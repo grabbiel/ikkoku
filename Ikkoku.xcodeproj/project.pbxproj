@@ -6,14 +6,19 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		79A8E8D23034DCDC004895DE /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 79A8E8D13034DCD4004895DE /* .gitignore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		79A8E8B53034D876004895DE /* IkkokuCreator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IkkokuCreator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		79A8E8D13034DCD4004895DE /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		79A8E8B73034D876004895DE /* IkkokuCreator */ = {
+		79A8E8C93034D9BC004895DE /* Apps */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = IkkokuCreator;
+			path = Apps;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +37,8 @@
 		79A8E8AC3034D876004895DE = {
 			isa = PBXGroup;
 			children = (
-				79A8E8B73034D876004895DE /* IkkokuCreator */,
+				79A8E8D13034DCD4004895DE /* .gitignore */,
+				79A8E8C93034D9BC004895DE /* Apps */,
 				79A8E8B63034D876004895DE /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,7 +67,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				79A8E8B73034D876004895DE /* IkkokuCreator */,
+				79A8E8C93034D9BC004895DE /* Apps */,
 			);
 			name = IkkokuCreator;
 			packageProductDependencies = (
@@ -85,7 +91,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 79A8E8B03034D876004895DE /* Build configuration list for PBXProject "IkkokuCreator" */;
+			buildConfigurationList = 79A8E8B03034D876004895DE /* Build configuration list for PBXProject "Ikkoku" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -109,6 +115,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				79A8E8D23034DCDC004895DE /* .gitignore in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -312,7 +319,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		79A8E8B03034D876004895DE /* Build configuration list for PBXProject "IkkokuCreator" */ = {
+		79A8E8B03034D876004895DE /* Build configuration list for PBXProject "Ikkoku" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				79A8E8BE3034D877004895DE /* Debug */,
