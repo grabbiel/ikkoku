@@ -27,10 +27,31 @@
 		79A8E8D13034DCD4004895DE /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		796F38683037809E007ABF96 /* Exceptions for "Assets" folder in "IkkokuCreator" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				fixtures/garment_fixture.bin,
+				fixtures/garment_fixture.gltf,
+				fixtures/rig_fixture.bin,
+				fixtures/rig_fixture.gltf,
+			);
+			target = 79A8E8B43034D876004895DE /* IkkokuCreator */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		796F38553036A3C9007ABF96 /* Shaders */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Shaders;
+			sourceTree = "<group>";
+		};
+		796F38603037800D007ABF96 /* Assets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				796F38683037809E007ABF96 /* Exceptions for "Assets" folder in "IkkokuCreator" target */,
+			);
+			path = Assets;
 			sourceTree = "<group>";
 		};
 		79A8E8C93034D9BC004895DE /* Apps */ = {
@@ -60,6 +81,7 @@
 		79A8E8AC3034D876004895DE = {
 			isa = PBXGroup;
 			children = (
+				796F38603037800D007ABF96 /* Assets */,
 				79A8E8D33034E43B004895DE /* Packages */,
 				79A8E8D13034DCD4004895DE /* .gitignore */,
 				79A8E8C93034D9BC004895DE /* Apps */,
@@ -114,6 +136,7 @@
 				796F385D3036A4D1007ABF96 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+				796F38603037800D007ABF96 /* Assets */,
 				79A8E8C93034D9BC004895DE /* Apps */,
 				79A8E8D33034E43B004895DE /* Packages */,
 			);
