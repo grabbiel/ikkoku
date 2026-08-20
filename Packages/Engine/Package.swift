@@ -1,3 +1,4 @@
+// swift-tools-version: 6.0
 //
 //  Package.swift
 //  IkkokuCreator
@@ -5,7 +6,6 @@
 //  Created by rumpology on 8/18/26.
 //
 
-// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
@@ -18,6 +18,6 @@ let package = Package(
         .target(name: "ShaderTypes"),
         .target(name: "CoreMath", dependencies: ["ShaderTypes"]),
         .target(name: "GPU", dependencies: ["CoreMath", "ShaderTypes"]),
-        .testTarget(name: "CoreMathTests", dependencies: ["CoreMath"]),
+        .testTarget(name: "CoreMathTests", dependencies: ["CoreMath", "ShaderTypes"]),
     ]
 )
