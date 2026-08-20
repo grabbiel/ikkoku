@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		796F384E303695C9007ABF96 /* Engine in Frameworks */ = {isa = PBXBuildFile; productRef = 796F384D303695C9007ABF96 /* Engine */; };
 		79A8E8D23034DCDC004895DE /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = 79A8E8D13034DCD4004895DE /* .gitignore */; };
 /* End PBXBuildFile section */
 
@@ -21,6 +22,11 @@
 			path = Apps;
 			sourceTree = "<group>";
 		};
+		79A8E8D33034E43B004895DE /* Packages */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Packages;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -28,6 +34,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				796F384E303695C9007ABF96 /* Engine in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -37,6 +44,7 @@
 		79A8E8AC3034D876004895DE = {
 			isa = PBXGroup;
 			children = (
+				79A8E8D33034E43B004895DE /* Packages */,
 				79A8E8D13034DCD4004895DE /* .gitignore */,
 				79A8E8C93034D9BC004895DE /* Apps */,
 				79A8E8B63034D876004895DE /* Products */,
@@ -68,9 +76,11 @@
 			);
 			fileSystemSynchronizedGroups = (
 				79A8E8C93034D9BC004895DE /* Apps */,
+				79A8E8D33034E43B004895DE /* Packages */,
 			);
 			name = IkkokuCreator;
 			packageProductDependencies = (
+				796F384D303695C9007ABF96 /* Engine */,
 			);
 			productName = IkkokuCreator;
 			productReference = 79A8E8B53034D876004895DE /* IkkokuCreator.app */;
@@ -88,6 +98,7 @@
 				TargetAttributes = {
 					79A8E8B43034D876004895DE = {
 						CreatedOnToolsVersion = 26.0.1;
+						LastSwiftMigration = 2600;
 					};
 				};
 			};
@@ -100,6 +111,9 @@
 			);
 			mainGroup = 79A8E8AC3034D876004895DE;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				796F384C303695C9007ABF96 /* XCLocalSwiftPackageReference "Packages/Engine" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 79A8E8B63034D876004895DE /* Products */;
 			projectDirPath = "";
@@ -257,6 +271,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -271,6 +286,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.grabbiel.IkkokuCreator;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -279,6 +295,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 			};
@@ -289,6 +306,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -303,6 +321,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.grabbiel.IkkokuCreator;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -338,6 +357,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		796F384C303695C9007ABF96 /* XCLocalSwiftPackageReference "Packages/Engine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/Engine;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		796F384D303695C9007ABF96 /* Engine */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Engine;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 79A8E8AD3034D876004895DE /* Project object */;
 }
