@@ -1,29 +1,26 @@
-//
-//  ShaderTypes.h
-//  IkkokuCreator
-//
-//  Created by rumpology on 8/18/26.
-//
+// swift-tools-version note: this header is compiled by C, Swift's importer,
+// and the Metal compiler. Keep it free of Foundation and Objective-C.
 #ifndef ShaderTypes_h
 #define ShaderTypes_h
 
+#define IK_ENUM(_type, _name) enum _name : _type _name; enum _name : _type
+
 #ifdef __METAL_VERSION__
-#define NS_ENUM(_type, _name) enum _name : _type _name; enum _name : _type
 typedef metal::int32_t EnumBackingType;
 #else
-#import <Foundation/Foundation.h>
-typedef NSInteger EnumBackingType;
+#include <stdint.h>
+typedef int32_t EnumBackingType;
 #endif
 
 #include <simd/simd.h>
 
-typedef NS_ENUM(EnumBackingType, BufferIndex) {
+typedef IK_ENUM(EnumBackingType, BufferIndex) {
     BufferIndexFrameUniforms = 0,
     BufferIndexDrawUniforms  = 1,
     BufferIndexVertices      = 2,
 };
 
-typedef NS_ENUM(EnumBackingType, VertexAttribute) {
+typedef IK_ENUM(EnumBackingType, VertexAttribute) {
     VertexAttributePosition = 0,
     VertexAttributeNormal   = 1,
     VertexAttributeTexcoord = 2,
