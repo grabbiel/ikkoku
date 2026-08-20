@@ -125,13 +125,7 @@
 	],
 	"meshes":[
 		{
-			"extras":{
-				"targetNames":[
-					"DisplaceY",
-					"DisplaceX"
-				]
-			},
-			"name":"Cylinder.001",
+			"name":"Garment",
 			"primitives":[
 				{
 					"attributes":{
@@ -145,28 +139,14 @@
 						"WEIGHTS_1":7
 					},
 					"indices":8,
-					"material":0,
-					"targets":[
-						{
-							"POSITION":9,
-							"NORMAL":10
-						},
-						{
-							"POSITION":11,
-							"NORMAL":12
-						}
-					]
+					"material":0
 				}
-			],
-			"weights":[
-				0,
-				0
 			]
 		}
 	],
 	"skins":[
 		{
-			"inverseBindMatrices":13,
+			"inverseBindMatrices":9,
 			"joints":[
 				5,
 				4,
@@ -244,87 +224,7 @@
 			"type":"SCALAR"
 		},
 		{
-			"componentType":5126,
-			"count":260,
-			"max":[
-				0,
-				0,
-				0
-			],
-			"min":[
-				0,
-				0,
-				-0.7674753665924072
-			],
-			"sparse":{
-				"count":108,
-				"indices":{
-					"bufferView":9,
-					"componentType":5121
-				},
-				"values":{
-					"bufferView":10
-				}
-			},
-			"type":"VEC3"
-		},
-		{
-			"componentType":5126,
-			"count":260,
-			"sparse":{
-				"count":27,
-				"indices":{
-					"bufferView":11,
-					"componentType":5123
-				},
-				"values":{
-					"bufferView":12
-				}
-			},
-			"type":"VEC3"
-		},
-		{
-			"componentType":5126,
-			"count":260,
-			"max":[
-				0.20027387142181396,
-				0,
-				0
-			],
-			"min":[
-				0,
-				0,
-				0
-			],
-			"sparse":{
-				"count":56,
-				"indices":{
-					"bufferView":13,
-					"componentType":5121
-				},
-				"values":{
-					"bufferView":14
-				}
-			},
-			"type":"VEC3"
-		},
-		{
-			"componentType":5126,
-			"count":260,
-			"sparse":{
-				"count":31,
-				"indices":{
-					"bufferView":15,
-					"componentType":5123
-				},
-				"values":{
-					"bufferView":16
-				}
-			},
-			"type":"VEC3"
-		},
-		{
-			"bufferView":17,
+			"bufferView":9,
 			"componentType":5126,
 			"count":6,
 			"type":"MAT4"
@@ -387,53 +287,13 @@
 		},
 		{
 			"buffer":0,
-			"byteLength":108,
-			"byteOffset":25184
-		},
-		{
-			"buffer":0,
-			"byteLength":1296,
-			"byteOffset":25292
-		},
-		{
-			"buffer":0,
-			"byteLength":54,
-			"byteOffset":26588
-		},
-		{
-			"buffer":0,
-			"byteLength":324,
-			"byteOffset":26644
-		},
-		{
-			"buffer":0,
-			"byteLength":56,
-			"byteOffset":26968
-		},
-		{
-			"buffer":0,
-			"byteLength":672,
-			"byteOffset":27024
-		},
-		{
-			"buffer":0,
-			"byteLength":62,
-			"byteOffset":27696
-		},
-		{
-			"buffer":0,
-			"byteLength":372,
-			"byteOffset":27760
-		},
-		{
-			"buffer":0,
 			"byteLength":384,
-			"byteOffset":28132
+			"byteOffset":25184
 		}
 	],
 	"buffers":[
 		{
-			"byteLength":28516,
+			"byteLength":25568,
 			"uri":"garment_fixture.bin"
 		}
 	]
