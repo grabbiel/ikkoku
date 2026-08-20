@@ -8,14 +8,31 @@
 
 /* Begin PBXBuildFile section */
 		796F384E303695C9007ABF96 /* Engine in Frameworks */ = {isa = PBXBuildFile; productRef = 796F384D303695C9007ABF96 /* Engine */; };
+		796F385B3036A4B1007ABF96 /* IkkokuShaders.metallib in Resources */ = {isa = PBXBuildFile; fileRef = 796F38543036A3C9007ABF96 /* IkkokuShaders.metallib */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		796F385C3036A4D1007ABF96 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 79A8E8AD3034D876004895DE /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 796F38533036A3C9007ABF96;
+			remoteInfo = IkkokuShaders;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		796F38543036A3C9007ABF96 /* IkkokuShaders.metallib */ = {isa = PBXFileReference; explicitFileType = "archive.metal-library"; includeInIndex = 0; path = IkkokuShaders.metallib; sourceTree = BUILT_PRODUCTS_DIR; };
 		79A8E8B53034D876004895DE /* IkkokuCreator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IkkokuCreator.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		79A8E8D13034DCD4004895DE /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		796F38553036A3C9007ABF96 /* Shaders */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shaders;
+			sourceTree = "<group>";
+		};
 		79A8E8C93034D9BC004895DE /* Apps */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Apps;
@@ -46,6 +63,7 @@
 				79A8E8D33034E43B004895DE /* Packages */,
 				79A8E8D13034DCD4004895DE /* .gitignore */,
 				79A8E8C93034D9BC004895DE /* Apps */,
+				796F38553036A3C9007ABF96 /* Shaders */,
 				79A8E8B63034D876004895DE /* Products */,
 			);
 			sourceTree = "<group>";
@@ -54,6 +72,7 @@
 			isa = PBXGroup;
 			children = (
 				79A8E8B53034D876004895DE /* IkkokuCreator.app */,
+				796F38543036A3C9007ABF96 /* IkkokuShaders.metallib */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -61,6 +80,26 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		796F38533036A3C9007ABF96 /* IkkokuShaders */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 796F38583036A3C9007ABF96 /* Build configuration list for PBXNativeTarget "IkkokuShaders" */;
+			buildPhases = (
+				796F38523036A3C9007ABF96 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				796F38553036A3C9007ABF96 /* Shaders */,
+			);
+			name = IkkokuShaders;
+			packageProductDependencies = (
+			);
+			productName = IkkokuShaders;
+			productReference = 796F38543036A3C9007ABF96 /* IkkokuShaders.metallib */;
+			productType = "com.apple.product-type.metal-library";
+		};
 		79A8E8B43034D876004895DE /* IkkokuCreator */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 79A8E8C03034D877004895DE /* Build configuration list for PBXNativeTarget "IkkokuCreator" */;
@@ -72,6 +111,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				796F385D3036A4D1007ABF96 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				79A8E8C93034D9BC004895DE /* Apps */,
@@ -95,6 +135,9 @@
 				LastSwiftUpdateCheck = 2600;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
+					796F38533036A3C9007ABF96 = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
 					79A8E8B43034D876004895DE = {
 						CreatedOnToolsVersion = 26.0.1;
 						LastSwiftMigration = 2600;
@@ -119,6 +162,7 @@
 			projectRoot = "";
 			targets = (
 				79A8E8B43034D876004895DE /* IkkokuCreator */,
+				796F38533036A3C9007ABF96 /* IkkokuShaders */,
 			);
 		};
 /* End PBXProject section */
@@ -128,12 +172,20 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				796F385B3036A4B1007ABF96 /* IkkokuShaders.metallib in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		796F38523036A3C9007ABF96 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		79A8E8B13034D876004895DE /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -143,7 +195,39 @@
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		796F385D3036A4D1007ABF96 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 796F38533036A3C9007ABF96 /* IkkokuShaders */;
+			targetProxy = 796F385C3036A4D1007ABF96 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		796F38593036A3C9007ABF96 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 3LYWV7T9MT;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				"MTL_HEADER_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/Packages/Engine/Sources/ShaderTypes/include";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				VERSIONING_SYSTEM = "";
+			};
+			name = Debug;
+		};
+		796F385A3036A3C9007ABF96 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 3LYWV7T9MT;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				"MTL_HEADER_SEARCH_PATHS[sdk=macosx*]" = "$(SRCROOT)/Packages/Engine/Sources/ShaderTypes/include";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				VERSIONING_SYSTEM = "";
+			};
+			name = Release;
+		};
 		79A8E8BE3034D877004895DE /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -336,6 +420,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		796F38583036A3C9007ABF96 /* Build configuration list for PBXNativeTarget "IkkokuShaders" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				796F38593036A3C9007ABF96 /* Debug */,
+				796F385A3036A3C9007ABF96 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		79A8E8B03034D876004895DE /* Build configuration list for PBXProject "Ikkoku" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

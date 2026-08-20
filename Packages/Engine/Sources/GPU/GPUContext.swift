@@ -1,11 +1,20 @@
-//
-//  GPUContext.swift
-//  Engine
-//
-//  Created by rumpology on 8/19/26.
-//
-
 import Metal
+
+public enum GPUError: Error, CustomStringConvertible {
+    case noDevice
+    case shaderLibraryNotFound(name: String, bundle: String)
+
+    public var description: String {
+        switch self {
+        case .noDevice:
+            return "No Metal device is available on this system."
+        case let .shaderLibraryNotFound(name, bundle):
+            return "Could not find \(name).metallib in \(bundle). "
+                 + "Check that the shader target is a dependency and that the "
+                 + "metallib is in Copy Bundle Resources."
+        }
+    }
+}
 
 public final class GPUContext: @unchecked Sendable {
     public static let maxFramesInFlight = 3
@@ -23,6 +32,8 @@ public final class GPUContext: @unchecked Sendable {
         self.commandQueue = queue
     }
 
+    // MARK: - Frame pacing
+
     /// Blocks until a frame slot frees up. Call at the top of every frame.
     public func waitForFrameSlot() { inFlight.wait() }
 
@@ -33,6 +44,24 @@ public final class GPUContext: @unchecked Sendable {
     public func releaseFrameSlot(onCompletionOf commandBuffer: any MTLCommandBuffer) {
         let semaphore = inFlight
         commandBuffer.addCompletedHandler { _ in semaphore.signal() }
+    }
+
+    // MARK: - Shaders
+
+    /// Loads a precompiled metallib produced by a separate shader target.
+    /// Explicit rather than `makeDefaultLibrary()` so both app targets can
+    /// share one compiled library instead of each building its own.
+    public func makeShaderLibrary(
+        named name: String = "IkkokuShaders",
+        in bundle: Bundle = .main
+    ) throws -> any MTLLibrary {
+        guard let url = bundle.url(forResource: name, withExtension: "metallib") else {
+            throw GPUError.shaderLibraryNotFound(
+                name: name, bundle: bundle.bundleURL.lastPathComponent)
+        }
+        let library = try device.makeLibrary(URL: url)
+        library.label = name
+        return library
     }
 
     // MARK: - Debugging
