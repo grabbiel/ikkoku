@@ -1,9 +1,3 @@
-//
-//  Triangle.metal
-//  Ikkoku
-//
-//  Created by rumpology on 8/19/26.
-//
 #include <metal_stdlib>
 #include "ShaderTypes.h"
 
@@ -16,17 +10,22 @@ struct VertexOut {
 
 vertex VertexOut triangle_vertex(
     uint vid [[vertex_id]],
-    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]])
+    constant FrameUniforms &frame [[buffer(BufferIndexFrameUniforms)]],
+    constant DrawUniforms  &draw  [[buffer(BufferIndexDrawUniforms)]])
 {
-    const float2 positions[3] = { float2(0, 0.6), float2(-0.6, -0.4), float2(0.6, -0.4) };
-    const float3 colors[3]    = { float3(1, 0.3, 0.4), float3(0.3, 1, 0.5), float3(0.4, 0.5, 1) };
-
-    float s = sin(frame.time);
-    float c = cos(frame.time);
-    float2 p = positions[vid];
+    const float3 positions[3] = {
+        float3( 0.0,  0.8, 0.0),
+        float3(-0.8, -0.6, 0.0),
+        float3( 0.8, -0.6, 0.0)
+    };
+    const float3 colors[3] = {
+        float3(1.0, 0.35, 0.45),
+        float3(0.35, 1.0, 0.55),
+        float3(0.45, 0.55, 1.0)
+    };
 
     VertexOut out;
-    out.position = float4(p.x * c - p.y * s, p.x * s + p.y * c, 0.5, 1.0);
+    out.position = frame.viewProjection * draw.model * float4(positions[vid], 1.0);
     out.color = colors[vid];
     return out;
 }

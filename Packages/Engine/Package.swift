@@ -12,12 +12,13 @@ let package = Package(
     name: "Engine",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "Engine", targets: ["GPU", "CoreMath", "ShaderTypes"]),
+        .library(name: "Engine", targets: ["Renderer", "GPU", "CoreMath", "ShaderTypes"]),
     ],
     targets: [
         .target(name: "ShaderTypes"),
         .target(name: "CoreMath", dependencies: ["ShaderTypes"]),
         .target(name: "GPU", dependencies: ["CoreMath", "ShaderTypes"]),
+        .target(name: "Renderer", dependencies: ["GPU", "CoreMath", "ShaderTypes"]),
         .testTarget(name: "CoreMathTests", dependencies: ["CoreMath", "ShaderTypes"]),
     ]
 )

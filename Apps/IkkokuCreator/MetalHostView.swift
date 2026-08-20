@@ -9,11 +9,12 @@ import SwiftUI
 import Metal
 import QuartzCore
 import GPU
+import Renderer
 
 final class MetalView: NSView, CAMetalDisplayLinkDelegate {
     private let gpu: GPUContext
     private var displayLink: CAMetalDisplayLink?
-    private var frameIndex = 0
+    nonisolated(unsafe) private var renderer: Renderer?
 
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
@@ -43,6 +44,16 @@ final class MetalView: NSView, CAMetalDisplayLinkDelegate {
             return
         }
         updateDrawableSize()
+
+        if renderer == nil {
+            do {
+                renderer = try Renderer(gpu: gpu, colorFormat: metalLayer.pixelFormat)
+            } catch {
+                print("[ikkoku] renderer init failed: \(error)")
+                return
+            }
+        }
+
         let link = CAMetalDisplayLink(metalLayer: metalLayer)
         link.delegate = self
         link.preferredFrameLatency = 2
@@ -70,34 +81,8 @@ final class MetalView: NSView, CAMetalDisplayLinkDelegate {
 
     nonisolated func metalDisplayLink(_ link: CAMetalDisplayLink,
                                       needsUpdate update: CAMetalDisplayLink.Update) {
-        let drawable = update.drawable
-
-        gpu.waitForFrameSlot()
-        guard let commandBuffer = gpu.commandQueue.makeCommandBuffer() else {
-            gpu.releaseFrameSlot()
-            return
-        }
-        commandBuffer.label = "Frame"
-
-        let t = update.targetPresentationTimestamp
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = drawable.texture
-        pass.colorAttachments[0].loadAction = .clear
-        pass.colorAttachments[0].storeAction = .store
-        pass.colorAttachments[0].clearColor = MTLClearColor(
-            red: 0.5 + 0.5 * sin(t),
-            green: 0.08,
-            blue: 0.5 + 0.5 * cos(t * 0.7),
-            alpha: 1)
-
-        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) {
-            encoder.label = "Clear"
-            encoder.endEncoding()
-        }
-
-        gpu.releaseFrameSlot(onCompletionOf: commandBuffer)
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
+        renderer?.draw(to: update.drawable,
+                       timestamp: update.targetPresentationTimestamp)
     }
 }
 
