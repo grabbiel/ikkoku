@@ -9,17 +9,15 @@ import SwiftUI
 import GPU
 
 struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
-    }
-}
+    private let gpu = GPUContext()
 
-#Preview {
-    ContentView()
+    var body: some View {
+        if let gpu {
+            MetalHostView(gpu: gpu)
+                .frame(minWidth: 960, minHeight: 640)
+        } else {
+            Text("Metal is unavailable on this system.")
+                .frame(minWidth: 400, minHeight: 200)
+        }
+    }
 }
