@@ -1,0 +1,1284 @@
+{
+ "version": 1,
+ "regions": {
+  "torso_upper": 1,
+  "torso_lower": 2,
+  "upperarm_L": 3,
+  "upperarm_R": 4,
+  "forearm_L": 5,
+  "forearm_R": 6,
+  "hand_L": 7,
+  "hand_R": 8,
+  "thigh_L": 9,
+  "thigh_R": 10,
+  "calf_L": 11,
+  "calf_R": 12,
+  "foot_L": 13,
+  "foot_R": 14
+ },
+ "bodies": [
+  {
+   "id": "body_f",
+   "sex": "f",
+   "file": "Characters/body_f.glb",
+   "regionsAttribute": "_REGION",
+   "regionsFile": "Characters/body_f.regions.bin",
+   "meshes": [
+    "body",
+    "eye_L",
+    "eye_R",
+    "eyelash",
+    "eyebrow",
+    "teeth",
+    "tongue"
+   ],
+   "bones": [
+    "root",
+    "hips",
+    "spine01",
+    "spine02",
+    "spine03",
+    "neck",
+    "head",
+    "head_top",
+    "eye_L",
+    "bust_L",
+    "shoulder_L",
+    "upperarm_L",
+    "forearm_L",
+    "hand_L",
+    "thumb01_L",
+    "thumb02_L",
+    "thumb03_L",
+    "index01_L",
+    "index02_L",
+    "index03_L",
+    "middle01_L",
+    "middle02_L",
+    "middle03_L",
+    "ring01_L",
+    "ring02_L",
+    "ring03_L",
+    "pinky01_L",
+    "pinky02_L",
+    "pinky03_L",
+    "thigh_L",
+    "calf_L",
+    "foot_L",
+    "toes_L",
+    "eye_R",
+    "bust_R",
+    "shoulder_R",
+    "upperarm_R",
+    "forearm_R",
+    "hand_R",
+    "thumb01_R",
+    "thumb02_R",
+    "thumb03_R",
+    "index01_R",
+    "index02_R",
+    "index03_R",
+    "middle01_R",
+    "middle02_R",
+    "middle03_R",
+    "ring01_R",
+    "ring02_R",
+    "ring03_R",
+    "pinky01_R",
+    "pinky02_R",
+    "pinky03_R",
+    "thigh_R",
+    "calf_R",
+    "foot_R",
+    "toes_R"
+   ],
+   "morphs": [
+    "face.head_width",
+    "face.head_height",
+    "face.upper_depth",
+    "face.lower_depth",
+    "face.jaw_width",
+    "face.jaw_height",
+    "face.jaw_depth",
+    "face.chin_height",
+    "face.chin_width",
+    "face.chin_depth",
+    "face.cheek_width",
+    "face.cheek_height",
+    "face.cheek_depth",
+    "eye.size",
+    "eye.height",
+    "eye.spacing",
+    "eye.depth",
+    "eye.angle",
+    "eye.width",
+    "eye.outer_height",
+    "eye.inner_height",
+    "eye.lid_upper",
+    "eye.lid_lower",
+    "nose.height",
+    "nose.depth",
+    "nose.size",
+    "nose.angle",
+    "nose.bridge_height",
+    "nose.bridge_width",
+    "nose.wing_width",
+    "nose.tip_height",
+    "mouth.height",
+    "mouth.width",
+    "mouth.depth",
+    "mouth.lip_upper",
+    "mouth.lip_lower",
+    "mouth.corner_height",
+    "ear.size",
+    "ear.angle",
+    "ear.upper",
+    "ear.lower",
+    "body.bust_size",
+    "body.bust_height",
+    "body.bust_spacing",
+    "body.bust_softness",
+    "body.waist_width",
+    "body.waist_depth",
+    "body.belly",
+    "body.back",
+    "body.hip_width",
+    "body.hip_depth",
+    "body.butt_size",
+    "body.shoulder_width",
+    "body.neck_thickness",
+    "body.upperarm_thickness",
+    "body.forearm_thickness",
+    "body.thigh_thickness",
+    "body.calf_thickness",
+    "exp.blink_L",
+    "exp.blink_R",
+    "exp.eye_wide",
+    "exp.eye_smile",
+    "exp.squint",
+    "exp.brow_up",
+    "exp.brow_angry",
+    "exp.brow_sad",
+    "exp.mouth_a",
+    "exp.mouth_i",
+    "exp.mouth_u",
+    "exp.mouth_e",
+    "exp.mouth_o",
+    "exp.smile",
+    "exp.frown",
+    "exp.mouth_open"
+   ],
+   "eye": {
+    "L": {
+     "centre": [
+      0.033484567871730535,
+      -0.11603563636569197,
+      1.5689052864467128
+     ],
+     "radius": 0.025654675409425474,
+     "verts": 276,
+     "tris": 530
+    },
+    "R": {
+     "centre": [
+      -0.033197355579947914,
+      -0.11590452594390989,
+      1.5689015232886605
+     ],
+     "radius": 0.025853298821771235,
+     "verts": 276,
+     "tris": 530
+    }
+   },
+   "textures": {
+    "skinBase": "skin_f_base.png",
+    "skinDetail": "skin_f_detail.png"
+   }
+  },
+  {
+   "id": "body_m",
+   "sex": "m",
+   "file": "Characters/body_m.glb",
+   "regionsAttribute": "_REGION",
+   "regionsFile": "Characters/body_m.regions.bin",
+   "meshes": [
+    "body",
+    "eye_L",
+    "eye_R",
+    "eyelash",
+    "eyebrow",
+    "teeth",
+    "tongue"
+   ],
+   "bones": [
+    "root",
+    "hips",
+    "spine01",
+    "spine02",
+    "spine03",
+    "neck",
+    "head",
+    "head_top",
+    "eye_L",
+    "bust_L",
+    "shoulder_L",
+    "upperarm_L",
+    "forearm_L",
+    "hand_L",
+    "thumb01_L",
+    "thumb02_L",
+    "thumb03_L",
+    "index01_L",
+    "index02_L",
+    "index03_L",
+    "middle01_L",
+    "middle02_L",
+    "middle03_L",
+    "ring01_L",
+    "ring02_L",
+    "ring03_L",
+    "pinky01_L",
+    "pinky02_L",
+    "pinky03_L",
+    "thigh_L",
+    "calf_L",
+    "foot_L",
+    "toes_L",
+    "eye_R",
+    "bust_R",
+    "shoulder_R",
+    "upperarm_R",
+    "forearm_R",
+    "hand_R",
+    "thumb01_R",
+    "thumb02_R",
+    "thumb03_R",
+    "index01_R",
+    "index02_R",
+    "index03_R",
+    "middle01_R",
+    "middle02_R",
+    "middle03_R",
+    "ring01_R",
+    "ring02_R",
+    "ring03_R",
+    "pinky01_R",
+    "pinky02_R",
+    "pinky03_R",
+    "thigh_R",
+    "calf_R",
+    "foot_R",
+    "toes_R"
+   ],
+   "morphs": [
+    "face.head_width",
+    "face.head_height",
+    "face.upper_depth",
+    "face.lower_depth",
+    "face.jaw_width",
+    "face.jaw_height",
+    "face.jaw_depth",
+    "face.chin_height",
+    "face.chin_width",
+    "face.chin_depth",
+    "face.cheek_width",
+    "face.cheek_height",
+    "face.cheek_depth",
+    "eye.size",
+    "eye.height",
+    "eye.spacing",
+    "eye.depth",
+    "eye.angle",
+    "eye.width",
+    "eye.outer_height",
+    "eye.inner_height",
+    "eye.lid_upper",
+    "eye.lid_lower",
+    "nose.height",
+    "nose.depth",
+    "nose.size",
+    "nose.angle",
+    "nose.bridge_height",
+    "nose.bridge_width",
+    "nose.wing_width",
+    "nose.tip_height",
+    "mouth.height",
+    "mouth.width",
+    "mouth.depth",
+    "mouth.lip_upper",
+    "mouth.lip_lower",
+    "mouth.corner_height",
+    "ear.size",
+    "ear.angle",
+    "ear.upper",
+    "ear.lower",
+    "body.bust_size",
+    "body.bust_height",
+    "body.bust_spacing",
+    "body.bust_softness",
+    "body.waist_width",
+    "body.waist_depth",
+    "body.belly",
+    "body.back",
+    "body.hip_width",
+    "body.hip_depth",
+    "body.butt_size",
+    "body.shoulder_width",
+    "body.neck_thickness",
+    "body.upperarm_thickness",
+    "body.forearm_thickness",
+    "body.thigh_thickness",
+    "body.calf_thickness",
+    "exp.blink_L",
+    "exp.blink_R",
+    "exp.eye_wide",
+    "exp.eye_smile",
+    "exp.squint",
+    "exp.brow_up",
+    "exp.brow_angry",
+    "exp.brow_sad",
+    "exp.mouth_a",
+    "exp.mouth_i",
+    "exp.mouth_u",
+    "exp.mouth_e",
+    "exp.mouth_o",
+    "exp.smile",
+    "exp.frown",
+    "exp.mouth_open"
+   ],
+   "eye": {
+    "L": {
+     "centre": [
+      0.03286091549146443,
+      -0.13910102916313796,
+      1.7032592004683478
+     ],
+     "radius": 0.021430119053418375,
+     "verts": 276,
+     "tris": 530
+    },
+    "R": {
+     "centre": [
+      -0.032828000437243196,
+      -0.13908694571017483,
+      1.703259187243392
+     ],
+     "radius": 0.02145451392487021,
+     "verts": 276,
+     "tris": 530
+    }
+   },
+   "textures": {
+    "skinBase": "skin_m_base.png",
+    "skinDetail": "skin_m_detail.png"
+   }
+  }
+ ],
+ "hair": [
+  {
+   "id": "bob",
+   "file": "Hair/hair_bob.glb",
+   "sex": "f",
+   "name": "Bob",
+   "strandUV": true,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "long_straight",
+   "file": "Hair/hair_long_straight.glb",
+   "sex": "f",
+   "name": "Long straight",
+   "strandUV": true,
+   "chainBones": [
+    "hair_back_01",
+    "hair_back_02",
+    "hair_back_03"
+   ],
+   "parts": [
+    "hair_front",
+    "hair_back"
+   ]
+  },
+  {
+   "id": "messy_m",
+   "file": "Hair/hair_messy_m.glb",
+   "sex": "m",
+   "name": "Messy (M)",
+   "strandUV": true,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_afro01",
+   "file": "Hair/hair_mh_afro01.glb",
+   "sex": "any",
+   "name": "MH afro",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_bob01",
+   "file": "Hair/hair_mh_bob01.glb",
+   "sex": "any",
+   "name": "MH bob 01",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_bob02",
+   "file": "Hair/hair_mh_bob02.glb",
+   "sex": "any",
+   "name": "MH bob 02",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_braid01",
+   "file": "Hair/hair_mh_braid01.glb",
+   "sex": "any",
+   "name": "MH braid",
+   "strandUV": false,
+   "chainBones": [
+    "hair_back_01",
+    "hair_back_02",
+    "hair_back_03"
+   ],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_long01",
+   "file": "Hair/hair_mh_long01.glb",
+   "sex": "any",
+   "name": "MH long",
+   "strandUV": false,
+   "chainBones": [
+    "hair_back_01",
+    "hair_back_02",
+    "hair_back_03"
+   ],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_ponytail01",
+   "file": "Hair/hair_mh_ponytail01.glb",
+   "sex": "any",
+   "name": "MH ponytail",
+   "strandUV": false,
+   "chainBones": [
+    "hair_back_01",
+    "hair_back_02",
+    "hair_back_03"
+   ],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_short01",
+   "file": "Hair/hair_mh_short01.glb",
+   "sex": "any",
+   "name": "MH short 01",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_short02",
+   "file": "Hair/hair_mh_short02.glb",
+   "sex": "any",
+   "name": "MH short 02",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_short03",
+   "file": "Hair/hair_mh_short03.glb",
+   "sex": "any",
+   "name": "MH short 03",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "mh_short04",
+   "file": "Hair/hair_mh_short04.glb",
+   "sex": "any",
+   "name": "MH short 04",
+   "strandUV": false,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "ponytail",
+   "file": "Hair/hair_ponytail.glb",
+   "sex": "f",
+   "name": "Ponytail",
+   "strandUV": true,
+   "chainBones": [
+    "hair_back_01",
+    "hair_back_02",
+    "hair_back_03"
+   ],
+   "parts": [
+    "hair",
+    "hair_back",
+    "hair_tie"
+   ]
+  },
+  {
+   "id": "short_m",
+   "file": "Hair/hair_short_m.glb",
+   "sex": "m",
+   "name": "Short (M)",
+   "strandUV": true,
+   "chainBones": [],
+   "parts": [
+    "hair"
+   ]
+  },
+  {
+   "id": "twintails",
+   "file": "Hair/hair_twintails.glb",
+   "sex": "f",
+   "name": "Twintails",
+   "strandUV": true,
+   "chainBones": [
+    "hair_back_01",
+    "hair_back_02",
+    "hair_back_03",
+    "hair_back_04",
+    "hair_back_05",
+    "hair_back_06"
+   ],
+   "parts": [
+    "hair",
+    "hair_tie_L",
+    "hair_tie_R",
+    "hair_back"
+   ]
+  }
+ ],
+ "clothes": [
+  {
+   "id": "top_croptop",
+   "slot": "top",
+   "file": "Clothes/top_croptop.glb",
+   "colorMask": "Clothes/top_croptop_cm.png",
+   "sex": "f",
+   "name": "Crop top",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [
+    "torso_upper"
+   ],
+   "bodyMask": "Clothes/top_croptop_bm.png"
+  },
+  {
+   "id": "bottom_shorts",
+   "slot": "bottom",
+   "file": "Clothes/bottom_shorts.glb",
+   "colorMask": "Clothes/bottom_shorts_cm.png",
+   "sex": "f",
+   "name": "Shorts",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/bottom_shorts_bm.png"
+  },
+  {
+   "id": "top_tshirt",
+   "slot": "top",
+   "file": "Clothes/top_tshirt.glb",
+   "colorMask": "Clothes/top_tshirt_cm.png",
+   "sex": "f",
+   "name": "T-shirt",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [
+    "torso_upper"
+   ],
+   "bodyMask": "Clothes/top_tshirt_bm.png"
+  },
+  {
+   "id": "bottom_jeans",
+   "slot": "bottom",
+   "file": "Clothes/bottom_jeans.glb",
+   "colorMask": "Clothes/bottom_jeans_cm.png",
+   "sex": "f",
+   "name": "Jeans",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [
+    "thigh_L",
+    "thigh_R"
+   ],
+   "bodyMask": "Clothes/bottom_jeans_bm.png"
+  },
+  {
+   "id": "top_dress_camisole",
+   "slot": "top",
+   "file": "Clothes/top_dress_camisole.glb",
+   "colorMask": "Clothes/top_dress_camisole_cm.png",
+   "sex": "f",
+   "name": "Camisole dress",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [
+    "torso_lower"
+   ],
+   "bodyMask": "Clothes/top_dress_camisole_bm.png"
+  },
+  {
+   "id": "top_sailor",
+   "slot": "top",
+   "file": "Clothes/top_sailor.glb",
+   "colorMask": "Clothes/top_sailor_cm.png",
+   "sex": "f",
+   "name": "Sailor top",
+   "colors": [
+    "Main",
+    "Collar",
+    "Ribbon"
+   ],
+   "hideBody": [
+    "torso_upper"
+   ],
+   "bodyMask": "Clothes/top_sailor_bm.png"
+  },
+  {
+   "id": "bottom_skirt_pleated",
+   "slot": "bottom",
+   "file": "Clothes/bottom_skirt_pleated.glb",
+   "colorMask": "Clothes/bottom_skirt_pleated_cm.png",
+   "sex": "f",
+   "name": "Pleated skirt",
+   "colors": [
+    "Main",
+    "Waistband"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/bottom_skirt_pleated_bm.png"
+  },
+  {
+   "id": "socks_knee",
+   "slot": "socks",
+   "file": "Clothes/socks_knee.glb",
+   "colorMask": "Clothes/socks_knee_cm.png",
+   "sex": "f",
+   "name": "Knee socks",
+   "colors": [
+    "Main",
+    "Top band"
+   ],
+   "hideBody": [
+    "calf_L",
+    "calf_R",
+    "foot_L",
+    "foot_R"
+   ],
+   "bodyMask": "Clothes/socks_knee_bm.png"
+  },
+  {
+   "id": "socks_ankle",
+   "slot": "socks",
+   "file": "Clothes/socks_ankle.glb",
+   "colorMask": "Clothes/socks_ankle_cm.png",
+   "sex": "f",
+   "name": "Ankle socks",
+   "colors": [
+    "Main",
+    "Top band"
+   ],
+   "hideBody": [
+    "foot_L",
+    "foot_R"
+   ],
+   "bodyMask": "Clothes/socks_ankle_bm.png"
+  },
+  {
+   "id": "pantyhose_black",
+   "slot": "pantyhose",
+   "file": "Clothes/pantyhose_black.glb",
+   "colorMask": "Clothes/pantyhose_black_cm.png",
+   "sex": "f",
+   "name": "Pantyhose",
+   "colors": [
+    "Main"
+   ],
+   "hideBody": [
+    "calf_L",
+    "calf_R",
+    "foot_L",
+    "foot_R",
+    "thigh_L",
+    "thigh_R"
+   ],
+   "bodyMask": "Clothes/pantyhose_black_bm.png"
+  },
+  {
+   "id": "gloves_short",
+   "slot": "gloves",
+   "file": "Clothes/gloves_short.glb",
+   "colorMask": "Clothes/gloves_short_cm.png",
+   "sex": "f",
+   "name": "Short gloves",
+   "colors": [
+    "Main",
+    "Cuff"
+   ],
+   "hideBody": [
+    "hand_L",
+    "hand_R"
+   ],
+   "bodyMask": "Clothes/gloves_short_bm.png"
+  },
+  {
+   "id": "underwear_plain",
+   "slot": "underwear",
+   "file": "Clothes/underwear_plain.glb",
+   "colorMask": "Clothes/underwear_plain_cm.png",
+   "sex": "f",
+   "name": "Plain underwear",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/underwear_plain_bm.png"
+  },
+  {
+   "id": "bra_plain",
+   "slot": "bra",
+   "file": "Clothes/bra_plain.glb",
+   "colorMask": "Clothes/bra_plain_cm.png",
+   "sex": "f",
+   "name": "Plain bra",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/bra_plain_bm.png"
+  },
+  {
+   "id": "shoes_in_loafers",
+   "slot": "shoes_in",
+   "file": "Clothes/shoes_in_loafers.glb",
+   "colorMask": "Clothes/shoes_in_loafers_cm.png",
+   "sex": "f",
+   "name": "Loafers",
+   "colors": [
+    "Main",
+    "Trim",
+    "Sole"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/shoes_in_loafers_bm.png"
+  },
+  {
+   "id": "shoes_out_sneakers",
+   "slot": "shoes_out",
+   "file": "Clothes/shoes_out_sneakers.glb",
+   "colorMask": "Clothes/shoes_out_sneakers_cm.png",
+   "sex": "f",
+   "name": "Sneakers",
+   "colors": [
+    "Main",
+    "Trim",
+    "Sole"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/shoes_out_sneakers_bm.png"
+  },
+  {
+   "id": "top_blazer",
+   "slot": "top",
+   "file": "Clothes/top_blazer.glb",
+   "colorMask": "Clothes/top_blazer_cm.png",
+   "sex": "f",
+   "name": "Blazer",
+   "colors": [
+    "Main",
+    "Lapel",
+    "Buttons"
+   ],
+   "hideBody": [
+    "torso_upper"
+   ],
+   "bodyMask": "Clothes/top_blazer_bm.png"
+  },
+  {
+   "id": "top_shirt_m",
+   "slot": "top",
+   "file": "Clothes/top_shirt_m.glb",
+   "colorMask": "Clothes/top_shirt_m_cm.png",
+   "sex": "m",
+   "name": "Shirt",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [
+    "torso_upper",
+    "upperarm_L",
+    "upperarm_R"
+   ],
+   "bodyMask": "Clothes/top_shirt_m_bm.png"
+  },
+  {
+   "id": "bottom_trousers_m",
+   "slot": "bottom",
+   "file": "Clothes/bottom_trousers_m.glb",
+   "colorMask": "Clothes/bottom_trousers_m_cm.png",
+   "sex": "m",
+   "name": "Trousers",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [
+    "calf_L",
+    "thigh_L",
+    "thigh_R"
+   ],
+   "bodyMask": "Clothes/bottom_trousers_m_bm.png"
+  },
+  {
+   "id": "socks_knee_m",
+   "slot": "socks",
+   "file": "Clothes/socks_knee_m.glb",
+   "colorMask": "Clothes/socks_knee_m_cm.png",
+   "sex": "m",
+   "name": "Knee socks",
+   "colors": [
+    "Main",
+    "Top band"
+   ],
+   "hideBody": [
+    "calf_L",
+    "calf_R",
+    "foot_L",
+    "foot_R"
+   ],
+   "bodyMask": "Clothes/socks_knee_m_bm.png"
+  },
+  {
+   "id": "socks_ankle_m",
+   "slot": "socks",
+   "file": "Clothes/socks_ankle_m.glb",
+   "colorMask": "Clothes/socks_ankle_m_cm.png",
+   "sex": "m",
+   "name": "Ankle socks",
+   "colors": [
+    "Main",
+    "Top band"
+   ],
+   "hideBody": [
+    "foot_L",
+    "foot_R"
+   ],
+   "bodyMask": "Clothes/socks_ankle_m_bm.png"
+  },
+  {
+   "id": "gloves_short_m",
+   "slot": "gloves",
+   "file": "Clothes/gloves_short_m.glb",
+   "colorMask": "Clothes/gloves_short_m_cm.png",
+   "sex": "m",
+   "name": "Short gloves",
+   "colors": [
+    "Main",
+    "Cuff"
+   ],
+   "hideBody": [
+    "hand_L",
+    "hand_R"
+   ],
+   "bodyMask": "Clothes/gloves_short_m_bm.png"
+  },
+  {
+   "id": "underwear_plain_m",
+   "slot": "underwear",
+   "file": "Clothes/underwear_plain_m.glb",
+   "colorMask": "Clothes/underwear_plain_m_cm.png",
+   "sex": "m",
+   "name": "Plain underwear",
+   "colors": [
+    "Main",
+    "Trim"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/underwear_plain_m_bm.png"
+  },
+  {
+   "id": "shoes_in_loafers_m",
+   "slot": "shoes_in",
+   "file": "Clothes/shoes_in_loafers_m.glb",
+   "colorMask": "Clothes/shoes_in_loafers_m_cm.png",
+   "sex": "m",
+   "name": "Loafers",
+   "colors": [
+    "Main",
+    "Trim",
+    "Sole"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/shoes_in_loafers_m_bm.png"
+  },
+  {
+   "id": "shoes_out_sneakers_m",
+   "slot": "shoes_out",
+   "file": "Clothes/shoes_out_sneakers_m.glb",
+   "colorMask": "Clothes/shoes_out_sneakers_m_cm.png",
+   "sex": "m",
+   "name": "Sneakers",
+   "colors": [
+    "Main",
+    "Trim",
+    "Sole"
+   ],
+   "hideBody": [],
+   "bodyMask": "Clothes/shoes_out_sneakers_m_bm.png"
+  }
+ ],
+ "accessories": [
+  {
+   "id": "ribbon",
+   "file": "Accessories/acc_ribbon.glb",
+   "parent": "head",
+   "offset": [
+    0.06513479289412498,
+    0.08013002664501645,
+    0.07650062952104791
+   ],
+   "name": "Ribbon"
+  },
+  {
+   "id": "glasses",
+   "file": "Accessories/acc_glasses.glb",
+   "parent": "head",
+   "offset": [
+    0.0,
+    0.032700236446712605,
+    0.10625996221988661
+   ],
+   "name": "Glasses"
+  },
+  {
+   "id": "hat_beret",
+   "file": "Accessories/acc_hat_beret.glb",
+   "parent": "head",
+   "offset": [
+    0.0,
+    0.06768349201707413,
+    0.05450564725803571
+   ],
+   "name": "Beret"
+  },
+  {
+   "id": "hairpin",
+   "file": "Accessories/acc_hairpin.glb",
+   "parent": "head",
+   "offset": [
+    0.05,
+    0.09557775000000013,
+    0.04347033873859629
+   ],
+   "name": "Hairpin"
+  },
+  {
+   "id": "headband",
+   "file": "Accessories/acc_headband.glb",
+   "parent": "head",
+   "offset": [
+    0.0,
+    0.057577750000000094,
+    -0.021529661261403713
+   ],
+   "name": "Headband"
+  },
+  {
+   "id": "necklace",
+   "file": "Accessories/acc_necklace.glb",
+   "parent": "neck",
+   "offset": [
+    0.0,
+    0.02,
+    0.02
+   ],
+   "name": "Necklace"
+  },
+  {
+   "id": "cat_ears",
+   "file": "Accessories/acc_cat_ears.glb",
+   "parent": "head",
+   "offset": [
+    0.0,
+    0.12557775000000015,
+    -0.04652966126140371
+   ],
+   "name": "Cat ears"
+  },
+  {
+   "id": "bag",
+   "file": "Accessories/acc_bag.glb",
+   "parent": "spine03",
+   "offset": [
+    0.155,
+    0.18,
+    -0.0
+   ],
+   "name": "Bag"
+  }
+ ],
+ "items": [
+  {
+   "id": "cube",
+   "file": "Items/item_cube.glb",
+   "category": "Primitives",
+   "name": "Cube"
+  },
+  {
+   "id": "sphere",
+   "file": "Items/item_sphere.glb",
+   "category": "Primitives",
+   "name": "Sphere"
+  },
+  {
+   "id": "cylinder",
+   "file": "Items/item_cylinder.glb",
+   "category": "Primitives",
+   "name": "Cylinder"
+  },
+  {
+   "id": "plane",
+   "file": "Items/item_plane.glb",
+   "category": "Primitives",
+   "name": "Plane"
+  },
+  {
+   "id": "torus",
+   "file": "Items/item_torus.glb",
+   "category": "Primitives",
+   "name": "Torus"
+  },
+  {
+   "id": "stairs",
+   "file": "Items/item_stairs.glb",
+   "category": "Primitives",
+   "name": "Stairs"
+  },
+  {
+   "id": "chair",
+   "file": "Items/item_chair.glb",
+   "category": "Furniture",
+   "name": "Chair"
+  },
+  {
+   "id": "desk",
+   "file": "Items/item_desk.glb",
+   "category": "Furniture",
+   "name": "Desk"
+  },
+  {
+   "id": "bed",
+   "file": "Items/item_bed.glb",
+   "category": "Furniture",
+   "name": "Bed"
+  },
+  {
+   "id": "sofa",
+   "file": "Items/item_sofa.glb",
+   "category": "Furniture",
+   "name": "Sofa"
+  },
+  {
+   "id": "table",
+   "file": "Items/item_table.glb",
+   "category": "Furniture",
+   "name": "Table"
+  },
+  {
+   "id": "room_classroom",
+   "file": "Items/item_room_classroom.glb",
+   "category": "Rooms",
+   "name": "Classroom"
+  },
+  {
+   "id": "room_bedroom",
+   "file": "Items/item_room_bedroom.glb",
+   "category": "Rooms",
+   "name": "Bedroom"
+  },
+  {
+   "id": "room_street",
+   "file": "Items/item_room_street.glb",
+   "category": "Rooms",
+   "name": "Street"
+  },
+  {
+   "id": "sky_dome",
+   "file": "Items/item_sky_dome.glb",
+   "category": "Sky",
+   "name": "Sky dome"
+  }
+ ],
+ "textures": {
+  "iris": [
+   "eye_iris_0.png",
+   "eye_iris_1.png",
+   "eye_iris_2.png"
+  ],
+  "highlight": [
+   "eye_highlight_0.png",
+   "eye_highlight_1.png",
+   "eye_highlight_2.png"
+  ],
+  "eyeWhite": "eye_white.png",
+  "eyebrow": [
+   "eyebrow_0.png",
+   "eyebrow_1.png"
+  ],
+  "eyelash": [
+   "eyelash_0.png",
+   "eyelash_1.png"
+  ],
+  "patterns": [
+   "pattern_dots.png",
+   "pattern_lace.png",
+   "pattern_plaid.png",
+   "pattern_plain.png",
+   "pattern_stripes.png"
+  ],
+  "hairStrand": "hair_strand.png",
+  "faceOverlays": {
+   "blush": "face_overlay_blush.png",
+   "eyeshadow": "face_overlay_eyeshadow.png",
+   "lip": "face_overlay_lip.png"
+  },
+  "eyeUV": {
+   "note": "eyeball UVs are a planar projection along the gaze axis: silhouette circle radius 0.5 around (0.5,0.5); iris radius 0.38 of the texture",
+   "irisRadius": 0.38
+  },
+  "tinted": [
+   "skin_*_base (skin tint)",
+   "eye_iris_* (iris tint, alpha outside iris)",
+   "eyebrow_* (brow tint)",
+   "eyelash_* (lash tint)",
+   "hair_strand (hair tint)",
+   "pattern_* (pattern colour via alpha)"
+  ]
+ },
+ "sliders": {
+  "morphRange": "weight = slider/100; negative = mirrored delta",
+  "eyeBoneSliders": {
+   "eye.size": {
+    "scale": 1.2
+   },
+   "eye.height": {
+    "translate": [
+     0,
+     0.006,
+     0
+    ]
+   },
+   "eye.spacing": {
+    "translate": [
+     0.005,
+     0,
+     0
+    ],
+    "mirrorX": true
+   },
+   "eye.depth": {
+    "translate": [
+     0,
+     0,
+     -0.005
+    ]
+   }
+  },
+  "boneDriven": {
+   "height": "root scale",
+   "head_size": "head scale",
+   "neck_length": "neck length",
+   "torso_length": "spine01..03 length",
+   "arm_length": "upperarm/forearm length",
+   "leg_length": "thigh/calf length",
+   "hand_size": "hand scale",
+   "foot_size": "foot scale",
+   "bust_size": "bust_L/R scale"
+  }
+ },
+ "defaults": {
+  "skinTint": [
+   1.0,
+   0.86,
+   0.78
+  ],
+  "eyelashTint": [
+   0.18,
+   0.12,
+   0.16
+  ],
+  "eyebrowTint": [
+   0.42,
+   0.28,
+   0.3
+  ],
+  "irisTint": [
+   0.55,
+   0.35,
+   0.75
+  ],
+  "hairTint": [
+   0.45,
+   0.3,
+   0.55
+  ]
+ },
+ "notes": [
+  "_REGION is exported by the Blender glTF exporter as a FLOAT scalar attribute (values 0..14 exact); body_<sex>.regions.bin holds the same ids as uint8 in exported vertex order. The neck is region 0 (never hidden).",
+  "clothes[].bodyMask: 1024^2 grayscale in BODY UV space, white = skin pixel hidden under the garment (dilated 3 px); hideBody lists regions with >= 90% of their vertices covered.",
+  "clothes[].colorMask: R/G/B = tint zones 1/2/3 in the garment's UV space; background is zone 1 (red).",
+  "eyelash/eyebrow meshes carry the eye/brow expression morphs (same target names) so lashes follow blinks.",
+  "Items carry a COLOR_0 base tint (alpha = outline width multiplier)."
+ ]
+}

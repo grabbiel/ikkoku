@@ -1,14 +1,8 @@
-//
-//  FrameRing.swift
-//  Engine
-//
-//  Created by rumpology on 8/19/26.
-//
 import Metal
 
 /// One shared-storage buffer partitioned into per-frame regions.
 /// Write uniforms with `allocate`, bind with the returned offset.
-public final class FrameRing {
+public final class FrameRing: @unchecked Sendable {
     public static let alignment = 256
 
     public let buffer: any MTLBuffer
@@ -18,7 +12,7 @@ public final class FrameRing {
     private var cursor = 0
 
     public init?(device: any MTLDevice,
-                 regionSize: Int = 64 * 1024,
+                 regionSize: Int = 8 * 1024 * 1024,
                  regionCount: Int = GPUContext.maxFramesInFlight) {
         let aligned = FrameRing.align(regionSize)
         guard let buffer = device.makeBuffer(length: aligned * regionCount,
@@ -35,12 +29,26 @@ public final class FrameRing {
         cursor = 0
     }
 
+    public var bytesUsed: Int { cursor }
+
     /// Copies `value` into the current region. Returns its byte offset.
     public func allocate<T>(_ value: T) -> Int {
         let size = MemoryLayout<T>.stride
         precondition(cursor + size <= regionSize, "FrameRing region exhausted")
         let offset = regionIndex * regionSize + cursor
         buffer.contents().storeBytes(of: value, toByteOffset: offset, as: T.self)
+        cursor += FrameRing.align(size)
+        return offset
+    }
+
+    /// Copies an array. Returns the byte offset of element 0.
+    public func allocate<T>(array: [T]) -> Int {
+        let size = max(MemoryLayout<T>.stride * array.count, 1)
+        precondition(cursor + size <= regionSize, "FrameRing region exhausted (\(size) bytes)")
+        let offset = regionIndex * regionSize + cursor
+        array.withUnsafeBytes { src in
+            if let base = src.baseAddress { buffer.contents().advanced(by: offset).copyMemory(from: base, byteCount: src.count) }
+        }
         cursor += FrameRing.align(size)
         return offset
     }
