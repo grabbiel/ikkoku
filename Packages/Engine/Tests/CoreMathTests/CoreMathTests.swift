@@ -11,11 +11,11 @@ import ShaderTypes
 import simd
 
 @Test func frameUniformsStride() {
-    #expect(MemoryLayout<FrameUniforms>.stride == 160)
+    #expect(MemoryLayout<FrameUniforms>.stride == 560)
 }
 
 @Test func drawUniformsStride() {
-    #expect(MemoryLayout<DrawUniforms>.stride == 112)
+    #expect(MemoryLayout<DrawUniforms>.stride == 144)
 }
 
 @Test func reverseZMapsNearToOneAndFarToZero() {

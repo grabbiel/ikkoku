@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "79A8E8B43034D876004895DE"
-               BuildableName = "IkkokuCreator.app"
+               BuildableName = "Ikkoku.app"
                BlueprintName = "IkkokuCreator"
                ReferencedContainer = "container:Ikkoku.xcodeproj">
             </BuildableReference>
@@ -45,7 +45,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "79A8E8B43034D876004895DE"
-            BuildableName = "IkkokuCreator.app"
+            BuildableName = "Ikkoku.app"
             BlueprintName = "IkkokuCreator"
             ReferencedContainer = "container:Ikkoku.xcodeproj">
          </BuildableReference>
@@ -69,7 +69,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "79A8E8B43034D876004895DE"
-            BuildableName = "IkkokuCreator.app"
+            BuildableName = "Ikkoku.app"
             BlueprintName = "IkkokuCreator"
             ReferencedContainer = "container:Ikkoku.xcodeproj">
          </BuildableReference>

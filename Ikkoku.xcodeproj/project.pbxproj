@@ -23,7 +23,7 @@
 
 /* Begin PBXFileReference section */
 		796F38543036A3C9007ABF96 /* IkkokuShaders.metallib */ = {isa = PBXFileReference; explicitFileType = "archive.metal-library"; includeInIndex = 0; path = IkkokuShaders.metallib; sourceTree = BUILT_PRODUCTS_DIR; };
-		79A8E8B53034D876004895DE /* IkkokuCreator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = IkkokuCreator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		79A8E8B53034D876004895DE /* IkkokuCreator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Ikkoku.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		79A8E8D13034DCD4004895DE /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -50,6 +50,15 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				796F38683037809E007ABF96 /* Exceptions for "Assets" folder in "IkkokuCreator" target */,
+			);
+			explicitFolders = (
+				Accessories,
+				Characters,
+				Clothes,
+				Hair,
+				Items,
+				Textures,
+				Thumbs,
 			);
 			path = Assets;
 			sourceTree = "<group>";
@@ -381,12 +390,14 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3LYWV7T9MT;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_CFBundleDisplayName = Ikkoku;
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -394,7 +405,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.grabbiel.IkkokuCreator;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Ikkoku;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -416,12 +427,14 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 3LYWV7T9MT;
-				ENABLE_APP_SANDBOX = YES;
+				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_CFBundleDisplayName = Ikkoku;
+				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -429,7 +442,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.6;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.grabbiel.IkkokuCreator;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = Ikkoku;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
