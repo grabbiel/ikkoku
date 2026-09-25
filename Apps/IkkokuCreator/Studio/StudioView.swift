@@ -178,6 +178,7 @@ struct StudioView: View {
             Picker("", selection: $model.inspectorTab) {
                 ForEach(StudioModel.InspectorTab.allCases) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).labelsHidden().padding(8)
+                .accessibilityIdentifier("studio.inspector.tabs")
             ScrollView {
                 if let diagnostics = model.doc.sourcePreviewDiagnostics, !diagnostics.isEmpty {
                     DisclosureGroup("Source compatibility details") {
@@ -187,16 +188,13 @@ struct StudioView: View {
                     }.padding(12)
                 }
                 Group {
-                    if model.selectedObject?.sourceCharacter != nil && [.pose, .face, .clothes].contains(model.inspectorTab) {
-                        Text("This reference avatar shows supported card settings and saved FK. Source pose editing, clothing changes and the original full-body IK solver are not connected to this preview yet.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    } else { switch model.inspectorTab {
+                    switch model.inspectorTab {
                     case .object: ObjectInspector(model: model)
                     case .pose: PoseInspector(model: model)
                     case .face: FaceInspector(model: model)
                     case .clothes: ClothesInspector(model: model)
                     case .scene: SceneInspector(model: model)
-                    } }
+                    }
                 }.padding(12)
             }
             Divider()
@@ -259,12 +257,17 @@ struct ObjectInspector: View {
                 case .character:
                     SectionBox(title: "Character") {
                         Text(o.card?.profile.name ?? "").font(.callout)
-                        HStack {
-                            Button("Edit in Maker") { if let c = o.card { app.maker?.load(card: c); app.mode = .maker } }
-                            Button("Replace from Maker") { if let c = app.maker?.card { model.update(o.id) { $0.card = c; $0.name = c.profile.name } } }
+                        if o.sourceCharacter == nil {
+                            HStack {
+                                Button("Edit in Maker") { if let c = o.card { app.maker?.load(card: c); app.mode = .maker } }
+                                Button("Replace from Maker") { if let c = app.maker?.card { model.update(o.id) { $0.card = c; $0.name = c.profile.name } } }
+                            }
+                            Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(o.id) { $0.clothingVisible = v } }))
+                            Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(o.id) { $0.accessoriesVisible = v } }))
+                        } else {
+                            Text("Original character: name, transform and voice are editable here. Maker editing, replacement and the prototype clothing/accessory toggles only affect unused native fields and are not available for this reference avatar.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                        Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(o.id) { $0.clothingVisible = v } }))
-                        Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(o.id) { $0.accessoriesVisible = v } }))
                     }
                     if o.sourceCharacter != nil {
                         SectionBox(title: "Voice") {
@@ -385,14 +388,18 @@ struct SourcePoseInspector: View {
         if let state = model.selectedSourceIKState {
             SectionBox(title: "Original kinematics") {
                 Toggle("FK enabled", isOn: Binding(get: { state.enableFK && !state.enableIK }, set: { model.setSourceFKEnabled($0) }))
+                    .accessibilityIdentifier("studio.source.fk.enabled")
                 Toggle("IK enabled", isOn: Binding(get: { state.enableIK }, set: { model.setSourceIKEnabled($0) })).disabled(!model.sourceIKAvailable)
+                    .accessibilityIdentifier("studio.source.ik.enabled")
                 ForEach(0..<SourceStudioIKEditing.groupLabels.count, id: \.self) { group in
                     Toggle(SourceStudioIKEditing.groupLabels[group], isOn: Binding(get: { state.activeIK[group] }, set: { model.setSourceIKGroup(group, enabled: $0) })).disabled(!model.sourceIKAvailable)
+                        .accessibilityIdentifier("studio.source.ik.group.\(group)")
                 }
                 Picker("IK guide", selection: Binding(get: { model.selectedSourceIK ?? -1 }, set: { model.selectedSourceIK = $0 < 0 ? nil : $0; model.poseMode = .ik })) {
                     Text("None").tag(Int32(-1))
                     ForEach(0..<13, id: \.self) { id in Text(SourceStudioIKEditing.labels[id]).tag(Int32(id)) }
                 }.disabled(!model.sourceIKAvailable)
+                    .accessibilityIdentifier("studio.source.ik.guide")
                 if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
                     VectorRow(label: "Position", value: Binding(get: { value.position }, set: { model.setSourceIKValue(target, edit: .init(position: $0, rotationDegrees: value.rotationDegrees)) }), step: 0.02, format: "%.3f")
                     if SourceStudioIKEditing.allowsRotation(target) {
@@ -411,7 +418,11 @@ struct SourcePoseInspector: View {
 struct FaceInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
-        if let o = model.selectedObject, o.kind == .character, let i = model.doc.index(of: o.id), o.card != nil {
+        if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
+            Text("Source face editing is not supported yet. The original character's face is driven by its saved card data; the prototype expression controls below would only write unused native fields, so they are hidden for this reference avatar.")
+                .font(.callout).foregroundStyle(.secondary)
+                .accessibilityIdentifier("studio.face.source.unsupported")
+        } else if let o = model.selectedObject, o.kind == .character, let i = model.doc.index(of: o.id), o.card != nil {
             let exp = Binding<ExpressionState>(get: { model.doc.objects[i].card?.expression ?? ExpressionState() }, set: { v in model.update(o.id) { $0.card?.expression = v } })
             VStack(alignment: .leading, spacing: 10) {
                 SectionBox(title: "Expression") {
@@ -446,6 +457,7 @@ struct ClothesInspector: View {
                 let labels = model.sourceAccessoryLabels(for: o.id)
                 ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
                     Text(label).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("studio.source.accessory.\($0)")
                 }
                 if labels.isEmpty { Text("Source accessory selections are unavailable.").foregroundStyle(.secondary) }
             }
