@@ -135,9 +135,9 @@ The probe also accepts repeated `--native-manifest` arguments. The later
 before producing captures. That trap is now fixed in code (A-T04). With native
 manifests, each phase also delivers `--focus-events`. It writes an adapter report
 covering mounts, observers and generated-tone gain, which the probe checks; see
-[native adapters](native-adapters.md#startup-and-acceptance). Until that run
-passes on a release build, combined adapter/IR save-and-reload support remains a
-regression target, not an established passing workflow.
+[native adapters](native-adapters.md#startup-and-acceptance). Both installed-disabled and explicit-enabled Release runs passed during PR #2
+review; the reference records exact scope and private evidence. Wider plugin/UI
+compatibility remains outside those controlled fixtures.
 
 The successful IR-only capture supplied the following bounded performance sample.
 That 600×800 scene contains 28 visible items and 60,761 drawn triangles. On the
