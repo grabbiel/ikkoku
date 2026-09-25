@@ -11,6 +11,9 @@ Start with the [documentation index](docs/README.md),
 [component audit](docs/component-audit/README.md) records current feature status,
 specific code findings, evidence limits and actionable implementation tasks.
 
+To contribute through GitHub, follow the [contribution guide](CONTRIBUTING.md)
+for issues, branches, pull requests, collaboration and validation requirements.
+
 ## Build
 
 Use an Apple Silicon development host with Xcode 26, Swift 6 tooling and the

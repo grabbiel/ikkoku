@@ -11,6 +11,7 @@ percentage or general mod compatibility is claimed.
 | Need | Read |
 | --- | --- |
 | Project overview | [Repository README](../README.md) |
+| Contribute and collaborate through GitHub | [Contribution guide](../CONTRIBUTING.md) |
 | Build, tests, captures and prerequisites | [Build and test](guides/build-and-test.md) |
 | Maker, cards, Studio and source-mode limitations | [Using the app](guides/using-the-app.md) |
 | Scan/mount a local mod library | [Mod library guide](guides/mod-library.md) |

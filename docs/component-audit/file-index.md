@@ -1,7 +1,8 @@
 # File coverage index
 
-Snapshot: 2026-09-25, base `2cfb859` plus the uncommitted working tree. This index
-Refreshed after documentation reorganization on the same date. It lists every
+Code-audit snapshot: 2026-09-25, base `2cfb859` plus the then-uncommitted work.
+The file inventory includes the documentation reorganization, contribution
+guide and ST-T02/A-T04 probe test additions; it does not represent a new code audit. It lists every
 present Git-visible tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -10,7 +11,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**610 files indexed; 610 assigned; 0 unassigned.**
+**611 files indexed; 611 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -18,14 +19,14 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 108 |
 | [Studio / IK / animation](studio.md) | 89 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 283 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 69 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 70 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
 | Conversion / recovery / verification tool | 80 |
-| Documentation / historical evidence | 51 |
+| Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
 | Runtime / shared shader declaration | 137 |
@@ -607,6 +608,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | File | Role |
 | --- | --- |
 | [.gitignore](../../.gitignore) | Build / repository configuration |
+| [CONTRIBUTING.md](../../CONTRIBUTING.md) | Documentation / historical evidence |
 | [Ikkoku.xcodeproj/project.pbxproj](../../Ikkoku.xcodeproj/project.pbxproj) | Build / repository configuration |
 | [Ikkoku.xcodeproj/project.xcworkspace/contents.xcworkspacedata](../../Ikkoku.xcodeproj/project.xcworkspace/contents.xcworkspacedata) | Build / repository configuration |
 | [Ikkoku.xcodeproj/xcshareddata/xcschemes/IkkokuCreator.xcscheme](../../Ikkoku.xcodeproj/xcshareddata/xcschemes/IkkokuCreator.xcscheme) | Build / repository configuration |
