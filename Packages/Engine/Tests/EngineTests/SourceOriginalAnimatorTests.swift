@@ -5,9 +5,11 @@ import CoreMath
 import Scene
 import Studio
 
-@Test func sourceAnimatorMatchesOriginalUnityLocalPoseAndClockWhenSupplied() throws {
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ORIGINAL_ANIMATOR_REFERENCE", "IKKOKU_STUDIO_ANIMATION_CATALOG"]), "Requires IKKOKU_ORIGINAL_ANIMATOR_REFERENCE and IKKOKU_STUDIO_ANIMATION_CATALOG"))
+func sourceAnimatorMatchesOriginalUnityLocalPoseAndClockWhenSupplied() throws {
     let env = ProcessInfo.processInfo.environment
-    guard let path = env["IKKOKU_ORIGINAL_ANIMATOR_REFERENCE"], let catalogFile = env["IKKOKU_STUDIO_ANIMATION_CATALOG"] else { return }
+    let path = try SourceFixtureSupport.require("IKKOKU_ORIGINAL_ANIMATOR_REFERENCE")
+    let catalogFile = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
     struct Pose: Decodable {
         let position: [Float], rotation: [Float], scale: [Float]
         var p: Float3 { UnityCoordinates.position(Float3(position[0], position[1], position[2])) }
