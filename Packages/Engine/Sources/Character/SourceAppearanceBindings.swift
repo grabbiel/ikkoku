@@ -51,6 +51,7 @@ public struct SourceAppearanceBindings: Codable, Sendable {
         public let resolverProperties: [String]
         public let main: Texture?, mask: Texture?
         public let blend: String?
+        public let colorSpace: String?
         public let patterns: [Pattern]?, layers: [Layer]?
     }
     public let schemaVersion: Int
@@ -93,12 +94,19 @@ public extension SourcePreviewAppearance {
         public let appearance: SourcePreviewAppearance
         public let appliedFields: Set<String>
         public let diagnostics: [String]
+
+        public init(appearance: SourcePreviewAppearance, appliedFields: Set<String>, diagnostics: [String]) {
+            self.appearance = appearance
+            self.appliedFields = appliedFields
+            self.diagnostics = diagnostics
+        }
     }
 
     func applying(_ card: SourceCardAppearance, bindings: SourceAppearanceBindings, directory: URL,
-                  resources: ResourceStore) throws -> CardApplication {
+                  resources: ResourceStore, backend: SourceAppearanceCompositionBackend = .metal) throws -> CardApplication {
         var materials = self.materials, applied = Set<String>(), diagnostics = card.diagnostics + bindings.limitations
         var leases = textureOwner?.leases ?? [:]
+        var compositor: SourceMaterialCompositor?
         // Count every prospective output, including repeated recipes over one cached
         // source texture. Preflight before reading pixels or allocating Metal textures.
         var totalOutputBytes = 0
@@ -178,7 +186,12 @@ public extension SourcePreviewAppearance {
                 diagnostics.append("\(entry.parts.joined(separator: ", ")) kept reference material; unmatched selections: \((unsupported + modded).joined(separator: ", ")).")
                 continue
             }
-            let colors = entry.colors.compactMap { card.color($0) }
+            let sourceLinear = entry.colorSpace == "sourceLinear"
+            guard entry.colorSpace == nil || (sourceLinear && ["head", "clothes"].contains(entry.kind)) else {
+                throw RigError.invalid("Unverified source material color-space recipe.")
+            }
+            var colors = entry.colors.compactMap { card.color($0) }
+            if sourceLinear { colors = colors.map(linear) }
             guard colors.count == entry.colors.count else {
                 diagnostics.append("\(entry.parts.joined(separator: ", ")) kept reference material because color fields are missing or unsupported."); continue
             }
@@ -209,7 +222,7 @@ public extension SourcePreviewAppearance {
                             diagnostics.append("Skipped unavailable pattern or parameters: \(pattern.selection)=\(id)."); continue
                         }
                         guard meta.wrap == "repeat" || meta.wrap == "clamp" else { throw RigError.invalid("Unsupported source pattern wrapping.") }
-                        patterns.append((index, meta, try pixels(meta), color, Float2(scale)))
+                        patterns.append((index, meta, try pixels(meta), sourceLinear ? linear(color) : color, Float2(scale)))
                         applied.insert(pattern.color)
                     }
                 }
@@ -237,48 +250,70 @@ public extension SourcePreviewAppearance {
                             throw RigError.invalid("Unsupported source face layer sampling.")
                         }
                         if layer.kind == "paint" && layer.mask == nil { throw RigError.invalid("Face paint requires its source mask.") }
-                        layers.append((layer, meta, try pixels(meta), color, layout, try layer.mask.map(pixels)))
+                        layers.append((layer, meta, try pixels(meta), sourceLinear ? linear(color) : color, layout, try layer.mask.map(pixels)))
                         applied.insert(layer.color)
                     }
                 }
-                let count = dimensions.width * dimensions.height
-                var output = [UInt8](repeating: 0, count: count * 4)
-                for pixel in 0..<count {
-                    let offset = pixel * 4
-                    func sample(_ bytes: [UInt8]?, fallback: Float4) -> Float4 {
-                        guard let bytes else { return fallback }
-                        return Float4(Float(bytes[offset]), Float(bytes[offset + 1]), Float(bytes[offset + 2]), Float(bytes[offset + 3])) / 255
+                let gpu: any MTLTexture
+                if backend == .metal {
+                    if compositor == nil { compositor = try SourceMaterialCompositor(device: resources.device) }
+                    func image(_ meta: SourceAppearanceBindings.Texture, _ bytes: [UInt8]) -> SourceMaterialImage {
+                        SourceMaterialImage(width: meta.width, height: meta.height, repeating: meta.wrap == "repeat", bytes: bytes)
                     }
-                    let uv = Float2((Float(pixel % dimensions.width) + 0.5) / Float(dimensions.width),
-                                    1 - (Float(pixel / dimensions.width) + 0.5) / Float(dimensions.height))
-                    var effectiveColors = colors
-                    for (index, meta, bytes, patternColor, tiling) in patterns {
-                        let patternUV = uv * (Float2(repeating: 20) - 19 * tiling)
-                        effectiveColors[index] = SourceColorComposition.patternColor(base: colors[index], pattern: patternColor,
-                            red: sampled(bytes, meta, uv: patternUV).x)
-                    }
-                    var result = SourceColorComposition.compose(kind: kind, main: sample(main, fallback: .one),
-                        mask: (entry.mask != nil && mask != nil && (entry.mask!.width != dimensions.width || entry.mask!.height != dimensions.height))
-                            ? sampled(mask!, entry.mask!, uv: uv) : sample(mask, fallback: .zero), colors: effectiveColors, blend: blend)
-                    for (layer, meta, bytes, color, layout, maskBytes) in layers {
-                        var layerUV = uv
-                        if let layout { layerUV = SourceColorComposition.faceUV(uv, layout: layout, kind: layer.kind) }
-                        else if let transform = layer.transform {
-                            layerUV = (uv + Float2(transform[0], transform[1]) - Float2(repeating: 1)) * (Float2(repeating: 1) - Float2(transform[2], transform[3])) + Float2(repeating: 0.5)
+                    gpu = try compositor!.compose(kind: kind, width: dimensions.width, height: dimensions.height,
+                        main: entry.main.map { image($0, main!) }, mask: entry.mask.map { image($0, mask!) }, colors: colors, blend: blend, encodeSRGB: sourceLinear,
+                        patterns: patterns.map { SourceMaterialPattern(channel: $0.0, image: image($0.1, $0.2), color: $0.3, tiling: $0.4) },
+                        layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
+                            SourceMaterialLayer(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
+                                transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
+                        })
+                } else {
+                    let count = dimensions.width * dimensions.height
+                    var output = [UInt8](repeating: 0, count: count * 4)
+                    for pixel in 0..<count {
+                        let offset = pixel * 4
+                        func sample(_ bytes: [UInt8]?, fallback: Float4) -> Float4 {
+                            guard let bytes else { return fallback }
+                            return Float4(Float(bytes[offset]), Float(bytes[offset + 1]), Float(bytes[offset + 2]), Float(bytes[offset + 3])) / 255
                         }
-                        let attenuation: Float
-                        if let maskBytes, let mask = layer.mask { attenuation = sampled(maskBytes, mask, uv: uv).x }
-                        else { attenuation = 1 }
-                        result = SourceColorComposition.layer(base: result, texture: sampled(bytes, meta, uv: layerUV), color: color, mask: attenuation)
+                        let uv = Float2((Float(pixel % dimensions.width) + 0.5) / Float(dimensions.width),
+                                        1 - (Float(pixel / dimensions.width) + 0.5) / Float(dimensions.height))
+                        var effectiveColors = colors
+                        for (index, meta, bytes, patternColor, tiling) in patterns {
+                            let patternUV = uv * (Float2(repeating: 20) - 19 * tiling)
+                            effectiveColors[index] = SourceColorComposition.patternColor(base: colors[index], pattern: patternColor,
+                                red: sampled(bytes, meta, uv: patternUV).x)
+                        }
+                        var result = SourceColorComposition.compose(kind: kind, main: sample(main, fallback: .one),
+                            mask: (entry.mask != nil && mask != nil && (entry.mask!.width != dimensions.width || entry.mask!.height != dimensions.height))
+                                ? sampled(mask!, entry.mask!, uv: uv) : sample(mask, fallback: .zero), colors: effectiveColors, blend: blend)
+                        for (layer, meta, bytes, color, layout, maskBytes) in layers {
+                            var layerUV = uv
+                            if let layout { layerUV = SourceColorComposition.faceUV(uv, layout: layout, kind: layer.kind) }
+                            else if let transform = layer.transform {
+                                layerUV = (uv + Float2(transform[0], transform[1]) - Float2(repeating: 1)) * (Float2(repeating: 1) - Float2(transform[2], transform[3])) + Float2(repeating: 0.5)
+                            }
+                            let attenuation: Float
+                            if let maskBytes, let mask = layer.mask { attenuation = sampled(maskBytes, mask, uv: uv).x }
+                            else { attenuation = 1 }
+                            result = SourceColorComposition.layer(base: result, texture: sampled(bytes, meta, uv: layerUV), color: color, mask: attenuation)
+                        }
+                        if sourceLinear {
+                            for channel in 0..<3 {
+                                let value = result[channel]
+                                result[channel] = value <= 0.0031308 ? value * 12.92 : 1.055 * pow(max(value, 0), 1 / 2.4) - 0.055
+                            }
+                        }
+                        for channel in 0..<4 { output[offset + channel] = UInt8((min(max(result[channel], 0), 1) * 255).rounded(.toNearestOrEven)) }
                     }
-                    for channel in 0..<4 { output[offset + channel] = UInt8((min(max(result[channel], 0), 1) * 255).rounded(.toNearestOrEven)) }
+                    let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb,
+                        width: dimensions.width, height: dimensions.height, mipmapped: false)
+                    descriptor.usage = .shaderRead; descriptor.storageMode = .shared
+                    guard let cpuTexture = resources.device.makeTexture(descriptor: descriptor) else { throw ResourceError.bufferAllocation }
+                    output.withUnsafeBytes { cpuTexture.replace(region: MTLRegionMake2D(0, 0, dimensions.width, dimensions.height), mipmapLevel: 0,
+                        withBytes: $0.baseAddress!, bytesPerRow: dimensions.width * 4) }
+                    gpu = cpuTexture
                 }
-                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb,
-                    width: dimensions.width, height: dimensions.height, mipmapped: false)
-                descriptor.usage = .shaderRead; descriptor.storageMode = .shared
-                guard let gpu = resources.device.makeTexture(descriptor: descriptor) else { throw ResourceError.bufferAllocation }
-                output.withUnsafeBytes { gpu.replace(region: MTLRegionMake2D(0, 0, dimensions.width, dimensions.height), mipmapLevel: 0,
-                    withBytes: $0.baseAddress!, bytesPerRow: dimensions.width * 4) }
                 let handle = resources.register(texture: gpu)
                 texture = handle
                 leases[handle] = SourceAppearanceTextureLease(resources: resources, handle: handle)

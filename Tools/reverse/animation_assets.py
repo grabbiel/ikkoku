@@ -33,6 +33,7 @@ def streamed_curves(data: list[int], count: int, start: float) -> list[dict]:
         raise ValueError("Streamed curve limits exceeded")
     raw = struct.pack('<' + 'I' * len(data), *data)
     curves = [[] for _ in range(count)]
+    initial = [None for _ in range(count)]
     position, previous, terminal = 0, -math.inf, False
     while position < len(raw):
         if position + 8 > len(raw): raise ValueError("Truncated streamed frame")
@@ -48,11 +49,26 @@ def streamed_curves(data: list[int], count: int, start: float) -> list[dict]:
             if index < 0 or index >= count or index in seen: raise ValueError("Invalid or duplicate streamed curve index")
             seen.add(index)
             for value in coefficients: finite(value)
+            if time < start:
+                # Unity's first frame commonly uses -FLT_MAX and constant
+                # coefficients. It seeds curves whose first timed key occurs
+                # slightly after zero (e.g. one binary32 ULP after a cut).
+                if time == -3.4028234663852886e38:
+                    if coefficients[:3] != [0, 0, 0]: raise ValueError("Invalid streamed initialization sample")
+                    initial[index] = [0.0, 0.0, 0.0, coefficients[3]]
+                else:
+                    dt = start - time
+                    a, b, c, d = coefficients
+                    initial[index] = [a, 3*a*dt+b, (3*a*dt+2*b)*dt+c, ((a*dt+b)*dt+c)*dt+d]
+                    for value in initial[index]: finite(value)
             if time >= start:
                 if curves[index] and time <= curves[index][-1]['time']: raise ValueError("Duplicate streamed key time")
                 curves[index].append({'time': time, 'coefficients': coefficients})
         previous = time
     if count and not terminal: raise ValueError("Missing streamed terminal sentinel")
+    for index, keys in enumerate(curves):
+        if (not keys or keys[0]['time'] != start) and initial[index] is not None:
+            keys.insert(0, {'time': start, 'coefficients': initial[index]})
     if any(not keys or keys[0]['time'] != start for keys in curves):
         raise ValueError("Every streamed curve needs an explicit start key")
     return [{'kind': 'streamed', 'keys': keys} for keys in curves]
@@ -86,15 +102,15 @@ def convert_clip(raw: dict, identity: str, targets: dict[int, dict]) -> dict:
     muscle = raw['m_MuscleClip']
     start, stop = finite(muscle['m_StartTime']), finite(muscle['m_StopTime'])
     if start < 0 or stop <= start: raise ValueError("Invalid animation interval")
-    if muscle['m_Mirror'] or muscle['m_LoopBlend']:
-        raise ValueError("Mirroring and loop-pose correction are not implemented")
+    if muscle['m_Mirror']: raise ValueError("Clip mirroring is not implemented")
+    if muscle['m_LoopBlend']: raise ValueError("Generic loop-pose correction is not implemented")
     source = muscle['m_Clip']['data']
     stream, dense, constant = source['m_StreamedClip'], source['m_DenseClip'], source['m_ConstantClip']['data']
     curves = streamed_curves(stream['data'], stream['curveCount'], start)
     frames, count, rate, begin = dense['m_FrameCount'], dense['m_CurveCount'], finite(dense['m_SampleRate']), finite(dense['m_BeginTime'])
     if count < 0 or frames < 0 or count > 100000 or frames > 1000000 or len(dense['m_SampleArray']) != frames * count:
         raise ValueError("Invalid dense sample dimensions")
-    if count and (frames < 1 or rate <= 0 or begin > start): raise ValueError("Invalid dense interval")
+    if count and (frames < 1 or rate <= 0 or begin < 0 or begin > stop): raise ValueError("Invalid dense interval")
     for value in dense['m_SampleArray']: finite(value)
     curves += [{'kind': 'dense', 'beginTime': begin, 'sampleRate': rate,
                 'samples': dense['m_SampleArray'][index::count]} for index in range(count)]
@@ -152,7 +168,7 @@ def project_states(controller: dict, requested: list[str], pointers: dict[int, s
             motions.append({'clipID': pointers[clip['m_PathID']], 'threshold': threshold, 'cycleOffset': node['m_CycleOffset']})
         states.append({'id': str(state['m_FullPathID']), 'name': name, 'sourceStateIndex': state_index,
             'sourceFullPath': tos[state['m_FullPathID']], 'speed': state['m_Speed'],
-            'speedParameter': tos.get(state['m_SpeedParamID']), 'cycleOffset': state['m_CycleOffset'],
+            'speedParameter': tos.get(state['m_SpeedParamID']) or None, 'cycleOffset': state['m_CycleOffset'],
             'loop': state['m_Loop'], 'blendParameter': parameter, 'motions': motions})
     if len(set(requested)) != len(requested) or len(states) != len(requested) or {s['name'] for s in states} != set(requested):
         raise ValueError("Requested controller states are missing or ambiguous")

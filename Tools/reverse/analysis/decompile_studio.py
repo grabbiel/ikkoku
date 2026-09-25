@@ -40,7 +40,7 @@ def main() -> None:
         parser.error(f"Missing assembly: {assembly}. Fetch the observed Mono Managed files first.")
     tool = args.tool.resolve()
     if not tool.is_file():
-        parser.error(f"Missing ILSpy command: {tool}. See docs/reverse-analysis.md for installation.")
+        parser.error(f"Missing ILSpy command: {tool}. See docs/reference/studio/binary-contracts.md for installation.")
     output.mkdir(parents=True, exist_ok=True)
     version = subprocess.run([str(tool), "--version"], check=True, capture_output=True, text=True).stdout.strip()
     manifest = {

@@ -2,8 +2,10 @@ import Foundation
 import Character
 
 extension KoikatsuBinaryReader {
-    mutating func bone() throws -> KoikatsuBoneRecord {
-        KoikatsuBoneRecord(sourceKey: try int32(), transform: try changeAmount())
+    mutating func bone(destination: SourceSceneEdits.Destination? = nil) throws -> KoikatsuBoneRecord {
+        let key = try int32(), start = offset, transform = try changeAmount()
+        if let destination { editSpans.transforms[destination] = start..<offset }
+        return KoikatsuBoneRecord(sourceKey: key, transform: transform)
     }
     mutating func animation() throws -> KoikatsuAnimationRecord {
         KoikatsuAnimationRecord(group: try int32(), category: try int32(), no: try int32())
@@ -42,18 +44,19 @@ extension KoikatsuBinaryReader {
         _ = try SourceCharacterCard.decode(result)
         return result
     }
-    mutating func character(depth: Int) throws -> KoikatsuCharacterRecord {
+    mutating func character(depth: Int, objectKey: Int32) throws -> KoikatsuCharacterRecord {
         let sex = try int32()
         guard sex == 0 || sex == 1 else { throw invalid("unsupported character sex") }
-        let card = try embeddedCard()
+        let cardStart = offset, card = try embeddedCard()
+        editSpans.cards[objectKey] = cardStart..<offset
         var bones: [Int32: KoikatsuBoneRecord] = [:], ik: [Int32: KoikatsuBoneRecord] = [:]
         for _ in 0..<(try count()) {
             let key = try int32(); guard bones[key] == nil else { throw invalid("duplicate character FK bone ID") }
-            bones[key] = try bone()
+            bones[key] = try bone(destination: .characterFK(object: objectKey, bone: key))
         }
         for _ in 0..<(try count()) {
             let key = try int32(); guard ik[key] == nil else { throw invalid("duplicate character IK target ID") }
-            ik[key] = try bone()
+            ik[key] = try bone(destination: .characterIK(object: objectKey, target: key))
         }
         var children: [Int32: [KoikatsuObjectRecord]] = [:]
         for _ in 0..<(try count()) {
@@ -62,15 +65,25 @@ extension KoikatsuBinaryReader {
             for _ in 0..<(try count()) { entries.append(try object(depth: depth + 1, rootKey: nil)) }
             children[key] = entries
         }
-        let mode = try int32(), anime = try animation(), hands = [try int32(), try int32()]
-        let nipple = try float(), fluids = try take(5), mouth = try float(), lip = try bool(), look = try bone()
+        let mode = try int32(), animationStart = offset, anime = try animation(), hands = [try int32(), try int32()]
+        let nipple = try float(), fluids = try take(5), mouth = try float(), lip = try bool(), look = try bone(destination: .lookAt(object: objectKey))
+        let kinematicStart = offset
         let enabledIK = try bool(), activeIK = try flags(5), enabledFK = try bool(), activeFK = try flags(7)
-        let expressions = try flags(8), speed = try float(), pattern = try float(), option = try bool(), loop = try bool()
+        editSpans.kinematics[objectKey] = .init(enableIK: kinematicStart..<(kinematicStart + 1),
+            activeIK: (kinematicStart + 1)..<(kinematicStart + 6), enableFK: (kinematicStart + 6)..<(kinematicStart + 7),
+            activeFK: (kinematicStart + 7)..<offset)
+        let expressions = try flags(8), speedStart = offset, speed = try float(), pattern = try float(), option = try bool(), loop = try bool()
+        let voicesStart = offset
         var voices: [KoikatsuAnimationRecord] = []
         for _ in 0..<(try count()) { voices.append(try animation()) }
-        let voiceRepeat = try int32(), visibleSon = try bool(), sonLength = try float(), simple = try bool()
-        let simpleColor = try jsonVector(["r", "g", "b", "a"]), option1 = try float(), option2 = try float()
-        let neck = try take(byteCount()), eyes = try take(byteCount()), time = try float()
+        let voiceRepeat = try int32()
+        editSpans.voices[objectKey] = voicesStart..<offset
+        let visibleSon = try bool(), sonLength = try float(), simple = try bool()
+        let simpleColor = try jsonVector(["r", "g", "b", "a"]), optionsStart = offset, option1 = try float(), option2 = try float()
+        let neck = try take(byteCount()), eyes = try take(byteCount()), timeStart = offset, time = try float()
+        editSpans.animations[objectKey] = .init(identity: animationStart..<(animationStart + 12),
+            speedPattern: speedStart..<(speedStart + 8), forceLoop: (speedStart + 9)..<(speedStart + 10),
+            options: optionsStart..<(optionsStart + 8), normalizedTime: timeStart..<(timeStart + 4))
         let groupStates = try integerMap(), states = try integerMap()
         return KoikatsuCharacterRecord(sex: sex, cardData: card, bones: bones, ikTargets: ik,
             accessoryChildren: children, kinematicMode: mode, animation: anime, handPatterns: hands,
@@ -91,10 +104,13 @@ extension KoikatsuBinaryReader {
         return KoikatsuRouteRecord(points: points, active: try bool(), loop: try bool(), visibleLine: try bool(),
                                   orientation: try int32(), color: try jsonVector(["r", "g", "b", "a"]))
     }
-    mutating func camera() throws -> KoikatsuCameraRecord {
+    mutating func camera(slot: Int? = nil) throws -> KoikatsuCameraRecord {
         let version = try int32()
         guard version == 2 else { throw KoikatsuReadError.unsupportedVersion("camera:\(version)") }
-        return KoikatsuCameraRecord(position: try vector3(), rotationDegrees: try vector3(), distance: try vector3(), fieldOfView: try float())
+        let start = offset
+        let result = KoikatsuCameraRecord(position: try vector3(), rotationDegrees: try vector3(), distance: try vector3(), fieldOfView: try float())
+        if let slot { editSpans.cameraSlots[slot] = start..<offset } else { editSpans.currentCamera = start..<offset }
+        return result
     }
     mutating func sceneLight(map: Bool) throws -> KoikatsuSceneLighting {
         let color = try jsonVector(["r", "g", "b", "a"]), intensity = try float(), x = try float(), y = try float(), shadow = try bool()
@@ -122,7 +138,7 @@ extension KoikatsuBinaryReader {
         f["lineColorG"] = try float(); c["ambientShadow"] = try jsonVector(["r", "g", "b", "a"]); f["lineWidthG"] = try float()
         let ramp = try int32(); f["ambientShadowG"] = try float()
         let currentCamera = try camera()
-        var cameras: [KoikatsuCameraRecord] = []; for _ in 0..<10 { cameras.append(try camera()) }
+        var cameras: [KoikatsuCameraRecord] = []; for slot in 0..<10 { cameras.append(try camera(slot: slot)) }
         let charLight = try sceneLight(map: false), mapLight = try sceneLight(map: true)
         let bgm = try sound(), env = try sound(), outside = try sound(outside: true)
         return KoikatsuSceneSettings(map: map, mapTransform: mapTransform, sunLightType: sunType, mapOption: mapOption,

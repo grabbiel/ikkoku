@@ -21,11 +21,13 @@ public final class SourceRigPreview {
     private let resources: ResourceStore
     private let meshes: [MeshHandle]
     private let keyBase: UInt64
+    private var liveBounds: SourceRigBounds
 
     public init(source: SourceRig, contract: SourceShapeContract?, resources: ResourceStore, appearance: SourcePreviewAppearance? = nil,
                 expressionContract: SourceExpressionContract? = nil,
                 bodyOptions: SourceBodyShapePose.Options = .init()) throws {
         self.source = source; self.contract = contract
+        liveBounds = SourceRigBounds(source: source)
         self.expressionContract = expressionContract
         self.bodyOptions = bodyOptions
         bodyCoverage = try contract?.domain("body").map { try SourceBodyShapePose.coverage(rig: source.rig, domain: $0, options: bodyOptions) }
@@ -170,9 +172,11 @@ public final class SourceRigPreview {
                 vertices.append(GizmoVertex(position: evaluation.worldMatrices[index].translation, color: color))
             }
         }
+        var frameBounds = try liveBounds.bounds(evaluation: evaluation, morphWeights: morphWeights)
+        if frameBounds.isEmpty { frameBounds = try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: morphWeights) }
         var result = RenderFrame(camera: camera, mainLight: mainLight, items: items,
             gizmos: vertices.isEmpty ? [] : [GizmoBatch(primitive: .lines, vertices: vertices, depthTest: false)],
-            effects: effects, sceneBounds: try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: morphWeights))
+            effects: effects, sceneBounds: frameBounds)
         for (index, palette) in evaluation.palettes.enumerated() { result.skinSets[keyBase | UInt64(index)] = palette }
         result.retainTextures(from: resources)
         return result

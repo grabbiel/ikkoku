@@ -122,6 +122,9 @@ public struct SceneEffects: Sendable, Equatable, Codable {
     public var vignetteIntensity: Float = 0.35
     public var vignetteSmoothness: Float = 0.4
     public var fxaa = true
+    /// nil preserves the historical native highlight roll-off in older scenes.
+    /// Source-frame validation disables it to match an unprocessed Unity camera.
+    public var toneMappingEnabled: Bool?
     public var exposure: Float = 1.0
     public var contrast: Float = 1.0
     public var saturation: Float = 1.05

@@ -7,6 +7,9 @@ public struct KoikatsuChangeAmount: Sendable, Equatable {
     public let position: SIMD3<Float>
     public let rotationDegrees: SIMD3<Float>
     public let scale: SIMD3<Float>
+    public init(position: SIMD3<Float>, rotationDegrees: SIMD3<Float>, scale: SIMD3<Float>) {
+        self.position = position; self.rotationDegrees = rotationDegrees; self.scale = scale
+    }
 }
 
 public enum KoikatsuObjectKind: Int32, Sendable {
@@ -108,6 +111,9 @@ public struct KoikatsuCameraRecord: Sendable, Equatable {
     public let rotationDegrees: SIMD3<Float>
     public let distance: SIMD3<Float>
     public let fieldOfView: Float
+    public init(position: SIMD3<Float>, rotationDegrees: SIMD3<Float>, distance: SIMD3<Float>, fieldOfView: Float) {
+        self.position = position; self.rotationDegrees = rotationDegrees; self.distance = distance; self.fieldOfView = fieldOfView
+    }
 }
 
 public enum KoikatsuReadError: Error, LocalizedError, Sendable, Equatable {
@@ -175,6 +181,7 @@ struct KoikatsuBinaryReader {
     var offset = 0
     var objectCount = 0
     var sourceKeys = Set<Int32>()
+    var editSpans = SourceSceneEditSpans()
     static let maximumCount = 100_000
     static let maximumStringBytes = 1_048_576
 
@@ -282,7 +289,7 @@ struct KoikatsuBinaryReader {
                               uv: try jsonVector(["x", "y", "z", "w"]), rotation: try float())
     }
 
-    mutating func item() throws -> KoikatsuItemRecord {
+    mutating func item(objectKey: Int32) throws -> KoikatsuItemRecord {
         let group = try int32(), category = try int32(), no = try int32(), speed = try float()
         var colors: [SIMD4<Float>] = [], patterns: [KoikatsuPatternRecord] = []
         for _ in 0..<8 { colors.append(try jsonVector(["r", "g", "b", "a"])) }
@@ -294,7 +301,7 @@ struct KoikatsuBinaryReader {
         for _ in 0..<boneCount {
             let name = try string()
             guard bones[name] == nil else { throw invalid("duplicate bone name") }
-            bones[name] = KoikatsuBoneRecord(sourceKey: try int32(), transform: try changeAmount())
+            bones[name] = try bone(destination: .itemFK(object: objectKey, bone: name))
         }
         return KoikatsuItemRecord(group: group, category: category, no: no, animationSpeed: speed,
                                  colors: colors, patterns: patterns, alpha: alpha, lineColor: lineColor,
@@ -311,19 +318,21 @@ struct KoikatsuBinaryReader {
         guard let kind = KoikatsuObjectKind(rawValue: rawKind) else { throw KoikatsuReadError.unsupportedObjectKind(rawKind) }
         let key = try int32()
         guard sourceKeys.insert(key).inserted else { throw invalid("duplicate object key") }
-        let transform = try changeAmount(), treeState = try int32(), visible = try bool()
+        let transformStart = offset, transform = try changeAmount()
+        editSpans.transforms[.object(key)] = transformStart..<offset
+        let treeState = try int32(), visible = try bool()
         var name: String?, active: Bool?, itemRecord: KoikatsuItemRecord?, lightRecord: KoikatsuLightRecord?
         var children: [KoikatsuObjectRecord] = []
         var characterRecord: KoikatsuCharacterRecord?, routeRecord: KoikatsuRouteRecord?
         switch kind {
         case .folder: name = try string()
         case .camera: name = try string(); active = try bool()
-        case .character: characterRecord = try character(depth: depth)
+        case .character: characterRecord = try character(depth: depth, objectKey: key)
         case .route:
             name = try string()
             for _ in 0..<(try count()) { children.append(try object(depth: depth + 1, rootKey: nil)) }
             routeRecord = try route()
-        case .item: itemRecord = try item()
+        case .item: itemRecord = try item(objectKey: key)
         case .light:
             lightRecord = KoikatsuLightRecord(no: try int32(), color: try vector4(), intensity: try float(),
                                                range: try float(), spotAngle: try float(), shadow: try bool(),

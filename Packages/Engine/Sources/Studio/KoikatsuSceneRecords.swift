@@ -43,9 +43,15 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
     /// This does not replace missing character geometry with a guessed model.
     public func makePose(rig: RigDefinition, catalog: [SourceStudioPose.Bone], baseline: RigPose,
                          characterRoot: Int, bodyRoot: Int? = nil, hairRoot: Int? = nil,
-                         neckLookPattern: Int = 0) throws -> PoseResult {
+                         neckLookPattern: Int = 0, kinematics: SourceStudioKinematicState? = nil,
+                         fkOverrides: [Int: SIMD3<Float>] = [:]) throws -> PoseResult {
+        let state = kinematics ?? SourceStudioKinematicState(record: self)
+        try state.validate()
+        let activeFK = state.activeFK, activeIK = state.activeIK, enableFK = state.enableFK, enableIK = state.enableIK
+        var rotations = Dictionary(uniqueKeysWithValues: bones.map { (Int($0.key), $0.value.transform.rotationDegrees) })
+        rotations.merge(fkOverrides) { _, edit in edit }
         var controller = try SourceStudioPose(rig: rig, bones: catalog,
-            rotations: Dictionary(uniqueKeysWithValues: bones.map { (Int($0.key), $0.value.transform.rotationDegrees) }),
+            rotations: rotations,
             characterRoot: characterRoot, bodyRoot: bodyRoot, hairRoot: hairRoot, sex: Int(sex), neckLookPattern: neckLookPattern)
         var pose = baseline, effects: [SourceStudioPose.Effect] = []
         // Stage preferences while FK is off. Forced mode changes must not replace them.

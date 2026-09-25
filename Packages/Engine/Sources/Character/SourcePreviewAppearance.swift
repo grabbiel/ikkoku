@@ -32,7 +32,7 @@ public struct SourcePreviewAppearance: Sendable {
     public func replacingBodyMask(data: Data, resources: ResourceStore) throws -> Self {
         guard var body = materials["o_body_a/0"] else { throw RigError.invalid("Body coverage material is missing.") }
         let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        let mask = try resources.texture(data: data, key: "maker-body-mask:" + key, srgb: false)
+        let mask = try resources.texture(data: data, key: "maker-body-mask:" + key + ":" + UUID().uuidString, srgb: false)
         for i in body.indices {
             body[i].bodyMask = mask
             body[i].uniforms.sourceAlphaA = 1; body[i].uniforms.sourceAlphaB = 1
@@ -40,7 +40,24 @@ public struct SourcePreviewAppearance: Sendable {
             body[i].setFlag(MaterialFlagSourceBodyMask, true)
         }
         var result = materials; result["o_body_a/0"] = body
-        return Self(materials: result, textureOwner: textureOwner)
+        var leases = textureOwner?.leases ?? [:]
+        leases[mask] = SourceAppearanceTextureLease(resources: resources, handle: mask)
+        let used = Set(result.values.flatMap { $0 }.flatMap(\.textureHandles))
+        return Self(materials: result, textureOwner: SourceAppearanceTextureOwner(leases: leases.filter { used.contains($0.key) }))
+    }
+
+    public func removingBodyMask() -> Self {
+        var result = materials
+        if var body = result["o_body_a/0"] {
+            for i in body.indices {
+                body[i].bodyMask = nil
+                body[i].setFlag(MaterialFlagHasBodyMask, false)
+                body[i].setFlag(MaterialFlagSourceBodyMask, false)
+            }
+            result["o_body_a/0"] = body
+        }
+        let used = Set(result.values.flatMap { $0 }.flatMap(\.textureHandles))
+        return Self(materials: result, textureOwner: SourceAppearanceTextureOwner(leases: (textureOwner?.leases ?? [:]).filter { used.contains($0.key) }))
     }
 
     public static func load(url: URL, resources: ResourceStore, modLibrary: SourceModLibrary? = nil) throws -> Self {

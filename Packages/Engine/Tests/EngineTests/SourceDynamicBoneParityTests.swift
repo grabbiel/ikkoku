@@ -5,6 +5,7 @@ import simd
 import CoreMath
 import Scene
 import Character
+import Studio
 
 private struct DynamicsReferenceFixture: Decodable {
     struct Evidence: Decodable { let path: String, sha256: String }
@@ -146,4 +147,37 @@ private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, origina
     // Rebuilding a closest point first introduces an epsilon; normalizing it
     // then moves the particle a full radius along the capsule's own axis.
     #expect(result == position)
+}
+
+
+@Test func sourceStudioDynamicsOriginalPostPoseMatchesIndependentOracleWhenRequested() throws {
+    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_DYNAMICS_REFERENCE"] else { return }
+    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self,from:Data(contentsOf:URL(fileURLWithPath:path)))
+    let rig = try SourceRig.loadModel(url:URL(fileURLWithPath:try #require(fixture.sourceAvatar))).rig
+    let ids = Dictionary(uniqueKeysWithValues:rig.nodes.enumerated().map { ($0.element.sourceID,$0.offset) })
+    var frameCount = 0, maximum:Float = 0
+    for scenario in fixture.scenarios where scenario.frames.allSatisfy({ $0.weight == nil }) {
+        var session = try SourceStudioDynamics(rig:rig,initializationPose:rig.restPose,bindings:[.init(definition:scenario.definition,group:.hair)])
+        var time:Float = 0
+        for frame in scenario.frames {
+            time += frame.deltaTime
+            var pose = rig.restPose
+            for change in frame.overrides {
+                let index = try #require(ids[change.sourceID]),node = rig.nodes[index]
+                pose.localMatrices[index] = Transform.trs(change.translation ?? node.translation,change.rotation.map {simd_quatf(vector:$0)} ?? node.rotation,change.scale ?? node.scale)
+            }
+            let output = try session.evaluate(time:time,rig:rig,upstream:pose,enableFK:false,activeFK:Array(repeating:false,count:7),deltaTime:frame.deltaTime)
+            let world = try rig.evaluate(output).worldMatrices
+            #expect(session.states[0].lastStepCount == frame.expected.lastStepCount)
+            for (index,particle) in scenario.definition.particles.enumerated() {
+                let error = simd_distance(world[try #require(ids[particle.nodeID])].translation,frame.expected.positions[index])
+                maximum = max(maximum,error); #expect(error < 4e-5)
+            }
+            let repeated = try session.evaluate(time:time,rig:rig,upstream:pose,enableFK:false,activeFK:Array(repeating:false,count:7),deltaTime:frame.deltaTime)
+            #expect(repeated.localMatrices == output.localMatrices)
+            frameCount += 1
+        }
+    }
+    #expect(frameCount > 0)
+    print("Studio dynamics independent original reference: \(frameCount) frames, maximum world error \(maximum)")
 }

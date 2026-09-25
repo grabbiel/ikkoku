@@ -141,7 +141,11 @@ def build(source, shared, male, output):
             bindings = json.loads((directory / (manifest_name + '.card-appearance.json')).read_text())
             contract = json.loads((directory / 'character-shape-contract.json').read_text())
 
+            copied_files = set()
             def copy_file(name):
+                if name in copied_files:
+                    return
+                copied_files.add(name)
                 path = directory / name
                 if not path.resolve().is_relative_to(directory.resolve()):
                     raise ValueError('Referenced input escapes the source assembly')
@@ -159,10 +163,17 @@ def build(source, shared, male, output):
                 if 'irisHighlights' in part:
                     for key in ('upper', 'lower'):
                         copy_file(part['irisHighlights'][key])
+            def copy_binding_inputs(value):
+                if isinstance(value, dict):
+                    if {'file', 'sha256', 'width', 'height'}.issubset(value):
+                        copy_file(value['file'])
+                    for item in value.values():
+                        copy_binding_inputs(item)
+                elif isinstance(value, list):
+                    for item in value:
+                        copy_binding_inputs(item)
             for binding in bindings['entries']:
-                for key in ('main', 'mask'):
-                    if key in binding:
-                        copy_file(binding[key]['file'])
+                copy_binding_inputs(binding)
                 if 'face.headId' in binding['requirements']:
                     binding['requirements']['face.headId'] = head_id
 
@@ -207,8 +218,10 @@ def build(source, shared, male, output):
                 target = folder / name; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(image.tobytes())
                 head_binding[key] = dict(file=name, sha256=evidence(target)['sha256'], width=image.width, height=image.height)
             # Stable explicit neutral preview colors; card colors replace these.
+            from card_appearance_bindings import linear_colors, encode_rgb
             pixels = create_head_base(np.asarray(main, dtype=np.float32) / 255, np.asarray(mask, dtype=np.float32) / 255,
-                                      np.asarray([1, .87, .80, 1], dtype=np.float32), np.asarray([1, .77, .69, 1], dtype=np.float32))
+                                      linear_colors([1, .87, .80, 1]), linear_colors([1, .77, .69, 1]))
+            pixels = encode_rgb(pixels)
             base_name = f'head-materials/head-{head_id}-base.png'
             Image.fromarray(np.rint(np.clip(pixels, 0, 1) * 255).astype(np.uint8)).save(folder / base_name)
             for part in appearance['parts']:

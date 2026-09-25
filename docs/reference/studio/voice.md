@@ -1,0 +1,15 @@
+# Source Studio voice playback
+
+Reviewed 2026-09-25 against the working tree. The [Studio audit](../../component-audit/studio.md) is the feature-status and actionable-backlog index; this page records the narrower source contract and its evidence.
+
+The native Studio voice path keeps the saved playlist's `(group, category, no)` identities, ordering, duplicates and repeat enum. Scene import does not start audio. Explicit playback resolves a hash-verified converted file and runs through `AVAudioEngine`; the per-character gain, PCM group gain and master listener gain are distinct mixer stages.
+
+Recovered `Studio.VoiceCtrl`, `VoiceEndChecker`, `ChaFileParameter`, `Manager.Voice`, `Config.VoiceSystem` and `Config.SoundData` ground the scheduler and parameter mapping. `None` traverses the ordered playlist once and stops at its end, `All` wraps, and `Select` repeats the selected entry. Stops invalidate pending native completion callbacks. Personality gain comes from original VoiceInfo/config metadata, and pitch is the original clamped interpolation from 0.94 to 1.06 using card `voiceRate`.
+
+`Tools/reverse/studio_voice.py` creates a private catalog from original Studio voice tables. Optional explicit audio-bundle conversion emits hashed WAV files without playing them. The current local catalog covers 6,210 base selection rows and has **zero converted original audio files**; no original voice audio was decoded or played during validation. Personality metadata and the installed `UserData/config/voice.xml` were transferred read-only with SHA-256 provenance.
+
+`SourceStudioVoiceTests` verify ordered/repeated selection, parameter mapping, edited-original playlist roundtrips retaining cards/settings/trailers, and generated 440 Hz PCM rendered offline by the actual native audio engine. Measured gains match master values 1, 0.25 and 0, while per-voice gain remains 0.4. The isolated native Mute adapter test produces silence on focus loss and restores the captured master gain on focus restoration. Actual app mounting currently traps when focus initialization reads `NSApp` before AppKit has created it (`ST-B02`); the audio test does not cover that startup failure. No hardware audio output is started by these tests.
+
+The scheduler and generated-tone mixer evidence are bounded completed behaviors; the overall voice feature remains mid-stage. The implementation does not yet recreate Unity spatial attenuation, audio-driven mouth motion or original voice waveform parity. Missing audio conversions fail explicitly. The catalog and reference source remain ignored under `.local/reverse/studio-voice`; generated tone tests require no source assets.
+
+Next tasks (`ST-T12`) are to convert an explicitly selected source audio subset and verify file/hash resolution and scheduling without broad automatic playback, recover spatial/head attachment behavior, and drive mouth animation from the source amplitude path. Fix and exercise startup/focus mounting separately under `ST-B02` before reporting the original Mute plugin as usable in the app.

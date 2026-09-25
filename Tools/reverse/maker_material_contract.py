@@ -10,7 +10,7 @@ from pathlib import Path
 import msgpack
 import numpy as np
 import UnityPy
-from card_appearance_bindings import raw_texture, verify_programs
+from card_appearance_bindings import raw_texture, verify_programs, linear_colors, encode_rgb
 from head_material_contract import VERIFIED_PROGRAMS, create_head_base
 from clothed_material_contract import PROGRAMS, clothes_base
 
@@ -88,6 +88,7 @@ def export_catalogs(source,output):
 
 def expand(bindings,catalogs,creator,paint_mask):
     for entry in bindings['entries']:
+        if entry['kind'] in ['head','clothes']:entry['colorSpace']='sourceLinear'
         if entry['kind']=='clothes':
             index=int(entry['colors'][0].split('.')[2]);prefix=f'clothes.parts.{index}.colorInfo.'
             category=['ClothesTop','ClothesBot','ClothesBra','ClothesShorts','ClothesGloves','ClothesPanst','ClothesSocks','ClothesShoesInner','ClothesShoesOuter'][index]
@@ -108,7 +109,7 @@ def expand(bindings,catalogs,creator,paint_mask):
     bindings['limitations']=[
         'Recovered original pattern IDs and cheek/lip-line/face-paint/mole layers are composed with source bilinear UV sampling; unconverted or mod-resolved textures remain explicit omissions.',
         'Lip makeup and eyeshadow are separate draw-material overlays, not create_head layers, and are retained without being applied. Body texture/detail, lighting, gloss, stencil, and mip derivatives remain incomplete.',
-        'Byte-normalized source color-space assumption is unchanged; source lighting parity is not asserted.']
+        'Head and clothes linearize material colors and encode the composed output to sRGB, matching measured original create passes; source lighting and mip/filter edge parity are not asserted.']
     return bindings
 
 def generate_vectors(output):
@@ -136,11 +137,15 @@ def generate_card_oracle(folder, manifest, output):
         if entry['kind']!='head' and not(entry['kind']=='clothes' and entry['colors'][0].startswith('clothes.parts.0.')):continue
         main=pixels(entry['main']);mask=pixels(entry['mask']);h,w,_=main.shape
         xx,yy=np.meshgrid((np.arange(w,dtype=np.float32)+.5)/w,1-(np.arange(h,dtype=np.float32)+.5)/h);uv=np.stack([xx,yy],axis=-1)
-        colors=np.asarray([get_path(records,path) for path in entry['colors']],dtype=np.float32)
+        source_linear=entry.get('colorSpace')=='sourceLinear'
+        def selected_color(path):
+            value=np.asarray(get_path(records,path),dtype=np.float32)
+            return linear_colors(value) if source_linear else value
+        colors=np.asarray([selected_color(path) for path in entry['colors']],dtype=np.float32)
         if entry['kind']=='head':
             result=create_head_base(main,mask,*colors)
             for layer in entry['layers']:
-                ident=get_path(records,layer['selection']);meta=layer['textures'][str(ident)];color=np.asarray(get_path(records,layer['color']),dtype=np.float32)
+                ident=get_path(records,layer['selection']);meta=layer['textures'][str(ident)];color=selected_color(layer['color'])
                 point=uv
                 if layer.get('layout'):point=face_uv(uv,np.asarray(get_path(records,layer['layout']),dtype=np.float32),layer['kind'])
                 elif layer.get('transform'):
@@ -150,10 +155,11 @@ def generate_card_oracle(folder, manifest, output):
         else:
             colored=[]
             for i,pattern in enumerate(entry['patterns']):
-                ident=get_path(records,pattern['selection']);meta=pattern['textures'][str(ident)];other=np.asarray(get_path(records,pattern['color']),dtype=np.float32);tiling=np.asarray(get_path(records,pattern['tiling']),dtype=np.float32)
+                ident=get_path(records,pattern['selection']);meta=pattern['textures'][str(ident)];other=selected_color(pattern['color']);tiling=np.asarray(get_path(records,pattern['tiling']),dtype=np.float32)
                 red=sample(pixels(meta),uv*(20-19*tiling),meta['wrap']=='repeat')[...,0];colored.append(pattern_pair(colors[i],other,red))
             tint=1+mask[...,0:1]*(colored[0]-1);tint+=mask[...,1:2]*(colored[1]-tint);tint+=mask[...,2:3]*(colored[2]-tint)
             result=np.concatenate([np.clip(main[...,:3],0,1)*tint*main[...,3:4],main[...,3:4]**2],axis=-1)
+        if source_linear:result=encode_rgb(result)
         rgba=np.rint(np.clip(result,0,1)*255).astype(np.uint8).tobytes();filename=entry['kind']+'-expected.rgba';(output/filename).write_bytes(rgba)
         expected.append(dict(part=entry['parts'][0],file=filename,width=w,height=h,sha256=sha(rgba)))
     dump(output/'image-oracle.json',dict(schemaVersion=1,cardFile=card.name,cardSHA256=sha(data),recipes=expected))

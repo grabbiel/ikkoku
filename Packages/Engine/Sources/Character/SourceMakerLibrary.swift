@@ -25,7 +25,7 @@ public struct SourceMakerLibrary: Sendable {
     }
     private struct Document: Decodable { let schemaVersion: Int, entries: [Entry], assemblies: [Assembly]? }
     private struct Key: Hashable, Sendable { let category: Int, id: Int, guid: Data? }
-    public let directory: URL, entries: [Entry], assemblies: [Assembly]
+    public let sourceURL: URL, directory: URL, entries: [Entry], assemblies: [Assembly]
     private let entryIndex: [Key: Int]
 
     public static func load(url: URL) throws -> Self {
@@ -41,7 +41,7 @@ public struct SourceMakerLibrary: Sendable {
                   entry.empty == true || (entry.rig != nil && entry.meshNames?.isEmpty == false),
                   index.updateValue(i, forKey: key) == nil else { throw RigError.invalid("Invalid or duplicate Maker asset identity.") }
         }
-        let result = Self(directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
+        let result = Self(sourceURL: url.resolvingSymlinksInPath(), directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
         for entry in result.entries {
             for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask].compactMap({ $0 }) { _ = try result.contained(ref) }
         }
@@ -56,6 +56,14 @@ public struct SourceMakerLibrary: Sendable {
     public func assemblyURL(for identity: SourceCharacterCard.Customization) throws -> URL? {
         guard let entry = assemblies.first(where: { $0.sex == identity.sex && $0.headID == identity.headID && $0.exType == identity.exType }) else { return nil }
         return try verified(entry.manifest, maximumBytes: 1024 * 1024)
+    }
+    /// Until the assembly registry carries mod GUIDs, a resolver-backed head must
+    /// never alias a numerically equal vanilla head. Imported bytes stay intact.
+    public static func validateAssemblyIdentity(card: SourceCharacterCard) throws {
+        let refs = try card.modReferences()
+        guard refs?.records.contains(where: { $0.property.map { Data($0.utf8) } == Data("ChaFileFace.headId".utf8) }) != true else {
+            throw RigError.invalid("This card selects a mod head whose assembly conversion is unavailable. Its saved head and mod identities remain unchanged.")
+        }
     }
     private func contained(_ ref: File) throws -> URL {
         let url = directory.appendingPathComponent(ref.file).resolvingSymlinksInPath()
@@ -94,6 +102,7 @@ public struct SourceMakerLibrary: Sendable {
         public let source: SourceRig, selections: [Selection], diagnostics: [String]
         fileprivate let components: [MaterialComponent]
         fileprivate let bodyMask: URL?
+        fileprivate let clearBodyMask: Bool
         public var geometryChanged: Bool { selections.contains { $0.entry != nil } }
         public func appearance(base: SourcePreviewAppearance?, card: SourceCardAppearance, resources: ResourceStore,
                                modLibrary: SourceModLibrary?) throws -> SourcePreviewAppearance.CardApplication? {
@@ -111,6 +120,8 @@ public struct SourceMakerLibrary: Sendable {
             }
             if let mask = bodyMask, let current = combined {
                 combined = try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+            } else if clearBodyMask, let current = combined {
+                combined = current.removingBodyMask()
             }
             guard let combined else { return nil }
             return .init(appearance: combined, appliedFields: fields, diagnostics: messages)
@@ -118,7 +129,13 @@ public struct SourceMakerLibrary: Sendable {
     }
     public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL) throws -> Prepared {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
+        try Self.validateAssemblyIdentity(card: card)
         let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL))
+        let identity = try card.customization()
+        guard identity.sex == (manifest.sex ?? (manifest.kind == "koikatsu-male-avatar" ? 0 : 1)),
+              identity.headID == (manifest.headID ?? 0), identity.exType == 0 else {
+            throw RigError.invalid("Selected card and base assembly identities differ.")
+        }
         let folder = baseURL.deletingLastPathComponent().resolvingSymlinksInPath()
         func base(_ path: String) throws -> SourceRig {
             let url = folder.appendingPathComponent(path).resolvingSymlinksInPath()
@@ -127,15 +144,23 @@ public struct SourceMakerLibrary: Sendable {
         }
         let references = try card.modReferences()
         var selections: [Selection] = [], diagnostics: [String] = [], materials: [MaterialComponent] = []
-        var bodyMask: URL?
+        var bodyMask: URL?, clearBodyMask = false
         // Legacy reference manifests explicitly selected these three garments.
         // New manifests carry slots instead of inferring them from filenames.
         guard manifest.clothes.count == 3 || manifest.clothes.allSatisfy({ $0.slot != nil }), manifest.hair.count <= 4 else {
             throw RigError.invalid("Base avatar requires explicit clothing slot metadata.")
         }
         var hairBySlot: [Int: (SourceRig, [String]?)] = [:], clothesBySlot: [Int: (SourceRig, [String]?)] = [:]
-        for (i, part) in manifest.hair.enumerated() { hairBySlot[part.slot ?? i] = (try base(part.file), part.meshNames) }
-        for (i, part) in manifest.clothes.enumerated() { clothesBySlot[part.slot ?? [0, 1, 8][i]] = (try base(part.file), part.meshNames) }
+        for (i, part) in manifest.hair.enumerated() {
+            let slot = part.slot ?? i
+            guard (0..<4).contains(slot), hairBySlot[slot] == nil else { throw RigError.invalid("Invalid or duplicate base hair slot.") }
+            hairBySlot[slot] = (try base(part.file), part.meshNames)
+        }
+        for (i, part) in manifest.clothes.enumerated() {
+            let slot = part.slot ?? [0, 1, 8][i]
+            guard (0..<9).contains(slot), clothesBySlot[slot] == nil else { throw RigError.invalid("Invalid or duplicate base clothing slot.") }
+            clothesBySlot[slot] = (try base(part.file), part.meshNames)
+        }
         func integer(_ fields: [String: SourceMessagePackValue], _ name: String) throws -> Int {
             guard let value = fields[name]?.integerValue, Int32(exactly: value) != nil else { throw RigError.invalid("Missing or invalid Maker selection \(name).") }
             return value
@@ -170,6 +195,7 @@ public struct SourceMakerLibrary: Sendable {
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
             let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/")
             if selections.last?.entry != nil { clothesBySlot[slot] = value }
+            if slot == 0, selections.last?.entry?.empty == true { clearBodyMask = true }
         }
         diagnostics.append("Maker previews outdoor shoes and fully-on clothes; saved wear state is preserved.")
         let accessoryFields = try card.recordFields(.accessory(coordinate: coordinate))
@@ -192,7 +218,7 @@ public struct SourceMakerLibrary: Sendable {
             body: base(manifest.body.file), head: base(manifest.head.file), clothes: clothes.map(\.0), hair: hair.map(\.0),
             bodyMeshNames: manifest.body.meshNames, headMeshNames: manifest.head.meshNames,
             clothingMeshNames: clothes.map(\.1), hairMeshNames: hair.map(\.1), accessories: accessories)
-        return Prepared(source: source, selections: selections, diagnostics: diagnostics, components: materials, bodyMask: bodyMask)
+        return Prepared(source: source, selections: selections, diagnostics: diagnostics, components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
     }
 }
 

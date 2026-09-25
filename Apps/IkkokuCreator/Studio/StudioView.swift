@@ -266,6 +266,19 @@ struct ObjectInspector: View {
                         Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(o.id) { $0.clothingVisible = v } }))
                         Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(o.id) { $0.accessoriesVisible = v } }))
                     }
+                    if o.sourceCharacter != nil {
+                        SectionBox(title: "Voice") {
+                            HStack {
+                                Button("Play playlist") { model.playSourceVoice(o.id) }
+                                Button("Stop") { model.stopSourceVoice(o.id) }
+                                Menu("Repeat") {
+                                    Button("Play once") { model.setSourceVoiceRepeat(o.id, mode: 0) }
+                                    Button("Repeat playlist") { model.setSourceVoiceRepeat(o.id, mode: 1) }
+                                    Button("Repeat selected") { model.setSourceVoiceRepeat(o.id, mode: 2) }
+                                }
+                            }
+                        }
+                    }
                 case .item:
                     SectionBox(title: "Item") {
                         ColorRow(label: "Tint", color: Binding(get: { o.tint ?? .white }, set: { v in model.update(o.id) { $0.tint = v } }))
@@ -308,6 +321,9 @@ struct PoseInspector: View {
         if let o = model.selectedObject, o.kind == .character {
             VStack(alignment: .leading, spacing: 10) {
                 Picker("Mode", selection: $model.poseMode) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
+                if o.sourceCharacter != nil {
+                    SourcePoseInspector(model: model)
+                } else {
                 SectionBox(title: "Pose presets") {
                     let cats = Dictionary(grouping: PosePresets.all, by: \.category)
                     ForEach(cats.keys.sorted(), id: \.self) { cat in
@@ -355,9 +371,39 @@ struct PoseInspector: View {
                         }
                     }
                 }
+                }
             }
         } else {
             ContentUnavailableView("Select a character", systemImage: "figure.stand", description: Text("Posing works on characters."))
+        }
+    }
+}
+
+struct SourcePoseInspector: View {
+    @Bindable var model: StudioModel
+    var body: some View {
+        if let state = model.selectedSourceIKState {
+            SectionBox(title: "Original kinematics") {
+                Toggle("FK enabled", isOn: Binding(get: { state.enableFK && !state.enableIK }, set: { model.setSourceFKEnabled($0) }))
+                Toggle("IK enabled", isOn: Binding(get: { state.enableIK }, set: { model.setSourceIKEnabled($0) })).disabled(!model.sourceIKAvailable)
+                ForEach(0..<SourceStudioIKEditing.groupLabels.count, id: \.self) { group in
+                    Toggle(SourceStudioIKEditing.groupLabels[group], isOn: Binding(get: { state.activeIK[group] }, set: { model.setSourceIKGroup(group, enabled: $0) })).disabled(!model.sourceIKAvailable)
+                }
+                Picker("IK guide", selection: Binding(get: { model.selectedSourceIK ?? -1 }, set: { model.selectedSourceIK = $0 < 0 ? nil : $0; model.poseMode = .ik })) {
+                    Text("None").tag(Int32(-1))
+                    ForEach(0..<13, id: \.self) { id in Text(SourceStudioIKEditing.labels[id]).tag(Int32(id)) }
+                }.disabled(!model.sourceIKAvailable)
+                if let target = model.selectedSourceIK, let value = model.selectedSourceIKValue {
+                    VectorRow(label: "Position", value: Binding(get: { value.position }, set: { model.setSourceIKValue(target, edit: .init(position: $0, rotationDegrees: value.rotationDegrees)) }), step: 0.02, format: "%.3f")
+                    if SourceStudioIKEditing.allowsRotation(target) {
+                        VectorRow(label: "Rotate", value: Binding(get: { value.rotationDegrees }, set: { model.setSourceIKValue(target, edit: .init(position: value.position, rotationDegrees: $0)) }), step: 5, format: "%.0f")
+                    }
+                }
+                Text("Select an FK bone or IK guide in the viewport, then drag its gizmo.").font(.caption).foregroundStyle(.secondary)
+                Button("Restore saved pose") { model.resetSourcePoseEdits() }
+            }
+        } else {
+            Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -395,7 +441,15 @@ struct FaceInspector: View {
 struct ClothesInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
-        if let o = model.selectedObject, o.kind == .character, let i = model.doc.index(of: o.id), let card = o.card {
+        if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
+            SectionBox(title: "Accessories") {
+                let labels = model.sourceAccessoryLabels(for: o.id)
+                ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
+                    Text(label).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if labels.isEmpty { Text("Source accessory selections are unavailable.").foregroundStyle(.secondary) }
+            }
+        } else if let o = model.selectedObject, o.kind == .character, let i = model.doc.index(of: o.id), let card = o.card {
             VStack(alignment: .leading, spacing: 10) {
                 Picker("Outfit", selection: Binding(get: { card.currentOutfit }, set: { v in model.update(o.id) { $0.card?.currentOutfit = v } })) {
                     ForEach(0..<card.outfits.count, id: \.self) { Text(card.outfits[$0].name).tag($0) }

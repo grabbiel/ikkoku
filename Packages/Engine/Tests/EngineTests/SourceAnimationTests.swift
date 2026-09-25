@@ -99,6 +99,20 @@ private func animationLibrary(_ document: [String: Any] = animationDocument()) t
     }
 }
 
+@Test func sourceAnimationBlendsActualPosesAtSynchronizedNormalizedTime() throws {
+    var document = animationDocument(), states = document["states"] as! [[String: Any]]
+    states[0]["blendParameter"] = "Speed"
+    states[0]["motions"] = [["clipID": "clip", "threshold": 0, "cycleOffset": 0], ["clipID": "clip", "threshold": 1, "cycleOffset": 0.5]]
+    document["states"] = states
+    let library = try animationLibrary(document), rig = try RigDefinition(nodes: [.init(name: "joint", sourceID: "source:joint", parent: nil)], skins: [])
+    let pose = try library.applying(stateID: "idle", normalizedTime: 0.25, floatParameters: ["Speed": 0.25], to: rig)
+    let a = try library.applying(clipID: "clip", time: 0.25, to: rig), b = try library.applying(clipID: "clip", time: 0.75, to: rig)
+    let expected = a.localMatrices[0].translation * 0.75 + b.localMatrices[0].translation * 0.25
+    #expect(simd_distance(pose.localMatrices[0].translation, expected) < 0.000001)
+    #expect(try library.stateDuration(stateID: "idle", floatParameters: ["Speed": 0.25]) == 1)
+    #expect(try library.applying(stateID: "idle", normalizedTime: 10.25, floatParameters: ["Speed": 0.25], to: rig).localMatrices == pose.localMatrices)
+}
+
 @Test func sourceAnimationInstalledCurvesMatchIndependentSampler() throws {
     let environment = ProcessInfo.processInfo.environment
     guard let libraryPath = environment["IKKOKU_ANIMATION_LIBRARY"], let referencePath = environment["IKKOKU_ANIMATION_REFERENCE"] else { return }

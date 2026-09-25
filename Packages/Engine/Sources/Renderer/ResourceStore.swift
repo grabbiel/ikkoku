@@ -121,6 +121,28 @@ public final class ResourceStore: @unchecked Sendable {
 
     public func mesh(_ h: MeshHandle) -> GPUMesh? { lock.lock(); defer { lock.unlock() }; return meshes[h.id] }
 
+    public struct Statistics: Encodable, Sendable {
+        public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
+        public let meshBufferBytes: Int, deformBufferBytes: Int, hiddenBufferBytes: Int
+    }
+
+    /// Counts store-owned resources; device allocation also includes render
+    /// targets, pipelines and buffers retained by submitted frames.
+    public func statistics() -> Statistics {
+        lock.lock(); defer { lock.unlock() }
+        var buffers: [ObjectIdentifier: any MTLBuffer] = [:]
+        for mesh in meshes.values {
+            for buffer in [mesh.baseVertices, mesh.texcoords, mesh.texcoords1, mesh.texcoords2, mesh.indices,
+                           mesh.colors, mesh.skin, mesh.morphDeltas, mesh.morphNormals].compactMap({ $0 }) {
+                buffers[ObjectIdentifier(buffer)] = buffer
+            }
+        }
+        return Statistics(meshes: meshes.count, textures: textures.count, deformBuffers: deformBuffers.count,
+            hiddenBuffers: hiddenBuffers.count, meshBufferBytes: buffers.values.reduce(0) { $0 + $1.length },
+            deformBufferBytes: deformBuffers.values.reduce(0) { $0 + $1.length },
+            hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length })
+    }
+
     @discardableResult
     public func register(mesh data: MeshData, smoothOutlineNormals: Bool = true) throws -> MeshHandle {
         let n = data.vertexCount

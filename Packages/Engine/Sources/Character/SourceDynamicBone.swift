@@ -68,6 +68,7 @@ public struct SourceDynamicBone: Sendable {
     public private(set) var weight: Float = 1
     public let definition: SourceDynamicsDocument.Component
     private let nodes: [Int], colliderNodes: [Int], owner: Int
+    private let requiredNodes: Set<Int>
     private let rigIDs: [String], initialPosition: [Float3], initialRotation: [simd_quatf]
     private let localGravity: Float3
     private var previousOwner: Float3
@@ -100,10 +101,13 @@ public struct SourceDynamicBone: Sendable {
             guard finite(c.center), c.radius.isFinite, c.radius >= 0, c.height.isFinite, c.height >= 0,
                   (0...2).contains(c.direction), (0...1).contains(c.bound) else { throw RigError.invalid("Invalid dynamic collider.") }
         }
-        let state = try DynamicsTransforms(rig: rig, pose: pose ?? rig.restPose)
-        self.definition = definition; self.nodes = nodes
-        colliderNodes = try definition.colliders.map { try resolve($0.nodeID) }
-        owner = try resolve(definition.ownerID); rigIDs = rig.nodes.map(\.sourceID)
+        let colliderNodes = try definition.colliders.map { try resolve($0.nodeID) }
+        let owner = try resolve(definition.ownerID)
+        var required = Set(nodes + colliderNodes + [owner])
+        for node in required { var parent = rig.nodes[node].parent; while let index = parent { required.insert(index); parent = rig.nodes[index].parent } }
+        let state = try DynamicsTransforms(rig: rig, pose: pose ?? rig.restPose, requiredNodes: required)
+        self.definition = definition; self.nodes = nodes; self.colliderNodes = colliderNodes
+        self.owner = owner; self.requiredNodes = required; rigIDs = rig.nodes.map(\.sourceID)
         positions = nodes.map { state.world[$0].translation }; previousPositions = positions
         previousOwner = state.world[owner].translation
         initialPosition = nodes.map { state.translations[$0] }; initialRotation = nodes.map { state.rotations[$0] }
@@ -113,7 +117,7 @@ public struct SourceDynamicBone: Sendable {
     /// Source Update/OnDisable reset positions and rotations, retaining scale.
     public func resettingTransforms(rig: RigDefinition, pose: RigPose) throws -> RigPose {
         try validate(rig)
-        var state = try DynamicsTransforms(rig: rig, pose: pose)
+        var state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes)
         for (i, node) in nodes.enumerated() {
             state.translations[node] = initialPosition[i]; state.rotations[node] = initialRotation[i]; state.changed.insert(node)
         }
@@ -122,7 +126,7 @@ public struct SourceDynamicBone: Sendable {
 
     public mutating func resetParticles(rig: RigDefinition, pose: RigPose) throws {
         try validate(rig)
-        let state = try DynamicsTransforms(rig: rig, pose: pose)
+        let state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes)
         positions = nodes.map { state.world[$0].translation }; previousPositions = positions
         previousOwner = state.world[owner].translation
         // Source ResetParticlesPosition does not reset accumulated time.
@@ -154,7 +158,7 @@ public struct SourceDynamicBone: Sendable {
     }
 
     private mutating func advance(deltaTime: Float, rig: RigDefinition, pose: RigPose) throws -> RigPose {
-        var state = try DynamicsTransforms(rig: rig, pose: pose)
+        var state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes)
         let objectScale = length(state.world[owner][0].xyz)
         var movement = state.world[owner].translation - previousOwner
         previousOwner = state.world[owner].translation
@@ -306,13 +310,19 @@ private struct DynamicsTransforms {
     let original: [float4x4]
     var changed = Set<Int>()
     var children: [[Int]]
-    init(rig: RigDefinition, pose: RigPose) throws {
+    init(rig: RigDefinition, pose: RigPose, requiredNodes: Set<Int>) throws {
         guard pose.localMatrices.count == rig.nodes.count else { throw RigError.invalid("Dynamics pose count mismatch.") }
         translations = []; rotations = []; scales = []
         original = pose.localMatrices; children = Array(repeating: [], count: rig.nodes.count)
         for (i, node) in rig.nodes.enumerated() { if let parent = node.parent { children[parent].append(i) } }
         for (i, m) in pose.localMatrices.enumerated() {
             let scale = m.scaleFactors
+            // Unrelated authored matrices (for example a mirrored accessory) are
+            // carried through verbatim. Only particle/collider/owner ancestors
+            // need local quaternion decomposition for this component.
+            if !requiredNodes.contains(i) {
+                translations.append(m.translation); rotations.append(.identity); scales.append(scale); continue
+            }
             guard rig.nodes[i].authoredMatrix == nil, rig.nodes[i].scale.x > 0, rig.nodes[i].scale.y > 0, rig.nodes[i].scale.z > 0,
                   finite(m.translation), finite(scale), min(scale.x, min(scale.y, scale.z)) > 1e-6,
                   m[0].w == 0, m[1].w == 0, m[2].w == 0, m[3].w == 1 else {

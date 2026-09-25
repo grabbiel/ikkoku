@@ -56,6 +56,21 @@ public enum UnityCoordinates {
         return rotation(y * x * z)
     }
 
+    /// A source Z-X-Y Euler representation of an edited native quaternion.
+    /// Existing source Euler bytes should be retained for an unedited rotation.
+    public static func sourceEulerDegrees(_ native: simd_quatf) -> Float3 {
+        let m = float3x3(rotation(native).normalized)
+        let cosine = sqrt(m[0][1] * m[0][1] + m[1][1] * m[1][1])
+        let x = atan2(-m[2][1], cosine)
+        let y: Float, z: Float
+        if cosine > 0.00001 {
+            y = atan2(m[2][0], m[2][2]); z = atan2(m[0][1], m[1][1])
+        } else {
+            y = atan2(-m[0][2], m[0][0]); z = 0
+        }
+        return Float3(x, y, z) * (180 / .pi)
+    }
+
     /// Converts a local/world transform or inverse bind matrix, in column layout.
     /// Both the input and output spaces change basis: M' = C * M * C^-1.
     /// Preserves signed scales and shear, without a lossy TRS decomposition.

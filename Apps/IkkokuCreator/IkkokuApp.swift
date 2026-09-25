@@ -1,5 +1,6 @@
 import SwiftUI
 import Character
+import Studio
 
 @main
 struct IkkokuApp: App {
@@ -31,6 +32,7 @@ struct IkkokuApp: App {
                 Button("Import Model…") { app.importModel() }
                 Button("Import CharaStudio Object Layout…") { app.importKoikatsuLayout() }
                 Button("Preview CharaStudio Scene…") { app.openSourceScenePreview() }
+                Button("Export Edited Original Scene…") { app.exportSourceScene() }.disabled(app.studio?.doc.sourceSceneFile == nil)
                 Button("Save Scene…") { app.saveScene() }.keyboardShortcut("s", modifiers: [.command, .option])
                 Divider()
                 Button("Capture Screenshot…") { app.captureScreenshot() }.keyboardShortcut("p", modifiers: [.command, .shift])
@@ -47,6 +49,12 @@ struct IkkokuApp: App {
                 Button("Open Mod Library…") { app.openModLibrary() }
                 Button("Show Mod Library") { app.showModLibrary = true }
                 Button("Reload Mod Library") { app.reloadModLibrary() }.disabled(app.modProfile == nil)
+                Divider()
+                Button("Load Translated Studio Plugins…") { app.studio?.openSourcePluginProfile() }
+                Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }
+                Button(app.studio?.sourcePluginsRunning == true ? "Pause Studio Plugins" : "Run Studio Plugins") {
+                    app.studio?.sourcePluginsRunning.toggle()
+                }.disabled(app.studio?.sourcePluginSession == nil)
                 Divider()
                 Button("Load Bone Modifiers…") { app.openBoneModifiers() }.disabled(app.maker?.sourceRigPreview == nil)
                 Button("Clear Bone Modifiers") { app.maker?.clearBoneModifiers() }.disabled(app.maker?.sourceBoneModifiers == nil)

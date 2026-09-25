@@ -4,7 +4,7 @@ from pathlib import Path
 import argparse,json,hashlib,struct
 import numpy as np
 from PIL import Image
-from card_appearance_bindings import raw_texture
+from card_appearance_bindings import raw_texture, linear_colors, encode_rgb
 from clothed_material_contract import PROGRAMS,hair_base,clothes_base
 from maker_material_contract import expand,dump,sample
 
@@ -68,9 +68,9 @@ def build(root):
     main_pixels=pixels(main);mask_pixels=pixels(mask)
     if main_pixels.shape!=mask_pixels.shape:
      h,w,_=main_pixels.shape;xx,yy=np.meshgrid((np.arange(w)+.5)/w,1-(np.arange(h)+.5)/h);mask_pixels=sample(mask_pixels,np.stack([xx,yy],axis=-1))
-    bake=clothes_base(main_pixels,mask_pixels,tint)
+    bake=encode_rgb(clothes_base(main_pixels,mask_pixels,linear_colors(tint)))
     prefix=f'clothes.parts.{clothes_slot}.colorInfo.'
-    recipe.update(kind='clothes',colors=[prefix+f'{i}.baseColor' for i in range(3)],main=texture(main),mask=texture(mask),requirements={f'clothes.parts.{clothes_slot}.id':identifier,f'clothes.parts.{clothes_slot}.emblemeId':0},resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope],patterns=[dict(selection=prefix+f'{i}.pattern',color=prefix+f'{i}.patternColor',tiling=prefix+f'{i}.tiling',resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope+'Pattern'+str(i)],textures=textures) for i in range(3)])
+    recipe.update(kind='clothes',colorSpace='sourceLinear',colors=[prefix+f'{i}.baseColor' for i in range(3)],main=texture(main),mask=texture(mask),requirements={f'clothes.parts.{clothes_slot}.id':identifier,f'clothes.parts.{clothes_slot}.emblemeId':0},resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope],patterns=[dict(selection=prefix+f'{i}.pattern',color=prefix+f'{i}.patternColor',tiling=prefix+f'{i}.tiling',resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope+'Pattern'+str(i)],textures=textures) for i in range(3)])
     native.update(kind='cloth',color=[1,1,1,1],specularStrength=0,rimStrength=0)
    else:
     limits.append(f'{part}: {shader} retained as authored flat-color preview; original shader and accessory coloring not converted.')

@@ -1,0 +1,60 @@
+// Declaration-only semantic surface. This is not a Unity implementation.
+namespace UnityEngine {
+    [System.AttributeUsage(System.AttributeTargets.Field)]
+    public class SerializeField : System.Attribute { }
+    public class Object {
+        public static GameObject Instantiate(GameObject original) => throw new System.NotImplementedException();
+        public static void Destroy(GameObject instance) => throw new System.NotImplementedException();
+    }
+    public class GameObject : Object {
+        public Transform transform => throw new System.NotImplementedException();
+        public void SetActive(bool value) => throw new System.NotImplementedException();
+    }
+    public class MonoBehaviour : Object {
+        public GameObject gameObject => throw new System.NotImplementedException();
+        public Transform transform => throw new System.NotImplementedException();
+    }
+    public class Transform {
+        public Vector3 position { get; set; }
+        public Vector3 localPosition { get; set; }
+        public Vector3 localScale { get; set; }
+        public void Translate(Vector3 translation, Space relativeTo = Space.Self) => throw new System.NotImplementedException();
+    }
+    public enum Space { World = 0, Self = 1 }
+    public struct Vector3 {
+        public float x, y, z;
+        public Vector3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
+        public static Vector3 zero => default;
+        public static Vector3 one => new Vector3(1, 1, 1);
+        public static Vector3 operator +(Vector3 a, Vector3 b) => default;
+        public static Vector3 operator -(Vector3 a, Vector3 b) => default;
+        public static Vector3 operator *(Vector3 a, float b) => default;
+        public static Vector3 operator *(float a, Vector3 b) => default;
+        public static Vector3 operator /(Vector3 a, float b) => default;
+    }
+    public static class Time { public static float deltaTime => 0; public static float fixedDeltaTime => 0; }
+    public static class Mathf {
+        public static float Clamp01(float value) => throw new System.NotImplementedException();
+        public static float Lerp(float a, float b, float t) => throw new System.NotImplementedException();
+        public static float Sqrt(float value) => throw new System.NotImplementedException();
+    }
+    // These permit analyzing a whole recovered file while selecting other methods.
+    public struct Rect { public Rect(float x, float y, float width, float height) {} }
+    public static class Screen { public static int width => 0; public static int height => 0; }
+}
+
+namespace BepInEx {
+    public class BaseUnityPlugin : UnityEngine.MonoBehaviour { }
+    [System.AttributeUsage(System.AttributeTargets.Class)]
+    public class BepInPlugin : System.Attribute { public BepInPlugin(string guid, string name, string version) {} }
+    [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple=true)]
+    public class BepInProcess : System.Attribute { public BepInProcess(string processName) {} }
+    [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple=true)]
+    public class BepInIncompatibility : System.Attribute { public BepInIncompatibility(string guid) {} }
+    [System.AttributeUsage(System.AttributeTargets.Class, AllowMultiple=true)]
+    public class BepInDependency : System.Attribute {
+        public enum DependencyFlags { HardDependency=1, SoftDependency=2 }
+        public BepInDependency(string guid, DependencyFlags flags=DependencyFlags.HardDependency) {}
+        public BepInDependency(string guid, string minimumVersion) {}
+    }
+}

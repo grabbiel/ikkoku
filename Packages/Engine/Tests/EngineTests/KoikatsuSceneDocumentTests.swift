@@ -6,7 +6,7 @@ import Scene
 import CoreMath
 import Assets
 
-private struct SceneDocumentBytes {
+struct SceneDocumentBytes {
     var data = Data()
     mutating func i(_ value: Int32) { data += OriginalCardFixture.i32(value) }
     mutating func f(_ value: Float) { i(Int32(bitPattern: value.bitPattern)) }

@@ -1,25 +1,34 @@
 # Local source-data pipeline
 
-These tools read the user's local installation. They do not change or launch the
-Windows game. Extracted binaries, assets, source, logs and rendered proofs go under
-the ignored `.local/reverse/` directory. The Swift + Metal application remains the
-native runtime; it does not execute recovered C# or require Unity at runtime.
+Reviewed 2026-09-25. Commands run from the repository root. This runbook covers
+inventory, selected transfer and initial conversion recipes. The
+[documentation index](../../docs/README.md) links every current technical contract;
+the [component audit](../../docs/component-audit/README.md) owns feature completion,
+known defects and actionable implementation tasks.
 
-Mod import tooling lives in [`../mods/zipmod.py`](../mods/zipmod.py). Its versioned
-native resource packages and current compatibility limits are described in
-[the mod pipeline notes](../../docs/reverse-mods.md). Expression extraction and
-independent reference generation are described in
-[the expression notes](../../docs/reverse-expressions.md).
+Inventory/extraction reads the installed files without launching or changing the
+game. Separate original-player shader, character, animation, dynamics and lifecycle
+probes launch isolated temporary copies for controlled captures. Original binaries,
+recovered code, assets, logs and evidence remain in ignored `.local/reverse/`.
+The Swift + Metal app uses converted data, bounded translated IR and native
+adapters; it does not execute original managed DLLs or require Unity at runtime.
 
-The current logic workstream has a [complete managed-export runbook](../../docs/reverse-managed-recovery.md),
-plus source contracts and independent checks for [gameplay progression](../../docs/reverse-gameplay.md),
-[animation timing](../../docs/reverse-animation-playback.md), and
-[Studio FK](../../docs/reverse-studio-pose.md). Managed export completion does not
-mean those systems are all running in the native app. Further verified paths now cover
-[fixed-event/ADV execution](../../docs/reverse-gameplay-execution.md),
-[original clips](../../docs/reverse-animator.md), [two-bone IK](../../docs/reverse-ik.md),
-[hair dynamics](../../docs/reverse-dynamics.md), and
-[complete Studio records with a bounded preview](../../docs/reverse-studio-scenes.md).
+## Choose a workstream
+
+| Work | Current reference |
+| --- | --- |
+| Complete selected managed exports and fallback decompilation | [Managed recovery](../../docs/reference/managed-recovery.md) |
+| Character rigs, 52 face/44 body shape slots, male/female assembly | [Shape contracts](../../docs/reference/character/contracts.md), [rigs](../../docs/reference/character/rigs.md), [male assembly](../../docs/reference/character/male.md) |
+| Original cards, selected assets, makeup and identity-preserving export | [Cards](../../docs/reference/character/cards.md), [Maker assets](../../docs/reference/character/maker-assets.md), [materials](../../docs/reference/character/material-expansion.md) |
+| Studio scene records and bounded editing | [Scene records](../../docs/reference/studio/scene-records.md), [scene editing](../../docs/reference/studio/scene-editing.md) |
+| Animator, full-body IK, dynamics and voice | [Animator](../../docs/reference/animation/animator.md), [Studio animation](../../docs/reference/studio/animation.md), [full-body IK](../../docs/reference/studio/full-body-ik.md), [dynamics](../../docs/reference/animation/dynamics-parity.md), [voice](../../docs/reference/studio/voice.md) |
+| Gameplay and ADV | [Cycle](../../docs/reference/gameplay/cycle.md), [ADV execution](../../docs/reference/gameplay/adv.md) |
+| Mods, C# substitution and native plugin adapters | [Mod guide](../../docs/guides/mod-library.md), [API substitution](../../docs/reference/mods/api-substitution.md), [plugin execution](../../docs/reference/mods/plugin-execution.md) |
+| Source shader translation, matched frames and performance | [Renderer](../../docs/reference/renderer.md), [material probes](../../docs/reference/character/material-expansion.md) |
+
+Recovery success, parsed records, preserved bytes, native execution and original
+parity are separate milestones. Use the owning reference's fixture requirements;
+there is no one-command whole-game converter or all-mod compatibility layer.
 
 ## Inventory and bounded transfer
 
@@ -37,8 +46,9 @@ python3 Tools/reverse/vm_source.py --vm 'Windows 11' fetch \
 Inventory records player backends/Unity versions, managed DLL hashes, and bundle
 names and sizes. Fetch accepts only explicit relative installation paths, bounds
 each file transfer (256 MiB default), and verifies its length and SHA-256 against
-the VM. Every copied source file gets a provenance sidecar. It does not dump all
-1,665 bundles merely to export one asset.
+the VM. Every copied source file gets a provenance sidecar. The retained
+installation inventory contains 1,665 bundles; a selected export
+fetches only its declared inputs.
 
 ## Targeted Mono recovery
 
@@ -61,7 +71,7 @@ python3 Tools/reverse/analysis/decompile_studio.py \
 The initial recovery used `.local/reverse/managed/CharaStudio`, still the wrapper's
 default. The wrapper recovers 17 named Studio contracts and writes a manifest of
 input/output hashes and decompiler version. `--type Studio.OIItemInfo` narrows it
-to one contract. See [binary format notes](../../docs/reverse-analysis.md).
+to one contract. See [binary format notes](../../docs/reference/studio/binary-contracts.md).
 
 ## Convert the verified chair
 
@@ -84,7 +94,7 @@ python3.12 -m venv .local/reverse/unitypy-venv
 ```
 
 The original lookup resolves `(group: 2, category: 13, no: 73)`; see
-[catalog evidence](../../docs/reverse-catalog.md). The output includes glTF, binary
+[catalog evidence](../../docs/reference/studio/item-catalog.md). The output includes glTF, binary
 geometry, PNG base texture, raw local mesh/material/transform metadata, provenance,
 and `catalog.json` binding the source item ID to `chair.gltf`. No display-name or
 filename-number guessing is used.
@@ -114,7 +124,8 @@ swift test --package-path Packages/Engine
 swift run --package-path Packages/Engine ikkoku-inspect model \
   .local/reverse/exports/chair/chair.gltf
 xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator \
-  -configuration Debug -derivedDataPath .local/build build
+  -configuration Debug -derivedDataPath .local/build \
+  -destination 'platform=macOS,arch=arm64' build
 IKKOKU_CAPTURE_MODEL="$PWD/.local/reverse/exports/chair/chair.gltf" \
 IKKOKU_AUTOCAPTURE="$PWD/.local/reverse/exports/chair/native-render.png" \
   .local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku
@@ -152,9 +163,11 @@ the catalog. The original game's scene PNG and Ikkoku's JSON-in-PNG card remain
 different formats. Ikkoku scene cards store external paths; they are not asset
 packages and moving the referenced model files breaks those links.
 
-**File → Preview CharaStudio Scene…** separately previews supported original
-character shape/ABMX/FK settings on the selected clothed local avatar. It retains
-unsupported content as named tree entries and reports runtime/appearance gaps.
+**File → Preview CharaStudio Scene…** separately rebuilds supported normal
+male/female card selections, applies shape/static ABMX/expression/FK state and
+restores current/saved cameras. It retains unsupported objects as tree entries.
+The source Pose/Face/Clothes inspector gate still blocks implemented guide controls;
+routes/descendants and many mixed scene objects/settings have no rendering consumer.
 For the verified synthetic fullscene fixture, use
 `IKKOKU_SOURCE_SCENE=$PWD/.local/reverse/studio-scenes/synthetic-current.png`
 with `IKKOKU_AUTOCAPTURE`. This does not recreate arbitrary original scene appearance.
@@ -166,8 +179,8 @@ asset. It is not a full original-game scene or evidence of complete scene parity
 
 ## Character Maker rigs and source curves
 
-See [rig recovery](../../docs/reverse-rigs.md) for exact source bundles and export
-commands, and [shape recovery](../../docs/reverse-character.md) for the original
+See [rig recovery](../../docs/reference/character/rigs.md) for exact source bundles and export
+commands, and [shape recovery](../../docs/reference/character/contracts.md) for the original
 category/sample contracts. Generated files remain under `.local/reverse/rigs/`.
 
 ```sh
@@ -200,16 +213,20 @@ avatar below also supports head/hand compensation and original clothing coverage
 
 To inspect interactively, use **File → Open Source Rig…** or launch with
 `IKKOKU_OPEN_RIG=/absolute/path/to/neutral-rig.json`. Keep the shape contract beside
-the rig to enable height controls. The preview cannot be saved as a complete
-native character card or sent to Studio yet.
+the rig to enable height controls. A raw rig preview is not a complete native character card and cannot be sent
+directly to Studio. Original-card edited export is a separate supported path;
+see [card appearance](../../docs/reference/character/card-appearance.md).
 
-## Original clothed female base
+## Original clothed base: initial capture recipe
 
-See [assembly](../../docs/reverse-head-rig.md),
-[body formulas](../../docs/reverse-body-shape.md),
-[face formulas](../../docs/reverse-face-shape.md), and
-[head materials](../../docs/reverse-head-materials.md) for source evidence.
-With the selected local bundles/rigs already exported:
+See [assembly](../../docs/reference/character/head-rig.md),
+[body formulas](../../docs/reference/character/body-shape.md),
+[face formulas](../../docs/reference/character/face-shape.md), and
+[head materials](../../docs/reference/character/head-materials.md) for source evidence.
+The recipe below captures the initial female base. Male, heads 0/200/201,
+correction tables and card-selected assets use the additional conversion steps
+in [Maker assets](../../docs/reference/character/maker-assets.md). With the selected
+local bundles/rigs already exported:
 
 ```sh
 .local/reverse/unitypy-venv/bin/python Tools/reverse/head_material_contract.py
@@ -222,8 +239,9 @@ IKKOKU_AUTOCAPTURE="$PWD/.local/reverse/rigs/native-avatar-front.png" \
 ```
 
 `IKKOKU_SOURCE_BODY` and `IKKOKU_SOURCE_FACE` accept `defaults`, `rest`, `all=rate`,
-or comma-separated `index=rate` pairs in 0–1. Only four body destination controls
-are implemented; all face slots are mapped. `IKKOKU_CAPTURE_PRESET=face` frames the
+or comma-separated `index=rate` pairs in 0–1. All 44 body and 52 face shape slots have recovered setter coverage on supported
+normal assemblies. These slots fan out to more transform destinations; they do
+not imply support for every special/modded rig. `IKKOKU_CAPTURE_PRESET=face` frames the
 posed face. `IKKOKU_CAPTURE_SHADOWS=0` is a diagnostic comparison. The source front
 is native −Z; capture yaw defaults to 180 degrees.
 
@@ -232,9 +250,10 @@ Maker automatically discovers `.local/reverse/rigs/source-avatar.json` with its
 Missing local content uses bundled characters; malformed content reports its error.
 The source preview uses original geometry and bounded shader base-color recovery
 with approximate native lighting. Clothing outlines are disabled because the current
-inverted-hull implementation introduces an internal patch. Source expressions and
-automatic blinking are available; complete source card persistence, male base
-replacement and Studio character integration remain unfinished.
+inverted-hull implementation introduces an internal patch. Source expressions and automatic blinking are available. Normal male assembly,
+bounded original-card import/edit/export and selected Studio character reconstruction
+are now implemented. Full catalog/appearance coverage, general plugin behavior
+and source-aware Studio controls remain incomplete; see the linked audit.
 
 Shader bakes are gated by recovered DXBC program hashes and source-input hashes.
 `clothed-materials/composition.json` records the no-pattern catalog selection,

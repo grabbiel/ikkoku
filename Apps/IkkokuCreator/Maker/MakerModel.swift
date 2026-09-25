@@ -43,7 +43,7 @@ final class MakerModel: ViewportInputHandler {
     var lastLoadedURL: URL?
     var status = ""
     var sourceRigPreview: SourceRigPreview?
-    @ObservationIgnored private var sourceRigURL: URL?
+    @ObservationIgnored private(set) var sourceRigURL: URL?
     @ObservationIgnored private var sourceMakerLibrary: SourceMakerLibrary?
     @ObservationIgnored private var sourcePreparedAssets: SourceMakerLibrary.Prepared?
     var sourceAssetSelections: [SourceMakerLibrary.Selection] = []
@@ -286,7 +286,7 @@ final class MakerModel: ViewportInputHandler {
             do {
                 draft = try SourceCardAppearance(card: imported)
                 if let base = appearance, let draft {
-                    application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared)
+                    application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared, modLibrary: sourceModLibrary)
                     appearance = application?.appearance ?? base
                 }
             } catch { appearanceDiagnostics.append("Appearance retained as reference: \(error)") }
@@ -368,7 +368,7 @@ final class MakerModel: ViewportInputHandler {
             var appearance = FileManager.default.fileExists(atPath: appearanceURL.path)
                 ? try SourcePreviewAppearance.load(url: appearanceURL, resources: host.renderer.resources, modLibrary: library) : nil
             if let base = appearance, let draft = sourceAppearanceDraft {
-                cardApplication = try applyCardAppearance(draft, base: base, url: url, prepared: sourcePreparedAssets)
+                cardApplication = try applyCardAppearance(draft, base: base, url: url, prepared: sourcePreparedAssets, modLibrary: library)
                 appearance = cardApplication?.appearance ?? base
             }
             let preview = try SourceRigPreview(source: current.source, contract: current.contract,
@@ -441,6 +441,7 @@ final class MakerModel: ViewportInputHandler {
 
     func importSourceCardSettings(url: URL) throws {
         let imported = try SourceCharacterCard.load(url: url)
+        try SourceMakerLibrary.validateAssemblyIdentity(card: imported)
         let identity = try imported.customization()
         let urlForRig: URL
         if sourceRigPreview != nil, sourceSex == identity.sex, sourceHeadID == identity.headID,
@@ -460,7 +461,7 @@ final class MakerModel: ViewportInputHandler {
     }
 
     private func applyCardAppearance(_ draft: SourceCardAppearance, base: SourcePreviewAppearance, url: URL,
-                                     prepared: SourceMakerLibrary.Prepared? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+                                     prepared: SourceMakerLibrary.Prepared? = nil, modLibrary: SourceModLibrary?) throws -> SourcePreviewAppearance.CardApplication? {
         let bindingsURL = url.deletingPathExtension().appendingPathExtension("card-appearance.json")
         var current = base, fields = Set<String>(), diagnostics: [String] = []
         if FileManager.default.fileExists(atPath: bindingsURL.path) {
@@ -469,7 +470,7 @@ final class MakerModel: ViewportInputHandler {
             let applied = try current.applying(draft, bindings: bindings, directory: url.deletingLastPathComponent(), resources: host.renderer.resources)
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
-        if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources, modLibrary: sourceModLibrary) {
+        if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources, modLibrary: modLibrary) {
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         return .init(appearance: current, appliedFields: fields, diagnostics: diagnostics)
@@ -523,7 +524,7 @@ final class MakerModel: ViewportInputHandler {
         if let sourceMakerLibrary, let importedSourceCard, draft.coordinate != sourceAppearanceDraft?.coordinate {
             prepared = try sourceMakerLibrary.prepare(card: importedSourceCard, coordinate: draft.coordinate, baseURL: url)
         } else { prepared = sourcePreparedAssets }
-        let application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared)
+        let application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared, modLibrary: sourceModLibrary)
         let preview = try SourceRigPreview(source: prepared?.source ?? current.source, contract: current.contract, resources: host.renderer.resources,
             appearance: application?.appearance ?? base, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions)
         _ = try preview.bounds(bodyValues: applySourceCustomization ? sourceBodyValues : nil,

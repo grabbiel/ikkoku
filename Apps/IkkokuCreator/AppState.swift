@@ -39,6 +39,9 @@ final class AppState {
         do {
             let host = try EngineHost()
             self.host = host
+            if let probePath = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_PROBE"] {
+                AppState.captureOriginalFrameProbe(host: host, path: probePath)
+            }
             if let rigPath = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_RIG"] {
                 AppState.captureRig(host: host, path: rigPath)
             }
@@ -76,6 +79,10 @@ final class AppState {
             if let errorMessage, ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil {
                 print("[ikkoku] requested capture input failed: \(errorMessage)")
                 exit(1)
+            }
+            if let studio {
+                do { try AppState.configureStudioExecution(studio) }
+                catch { self.errorMessage = "Studio execution: \(error)"; if ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil { print("[ikkoku] \(error)"); exit(1) } }
             }
             AppState.sharedStudio = studio
             AppState.uiCaptureState = self
@@ -187,10 +194,18 @@ final class AppState {
 
     func openSourceScenePreview() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.png]; panel.allowsMultipleSelection = false
-        panel.message = "Preview supported character settings and saved FK on the local clothed reference avatar. Other source records remain in the compatibility report."
+        panel.message = "Load converted card selections, source camera and saved poses. Missing conversions are listed in the compatibility report."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do { try importSourceScenePreview(url: url) }
         catch { errorMessage = "Could not preview source scene: \(error)" }
+    }
+
+    func exportSourceScene() {
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "edited-original-scene.png"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try studio?.exportSourceScene(to: url) }
+        catch { errorMessage = "Could not export original scene: \(error)" }
     }
 
     func loadModLibrary(url: URL) throws {
@@ -271,6 +286,8 @@ final class AppState {
             studio.liveAnimation = false
             studio.showGizmos = false
             try studio.loadScene(from: URL(fileURLWithPath: path))
+            try configureStudioExecution(studio)
+            if let save = env["IKKOKU_SAVE_SCENE"] { try studio.saveScene(to: URL(fileURLWithPath: save)) }
             for object in studio.doc.objects where object.kind == .item && studio.doc.isVisible(object.id) {
                 guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
                     throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
@@ -415,6 +432,10 @@ final class AppState {
         let w = Int(env["IKKOKU_CAPTURE_W"] ?? "") ?? 1200, h = Int(env["IKKOKU_CAPTURE_H"] ?? "") ?? 1600
         var frame = host.renderer.currentFrame()
         if env["IKKOKU_SOURCE_SCENE"] != nil, let studio = AppState.sharedStudio {
+            if let path = env["IKKOKU_SOURCE_SCENE_EDITS"] {
+                do { try studio.applySourceCaptureEdits(Data(contentsOf: URL(fileURLWithPath: path))) }
+                catch { print("[ikkoku] source scene capture edits failed: \(error)"); exit(1) }
+            }
             studio.refresh(); frame = studio.frame
         }
         if env["IKKOKU_CAPTURE_STUDIO"] != nil, let studio = AppState.sharedStudio {
@@ -458,11 +479,49 @@ final class AppState {
             do { try studio.loadScene(from: URL(fileURLWithPath: scenePath)); frame = studio.frame; print("[ikkoku] scene loaded: \(studio.doc.objects.count) objects") }
             catch { print("[ikkoku] scene load failed: \(error)") }
         }
+        if let path = env["IKKOKU_EXPORT_SOURCE_SCENE"], let studio = AppState.sharedStudio {
+            do { try studio.exportSourceScene(to: URL(fileURLWithPath: path)); print("[ikkoku] edited original scene exported to \(path)") }
+            catch { print("[ikkoku] original scene export failed: \(error)"); exit(1) }
+        }
+        if env["IKKOKU_CAPTURE_GRID"] == "0" { frame.effects.showGrid = false }
+        if env["IKKOKU_CAPTURE_GIZMOS"] == "0" { frame.gizmos = [] }
+        if let output = env["IKKOKU_BENCHMARK_OUTPUT"] {
+            do {
+                let report = try host.renderer.benchmark(frame: frame, width: w, height: h,
+                    measuredFrames: Int(env["IKKOKU_BENCHMARK_FRAMES"] ?? "20") ?? 20)
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                var document = try JSONSerialization.jsonObject(with: encoder.encode(report)) as! [String: Any]
+                document["sourceCardSHA256"] = maker.importedSourceCard?.sourceSHA256
+                document["assembly"] = maker.sourceRigURL?.path
+                document["coordinate"] = maker.sourceBoneModifierCoordinate
+                document["appearanceFieldCount"] = maker.sourceAppearanceAppliedFields.count
+                document["assetSelections"] = maker.sourceAssetSelections.map { selected -> [String: Any] in
+                    var row: [String: Any] = ["property": selected.property, "category": selected.category,
+                        "savedID": selected.savedID, "sourceID": selected.sourceID, "status": selected.status]
+                    row["modGUID"] = selected.modGUID
+                    return row
+                }
+                document["coverageScope"] = "Selected converted assets for this card; not whole-game catalog coverage."
+                document["diagnostics"] = maker.sourceAppearanceDiagnostics
+                if env["IKKOKU_SOURCE_SCENE"] != nil, let studio = AppState.sharedStudio {
+                    for key in ["sourceCardSHA256", "assembly", "coordinate", "appearanceFieldCount", "assetSelections", "diagnostics"] { document.removeValue(forKey: key) }
+                    document["studio"] = studio.sourceBenchmarkMetadata()
+                    if let text = env["IKKOKU_BENCHMARK_SIMULATION_FRAMES"] {
+                        guard let frames = Int(text) else { throw GLTFError.io("Invalid Studio simulation benchmark frame count.") }
+                        document["simulation"] = try studio.benchmarkSourceEvaluation(measuredFrames: frames)
+                    }
+                }
+                try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
+                    .write(to: URL(fileURLWithPath: output), options: .atomic)
+                print("[ikkoku] benchmark written to \(output)")
+            } catch { print("[ikkoku] benchmark failed: \(error)"); exit(1) }
+        }
         let t0 = CFAbsoluteTimeGetCurrent()
         if let img = host.renderer.capture(frame: frame, width: w, height: h) {
-            try? ImageIO.writePNG(img, to: URL(fileURLWithPath: out))
+            do { try ImageIO.writePNG(img, to: URL(fileURLWithPath: out)) }
+            catch { print("[ikkoku] autocapture write failed: \(error)"); exit(1) }
             print("[ikkoku] autocapture written to \(out) (\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms, \(frame.items.count) items)")
-        } else { print("[ikkoku] autocapture failed") }
+        } else { print("[ikkoku] autocapture failed"); exit(1) }
         if env["IKKOKU_CAPTURE_UI"] != nil {
             // Real window snapshot after layout; handled by `snapshotWindowIfRequested` once the window exists.
             for line in host.library.log { print("[ikkoku] \(line)") }
@@ -649,9 +708,16 @@ final class AppState {
 }
 
 enum ImageIO {
-    static func writePNG(_ image: CGImage, to url: URL) throws {
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
+    static func pngData(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw RigError.invalid("Could not create PNG encoder.")
+        }
         CGImageDestinationAddImage(dest, image, nil)
-        CGImageDestinationFinalize(dest)
+        guard CGImageDestinationFinalize(dest) else { throw RigError.invalid("Could not finish PNG encoding.") }
+        return data as Data
+    }
+    static func writePNG(_ image: CGImage, to url: URL) throws {
+        try pngData(image).write(to: url, options: .atomic)
     }
 }

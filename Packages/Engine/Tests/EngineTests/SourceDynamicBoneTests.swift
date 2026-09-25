@@ -129,3 +129,13 @@ private func close(_ a: Float3, _ b: Float3, _ epsilon: Float = 1e-5) -> Bool { 
     }
     #expect(states.allSatisfy { $0.lastStepCount == 2 })
 }
+
+@Test func sourceDynamicsIgnoresUnrelatedMirroredAccessoryButRejectsReflectedAncestors() throws {
+    let original = try dynamicsRig()
+    let rig = try RigDefinition(nodes:original.nodes + [.init(name:"mirrored accessory",sourceID:"accessory",parent:0,scale:Float3(-1,-1,1))],skins:[])
+    var solver = try SourceDynamicBone(rig:rig,definition:dynamicsConfig(force:Float3(0.1,0,0)))
+    let pose = try solver.step(deltaTime:1/60,rig:rig,pose:rig.restPose)
+    #expect(pose.localMatrices[3] == rig.restPose.localMatrices[3])
+    var invalid = rig.restPose; invalid.localMatrices[0] = Transform.trs(.zero,.identity,Float3(-1,1,1))
+    #expect(throws:(any Error).self) { try SourceDynamicBone(rig:rig,pose:invalid,definition:dynamicsConfig()) }
+}

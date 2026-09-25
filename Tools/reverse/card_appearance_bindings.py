@@ -45,6 +45,18 @@ def synthetic_card(custom,clothes,sex):
     return blank_png()+struct.pack('<i',100)+dotnet_string(MAGIC)+dotnet_string(VERSIONS['card'])+length(b'')+length(header)+struct.pack('<q',len(payload))+payload
 
 
+def linear_colors(values):
+    result=np.asarray(values,dtype=np.float32).copy()
+    color=result[...,:3]
+    result[...,:3]=np.where(color<=.04045,color/12.92,((color+.055)/1.055)**2.4)
+    return result
+
+def encode_rgb(values):
+    result=np.asarray(values,dtype=np.float32).copy()
+    color=result[...,:3]
+    result[...,:3]=np.where(color<=.0031308,color*12.92,1.055*np.maximum(color,0)**(1/2.4)-.055)
+    return result
+
 def get_path(records,path):
     value=records
     for key in path.split('.'):
@@ -113,6 +125,7 @@ def build(shared,output,*,male=False):
     def recipe(parts,kind,colors,requirements,mods,pass_index=0,**rest):
         entries.append(dict(parts=[p+'/0' for p in parts],pass_=pass_index,kind=kind,colors=colors,requirements=requirements,resolverProperties=mods,**rest))
         entries[-1]['pass']=entries[-1].pop('pass_')
+        if kind in ['head','clothes']:entries[-1]['colorSpace']='sourceLinear'
     zero_makeup={'face.baseMakeup.'+key:0 for key in ['eyeshadowId','cheekId','lipId','paintId.0','paintId.1']}
     makeup_mods=['ChaFileMakeup.'+key for key in ['eyeshadowId','cheekId','lipId','PaintID1','PaintID2']]
     recipe(['cf_O_face'],'head',['body.skinMainColor','body.skinSubColor'],
@@ -159,7 +172,7 @@ def build(shared,output,*,male=False):
     limits=['Only selected original head00, reference clothes and two hair parts have native color recipes; unmatched original or modded IDs retain explicit reference materials.',
             'Hair and clothing geometry, patterns, makeup, detail normals, gloss and other unbound material fields are preserved in the source card but not restored by these recipes.',
             'Body uses flat skin tint for the explicitly clothed reference selection; no body texture or unclothed appearance parity.',
-            'Verified albedo formulas only; original lighting, stencil, texture filtering and color-space parity remain incomplete.']
+            'Head/clothes recipes use measured original linear material colors and sRGB output; other color-space paths, original lighting, stencil and texture filtering remain incomplete.']
     stem='source-male-avatar' if male else 'source-avatar'
     appearance=json.loads((output/(stem+'.appearance.json')).read_text())
     surfaces={(p['part'],p.get('pass',0)) for p in appearance['parts']}
@@ -181,11 +194,13 @@ def build(shared,output,*,male=False):
         main=image(entry['main']) if 'main' in entry else None;mask=image(entry['mask']) if 'mask' in entry else None
         colors=np.asarray([get_path(records,p) for p in entry['colors']],dtype=np.float32)
         kind=entry['kind']
+        if entry.get('colorSpace')=='sourceLinear':colors=linear_colors(colors)
         if kind=='head':pixels=create_head_base(main,mask,*colors)
         elif kind=='eye':pixels=create_eye_base(main,colors[0],np.float32(get_path(records,entry['blend'])))
         elif kind=='eyeWhite':pixels=create_eye_white(main,*colors)
         elif kind=='clothes':pixels=clothes_base(main,mask,colors)
         else:pixels=hair_base(mask,colors)
+        if entry.get('colorSpace')=='sourceLinear':pixels=encode_rgb(pixels)
         rgba=np.rint(np.clip(pixels,0,1)*255).astype(np.uint8).tobytes()
         filename=f'expected-appearance-{entry_index}.rgba';(output/'card-appearance-inputs'/filename).write_bytes(rgba)
         oracle['recipes'].append(dict(entryIndex=entry_index,parts=entry['parts'],kind=kind,file='card-appearance-inputs/'+filename,sha256=digest(rgba),bytes=len(rgba),tolerance=1))

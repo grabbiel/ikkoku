@@ -5,7 +5,7 @@ python3 with numpy/Pillow. Everything that needs bpy is guarded.
 
 Working space ("Blender space"): metres, Z up, character faces -Y, +X is the
 character's left. The glTF exporter (export_yup=True) turns this into
-Y up / faces +Z as required by docs/ASSET_SPEC.md.
+Y up / faces +Z as required by docs/reference/native-assets.md.
 """
 import os, sys, json, struct, math, time
 import numpy as np

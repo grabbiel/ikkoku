@@ -57,7 +57,7 @@ func sourceStudioCharacterPreviewBuildsSupportedSyntheticPoseAndFiniteWorldBound
     let frame = try original.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(), world: matrix_identity_float4x4, objectID: 73)
     #expect(!frame.items.isEmpty && frame.items.allSatisfy { $0.objectID == 73 })
     #expect(!frame.sceneBounds.isEmpty && frame.sceneBounds.radius.isFinite)
-    #expect(!original.diagnostics.isEmpty && original.diagnostics[0].contains("Original appearance"))
+    #expect(!original.diagnostics.isEmpty && original.diagnostics[0].contains("Converted card"))
     let moved = try original.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
         world: Transform.translation(SIMD3<Float>(2, 3, -4)), objectID: 91)
     let expected = frame.sceneBounds.center + SIMD3<Float>(2, 3, -4)
@@ -104,7 +104,7 @@ func sourceStudioCharacterPreviewRejectsUnsupportedEmbeddedSexAndHeadWhenSupplie
                 rig: input.rig, catalog: input.catalog), resources: resources)
             Issue.record("Unsupported embedded character unexpectedly produced a reference preview.")
         } catch {
-            #expect(String(describing: error).contains("sex, head or body-bone identity"))
+            #expect(String(describing: error).contains("identities differ") || String(describing: error).contains("assembly conversion is missing"))
         }
         // Initialization creates the source rig first; failed compatibility must
         // still release its registered geometry when the partial object dies.

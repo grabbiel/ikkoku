@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export the selected original hair DynamicBone setup, without rendering assets.
 
-Supports the observed real-node, empty exclusion/notRoll and zero-tangent-distribution
+Supports the observed real-node, empty exclusion/notRoll and finite Hermite-distribution
 configuration. Rejects other variants rather than approximating their topology.
 """
 from __future__ import annotations
@@ -20,13 +20,14 @@ def vector(v):
 
 def distribution(curve, time=0):
     import numpy as np
+    if not math.isfinite(time): raise ValueError('Nonfinite curve sample time')
     keys = curve.get('m_Curve', [])
     if not keys:
         return 1.0
     if any(not math.isfinite(k[field]) for k in keys for field in ['time', 'value', 'inSlope', 'outSlope']):
         raise ValueError('Nonfinite distribution')
-    if any(k['inSlope'] != 0 or k['outSlope'] != 0 for k in keys):
-        raise ValueError('This bounded exporter accepts zero-tangent curves only')
+    if not math.isfinite(time) or any(k.get('weightedMode', 0) != 0 for k in keys):
+        raise ValueError('Nonfinite sample time or weighted curve is unsupported')
     if any(a['time'] >= b['time'] for a, b in zip(keys, keys[1:])):
         raise ValueError('Curve keys must be strictly ordered')
     if time <= keys[0]['time']: return keys[0]['value']
@@ -35,7 +36,12 @@ def distribution(curve, time=0):
     f = np.float32
     u = f(f(time - f(a['time'])) / f(f(b['time']) - f(a['time'])))
     smooth = f(f(u * u) * f(f(3) - f(f(2) * u)))
-    return float(f(f(a['value']) + f(f(f(b['value']) - f(a['value'])) * smooth)))
+    base = f(f(a['value']) + f(f(f(b['value']) - f(a['value'])) * smooth))
+    if a['outSlope'] == 0 and b['inSlope'] == 0: return float(base)
+    duration = f(f(b['time']) - f(a['time']))
+    h10 = f(f(f(u*u)*u) - f(f(2)*f(u*u)) + u)
+    h11 = f(f(f(u*u)*u) - f(u*u))
+    return float(f(f(base + f(f(h10 * f(a['outSlope'])) * duration)) + f(f(h11 * f(b['inSlope'])) * duration)))
 
 
 def validate_topology(tree):
@@ -51,14 +57,18 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def extract(rigs: Path) -> dict:
+def extract(rigs: Path, maker_library: Path | None = None) -> dict:
     import UnityPy
     import numpy as np
+    rigs = rigs.resolve()
+    maker_library = maker_library.resolve() if maker_library is not None else None
     evidence = []
     def read(path):
         evidence.append({'path': str(path.relative_to(REPO)), 'sha256': digest(path)})
         return json.loads(path.read_text())
+    bundle_cache = {}
     def bundle(name):
+        if name in bundle_cache: return bundle_cache[name]
         path = rigs / 'source/abdata/chara' / (name + '.unity3d')
         proof = json.loads(path.with_suffix(path.suffix + '.provenance.json').read_text())
         hashed = digest(path)
@@ -67,7 +77,8 @@ def extract(rigs: Path) -> dict:
         if expected != hashed:
             raise ValueError(f'Bundle provenance hash mismatch: {path}')
         evidence.append({'path': str(path.relative_to(REPO)), 'sha256': hashed})
-        return UnityPy.load(str(path))
+        bundle_cache[name] = UnityPy.load(str(path))
+        return bundle_cache[name]
     def identity(obj):
         return f'{obj.assets_file.name}:{obj.path_id}'
     def components(env, nodes):
@@ -97,8 +108,29 @@ def extract(rigs: Path) -> dict:
             'center': vector(data['m_Center']), 'radius': data['m_Radius'], 'height': data['m_Height'],
             'direction': data['m_Direction'], 'bound': data['m_Bound'], 'enabled': bool(data['m_Enabled'])})
     result = []
-    for rig_name, bundle_name, prefix in [('hair-back-rig', 'bo_hair_b_00', 'hair-0/'), ('hair-front-rig', 'bo_hair_f_00', 'hair-1/')]:
-        model = read(rigs / (rig_name + '.json')); nodes = model['nodes']
+    hair_inputs = [(rigs / (name + '.json'), bundle_name, prefix, None) for name, bundle_name, prefix in
+                   [('hair-back-rig', 'bo_hair_b_00', 'hair-0/'), ('hair-front-rig', 'bo_hair_f_00', 'hair-1/')]]
+    if maker_library is not None:
+        library = read(maker_library)
+        hair_inputs = []
+        for entry in library['entries']:
+            if entry['category'] not in range(101, 105) or entry.get('empty'): continue
+            if entry.get('modGUID') is not None: raise ValueError('This exporter requires original catalog hair entries; mod component contracts are separate')
+            source = entry.get('source', {})
+            asset = (maker_library.parent / entry['rig']['file']).resolve()
+            if not asset.is_relative_to(maker_library.parent.resolve()) or digest(asset) != entry['rig']['sha256']:
+                raise ValueError('Maker hair rig identity/hash mismatch')
+            source_bundle = Path(source['bundle'])
+            if source_bundle.parent != Path('chara') or source_bundle.suffix != '.unity3d':
+                raise ValueError('This extractor requires an available original chara bundle')
+            source_file = rigs / 'source/abdata' / source_bundle
+            if source.get('bundleSHA256') != digest(source_file): raise ValueError('Maker library/source bundle identity mismatch')
+            hair_inputs.append((asset, source_bundle.stem, f"hair-{entry['category'] - 101}/",
+                                dict(category=entry['category'], id=entry['id'], modGUID=entry.get('modGUID'))))
+    coverage = []
+    for rig_path, bundle_name, prefix, asset_identity in hair_inputs:
+        model = read(rig_path); nodes = model['nodes']
+        component_start = len(result)
         children = [[] for _ in nodes]
         for i, node in enumerate(nodes):
             if node['parent'] is not None:
@@ -129,7 +161,7 @@ def extract(rigs: Path) -> dict:
             lengths = []
             def visit(index, parent, distance=0):
                 current = len(particles)
-                particles.append({'nodeID': prefix + nodes[index]['sourceID'], 'parent': parent})
+                particles.append({'nodeID': prefix + nodes[index]['sourceID'], 'nodeName': nodes[index]['name'], 'parent': parent})
                 lengths.append(distance)
                 for child in children[index]:
                     edge = np.linalg.norm(worlds[index][:3,3] - worlds[child][:3,3])
@@ -143,28 +175,30 @@ def extract(rigs: Path) -> dict:
                     factor = distribution(data['m_' + field + 'Distrib'], rate) if maximum > 0 else 1
                     v = float(np.float32(data['m_' + field]) * np.float32(factor))
                     particle[field.lower()] = max(0.0, v) if field == 'Radius' else max(0.0, min(1.0, v))
-            result.append({'sourceID': identity(obj), 'ownerID': prefix + nodes[ni]['sourceID'],
+            result.append({'sourceAsset': asset_identity, 'sourceID': identity(obj), 'rootName': nodes[root]['name'], 'ownerName': nodes[ni]['name'], 'ownerID': prefix + nodes[ni]['sourceID'],
                 'updateRate': data['m_UpdateRate'], 'gravity': vector(data['m_Gravity']), 'force': vector(data['m_Force']),
                 'freezeAxis': data['m_FreezeAxis'], 'particles': particles,
                 'colliders': colliders if data['m_Colliders'] is not None else []})
+        coverage.append({'rig': str(rig_path.relative_to(REPO)), 'sourceAsset': asset_identity, 'components': len(result) - component_start})
     index = read(REPO / '.local/reverse/managed-recovery/index.json')
     project = Path(index['assemblies'][0]['directory']) / 'project'
     for name in ['DynamicBone.cs', 'DynamicBoneCollider.cs', 'ChaControl.cs']:
         path = project / name
         evidence.append({'path': str(path.relative_to(REPO)), 'sha256': digest(path)})
     return {'schemaVersion': 1, 'coordinateSpace': 'native-right-handed-y-up', 'components': result,
-            'evidence': evidence,
-            'scope': 'Selected original hair real-node DynamicBone setup. Source replaces prefab collider slots with body colliders. Other variants, virtual ends, exclusions/notRolls and distance disabling are unsupported.'}
+            'evidence': evidence, 'assetCoverage': coverage,
+            'scope': 'Selected/converted original hair real-node DynamicBone setup. Source replaces prefab collider slots with body colliders. Other variants, virtual ends, exclusions/notRolls and distance disabling are unsupported.'}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rigs', type=Path, default=REPO / '.local/reverse/rigs')
+    parser.add_argument('--maker-library', type=Path, help='Export exact DynamicBone components for all converted original hair assets in this verified library')
     parser.add_argument('--output', type=Path, default=REPO / '.local/reverse/rigs/source-dynamics.json')
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to((REPO / '.local').resolve()):
         parser.error('Original data must remain under .local')
-    value = extract(args.rigs)
+    value = extract(args.rigs, args.maker_library)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(value, indent=2) + '\n')
     print(json.dumps({'components': len(value['components']), 'particles': sum(len(c['particles']) for c in value['components']),

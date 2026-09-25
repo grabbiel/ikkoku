@@ -139,6 +139,60 @@ public final class Renderer: @unchecked Sendable {
                        bitmapInfo: info, provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
+    /// Measures the same pass graph as capture while reusing all render targets.
+    /// Each command buffer completes before the next sample. This is a render
+    /// latency baseline, not an interactive application throughput measurement.
+    public func benchmark(frame: RenderFrame, width: Int, height: Int,
+                          warmupFrames: Int = 3, measuredFrames: Int = 20) throws -> RenderBenchmark {
+        guard (1...8192).contains(width), (1...8192).contains(height),
+              (0...100).contains(warmupFrames), (1...1000).contains(measuredFrames) else {
+            throw RenderBenchmarkError.invalidConfiguration
+        }
+        let before = RenderBenchmark.residentBytes()
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.ldrFormat, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]; descriptor.storageMode = .private
+        guard let target = gpu.device.makeTexture(descriptor: descriptor) else { throw RendererError.textureCreationFailed }
+        let targets = try RenderTargets(device: gpu.device, width: width, height: height)
+        var cpu: [Double] = [], completion: [Double] = [], gpuTimes: [Double] = []
+        for sample in 0..<(warmupFrames + measuredFrames) {
+            try autoreleasepool {
+                gpu.waitForFrameSlot(); defer { gpu.releaseFrameSlot() }
+                guard let cb = gpu.commandQueue.makeCommandBuffer() else { throw RenderBenchmarkError.commandBuffer }
+                cb.label = "Benchmark \(sample)"
+                renderLock.lock()
+                let start = CACurrentMediaTime()
+                frameRing.beginFrame(frameIndex); frameIndex &+= 1
+                encode(frame: frame, target: target, targets: targets, commandBuffer: cb)
+                let errors = lastDeformationErrors
+                // Commit under the lock so interactive draws cannot submit after
+                // reusing the same deformation buffers but before this frame.
+                if errors.isEmpty { cb.commit() }
+                let submitted = CACurrentMediaTime()
+                renderLock.unlock()
+                guard errors.isEmpty else { throw RenderBenchmarkError.deformation(errors) }
+                cb.waitUntilCompleted()
+                let end = CACurrentMediaTime()
+                guard cb.status == .completed else { throw RenderBenchmarkError.gpu(cb.error?.localizedDescription ?? "Command failed") }
+                if sample >= warmupFrames {
+                    cpu.append((submitted - start) * 1000); completion.append((end - start) * 1000)
+                    if cb.gpuEndTime > cb.gpuStartTime, cb.gpuStartTime > 0 { gpuTimes.append((cb.gpuEndTime - cb.gpuStartTime) * 1000) }
+                }
+            }
+        }
+        let visible = frame.items.filter(\.visible)
+        let meshes = visible.compactMap { resources.mesh($0.mesh) }
+        var unique = Set<UInt32>()
+        let vertices = visible.reduce(0) { total, item in
+            total + (unique.insert(item.mesh.id).inserted ? (resources.mesh(item.mesh)?.vertexCount ?? 0) : 0)
+        }
+        return RenderBenchmark(device: gpu.device.name, width: width, height: height,
+            warmupFrames: warmupFrames, measuredFrames: measuredFrames, cpuEncodeMilliseconds: .init(cpu),
+            completionMilliseconds: .init(completion), gpuMilliseconds: gpuTimes.count == measuredFrames ? .init(gpuTimes) : nil,
+            residentBytesBefore: before, residentBytesAfter: RenderBenchmark.residentBytes(), metalAllocatedBytes: gpu.device.currentAllocatedSize,
+            visibleItems: visible.count, missingMeshes: visible.count - meshes.count,
+            drawnTriangles: meshes.reduce(0) { $0 + $1.indexCount / 3 }, uniqueVertices: vertices, resources: resources.statistics())
+    }
+
     // MARK: - Frame preparation
 
     struct DrawRecord {
@@ -234,7 +288,7 @@ public final class Renderer: @unchecked Sendable {
         pp.vignette = Float4(fx.vignetteEnabled ? fx.vignetteIntensity : 0, fx.vignetteSmoothness, fw / fh, 0)
         pp.grade = Float4(fx.exposure, fx.contrast, fx.saturation, fx.temperature)
         pp.texel = Float4(1 / fw, 1 / fh, fw, fh)
-        pp.flags = (fx.fxaa ? 1 : 0) | (fx.bloomEnabled ? 2 : 0) | (fx.vignetteEnabled ? 4 : 0) | 8
+        pp.flags = (fx.fxaa ? 1 : 0) | (fx.bloomEnabled ? 2 : 0) | (fx.vignetteEnabled ? 4 : 0) | 8 | ((fx.toneMappingEnabled ?? true) ? 16 : 0)
         let postOffset = frameRing.allocate(pp)
 
         // Retained per-frame buffers preserve the complete palette without consuming

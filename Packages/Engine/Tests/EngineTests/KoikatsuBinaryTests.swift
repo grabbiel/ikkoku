@@ -4,7 +4,7 @@ import Studio
 
 // Synthetic records following the observed BinaryWriter call order. No game assets or
 // decompiled implementation are included in these fixtures.
-private struct StudioBytes {
+struct StudioBytes {
     var data = Data()
     mutating func i32(_ value: Int32) {
         let bits = UInt32(bitPattern: value)
@@ -28,7 +28,7 @@ private struct StudioBytes {
         i32(key); string("纹理/地板.png"); bool(true)
         string(#"{"x":0.25,"y":0.5,"z":2,"w":3}"#); f32(45)
     }
-    mutating func item() {
+    mutating func item(bone: String = "chair_joint") {
         header(kind: 1, key: 13)
         i32(7); i32(8); i32(9); f32(1.25)
         for index in 0..<8 { string("{\"r\":\(index),\"g\":0.25,\"b\":0.5,\"a\":1}") }
@@ -36,7 +36,7 @@ private struct StudioBytes {
         f32(0.75); string(#"{"r":0.1,"g":0.2,"b":0.3,"a":1}"#); f32(0.7)
         string(#"{"r":0.4,"g":0.5,"b":0.6,"a":1}"#); f32(2); f32(0.25)
         pattern(-1); bool(true)
-        i32(1); string("chair_joint"); i32(77); transform() // OIBoneInfo omits kind/tree/visible.
+        i32(1); string(bone); i32(77); transform() // OIBoneInfo omits kind/tree/visible.
         bool(false); f32(0.375)
         i32(0) // children
     }

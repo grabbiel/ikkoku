@@ -6,14 +6,18 @@ import CoreMath
 public struct OrbitCamera: Sendable, Equatable, Codable {
     public var target: Float3 = Float3(0, 0.9, 0)
     public var distance: Float = 2.6
-    public var yaw: Float = 0          // radians, around Y
-    public var pitch: Float = 0.05     // radians, positive looks down
+    public var yaw: Float = 0 { didSet { orientationOverride = nil } } // radians, around Y
+    public var pitch: Float = 0.05 { didSet { orientationOverride = nil } }
+    /// Imported camera orientation includes roll; orbit edits return to the
+    /// editor's two-angle control. Optional for older native scene documents.
+    public var orientationOverride: Float4?
     public var fovDegrees: Float = 30
     public var near: Float = 0.05
 
     public init() {}
 
     public var position: Float3 {
+        if let orientationOverride { return target + simd_quatf(vector: orientationOverride).act(Float3(0, 0, distance)) }
         let cp = cos(pitch), sp = sin(pitch)
         let dir = Float3(sin(yaw) * cp, sp, cos(yaw) * cp)
         return target + dir * distance
@@ -21,7 +25,10 @@ public struct OrbitCamera: Sendable, Equatable, Codable {
 
     public var forward: Float3 { normalize(target - position) }
 
-    public func viewMatrix() -> float4x4 { Projection.lookAt(eye: position, center: target, up: Float3(0, 1, 0)) }
+    public func viewMatrix() -> float4x4 {
+        let up = orientationOverride.map { simd_quatf(vector: $0).act(Float3(0, 1, 0)) } ?? Float3(0, 1, 0)
+        return Projection.lookAt(eye: position, center: target, up: up)
+    }
 
     public func projectionMatrix(aspect: Float) -> float4x4 {
         Projection.perspectiveReverseZInfinite(fovyRadians: fovDegrees.degreesToRadians, aspect: aspect, near: near)

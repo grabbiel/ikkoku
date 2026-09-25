@@ -103,7 +103,7 @@ fragment float4 composite_fragment(FSQOut in [[stage_in]],
         float v = smoothstep(0.8, 0.8 - post.vignette.y, length(d) * post.vignette.x);
         c *= mix(1.0, v, post.vignette.x > 0.0 ? 1.0 : 0.0);
     }
-    c = c / (1.0 + c * 0.05);            // gentle highlight roll-off
+    if (post.flags & 16u) c = c / (1.0 + c * 0.05); // optional native highlight roll-off
     return float4(linearToSrgb(saturate(c)), s.a);
 }
 

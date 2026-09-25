@@ -34,12 +34,32 @@ class SourceAnimationAssetTests(unittest.TestCase):
         for data in malformed:
             with self.subTest(data=data), self.assertRaises(ValueError): streamed_curves(data, 1, 0)
 
+    def test_streamed_initialization_samples_fill_only_the_prekey_interval(self):
+        first = 2.384185791015625e-7
+        data = words([(-3.4028234663852886e38, [(0, [0, 0, 0, 4])]),
+                      (first, [(0, [0, 0, 0, 7])]), (math.inf, [])])
+        curve = streamed_curves(data, 1, 0)[0]
+        self.assertEqual(sample_curve(curve, 0), 4)
+        self.assertEqual(sample_curve(curve, first), 7)
+        data = words([(-1, [(0, [2, 3, 5, 7])]), (1, [(0, [0, 0, 0, 33])]), (math.inf, [])])
+        curve = streamed_curves(data, 1, 0)[0]
+        self.assertEqual(sample_curve(curve, 0.5), ((2*1.5+3)*1.5+5)*1.5+7)
+
     def test_dense_sampling_interpolates_and_clamps(self):
         curve = {'kind': 'dense', 'beginTime': 0, 'sampleRate': 2, 'samples': [1, 5, 9]}
         self.assertEqual(sample_curve(curve, 0.25), 3)
         self.assertEqual(sample_curve(curve, -1), 1)
         self.assertEqual(sample_curve(curve, 3), 9)
         self.assertEqual(sample_curve({'kind': 'constant', 'value': 7}, 99), 7)
+
+    def test_dense_curve_can_begin_after_clip_start(self):
+        raw = self.clip(); clip = raw['m_MuscleClip']['m_Clip']['data']
+        clip['m_DenseClip'].update(m_FrameCount=2, m_CurveCount=3, m_BeginTime=0.25, m_SampleRate=2,
+                                 m_SampleArray=[1,2,3,4,5,6])
+        clip['m_ConstantClip']['data'] = []
+        converted = convert_clip(raw, 'late-dense', {})
+        self.assertEqual([sample_curve(c, 0) for c in converted['curves']], [1,2,3])
+        self.assertEqual([sample_curve(c, 0.5) for c in converted['curves']], [2.5,3.5,4.5])
 
     def test_binding_hash_uses_full_root_relative_path_and_explicit_source_id(self):
         rig = {'nodes': [{'name': 'root', 'sourceID': '0', 'parent': None},

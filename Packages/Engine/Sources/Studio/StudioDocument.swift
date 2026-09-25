@@ -4,6 +4,7 @@ import CoreMath
 import Scene
 import Renderer
 import Character
+import Gameplay
 
 public enum StudioObjectKind: String, Codable, Sendable { case character, item, light, camera, folder }
 
@@ -32,6 +33,19 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     // character
     public var card: CharacterCard?
     public var sourceCharacter: SourceStudioCharacterReference?
+    /// Import baselines let original-format export reject native rename/type
+    /// edits without confusing retained placeholders with rendered characters.
+    public var sourcePreviewName: String?
+    public var sourcePreviewKind: StudioObjectKind?
+    public var sourceAttachmentPoint: Int32?
+    /// Original catalog bone IDs and Unity local Euler degrees; separate from
+    /// the prototype skeleton's rest-relative pose deltas.
+    public var sourceFKRotations: [Int: Float3]?
+    public var sourceIKOverrides: [Int32: SourceStudioIKEdit]?
+    public var sourceKinematics: SourceStudioKinematicState?
+    /// Original catalog IDs and timing; nil resumes the source scene's values.
+    public var sourceAnimation: SourceStudioAnimationState?
+    public var sourceVoice: SourceStudioVoiceState?
     public var poseDelta = PoseDelta()
     public var ikTargets: [IKChain: IKTarget] = [:]
     public var animationPreset: String?
@@ -93,7 +107,10 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     public var timeline = Timeline()
     public var sourceSceneFile: String?
     public var sourceSceneSHA256: String?
+    public var sourceVoiceCatalogFile: String?
     public var sourcePreviewDiagnostics: [String]?
+    public var sourcePluginState: SourceStudioPluginState?
+    public var sourceNativePlugins: [SourceNativePluginReference]?
 
     public init() {
         camera.target = Float3(0, 0.9, 0); camera.distance = 3.4; camera.yaw = 0.35; camera.pitch = 0.12

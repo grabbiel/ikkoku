@@ -141,6 +141,47 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
         return speed
     }
 
+    /// The selected state's synchronized normalized clock uses the weighted
+    /// authored durations. No controller transitions are inferred here.
+    public func stateDuration(stateID: String, floatParameters: [String: Float] = [:]) throws -> Float {
+        let values = try motions(stateID: stateID, floatParameters: floatParameters)
+        let duration = try values.reduce(Float(0)) { try $0 + clip(id: $1.clipID).duration * $1.weight }
+        guard duration.isFinite, duration > 0 else { throw RigError.invalid("Invalid blended animation duration.") }
+        return duration
+    }
+
+    public func applying(stateID: String, normalizedTime: Float, floatParameters: [String: Float] = [:],
+                         to rig: RigDefinition, baseline: RigPose? = nil, allowingUnbound: Bool = false) throws -> RigPose {
+        guard normalizedTime.isFinite else { throw RigError.invalid("Animation normalized time must be finite.") }
+        let motions = try motions(stateID: stateID, floatParameters: floatParameters)
+        var poses: [RigPose] = []
+        var rotatedOrScaled = Set<Int>(), changed = Set<Int>()
+        let indices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) })
+        for motion in motions {
+            let clip = try clip(id: motion.clipID)
+            var phase = normalizedTime + motion.cycleOffset
+            phase = clip.loop ? phase - floor(phase) : min(max(phase, 0), 1)
+            poses.append(try applying(clipID: clip.id, time: clip.startTime + phase * clip.duration,
+                to: rig, baseline: baseline, allowingUnbound: allowingUnbound))
+            for binding in clip.bindings {
+                guard let id = binding.targetSourceID, let index = indices[id] else { continue }
+                changed.insert(index)
+                if binding.attribute != 1 { rotatedOrScaled.insert(index) }
+            }
+        }
+        guard poses.count == 2 else { return poses[0] }
+        var result = poses[0]
+        let t = motions[1].weight
+        for node in changed {
+            let a = poses[0].localMatrices[node], b = poses[1].localMatrices[node]
+            let translation = a.translation + (b.translation - a.translation) * t
+            if !rotatedOrScaled.contains(node) { result.localMatrices[node].columns.3 = Float4(translation, 1); continue }
+            let ac = try Self.decompose(a), bc = try Self.decompose(b)
+            result.localMatrices[node] = Transform.trs(translation, simd_slerp(ac.0, bc.0, t), ac.1 + (bc.1 - ac.1) * t)
+        }
+        return result
+    }
+
     private func parameterValue(_ name: String, values: [String: Float]) throws -> Float {
         guard let parameter = parameters.first(where: { $0.name == name && $0.type == "float" }),
               let value = values[name] ?? parameter.floatDefault, value.isFinite else {
@@ -246,7 +287,7 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
                     guard curve.value?.isFinite == true, curve.keys == nil, curve.samples == nil else { throw RigError.invalid("Invalid constant animation curve.") }
                     sampleCount += 1
                 case "dense":
-                    guard let rate = curve.sampleRate, rate.isFinite, rate > 0, let begin = curve.beginTime, begin.isFinite, begin <= clip.startTime,
+                    guard let rate = curve.sampleRate, rate.isFinite, rate > 0, let begin = curve.beginTime, begin.isFinite, begin >= 0, begin <= clip.stopTime,
                           let samples = curve.samples, !samples.isEmpty, samples.allSatisfy(\.isFinite), curve.value == nil, curve.keys == nil else {
                         throw RigError.invalid("Invalid dense animation curve.")
                     }
