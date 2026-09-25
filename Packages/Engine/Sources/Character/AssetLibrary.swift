@@ -126,6 +126,24 @@ public final class AssetLibrary: @unchecked Sendable {
 
     public func fileExists(_ relativePath: String) -> Bool { FileManager.default.fileExists(atPath: url(relativePath).path) }
 
+    /// Explicit import boundary for static converted prefabs. Errors are surfaced to
+    /// the caller and failed imports are retryable after the source file is repaired.
+    public func importStaticAsset(url: URL) throws -> LoadedAsset {
+        let source = url.standardizedFileURL
+        let gltf = try GLBLoader.load(url: source)
+        guard gltf.skins.isEmpty else {
+            throw GLTFError.io("Static model import does not support skinned characters; a skeleton mapping is required.")
+        }
+        let loaded = try LoadedAsset(url: source, asset: gltf, resources: resources)
+        guard !loaded.parts.isEmpty, !loaded.bounds.isEmpty else {
+            throw GLTFError.io("The model contains no drawable triangle meshes.")
+        }
+        assets[source.path] = loaded
+        failed.remove(source.path)
+        log.append("Imported \(source.lastPathComponent): \(loaded.parts.count) static parts")
+        return loaded
+    }
+
     /// Loads a GLB/glTF relative to the assets root (or an absolute path). Pass the body skeleton for
     /// garments/hair so their joint indices are remapped onto it (cached per skeletonKey).
     public func asset(_ relativePath: String, skeleton: Skeleton? = nil, skeletonKey: String? = nil, namePrefix: String? = nil) -> LoadedAsset? {

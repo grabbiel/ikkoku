@@ -16,9 +16,13 @@ public final class GPUMesh: @unchecked Sendable {
     public let indexCount: Int
     public let baseVertices: any MTLBuffer      // DeformedVertex[]
     public let texcoords: any MTLBuffer         // float2[]
+    public let texcoords1: any MTLBuffer        // UV1 float2[]; aliases UV0 when absent
+    public let texcoords2: any MTLBuffer        // UV2 float2[]; aliases UV0 when absent
     public let colors: (any MTLBuffer)?         // uchar4[]
     public let indices: any MTLBuffer           // uint32[]
     public let skin: (any MTLBuffer)?           // SkinVertex[]
+    /// Includes zero-weight lanes: the compute shader must never address outside the palette.
+    public let requiredBoneCount: Int
     public let morphDeltas: (any MTLBuffer)?    // packed float3 [targets*verts]
     public let morphNormals: (any MTLBuffer)?
     public let morphNames: [String]
@@ -26,15 +30,56 @@ public final class GPUMesh: @unchecked Sendable {
     public let regions: [UInt8]
     public var needsDeform: Bool { skin != nil || morphDeltas != nil }
 
-    init(name: String, vertexCount: Int, indexCount: Int, baseVertices: any MTLBuffer, texcoords: any MTLBuffer, colors: (any MTLBuffer)?,
-         indices: any MTLBuffer, skin: (any MTLBuffer)?, morphDeltas: (any MTLBuffer)?, morphNormals: (any MTLBuffer)?, morphNames: [String], bounds: AABB, regions: [UInt8]) {
+    init(name: String, vertexCount: Int, indexCount: Int, baseVertices: any MTLBuffer, texcoords: any MTLBuffer,
+         texcoords1: any MTLBuffer, texcoords2: any MTLBuffer, colors: (any MTLBuffer)?,
+         indices: any MTLBuffer, skin: (any MTLBuffer)?, requiredBoneCount: Int, morphDeltas: (any MTLBuffer)?, morphNormals: (any MTLBuffer)?, morphNames: [String], bounds: AABB, regions: [UInt8]) {
         self.name = name; self.vertexCount = vertexCount; self.indexCount = indexCount; self.baseVertices = baseVertices
-        self.texcoords = texcoords; self.colors = colors; self.indices = indices; self.skin = skin; self.morphDeltas = morphDeltas
+        self.texcoords = texcoords; self.texcoords1 = texcoords1; self.texcoords2 = texcoords2
+        self.colors = colors; self.indices = indices; self.skin = skin; self.morphDeltas = morphDeltas
         self.morphNormals = morphNormals; self.morphNames = morphNames; self.bounds = bounds; self.regions = regions
+        self.requiredBoneCount = requiredBoneCount
+    }
+
+    public func validateSkinPalette(boneCount: Int) throws {
+        guard skin == nil || boneCount >= requiredBoneCount else {
+            throw ResourceError.invalidSkin("\(name): palette has \(boneCount) bones; vertex influences require \(requiredBoneCount)")
+        }
     }
 }
 
-public enum ResourceError: Error { case bufferAllocation, imageDecode(String) }
+public enum ResourceError: Error { case bufferAllocation, imageDecode(String), invalidSkin(String), invalidUV(String) }
+
+/// Checks the CPU boundary before malformed influences can reach a GPU buffer.
+struct ValidatedSkinInfluences {
+    let vertices: [SkinVertex]
+    let requiredBoneCount: Int
+
+    init(joints: [SIMD4<UInt16>], weights: [Float4], vertexCount: Int) throws {
+        guard !joints.isEmpty || !weights.isEmpty else {
+            vertices = []; requiredBoneCount = 0; return
+        }
+        guard joints.count == vertexCount, weights.count == vertexCount else {
+            throw ResourceError.invalidSkin("joint/weight count does not match the vertex count")
+        }
+        var result: [SkinVertex] = []
+        result.reserveCapacity(vertexCount)
+        var required = 0
+        for i in 0..<vertexCount {
+            let w = weights[i]
+            guard (0..<4).allSatisfy({ w[$0].isFinite && w[$0] >= 0 }) else {
+                throw ResourceError.invalidSkin("vertex \(i) has a nonfinite or negative weight")
+            }
+            // Sum in Double so a finite input cannot overflow while being normalized.
+            let total = (0..<4).reduce(0.0) { $0 + Double(w[$1]) }
+            guard total > 0 else { throw ResourceError.invalidSkin("vertex \(i) has no positive influence") }
+            let normalized = Float4((0..<4).map { Float(Double(w[$0]) / total) })
+            result.append(SkinVertex(joints: joints[i], weights: normalized))
+            for lane in 0..<4 { required = max(required, Int(joints[i][lane]) + 1) }
+        }
+        vertices = result
+        requiredBoneCount = required
+    }
+}
 
 /// Thread-safe owner of every GPU resource the renderer draws. Handles are stable for the app lifetime.
 public final class ResourceStore: @unchecked Sendable {
@@ -79,6 +124,12 @@ public final class ResourceStore: @unchecked Sendable {
     @discardableResult
     public func register(mesh data: MeshData, smoothOutlineNormals: Bool = true) throws -> MeshHandle {
         let n = data.vertexCount
+        for (set, coordinates) in [(1, data.uvs1), (2, data.uvs2)] where !coordinates.isEmpty {
+            guard coordinates.count == n, coordinates.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else {
+                throw ResourceError.invalidUV("\(data.name): UV\(set) must contain one finite coordinate per vertex")
+            }
+        }
+        let influences = try ValidatedSkinInfluences(joints: data.joints, weights: data.weights, vertexCount: n)
         let outlineNormals = smoothOutlineNormals ? MeshUtil.computeSmoothNormals(positions: data.positions, indices: data.indices) : data.normals
         var verts = [DeformedVertex](repeating: DeformedVertex(), count: n)
         let hasTangents = data.tangents.count == n
@@ -98,6 +149,15 @@ public final class ResourceStore: @unchecked Sendable {
         let uvs = data.uvs.count == n ? data.uvs : [Float2](repeating: .zero, count: n)
         guard let ub = device.makeBuffer(bytes: uvs, length: MemoryLayout<Float2>.stride * n, options: .storageModeShared) else { throw ResourceError.bufferAllocation }
         ub.label = "\(data.name).uv"
+        func extraUV(_ coordinates: [Float2], set: Int) throws -> any MTLBuffer {
+            guard !coordinates.isEmpty else { return ub }
+            guard let buffer = device.makeBuffer(bytes: coordinates, length: MemoryLayout<Float2>.stride * n, options: .storageModeShared) else {
+                throw ResourceError.bufferAllocation
+            }
+            buffer.label = "\(data.name).uv\(set)"
+            return buffer
+        }
+        let ub1 = try extraUV(data.uvs1, set: 1), ub2 = try extraUV(data.uvs2, set: 2)
         var cb: (any MTLBuffer)? = nil
         if hasColors {
             let c = data.colors.map { SIMD4<UInt8>(UInt8(clamp($0.x, 0, 1) * 255), UInt8(clamp($0.y, 0, 1) * 255), UInt8(clamp($0.z, 0, 1) * 255), UInt8(clamp($0.w, 0, 1) * 255)) }
@@ -107,9 +167,10 @@ public final class ResourceStore: @unchecked Sendable {
         guard let ib = device.makeBuffer(bytes: data.indices, length: 4 * data.indices.count, options: .storageModeShared) else { throw ResourceError.bufferAllocation }
         ib.label = "\(data.name).idx"
         var sb: (any MTLBuffer)? = nil
-        if data.isSkinned {
-            let s = (0..<n).map { SkinVertex(joints: data.joints[$0], weights: data.weights[$0]) }
+        if !influences.vertices.isEmpty {
+            let s = influences.vertices
             sb = device.makeBuffer(bytes: s, length: MemoryLayout<SkinVertex>.stride * n, options: .storageModeShared)
+            guard sb != nil else { throw ResourceError.bufferAllocation }
             sb?.label = "\(data.name).skin"
         }
         var mb: (any MTLBuffer)? = nil
@@ -133,8 +194,9 @@ public final class ResourceStore: @unchecked Sendable {
                 mnb?.label = "\(data.name).morphN"
             } else { hasNormals = false }
         }
-        let mesh = GPUMesh(name: data.name, vertexCount: n, indexCount: data.indices.count, baseVertices: vb, texcoords: ub, colors: cb,
-                           indices: ib, skin: sb, morphDeltas: mb, morphNormals: mnb, morphNames: data.morphTargets.map(\.name), bounds: data.bounds, regions: data.regions)
+        let mesh = GPUMesh(name: data.name, vertexCount: n, indexCount: data.indices.count, baseVertices: vb, texcoords: ub,
+                           texcoords1: ub1, texcoords2: ub2, colors: cb,
+                           indices: ib, skin: sb, requiredBoneCount: influences.requiredBoneCount, morphDeltas: mb, morphNormals: mnb, morphNames: data.morphTargets.map(\.name), bounds: data.bounds, regions: data.regions)
         lock.lock(); defer { lock.unlock() }
         let h = MeshHandle(id: nextMesh); nextMesh += 1
         meshes[h.id] = mesh
@@ -226,5 +288,13 @@ public final class ResourceStore: @unchecked Sendable {
         textures[h.id] = texture
         if let key { textureKeys[key] = h }
         return h
+    }
+
+    /// Transient composed appearances own their handles. Prepared render frames
+    /// and encoded command buffers retain the actual Metal texture separately.
+    public func unregister(texture handle: TextureHandle) {
+        lock.lock(); defer { lock.unlock() }
+        textures.removeValue(forKey: handle.id)
+        textureKeys = textureKeys.filter { $0.value.id != handle.id }
     }
 }

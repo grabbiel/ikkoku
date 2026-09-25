@@ -179,14 +179,24 @@ struct StudioView: View {
                 ForEach(StudioModel.InspectorTab.allCases) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).labelsHidden().padding(8)
             ScrollView {
+                if let diagnostics = model.doc.sourcePreviewDiagnostics, !diagnostics.isEmpty {
+                    DisclosureGroup("Source compatibility details") {
+                        ForEach(Array(diagnostics.enumerated()), id: \.offset) { _, text in
+                            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }.padding(12)
+                }
                 Group {
-                    switch model.inspectorTab {
+                    if model.selectedObject?.sourceCharacter != nil && [.pose, .face, .clothes].contains(model.inspectorTab) {
+                        Text("This reference avatar shows supported card settings and saved FK. Source pose editing, clothing changes and the original full-body IK solver are not connected to this preview yet.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else { switch model.inspectorTab {
                     case .object: ObjectInspector(model: model)
                     case .pose: PoseInspector(model: model)
                     case .face: FaceInspector(model: model)
                     case .clothes: ClothesInspector(model: model)
                     case .scene: SceneInspector(model: model)
-                    }
+                    } }
                 }.padding(12)
             }
             Divider()

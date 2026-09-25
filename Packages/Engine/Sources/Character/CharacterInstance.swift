@@ -331,8 +331,11 @@ public final class CharacterInstance: Identifiable {
         func deformKey() -> UInt64 { let k = (instanceID << 16) | partIndex; partIndex += 1; return k }
 
         // Body + face parts
-        let mouthOpen = (weights["exp.mouth_open"] ?? 0) + (weights["exp.mouth_a"] ?? 0) + (weights["exp.mouth_o"] ?? 0)
-            + (weights["exp.mouth_e"] ?? 0) * 0.7 + (weights["exp.mouth_i"] ?? 0) * 0.5 + (weights["exp.smile"] ?? 0) * 0.6
+        let openVowels: Float = (weights["exp.mouth_open"] ?? 0)
+            + (weights["exp.mouth_a"] ?? 0) + (weights["exp.mouth_o"] ?? 0)
+        let narrowVowels: Float = (weights["exp.mouth_e"] ?? 0) * 0.7
+            + (weights["exp.mouth_i"] ?? 0) * 0.5
+        let mouthOpen: Float = openVowels + narrowVowels + (weights["exp.smile"] ?? 0) * 0.6
         for part in body.parts {
             let isMouthPart = ["teeth", "tongue"].contains(part.meshName.lowercased())
             if isMouthPart && mouthOpen < 0.12 { continue }          // inside a closed mouth: nothing to see
@@ -470,6 +473,28 @@ public enum MaterialBuilder {
         part.material.baseColorImage.flatMap { asset.imageTexture($0, srgb: true) }
     }
 
+    /// Applies source rasterization properties without replacing the chosen toon style.
+    /// Kept independent of GPU resources so the import contract can be tested directly.
+    static func applySurfaceProperties(_ source: MaterialData, to material: inout MaterialState) {
+        material.setFlag(MaterialFlagDoubleSided, source.doubleSided)
+        material.setFlag(MaterialFlagAlphaTest, source.alphaMode == "MASK")
+        material.setFlag(MaterialFlagAlphaBlend, source.alphaMode == "BLEND")
+        material.transparent = source.alphaMode == "BLEND"
+        if source.alphaMode == "MASK" { material.uniforms.params.w = source.alphaCutoff }
+        if material.transparent { material.setFlag(MaterialFlagNoOutline, true) }
+    }
+
+    private static func importedMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, kind: MaterialKind) -> MaterialState {
+        var material = MaterialState(uniforms: .make(kind: kind))
+        material.uniforms.baseColor = part.material.baseColorFactor
+        material.base = baseTexture(for: part, asset: asset)
+        material.setFlag(MaterialFlagHasBaseTexture, material.base != nil)
+        material.normal = part.material.normalImage.flatMap { asset.imageTexture($0, srgb: false) }
+        material.setFlag(MaterialFlagHasNormal, material.normal != nil)
+        applySurfaceProperties(part.material, to: &material)
+        return material
+    }
+
     public static func material(for part: LoadedAsset.Part, asset: LoadedAsset, card: CharacterCard, library: AssetLibrary) -> MaterialState {
         let k = kind(forMaterialName: part.materialName, meshName: part.meshName)
         switch k {
@@ -478,20 +503,12 @@ public enum MaterialBuilder {
         case MaterialKindEyelash: return lashMaterial(for: part, asset: asset, card: card, library: library)
         case MaterialKindHair: return hairMaterial(for: part, asset: asset, card: card, library: library)
         default:
-            var m = MaterialState(uniforms: .make(kind: k))
-            m.base = baseTexture(for: part, asset: asset)
-            let c = part.material.baseColorFactor
-            m.uniforms.baseColor = c
-            if m.base != nil { m.setFlag(MaterialFlagHasBaseTexture, true) }
-            if part.material.doubleSided { m.setFlag(MaterialFlagDoubleSided, true) }
-            if part.material.alphaMode == "MASK" { m.setFlag(MaterialFlagAlphaTest, true) }
-            if part.material.alphaMode == "BLEND" { m.transparent = true; m.setFlag(MaterialFlagNoOutline, true) }
-            return m
+            return importedMaterial(for: part, asset: asset, kind: k)
         }
     }
 
     public static func skinMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, card: CharacterCard, library: AssetLibrary) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindSkin))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindSkin)
         let sex = card.sex.rawValue
         let tex = library.catalog.textures
         let bodyTex = library.catalog.body(card.body.bodyID)?.textures ?? [:]
@@ -500,14 +517,13 @@ public enum MaterialBuilder {
         m.setFlag(MaterialFlagHasBaseTexture, m.base != nil)
         m.setFlag(MaterialFlagHasDetail, m.detail != nil)
         let tone = card.body.skinTone.linear
-        m.uniforms.baseColor = Float4(tone.x, tone.y, tone.z, 1)
+        m.uniforms.baseColor = Float4(tone.x, tone.y, tone.z, part.material.baseColorFactor.w)
         let shade = card.body.skinShadeTint.linear
         m.uniforms.shadowColor = Float4(shade.x / max(tone.x, 0.05), shade.y / max(tone.y, 0.05), shade.z / max(tone.z, 0.05), 0.5)
         m.uniforms.shadowColor = simd_clamp(m.uniforms.shadowColor, Float4(0.3, 0.3, 0.3, 0), Float4(1, 1, 1, 1))
         m.uniforms.params.y = card.body.skinGloss
         let ol = card.body.skinTone.linear * Float3(0.45, 0.28, 0.32)
         m.uniforms.outline = Float4(ol.x, ol.y, ol.z, 1.3)
-        m.setFlag(MaterialFlagDoubleSided, false)
         // Makeup overlays
         let ov = tex.faceOverlays ?? tex.overlays ?? [:]
         let blush = ov["blush"].flatMap { library.texture($0, srgb: false) } ?? library.texture("face_overlay_blush.png", srgb: false)
@@ -527,7 +543,7 @@ public enum MaterialBuilder {
     }
 
     public static func eyeMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, card: CharacterCard, library: AssetLibrary) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindEye))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindEye)
         let tex = library.catalog.textures
         let irisList = tex.iris ?? []
         let hlList = tex.highlight ?? []
@@ -538,10 +554,16 @@ public enum MaterialBuilder {
         m.colorMask = library.texture("eye_white.png")
         m.detail = library.texture(hlName, srgb: false)
         m.setFlag(MaterialFlagHasBaseTexture, m.base != nil)
-        if catalogIris == nil && part.material.alphaMode != "OPAQUE" { m.setFlag(MaterialFlagAlphaTest, true); m.uniforms.params.w = 0.1 }
+        if catalogIris != nil {
+            // Catalog iris alpha blends the iris into the painted sclera internally.
+            // It describes pigment, not transparent surface coverage.
+            m.transparent = false
+            m.setFlag(MaterialFlagAlphaBlend, false)
+            m.setFlag(MaterialFlagAlphaTest, false)
+        }
         let isRight = part.meshName.hasSuffix("_R") || part.meshName.lowercased().contains("right")
         let iris = (isRight && !card.face.sameIrisColor ? card.face.irisColorRight : card.face.irisColorLeft).linear
-        m.uniforms.baseColor = Float4(iris.x, iris.y, iris.z, 1)
+        m.uniforms.baseColor = Float4(iris.x, iris.y, iris.z, catalogIris != nil ? 1 : part.material.baseColorFactor.w)
         let w = card.face.eyeWhiteColor.linear
         m.uniforms.tint1 = Float4(w.x, w.y, w.z, 1)
         m.uniforms.eye = Float4(1 + card.face.irisSize / 100 * 0.35, 0, 0, card.face.highlightStrength)
@@ -550,27 +572,34 @@ public enum MaterialBuilder {
     }
 
     public static func lashMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, card: CharacterCard, library: AssetLibrary) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindEyelash))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindEyelash)
         let tex = library.catalog.textures
         let isBrow = part.meshName.lowercased().contains("brow") || part.materialName.lowercased().contains("brow")
         let list = (isBrow ? tex.eyebrow : tex.eyelash) ?? []
         let style = isBrow ? card.face.eyebrowStyle : card.face.eyelashStyle
         let name = list.isEmpty ? (isBrow ? "eyebrow_0.png" : "eyelash_0.png") : list[clamp(style, 0, list.count - 1)]
-        m.base = library.texture(name) ?? baseTexture(for: part, asset: asset)
+        let catalogTexture = library.texture(name)
+        m.base = catalogTexture ?? baseTexture(for: part, asset: asset)
         m.setFlag(MaterialFlagHasBaseTexture, m.base != nil)
         let c = (isBrow ? card.face.eyebrowColor : card.face.eyelashColor).linear
-        m.uniforms.baseColor = Float4(c.x, c.y, c.z, 1)
-        m.uniforms.params.w = 0.35
+        m.uniforms.baseColor = Float4(c.x, c.y, c.z, catalogTexture != nil ? 1 : part.material.baseColorFactor.w)
+        if catalogTexture != nil {
+            m.transparent = false
+            m.setFlag(MaterialFlagAlphaBlend, false)
+            m.setFlag(MaterialFlagAlphaTest, true)
+            m.setFlag(MaterialFlagDoubleSided, true)
+            m.uniforms.params.w = 0.35
+        }
         m.uniforms.shadowColor = Float4(0.85, 0.85, 0.9, 0.5)
         return m
     }
 
     public static func hairMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, card: CharacterCard, library: AssetLibrary) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindHair))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindHair)
         let h = card.hair
         let base = h.baseColor.linear
         let shade = h.shadeColor.linear
-        m.uniforms.baseColor = Float4(base.x, base.y, base.z, 1)
+        m.uniforms.baseColor = Float4(base.x, base.y, base.z, part.material.baseColorFactor.w)
         let ratio = simd_clamp(shade / max(base, Float3(repeating: 0.03)), Float3(repeating: 0.25), Float3(repeating: 1.1))
         m.uniforms.shadowColor = Float4(ratio.x, ratio.y, ratio.z, 0.5)
         let hl = h.highlightColor.linear
@@ -584,14 +613,12 @@ public enum MaterialBuilder {
         if let t = baseTexture(for: part, asset: asset), part.material.alphaMode != "OPAQUE" || part.material.baseColorImage != nil {
             m.base = t
             m.setFlag(MaterialFlagHasBaseTexture, true)
-            if part.material.alphaMode == "MASK" || part.material.alphaMode == "BLEND" { m.setFlag(MaterialFlagAlphaTest, true); m.uniforms.params.w = 0.4 }
         }
-        if part.material.doubleSided { m.setFlag(MaterialFlagDoubleSided, true) }
         return m
     }
 
     public static func clothMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, item: ClothItem, library: AssetLibrary) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindCloth))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindCloth)
         m.base = baseTexture(for: part, asset: asset)
         m.setFlag(MaterialFlagHasBaseTexture, m.base != nil)
         let entry = item.itemID.flatMap { library.catalog.cloth($0) }
@@ -617,14 +644,11 @@ public enum MaterialBuilder {
             m.uniforms.uvTransform = Float4(item.patternScale, item.patternScale, 0, 0)
         }
         m.uniforms.params.y = item.gloss
-        if part.material.doubleSided { m.setFlag(MaterialFlagDoubleSided, true) }
-        if part.material.alphaMode == "MASK" { m.setFlag(MaterialFlagAlphaTest, true) }
-        if part.material.normalImage != nil, let n = part.material.normalImage.flatMap({ asset.imageTexture($0, srgb: false) }) { m.normal = n; m.setFlag(MaterialFlagHasNormal, true) }
         return m
     }
 
     public static func accessoryMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, def: AccessoryDefinition, library: AssetLibrary) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindItem))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindItem)
         m.base = baseTexture(for: part, asset: asset)
         m.setFlag(MaterialFlagHasBaseTexture, m.base != nil)
         m.colorMask = library.sidecarTexture(for: asset, suffix: "_cm.png", srgb: false)
@@ -639,23 +663,18 @@ public enum MaterialBuilder {
             let c = cols[0].linear
             m.uniforms.baseColor = Float4(f.x * c.x, f.y * c.y, f.z * c.z, f.w)
         }
-        if part.material.alphaMode == "BLEND" { m.transparent = true; m.setFlag(MaterialFlagNoOutline, true) }
-        if part.material.doubleSided { m.setFlag(MaterialFlagDoubleSided, true) }
         return m
     }
 
     /// Generic material for studio items (props).
     public static func itemMaterial(for part: LoadedAsset.Part, asset: LoadedAsset, tint: RGB?, emissive: Float = 0) -> MaterialState {
-        var m = MaterialState(uniforms: .make(kind: MaterialKindItem))
+        var m = importedMaterial(for: part, asset: asset, kind: MaterialKindItem)
         m.base = baseTexture(for: part, asset: asset)
         m.setFlag(MaterialFlagHasBaseTexture, m.base != nil)
         var f = part.material.baseColorFactor
         if let tint { let c = tint.linear; f = Float4(f.x * c.x, f.y * c.y, f.z * c.z, f.w) }
         m.uniforms.baseColor = f
         m.uniforms.emissive = Float4(f.x, f.y, f.z, emissive)
-        if part.material.alphaMode == "BLEND" { m.transparent = true; m.setFlag(MaterialFlagNoOutline, true) }
-        if part.material.alphaMode == "MASK" { m.setFlag(MaterialFlagAlphaTest, true) }
-        if part.material.doubleSided { m.setFlag(MaterialFlagDoubleSided, true) }
         return m
     }
 }

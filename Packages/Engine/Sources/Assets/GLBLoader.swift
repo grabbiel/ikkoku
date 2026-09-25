@@ -35,24 +35,33 @@ public enum GLBLoader {
         var bin: Data?
         if data.count >= 12, data.readUInt32(at: 0) == 0x46546C67 { // "glTF"
             let length = Int(data.readUInt32(at: 8))
+            guard data.readUInt32(at: 4) == 2, length == data.count else { throw GLTFError.badChunk }
             var offset = 12
             var jsonChunk: Data?
             while offset + 8 <= min(length, data.count) {
                 let clen = Int(data.readUInt32(at: offset))
                 let ctype = data.readUInt32(at: offset + 4)
                 let start = offset + 8
-                guard start + clen <= data.count else { throw GLTFError.badChunk }
+                guard clen.isMultiple(of: 4), start + clen <= length else { throw GLTFError.badChunk }
                 let chunk = data.subdata(in: start..<(start + clen))
-                if ctype == 0x4E4F534A { jsonChunk = chunk }          // JSON
-                else if ctype == 0x004E4942 { bin = chunk }             // BIN
+                // The JSON chunk is unique and first; BIN, when present, is second.
+                if offset == 12 && ctype != 0x4E4F534A { throw GLTFError.badChunk }
+                if ctype == 0x4E4F534A {
+                    guard offset == 12, jsonChunk == nil else { throw GLTFError.badChunk }
+                    jsonChunk = chunk
+                } else if ctype == 0x004E4942 {
+                    guard bin == nil, offset == 20 + (jsonChunk?.count ?? 0) else { throw GLTFError.badChunk }
+                    bin = chunk
+                }
                 offset = start + clen
             }
-            guard let j = jsonChunk else { throw GLTFError.badChunk }
+            guard offset == length, let j = jsonChunk else { throw GLTFError.badChunk }
             json = j
         } else {
             json = data
         }
         let root = try JSONDecoder().decode(GLTFRoot.self, from: json)
+        try root.validateReferences()
         let ctx = try Context(root: root, bin: bin, baseURL: baseURL)
         var asset = try ctx.build()
         asset.url = sourceURL
@@ -64,9 +73,11 @@ public enum GLBLoader {
     private final class Context {
         let root: GLTFRoot
         var buffers: [Data]
+        let baseURL: URL?
 
         init(root: GLTFRoot, bin: Data?, baseURL: URL?) throws {
             self.root = root
+            self.baseURL = baseURL
             var bufs: [Data] = []
             for (i, b) in (root.buffers ?? []).enumerated() {
                 if let uri = b.uri {
@@ -88,13 +99,62 @@ public enum GLBLoader {
                 }
             }
             self.buffers = bufs
+            for (i, buffer) in (root.buffers ?? []).enumerated() {
+                guard buffer.byteLength <= bufs[i].count else { throw GLTFError.missingBuffer(i) }
+            }
+            try validateAccessors()
         }
 
         func bufferViewData(_ index: Int) throws -> (data: Data, stride: Int?) {
-            guard let bv = root.bufferViews?[index], bv.buffer < buffers.count else { throw GLTFError.missingBuffer(index) }
+            guard let views = root.bufferViews, views.indices.contains(index) else { throw GLTFError.missingBuffer(index) }
+            let bv = views[index]
+            guard buffers.indices.contains(bv.buffer) else { throw GLTFError.missingBuffer(index) }
             let start = bv.byteOffset ?? 0
+            let declaredLength = root.buffers![bv.buffer].byteLength
+            guard start >= 0, bv.byteLength >= 0, start <= declaredLength,
+                  bv.byteLength <= declaredLength - start else { throw GLTFError.badChunk }
             let d = buffers[bv.buffer].subdata(in: start..<(start + bv.byteLength))
             return (d, bv.byteStride)
+        }
+
+        func validateAccessors() throws {
+            func range(_ size: Int, offset: Int, count: Int, stride: Int, element: Int) throws {
+                guard offset >= 0, offset <= size, stride >= element,
+                      count == 0 || (element <= size - offset && count - 1 <= (size - offset - element) / stride) else {
+                    throw GLTFError.unsupportedAccessor("buffer range is out of bounds")
+                }
+            }
+            for i in (root.bufferViews ?? []).indices { _ = try bufferViewData(i) }
+            for accessor in root.accessors ?? [] {
+                let element = Self.componentCount(accessor.type) * Self.componentSize(accessor.componentType)
+                if let view = accessor.bufferView {
+                    let (data, stride) = try bufferViewData(view)
+                    try range(data.count, offset: accessor.byteOffset ?? 0, count: accessor.count, stride: stride ?? element, element: element)
+                } else if (accessor.byteOffset ?? 0) != 0 {
+                    throw GLTFError.unsupportedAccessor("byteOffset requires a bufferView")
+                }
+                if let sparse = accessor.sparse {
+                    let (indices, indexStride) = try bufferViewData(sparse.indices.bufferView)
+                    let (values, valueStride) = try bufferViewData(sparse.values.bufferView)
+                    guard indexStride == nil, valueStride == nil else {
+                        throw GLTFError.unsupportedAccessor("sparse buffer views must be tightly packed")
+                    }
+                    let size = Self.componentSize(sparse.indices.componentType)
+                    let offset = sparse.indices.byteOffset ?? 0
+                    try range(indices.count, offset: offset, count: sparse.count, stride: size, element: size)
+                    try range(values.count, offset: sparse.values.byteOffset ?? 0, count: sparse.count, stride: element, element: element)
+                    try indices.withUnsafeBytes { raw in
+                        var previous: UInt32?
+                        for i in 0..<sparse.count {
+                            let index = Self.readInteger(raw, offset + i * size, sparse.indices.componentType)
+                            guard index < accessor.count, previous.map({ index > $0 }) ?? true else {
+                                throw GLTFError.unsupportedAccessor("sparse indices must be ordered and in range")
+                            }
+                            previous = index
+                        }
+                    }
+                }
+            }
         }
 
         static func componentSize(_ t: Int) -> Int {
@@ -146,13 +206,16 @@ public enum GLBLoader {
                 idata.withUnsafeBytes { iraw in
                     vdata.withUnsafeBytes { vraw in
                         for k in 0..<sp.count {
-                            let idx = Int(Context.readComponent(iraw, ioff + k * isize, sp.indices.componentType, false))
+                            let idx = Int(Context.readInteger(iraw, ioff + k * isize, sp.indices.componentType))
                             for c in 0..<comps {
                                 out[idx * comps + c] = Context.readComponent(vraw, voff + (k * comps + c) * csize, acc.componentType, acc.normalized ?? false)
                             }
                         }
                     }
                 }
+            }
+            guard out.allSatisfy(\.isFinite) else {
+                throw GLTFError.unsupportedAccessor("accessor \(accessorIndex) contains a nonfinite component")
             }
             return (out, comps)
         }
@@ -170,12 +233,35 @@ public enum GLBLoader {
                     for i in 0..<acc.count {
                         let off = base + i * stride
                         for c in 0..<comps {
-                            out[i * comps + c] = UInt32(Context.readComponent(raw, off + c * csize, acc.componentType, false))
+                            out[i * comps + c] = Context.readInteger(raw, off + c * csize, acc.componentType)
+                        }
+                    }
+                }
+            }
+            if let sparse = acc.sparse {
+                let (indices, _) = try bufferViewData(sparse.indices.bufferView)
+                let (values, _) = try bufferViewData(sparse.values.bufferView)
+                indices.withUnsafeBytes { iraw in
+                    values.withUnsafeBytes { vraw in
+                        for k in 0..<sparse.count {
+                            let index = Int(Self.readInteger(iraw, (sparse.indices.byteOffset ?? 0) + k * Self.componentSize(sparse.indices.componentType), sparse.indices.componentType))
+                            for c in 0..<comps {
+                                out[index * comps + c] = Self.readInteger(vraw, (sparse.values.byteOffset ?? 0) + (k * comps + c) * csize, acc.componentType)
+                            }
                         }
                     }
                 }
             }
             return (out, comps)
+        }
+
+        static func readInteger(_ raw: UnsafeRawBufferPointer, _ offset: Int, _ type: Int) -> UInt32 {
+            switch type {
+            case 5121: return UInt32(raw.loadUnaligned(fromByteOffset: offset, as: UInt8.self))
+            case 5123: return UInt32(raw.loadUnaligned(fromByteOffset: offset, as: UInt16.self))
+            case 5125: return raw.loadUnaligned(fromByteOffset: offset, as: UInt32.self)
+            default: return 0
+            }
         }
 
         @inline(__always)
@@ -232,17 +318,19 @@ public enum GLBLoader {
             var nodes: [NodeData] = []
             for n in root.nodes ?? [] {
                 var t = Float3.zero, s = Float3(repeating: 1), r = simd_quatf.identity
+                var authored: float4x4?
                 if let m = n.matrix, m.count == 16 {
                     let mat = float4x4(Float4(m[0], m[1], m[2], m[3]), Float4(m[4], m[5], m[6], m[7]),
                                        Float4(m[8], m[9], m[10], m[11]), Float4(m[12], m[13], m[14], m[15]))
                     t = mat.translation; s = mat.scaleFactors; r = mat.rotationQuaternion
+                    authored = mat
                 } else {
                     if let tt = n.translation, tt.count == 3 { t = Float3(tt[0], tt[1], tt[2]) }
                     if let ss = n.scale, ss.count == 3 { s = Float3(ss[0], ss[1], ss[2]) }
                     if let rr = n.rotation, rr.count == 4 { r = simd_quatf(ix: rr[0], iy: rr[1], iz: rr[2], r: rr[3]) }
                 }
                 nodes.append(NodeData(name: n.name ?? "", children: n.children ?? [], parent: nil, mesh: n.mesh, skin: n.skin,
-                                      translation: t, rotation: r, scale: s, extras: n.extras))
+                                      translation: t, rotation: r, scale: s, extras: n.extras, authoredMatrix: authored))
             }
             for (i, n) in nodes.enumerated() { for c in n.children where c < nodes.count { nodes[c].parent = i } }
             let sceneIndex = root.scene ?? 0
@@ -270,11 +358,16 @@ public enum GLBLoader {
                 if let bv = img.bufferView {
                     images.append(ImageData(name: img.name ?? "", data: try bufferViewData(bv).data, mimeType: img.mimeType))
                 } else if let uri = img.uri {
-                    if uri.hasPrefix("data:"), let comma = uri.firstIndex(of: ","),
-                       let d = Data(base64Encoded: String(uri[uri.index(after: comma)...])) {
+                    if uri.hasPrefix("data:") {
+                        guard let comma = uri.firstIndex(of: ","),
+                              let d = Data(base64Encoded: String(uri[uri.index(after: comma)...])) else {
+                            throw GLTFError.io("Invalid image data URI")
+                        }
                         images.append(ImageData(name: img.name ?? "", data: d, mimeType: img.mimeType))
                     } else {
-                        images.append(ImageData(name: img.name ?? uri, data: Data(), mimeType: img.mimeType))
+                        guard let baseURL else { throw GLTFError.io("External image requires a base URL: \(uri)") }
+                        let imageURL = baseURL.appendingPathComponent(uri.removingPercentEncoding ?? uri)
+                        images.append(ImageData(name: img.name ?? uri, data: try Data(contentsOf: imageURL), mimeType: img.mimeType))
                     }
                 } else {
                     images.append(ImageData(name: img.name ?? "", data: Data(), mimeType: nil))
@@ -333,6 +426,12 @@ public enum GLBLoader {
                     } else {
                         indices = Array(0..<UInt32(positions.count))
                     }
+                    guard indices.count.isMultiple(of: 3) else {
+                        throw GLTFError.unsupportedAccessor("triangle index count must be a multiple of three")
+                    }
+                    if let invalid = indices.first(where: { $0 >= positions.count }) {
+                        throw GLTFError.unsupportedAccessor("triangle index \(invalid) exceeds \(positions.count) vertices")
+                    }
                     if normals.isEmpty { normals = MeshUtil.computeNormals(positions: positions, indices: indices) }
                     var targets: [MeshData.MorphTarget] = []
                     for (ti, t) in (p.targets ?? []).enumerated() {
@@ -370,9 +469,13 @@ public enum MeshUtil {
 
     /// Area-weighted smooth normals over positions that coincide (welds split vertices), used for outlines.
     public static func computeSmoothNormals(positions: [Float3], indices: [UInt32]) -> [Float3] {
-        var groups: [SIMD3<Int32>: Float3] = [:]
+        // Float vertex positions can exceed Int32's quantized range. Double can
+        // represent every finite Float after scaling without overflow or trapping.
+        var groups: [SIMD3<Double>: Float3] = [:]
         let faceNormals = computeNormals(positions: positions, indices: indices)
-        func key(_ p: Float3) -> SIMD3<Int32> { SIMD3<Int32>(Int32((p.x * 5000).rounded()), Int32((p.y * 5000).rounded()), Int32((p.z * 5000).rounded())) }
+        func key(_ p: Float3) -> SIMD3<Double> {
+            SIMD3<Double>((Double(p.x) * 5000).rounded(), (Double(p.y) * 5000).rounded(), (Double(p.z) * 5000).rounded())
+        }
         for (i, p) in positions.enumerated() { groups[key(p), default: .zero] += faceNormals[i] }
         return positions.map { p in
             let g = groups[key(p)] ?? Float3(0, 1, 0)

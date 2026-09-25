@@ -1,0 +1,5 @@
+UnityPy==1.23.0
+# Independent numerical rig verification (test_rig_parity.py).
+numpy==2.2.6
+# Serialized character lists consumed by the material-contract exporters.
+msgpack==1.1.2

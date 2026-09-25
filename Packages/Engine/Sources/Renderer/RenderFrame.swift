@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import simd
 import CoreMath
 import Scene
@@ -31,6 +32,11 @@ public struct MaterialState: Sendable, Equatable {
         && a.base == b.base && a.colorMask == b.colorMask && a.detail == b.detail && a.line == b.line && a.normal == b.normal
         && a.overlay0 == b.overlay0 && a.overlay1 == b.overlay1 && a.overlay2 == b.overlay2 && a.pattern == b.pattern
         && a.hairGloss == b.hairGloss && a.bodyMask == b.bodyMask && a.transparent == b.transparent && a.depthBias == b.depthBias
+    }
+
+    /// All explicit texture references, without fallback textures.
+    public var textureHandles: [TextureHandle] {
+        [base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask].compactMap { $0 }
     }
 
     public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) ?? MaterialKindItem }
@@ -146,6 +152,29 @@ public struct RenderFrame: Sendable {
     public var effects: SceneEffects
     public var sceneBounds: AABB          // used to fit the shadow map
     public var time: Double = 0
+    // Metal resources support concurrent reference ownership. The snapshot never
+    // mutates texture contents and its dictionary is copied with this frame value.
+    private struct RetainedTexture: @unchecked Sendable { let texture: any MTLTexture }
+    private var retainedTextures: [TextureHandle: RetainedTexture] = [:]
+
+    /// Freeze explicit texture resources while their appearance still owns them.
+    /// Later unregistering a handle cannot change this frame's sampled materials.
+    /// Repeating this after editing items prunes removed references and keeps existing
+    /// snapshots; new handles are resolved from the resource store.
+    public mutating func retainTextures(from resources: ResourceStore) {
+        let handles = Set(items.flatMap { $0.material.textureHandles })
+        var snapshot: [TextureHandle: RetainedTexture] = [:]
+        for handle in handles {
+            if let retained = retainedTextures[handle] { snapshot[handle] = retained }
+            else if let texture = resources.texture(handle) { snapshot[handle] = RetainedTexture(texture: texture) }
+        }
+        retainedTextures = snapshot
+    }
+
+    func texture(_ handle: TextureHandle?, resources: ResourceStore) -> (any MTLTexture)? {
+        guard let handle else { return nil }
+        return retainedTextures[handle]?.texture ?? resources.texture(handle)
+    }
 
     public init(camera: OrbitCamera = OrbitCamera(), mainLight: MainLight = MainLight(), lights: [SceneLight] = [],
                 items: [RenderItem] = [], gizmos: [GizmoBatch] = [], effects: SceneEffects = SceneEffects(),
@@ -173,6 +202,8 @@ public extension MaterialUniforms {
         m.uvTransform = Float4(1, 1, 0, 0)
         m.kind = UInt32(kind.rawValue)
         m.flags = MaterialFlagReceiveShadow.rawValue
+        m.sourceAlphaA = 1
+        m.sourceAlphaB = 1
         switch kind {
         case MaterialKindSkin:
             m.shadowColor = Float4(0.82, 0.66, 0.70, 0.52)

@@ -25,6 +25,8 @@ public final class Renderer: @unchecked Sendable {
     private var targets: RenderTargets?
     private var frameIndex = 0
     public private(set) var lastFrameGPUTime: Double = 0
+    /// Invalid skin bindings are skipped during interactive rendering; captures fail.
+    public private(set) var lastDeformationErrors: [String] = []
 
     public init(gpu: GPUContext) throws {
         self.gpu = gpu
@@ -42,7 +44,11 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: - Frame hand-off
 
-    public func submit(_ frame: RenderFrame) { frameLock.lock(); pendingFrame = frame; frameLock.unlock() }
+    public func submit(_ frame: RenderFrame) {
+        var snapshot = frame
+        snapshot.retainTextures(from: resources)
+        frameLock.lock(); pendingFrame = snapshot; frameLock.unlock()
+    }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
 
     // MARK: - Drawing to the swapchain
@@ -87,6 +93,7 @@ public final class Renderer: @unchecked Sendable {
         guard let targets = ensureTargets(width: size.0, height: size.1) else { renderLock.unlock(); return 0 }
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
         let ctx = prepare(frame: frame, targets: targets)
+        guard lastDeformationErrors.isEmpty else { renderLock.unlock(); return 0 }
         encodeDeform(ctx, cb)
         encodePick(ctx, targets: targets, cb)
         let readback = gpu.device.makeBuffer(length: 16, options: .storageModeShared)!
@@ -105,6 +112,7 @@ public final class Renderer: @unchecked Sendable {
     // MARK: - Offscreen capture
 
     public func capture(frame: RenderFrame, width: Int, height: Int) -> CGImage? {
+        guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.ldrFormat, width: width, height: height, mipmapped: false)
@@ -115,9 +123,12 @@ public final class Renderer: @unchecked Sendable {
         guard let targets = try? RenderTargets(device: gpu.device, width: width, height: height) else { renderLock.unlock(); return nil }
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
         encode(frame: frame, target: tex, targets: targets, commandBuffer: cb)
+        let validDeformation = lastDeformationErrors.isEmpty
         renderLock.unlock()
+        guard validDeformation else { return nil }
         cb.commit()
         cb.waitUntilCompleted()
+        guard cb.status == .completed else { return nil }
         let bytesPerRow = width * 4
         var bytes = [UInt8](repeating: 0, count: bytesPerRow * height)
         bytes.withUnsafeMutableBytes { tex.getBytes($0.baseAddress!, bytesPerRow: bytesPerRow, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
@@ -148,12 +159,15 @@ public final class Renderer: @unchecked Sendable {
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
         let shadowCasters: [DrawRecord]
-        let deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinOffset: Int?, morphOffset: Int, morphCount: Int)]
+        let deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)]
         let width: Int
         let height: Int
     }
 
-    private func prepare(frame: RenderFrame, targets: RenderTargets) -> FrameContext {
+    private func prepare(frame input: RenderFrame, targets: RenderTargets) -> FrameContext {
+        var frame = input
+        frame.retainTextures(from: resources)
+        lastDeformationErrors = []
         let W = targets.width, H = targets.height
         let fw = Float(W), fh = Float(H)
         let cam = frame.camera
@@ -223,33 +237,60 @@ public final class Renderer: @unchecked Sendable {
         pp.flags = (fx.fxaa ? 1 : 0) | (fx.bloomEnabled ? 2 : 0) | (fx.vignetteEnabled ? 4 : 0) | 8
         let postOffset = frameRing.allocate(pp)
 
-        // Skin sets: upload once per character.
-        var skinOffsets: [UInt64: Int] = [:]
-        for (key, mats) in frame.skinSets {
-            var m = mats
-            if m.count > IK_MAX_BONES { m = Array(m.prefix(Int(IK_MAX_BONES))) }
-            skinOffsets[key] = frameRing.allocate(array: m)
+        // Retained per-frame buffers preserve the complete palette without consuming
+        // the fixed-capacity uniform ring. Command buffers retain their resources.
+        var skinBuffers: [UInt64: (buffer: any MTLBuffer, count: Int)] = [:]
+        let referencedSkinSets = Set(frame.items.compactMap { item -> UInt64? in
+            guard item.visible, resources.mesh(item.mesh)?.skin != nil else { return nil }
+            return item.skinSet
+        })
+        for (key, mats) in frame.skinSets where referencedSkinSets.contains(key) {
+            guard !mats.isEmpty, mats.count <= Int(UInt32.max), mats.allSatisfy({ m in
+                (0..<4).allSatisfy { c in (0..<4).allSatisfy { r in m[c][r].isFinite } }
+            }) else {
+                lastDeformationErrors.append("Skin set \(key) is empty, oversized, or contains nonfinite matrices")
+                continue
+            }
+            guard let buffer = gpu.device.makeBuffer(bytes: mats, length: MemoryLayout<float4x4>.stride * mats.count,
+                                                     options: .storageModeShared) else {
+                lastDeformationErrors.append("Could not allocate skin set \(key)")
+                continue
+            }
+            buffer.label = "Skin set \(key)"
+            skinBuffers[key] = (buffer, mats.count)
         }
 
         var opaque: [DrawRecord] = []
         var transparent: [DrawRecord] = []
         var casters: [DrawRecord] = []
-        var deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinOffset: Int?, morphOffset: Int, morphCount: Int)] = []
+        var deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)] = []
         var deformSeen = Set<UInt64>()
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
+            let palette = item.skinSet.flatMap { skinBuffers[$0] }
+            if mesh.skin != nil, let key = item.skinSet {
+                do {
+                    guard item.deformKey != nil, let palette else {
+                        throw ResourceError.invalidSkin("\(mesh.name): missing deformation key or skin set \(key)")
+                    }
+                    try mesh.validateSkinPalette(boneCount: palette.count)
+                } catch {
+                    lastDeformationErrors.append(String(describing: error))
+                    continue
+                }
+            }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
                 let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount)
                 vb = buf
                 if !deformSeen.contains(key) {
                     deformSeen.insert(key)
-                    let entries = item.morphWeights.filter { $0.index < mesh.morphNames.count && abs($0.weight) > 1e-4 }
+                    let entries = item.morphWeights.filter { $0.index >= 0 && $0.index < mesh.morphNames.count && $0.weight.isFinite && abs($0.weight) > 1e-4 }
                         .prefix(Int(IK_MAX_ACTIVE_MORPHS)).map { MorphWeightEntry(index: UInt32($0.index), weight: $0.weight) }
                     let mo = frameRing.allocate(array: Array(entries))
-                    let so = item.skinSet.flatMap { skinOffsets[$0] }
-                    deforms.append((key, mesh, buf, mesh.skin != nil ? so : nil, mo, entries.count))
+                    let skin = mesh.skin != nil ? palette : nil
+                    deforms.append((key, mesh, buf, skin?.buffer, skin?.count ?? 0, mo, entries.count))
                 }
             }
             let hb = item.hiddenKey.flatMap { resources.hiddenBuffer(key: $0) }.flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
@@ -262,8 +303,10 @@ public final class Renderer: @unchecked Sendable {
             du.depthBias = item.material.depthBias
             let doff = frameRing.allocate(du)
             var mu = item.material.uniforms
-            if resources.texture(item.material.base) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
-            if resources.texture(item.material.bodyMask) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
+            if item.material.transparent { mu.flags |= MaterialFlagAlphaBlend.rawValue }
+            else { mu.flags &= ~MaterialFlagAlphaBlend.rawValue }
+            if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
+            if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
             let moff = frameRing.allocate(mu)
             let c = item.model.transformPoint(mesh.bounds.center)
@@ -276,7 +319,11 @@ public final class Renderer: @unchecked Sendable {
             if a.item.material.uniforms.kind != b.item.material.uniforms.kind { return a.item.material.uniforms.kind < b.item.material.uniforms.kind }
             return a.item.mesh.id < b.item.mesh.id
         }
-        transparent.sort { $0.distance > $1.distance }
+        transparent.sort {
+            if $0.distance != $1.distance { return $0.distance > $1.distance }
+            if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
+            return $0.item.mesh.id < $1.item.mesh.id
+        }
         return FrameContext(frame: frame, frameOffset: frameOffset, lightsOffset: lightsOffset, postOffset: postOffset,
                             opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms, width: W, height: H)
     }
@@ -299,11 +346,12 @@ public final class Renderer: @unchecked Sendable {
         let dummy = resources.dummyBuffer
         for d in ctx.deforms {
             var params = DeformParams(vertexCount: UInt32(d.mesh.vertexCount), activeMorphCount: UInt32(d.morphCount),
-                                      hasSkin: d.skinOffset != nil ? 1 : 0, hasMorphNormals: d.mesh.morphNormals != nil ? 1 : 0)
+                                      hasSkin: d.skinBuffer != nil ? 1 : 0, hasMorphNormals: d.mesh.morphNormals != nil ? 1 : 0,
+                                      boneCount: UInt32(d.boneCount))
             enc.setBuffer(d.mesh.baseVertices, offset: 0, index: Int(BufferIndexBaseVertices.rawValue))
             enc.setBuffer(d.buffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
             enc.setBuffer(d.mesh.skin ?? dummy, offset: 0, index: Int(BufferIndexSkinData.rawValue))
-            if let so = d.skinOffset { enc.setBuffer(frameRing.buffer, offset: so, index: Int(BufferIndexSkinMatrices.rawValue)) }
+            if let skin = d.skinBuffer { enc.setBuffer(skin, offset: 0, index: Int(BufferIndexSkinMatrices.rawValue)) }
             else { enc.setBuffer(dummy, offset: 0, index: Int(BufferIndexSkinMatrices.rawValue)) }
             enc.setBuffer(frameRing.buffer, offset: d.morphOffset, index: Int(BufferIndexMorphWeights.rawValue))
             enc.setBuffer(d.mesh.morphDeltas ?? dummy, offset: 0, index: Int(BufferIndexMorphDeltas.rawValue))
@@ -324,8 +372,12 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func bindDraw(_ enc: any MTLRenderCommandEncoder, _ rec: DrawRecord) {
+        // Mirrored scene nodes reverse triangle orientation in every geometry pass.
+        enc.setFrontFacing(simd_determinant(rec.item.model.upperLeft3x3) < 0 ? .clockwise : .counterClockwise)
         enc.setVertexBuffer(rec.vertexBuffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
         enc.setVertexBuffer(rec.mesh.texcoords, offset: 0, index: Int(BufferIndexTexcoords.rawValue))
+        enc.setVertexBuffer(rec.mesh.texcoords1, offset: 0, index: Int(BufferIndexTexcoords1.rawValue))
+        enc.setVertexBuffer(rec.mesh.texcoords2, offset: 0, index: Int(BufferIndexTexcoords2.rawValue))
         enc.setVertexBuffer(rec.mesh.colors ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexColors.rawValue))
         enc.setVertexBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))
         enc.setVertexBuffer(frameRing.buffer, offset: rec.materialOffset, index: Int(BufferIndexMaterial.rawValue))
@@ -334,20 +386,20 @@ public final class Renderer: @unchecked Sendable {
         enc.setFragmentBuffer(frameRing.buffer, offset: rec.materialOffset, index: Int(BufferIndexMaterial.rawValue))
     }
 
-    private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState) {
+    private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
         let white = resources.whiteTexture, black = resources.blackTexture
-        enc.setFragmentTexture(resources.texture(m.base) ?? white, index: Int(TextureIndexBase.rawValue))
-        enc.setFragmentTexture(resources.texture(m.colorMask) ?? black, index: Int(TextureIndexColorMask.rawValue))
+        enc.setFragmentTexture(frame.texture(m.base, resources: resources) ?? white, index: Int(TextureIndexBase.rawValue))
+        enc.setFragmentTexture(frame.texture(m.colorMask, resources: resources) ?? black, index: Int(TextureIndexColorMask.rawValue))
         let isEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue)
-        enc.setFragmentTexture(resources.texture(m.detail) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
-        enc.setFragmentTexture(resources.texture(m.line) ?? black, index: Int(TextureIndexLine.rawValue))
-        enc.setFragmentTexture(resources.texture(m.normal) ?? resources.flatNormalTexture, index: Int(TextureIndexNormal.rawValue))
-        enc.setFragmentTexture(resources.texture(m.overlay0) ?? black, index: Int(TextureIndexOverlay0.rawValue))
-        enc.setFragmentTexture(resources.texture(m.overlay1) ?? black, index: Int(TextureIndexOverlay1.rawValue))
-        enc.setFragmentTexture(resources.texture(m.overlay2) ?? black, index: Int(TextureIndexOverlay2.rawValue))
-        enc.setFragmentTexture(resources.texture(m.hairGloss) ?? white, index: Int(TextureIndexHairGloss.rawValue))
-        enc.setFragmentTexture(resources.texture(m.pattern) ?? white, index: Int(TextureIndexPattern.rawValue))
-        enc.setFragmentTexture(resources.texture(m.bodyMask) ?? black, index: Int(TextureIndexBodyMask.rawValue))
+        enc.setFragmentTexture(frame.texture(m.detail, resources: resources) ?? (isEye ? black : white), index: Int(TextureIndexDetail.rawValue))
+        enc.setFragmentTexture(frame.texture(m.line, resources: resources) ?? black, index: Int(TextureIndexLine.rawValue))
+        enc.setFragmentTexture(frame.texture(m.normal, resources: resources) ?? resources.flatNormalTexture, index: Int(TextureIndexNormal.rawValue))
+        enc.setFragmentTexture(frame.texture(m.overlay0, resources: resources) ?? black, index: Int(TextureIndexOverlay0.rawValue))
+        enc.setFragmentTexture(frame.texture(m.overlay1, resources: resources) ?? black, index: Int(TextureIndexOverlay1.rawValue))
+        enc.setFragmentTexture(frame.texture(m.overlay2, resources: resources) ?? black, index: Int(TextureIndexOverlay2.rawValue))
+        enc.setFragmentTexture(frame.texture(m.hairGloss, resources: resources) ?? white, index: Int(TextureIndexHairGloss.rawValue))
+        enc.setFragmentTexture(frame.texture(m.pattern, resources: resources) ?? white, index: Int(TextureIndexPattern.rawValue))
+        enc.setFragmentTexture(frame.texture(m.bodyMask, resources: resources) ?? black, index: Int(TextureIndexBodyMask.rawValue))
     }
 
     private func drawIndexed(_ enc: any MTLRenderCommandEncoder, _ mesh: GPUMesh) {
@@ -370,8 +422,8 @@ public final class Renderer: @unchecked Sendable {
             bindCommon(enc, ctx)
             for rec in ctx.shadowCasters {
                 bindDraw(enc, rec)
-                enc.setFragmentTexture(resources.texture(rec.item.material.base) ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
-                enc.setFragmentTexture(resources.texture(rec.item.material.bodyMask) ?? resources.blackTexture, index: Int(TextureIndexBodyMask.rawValue))
+                enc.setFragmentTexture(ctx.frame.texture(rec.item.material.base, resources: resources) ?? resources.whiteTexture, index: Int(TextureIndexBase.rawValue))
+                enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture, index: Int(TextureIndexBodyMask.rawValue))
                 drawIndexed(enc, rec.mesh)
             }
         }
@@ -424,14 +476,15 @@ public final class Renderer: @unchecked Sendable {
         for rec in ctx.opaque {
             let m = rec.item.material
             bindDraw(enc, rec)
-            bindTextures(enc, m)
+            bindTextures(enc, m, frame: ctx.frame)
             if outlinesOn && rec.item.outline && (m.uniforms.flags & MaterialFlagNoOutline.rawValue) == 0 {
                 enc.setRenderPipelineState(pipelines.outline)
                 enc.setDepthStencilState(pipelines.depthWrite)
                 enc.setCullMode(.front)
                 drawIndexed(enc, rec.mesh)
             }
-            enc.setRenderPipelineState(m.uniforms.kind == UInt32(MaterialKindEye.rawValue) ? pipelines.eye : pipelines.toonOpaque)
+            let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
+            enc.setRenderPipelineState(nativeEye ? pipelines.eye : pipelines.toonOpaque)
             enc.setDepthStencilState(pipelines.depthWrite)
             enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(enc, rec.mesh)
@@ -440,11 +493,13 @@ public final class Renderer: @unchecked Sendable {
 
         if !ctx.transparent.isEmpty {
             enc.pushDebugGroup("Transparent")
-            enc.setRenderPipelineState(pipelines.toonBlend)
             enc.setDepthStencilState(pipelines.depthTest)
             for rec in ctx.transparent {
+                let material = rec.item.material.uniforms
+                let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
+                enc.setRenderPipelineState(nativeEye ? pipelines.eyeBlend : pipelines.toonBlend)
                 bindDraw(enc, rec)
-                bindTextures(enc, rec.item.material)
+                bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
                 drawIndexed(enc, rec.mesh)
             }
@@ -553,8 +608,8 @@ public final class Renderer: @unchecked Sendable {
         enc.setDepthStencilState(pipelines.depthWrite)
         enc.setCullMode(.none)
         for rec in ctx.opaque + ctx.transparent where rec.item.objectID != 0 {
-            enc.setVertexBuffer(rec.vertexBuffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
-            enc.setVertexBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))
+            bindDraw(enc, rec)
+            bindTextures(enc, rec.item.material, frame: ctx.frame)
             enc.setFragmentBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))
             drawIndexed(enc, rec.mesh)
         }

@@ -7,6 +7,7 @@ import Renderer
 import Character
 import Studio
 import Assets
+import CryptoKit
 
 enum PoseMode: String, CaseIterable, Identifiable { case object = "Object", fk = "FK", ik = "IK"; var id: String { rawValue } }
 
@@ -46,6 +47,7 @@ final class StudioModel: ViewportInputHandler {
     private(set) var undoStack: [StudioDocument] = []
     private(set) var redoStack: [StudioDocument] = []
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
+    @ObservationIgnored private var sourceInstances: [UUID: SourceStudioCharacterPreview] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
     @ObservationIgnored private var drag: DragState?
     @ObservationIgnored private var hoverAxis: GizmoAxis?
@@ -85,7 +87,7 @@ final class StudioModel: ViewportInputHandler {
             timelineTime = t          // triggers refresh
             return
         }
-        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
+        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character && $0.sourceCharacter == nil }) else { return }
         animTime = CFAbsoluteTimeGetCurrent() - startTime
         refresh()
     }
@@ -130,8 +132,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); doc = d; status = "Undo" }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); doc = d; status = "Redo" }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); doc = d; status = "Undo" }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); doc = d; status = "Redo" }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -152,6 +154,17 @@ final class StudioModel: ViewportInputHandler {
     func addItem(id: String) {
         guard let e = library.catalog.item(id) else { return }
         add(.item(id: id, name: e.name))
+    }
+
+    /// Import a converted static prefab, retaining the glTF node transforms and materials.
+    func importModel(from url: URL) throws {
+        let asset = try library.importStaticAsset(url: url)
+        var object = StudioObject(name: url.deletingPathExtension().lastPathComponent, kind: .item)
+        object.assetFile = url.standardizedFileURL.path
+        add(object)
+        let bounds = asset.bounds.transformed(by: doc.worldMatrix(of: object.id))
+        doc.camera.target = bounds.center
+        doc.camera.distance = max(bounds.radius, 0.1) / sin(doc.camera.fovDegrees.degreesToRadians * 0.5) * 1.15
     }
     func addLight(_ kind: LightKind) { add(.light(kind)) }
     func addFolder() { add(StudioObject(name: "Folder", kind: .folder)) }
@@ -203,7 +216,92 @@ final class StudioModel: ViewportInputHandler {
 
     // MARK: Scene I/O
 
-    func newScene() { pushUndo(force: true); doc = StudioDocument(); instances.removeAll(); selection = nil; sceneURL = nil }
+    /// Explicit preview: unsupported original records remain named tree nodes
+    /// and are retained in the hash-verified source file, never guessed assets.
+    func importSourceScenePreview(sceneURL: URL, rigURL: URL, boneCatalogURL: URL) throws {
+        let handle = try FileHandle(forReadingFrom: sceneURL); defer { try? handle.close() }
+        let bytes = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
+        guard bytes.count <= 256 * 1024 * 1024 else { throw RigError.invalid("Source scene exceeds 256 MiB.") }
+        let source = try KoikatsuSceneReader.decodeDocument(bytes)
+        let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        var imported = StudioDocument(), previews: [UUID: SourceStudioCharacterPreview] = [:]
+        imported.name = sceneURL.deletingPathExtension().lastPathComponent + " — source preview"
+        imported.sourceSceneFile = sceneURL.path; imported.sourceSceneSHA256 = hash
+        var diagnostics = ["Source scene preview: supported female shape settings, static ABMX and saved FK are applied to the local clothed reference avatar. Hair, outfit and material selections, source animation, full IK, routes, lighting, camera and effects are not restored."]
+        var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false) }
+        while let (record, parent, attached) = stack.popLast() {
+            var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
+            object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
+            object.transform.position = UnityCoordinates.position(record.transform.position)
+            object.transform.scale = record.transform.scale
+            let rotation = UnityCoordinates.eulerDegrees(record.transform.rotationDegrees)
+            object.transform.rotation = rotation.eulerXYZ.radiansToDegrees
+            object.transform.rotationOverride = rotation.vector
+            if record.character != nil, !attached {
+                let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
+                    rigFile: rigURL.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey)
+                do {
+                    let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                    object.kind = .character; object.name = "Source character \(record.sourceKey) · reference avatar"
+                    object.sourceCharacter = reference; previews[object.id] = preview
+                    diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
+                } catch { diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)") }
+            } else if record.kind != .folder {
+                object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
+                diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering\(attached ? "; original attachment transform is unresolved" : "").")
+            }
+            imported.objects.append(object)
+            stack += record.children.reversed().map { ($0, object.id, attached || record.kind == .route) }
+            if let character = record.character {
+                for key in character.accessoryChildren.keys.sorted().reversed() {
+                    stack += (character.accessoryChildren[key] ?? []).reversed().map { ($0, object.id, true) }
+                }
+            }
+        }
+        imported.sourcePreviewDiagnostics = diagnostics
+        try imported.validateHierarchy()
+        for object in imported.objects {
+            if let preview = previews[object.id], imported.isVisible(object.id) {
+                let f = try preview.frame(camera: imported.camera, mainLight: imported.mainLight, effects: imported.effects,
+                    world: imported.worldMatrix(of: object.id), objectID: 1)
+                bounds.expand(f.sceneBounds)
+            }
+        }
+        if !bounds.isEmpty {
+            imported.camera.target = bounds.center; imported.camera.yaw = .pi
+            imported.camera.distance = max(bounds.radius, 0.1) / sin(imported.camera.fovDegrees.degreesToRadians * 0.5) * 1.1
+        }
+        pushUndo(force: true)
+        sourceInstances = previews; instances = [:]; doc = imported; self.sceneURL = nil
+        selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
+        status = "Source preview · \(previews.count) reference avatars · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
+    }
+
+    func importKoikatsuLayout(sceneURL: URL, catalogURL: URL) throws {
+        let snapshot = try KoikatsuSceneReader.decode(Data(contentsOf: sceneURL))
+        let catalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(contentsOf: catalogURL))
+        let imported = try KoikatsuLayoutImporter.convert(snapshot, catalog: catalog,
+                                                        catalogDirectory: catalogURL.deletingLastPathComponent())
+        var bounds = AABB.empty
+        var loaded: [String: LoadedAsset] = [:]
+        for object in imported.objects {
+            guard let path = object.assetFile else { continue }
+            let asset: LoadedAsset
+            if let cached = loaded[path] { asset = cached }
+            else { asset = try library.importStaticAsset(url: URL(fileURLWithPath: path)); loaded[path] = asset }
+            bounds.expand(asset.bounds.transformed(by: imported.worldMatrix(of: object.id)))
+        }
+        pushUndo(force: true)
+        doc.objects.append(contentsOf: imported.objects)
+        if !bounds.isEmpty {
+            doc.camera.target = bounds.center
+            doc.camera.distance = max(bounds.radius, 0.1) / sin(doc.camera.fovDegrees.degreesToRadians * 0.5) * 1.15
+        }
+        selection = imported.objects.first?.id
+        status = "Imported \(imported.objects.count) object transforms. Source materials, animation and scene settings were not applied."
+    }
+
+    func newScene() { pushUndo(force: true); sourceInstances.removeAll(); instances.removeAll(); doc = StudioDocument(); selection = nil; sceneURL = nil }
 
     func saveScene(to url: URL) throws {
         var f = frame
@@ -219,8 +317,10 @@ final class StudioModel: ViewportInputHandler {
     func loadScene(from url: URL) throws {
         let data = try Data(contentsOf: url)
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
+        try d.validateHierarchy()
         pushUndo(force: true)
         instances.removeAll()
+        sourceInstances.removeAll()
         selection = nil
         doc = d
         sceneURL = url
@@ -230,6 +330,7 @@ final class StudioModel: ViewportInputHandler {
     func importScene(from url: URL) throws {
         let data = try Data(contentsOf: url)
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
+        try d.validateHierarchy()
         pushUndo(force: true)
         var remap: [UUID: UUID] = [:]
         for o in d.objects { remap[o.id] = UUID() }
@@ -237,6 +338,12 @@ final class StudioModel: ViewportInputHandler {
             o.id = remap[o.id]!
             o.parent = o.parent.flatMap { remap[$0] }
             doc.objects.append(o)
+        }
+        for var key in d.timeline.keyframes {
+            guard let id = remap[key.object] else { continue }
+            key.id = UUID()
+            key.object = id
+            doc.timeline.insert(key)
         }
         status = "Imported \(d.objects.count) objects"
     }
@@ -268,6 +375,8 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func refresh() {
+        let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
+        sourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
         var items: [RenderItem] = []
         var skinSets: [UInt64: [float4x4]] = [:]
         var lights: [SceneLight] = []
@@ -284,6 +393,21 @@ final class StudioModel: ViewportInputHandler {
             guard doc.isVisible(o.id) else { continue }
             switch o.kind {
             case .character:
+                if let reference = o.sourceCharacter {
+                    do {
+                        let preview: SourceStudioCharacterPreview
+                        if let cached = sourceInstances[o.id], cached.reference == reference { preview = cached }
+                        else {
+                            preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                            sourceInstances[o.id] = preview
+                        }
+                        let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
+                            world: world, objectID: objectID)
+                        items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
+                        bounds.expand(rendered.sceneBounds)
+                    } catch { status = "Source character \(o.sourceObjectKey ?? 0): \(error)" }
+                    continue
+                }
                 let inst = instance(for: o)
                 if let card = o.card, inst.card != card { inst.card = card }
                 inst.poseDelta = combinedPoseDelta(o)
@@ -307,7 +431,8 @@ final class StudioModel: ViewportInputHandler {
                     gizmos += characterGizmos(o, inst: inst, result: r)
                 }
             case .item:
-                guard let iid = o.itemID, let e = library.catalog.item(iid), let a = library.asset(e.file) else { continue }
+                guard let file = o.assetFile ?? o.itemID.flatMap({ library.catalog.item($0)?.file }),
+                      let a = library.asset(file) else { continue }
                 for part in a.parts {
                     let mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: o.tint, emissive: o.emissive)
                     let model = world * part.worldMatrix

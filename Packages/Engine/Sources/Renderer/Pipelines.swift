@@ -18,6 +18,7 @@ final class Pipelines: @unchecked Sendable {
     let toonOpaque: any MTLRenderPipelineState
     let toonBlend: any MTLRenderPipelineState
     let eye: any MTLRenderPipelineState
+    let eyeBlend: any MTLRenderPipelineState
     let outline: any MTLRenderPipelineState
     let shadow: any MTLRenderPipelineState
     let background: any MTLRenderPipelineState
@@ -83,6 +84,7 @@ final class Pipelines: @unchecked Sendable {
         toonOpaque = try render("ToonOpaque", "toon_vertex", "toon_fragment", color: hdr, depth: dep, samples: ms)
         toonBlend = try render("ToonBlend", "toon_vertex", "toon_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
         eye = try render("Eye", "toon_vertex", "eye_fragment", color: hdr, depth: dep, samples: ms)
+        eyeBlend = try render("EyeBlend", "toon_vertex", "eye_fragment", color: hdr, depth: dep, samples: ms, blend: .alpha)
         outline = try render("Outline", "outline_vertex", "outline_fragment", color: hdr, depth: dep, samples: ms)
         shadow = try render("Shadow", "shadow_vertex", "shadow_fragment", color: nil, depth: dep, samples: 1)
         background = try render("Background", "fullscreen_vertex", "background_fragment", color: hdr, depth: dep, samples: ms)

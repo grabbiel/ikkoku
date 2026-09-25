@@ -28,7 +28,7 @@ fragment void shadow_fragment(ShadowVertexOut in [[stage_in]],
                               texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]])
 {
     if (in.hidden > 0.5) discard_fragment();
-    if ((mat.flags & MaterialFlagHasBodyMask) && bodyMask.sample(linearClamp, in.uv).r > 0.5) discard_fragment();
+    if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
     if (mat.flags & MaterialFlagAlphaTest) {
         float a = (mat.flags & MaterialFlagHasBaseTexture) ? baseTex.sample(linearRepeat, in.uv).a : 1.0;
         if (a * mat.baseColor.a < mat.params.w) discard_fragment();

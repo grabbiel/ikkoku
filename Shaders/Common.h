@@ -53,4 +53,16 @@ constexpr sampler linearRepeat(mag_filter::linear, min_filter::linear, mip_filte
 constexpr sampler linearClamp(mag_filter::linear, min_filter::linear, mip_filter::linear, address::clamp_to_edge);
 constexpr sampler shadowSampler(mag_filter::linear, min_filter::linear, compare_func::greater_equal, address::clamp_to_edge);
 
+// Original main_skin uses RG as coverage, with independent clothing-state controls.
+// Generated characters retain the earlier convention: R above 0.5 hides the surface.
+inline bool bodyMaskDiscards(texture2d<float> mask, float2 uv, constant MaterialUniforms& mat) {
+    if (!(mat.flags & MaterialFlagHasBodyMask)) return false;
+    float2 value = mask.sample(linearClamp, uv).rg;
+    if (mat.flags & MaterialFlagSourceBodyMask) {
+        float coverage = min(max(value.r, 1.0 - mat.sourceAlphaA), max(value.g, 1.0 - mat.sourceAlphaB));
+        return coverage < 0.5;
+    }
+    return value.r > 0.5;
+}
+
 #endif

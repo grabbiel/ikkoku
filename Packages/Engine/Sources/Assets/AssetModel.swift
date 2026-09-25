@@ -9,6 +9,8 @@ public struct MeshData: Sendable {
     public var normals: [Float3]
     public var tangents: [Float4]          // empty if absent
     public var uvs: [Float2]               // empty if absent
+    public var uvs1: [Float2]              // optional source UV1; empty uses UV0 on the GPU
+    public var uvs2: [Float2]              // optional source UV2; empty uses UV0 on the GPU
     public var colors: [Float4]            // empty if absent (linear rgba 0…1)
     public var joints: [SIMD4<UInt16>]     // empty if not skinned
     public var weights: [Float4]
@@ -33,10 +35,12 @@ public struct MeshData: Sendable {
     public var isSkinned: Bool { !joints.isEmpty }
 
     public init(name: String, positions: [Float3], normals: [Float3], tangents: [Float4] = [], uvs: [Float2] = [],
+                uvs1: [Float2] = [], uvs2: [Float2] = [],
                 colors: [Float4] = [], joints: [SIMD4<UInt16>] = [], weights: [Float4] = [], indices: [UInt32],
                 morphTargets: [MorphTarget] = [], materialIndex: Int? = nil, regions: [UInt8] = [], extras: JSONValue? = nil) {
         self.name = name; self.positions = positions; self.normals = normals; self.tangents = tangents
-        self.uvs = uvs; self.colors = colors; self.joints = joints; self.weights = weights; self.indices = indices
+        self.uvs = uvs; self.uvs1 = uvs1; self.uvs2 = uvs2
+        self.colors = colors; self.joints = joints; self.weights = weights; self.indices = indices
         self.morphTargets = morphTargets; self.materialIndex = materialIndex; self.regions = regions; self.extras = extras
         self.bounds = AABB.of(points: positions)
     }
@@ -81,7 +85,9 @@ public struct NodeData: Sendable {
     public var rotation: simd_quatf
     public var scale: Float3
     public var extras: JSONValue?
-    public var localMatrix: float4x4 { Transform.trs(translation, rotation, scale) }
+    /// Preserve authored matrices, including reflections and shear, for static prefabs.
+    public var authoredMatrix: float4x4? = nil
+    public var localMatrix: float4x4 { authoredMatrix ?? Transform.trs(translation, rotation, scale) }
 }
 
 public struct MeshGroup: Sendable {
@@ -113,7 +119,14 @@ public struct GLTFAsset: Sendable {
     /// All (node, mesh) pairs in scene order.
     public var meshNodes: [(node: Int, mesh: Int)] {
         var out: [(Int, Int)] = []
-        for (i, n) in nodes.enumerated() { if let m = n.mesh { out.append((i, m)) } }
+        var stack = Array(rootNodes.reversed())
+        var visited = Set<Int>()
+        while let i = stack.popLast() {
+            guard nodes.indices.contains(i), visited.insert(i).inserted else { continue }
+            let n = nodes[i]
+            if let m = n.mesh { out.append((i, m)) }
+            stack.append(contentsOf: n.children.reversed())
+        }
         return out
     }
 }

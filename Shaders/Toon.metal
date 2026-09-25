@@ -6,6 +6,8 @@ struct ToonVertexOut {
     float3 worldNormal;
     float4 worldTangent;
     float2 uv;
+    float2 uv1;
+    float2 uv2;
     float4 color;
     float4 shadowCoord;
     float hidden;
@@ -15,6 +17,8 @@ vertex ToonVertexOut toon_vertex(
     uint vid [[vertex_id]],
     device const DeformedVertex* verts [[buffer(BufferIndexVertices)]],
     device const float2* uvs [[buffer(BufferIndexTexcoords)]],
+    device const float2* uvs1 [[buffer(BufferIndexTexcoords1)]],
+    device const float2* uvs2 [[buffer(BufferIndexTexcoords2)]],
     device const uchar4* colors [[buffer(BufferIndexVertexColors)]],
     constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
     constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
@@ -29,8 +33,14 @@ vertex ToonVertexOut toon_vertex(
     o.position = frame.viewProjection * wp;
     float3x3 nm = float3x3(draw.normalMatrix[0].xyz, draw.normalMatrix[1].xyz, draw.normalMatrix[2].xyz);
     o.worldNormal = normalize(nm * v.normal);
-    o.worldTangent = float4(normalize(nm * v.tangent.xyz), v.tangent.w);
+    // Tangents are surface directions, not normals: use the model's linear part.
+    // A mirrored instance also reverses the tangent basis orientation.
+    float3x3 linearModel = float3x3(draw.model[0].xyz, draw.model[1].xyz, draw.model[2].xyz);
+    float orientation = determinant(linearModel) < 0.0 ? -1.0 : 1.0;
+    o.worldTangent = float4(linearModel * v.tangent.xyz, v.tangent.w * orientation);
     o.uv = v.uv;
+    o.uv1 = uvs1[vid];
+    o.uv2 = uvs2[vid];
     o.color = v.color;
     o.shadowCoord = frame.shadowViewProjection * wp;
     o.hidden = hiddenFlag(v.region, draw.flags, hiddenBuf, vid);
@@ -180,7 +190,7 @@ fragment float4 toon_fragment(
     texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]])
 {
     if (in.hidden > 0.5) discard_fragment();
-    if ((mat.flags & MaterialFlagHasBodyMask) && bodyMask.sample(linearClamp, in.uv).r > 0.5) discard_fragment();
+    if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
     float2 uv = in.uv;
     float4 base = mat.baseColor;
     if (mat.flags & MaterialFlagHasBaseTexture) {
@@ -205,12 +215,24 @@ fragment float4 toon_fragment(
         }
     }
     // Overlays (blush, eyeshadow, lipstick, tan lines …): alpha masks × colour
-    if (mat.flags & MaterialFlagHasOverlay0) { float a = overlay0.sample(linearRepeat, uv).a * mat.overlayColor0.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor0.rgb, a); }
-    if (mat.flags & MaterialFlagHasOverlay1) { float a = overlay1.sample(linearRepeat, uv).a * mat.overlayColor1.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor1.rgb, a); }
+    if (mat.flags & MaterialFlagSourceIrisHighlights) {
+        // toon_eye_lod0 prelighting composition. UV1/UV2 are authored independently
+        // of base UV0; source gaze, eye rotation and expression sampling remain separate.
+        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(linearRepeat, in.uv1).a : 0.0;
+        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(linearRepeat, in.uv2).a : 0.0;
+        float4 highlight = max(upperAlpha * mat.overlayColor0, lowerAlpha * mat.overlayColor1);
+        float factor = highlight.a * mat.eye.w;
+        base.rgb = mix(base.rgb, highlight.rgb, factor);
+        base.a = max(base.a, factor);
+    } else {
+        if (mat.flags & MaterialFlagHasOverlay0) { float a = overlay0.sample(linearRepeat, uv).a * mat.overlayColor0.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor0.rgb, a); }
+        if (mat.flags & MaterialFlagHasOverlay1) { float a = overlay1.sample(linearRepeat, uv).a * mat.overlayColor1.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor1.rgb, a); }
+    }
     if (mat.flags & MaterialFlagHasOverlay2) { float a = overlay2.sample(linearRepeat, uv).a * mat.overlayColor2.a; base.rgb = mix(base.rgb, base.rgb * mat.overlayColor2.rgb, a); }
 
     float alpha = base.a;
     if (mat.flags & MaterialFlagAlphaTest) { if (alpha < mat.params.w) discard_fragment(); }
+    if (!(mat.flags & MaterialFlagAlphaBlend)) alpha = 1.0;
 
     Surface s;
     s.albedo = base.rgb;
@@ -219,9 +241,15 @@ fragment float4 toon_fragment(
     if (!isFront && (mat.flags & MaterialFlagDoubleSided)) n = -n;
     if (mat.flags & MaterialFlagHasNormal) {
         float3 tn = normalTex.sample(linearRepeat, uv).xyz * 2.0 - 1.0;
-        float3 t = normalize(in.worldTangent.xyz);
+        // Interpolation and skinning can make the tangent nonorthogonal to n.
+        float3 t = in.worldTangent.xyz - n * dot(n, in.worldTangent.xyz);
+        if (dot(t, t) < 1e-10) {
+            float3 axis = abs(n.y) < 0.999 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+            t = cross(axis, n);
+        }
+        t = normalize(t);
         float3 b = cross(n, t) * in.worldTangent.w;
-        n = normalize(t * tn.x * 0.5 + b * tn.y * 0.5 + n * tn.z);
+        n = normalize(t * tn.x + b * tn.y + n * tn.z);
     }
     s.normal = n;
     s.view = normalize(frame.cameraPosition.xyz - in.worldPos);
@@ -259,8 +287,9 @@ fragment float4 eye_fragment(
     float2 iuv = (in.uv - c) / max(mat.eye.x, 0.05) + 0.5;
     float4 iris = irisTex.sample(linearClamp, iuv);
     float inside = float(all(iuv >= 0.0) && all(iuv <= 1.0));
+    float coverage = iris.a * inside * mat.baseColor.a;
     // Source-style eye textures (e.g. a transparent cornea shell) use alpha as coverage.
-    if ((mat.flags & MaterialFlagAlphaTest) && iris.a < mat.params.w) discard_fragment();
+    if ((mat.flags & MaterialFlagAlphaTest) && coverage < mat.params.w) discard_fragment();
     iris.a *= inside;
     float4 white = whiteTex.sample(linearClamp, in.uv);
     if (white.a == 0.0) white = float4(1.0, 1.0, 1.0, 1.0);
@@ -277,5 +306,5 @@ fragment float4 eye_fragment(
     if (mat.kind == MaterialKindSkin) shadow = mix(1.0, shadow, 0.55);   // faces keep soft, high-key shadows
     float lit = smoothstep(0.35, 0.55, ndl * 0.5 + 0.5) * shadow;
     col *= mix(mat.shadowColor.rgb, float3(1.0), lit);
-    return float4(col, 1.0);
+    return float4(col, (mat.flags & MaterialFlagAlphaBlend) ? coverage : 1.0);
 }

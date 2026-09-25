@@ -1,12 +1,16 @@
 import SwiftUI
 import Character
 import Renderer
+import Scene
 
 struct MakerView: View {
     @Bindable var model: MakerModel
 
     var body: some View {
         HStack(spacing: 0) {
+            if model.sourceRigPreview != nil {
+                SourceRigPanel(model: model)
+            } else {
             VStack(spacing: 0) {
                 Picker("", selection: $model.tab) {
                     ForEach(MakerTab.allCases) { t in Image(systemName: t.symbol).tag(t).help(t.rawValue) }
@@ -30,10 +34,11 @@ struct MakerView: View {
                 Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1).padding(6)
             }
             .frame(width: 400)
+            }
             Divider()
             ZStack(alignment: .top) {
                 ViewportView(renderer: model.host.renderer, handler: model)
-                viewportToolbar
+                if model.sourceRigPreview == nil { viewportToolbar }
             }
         }
     }

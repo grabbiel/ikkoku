@@ -70,3 +70,12 @@ fastlane/test_output
 !Assets/fixtures/*.bin
 
 .DS_Store
+
+# Local game installation inventory, extracted assets, decompiled code and tools.
+.local/
+
+# Native rebuild output.
+build/
+compile_commands.json
+__pycache__/
+*.py[cod]

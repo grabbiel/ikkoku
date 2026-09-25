@@ -20,7 +20,6 @@ typedef uint32_t IKUInt;
 // MARK: - Limits
 #define IK_MAX_LIGHTS        8
 #define IK_MAX_ACTIVE_MORPHS 64
-#define IK_MAX_BONES         256
 
 // MARK: - Buffer bind points
 typedef IK_ENUM(EnumBackingType, BufferIndex) {
@@ -41,6 +40,8 @@ typedef IK_ENUM(EnumBackingType, BufferIndex) {
     BufferIndexGizmoVertices  = 14,  // GizmoVertex[]
     BufferIndexMorphNormals   = 15,  // PackedFloat3[targets*verts] (optional)
     BufferIndexVertexHidden   = 16,  // uchar[] per vertex (1 = hidden), when DrawFlagHasHiddenBuffer
+    BufferIndexTexcoords1      = 17,  // optional source UV1, otherwise UV0
+    BufferIndexTexcoords2      = 18,  // optional source UV2, otherwise UV0
 };
 
 // MARK: - Texture bind points
@@ -93,6 +94,8 @@ typedef IK_ENUM(IKUInt, MaterialFlags) {
     MaterialFlagReceiveShadow   = 1u << 14,
     MaterialFlagHasVertexColor  = 1u << 15,
     MaterialFlagHasBodyMask     = 1u << 16,
+    MaterialFlagSourceBodyMask  = 1u << 17, // RG source coverage; requires HasBodyMask
+    MaterialFlagSourceIrisHighlights = 1u << 18, // overlay0/1 alpha at UV1/UV2; eye.w enables highlights
 };
 
 #define DrawFlagHasHiddenBuffer 0x80000000u
@@ -122,6 +125,7 @@ typedef struct {
     IKUInt activeMorphCount;
     IKUInt hasSkin;           // 0/1
     IKUInt hasMorphNormals;   // 0/1
+    IKUInt boneCount;         // bounds of the bound palette, never silently truncated
 } DeformParams;
 
 typedef struct {
@@ -182,8 +186,8 @@ typedef struct {
     vector_float4 uvTransform;    // scale u, scale v, offset u, offset v (pattern)
     IKUInt        kind;           // MaterialKind
     IKUInt        flags;          // MaterialFlags
-    float         _pad0;
-    float         _pad1;
+    float         sourceAlphaA;   // source body-mask R control (1 = apply mask)
+    float         sourceAlphaB;   // source body-mask G control (1 = apply mask)
 } MaterialUniforms;
 
 typedef IK_ENUM(EnumBackingType, LightType) {

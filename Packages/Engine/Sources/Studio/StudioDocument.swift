@@ -9,11 +9,15 @@ public enum StudioObjectKind: String, Codable, Sendable { case character, item, 
 
 public struct StudioTransform: Codable, Sendable, Equatable {
     public var position = Float3.zero
-    public var rotation = Float3.zero       // Euler XYZ degrees
+    public var rotation = Float3.zero { didSet { rotationOverride = nil } } // Editable Euler XYZ degrees
+    /// Exact imported quaternion; an explicit Euler edit replaces it.
+    public var rotationOverride: Float4?
     public var scale = Float3(repeating: 1)
     public init() {}
-    public var matrix: float4x4 { Transform.trs(position, simd_quatf(eulerXYZ: rotation.degreesToRadians), scale) }
-    public var quaternion: simd_quatf { simd_quatf(eulerXYZ: rotation.degreesToRadians) }
+    public var matrix: float4x4 { Transform.trs(position, quaternion, scale) }
+    public var quaternion: simd_quatf {
+        rotationOverride.map { simd_quatf(vector: $0) } ?? simd_quatf(eulerXYZ: rotation.degreesToRadians)
+    }
 }
 
 /// One node of the studio workspace tree.
@@ -27,6 +31,7 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public var transform = StudioTransform()
     // character
     public var card: CharacterCard?
+    public var sourceCharacter: SourceStudioCharacterReference?
     public var poseDelta = PoseDelta()
     public var ikTargets: [IKChain: IKTarget] = [:]
     public var animationPreset: String?
@@ -36,6 +41,9 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     public var handGestureR = 0
     // item
     public var itemID: String?
+    /// Local converted glTF/GLB path. Kept separate from catalog IDs and persisted in scene cards.
+    public var assetFile: String?
+    public var sourceObjectKey: Int32?
     public var tint: RGB?
     public var emissive: Float = 0
     // light
@@ -83,6 +91,9 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     public var captureWidth = 1920
     public var captureHeight = 1080
     public var timeline = Timeline()
+    public var sourceSceneFile: String?
+    public var sourceSceneSHA256: String?
+    public var sourcePreviewDiagnostics: [String]?
 
     public init() {
         camera.target = Float3(0, 0.9, 0); camera.distance = 3.4; camera.yaw = 0.35; camera.pitch = 0.12
@@ -92,42 +103,84 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     public func index(of id: UUID) -> Int? { objects.firstIndex { $0.id == id } }
     public func children(of id: UUID?) -> [StudioObject] { objects.filter { $0.parent == id } }
 
+    /// Validate imported documents before publishing them to the editor/renderer.
+    public func validateHierarchy() throws {
+        var byID: [UUID: StudioObject] = [:]
+        for object in objects {
+            guard byID.updateValue(object, forKey: object.id) == nil else { throw StudioHierarchyError.duplicate(object.id) }
+        }
+        for object in objects {
+            if let parent = object.parent, byID[parent] == nil { throw StudioHierarchyError.missingParent(parent) }
+        }
+        var complete = Set<UUID>()
+        for object in objects where !complete.contains(object.id) {
+            var path = Set<UUID>()
+            var current: UUID? = object.id
+            while let id = current, !complete.contains(id) {
+                guard path.insert(id).inserted else { throw StudioHierarchyError.cycle(id) }
+                current = byID[id]?.parent
+            }
+            complete.formUnion(path)
+        }
+    }
+
     /// World matrix including parents.
     public func worldMatrix(of id: UUID) -> float4x4 {
         guard let o = object(id) else { return matrix_identity_float4x4 }
         var m = o.transform.matrix
         var p = o.parent
-        var guardCount = 0
-        while let pid = p, let po = object(pid), guardCount < 64 { m = po.transform.matrix * m; p = po.parent; guardCount += 1 }
+        var visited: Set<UUID> = [id]
+        while let pid = p, visited.insert(pid).inserted, let po = object(pid) {
+            m = po.transform.matrix * m; p = po.parent
+        }
         return m
     }
 
     public func isVisible(_ id: UUID) -> Bool {
         var cur: UUID? = id
-        var n = 0
-        while let c = cur, let o = object(c), n < 64 { if !o.visible { return false }; cur = o.parent; n += 1 }
+        var visited = Set<UUID>()
+        while let c = cur {
+            guard visited.insert(c).inserted, let o = object(c), o.visible else { return false }
+            cur = o.parent
+        }
         return true
     }
 
     public func isDescendant(_ id: UUID, of ancestor: UUID) -> Bool {
         var cur = object(id)?.parent
-        var n = 0
-        while let c = cur, n < 64 { if c == ancestor { return true }; cur = object(c)?.parent; n += 1 }
+        var visited = Set<UUID>()
+        while let c = cur, visited.insert(c).inserted { if c == ancestor { return true }; cur = object(c)?.parent }
         return false
     }
 
     public mutating func remove(_ id: UUID) {
         let victims = objects.filter { $0.id == id || isDescendant($0.id, of: id) }.map(\.id)
         objects.removeAll { victims.contains($0.id) }
+        timeline.keyframes.removeAll { victims.contains($0.object) }
     }
 
     /// Depth-first ordered list of (object, depth) for the tree view.
     public func flattened() -> [(object: StudioObject, depth: Int)] {
         var out: [(StudioObject, Int)] = []
-        func visit(_ parent: UUID?, _ depth: Int) {
-            for o in objects where o.parent == parent { out.append((o, depth)); visit(o.id, depth + 1) }
+        let children = Dictionary(grouping: objects, by: \.parent)
+        var stack = (children[nil] ?? []).reversed().map { ($0, 0) }
+        var visited = Set<UUID>()
+        while let (object, depth) = stack.popLast() {
+            guard visited.insert(object.id).inserted else { continue }
+            out.append((object, depth))
+            stack.append(contentsOf: (children[object.id] ?? []).reversed().map { ($0, depth + 1) })
         }
-        visit(nil, 0)
         return out
+    }
+}
+
+public enum StudioHierarchyError: Error, CustomStringConvertible {
+    case duplicate(UUID), missingParent(UUID), cycle(UUID)
+    public var description: String {
+        switch self {
+        case .duplicate(let id): return "Scene contains duplicate object ID \(id)."
+        case .missingParent(let id): return "Scene references missing parent \(id)."
+        case .cycle(let id): return "Scene hierarchy contains a cycle at \(id)."
+        }
     }
 }

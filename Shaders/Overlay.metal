@@ -52,19 +52,24 @@ fragment float4 grid_fragment(GridOut in [[stage_in]],
 }
 
 // Picking: writes object id.
-struct PickOut { float4 position [[position]]; };
+struct PickOut { float4 position [[position]]; float2 uv; };
 
 vertex PickOut pick_vertex(uint vid [[vertex_id]],
                            device const DeformedVertex* verts [[buffer(BufferIndexVertices)]],
+                           device const float2* uvs [[buffer(BufferIndexTexcoords)]],
                            constant FrameUniforms& frame [[buffer(BufferIndexFrameUniforms)]],
                            constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]])
 {
     PickOut o;
     o.position = frame.viewProjection * draw.model * float4(verts[vid].position.xyz, 1.0);
+    o.uv = uvs[vid];
     return o;
 }
 
-fragment uint pick_fragment(PickOut in [[stage_in]], constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]]) {
+fragment uint pick_fragment(PickOut in [[stage_in]], constant DrawUniforms& draw [[buffer(BufferIndexDrawUniforms)]],
+                            constant MaterialUniforms& mat [[buffer(BufferIndexMaterial)]],
+                            texture2d<float> bodyMask [[texture(TextureIndexBodyMask)]]) {
+    if (bodyMaskDiscards(bodyMask, in.uv, mat)) discard_fragment();
     return draw.objectID;
 }
 
