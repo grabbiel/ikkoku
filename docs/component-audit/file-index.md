@@ -1,8 +1,8 @@
 # File coverage index
 
 Code-audit snapshot: 2026-09-25, base `2cfb859` plus the then-uncommitted work.
-The file inventory includes the documentation reorganization and contribution
-guide addition; it does not represent a new code audit. It lists every
+The file inventory includes the documentation reorganization, contribution
+guide and ST-T02/A-T04 probe test additions; it does not represent a new code audit. It lists every
 present Git-visible tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -11,11 +11,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**610 files indexed; 610 assigned; 0 unassigned.**
+**611 files indexed; 611 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 60 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 108 |
 | [Studio / IK / animation](studio.md) | 89 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 283 |
@@ -30,7 +30,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
 | Runtime / shared shader declaration | 137 |
-| Test / validation | 100 |
+| Test / validation | 101 |
 
 ## App / gameplay / plugins
 
@@ -96,6 +96,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Tools/translation/plugin.py](../../Tools/translation/plugin.py) | Conversion / recovery / verification tool |
 | [Tools/translation/studio_execution_probe.py](../../Tools/translation/studio_execution_probe.py) | Conversion / recovery / verification tool |
 | [Tools/translation/tests/test_native_adapters.py](../../Tools/translation/tests/test_native_adapters.py) | Test / validation |
+| [Tools/translation/tests/test_studio_execution_probe.py](../../Tools/translation/tests/test_studio_execution_probe.py) | Test / validation |
 | [Tools/translation/tests/test_translation.py](../../Tools/translation/tests/test_translation.py) | Test / validation |
 | [Tools/translation/translate.py](../../Tools/translation/translate.py) | Conversion / recovery / verification tool |
 

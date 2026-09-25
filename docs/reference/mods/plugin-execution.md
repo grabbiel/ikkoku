@@ -130,11 +130,14 @@ keys/native UUIDs/GUIDs plus resumed fields without replaying Start. The private
 `.local/reverse/plugin-execution/release-capture-01/report.json`, retained on
 2026-09-25, passed for the **IR motion fixture only**, with identical reload pixels.
 
-The probe also accepts repeated `--native-manifest` arguments, but the later
+The probe also accepts repeated `--native-manifest` arguments. The later
 `native-adapter-capture-01` run failed with the Mute `NSApp` initialization trap
-before producing captures. Adding those arguments is a regression target, not an
-established passing workflow. Fix A-T04 before claiming combined adapter/IR
-save-and-reload support.
+before producing captures. That trap is now fixed in code (A-T04). With native
+manifests, each phase also delivers `--focus-events`. It writes an adapter report
+covering mounts, observers and generated-tone gain, which the probe checks; see
+[native adapters](native-adapters.md#startup-and-acceptance). Until that run
+passes on a release build, combined adapter/IR save-and-reload support remains a
+regression target, not an established passing workflow.
 
 The successful IR-only capture supplied the following bounded performance sample.
 That 600×800 scene contains 28 visible items and 60,761 drawn triangles. On the

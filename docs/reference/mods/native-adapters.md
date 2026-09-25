@@ -2,11 +2,12 @@
 
 Reviewed 2026-09-25. Two exact installed revisions have verified **bounded Swift
 behavior adapters** and immutable package tests. Actual app integration is
-incomplete: Mute can trap during startup before `NSApp` exists, and the source
-character inspector gate prevents reaching accessory labels. The successful
-IR-only release capture does not validate either workflow. See
+incomplete. The Mute startup trap before `NSApp` exists is fixed in code, but the
+release acceptance run is still pending. The source character inspector gate
+prevents reaching accessory labels. The successful IR-only release capture does
+not validate either workflow. See
 [A-T04 / P-T03](../../component-audit/app-gameplay-and-plugins.md) and
-[ST-T01/02](../../component-audit/studio.md) for confirmed defects and acceptance.
+[ST-T01/02](../../component-audit/studio.md) for defects and acceptance.
 
 ## Conversion and identity
 
@@ -47,7 +48,8 @@ of changed assembly/config/manifest bytes. `test_native_adapters.py` verifies th
 automatic CLI route against the same originals without invoking a decompiler or
 executing the assemblies. Set `IKKOKU_NATIVE_PLUGIN_PACKAGES` to the private fixture
 package directory to enable those source-backed checks. They are separate from
-actual app startup and UI verification.
+actual app startup and UI verification. The capture-only focus variables are
+described under [startup and acceptance](#startup-and-acceptance).
 
 The registry requires these exact assembly identities:
 
@@ -60,18 +62,69 @@ The retained 2026-09-25 evidence reports three native package tests and one
 original-fixture Python packaging test passing. This documentation revision did
 not rerun them. Missing fixture variables skip the original-assembly comparison.
 
-## App integration defects
+## Startup and acceptance
 
-`StudioModel.configureSourceMutePlugin(configuration:)` calls `NSApp.isActive`
-from a path reachable during `AppState` initialization. The private
+SwiftUI constructs `AppState` before `NSApplication` exists. Environment and
+capture mounts, and saved-scene restores in `captureScene`, all run inside that
+initializer. The Mute mount used to read `NSApp.isActive` there, so the private
 `.local/reverse/plugin-execution/native-adapter-capture-01` run terminated with
 SIGTRAP before capture; `Ikkoku-2026-09-25-071053.ips` identifies that method.
-Initialize focus after AppKit exists, or supply headless focus explicitly, then
-rerun `studio_execution_probe.py` with both original manifests and the IR fixture.
-Acceptance requires unchanged package hashes/IDs, resumed fields and pixel-identical
-reload, followed by focus gain/loss checks with generated audio.
 
-`StudioView` also intercepts source-character pose/face/clothes inspectors with a
+`StudioModel.mountSourceFocusAdapter` now owns the adapter and its single pair of
+become/resign-active observers. Every remount replaces the pair and unmounting
+removes it. `SourceApplicationFocusHost` restores the replaced adapter's saved
+volume first, as before. It then delivers the initial focus sample immediately
+when `NSApp` exists. Otherwise it delivers the sample once, at
+`NSApplication.didFinishLaunchingNotification`. A real focus change supersedes a
+pending sample, so a duplicate startup loss cannot store zero through the
+repeated-loss quirk. `sourceMuteFocusHostDefersInitialFocusOnceAndRestoresReplacedAdapter`
+covers this state machine.
+
+Headless captures exit before launch finishes, so two capture-only variables
+provide focus evidence. `IKKOKU_APPLICATION_FOCUS=0,1` delivers up to 64 focus
+losses (`0`) and gains (`1`) through the same method as the AppKit observers; it
+requires a mounted Mute adapter. `IKKOKU_NATIVE_PLUGIN_REPORT=/path/report.json`
+records the mounted package references, whether `NSApplication` existed, the
+observer count and the pending initial sample. After each event it also records
+master and voice gain plus the RMS of a generated 440 Hz tone rendered offline
+through the app's voice and master mixers. Tone capture refuses running audio
+output and returns the bus to realtime mode with its gains unchanged.
+
+ST-T02/A-T04 acceptance is the release probe with both packages and the IR fixture:
+
+```sh
+python3 Tools/translation/studio_execution_probe.py \
+  --executable .local/build/Build/Products/Release/Ikkoku.app/Contents/MacOS/Ikkoku \
+  --scene /absolute/path/to/controlled-clothed-scene.png \
+  --environment /absolute/path/to/capture-environment.json \
+  --manifest /absolute/path/to/StudioMotionFixture/manifest.json \
+  --native-manifest .local/plugins/mute-original/manifest.json \
+  --native-manifest .local/plugins/accessory-names-original/manifest.json \
+  --output .local/reverse/plugin-execution/native-adapter-capture-02
+```
+
+The run phase mounts both packages; reload and continue restore them from the
+saved native scene. Each phase must exit zero and delivers `--focus-events`
+(default `0,1`). The probe fails in each of these cases:
+
+- manifest hashes, identities or the Mute setting change between phases;
+- a phase has anything other than one observer pair;
+- the initial sample was taken before `NSApplication` existed;
+- master, voice or tone gain differs from Mute 1.1;
+- reload pixels change.
+
+The installed configuration is disabled, so focus loss must leave gain unchanged.
+Add `--mute-config` with an enabled copy of the configuration to check audible
+muting through the app bus. The probe passes it as `IKKOKU_MUTE_BACKGROUND_CONFIG`,
+which remounts the adapter with that configuration after the package mounts.
+Saved package references keep the original configuration. `test_studio_execution_probe.py` tests these report rules without
+launching the app. This fix has not yet been built or run through the probe. The
+resulting `report.json` is the evidence that closes ST-T02 and A-T04; record its
+path, hashes and executed focus events in the audit.
+
+## Accessory label UI gate
+
+`StudioView` intercepts source-character pose/face/clothes inspectors with a
 stale placeholder. Remove that gate and verify the mounted accessory-name labels
 through the actual UI. Label-model tests alone do not establish UI integration.
 

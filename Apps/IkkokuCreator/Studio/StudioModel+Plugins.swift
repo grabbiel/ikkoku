@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import AVFAudio
 import Studio
 import Gameplay
 
@@ -61,20 +62,87 @@ extension StudioModel {
 
     func configureSourceMutePlugin(configuration: Data) throws {
         let enabled = try SourceMuteInBackgroundPlugin.readConfiguration(configuration)
-        let adapter = SourceMuteInBackgroundPlugin(enabled: enabled,
+        mountSourceFocusAdapter(SourceMuteInBackgroundPlugin(enabled: enabled,
             readVolume: { [weak self] in MainActor.assumeIsolated { self?.sourceAudioBus.masterVolume ?? 0 } },
-            writeVolume: { [weak self] value in MainActor.assumeIsolated { self?.sourceAudioBus.masterVolume = value } })
+            writeVolume: { [weak self] value in MainActor.assumeIsolated { self?.sourceAudioBus.masterVolume = value } }))
+        status = "Loaded \(SourceMuteInBackgroundPlugin.guid) \(SourceMuteInBackgroundPlugin.version)"
+    }
+
+    /// Replaces the adapter and its single observer set. SwiftUI builds AppState
+    /// before NSApplication exists, so capture/env mounts sample the initial focus
+    /// at launch instead of reading a nil NSApp.
+    func mountSourceFocusAdapter(_ adapter: SourceMuteInBackgroundPlugin?) {
         for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
-        sourceFocusObservers = []
-        sourceMutePlugin?.onApplicationFocus(true)
-        sourceMutePlugin = adapter
+        sourceFocusObservers = []; removeSourceLaunchObserver()
+        sourceFocus.mount(adapter)
+        guard adapter != nil else { return }
         for (name, focused) in [(NSApplication.didBecomeActiveNotification, true), (NSApplication.didResignActiveNotification, false)] {
             sourceFocusObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.sourceMutePlugin?.onApplicationFocus(focused) }
+                MainActor.assumeIsolated { self?.receiveSourceApplicationFocus(focused) }
             })
         }
-        adapter.onApplicationFocus(NSApp.isActive)
-        status = "Loaded \(SourceMuteInBackgroundPlugin.guid) \(SourceMuteInBackgroundPlugin.version)"
+        if let app = NSApp { deliverInitialSourceFocus(app.isActive); return }
+        sourceLaunchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.deliverInitialSourceFocus(NSApp?.isActive ?? false) }
+        }
+    }
+
+    /// AppKit focus notifications and headless capture focus events share this path.
+    func receiveSourceApplicationFocus(_ focused: Bool) {
+        removeSourceLaunchObserver()
+        sourceFocus.focusChanged(focused)
+    }
+
+    private func deliverInitialSourceFocus(_ focused: Bool) {
+        removeSourceLaunchObserver()
+        sourceFocus.deliverInitialFocus(focused)
+    }
+
+    private func removeSourceLaunchObserver() {
+        if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
+        sourceLaunchObserver = nil
+    }
+
+    func sourceFocusState() -> [String: Any] {
+        var state: [String: Any] = ["mounted": sourceFocus.adapter != nil, "awaitingInitialFocus": sourceFocus.awaitingInitialFocus,
+            "focusObservers": sourceFocusObservers.count, "launchObserver": sourceLaunchObserver != nil]
+        if let adapter = sourceFocus.adapter { state["enabled"] = adapter.enabled }
+        return state
+    }
+
+    /// Capture-only gain evidence: renders a generated 440 Hz tone offline through
+    /// the live bus's voice and master mixers, then returns the bus to realtime.
+    /// Running output would be disturbed, so it is rejected instead.
+    func measureGeneratedToneRMS() throws -> Float {
+        let engine = sourceAudioBus.engine
+        guard !engine.isRunning, !engine.isInManualRenderingMode else {
+            throw SourcePluginError.invalid("Generated-tone gain capture requires stopped realtime Studio audio.")
+        }
+        let master = sourceAudioBus.masterVolume, voice = sourceAudioBus.voiceVolume
+        try sourceAudioBus.enableOfflineRendering()
+        defer { engine.disableManualRenderingMode(); sourceAudioBus.masterVolume = master; sourceAudioBus.voiceVolume = voice }
+        guard sourceAudioBus.masterVolume == master, sourceAudioBus.voiceVolume == voice else {
+            throw SourcePluginError.runtime("Offline rendering changed the Studio gains being measured.")
+        }
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1),
+              let tone = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 48_000),
+              let output = AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat, frameCapacity: 4096) else {
+            throw SourcePluginError.runtime("Generated-tone buffers are unavailable.")
+        }
+        tone.frameLength = 48_000
+        let samples = tone.floatChannelData![0]
+        for i in 0..<48_000 { samples[i] = 0.25 * sin(2 * .pi * 440 * Float(i) / 48_000) }
+        let node = AVAudioPlayerNode()
+        engine.attach(node); engine.connect(node, to: sourceAudioBus.voiceMixer, format: format)
+        defer { node.stop(); engine.stop(); engine.detach(node) }
+        node.scheduleBuffer(tone, at: nil, options: [], completionHandler: nil)
+        try engine.start(); node.play()
+        var sum: Float = 0, count = 0
+        for pass in 0..<4 {
+            guard try engine.renderOffline(4096, to: output) == .success else { throw SourcePluginError.runtime("Generated-tone render failed.") }
+            if pass > 0 { for i in 0..<Int(output.frameLength) { let x = output.floatChannelData![0][i]; sum += x * x; count += 1 } }
+        }
+        return sqrt(sum / Float(count))
     }
 
     func loadSourceNativePlugin(url: URL) throws {
@@ -102,10 +170,8 @@ extension StudioModel {
             } else if package.manifest.adapterID == SourceNativePluginPackage.accessoryAdapter { accessoryNames = true }
         }
         // Validate every package before replacing any active adapter.
-        sourceMutePlugin?.onApplicationFocus(true); sourceMutePlugin = nil
-        for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
-        sourceFocusObservers = []
         if let configuration = muteConfiguration { try configureSourceMutePlugin(configuration: configuration) }
+        else { mountSourceFocusAdapter(nil) }
         sourceAccessoryNamesEnabled = accessoryNames
     }
 

@@ -12,7 +12,7 @@ has several separate paths; importing one kind does not enable the others.
 | [Card-selected Maker assets](../character/maker-assets.md) | Load selected converted hair/clothes/accessories and supported appearance layers | The audited local geometry library has no mod-GUID geometry entries; coverage is a small source subset |
 | [Static ABMX](abmx.md) and [card editing](../character/cards.md) | Decode current payloads, apply supported bone modifiers, retain unknown Extended Save bytes during supported edits | Dynamic/accessory ABMX and plugin-specific mutation/save callbacks are incomplete |
 | [C# translation](api-substitution.md) and [Studio execution](plugin-execution.md) | Accept an explicit typed API/AST subset, execute it in Studio and persist native runtime state | Most Unity/BepInEx APIs, Harmony, coroutines and arbitrary managed components are unsupported |
-| [Installed native adapters](native-adapters.md) | Package two exact installed revisions and reproduce their bounded behavior in Swift tests | Mute startup mounting currently traps before `NSApp` exists; accessory UI is blocked by the source inspector gate |
+| [Installed native adapters](native-adapters.md) | Package two exact installed revisions and reproduce their bounded behavior in Swift tests | Mute startup mounting no longer reads `NSApp` before it exists, but the release acceptance run is pending; accessory UI is blocked by the source inspector gate |
 
 The rest of this document records the original installation survey and the
 archive package contract. The [character/mod audit](../../component-audit/character-and-mods.md)

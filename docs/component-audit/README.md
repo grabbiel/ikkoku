@@ -79,7 +79,7 @@ or hardens the implementation. Task IDs in the reports are stable references.
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
-| 1 | **ST-T02 / A-T04** | Fix native Mute adapter initialization before `NSApp` exists; pass the previously crashing release mount/save/reload/continue probe with original package identities intact. |
+| 1 | **ST-T02 / A-T04** | Code fix in place: Mute focus is initialized once `NSApp` exists, each mount owns one observer set, and headless focus reports are available. Remaining: pass the previously crashing release mount/save/reload/continue probe with both original packages, focus loss/gain and generated-tone gain checks, and original package identities intact. |
 | 2 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. |
 | 3 | **T-T04, E-T03, CMT-11** | Make source-fixture execution explicit and reproducible. Preserve original/native input hashes, distinguish skips from executed checks, and add app workflows alongside kernel tests. |
 | 4 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
@@ -101,10 +101,10 @@ review additionally ran 31 targeted Python tests successfully. Link/coverage and
 whitespace checks validate the documentation itself. Existing test counts in
 historical reports are dated results, not a fresh all-project test certification.
 
-Two important confirmed defects are recorded, **not fixed by this documentation
-work**: the unreachable source Studio inspectors and the native Mute adapter's
-headless startup trap. Existing successful IR-plugin tests do not invalidate
-either finding. The audit also records incomplete or unverified areas without
+Two important confirmed defects were recorded: the unreachable source Studio
+inspectors (open) and the native Mute adapter's headless startup trap (fixed in
+code; release acceptance run pending, ST-T02/A-T04). Existing successful
+IR-plugin tests do not invalidate either finding. The audit also records incomplete or unverified areas without
 presenting them as discovered runtime bugs.
 
 ## Keeping this current

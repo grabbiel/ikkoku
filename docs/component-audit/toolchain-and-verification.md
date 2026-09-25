@@ -63,7 +63,7 @@ These commands are useful diagnostic consumers, not gameplay/UI implementations.
 | Public synthetic unit tests | Mid-stage | Swift CoreMath/Engine, Python reverse/mod/translation tests cover many boundaries and formulas. No latest all-project count is asserted here because this audit did not rerun every suite. | T-T04: publish per-suite command, revision and result rather than copy an older green count. |
 | Original fixture tests | Mid-stage | Many Swift tests use `guard let env ... else { return }`; others use explicit conditional enablement. An apparently passed test can mean the source fixture never ran. | T-T04: make omitted source cases explicit skips and add a strict private-fixture suite that fails if prerequisites are absent. |
 | Numerical source parity | Mid-stage | Separate evidence exists for shapes, rigs, material composition, ADV kernels, IK, dynamic bones and Animator samples. Each validates only its stated source/input domain. | E-T03: retain expected-value independence and replay metadata; broaden domains according to component tasks. |
-| Actual app integration | Infancy | Headless release IR save/reload succeeded; two-original-adapter startup failed. Source inspector controls can be unreachable even when engine tests pass. There is no broad UI automation suite. | T-T04 plus A-T04 and Studio UI task: test menu/inspector reachability, file operations, startup and persistence through the application. |
+| Actual app integration | Infancy | Headless release IR save/reload succeeded; two-original-adapter startup failed before the A-T04 fix and has not been rerun. Source inspector controls can be unreachable even when engine tests pass. There is no broad UI automation suite. | T-T04 plus A-T04 and Studio UI task: test menu/inspector reachability, file operations, startup and persistence through the application. |
 | Matched original frames | Mid-stage | Frozen-geometry diagnostic and translated shader comparisons exist. Whole native source scene/animation/appearance parity is not established. | Renderer audit describes geometry/garment passes and full-color failure; keep those gates separate. |
 | Performance and memory | Mid-stage | GPU reused-target timings, CPU scene evaluation and RSS/Metal allocations measured for specific release fixtures. Offscreen microbench excludes scheduling/readback and may exclude dynamics when no chain matches. | T-T06: end-to-end displayed frame profiling with multiple characters, dynamic chains, asset streaming and long-lived resource use. |
 | Whole asset/plugin coverage | Infancy | Selected Maker/catalog counts and installed mod inventory exist. Installed directory counts are not compatible-content counts; support DLLs are not independent plugins. | E-T04/P-T01: report denominators and per-stage reasons, then expand bounded fixtures. |
@@ -82,7 +82,7 @@ executed during the documentation pass:
   passed with `IKKOKU_NATIVE_PLUGIN_PACKAGES` set.
 - `.local/reverse/plugin-execution/release-capture-01/report.json`: successful
   IR plugin run/reload/continue. `native-adapter-capture-01` is a **failed** later
-  attempt, not equivalent evidence.
+  attempt from before the A-T04 fix, not equivalent evidence.
 - `.local/reverse/original-animation-probe/native-comparison.json`: 180 source
   player samples, 60,804 bone matrices; see Studio audit for errors and scope.
 - `.local/reverse/studio-dynamics/final-targeted-tests.log`: 36 combined targeted
