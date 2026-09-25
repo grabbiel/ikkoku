@@ -21,7 +21,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 | A03 · Viewport display and input | Mid-stage | `CAMetalDisplayLink` drives drawable presentation; Retina pixel conversion, orbit/pan/zoom, trackpad magnification, mouse and key delegation exist. Simulation uses editor timers, not this presentation timestamp. | A-T03: instrument displayed frames and simulation cadence together; validate resize, focus loss, mode switching and more than one window. |
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
 | A05 · Source Maker → Studio transfer | Pending | `Send to Studio` is explicitly disabled while a source rig is active. The enabled command sends the bundled `CharacterCard`. Original cards can instead enter through source scene preview. | Preserve edited source card bytes, selection, outfit, resolver GUIDs and source rig references when adding a source character; compare Maker and Studio posed appearance. |
-| A06 · Headless capture orchestration | Mid-stage | Environment switches cover rigs, models, source/native cards/scenes, shape/color edits, fixed animation time, scripted plugin steps, screenshots and benchmarks. Startup calls capture paths synchronously and exits. Input errors are generally explicit. | A-T04: cover startup phases, output errors and invalid combinations; eliminate dependence on an initialized AppKit application during early capture. |
+| A06 · Headless capture orchestration | Mid-stage | Environment switches cover rigs, models, source/native cards/scenes, shape/color edits, fixed animation time, scripted plugin steps, focus events, adapter reports, screenshots and benchmarks. Startup calls capture paths synchronously and exits before `NSApplication` finishes launching. Native adapter mounts no longer read `NSApp` there. Input errors are generally explicit. | A-T04: verify the adapter fix through the release probe. Then cover the remaining startup phases, output errors and invalid combinations. |
 | A07 · Window UI capture and thumbnail generation | Infancy | UI capture runs after a fixed 2.5-second delay and uses `try?` for PNG writing; it can exit successfully without a valid output. Thumbnail generation similarly ignores individual write failures. | A-T05: wait for explicit readiness, propagate errors and verify expected nonempty image files before exit 0. |
 | A08 · Original-frame probe entry point | Mid-stage | Produces generic-renderer, geometry/depth-normal and optional translated-shader diagnostic captures. Its own report correctly says frozen original geometry does not validate native rigs or scene loading. | Keep probe evidence separate from actual Maker/Studio frames; see renderer tasks R1/R2. |
 | A09 · Mod library commands/UI | Mid-stage | Explicit load/reload with dependency reporting. Scanning/conversion happens in CLI tools; the app does not automatically discover newly installed Windows mods. | Connect conversion job status, compatibility results and explicit version selection to app workflow; see Character/mod audit. |
@@ -44,15 +44,20 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   simulation and display scheduling, cancel timers/observers on teardown, and
   specify multiwindow behavior. Accept with mode/focus/resize/window-close tests
   and measured displayed frame latency, including source animation and plugins.
-- **A-T04 — Startup-safe native adapters (P0, confirmed defect).**
-  `StudioModel.configureSourceMutePlugin(configuration:)` reads `NSApp.isActive`
-  while `AppState.init` can call it before `NSApp` exists. The release app traps
-  rather than reporting an error. Move focus initialization to a valid lifecycle
-  point or inject focus state for headless execution. Accept when
-  `studio_execution_probe.py` with **both** original adapter manifests completes
-  run/reload/continue, retains exact manifest hashes and produces identical reload
-  pixels. Evidence: private `native-adapter-capture-01/run.log` is empty because
-  of SIGTRAP; macOS report `Ikkoku-2026-09-25-071053.ips` identifies that method.
+- **A-T04 — Startup-safe native adapters (P0, fixed in code; acceptance pending).**
+  `StudioModel.configureSourceMutePlugin(configuration:)` read `NSApp.isActive`
+  while `AppState.init` can call it before `NSApp` exists, so the release app
+  trapped instead of reporting an error. Evidence: private
+  `native-adapter-capture-01/run.log` is empty because of SIGTRAP; macOS report
+  `Ikkoku-2026-09-25-071053.ips` identifies that method. Focus initialization now
+  happens at a valid lifecycle point: immediately when `NSApp` exists, otherwise
+  at `didFinishLaunching` (ST-T02). Headless execution injects focus with
+  `IKKOKU_APPLICATION_FOCUS` and reports it with `IKKOKU_NATIVE_PLUGIN_REPORT`.
+  Accept when `studio_execution_probe.py` with **both** original adapter
+  manifests completes run/reload/continue, retains exact manifest hashes, passes
+  its adapter-report checks and produces identical reload pixels. That run has
+  not been made; see
+  [native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
 - **A-T05 — Capture result integrity (P2).** Make UI/thumbnail output failures
   observable and return nonzero on any required missing output. Test a destination
   that cannot be written and readiness timeout; no false “written” message.
@@ -123,9 +128,9 @@ Concrete Studio integration is covered in [Studio](studio.md).
 | P09 · BepInEx metadata/dependencies/process filters | Mid-stage | GUID/name/version, hard/soft dependencies, incompatibilities and process names are retained. Ordinal UTF-8 identity avoids Swift canonical equivalence. Missing dependencies/cycles/conflicts fail. Process matching uses a Foundation case-insensitive approximation. | P-T02: test source loader corner cases, validate standalone versions, define global native-adapter/IR dependency graph and permitted duplicate/version policy. |
 | P10 · Immutable packaging and static DLL recovery | Mid-stage | `.cs` or bounded `.dll` input; DLLs are statically decompiled, not loaded. New generations preserve source/program hashes. Rejected conversion has diagnostics but no loadable manifest. Exact two-DLL registry selects verified Swift adapters. | P-T02: batch discovery/triage, assembly dependencies, multiple types and compatibility report; bind converter version and migrations to saved profiles. |
 | P11 · IR plugin execution in Studio | Mid-stage | Explicit profile binds original source keys or native UUIDs. Local/world transforms, attachment frames, subtree clones and identity preservation work. Native save/reload persists clocks/fields without replaying Start. | App controls for bindings/unload and source-object topology changes; no implicit source BepInEx manager exists. |
-| P12 · Original MuteInBackground 1.1 behavior | Fully ported — bounded initial config/focus callback | Exact installed GUID/hash registry; original config parsing oracle covers 23 cases and seven focus traces, including the repeat-focus-loss quirk. Audio bus mixer endpoint tested with a generated tone. | Live config-file watching and multiple static copies are unsupported; **app startup mount is broken**, A-T04. |
+| P12 · Original MuteInBackground 1.1 behavior | Fully ported — bounded initial config/focus callback | Exact installed GUID/hash registry; original config parsing oracle covers 23 cases and seven focus traces, including the repeat-focus-loss quirk. Audio bus mixer endpoint tested with a generated tone. | Live config-file watching and multiple static copies are unsupported. The app startup trap is fixed in code, but the app mount still needs the A-T04 release run. |
 | P13 · Original StudioAccessoryNames 1.1.0 behavior | Fully ported — bounded label pass | Recovered coroutine result matches three source-host cases, including UTF-16 digit detection and missing slots. Mount enables the native label model; source identities are unchanged. | Actual inspector integration is blocked by the source-character UI gate; Studio audit records that defect. General Unity UI/coroutine execution is not provided. |
-| P14 · Native adapter package/persistence validation | Mid-stage | Exact assembly/type/GUID/version/process/config hashes required. Saved scene references reject changed packages. Three native package tests and one Python packaging test pass with original fixtures. | P-T03/A-T04: successful actual-app mount/save/reload has not passed; latest run traps before capture. |
+| P14 · Native adapter package/persistence validation | Mid-stage | Exact assembly/type/GUID/version/process/config hashes required. Saved scene references reject changed packages. Three native package tests and one Python packaging test pass with original fixtures. The execution probe now compares mounted references with each phase's adapter report. | P-T03/A-T04: successful actual-app mount/save/reload has not passed. The latest recorded run trapped before capture and predates the startup fix. |
 | P15 · Arbitrary installed managed plugin compatibility | Infancy | Automatic rewriting works only for the explicit AST/API subset; native adapters cover two exact installed revisions. There is no proof of compatibility with 243 DLLs in the surveyed plugin directory (which includes libraries). | P-T01/P-T02: inventory loadable types, prioritize common APIs and measure supported/rejected behavior by exact revision. |
 | P16 · Harmony, coroutines, reflection, extended Unity API | Pending | No generic Harmony patch host, coroutine scheduler, reflection/unsafe execution or arbitrary Windows helper runtime. Unsupported code is rejected rather than partially run. | Define supported patch/event seams, state-machine translation and isolation boundaries; validate actual recovered plugin logic one family at a time. |
 | P17 · Unknown plugin data / edited-original export | Mid-stage | Card/scene bytes retain unknown plugin payloads. Native translated runtime state is saved in native metadata; edited original scene export rejects live IR state without a KKEx adapter. | P-T05: implement GUID-specific source serialization; byte-preservation does not establish plugin execution. |
@@ -166,13 +171,15 @@ Concrete Studio integration is covered in [Studio](studio.md).
   calculations/recovered-source fixtures, **not a complete running game**.
 - Plugin tests: `SourcePluginRuntimeTests.swift`,
   `SourceNativePluginPackageTests.swift`, `SourceMuteInBackgroundTests.swift`,
-  `Tools/translation/tests/test_translation.py` and `test_native_adapters.py`.
+  `Tools/translation/tests/test_translation.py`, `test_native_adapters.py` and
+  `test_studio_execution_probe.py` (probe report rules only; no app launch).
   Original fixtures are gated by environment/local files; see the toolchain audit
   before interpreting a green run with absent fixtures.
 - Private `release-capture-01/report.json` proves an IR-only release app
   run/save/reload/continue with pixel-identical reload, Start count 1 and unchanged
   identity. It does **not** prove original-adapter mounting. The later
-  `native-adapter-capture-01` failed with the AppKit initialization trap.
+  `native-adapter-capture-01` failed with the AppKit initialization trap; rerun
+  it after the A-T04 fix.
 - Existing [plugin execution](../reference/mods/plugin-execution.md), [API substitution](../reference/mods/api-substitution.md) and
   [native adapters](../reference/mods/native-adapters.md) describe narrower contracts. Historical
   “remaining work” prose elsewhere can be stale; this audit separates recovered

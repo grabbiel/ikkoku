@@ -96,10 +96,13 @@ UI capture opens the application window; it is distinct from offscreen rendering
 It currently ignores PNG-write failures, so inspect the output file rather than
 relying on its exit status (A-T05).
 Source-rig, card, scene, plugin and matched-player capture recipes live with their
-[technical references](../README.md#technical-references). Do not mount the known
-Mute native adapter when expecting headless startup to succeed: its current
-`NSApp.isActive` access precedes application initialization. Track the fix as A-T04
-and ST-T02 in the audit, then rerun the failed adapter capture.
+[technical references](../README.md#technical-references). Headless captures exit
+before `NSApplication` finishes launching. The Mute native adapter therefore defers
+its initial focus sample instead of reading `NSApp`; this fixes the recorded
+startup trap. `IKKOKU_APPLICATION_FOCUS` and `IKKOKU_NATIVE_PLUGIN_REPORT` supply
+and record focus for captures. The release adapter capture that closes A-T04 and
+ST-T02 has not been rerun yet; see
+[native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
 
 ## Inspect without the GUI
 

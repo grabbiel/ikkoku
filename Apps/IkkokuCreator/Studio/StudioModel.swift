@@ -61,8 +61,9 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored private var animTime: Double = 0
     private(set) var sourceAnimationTime: Float = 0
     @ObservationIgnored var sourcePluginSession: SourceStudioPluginSession?
-    @ObservationIgnored var sourceMutePlugin: SourceMuteInBackgroundPlugin?
+    let sourceFocus = SourceApplicationFocusHost()
     @ObservationIgnored var sourceFocusObservers: [NSObjectProtocol] = []
+    @ObservationIgnored var sourceLaunchObserver: NSObjectProtocol?
     var sourcePluginsRunning = false
     var sourceAccessoryNamesEnabled = false
     var liveAnimation = true

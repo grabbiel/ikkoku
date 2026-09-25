@@ -30,6 +30,34 @@ import Studio
     #expect(bus.masterVolume == 0 && bus.voiceVolume == 0.4) // Original 1.1 repeated-loss quirk.
 }
 
+@Test func sourceMuteFocusHostDefersInitialFocusOnceAndRestoresReplacedAdapter() {
+    var volume: Float = 0.8
+    func adapter(_ enabled: Bool) -> SourceMuteInBackgroundPlugin {
+        SourceMuteInBackgroundPlugin(enabled: enabled, readVolume: { volume }, writeVolume: { volume = $0 })
+    }
+    let host = SourceApplicationFocusHost(), first = adapter(true)
+    host.mount(first) // Mounted before the host application can report focus.
+    #expect(host.awaitingInitialFocus && volume == 0.8 && first.originalVolume == nil)
+    host.deliverInitialFocus(false)
+    #expect(!host.awaitingInitialFocus && volume == 0 && first.originalVolume == 0.8)
+    host.deliverInitialFocus(false) // A second sample would save zero through the repeated-loss quirk.
+    #expect(volume == 0 && first.originalVolume == 0.8)
+    host.focusChanged(true)
+    #expect(volume == 0.8 && first.originalVolume == nil)
+    host.focusChanged(false); let second = adapter(true); host.mount(second)
+    let replaced = host.adapter === second
+    #expect(volume == 0.8 && first.originalVolume == nil && replaced && host.awaitingInitialFocus)
+    host.focusChanged(true); host.deliverInitialFocus(false) // A real change supersedes the pending sample.
+    #expect(volume == 0.8 && second.originalVolume == nil && !host.awaitingInitialFocus)
+    host.focusChanged(false); #expect(volume == 0)
+    host.mount(nil)
+    let unmounted = host.adapter == nil
+    #expect(volume == 0.8 && unmounted && !host.awaitingInitialFocus)
+    host.focusChanged(false); host.deliverInitialFocus(false); #expect(volume == 0.8)
+    let disabled = adapter(false); host.mount(disabled); host.deliverInitialFocus(false); host.focusChanged(false)
+    #expect(volume == 0.8 && disabled.originalVolume == nil) // Installed default configuration.
+}
+
 private struct MuteOracle: Decodable {
     struct Step: Decodable { let enabled: Bool?, volume: Float?, focus: Bool? }
     struct Scenario: Decodable { let name: String, volume: Float, steps: [Step] }

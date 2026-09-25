@@ -66,3 +66,28 @@ public final class SourceMuteInBackgroundPlugin {
         return lastValue?.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\0"))).lowercased() == "true"
     }
 }
+
+/// Host side of Unity's OnApplicationFocus for the one mounted focus adapter.
+/// A host can mount before it can observe focus (SwiftUI builds app state before
+/// NSApplication exists), so the initial sample may arrive later. It is
+/// delivered at most once, and a real focus change supersedes it; a duplicate
+/// false sample would otherwise trigger the repeated-loss quirk and save zero.
+public final class SourceApplicationFocusHost {
+    public private(set) var adapter: SourceMuteInBackgroundPlugin?
+    public private(set) var awaitingInitialFocus = false
+    public init() {}
+    /// Restores the replaced adapter's saved volume before installing `next`.
+    public func mount(_ next: SourceMuteInBackgroundPlugin?) {
+        adapter?.onApplicationFocus(true)
+        adapter = next; awaitingInitialFocus = next != nil
+    }
+    public func deliverInitialFocus(_ hasFocus: Bool) {
+        guard awaitingInitialFocus else { return }
+        awaitingInitialFocus = false
+        adapter?.onApplicationFocus(hasFocus)
+    }
+    public func focusChanged(_ hasFocus: Bool) {
+        awaitingInitialFocus = false
+        adapter?.onApplicationFocus(hasFocus)
+    }
+}

@@ -48,7 +48,8 @@ Reviewed against the working tree on 2026-09-25:
 - **Gameplay and mods:** cycle and fixed-event eligibility kernels, bounded ADV and translated
   plugin execution, archive/catalog resolution and two exact native plugin
   adapters. No complete playable game host or general managed-plugin compatibility.
-  The Mute adapter has a known headless startup crash.
+  The Mute adapter's headless startup crash is fixed in code; its release
+  acceptance run is pending.
 
 A parsed record, preserved plugin payload or successful decompilation does not mean
 that its behavior is rendered, interactive or ported. See the audit for those
