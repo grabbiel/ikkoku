@@ -87,10 +87,11 @@ do {
     let animationPose = arguments.count == 5 && arguments[0] == "animation-pose"
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
+    let cardPose = arguments.count == 3 && arguments[0] == "card-pose"
     let converting = arguments.count == 4 && arguments[0] == "layout"
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
-    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardMods || logicTrace || studioPose || animationPose else {
+    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose else {
         throw GLTFError.io("""
             Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card> <local-file>
                    ikkoku-inspect mod-library <library.json>
@@ -103,6 +104,7 @@ do {
                    ikkoku-inspect animation-pose <animation.json> <rig-or-avatar.json> <clip-id> <seconds>
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
                    ikkoku-inspect bone-modifier-snapshot <rig-or-avatar.json> <modifiers.json>
+                   ikkoku-inspect card-pose <avatar.json> <card.png>
                    ikkoku-inspect layout <source-scene.png> <converted-catalog.json> <native-scene.png>
                    ikkoku-inspect rig-snapshot <source-rig.json> <shape-contract.json> <rest|height-rate>
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
@@ -204,6 +206,8 @@ do {
             ["name": part.mesh.name, "positions": try source.deformedPositions(part: part, evaluation: evaluation).map(values)]
         }
         report["scope"] = "Recovered static ABMX baseline behavior at coordinate0; dynamic, animation and accessory modifier behavior remains unsupported."
+    case "card-pose":
+        report.merge(try inspectSourceCardPose(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL)) { _, new in new }
     case "mod":
         let package = try SourceModPackage.load(url: url)
         report["modGUID"] = package.source.guid
