@@ -77,6 +77,34 @@ focused runs, expanded texture validation took 27.25 seconds on the CPU route an
 uploads; they are not interactive frame-time measurements or a controlled
 performance benchmark.
 
+## Draw-material overlays
+
+`SourceDrawOverlays.swift` derives the seven ChaControl draw-material bindings
+from the card alone. None of these bindings is wired into composition or
+rendering yet, and none was compared with an original capture. Each keeps the
+source category name, catalog ID and RGBA values:
+
+| Record | Slot | Category | ID / color source |
+| --- | --- | --- | --- |
+| Active makeup record | face overtex1 | `mt_lip` | `lipId` / `lipColor` |
+| Prefab material | face overtex2 | `prefab` | Alpha `lerp(0, 0.2, hohoAkaRate)` with the rate clamped to `[0, 1]` (non-finite rate becomes 0); RGB comes from the prefab material |
+| Active makeup record | face overtex3 | `mt_eyeshadow` | `eyeshadowId` / `eyeshadowColor`; alpha pinned to 0 while `gagEyes` is set |
+| Body record | body overtex1 | `mt_nip` | `nipId` / `nipColor` |
+| Body record | body overtex2 | `mt_underhair` | `underhairId` / `underhairColor` |
+| Face record | eye overtex1 | `mt_eye_hi_up` | `hlUpId` / `hlUpColor` |
+| Face record | eye overtex2 | `mt_eye_hi_down` | `hlDownId` / `hlDownColor` |
+
+The active makeup record is the coordinate's makeup record when its
+`enableMakeup` byte is nonzero and otherwise the face record's `baseMakeup`;
+that selection comes from `SourceCardAppearance` and is not re-implemented
+here. Each catalog slot requires a valid ID; when its colour is present but
+the ID is missing or unreadable, the slot stays unbound and emits a diagnostic.
+An unreadable ID also keeps its existing path-specific diagnostic. An absent
+colour yields no binding; an unreadable colour emits a diagnostic naming the
+path. No substitute catalog ID or invented default colour is used. The blush
+binding sets `rgbFromPrefab` to `true` and keeps its `prefab`-material diagnostic
+because only its alpha comes from the card or status.
+
 ## Original-player comparison harness
 
 `Tools/reverse/original_shader_probe.py` prepares an isolated original Studio
@@ -125,7 +153,9 @@ pixel comparison results are collected under `.local/reverse/original-shader-pro
 
 ## Remaining limits
 
-Lip makeup and eyeshadow remain separate unported draw-material overlays.
+The draw-material overlays (lip, eyeshadow, blush, nip, underhair and the eye
+highlight pair) have native binding derivation only, per *Draw-material
+overlays* above; none is composed into a texture or rendered yet.
 Body detail/paint, alternate create-shader families, accessory material coloring,
 emblems, extra clothing channels and arbitrary plugin shader replacements remain
 unsupported. The runtime reports omissions and preserves the original card
