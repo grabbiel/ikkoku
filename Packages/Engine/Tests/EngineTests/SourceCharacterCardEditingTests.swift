@@ -176,10 +176,11 @@ private enum EditingFixture {
     #expect(throws: (any Error).self) { try original.recordData(.clothes(coordinate: -1)) }
 }
 
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_CARD_EDIT_OUTPUT"]),
-               "Requires IKKOKU_CARD_EDIT_OUTPUT"))
+// Optional evidence writer, not a fixture test.
+@Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_CARD_EDIT_OUTPUT"] ?? "").isEmpty == false,
+               "Writes independent-oracle evidence only when IKKOKU_CARD_EDIT_OUTPUT is set"))
 func sourceCardEditingWritesIndependentOracleEvidence() throws {
-    let directory = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_CARD_EDIT_OUTPUT"))
+    let directory = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["IKKOKU_CARD_EDIT_OUTPUT"]))
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let source = EditingFixture.card(sex: 0), card = try SourceCharacterCard.decode(source)
     var face = try card.customization().faceValues, body = try card.customization().bodyValues
