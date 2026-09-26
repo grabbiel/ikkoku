@@ -148,9 +148,10 @@ private struct ResolverOracle: Decodable {
     let cardSHA256: String, pluginID: String?, pluginVersion: Int?, records: [Record]
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_SOURCE_RESOLVER_FIXTURES"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_RESOLVER_FIXTURES"]),
+               "Requires IKKOKU_SOURCE_RESOLVER_FIXTURES"))
 func sourceCardResolverMatchesIndependentSourceFormatOracle() throws {
-    let root = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["IKKOKU_SOURCE_RESOLVER_FIXTURES"]))
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_RESOLVER_FIXTURES"))
     for name in ["synthetic-current", "synthetic-ec-precedence", "synthetic-ec-without-info",
                  "synthetic-null-ec-falls-back", "synthetic-legacy-override"] {
         let card = try SourceCharacterCard.load(url: root.appendingPathComponent(name + ".png"))

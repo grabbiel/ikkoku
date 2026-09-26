@@ -128,8 +128,10 @@ private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, origina
     try checkDynamicsReference(fixture, original: false)
 }
 
-@Test func sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_DYNAMICS_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_DYNAMICS_REFERENCE"]),
+               "Requires IKKOKU_SOURCE_DYNAMICS_REFERENCE"))
+func sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SOURCE_DYNAMICS_REFERENCE")
     let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     #expect(fixture.sourceAvatar != nil && fixture.scenarios.count == 5)
     #expect(fixture.scenarios.reduce(0) { $0 + $1.definition.particles.count } == 20)
@@ -150,8 +152,10 @@ private func checkDynamicsReference(_ fixture: DynamicsReferenceFixture, origina
 }
 
 
-@Test func sourceStudioDynamicsOriginalPostPoseMatchesIndependentOracleWhenRequested() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_DYNAMICS_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_DYNAMICS_REFERENCE"]),
+               "Requires IKKOKU_SOURCE_DYNAMICS_REFERENCE"))
+func sourceStudioDynamicsOriginalPostPoseMatchesIndependentOracleWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SOURCE_DYNAMICS_REFERENCE")
     let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self,from:Data(contentsOf:URL(fileURLWithPath:path)))
     let rig = try SourceRig.loadModel(url:URL(fileURLWithPath:try #require(fixture.sourceAvatar))).rig
     let ids = Dictionary(uniqueKeysWithValues:rig.nodes.enumerated().map { ($0.element.sourceID,$0.offset) })

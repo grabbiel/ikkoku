@@ -44,10 +44,19 @@ python3 -m unittest discover -s Tools/translation/tests -p 'test_*.py'
 ```
 
 The Swift suite includes synthetic contracts and optional source fixtures. Tests
-that guard an absent `IKKOKU_*` path can return early; a green suite alone does not
-prove source-data coverage. Metal-specific checks need a Metal device. Record
-fixture environment variables, executed case counts and input hashes with results.
-The [component reports](../component-audit/README.md) map features to their tests.
+that need a private fixture run only when every `IKKOKU_*` variable they require is
+set to a nonempty path; otherwise they report as *skipped* with a `Requires
+IKKOKU_…` reason, so a green run never hides missing source-data coverage.
+Metal-specific checks need a Metal device and skip with that reason added while no
+device is present. To audit that coverage, run with
+`IKKOKU_REQUIRE_SOURCE_FIXTURES=1 swift test
+--package-path Packages/Engine`: every gated test then runs and fails with the
+missing-variable message instead of silently skipping. Supply fixtures by
+exporting the variables listed in the component reports and reference docs
+(e.g. `IKKOKU_SHAPE_CONTRACT=/absolute/path/to/character-shape-contract.json`);
+`require`d paths must exist or the gated test fails. Record executed case counts
+and input hashes with results; the [component reports](../component-audit/README.md)
+map features to their tests.
 
 For the reverse tools, create the pinned Python environment before running their
 unit tests or exporters. The recorded compatible interpreter is Python 3.12:

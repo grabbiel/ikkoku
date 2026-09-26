@@ -189,8 +189,10 @@ private func studioPoseEffectJSON(_ effect: SourceStudioPose.Effect) -> [Any] {
     }
 }
 
-@Test func sourceStudioPoseMatchesIndependentInstalledContractOracleWhenSupplied() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_POSE_CONTRACT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_POSE_CONTRACT"]),
+               "Requires IKKOKU_STUDIO_POSE_CONTRACT"))
+func sourceStudioPoseMatchesIndependentInstalledContractOracleWhenSupplied() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
     let contract = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any])
     let oracle = try #require(contract["oracle"] as? [String: Any])
     let rig = try studioPoseRig()

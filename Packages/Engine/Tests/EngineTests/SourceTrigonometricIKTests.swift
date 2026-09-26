@@ -53,8 +53,10 @@ private func simpleIKPose() -> SourceTrigonometricIK.Pose {
     #expect(solver.bendNormal == normal) // Source ignores zero cross products.
 }
 
-@Test func sourceTrigonometricIKIndependentMatrixOracle() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_TRIGONOMETRIC_IK_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_TRIGONOMETRIC_IK_REFERENCE"]),
+               "Requires IKKOKU_TRIGONOMETRIC_IK_REFERENCE"))
+func sourceTrigonometricIKIndependentMatrixOracle() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_TRIGONOMETRIC_IK_REFERENCE")
     struct Reference: Decodable {
         struct Pose: Decodable {
             var positions: [[Float]], rotations: [[Float]]

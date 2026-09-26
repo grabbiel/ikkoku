@@ -344,9 +344,10 @@ private struct ModPackageFixture {
     #expect(throws: SourceModError.self) { try fixture.load() }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_MOD_PACKAGE"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MOD_PACKAGE"]),
+               "Requires IKKOKU_MOD_PACKAGE"))
 func sourceModPackageLoadsNativeImportedPackageFromEnvironment() throws {
-    let path = try #require(ProcessInfo.processInfo.environment["IKKOKU_MOD_PACKAGE"])
+    let path = try SourceFixtureSupport.require("IKKOKU_MOD_PACKAGE")
     var isDirectory: ObjCBool = false
     try #require(FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory))
     let input = URL(fileURLWithPath: path)

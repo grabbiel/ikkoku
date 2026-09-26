@@ -11,7 +11,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**611 files indexed; 611 assigned; 0 unassigned.**
+**613 files indexed; 613 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -19,7 +19,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 108 |
 | [Studio / IK / animation](studio.md) | 89 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 283 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 70 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 72 |
 
 | File role | Files |
 | --- | ---: |
@@ -30,7 +30,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
 | Runtime / shared shader declaration | 137 |
-| Test / validation | 101 |
+| Test / validation | 103 |
 
 ## App / gameplay / plugins
 
@@ -621,6 +621,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/main.swift](../../Packages/Engine/Sources/IkkokuInspect/main.swift) | Runtime / shared shader declaration |
 | [README.md](../../README.md) | Documentation / historical evidence |
+| [Packages/Engine/Tests/EngineTests/SourceFixtureSupport.swift](../../Packages/Engine/Tests/EngineTests/SourceFixtureSupport.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceFixtureSupportTests.swift](../../Packages/Engine/Tests/EngineTests/SourceFixtureSupportTests.swift) | Test / validation |
 | [Tools/reverse/README.md](../../Tools/reverse/README.md) | Documentation / historical evidence |
 | [Tools/reverse/analysis/decompile_studio.py](../../Tools/reverse/analysis/decompile_studio.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/recover_managed.py](../../Tools/reverse/analysis/recover_managed.py) | Conversion / recovery / verification tool |

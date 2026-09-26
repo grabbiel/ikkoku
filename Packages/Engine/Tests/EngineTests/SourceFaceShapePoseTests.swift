@@ -121,9 +121,11 @@ private func closeMatrix(_ a: float4x4, _ b: float4x4, tolerance: Float = 2e-5) 
     #expect(throws: RigError.self) { try SourceFaceShapePose.make(rig: missing, state: state) }
 }
 
-@Test func sourceFaceLoadsLocalRecoveredHeadWhenRequested() throws {
-    let environment = ProcessInfo.processInfo.environment
-    guard let path = environment["IKKOKU_HEAD_RIG"], let contractPath = environment["IKKOKU_SHAPE_CONTRACT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_HEAD_RIG", "IKKOKU_SHAPE_CONTRACT"]),
+               "Requires IKKOKU_HEAD_RIG, IKKOKU_SHAPE_CONTRACT"))
+func sourceFaceLoadsLocalRecoveredHeadWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_HEAD_RIG")
+    let contractPath = try SourceFixtureSupport.require("IKKOKU_SHAPE_CONTRACT")
     let source = try SourceRig.load(url: URL(fileURLWithPath: path))
     let contract = try SourceShapeContract.decode(Data(contentsOf: URL(fileURLWithPath: contractPath)))
     let face = try #require(contract.domain("face"))
