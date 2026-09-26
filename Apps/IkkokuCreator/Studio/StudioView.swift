@@ -269,7 +269,7 @@ struct ObjectInspector: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    if o.sourceCharacter != nil {
+                    if model.selectedIsSourceCharacter {
                         SectionBox(title: "Voice") {
                             HStack {
                                 Button("Play playlist") { model.playSourceVoice(o.id) }
@@ -312,6 +312,8 @@ struct ObjectInspector: View {
                 case .folder: EmptyView()
                 }
             }
+            .onAppear { model.displayedInspectorView = "ObjectInspector" }
+            .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
         } else {
             ContentUnavailableView("Nothing selected", systemImage: "cursorarrow.click", description: Text("Click an object in the viewport or the workspace."))
         }
@@ -326,54 +328,59 @@ struct PoseInspector: View {
                 Picker("Mode", selection: $model.poseMode) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
                 if o.sourceCharacter != nil {
                     SourcePoseInspector(model: model)
+                        .onAppear { model.displayedInspectorView = "SourcePoseInspector" }
+                        .onDisappear { if model.displayedInspectorView == "SourcePoseInspector" { model.displayedInspectorView = "none" } }
                 } else {
-                SectionBox(title: "Pose presets") {
-                    let cats = Dictionary(grouping: PosePresets.all, by: \.category)
-                    ForEach(cats.keys.sorted(), id: \.self) { cat in
-                        Text(cat).font(.caption).foregroundStyle(.secondary)
-                        ItemGrid(entries: cats[cat]!.map { .init(id: $0.id, name: $0.name) }, selected: o.animationPreset, allowNone: false) { id in
-                            model.update(o.id) { $0.animationPreset = id }
+                    Group {
+                        SectionBox(title: "Pose presets") {
+                            let cats = Dictionary(grouping: PosePresets.all, by: \.category)
+                            ForEach(cats.keys.sorted(), id: \.self) { cat in
+                                Text(cat).font(.caption).foregroundStyle(.secondary)
+                                ItemGrid(entries: cats[cat]!.map { .init(id: $0.id, name: $0.name) }, selected: o.animationPreset, allowNone: false) { id in
+                                    model.update(o.id) { $0.animationPreset = id }
+                                }
+                            }
+                            Button("Reset pose (clear FK/IK)") { model.resetPose() }
                         }
-                    }
-                    Button("Reset pose (clear FK/IK)") { model.resetPose() }
-                }
-                SectionBox(title: "Hands") {
-                    Picker("Left hand", selection: Binding(get: { o.handGestureL }, set: { v in model.update(o.id) { $0.handGestureL = v } })) {
-                        ForEach(0..<PosePresets.handGestures.count, id: \.self) { Text(PosePresets.handGestures[$0].name).tag($0) }
-                    }
-                    Picker("Right hand", selection: Binding(get: { o.handGestureR }, set: { v in model.update(o.id) { $0.handGestureR = v } })) {
-                        ForEach(0..<PosePresets.handGestures.count, id: \.self) { Text(PosePresets.handGestures[$0].name).tag($0) }
-                    }
-                }
-                SectionBox(title: "FK") {
-                    Picker("Group", selection: $model.fkGroup) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }
-                    if let skel = model.selectedInstance?.skeleton {
-                        let bones = skel.bones.enumerated().filter { model.fkGroup.contains($0.element.name) }
-                        Picker("Bone", selection: Binding(get: { model.selectedBone ?? -1 }, set: { model.selectedBone = $0 < 0 ? nil : $0 })) {
-                            Text("None").tag(-1)
-                            ForEach(bones, id: \.offset) { Text($0.element.name).tag($0.offset) }
+                        SectionBox(title: "Hands") {
+                            Picker("Left hand", selection: Binding(get: { o.handGestureL }, set: { v in model.update(o.id) { $0.handGestureL = v } })) {
+                                ForEach(0..<PosePresets.handGestures.count, id: \.self) { Text(PosePresets.handGestures[$0].name).tag($0) }
+                            }
+                            Picker("Right hand", selection: Binding(get: { o.handGestureR }, set: { v in model.update(o.id) { $0.handGestureR = v } })) {
+                                ForEach(0..<PosePresets.handGestures.count, id: \.self) { Text(PosePresets.handGestures[$0].name).tag($0) }
+                            }
                         }
-                        if let bi = model.selectedBone, bi < skel.count {
-                            let name = skel.bones[bi].name
-                            VectorRow(label: "Rotate", value: Binding(get: { model.boneRotation(name) }, set: { model.setBoneRotation(name, $0) }), step: 5, format: "%.0f")
-                            Button("Reset bone") { model.setBoneRotation(name, .zero) }
-                            Text("Drag the ring gizmo in the viewport to rotate. Shift snaps to 15°.").font(.caption).foregroundStyle(.secondary)
+                        SectionBox(title: "FK") {
+                            Picker("Group", selection: $model.fkGroup) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }
+                            if let skel = model.selectedInstance?.skeleton {
+                                let bones = skel.bones.enumerated().filter { model.fkGroup.contains($0.element.name) }
+                                Picker("Bone", selection: Binding(get: { model.selectedBone ?? -1 }, set: { model.selectedBone = $0 < 0 ? nil : $0 })) {
+                                    Text("None").tag(-1)
+                                    ForEach(bones, id: \.offset) { Text($0.element.name).tag($0.offset) }
+                                }
+                                if let bi = model.selectedBone, bi < skel.count {
+                                    let name = skel.bones[bi].name
+                                    VectorRow(label: "Rotate", value: Binding(get: { model.boneRotation(name) }, set: { model.setBoneRotation(name, $0) }), step: 5, format: "%.0f")
+                                    Button("Reset bone") { model.setBoneRotation(name, .zero) }
+                                    Text("Drag the ring gizmo in the viewport to rotate. Shift snaps to 15°.").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
-                    }
-                }
-                SectionBox(title: "IK") {
-                    ForEach(IKChain.allCases, id: \.self) { chain in
-                        let t = o.ikTargets[chain] ?? IKTarget()
-                        HStack {
-                            Toggle(chain.label, isOn: Binding(get: { t.enabled }, set: { model.enableIK(chain, on: $0) }))
-                            Spacer()
-                            if t.enabled { Button("Select") { model.selectedIK = chain; model.poseMode = .ik }.controlSize(.small) }
+                        SectionBox(title: "IK") {
+                            ForEach(IKChain.allCases, id: \.self) { chain in
+                                let t = o.ikTargets[chain] ?? IKTarget()
+                                HStack {
+                                    Toggle(chain.label, isOn: Binding(get: { t.enabled }, set: { model.enableIK(chain, on: $0) }))
+                                    Spacer()
+                                    if t.enabled { Button("Select") { model.selectedIK = chain; model.poseMode = .ik }.controlSize(.small) }
+                                }
+                                if t.enabled {
+                                    VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.update(o.id) { $0.ikTargets[chain]?.position = v } }), step: 0.02, format: "%.3f")
+                                }
+                            }
                         }
-                        if t.enabled {
-                            VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.update(o.id) { $0.ikTargets[chain]?.position = v } }), step: 0.02, format: "%.3f")
-                        }
-                    }
-                }
+                    }.onAppear { model.displayedInspectorView = "PoseInspector" }
+                    .onDisappear { if model.displayedInspectorView == "PoseInspector" { model.displayedInspectorView = "none" } }
                 }
             }
         } else {
@@ -421,6 +428,8 @@ struct FaceInspector: View {
         if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             Text("Source face editing is not supported yet. The original character's face is driven by its saved card data; the prototype expression controls below would only write unused native fields, so they are hidden for this reference avatar.")
                 .font(.callout).foregroundStyle(.secondary)
+                .onAppear { model.displayedInspectorView = "FaceInspector.sourceUnsupported" }
+                .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceUnsupported" { model.displayedInspectorView = "none" } }
                 .accessibilityIdentifier("studio.face.source.unsupported")
         } else if let o = model.selectedObject, o.kind == .character, let i = model.doc.index(of: o.id), o.card != nil {
             let exp = Binding<ExpressionState>(get: { model.doc.objects[i].card?.expression ?? ExpressionState() }, set: { v in model.update(o.id) { $0.card?.expression = v } })
@@ -443,6 +452,8 @@ struct FaceInspector: View {
                     Text("Follow camera keeps the eyes on the viewer; Fixed target uses the point above (scene space).").font(.caption).foregroundStyle(.secondary)
                 }
             }
+            .onAppear { model.displayedInspectorView = "FaceInspector" }
+            .onDisappear { if model.displayedInspectorView == "FaceInspector" { model.displayedInspectorView = "none" } }
         } else {
             ContentUnavailableView("Select a character", systemImage: "face.smiling", description: Text("Expressions work on characters."))
         }
@@ -455,12 +466,14 @@ struct ClothesInspector: View {
         if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             SectionBox(title: "Accessories") {
                 let labels = model.sourceAccessoryLabels(for: o.id)
-                ForEach(Array(labels.enumerated()), id: \.offset) { _, label in
+                ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
                     Text(label).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("studio.source.accessory.\($0)")
+                        .accessibilityIdentifier("studio.source.accessory.\(index)")
                 }
                 if labels.isEmpty { Text("Source accessory selections are unavailable.").foregroundStyle(.secondary) }
             }
+            .onAppear { model.displayedInspectorView = "ClothesInspector.sourceAccessoryLabels" }
+            .onDisappear { if model.displayedInspectorView == "ClothesInspector.sourceAccessoryLabels" { model.displayedInspectorView = "none" } }
         } else if let o = model.selectedObject, o.kind == .character, let i = model.doc.index(of: o.id), let card = o.card {
             VStack(alignment: .leading, spacing: 10) {
                 Picker("Outfit", selection: Binding(get: { card.currentOutfit }, set: { v in model.update(o.id) { $0.card?.currentOutfit = v } })) {
@@ -491,6 +504,8 @@ struct ClothesInspector: View {
                     }
                 }
             }
+            .onAppear { model.displayedInspectorView = "ClothesInspector" }
+            .onDisappear { if model.displayedInspectorView == "ClothesInspector" { model.displayedInspectorView = "none" } }
         } else {
             ContentUnavailableView("Select a character", systemImage: "tshirt", description: Text("Clothing states work on characters."))
         }
@@ -549,5 +564,7 @@ struct SceneInspector: View {
                 Text("Capture with ⇧⌘P or the Capture button. Transparent background applies to captures.").font(.caption).foregroundStyle(.secondary)
             }
         }
+        .onAppear { model.displayedInspectorView = "SceneInspector" }
+        .onDisappear { if model.displayedInspectorView == "SceneInspector" { model.displayedInspectorView = "none" } }
     }
 }

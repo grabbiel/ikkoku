@@ -84,7 +84,7 @@ identical reload frames; enabled tone gain muted/restored. See
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
-| 1 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. |
+| 1 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. **Status 2026-09-25:** gate removed and prototype-only inspector/Timeline writes blocked for source characters; headless `IKKOKU_CAPTURE_UI_REPORT` records the rendered inspector (mutation-checked). Remaining: live mouse-driven guide edits, undo/redo, save/reload and original export through the UI. |
 | 2 | **T-T04, E-T03, CMT-11** | Make source-fixture execution explicit and reproducible. Preserve original/native input hashes, distinguish skips from executed checks, and add app workflows alongside kernel tests. |
 | 3 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
 | 4 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
@@ -106,7 +106,7 @@ whitespace checks validate the documentation itself. Existing test counts in
 historical reports are dated results, not a fresh all-project test certification.
 
 Two important confirmed defects were recorded: the unreachable source Studio
-inspectors (open) and the native Mute adapter's headless startup trap (fixed in
+inspectors (gate removed 2026-09-25; live UI acceptance still open, ST-T01) and the native Mute adapter's headless startup trap (fixed in
 code and verified in the PR #2 acceptance follow-up, ST-T02/A-T04). Existing successful
 IR-plugin tests do not invalidate either finding. The audit also records incomplete or unverified areas without
 presenting them as discovered runtime bugs.
