@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "source-maker-assembly",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceMakerBodyTypeIsCorrectionChoiceAndPreservesSex|sourceMakerRejectsUnrecoveredAssembliesAndMissingOrInvalidCorrection|sourceMakerAdditionalHeadsUseOwnCurvesMorphsAndCorrectedBodyWhenSupplied"],
+      "fixtures": [
+        {"env": "IKKOKU_MAKER_ASSEMBLIES", "kind": "file"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Assembly variant registry entries are checked against converted Maker records supplied by the environment file; skipped (failed under --strict) when absent.",
+      "timeout": 300
+    },
+    {
+      "id": "source-maker-library",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceMakerLibraryResolvesFirstOrdinalModSourceSlotWithoutChangingIdentity|sourceMakerLibraryRejectsDuplicateIdentityTraversalAndChangedAssemblyBytes|sourceMakerLibraryDoesNotAliasResolverBackedHeadToVanillaIdentity|sourceMakerLibraryRejectsInvalidOrDuplicateBaseComponentSlots|sourceMakerLibraryPreparesSelectedClothedGeometryHeadsBoneTypesAndAccessoryTransforms|sourceMakerSelectedCardEditsKeepOpaqueTokensResolverAndAssetIdentity"],
+      "fixtures": [
+        {"env": "IKKOKU_MAKER_SELECTION_FIXTURES", "kind": "file"},
+        {"env": "IKKOKU_MAKER_LIBRARY", "kind": "file"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Selection cases carry expected slots/hashes from the recorded fixture directory; identity comparisons are exact.",
+      "timeout": 300
+    },
+    {
+      "id": "source-character-cards",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceCharacterCardReadsRawAndPNGFramingWithByteIdenticalOpaqueData|sourceCharacterCardRejectsEveryTruncationOfACompleteRawCard|sourceCharacterCardRejectsDuplicateOverlappingNegativeAndOutOfBoundsBlocks|sourceCharacterCardValidatesHeaderAndPNGContainerIntegrity|sourceCharacterCardValidatesCustomizationVersionsLengthsAndNumericValues|sourceCharacterCardCurrentPluginArraysRetainDefaultsExtrasAndOpaqueFields|sourceCharacterCardLegacyOverrideAndMalformedTrailerFallbackMatchSourcePrecedence|sourceCharacterCardMalformedOrUnsupportedCurrentExtensionsRemainOpaque|sourceCharacterCardPreviewCopiesAllShapesAndBridgesOriginalABMX|sourceCharacterCardPreviewRejectsUnsupportedIdentityAndAppliedShapeRanges|sourceCharacterCardMatchesIndependentPythonOriginalFormatOracle"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_CARD_FIXTURE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_CARD_ORACLE", "kind": "file"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Card framing/decoding checks compare against the recorded Python original-format oracle; exact byte/field equality where documented.",
+      "timeout": 300
+    },
+    {
+      "id": "source-card-editing",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceCardEditingNoOpRetainsEveryOriginalToken|sourceCardEditingShapesPreserveUneditedRecordsAndLegacyPluginPrecedence|sourceCardEditingColorsRetainSelectedAssetsAndUntouchedCoordinates|sourceCardEditingMaleAndExtendedShapeRangesRemainValidSerialization|sourceCardEditingPNGReplacementRejectsAppendedCardAndCorruptCRC|sourceCardEditingRejectsOverlappingMissingAndInvalidValues|sourceCardEditingRetainsPayloadGapsAndMovesFollowingOffsets|sourceCardEditingRejectsGappedExtendedSaveAndAmbiguousEmptyOffsets|sourceCardEditingKeepsOpaqueHairWhenOnlyShapesChange|sourceCardEditingRejectsDuplicatePathMapAndUnsupportedVersion|sourceCardEditingWritesIndependentOracleEvidence|sourceCardEditingPreservesSpecialAssemblyTypeWhilePreviewRejectsIt"],
+      "fixtures": [
+        {"env": "IKKOKU_CARD_EDIT_OUTPUT", "kind": "directory"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Editing checks emit source/edited PNGs and edits.json into the declared output directory; runs whenever that directory path is supplied and exists.",
+      "timeout": 300
+    },
+    {
+      "id": "source-card-mod-reference",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceCardResolverDecodesOriginalMapAndPreservesUnknownBytes|sourceCardResolverFormatterDefaultsAndLastValidatedDuplicateWins|sourceCardResolverMarkerPrecedenceAndIgnoredVersionMatchSource|sourceCardResolverRejectsMalformedAndOversizedRecords|sourceCardResolverFirstExactPropertyWinsWithoutUnicodeNormalization|sourceCardResolverUsesSavedSlotAndActualDestinationCategoryForCatalogLookup|sourceCardResolverReportsMissingLibraryAndUnresolvedIdentitiesWithoutFallback|sourceModCatalogResolverKeepsSourceGUIDWhitespaceAndOrdinalIdentity|sourceCardResolverMatchesIndependentSourceFormatOracle"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_RESOLVER_FIXTURES", "kind": "directory"},
+        {"env": "IKKOKU_MOD_CATALOG_CONTRACT", "kind": "file"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Resolver/catalog checks compare exact source strings and identifiers; unknown tokens stay opaque.",
+      "timeout": 300
+    },
+    {
+      "id": "source-card-appearance",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceCardAppearanceReadsTypedColorsPathsAndPreservesMissingFields|sourceCardAppearanceRejectsMalformedColorArraysWithoutCoercion|sourceCardAppearanceNormalizedEditsRoundTripAndRetainModMetadata|sourceCardAppearanceBindingsGateSelectionAndSavedModIdentityBeforeReadingTextures|sourceCardAppearanceBindingsValidatePathsHashesDimensionsAndMaterialTargets|sourceCardAppearanceTransientTextureLifetimeAndFailureCleanup|sourceCardAppearanceDerivedMaterialKeepsUnmodifiedTextureLease|sourceCardAppearanceFemaleAndMalePixelsMatchIndependentRawRGBAOracle"],
+      "fixtures": [
+        {"env": "IKKOKU_APPEARANCE_REFERENCE_ROOT", "kind": "directory"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Appearance checks validate recorded reference roots without decoding original pixels.",
+      "timeout": 300
+    },
+    {
+      "id": "source-material-expansion",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine", "--filter", "sourceActiveMakeupKeepsRecordIdentityAndAccessoryColors|sourceMaterialLayerIndependentShaderOracle|sourceAppearanceAccessoryContextPreservesCatalogRequirements|sourceMaterialExpandedTextureIndependentOracle|sourceMaterialLayerModIdentitySkipsUnavailableInputBeforeReadingAndPreservesBytes|sourceMaterialLinearRecipeConvertsColorsAndOutputWithoutChangingAlphaOrIdentity"],
+      "fixtures": [
+        {"env": "IKKOKU_MATERIAL_IMAGE_REFERENCE", "kind": "file"},
+        {"env": "IKKOKU_MATERIAL_LAYER_REFERENCE", "kind": "file"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Material checks run independent shader/texture oracles supplied via the environment file.",
+      "timeout": 300
+    },
+    {
+      "id": "card-roundtrip-audit",
+      "argv": ["python3", "Tools/reverse/analysis/card_roundtrip.py"],
+      "fixtures": [
+        {"env": "IKKOKU_CARD_EDIT_OUTPUT", "kind": "directory"},
+        {"env": "IKKOKU_MANAGED_RECOVERY_EXPORT", "kind": "directory"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Byte-span audit of native edited cards; unedited tokens must stay byte-identical. Requires the Swift editing test's output files to already exist in the declared directory and the managed-recovery project exports the audit cites as evidence; those exports do not exist in this checkout, so this check skips by name rather than failing.",
+      "timeout": 120
+    },
+    {
+      "id": "maker-roundtrip-audit",
+      "argv": ["python3", "Tools/reverse/analysis/maker_roundtrip.py"],
+      "fixtures": [
+        {"env": "IKKOKU_MAKER_COMPLETION_INPUTS", "kind": "file"}
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Explicit export cases audited against the independent original framing parsers; skips when the environment file does not supply the cases file.",
+      "timeout": 120
+    }
+  ]
+}
