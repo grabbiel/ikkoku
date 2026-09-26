@@ -600,23 +600,91 @@ final class AppState {
         print("[ikkoku] thumbnails written to \(dir.path)")
     }
 
-    /// `IKKOKU_CAPTURE_UI=<png>`: snapshot the main window's AppKit/SwiftUI content (no screen-recording permission needed), then quit.
+    /// `IKKOKU_CAPTURE_UI=<png>`: snapshot the main window's AppKit/SwiftUI content
+    /// (no screen-recording permission needed), then quit. `IKKOKU_CAPTURE_UI_MODE=studio`
+    /// selects the first source character (falling back to the Maker card) and
+    /// `IKKOKU_CAPTURE_UI_STUDIO_TAB` picks the inspector tab. `IKKOKU_CAPTURE_UI_REPORT=<json>`
+    /// also writes a report of the inspector actually shown — even when the PNG fails —
+    /// and the process quits nonzero if that report cannot be written.
     func snapshotWindowIfRequested() {
         let env = ProcessInfo.processInfo.environment
         guard let out = env["IKKOKU_CAPTURE_UI"] else { return }
         if let tab = env["IKKOKU_CAPTURE_UI_TAB"].flatMap({ MakerTab(rawValue: $0.capitalized) }) { maker?.tab = tab }
         if env["IKKOKU_CAPTURE_UI_MODE"] == "studio" {
             mode = .studio
-            if let studio, studio.doc.objects.isEmpty, let card = maker?.card { studio.addCharacter(card); studio.inspectorTab = .pose }
+            if let studio {
+                // With IKKOKU_SOURCE_SCENE the first source character is already selected;
+                // otherwise select the first original object, else add a Maker card.
+                if let source = studio.doc.objects.first(where: { $0.sourceCharacter != nil }) {
+                    studio.selection = source.id
+                } else if studio.doc.objects.isEmpty, let card = maker?.card {
+                    studio.addCharacter(card); studio.inspectorTab = .pose
+                }
+                if let tabText = env["IKKOKU_CAPTURE_UI_STUDIO_TAB"] {
+                    guard let tab = StudioModel.InspectorTab.allCases.first(where: { $0.rawValue.lowercased() == tabText.lowercased() }) else {
+                        print("[ikkoku] unknown IKKOKU_CAPTURE_UI_STUDIO_TAB '\(tabText)'")
+                        exit(1)
+                    }
+                    studio.inspectorTab = tab
+                }
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-            guard let window = NSApp.windows.first(where: { $0.isVisible }), let view = window.contentView else { print("[ikkoku] no window"); exit(1) }
-            view.layoutSubtreeIfNeeded()
-            if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                view.cacheDisplay(in: view.bounds, to: rep)
-                if let cg = rep.cgImage { try? ImageIO.writePNG(cg, to: URL(fileURLWithPath: out)); print("[ikkoku] ui snapshot written to \(out)") }
+            var failed = false
+            guard let window = NSApp.windows.first(where: { $0.isVisible }), let view = window.contentView else {
+                print("[ikkoku] no window")
+                self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
+                exit(1)
             }
-            exit(0)
+            view.layoutSubtreeIfNeeded()
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+                print("[ikkoku] ui snapshot failed: no image rep")
+                self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
+                exit(1)
+            }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            guard let cg = rep.cgImage else {
+                print("[ikkoku] ui snapshot failed: no cached image")
+                self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
+                exit(1)
+            }
+            do { try ImageIO.writePNG(cg, to: URL(fileURLWithPath: out)); print("[ikkoku] ui snapshot written to \(out)") }
+            catch { print("[ikkoku] ui snapshot failed: \(error)"); failed = true }
+            // Write the report even if the PNG failed; quit nonzero only if the report can't be written.
+            self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
+            exit(failed ? 1 : 0)
+        }
+    }
+
+    /// Writes the headless UI-capture report describing the inspector actually shown.
+    private func writeUICaptureReport(to path: String?) {
+        guard let path else { return }
+        let url = URL(fileURLWithPath: path)
+        var kindName = "none"
+        if let o = studio?.selectedObject { kindName = String(describing: o.kind) }
+        let labelCount = studio.flatMap { model -> Int? in model.selectedObject.map { model.sourceAccessoryLabels(for: $0.id).count } } ?? 0
+        let expected = studio?.inspectorViewName ?? "none"
+        let displayed = studio?.displayedInspectorView ?? "none"
+        if displayed != expected {
+            print("[ikkoku] ui report: inspector mismatch expected=\(expected) displayed=\(displayed)")
+        }
+        let report: [String: Any] = [
+            "mode": mode.rawValue.lowercased(),
+            "inspectorTab": studio?.inspectorTab.rawValue.lowercased() ?? "none",
+            "selectedObjectKind": kindName,
+            "selectedIsSourceCharacter": studio?.selectedIsSourceCharacter ?? false,
+            "inspectorView": displayed,
+            "expectedInspectorView": expected,
+            "sourceIKAvailable": studio?.sourceIKAvailable ?? false,
+            "sourceAccessoryLabelCount": labelCount,
+        ]
+        do {
+            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+                .write(to: url, options: .atomic)
+            print("[ikkoku] ui report written to \(path)")
+        } catch {
+            print("[ikkoku] ui report failed: \(error)")
+            exit(1)
         }
     }
 
