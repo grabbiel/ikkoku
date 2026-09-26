@@ -39,6 +39,20 @@ def family_metrics(source,full,only):
  if not mask.any():return dict(comparedPixels=0,note='family is never frontmost')
  return dict(scope='Original source shader programs rendered alone; compared only where that family is frontmost in both.',**color_metrics(source,only,mask))
 
+def silhouette_attribution(families,original,native):
+ # Pixel where only the original or only the full translated render covers, split into
+ # originalOnly/nativeOnly and attributed to the family whose family-only render has
+ # alpha>0 there (several families → 'overlap', none → 'none'); ≤20 samples per class.
+ if original.shape!=native.shape or any(render.shape!=original.shape for render in families.values()):raise ValueError('Silhouette comparison requires equal dimensions')
+ result={}
+ for kind,difference in [('nativeOnly',(native[:,:,3]>0)&~(original[:,:,3]>0)),('originalOnly',(original[:,:,3]>0)&~(native[:,:,3]>0))]:
+  rows=np.argwhere(difference);coords=[[int(x),int(y)] for y,x in rows];attribution={}
+  for y,x in rows:
+   covers=[name for name,render in families.items() if render[y,x,3]>0];label=covers[0] if len(covers)==1 else ('none' if not covers else 'overlap')
+   attribution[label]=attribution.get(label,0)+1
+  result[kind]=dict(pixels=len(rows),attribution=attribution,samples=coords[:20])
+ return result
+
 def compare(folder):
  native=json.loads((folder/'native-report.json').read_text());filename=native.get('sourceFrameFile','frame.json')
  if Path(filename).name!=filename or filename.startswith('.'):raise ValueError('Invalid source frame path')
@@ -60,8 +74,9 @@ def compare(folder):
   result[label]=dict(scope='Original source shader programs, original frozen geometry, source render queues/pass states and material bindings; native rig evaluation not included.',silhouette=geometry_metrics(source_alpha,target_alpha),color=color_metrics(source,target,source_alpha&target_alpha))
   result[label]['passes']=result[label]['silhouette']['passes'] and result[label]['color']['passes']
  if (folder/'native-translated.png').exists():
-  source=pixels('original-color.png');full=pixels('native-translated.png');result['translatedFamilies']={}
-  for image in sorted(folder.glob('native-translated-*.png')):result['translatedFamilies'][image.name[len('native-translated-'):-len('.png')]]=(family_metrics(source,full,pixels(image.name)))
+  source=pixels('original-color.png');full=pixels('native-translated.png');renders={image.name[len('native-translated-'):-len('.png')]:pixels(image.name) for image in sorted(folder.glob('native-translated-*.png'))}
+  result['translatedFamilies']={name:family_metrics(source,full,render) for name,render in renders.items()}
+  result['translatedSilhouette']=dict(scope='Whole-character alpha coverage; pixels where exactly one render is opaque, attributed to the family rendering them alone.',**silhouette_attribution(renders,source,full))
  result['mipCoverage']=dict(textures=len(frame['textures']),authored=sum(bool(t.get('mipFiles')) for t in frame['textures']),noMips=sum(t.get('mipLevels')==1 for t in frame['textures']),generated=sum(t.get('mipLevels',1)>1 and not t.get('mipFiles') for t in frame['textures']))
  result['passesAllGates']=all(result[k]['passes'] for k in ['geometry','depthNormals','color'])
  (folder/'frame-comparison.json').write_text(json.dumps(result,indent=2)+'\n');return result

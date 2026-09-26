@@ -242,45 +242,57 @@ state and captured textures. It compiles translated programs per job. Production
 live source-program registry integration.
 
 Comparing a frozen original character frame (controls in the commands below;
-re-run against a current-code capture on 2026-09-26, source frame
-SHA-256 `9aa4de394acbae5e9a7d336b5990aa67f9619931dfce3cac6d1e8711c8bcc750`):
+re-run against current code on 2026-09-26 into `.local/r1b/probe`, starting
+from the original captures `.local/reverse/original-character-probe/{frame.json,frame-mips.json}`;
+both frame variants reference the same source capture, SHA-256
+`13bd11c2805ac99172dc7ce7539c3cb98f06edcb858af4a1136ce3570b66f039`):
 
 | Compared path | Silhouette IoU | Color error (0–255) | Result and scope |
 | --- | ---: | --- | --- |
 | Geometry diagnostic | 0.9998196 | Not a color gate | 18 differing silhouette pixels; depth p99 0 m, normals 0 bytes; passes frozen geometry |
-| Production native toon | See geometry diagnostic | Mean 31.2589; p99 239 | Fails source color parity |
-| Translated garments | 0.9995455 | Mean 0.1330; p99 2 | Passes selected garment color gate |
-| Translated full character | 0.9988685 | Mean 0.2267; p99 5 | Fails full-character silhouette (112 differing pixels) and p99-color gates |
+| Production native toon | See geometry diagnostic | Mean 31.2763; p99 239 | Fails source color parity |
+| Translated garments | 0.9995455 | Mean 0.1169; p99 2 | Passes selected garment color gate |
+| Translated full character (reference run `frame-mips.json`; identical on `frame.json`) | 0.9988685 | Mean 0.2087; p99 4 | Fails full-character silhouette gate (112 differing pixels); color gate passes |
 
-The earlier documentation quoted mean 26.9362/p99 242 for the full
-character. That figure came from an older retained capture (native render dated
-2026-09-25 07:10) made with earlier code; current code renders skin, face and
-eyes correctly, and the remaining residual concentrates on thin hair/outline
-edges (attribution below).
+The earlier documentation quoted mean 26.9362/p99 242 (older capture) and
+mean 0.2267/p99 5 (previous code) for the full character. Current code
+reduces the color residual below the p99 ≤4 gate on both frame variants; the
+remaining residual is geometric — thin hair/outline edges — and concentrates
+in the hair families (attribution below).
 
 Per-family attribution — each family rendered alone, compared only where it
 is front-most in both renders (`IKKOKU_ORIGINAL_FRAME_FAMILIES=1`):
 
 | Family | Pixels | Mean | p99 | Result |
 | --- | ---: | ---: | ---: | --- |
-| main_opaque | 76708 | 0.133 | 2 | Passes color gate |
+| main_opaque | 76709 | 0.117 | 2 | Passes color gate |
 | main_skin | 13515 | 0.202 | 1 | Passes color gate |
-| main_hair | 3624 | 1.032 | 23 | Fails p99 gate; thin hair edges |
-| main_hair_front | 6181 | 0.915 | 23 | Fails p99 gate; thin hair edges |
+| main_hair | 3528 | 0.998 | 24 | Fails p99 gate; thin hair edges |
+| main_hair_front | 6181 | 0.844 | 22 | Fails p99 gate; thin hair edges |
 | toon_eye_lod0 | 368 | 0.010 | 0 | Passes color gate |
 | toon_eyew_lod0 | 303 | 0.002 | 0 | Passes color gate |
 | toon_nose_lod0 / main_item | 0 | — | — | Never front-most in the frozen frame |
+
+Whole-character silhouette attribution (`translatedSilhouette`): 61 pixels
+are opaque only in the full translated render — attributed to main_hair
+alone (30), hair/outline overlap (23), main_opaque (4), main_hair_front (3)
+and main_skin (1) — and 51 pixels are opaque only in the original capture —
+attributed to main_skin (31), none (11), overlap (2) and main_hair (7). Up
+to 20 sample coordinates per class are recorded in
+`<probe folder>/frame-comparison.json`.
 
 A pixel counts as front-most only where the full translated render and the family-only render have identical RGB, so blended/translucent overlaps are excluded from per-family metrics.
 
 Reproduction: build with `xcodebuild -project Ikkoku.xcodeproj -scheme
 IkkokuCreator -configuration Debug -derivedDataPath .local/build
 -destination 'platform=macOS,arch=arm64' build`; run
-`IKKOKU_ORIGINAL_FRAME_PROBE=$PWD/.local/reverse/original-character-probe/frame.json
+`IKKOKU_ORIGINAL_FRAME_PROBE=$PWD/.local/r1b/probe/frame-mips.json
 IKKOKU_ORIGINAL_FRAME_FAMILIES=1
 .local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku`;
-compare with `Tools/reverse/compare_original_frame.py .local/reverse/original-character-probe`.
-These are frozen-evaluated-geometry diagnostics, not live-renderer parity.
+compare with `Tools/reverse/compare_original_frame.py .local/r1b/probe`.
+Swap `frame.json` for `frame-mips.json` to reproduce the original capture
+variant. These are frozen-evaluated-geometry diagnostics, not
+live-renderer parity.
 
 The silhouette gate is IoU ≥0.999; the color gate is mean ≤1 and p99 ≤4.
 The fixture disables shadows. Original
@@ -295,9 +307,33 @@ Next: attribute the hair/outline edge residual to a concrete binding or
 state difference before any gate relaxation, then integrate verified programs
 with production material/queue/pass dispatch. Compare independently loaded
 original/native scenes with matched time, camera, lights and effects after
-that integration. Track R1/R2 and CMT-04; R1 remains open — per-family
-isolation exists, but the full-character silhouette and p99-color gates
-still fail and no cause has been confirmed for the hair-edge residual.
+that integration. Orchestrator analysis of the 2026-09-26 authored-mip run
+shows the silhouette residual is not a colour or alpha-output problem. At
+the hair crown (approximately x 345–423, y 96–116 of the 768x1024 frame),
+some pixels with the hair-outline colour (for example RGB 46,23,11) are
+covered in the `main_hair`-only render but empty in the full translated
+render; neighbouring pixels show the reverse. This points to interactions
+between families in the full draw, most likely inter-family depth or stencil
+state/order at the hair crown (for example, the stencil that lets eyebrows
+and eyelines show through front hair). Next compare the pass states
+(`stencilRef`, `stencilReadMask`, `stencilWriteMask`, comparison ops and queue
+order) of `main_hair`, `main_hair_front`, `toon_eyew_lod0` and their outlines.
+The boundary-pixel classes are now attributed and
+re-measured (2026-09-26 re-run on both frame variants: same
+`sourceFrameSHA256` 13bd11c2…; 61 native-only / 51 original-only pixels),
+but none of the hypotheses yields an explainable fix: no translated program
+binds `_ScreenParams`, `_ProjectionParams`, `unity_MatrixV`,
+`unity_CameraProjection`, `glstate_matrix_projection` or
+`unity_WorldTransformParams` (only `unity_ObjectToWorld`,
+`unity_WorldToObject` and `unity_MatrixVP`, bound from computed values per
+the conversion tables above), every hair/outline fragment keeps the
+`discard`-under-`_Cutoff`/`_alpha_a`-`_alpha_b` semantics unchanged from
+the DXBC, and the stored outline pass states map to the same culling
+(0→none/1→front/2→back), depth and stencil states the probe already
+applies. Track R1/R2 and CMT-04; R1 remains open — per-family isolation and
+silhouette-class attribution exist, but the full-character silhouette gate
+still fails (112 differing pixels) and no cause has been confirmed for the
+hair-edge residual.
 
 ## Resource and measurement boundaries
 
