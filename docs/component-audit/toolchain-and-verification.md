@@ -15,7 +15,7 @@ milestones; a successful extractor does not complete a gameplay feature.
 | T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no checked-in release automation, installer, notarization procedure or converted-library setup UI. App sandbox is disabled. | T-T02: write and exercise a release process, including private-content exclusion and user-owned external library access. |
 | T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. | T-T03: unify output policy and provenance checks; verify distributable artifact contents rather than relying only on Git ignore. |
 | T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Blender and local ILSpy/oracle tools are still environment prerequisites. | T-T01: record supported tool versions/install checks, lock a reproducible tool environment, fail helpfully when optional tools are absent. |
-| T07 · Continuous integration and release gating | Pending | No CI workflow is present in the reviewed file inventory. Xcode's scheme has a TestAction, but private fixture tests and actual headless app probes need explicit orchestration. | T-T04: separate public synthetic checks from opt-in private-source parity and actual-app tests; report all omitted fixtures. |
+| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe, and no CI workflow was wired to execute any lane. | T-T04 (partial): wire the four lanes into CI and add Maker UI/session scenarios — import, outfit switch, edits and export — and make the declared source-inspector checks pass when PR #5 is merged. |
 
 ## E. Original installation access and recovery
 
@@ -35,8 +35,8 @@ in [the file index](file-index.md).
 | E04 · Inspected managed exports | Fully ported — artifact recovery only | Private index reports five selected assemblies recovered, with 2,026 main-game, 2,026 Studio, 929 firstpass and two 3-file UnityScript project exports. Nine overrides each for main/Studio and two for firstpass resolve recorded decompiler diagnostics. Hash verification covers exported artifacts. | These counts prove neither recompilation nor native behavior; remaining game/plugin/VR assemblies and semantic translation are separate work. |
 | E05 · IL2CPP/AOT/Ghidra pipeline | Pending — conditional, not needed for this install | Detection exists, but no Il2CppDumper/GameAssembly/global-metadata recovery or Ghidra automation implementation is checked in. | Only activate this branch if a future inspected installation actually uses IL2CPP; do not spend current Mono-port work on struct-padding parity. |
 | E06 · Unity asset conversion | Mid-stage | UnityPy-based catalog/prefab/rig/material/animation tools export selected typed data. This is an explicit conversion pipeline, not a bulk AssetRipper project import with automatic feature parity. | Coverage inventory must distinguish catalog-known, fetched, decoded, converted, drawable and behavior-verified entries. |
-| E07 · Contract/oracle generators | Mid-stage | Separate Python calculations, recovered C# hosts, original managed-DLL calls and original Unity player probes all exist. These have different evidentiary strength and different scopes. | E-T03: bind each result to input/source/native executable hashes and identify exactly which tier produced expectations. |
-| E08 · Original-player probes | Mid-stage | Controlled copied-player fixtures capture lifecycle, animation, dynamics or frozen character/shader data. Numeric probes avoid requiring visual comparison; frame probes use controlled clothed fixtures. | E-T03: source revision, player settings, camera/light, time, selection, exit status and stopped process should be part of every reproducible result manifest. |
+| E07 · Contract/oracle generators | Partial | The four verification lanes keep their separate evidentiary strengths: `public.json` declares `synthetic`-tier checks only, `private-source.json` and `maker.json` declare `recovered-code-oracle` checks with per-fixture gates (`private-source.json` runs with missing optional fixtures recorded; checks needing absent required fixtures skip), and `app-smoke.json` declares `app-smoke` checks. `Tools/verification/run.py` now records manifest/runner hashes, git revision + dirty diff hash and tool versions per report (E-T03's standardization); no check executes a recovered managed DLL or the original player, so `original-managed-dll` and `original-player-probe` remain unexercised tiers. | E-T03 (partial): wire the lanes into CI and route the existing `Tools/reverse` oracle generators through a lane so their outputs get manifest binding; keep tiers that cannot run excluded from green counts. |
+| E08 · Original-player probes | Partial | The copied-player probes still run ad hoc; none of the four lane manifests schedules them, so no lane proof exists for a reproduced probe run. The runner does record git revision/diff hash, tool versions, per-check exit code, elapsed time and log path/hash — the manifest fields E-T03 asked for — but player settings, camera/light and selection state remain per-probe convention, not manifest-declared fixtures. | E-T03 (partial): add an `original-player-probe`-tier check that runs the existing lifecycle/dynamics probes through the runner with recorded settings; current probes cannot reproduce a session inside a lane run. |
 | E09 · Whole-install conversion orchestration | Infancy | Numerous targeted CLIs and local manifests exist; no single dependency-aware job graph runs inventory → recovery → assets → native coverage → parity → app installation. | E-T04: add resumable dependency graph and explicit per-stage diagnostics; avoid overwriting selected generations. |
 
 ## I. `ikkoku-inspect`
@@ -60,10 +60,10 @@ These commands are useful diagnostic consumers, not gameplay/UI implementations.
 
 | Feature | Status | Specific review comments | Next task |
 | --- | --- | --- | --- |
-| Public synthetic unit tests | Mid-stage | Swift CoreMath/Engine, Python reverse/mod/translation tests cover many boundaries and formulas. No latest all-project count is asserted here because this audit did not rerun every suite. | T-T04: publish per-suite command, revision and result rather than copy an older green count. |
-| Original fixture tests | Mid-stage | Many Swift tests use `guard let env ... else { return }`; others use explicit conditional enablement. An apparently passed test can mean the source fixture never ran. | T-T04: make omitted source cases explicit skips and add a strict private-fixture suite that fails if prerequisites are absent. |
-| Numerical source parity | Mid-stage | Separate evidence exists for shapes, rigs, material composition, ADV kernels, IK, dynamic bones and Animator samples. Each validates only its stated source/input domain. | E-T03: retain expected-value independence and replay metadata; broaden domains according to component tasks. |
-| Actual app integration | Infancy | Headless release IR save/reload succeeded; two-original-adapter Release startup/save/reload and enabled/disabled gain checks passed in PR #2 after the A-T04 fix. Source inspector controls can be unreachable even when engine tests pass. There is no broad UI automation suite. | T-T04 plus A-T04 and Studio UI task: test menu/inspector reachability, file operations, startup and persistence through the application. |
+| Public synthetic unit tests | Mid-stage | The `public.json` lane runs five checks with no private data: Engine `swift test` plus the mod-tools, translation, runner-self and Studio-inspector `unittest` suites. All 5 checks pass; Engine runs 369 tests. The runner parses per-test results, including PR #4 named fixture skips, into the report. | T-T04 (partial): CI still runs none of these lanes; keep per-suite command, revision and result recorded per run instead of copying an older green count. |
+| Original fixture tests | Mid-stage | Lane gating is per check: `private-source.json` declares all 47 fixture variables gated in `Packages/Engine/Tests` (except the output/report/result paths and `IKKOKU_SAVE_SCENE`/`IKKOKU_EXPORT_SOURCE_SCENE`) as `"optional"`, so its one check runs with or without an environment file and merely lists unsupplied fixtures in `missingFixtures` — `--strict` turns any of those into a failure. On the integrated tree with PR #4 and 32 fixtures supplied, 379 tests are reported: 359 passed, 20 named skips, 0 failed. | T-T04: add a strict private-fixture suite that fails if prerequisites are absent. |
+| Numerical source parity | Mid-stage | Separate evidence exists for shapes, rigs, material composition, ADV kernels, IK, dynamic bones and Animator samples. Each validates only its stated source/input domain; the `recovered-code-oracle` tier and `tolerance` notes in the lane manifests keep that scoped. | E-T03 (partial): retain expected-value independence and replay metadata; broaden domains according to component tasks. The checks still need a complete private fixture set before they run end-to-end. |
+| Actual app integration | Infancy | `app-smoke.json` declares a Debug `xcodebuild` build (binary hashed as artifact, passes), a headless Mute-startup check (`startup-mute-capture`, which skips due to 3 missing plugin fixtures), and the two-step Studio-inspector check: `studio-inspector-capture` runs the Debug app expecting a source-pose report, and `studio-inspector-validate` validates that JSON. When PR #5 UI report hooks are merged, both inspector checks pass (`SourcePoseInspector observed == expected`); on this branch without PR #5, capture and validate fail with a clear missing-report result as documented in their tolerance text. Headless release IR save/reload succeeded earlier; source-inspector controls remain unreachable on this branch even when engine tests pass. | T-T04 plus A-T04 and Studio UI task: test menu/inspector reachability, file operations, startup and persistence through the application. |
 | Matched original frames | Mid-stage | Frozen-geometry diagnostic and translated shader comparisons exist. Whole native source scene/animation/appearance parity is not established. | Renderer audit describes geometry/garment passes and full-color failure; keep those gates separate. |
 | Performance and memory | Mid-stage | GPU reused-target timings, CPU scene evaluation and RSS/Metal allocations measured for specific release fixtures. Offscreen microbench excludes scheduling/readback and may exclude dynamics when no chain matches. | T-T06: end-to-end displayed frame profiling with multiple characters, dynamic chains, asset streaming and long-lived resource use. |
 | Whole asset/plugin coverage | Infancy | Selected Maker/catalog counts and installed mod inventory exist. Installed directory counts are not compatible-content counts; support DLLs are not independent plugins. | E-T04/P-T01: report denominators and per-stage reasons, then expand bounded fixtures. |
@@ -107,11 +107,20 @@ data is deliberately not copied into the documentation or distribution.
   converter versions, immutable outputs and atomic publication for converters.
   Accept when interrupted or changed inputs cannot be presented as complete,
   current converted generations.
-- **T-T04 — Explicit verification lanes (P1).** Add public unit, private-source
-  parity, actual-app smoke and release-packaging jobs. Replace silent fixture
-  returns with reported skips; a strict private lane requires all declared inputs.
-  Accept when the report separates executed/passed/failed/skipped coverage and
-  catches both the current startup trap and unreachable source inspectors.
+- **T-T04 — Explicit verification lanes (P1, partial).** Add public unit,
+  private-source parity, actual-app smoke and release-packaging jobs. Replace
+  silent fixture returns with reported skips; a strict private lane requires all
+  declared inputs. Accept when the report separates executed/passed/failed/skipped
+  coverage and catches both the current startup trap and unreachable source
+  inspectors. Implemented and locally verified on 2026-09-26: four lane
+  manifests under `Tools/verification/lanes/` plus the stdlib runner
+  `Tools/verification/run.py`. All 47 private-source fixtures are declared
+  `optional`, so the Engine suite runs with or without an environment file and
+  records supplied/missing fixtures per check; `--strict` fails any check with
+  a missing fixture. PR #4 supplies named per-test fixture skips, so the lane
+  reports missing source cases explicitly. Still remaining: CI wiring — nothing
+  schedules these lanes yet — and Maker
+  UI/session scenarios for import, outfit switch, edits and export.
 - **T-T05 — Capability-driven diagnostics/docs (P2, partial).** The 2026-09-25
   documentation revision organized maintained guides/references and archived
   historical checkpoints with links to this audit. Remaining work: replace stale
@@ -129,10 +138,19 @@ data is deliberately not copied into the documentation or distribution.
 - **E-T02 — Recovery consumer consistency (P1).** Require every contract generator
   to resolve selected project and per-type fallback via the recovery manifest.
   Accept when a primary error stub cannot accidentally become translation input.
-- **E-T03 — Reproducible evidence manifests (P1).** Standardize source hash,
-  native executable/tool hash, input data, configuration, reference tier and
+- **E-T03 — Reproducible evidence manifests (P1, partial).** Standardize source
+  hash, native executable/tool hash, input data, configuration, reference tier and
   tolerance/gate output. Accept when a new run can reproduce each claimed parity
-  result without inferring settings from shell history.
+  result without inferring settings from shell history. Implemented in
+  `Tools/verification/run.py`: reports record the git revision, dirty flag and
+  sha256 of `git diff HEAD`, runner/manifest hashes, tool versions (absent tools
+  tolerated), per-check argv/cwd, sorted `IKKOKU_*` variable names passed from
+  the environment file (`passedEnvironment`), values only for the check's own
+  settings (`env`), `suppliedFixtures`/`missingFixtures` with paths and hashes,
+  declared reference tier, tolerance text, and artifacts hashed **after** the
+  run — a missing artifact fails the check. Still remaining: CI wiring, and the
+  `original-managed-dll` / `original-player-probe` tiers have no checks that
+  execute them yet — no claim of source parity is made from resemblance.
 - **E-T04 — Conversion orchestration and coverage (P2).** Build a resumable job
   graph over catalogs/assets/behavior adapters and preserve saved generation
   identities. Accept when each unconverted dependency has a concrete reason and

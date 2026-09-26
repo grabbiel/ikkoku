@@ -19,6 +19,7 @@ percentage or general mod compatibility is claimed.
 | Resume implementation | [Audit and prioritized backlog](component-audit/README.md) |
 | Recover/convert original data | [Source pipeline runbook](../Tools/reverse/README.md) |
 | Regenerate bundled prototype assets | [Bundled asset runbook](../Tools/assets/README.md) |
+| Run or extend reproducible verification lanes | [Verification lane runner](../Tools/verification/README.md) |
 
 ## Component audit
 
