@@ -266,6 +266,31 @@ then integrate verified programs with production material/queue/pass dispatch.
 Compare independently loaded original/native scenes with matched time, camera,
 lights and effects after that integration. Track R1/R2 and CMT-04.
 
+### Native pose gate
+
+The R2 transform gate compares original-player local bone transforms composed into
+world space with native `card-pose` world matrices, matching hierarchy suffixes
+from `p_cf_body_bone`. Generate the native snapshot with
+`ikkoku-inspect card-pose <avatar.json> <card.png>`, then run
+`compare_original_pose.py <probe folder> <native.json>`; the comparator takes the
+avatar path from the snapshot's `source` field unless `--avatar` is supplied.
+
+For the retained controlled clothed capture (source frame SHA-256
+`9aa4de394acbae5e9a7d336b5990aa67f9619931dfce3cac6d1e8711c8bcc750`),
+672 bones matched. Five ambiguous duplicate original paths were excluded; the
+report lists 84 original-only keys, including clothing/accessory roots such as
+`ct_clothesBot` and `ct_bra`, and 61 native-only keys. Position p50 was
+7.9e-8 m; maximum scale error was 1.9e-6, with none over 1e-4. Forty-six bones
+exceeded position 1e-4 m (36) and/or rotation 0.01° (46). All 46 were under
+hand joints. The full gate fails; the diagnostic excluding hands passes. The
+snapshot output was byte-identical across two runs.
+
+The original `ChaControl` initializes its default hand-control pose through
+`InitializeControlHandAll`; native `card-pose` applies no hand pattern. Hand-pattern
+recovery belongs to ST-T07. For this fixture, body and face shape, height and
+static ABMX composition match the original player's bone transforms. Coverage is
+one T-posed fixture, one outfit and standard bone type; animation is untested.
+
 ## Resource and measurement boundaries
 
 The live renderer supports four skin influences and a single morph frame per
