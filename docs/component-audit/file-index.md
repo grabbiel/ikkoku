@@ -620,9 +620,9 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Packages/Engine/Sources/IkkokuInspect/StudioPoseInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioPoseInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/main.swift](../../Packages/Engine/Sources/IkkokuInspect/main.swift) | Runtime / shared shader declaration |
-| [README.md](../../README.md) | Documentation / historical evidence |
 | [Packages/Engine/Tests/EngineTests/SourceFixtureSupport.swift](../../Packages/Engine/Tests/EngineTests/SourceFixtureSupport.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceFixtureSupportTests.swift](../../Packages/Engine/Tests/EngineTests/SourceFixtureSupportTests.swift) | Test / validation |
+| [README.md](../../README.md) | Documentation / historical evidence |
 | [Tools/reverse/README.md](../../Tools/reverse/README.md) | Documentation / historical evidence |
 | [Tools/reverse/analysis/decompile_studio.py](../../Tools/reverse/analysis/decompile_studio.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/recover_managed.py](../../Tools/reverse/analysis/recover_managed.py) | Conversion / recovery / verification tool |

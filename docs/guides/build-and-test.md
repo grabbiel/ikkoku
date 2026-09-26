@@ -45,21 +45,20 @@ python3 -m unittest discover -s Tools/translation/tests -p 'test_*.py'
 
 The Swift suite includes synthetic contracts and optional source fixtures. Tests
 that need a private fixture run only when every `IKKOKU_*` variable they require is
-set to a nonempty path; otherwise they report as *skipped* with a `Requires
-IKKOKU_…` reason, so a green run never hides missing source-data coverage.
-Some Metal-dependent tests skip without a Metal device and report that reason;
-others require a device inside the test and fail without one. To audit fixture
-coverage, run with
-`IKKOKU_REQUIRE_SOURCE_FIXTURES=1 swift test
---package-path Packages/Engine`: every fixture-gated test runs and fails on a
-missing variable, except tests that also need a Metal device, which still skip
-when none is present. Optional output variables such as `IKKOKU_CARD_EDIT_OUTPUT`
+set to a nonempty path; otherwise they report as *skipped* with a
+`Requires IKKOKU_…` reason, so a green run never hides missing source-data coverage.
+To audit fixture coverage, run with
+`IKKOKU_REQUIRE_SOURCE_FIXTURES=1 swift test --package-path Packages/Engine`:
+every fixture-gated test runs and fails on a missing variable, except tests whose
+skip gate also requires a Metal device; those still skip without one and report
+that reason. Tests that require a device inside the test body fail without one.
+Optional output variables such as `IKKOKU_CARD_EDIT_OUTPUT`
 are never required by strict mode. Supply fixtures by
 exporting the variables listed in the component reports and reference docs
 (e.g. `IKKOKU_SHAPE_CONTRACT=/absolute/path/to/character-shape-contract.json`);
-`require`d paths must exist or the gated test fails. Record executed case counts
-and input hashes with results; the [component reports](../component-audit/README.md)
-map features to their tests.
+Supplied fixture paths must exist; otherwise the gated test fails. Record
+executed case counts and input hashes with results; the
+[component reports](../component-audit/README.md) map features to their tests.
 
 For the reverse tools, create the pinned Python environment before running their
 unit tests or exporters. The recorded compatible interpreter is Python 3.12:
