@@ -10,14 +10,14 @@ import ShaderTypes
 /// fixture inputs. Unknown constant bindings/pass states fail instead of silently
 /// substituting the native toon shader. Derived MSL stays in private local assets.
 public extension OriginalFrameProbe {
-    func captureTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, queue: any MTLCommandQueue, allFamilies: Bool = false) throws -> CGImage {
+    func captureTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, queue: any MTLCommandQueue, allFamilies: Bool = false, families: Set<String>? = nil) throws -> CGImage {
         let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height, mipmapped: false); colorDescriptor.usage = .renderTarget; colorDescriptor.storageMode = .shared
         let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float_stencil8, width: width, height: height, mipmapped: false); depthDescriptor.usage = .renderTarget; depthDescriptor.storageMode = .private
         guard let color = resources.device.makeTexture(descriptor: colorDescriptor), let depth = resources.device.makeTexture(descriptor: depthDescriptor), let command = queue.makeCommandBuffer() else { throw ProbeError.gpu("Source shader targets") }
         let outline = programURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(programURL.deletingLastPathComponent().lastPathComponent + "_outline/program.json")
         let programs = FileManager.default.fileExists(atPath: outline.path) ? [outline, programURL] : [programURL]
         var jobs: [(program: URL, item: Int?)] = programs.map { ($0, nil) }
-        if allFamilies {
+        if allFamilies || families != nil {
             guard let source = try JSONSerialization.jsonObject(with: Data(contentsOf: frameURL)) as? [String: Any], let meshes = source["meshes"] as? [[String: Any]] else { throw ProbeError.invalid("Source mesh list") }
             var draws: [(queue: Int, index: Int, programs: [URL])] = [], index = 0
             let directory = programURL.deletingLastPathComponent().deletingLastPathComponent()
@@ -31,6 +31,7 @@ public extension OriginalFrameProbe {
                     if shader == "Shader Forge/shadowcast" { continue }
                     guard shader.hasPrefix("Shader Forge/"), shader.split(separator: "/").count == 2 else { throw ProbeError.invalid("Unknown source shader family") }
                     let name = String(shader.split(separator: "/")[1])
+                    if let filter = families, !filter.contains(name) { continue }
                     let forward = directory.appendingPathComponent(name + "/program.json")
                     let outline = directory.appendingPathComponent(name + "_outline/program.json")
                     guard FileManager.default.fileExists(atPath: forward.path) else { throw ProbeError.invalid("Missing translated shader \(shader)") }

@@ -33,6 +33,12 @@ def color_metrics(original,native,mask):
  mae=float(error.mean());p99=float(np.percentile(error,99))
  return dict(comparedPixels=int(mask.sum()),meanAbsoluteChannelBytes=mae,p99ChannelBytes=p99,maximumChannelBytes=int(error.max()),withinTwoBytesFraction=float((error<=2).mean()),tolerance=dict(maximumMeanAbsoluteChannelBytes=1,maximumP99ChannelBytes=4),passes=mae<=1 and p99<=4)
 
+def family_metrics(source,full,only):
+ if source.shape!=full.shape or source.shape!=only.shape:raise ValueError('Family comparison requires equal dimensions')
+ mask=(source[:,:,3]>0)&(only[:,:,3]>0)&np.all(full[:,:,:3]==only[:,:,:3],axis=2)
+ if not mask.any():return dict(comparedPixels=0,note='family is never frontmost')
+ return dict(scope='Original source shader programs rendered alone; compared only where that family is frontmost in both.',**color_metrics(source,only,mask))
+
 def compare(folder):
  native=json.loads((folder/'native-report.json').read_text());filename=native.get('sourceFrameFile','frame.json')
  if Path(filename).name!=filename or filename.startswith('.'):raise ValueError('Invalid source frame path')
@@ -53,6 +59,9 @@ def compare(folder):
   source=pixels(source_name);target=pixels(native_name);source_alpha=source[:,:,3]>0;target_alpha=target[:,:,3]>0
   result[label]=dict(scope='Original source shader programs, original frozen geometry, source render queues/pass states and material bindings; native rig evaluation not included.',silhouette=geometry_metrics(source_alpha,target_alpha),color=color_metrics(source,target,source_alpha&target_alpha))
   result[label]['passes']=result[label]['silhouette']['passes'] and result[label]['color']['passes']
+ if (folder/'native-translated.png').exists():
+  source=pixels('original-color.png');full=pixels('native-translated.png');result['translatedFamilies']={}
+  for image in sorted(folder.glob('native-translated-*.png')):result['translatedFamilies'][image.name[len('native-translated-'):-len('.png')]]=(family_metrics(source,full,pixels(image.name)))
  result['mipCoverage']=dict(textures=len(frame['textures']),authored=sum(bool(t.get('mipFiles')) for t in frame['textures']),noMips=sum(t.get('mipLevels')==1 for t in frame['textures']),generated=sum(t.get('mipLevels',1)>1 and not t.get('mipFiles') for t in frame['textures']))
  result['passesAllGates']=all(result[k]['passes'] for k in ['geometry','depthNormals','color'])
  (folder/'frame-comparison.json').write_text(json.dumps(result,indent=2)+'\n');return result
