@@ -390,11 +390,11 @@ private struct OriginalCardOracle: Decodable {
     let blocks: [Block], custom: Custom, parameter: Parameter, extendedDataSource: String, plugins: [Plugin], footer: Binary
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD_FIXTURE"] != nil &&
-              ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD_ORACLE"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_CARD_FIXTURE", "IKKOKU_SOURCE_CARD_ORACLE"]),
+               "Requires IKKOKU_SOURCE_CARD_FIXTURE, IKKOKU_SOURCE_CARD_ORACLE"))
 func sourceCharacterCardMatchesIndependentPythonOriginalFormatOracle() throws {
-    let fixturePath = try #require(ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD_FIXTURE"])
-    let oraclePath = try #require(ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD_ORACLE"])
+    let fixturePath = try SourceFixtureSupport.require("IKKOKU_SOURCE_CARD_FIXTURE")
+    let oraclePath = try SourceFixtureSupport.require("IKKOKU_SOURCE_CARD_ORACLE")
     let bytes = try Data(contentsOf: URL(fileURLWithPath: fixturePath))
     let oracle = try JSONDecoder().decode(OriginalCardOracle.self, from: Data(contentsOf: URL(fileURLWithPath: oraclePath)))
     let card = try SourceCharacterCard.load(url: URL(fileURLWithPath: fixturePath))

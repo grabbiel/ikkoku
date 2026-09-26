@@ -167,8 +167,10 @@ private enum ResolverDestinationFixture {
     }
 }
 
-@Test func sourceCardResolverDestinationsIndependentSourceContract() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_MOD_CATALOG_CONTRACT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MOD_CATALOG_CONTRACT"]),
+               "Requires IKKOKU_MOD_CATALOG_CONTRACT"))
+func sourceCardResolverDestinationsIndependentSourceContract() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_MOD_CATALOG_CONTRACT")
     let contract = try SourceModCatalogContract.decode(Data(contentsOf: URL(fileURLWithPath: path)))
     let F = ResolverDestinationFixture.self
     let scan = try F.card(coordinates: [.binary(F.coordinate())]).resolverDestinations(contract: contract)

@@ -100,8 +100,10 @@ import Gameplay
     }
 }
 
-@Test func sourceFixedEventIndependentOriginalTableReference() throws {
-    guard let directory = ProcessInfo.processInfo.environment["IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"]),
+               "Requires IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"))
+func sourceFixedEventIndependentOriginalTableReference() throws {
+    let directory = try SourceFixtureSupport.require("IKKOKU_GAMEPLAY_EXECUTION_REFERENCE")
     struct Reference: Decodable {
         struct Expected: Decodable { var entryIndex: Int; var assetID: Int; var mapNo: Int; var waitPointID: String?; var layerIndex: Int }
         struct Case: Decodable { var name: String; var heroineID: Int; var context: SourceFixedEventScheduler.Context; var expected: Expected? }
@@ -124,8 +126,10 @@ import Gameplay
     }
 }
 
-@Test func sourceADVIndependentHandDerivedReference() throws {
-    guard let directory = ProcessInfo.processInfo.environment["IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"]),
+               "Requires IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"))
+func sourceADVIndependentHandDerivedReference() throws {
+    let directory = try SourceFixtureSupport.require("IKKOKU_GAMEPLAY_EXECUTION_REFERENCE")
     struct Reference: Decodable {
         struct Tick: Decodable { var deltaTime: Float; var requestNext: Bool? }
         struct State: Decodable { var pc: Int; var variables: [String: SourceADVValue]; var status: String; var waitElapsed: [Float]; var faultPC: Int? }
@@ -153,8 +157,10 @@ import Gameplay
     }
 }
 
-@Test func sourceADVOriginalParameterScenarioStopsAtUnportedBinding() throws {
-    guard let directory = ProcessInfo.processInfo.environment["IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"]),
+               "Requires IKKOKU_GAMEPLAY_EXECUTION_REFERENCE"))
+func sourceADVOriginalParameterScenarioStopsAtUnportedBinding() throws {
+    let directory = try SourceFixtureSupport.require("IKKOKU_GAMEPLAY_EXECUTION_REFERENCE")
     let program = try SourceADVProgram.decode(Data(contentsOf: URL(fileURLWithPath: directory).appendingPathComponent("original-parameter-301.json")))
     var vm = try SourceADVInterpreter(program: program)
     try vm.start()

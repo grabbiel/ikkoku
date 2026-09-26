@@ -21,8 +21,9 @@ private struct BodyOracle: Decodable {
 private func bodyV(_ a:[Float]) -> Float3 { Float3(a[0],a[1],a[2]) }
 private func bodyQ(_ a:[Float]) -> simd_quatf { simd_quatf(ix:a[0],iy:a[1],iz:a[2],r:a[3]) }
 
-@Test func sourceFullBodyMatchesRecoveredCSharpOracleWhenRequested() throws {
-    guard let path=ProcessInfo.processInfo.environment["IKKOKU_FULLBODY_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_FULLBODY_REFERENCE"]), "Requires IKKOKU_FULLBODY_REFERENCE"))
+func sourceFullBodyMatchesRecoveredCSharpOracleWhenRequested() throws {
+    let path=try SourceFixtureSupport.require("IKKOKU_FULLBODY_REFERENCE")
     let reference=try JSONDecoder().decode(BodyOracle.self,from:Data(contentsOf:URL(fileURLWithPath:path)))
     #expect(reference.kind == "recovered-finalik-csharp-numerical-oracle")
     #expect(reference.cases.count >= 12)

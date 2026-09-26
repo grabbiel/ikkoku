@@ -206,9 +206,10 @@ private struct ModProfileFixture {
     }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_MOD_LIBRARY"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MOD_LIBRARY"]),
+               "Requires IKKOKU_MOD_LIBRARY"))
 func sourceModProfileLoadsImportedLibraryFromEnvironment() throws {
-    let path = try #require(ProcessInfo.processInfo.environment["IKKOKU_MOD_LIBRARY"])
+    let path = try SourceFixtureSupport.require("IKKOKU_MOD_LIBRARY")
     var isDirectory: ObjCBool = false
     try #require(FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory))
     let input = URL(fileURLWithPath: path)

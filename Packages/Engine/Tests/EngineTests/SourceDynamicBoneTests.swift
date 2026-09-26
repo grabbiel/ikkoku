@@ -113,9 +113,11 @@ private func close(_ a: Float3, _ b: Float3, _ epsilon: Float = 1e-5) -> Bool { 
     #expect(throws: (any Error).self) { try SourceDynamicBone(rig: rig, definition: config) }
 }
 
-@Test func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
-    guard let file = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_DYNAMICS"],
-          let avatar = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_DYNAMICS", "IKKOKU_SOURCE_AVATAR"]),
+               "Requires IKKOKU_SOURCE_DYNAMICS, IKKOKU_SOURCE_AVATAR"))
+func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
+    let file = try SourceFixtureSupport.require("IKKOKU_SOURCE_DYNAMICS")
+    let avatar = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
     let source = try SourceRig.loadModel(url: URL(fileURLWithPath: avatar))
     let document = try SourceDynamicsDocument.load(url: URL(fileURLWithPath: file))
     #expect(document.components.count == 5)

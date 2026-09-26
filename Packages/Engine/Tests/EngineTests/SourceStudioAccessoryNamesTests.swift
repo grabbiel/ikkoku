@@ -13,8 +13,10 @@ import Studio
     #expect(SourceStudioAccessoryNamesPlugin.guid == "KK_StudioAccessoryNames" && SourceStudioAccessoryNamesPlugin.version == "1.1.0")
 }
 
-@Test func sourceAccessoryNamesMatchUntouchedRecoveredCoroutine() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_ACCESSORY_NAMES_ORACLE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ACCESSORY_NAMES_ORACLE"]),
+               "Requires IKKOKU_ACCESSORY_NAMES_ORACLE"))
+func sourceAccessoryNamesMatchUntouchedRecoveredCoroutine() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_ACCESSORY_NAMES_ORACLE")
     struct Case: Decodable { let name: String, rows: [SourceStudioAccessoryNamesPlugin.Row], names: [Int:String] }
     struct Result: Decodable { let name: String, deferred: Bool, completed: Bool, before: [String?], rows: [SourceStudioAccessoryNamesPlugin.Row] }
     struct Oracle: Decodable { let cases: [Case], results: [Result] }

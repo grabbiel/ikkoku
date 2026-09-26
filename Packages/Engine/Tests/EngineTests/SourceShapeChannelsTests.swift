@@ -105,8 +105,10 @@ private func fixtureContract() throws -> SourceShapeContract {
     #expect(try restored.domain("test")?.makeState() == contract.domain("test")?.makeState())
 }
 
-@Test func sourceShapeLoadsLocalRecoveredContractWhenRequested() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SHAPE_CONTRACT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SHAPE_CONTRACT"]),
+               "Requires IKKOKU_SHAPE_CONTRACT"))
+func sourceShapeLoadsLocalRecoveredContractWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SHAPE_CONTRACT")
     let contract = try SourceShapeContract.decode(Data(contentsOf: URL(fileURLWithPath: path)))
     let body = try #require(contract.domain("body")), face = try #require(contract.domain("face"))
     #expect(body.valueCount == 44 && face.valueCount == 52)

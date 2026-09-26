@@ -103,15 +103,15 @@ private struct MakerSelectionCases: Decodable {
         let moved: Bool, materials: Bool, selectionCount: Int, opaqueTokenCount: Int
     }
     let library: String, femaleBase: String, maleBase: String, fixtures: [Case]
-    static func load() throws -> (Self, URL)? {
-        guard let path = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SELECTION_FIXTURES"] else { return nil }
-        let url = URL(fileURLWithPath: path)
+    static func load() throws -> (Self, URL) {
+        let url = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_SELECTION_FIXTURES"))
         return (try JSONDecoder().decode(Self.self, from: Data(contentsOf: url)), url.deletingLastPathComponent())
     }
 }
 
-@Test func sourceMakerLibraryRejectsInvalidOrDuplicateBaseComponentSlots() throws {
-    guard let (fixtures, fixtureDirectory) = try MakerSelectionCases.load() else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+func sourceMakerLibraryRejectsInvalidOrDuplicateBaseComponentSlots() throws {
+    let (fixtures, fixtureDirectory) = try MakerSelectionCases.load()
     let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
     let sourceURL = URL(fileURLWithPath: fixtures.femaleBase), directory = try MakerLibraryFixture.directory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -141,9 +141,9 @@ private struct MakerSelectionCases: Decodable {
     }
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil, "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
 func sourceMakerLibraryPreparesSelectedClothedGeometryHeadsBoneTypesAndAccessoryTransforms() throws {
-    guard let (fixtures, directory) = try MakerSelectionCases.load() else { return }
+    let (fixtures, directory) = try MakerSelectionCases.load()
     let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     for sample in fixtures.fixtures {
@@ -194,8 +194,9 @@ func sourceMakerLibraryPreparesSelectedClothedGeometryHeadsBoneTypesAndAccessory
     }
 }
 
-@Test func sourceMakerSelectedCardEditsKeepOpaqueTokensResolverAndAssetIdentity() throws {
-    guard let (fixtures, directory) = try MakerSelectionCases.load() else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+func sourceMakerSelectedCardEditsKeepOpaqueTokensResolverAndAssetIdentity() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
     for sample in fixtures.fixtures {
         let original = try SourceCharacterCard.decode(Data(contentsOf: directory.appendingPathComponent(sample.file)))
         let body = try original.recordFields(.body), unknown = try #require(body["fixtureOpaque99"])

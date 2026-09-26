@@ -176,7 +176,9 @@ private enum EditingFixture {
     #expect(throws: (any Error).self) { try original.recordData(.clothes(coordinate: -1)) }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_CARD_EDIT_OUTPUT"] != nil))
+// Optional evidence writer, not a fixture test.
+@Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_CARD_EDIT_OUTPUT"] ?? "").isEmpty == false,
+               "Writes independent-oracle evidence only when IKKOKU_CARD_EDIT_OUTPUT is set"))
 func sourceCardEditingWritesIndependentOracleEvidence() throws {
     let directory = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["IKKOKU_CARD_EDIT_OUTPUT"]))
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

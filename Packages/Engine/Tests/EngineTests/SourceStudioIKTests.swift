@@ -99,9 +99,11 @@ private func studioIKFixture(scale: Float3 = .one) throws -> (RigDefinition, Sou
     }
 }
 
-@Test func sourceStudioIKOriginalBindingsBindAndReportActualCoverage() throws {
-    let env = ProcessInfo.processInfo.environment
-    guard let path = env["IKKOKU_SOURCE_AVATAR"], let bindingPath = env["IKKOKU_STUDIO_IK_BINDINGS"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_IK_BINDINGS"]),
+               "Requires IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_IK_BINDINGS"))
+func sourceStudioIKOriginalBindingsBindAndReportActualCoverage() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let bindingPath = try SourceFixtureSupport.require("IKKOKU_STUDIO_IK_BINDINGS")
     let source = try SourceRig.loadModel(url: URL(fileURLWithPath: path))
     let bindings = try JSONDecoder().decode(SourceStudioIK.Bindings.self, from: Data(contentsOf: URL(fileURLWithPath: bindingPath)))
     let solver = try SourceStudioIK(rig: source.rig, bindings: bindings)

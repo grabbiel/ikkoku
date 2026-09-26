@@ -22,8 +22,10 @@ import Renderer
     #expect(throws: (any Error).self) { try clock.advance(deltaTime: 1, speed: -1, stateSpeed: 1, duration: 1, loops: false, forceLoop: false) }
 }
 
-@Test func sourceStudioAnimationClockMatchesRecoveredBinary32TraceWhenSupplied() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_CONTRACT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_ANIMATION_CONTRACT"]),
+               "Requires IKKOKU_STUDIO_ANIMATION_CONTRACT"))
+func sourceStudioAnimationClockMatchesRecoveredBinary32TraceWhenSupplied() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CONTRACT")
     struct Contract: Decodable {
         struct Scenario: Decodable {
             struct Frame: Decodable { let deltaTime: Float, normalizedTime: Float }
@@ -63,9 +65,10 @@ import Renderer
     #expect(throws: (any Error).self) { try source.editedData(.init(animations: [10: edit])) }
 }
 
-@Test func sourceStudioAnimationConvertedNormalCatalogIdentityParametersAndSamplesWhenSupplied() throws {
-    let env = ProcessInfo.processInfo.environment
-    guard let path = env["IKKOKU_STUDIO_ANIMATION_CATALOG"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_ANIMATION_CATALOG"]),
+               "Requires IKKOKU_STUDIO_ANIMATION_CATALOG"))
+func sourceStudioAnimationConvertedNormalCatalogIdentityParametersAndSamplesWhenSupplied() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
     let url = URL(fileURLWithPath: path), catalog = try SourceStudioAnimationCatalog.load(url: url)
     let scene = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
     var state = SourceStudioAnimationState(record: try #require(scene.snapshot.roots[0].character))
@@ -102,8 +105,10 @@ import Renderer
     }
 }
 
-@Test func sourceStudioAnimationIncrementalClockRetainsExactFixedStepBoundariesWhenSupplied() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_CATALOG"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_ANIMATION_CATALOG"]),
+               "Requires IKKOKU_STUDIO_ANIMATION_CATALOG"))
+func sourceStudioAnimationIncrementalClockRetainsExactFixedStepBoundariesWhenSupplied() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
     let url = URL(fileURLWithPath: path), catalog = try SourceStudioAnimationCatalog.load(url: url)
     let scene = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
     var state = SourceStudioAnimationState(record: try #require(scene.snapshot.roots[0].character))
@@ -129,12 +134,14 @@ import Renderer
     #expect(playback.lastAdvanceSteps <= 3) // Live cost no longer scales with scene age.
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_STUDIO_ANIMATION_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_STUDIO_ANIMATION_CATALOG and a Metal device"))
 func sourceStudioAnimationEvaluatesClothedPoseAttachmentsAndExportReloadWhenSupplied() throws {
-    let env = ProcessInfo.processInfo.environment
-    guard let folder = env["IKKOKU_STUDIO_EXPANSION"], let maker = env["IKKOKU_MAKER_LIBRARY"],
-          let female = env["IKKOKU_SOURCE_AVATAR"], let bones = env["IKKOKU_STUDIO_POSE_CONTRACT"],
-          let animations = env["IKKOKU_STUDIO_ANIMATION_CATALOG"] else { return }
+    let folder = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let maker = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let bones = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let animations = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
     let input = URL(fileURLWithPath: folder).appendingPathComponent("studio-female-head200-bone1.png")
     let original = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: input))
     let record = try #require(original.snapshot.roots[0].character)
@@ -167,7 +174,7 @@ func sourceStudioAnimationEvaluatesClothedPoseAttachmentsAndExportReloadWhenSupp
     let after = try preview(saved, reloadBytes)
     #expect(after.pose.localMatrices.elementsEqual(b.localMatrices))
     #expect(after.record.cardData == before.record.cardData)
-    if let output = env["IKKOKU_STUDIO_ANIMATION_FIXTURE_OUTPUT"] {
+    if let output = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_FIXTURE_OUTPUT"] {
         let path = URL(fileURLWithPath: output); try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
         try initialBytes.write(to: path.appendingPathComponent("clothed-studio-animation.png"))
         try reloadBytes.write(to: path.appendingPathComponent("clothed-studio-animation-t05.png"))

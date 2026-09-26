@@ -159,9 +159,10 @@ private struct BoneModifierReference: Decodable {
     let schemaVersion: Int, cases: [Case]
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_ABMX_REFERENCE"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ABMX_REFERENCE"]),
+               "Requires IKKOKU_ABMX_REFERENCE"))
 func sourceBoneModifierMatchesIndependentLocalNumPyMatrices() throws {
-    let path = try #require(ProcessInfo.processInfo.environment["IKKOKU_ABMX_REFERENCE"])
+    let path = try SourceFixtureSupport.require("IKKOKU_ABMX_REFERENCE")
     let reference = try JSONDecoder().decode(BoneModifierReference.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     #expect(reference.schemaVersion == 1 && reference.cases.count == 8)
     func matrix(_ values: [Float]) throws -> float4x4 {
@@ -186,13 +187,12 @@ func sourceBoneModifierMatchesIndependentLocalNumPyMatrices() throws {
     }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_ABMX_MODIFIERS"] != nil &&
-    ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ABMX_MODIFIERS", "IKKOKU_SOURCE_AVATAR"]),
+               "Requires IKKOKU_ABMX_MODIFIERS, IKKOKU_SOURCE_AVATAR"))
 func sourceBoneModifierLoadsLocalClothedAvatarExample() throws {
-    let environment = ProcessInfo.processInfo.environment
-    let path = try #require(environment["IKKOKU_ABMX_MODIFIERS"])
+    let path = try SourceFixtureSupport.require("IKKOKU_ABMX_MODIFIERS")
     let modifiers = try SourceBoneModifiers.decode(Data(contentsOf: URL(fileURLWithPath: path)))
-    let avatarPath = try #require(environment["IKKOKU_SOURCE_AVATAR"])
+    let avatarPath = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
     let source = try SourceRig.loadModel(url: URL(fileURLWithPath: avatarPath))
     let pose = try modifiers.applying(to: source.rig, baseline: source.rig.restPose)
     #expect(modifiers.count == 3)
@@ -415,12 +415,11 @@ private func decodeBoneModifierWire(_ value: SourceMessagePackValue) throws -> S
     #expect(Data(distinctNames.modifiers[0].boneName.utf8) != Data(distinctNames.modifiers[1].boneName.utf8))
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_ABMX_BONE_DATA"] != nil &&
-    ProcessInfo.processInfo.environment["IKKOKU_ABMX_MODIFIERS"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ABMX_BONE_DATA", "IKKOKU_ABMX_MODIFIERS"]),
+               "Requires IKKOKU_ABMX_BONE_DATA, IKKOKU_ABMX_MODIFIERS"))
 func sourceBoneModifierNativeWireMatchesLocalPythonConversion() throws {
-    let environment = ProcessInfo.processInfo.environment
-    let payloadPath = try #require(environment["IKKOKU_ABMX_BONE_DATA"])
-    let jsonPath = try #require(environment["IKKOKU_ABMX_MODIFIERS"])
+    let payloadPath = try SourceFixtureSupport.require("IKKOKU_ABMX_BONE_DATA")
+    let jsonPath = try SourceFixtureSupport.require("IKKOKU_ABMX_MODIFIERS")
     let converted = try SourceBoneModifiers.decode(Data(contentsOf: URL(fileURLWithPath: jsonPath)))
     let payload = try Data(contentsOf: URL(fileURLWithPath: payloadPath))
     let native = try SourceBoneModifiers.decodeBoneData(payload, dataKind: converted.source.dataKind,
@@ -436,7 +435,7 @@ func sourceBoneModifierNativeWireMatchesLocalPythonConversion() throws {
     #expect(native.diagnostics?.map(\.code) == converted.diagnostics?.map(\.code))
     #expect(native.diagnostics?.map(\.severity) == converted.diagnostics?.map(\.severity))
     #expect(native.diagnostics?.map(\.message) == converted.diagnostics?.map(\.message))
-    if let avatarPath = environment["IKKOKU_SOURCE_AVATAR"] {
+    if let avatarPath = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"] {
         let model = try SourceRig.loadModel(url: URL(fileURLWithPath: avatarPath))
         let baseline = model.rig.restPose
         #expect(try native.applying(to: model.rig, baseline: baseline).localMatrices ==
