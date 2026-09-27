@@ -69,6 +69,15 @@ state and restores current/saved cameras. Original attachment and animation/IK
 kernels exist, but scene loading is incomplete: routes and their descendants and
 many original items, lights and scene effects remain unrendered or unapplied.
 
+With `IKKOKU_STUDIO_ANIMATION_CATALOG` configured, a selected source character
+also gets a Source Animation inspector under the Pose tab: pick a catalog entry
+via group → category → entry (rows without a converted file are disabled),
+adjust speed (0…3) or force-loop, and press Restart to start the selected
+character at phase 0. Selecting an animation also starts that character at
+phase 0; speed and force-loop changes keep its current phase. Other characters
+keep their phase while the shared clock is rebased by baking each character's
+evaluated time.
+
 With a source character selected, the Pose, Face and Clothes tabs are
 reachable: Pose shows source FK/IK guides (position/rotation editing), Face shows
 a "not supported yet" note, and Clothes lists mounted accessory labels. The
