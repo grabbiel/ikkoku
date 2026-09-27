@@ -87,7 +87,7 @@ do {
     let animationPose = arguments.count == 5 && arguments[0] == "animation-pose"
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
-    let cardPose = arguments.count == 3 && arguments[0] == "card-pose"
+    let cardPose = (arguments.count == 3 || (arguments.count == 5 && arguments[3] == "--studio-hands")) && arguments[0] == "card-pose"
     let converting = arguments.count == 4 && arguments[0] == "layout"
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
@@ -104,7 +104,7 @@ do {
                    ikkoku-inspect animation-pose <animation.json> <rig-or-avatar.json> <clip-id> <seconds>
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
                    ikkoku-inspect bone-modifier-snapshot <rig-or-avatar.json> <modifiers.json>
-                   ikkoku-inspect card-pose <avatar.json> <card.png>
+                   ikkoku-inspect card-pose <avatar.json> <card.png> [--studio-hands <pose.json>]
                    ikkoku-inspect layout <source-scene.png> <converted-catalog.json> <native-scene.png>
                    ikkoku-inspect rig-snapshot <source-rig.json> <shape-contract.json> <rest|height-rate>
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
@@ -207,7 +207,8 @@ do {
         }
         report["scope"] = "Recovered static ABMX baseline behavior at coordinate0; dynamic, animation and accessory modifier behavior remains unsupported."
     case "card-pose":
-        report.merge(try inspectSourceCardPose(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL)) { _, new in new }
+        let handsURL = arguments.count == 5 ? URL(fileURLWithPath: arguments[4]).standardizedFileURL : nil
+        report.merge(try inspectSourceCardPose(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL, studioHandURL: handsURL)) { _, new in new }
     case "mod":
         let package = try SourceModPackage.load(url: url)
         report["modGUID"] = package.source.guid

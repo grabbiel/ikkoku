@@ -11,13 +11,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**614 files indexed; 614 assigned; 0 unassigned.**
+**618 files indexed; 618 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
-| [Character / Maker / mods](character-and-mods.md) | 108 |
-| [Studio / IK / animation](studio.md) | 89 |
+| [Character / Maker / mods](character-and-mods.md) | 110 |
+| [Studio / IK / animation](studio.md) | 91 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 71 |
 
@@ -25,12 +25,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 81 |
+| Conversion / recovery / verification tool | 82 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 138 |
-| Test / validation | 102 |
+| Runtime / shared shader declaration | 139 |
+| Test / validation | 104 |
 
 ## App / gameplay / plugins
 
@@ -151,6 +151,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceRigPreview.swift](../../Packages/Engine/Sources/Character/SourceRigPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapeChannels.swift](../../Packages/Engine/Sources/Character/SourceShapeChannels.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift](../../Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceStudioHandPose.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/CharacterTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAnimationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAnimationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAppearanceSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAppearanceSafetyTests.swift) | Test / validation |
@@ -177,6 +178,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourcePreviewAppearanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePreviewAppearanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShapeChannelsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShapeChannelsTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift) | Test / validation |
 | [Tools/mods/library.py](../../Tools/mods/library.py) | Conversion / recovery / verification tool |
 | [Tools/mods/test_library.py](../../Tools/mods/test_library.py) | Test / validation |
 | [Tools/mods/test_zipmod.py](../../Tools/mods/test_zipmod.py) | Test / validation |
@@ -301,12 +303,14 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/studio_animation.py](../../Tools/reverse/studio_animation.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_attachments.py](../../Tools/reverse/studio_attachments.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_dynamics_fixture.py](../../Tools/reverse/studio_dynamics_fixture.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/studio_hand_animation.py](../../Tools/reverse/studio_hand_animation.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_selection_fixture.py](../../Tools/reverse/studio_selection_fixture.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_voice.py](../../Tools/reverse/studio_voice.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_animation_assets.py](../../Tools/reverse/test_animation_assets.py) | Test / validation |
 | [Tools/reverse/test_compare_dynamics_probe.py](../../Tools/reverse/test_compare_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_dynamics_contract.py](../../Tools/reverse/test_dynamics_contract.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
+| [Tools/reverse/test_studio_hand_animation.py](../../Tools/reverse/test_studio_hand_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_pose_contract.py](../../Tools/reverse/test_studio_pose_contract.py) | Test / validation |
 | [Tools/reverse/test_studio_scene_contract.py](../../Tools/reverse/test_studio_scene_contract.py) | Test / validation |
 | [Tools/reverse/test_trigonometric_ik_contract.py](../../Tools/reverse/test_trigonometric_ik_contract.py) | Test / validation |

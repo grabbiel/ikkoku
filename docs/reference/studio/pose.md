@@ -259,12 +259,21 @@ sets `ptn = 0`; `LoadAnime()` loads the controller for
 `OnDisable` toggle the Animator. `Studio.OCIChar` sets
 `handAnimeCtrl[_type].ptn` for Studio hand-pattern edits, and
 `Studio.Preparation` owns the two controllers. Together with the frame trace
-and inactive `ShapeHandInfo` source rows, this strongly supports CharaStudio's
+and inactive `ShapeHandInfo` source rows, this supports CharaStudio's
 default hand-animation pattern 0 as the source of the 46 R2 finger outliers,
-rather than the card hand-shape controller. The remaining confirmation is to
-convert the default state clips of `cf_hand_L_00` and `cf_hand_R_00` and compare
-their finger rotations with this capture. The native Studio/character pose path
-must apply hand pattern 0 and saved Studio hand patterns to match the source.
+rather than the card hand-shape controller. That attribution is now
+confirmed and locally verified (2026-09-27): `Tools/reverse/studio_hand_animation.py`
+converts each controller's default `goo` state — one looping clip per hand,
+15 finger-bone records compared per hand — and `SourceStudioHandPose`
+replays that frozen document on top of the card pose, so
+`ikkoku-inspect card-pose … --studio-hands
+.local/stt07d/studio-hand-fitted.json` closes the R2 gate at 0 outliers over
+672 bones, with a comparator maximum rotation difference of 8.4e-05°.
+The matching sample time t=0.107 s was fitted on a 0.001 s grid over the
+looping clip (finger-only fit metric 6.71e-05°, versus 0.0441° at t=0);
+the capture never records which loop phase it sampled, so parity holds only
+at the fitted phase. Saved Studio hand patterns (non-zero
+patterns) and the deferred FK activation effects still need routing.
 
 ## Remaining Studio dependency inventory
 
