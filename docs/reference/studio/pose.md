@@ -253,27 +253,33 @@ after `LoadAsync` at frame 31; the fingers take their final values at frame 32.
 An Animator with a controller writes its bones on its first evaluation, which
 accounts for this one-frame delay without an `enabled` state change.
 
-Recovered CharaStudio source supports this attribution: `Studio.HandAnimeCtrl.Init(sex)`
-sets `ptn = 0`; `LoadAnime()` loads the controller for
-`Info.dicHandAnime[hand][ptn]` and calls `animator.Play(clip)`; `OnEnable` and
-`OnDisable` toggle the Animator. `Studio.OCIChar` sets
-`handAnimeCtrl[_type].ptn` for Studio hand-pattern edits, and
-`Studio.Preparation` owns the two controllers. Together with the frame trace
-and inactive `ShapeHandInfo` source rows, this supports CharaStudio's
-default hand-animation pattern 0 as the source of the 46 R2 finger outliers,
-rather than the card hand-shape controller. That attribution is now
-confirmed and locally verified (2026-09-27): `Tools/reverse/studio_hand_animation.py`
+Recovered CharaStudio source separates this probe from Studio initialization:
+`AddObjectAssist` calls `HandAnimeCtrl.Init(sex)` for every added character,
+setting hand pattern 0. The Studio `HandAnime_00_00`/`HandAnime_01_00` tables
+list only pattern IDs 1–21 (1 = `goo`, 2 = `scissors`, 3 = `par`, …,
+17 = `ok`, 21 = `par_straight`). Pattern 0 finds no entry, so `LoadAnime`
+disables the hand Animator. Saved scenes apply `OICharInfo.handPtn[L/R]`
+through `OCIChar.ChangeHandAnime`; `Studio.Preparation` owns the two
+controllers, and `OnEnable`/`OnDisable` toggle their Animators. The controlled
+probe instead creates its
+character with `Manager.Character.CreateFemale` and never calls `Init`;
+the prefab's enabled hand Animators play their controller default state
+`goo`, the same clip as Studio pattern 1. This accounts for the 46 R2 finger
+outliers. The probe attribution was locally verified (2026-09-27):
+`Tools/reverse/studio_hand_animation.py`
 converts each controller's default `goo` state — one looping clip per hand,
 15 finger-bone records compared per hand — and `SourceStudioHandPose`
 replays that frozen document on top of the card pose, so
 `ikkoku-inspect card-pose … --studio-hands
-.local/stt07d/studio-hand-fitted.json` closes the R2 gate at 0 outliers over
+.local/stt07d/studio-hand-fitted.json` reproduces the PROBE fixture
+(equivalent to pattern 1) and closes the R2 gate at 0 outliers over
 672 bones, with a comparator maximum rotation difference of 8.4e-05°.
 The matching sample time t=0.107 s was fitted on a 0.001 s grid over the
 looping clip (finger-only fit metric 6.71e-05°, versus 0.0441° at t=0);
 the capture never records which loop phase it sampled, so parity holds only
-at the fitted phase. Saved Studio hand patterns (non-zero
-patterns) and the deferred FK activation effects still need routing.
+at the fitted phase. Studio characters with pattern 0 have no hand animation;
+saved patterns 1–21 need their own conversion in the next ST-T07 slice.
+Deferred FK activation effects still need routing.
 
 ## Remaining Studio dependency inventory
 

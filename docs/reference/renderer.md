@@ -286,17 +286,29 @@ hand joints. The full gate fails; the diagnostic excluding hands passes. The
 snapshot output was byte-identical across two runs.
 
 The 46 outliers are finger joints whose original values equal the
-`cf_anmShapeHand` sample-index-1 rotations. The card's hand patterns are disabled,
-so the writer remains unattributed; see [finger-pose source attribution](studio/pose.md#finger-pose-source-attribution-st-t07).
+`cf_anmShapeHand` sample-index-1 rotations. The card's hand patterns are disabled.
+Recovered CharaStudio source shows that `AddObjectAssist` calls
+`HandAnimeCtrl.Init(sex)` for every added character, setting pattern 0. The
+Studio `HandAnime_00_00`/`HandAnime_01_00` tables list only IDs 1–21
+(1 = `goo`, 2 = `scissors`, 3 = `par`, …, 17 = `ok`, 21 = `par_straight`),
+so pattern 0 has no entry and `LoadAnime` disables the hand Animator. Saved
+scenes apply `OICharInfo.handPtn[L/R]` through `OCIChar.ChangeHandAnime`.
+The controlled probe uses `Manager.Character.CreateFemale` and never calls
+`Init`, leaving the prefab hand Animators enabled to play their controller
+default state `goo`, the same clip as Studio pattern 1; see
+[finger-pose source attribution](studio/pose.md#finger-pose-source-attribution-st-t07).
 Native `card-pose` applies no hand pattern unless `--studio-hands` names a
 converted hand-pose document, so the full gate still fails on those 46 bones
 without that flag. `card-pose --studio-hands <pose.json>` applies the
-converted default-state `goo` clips of `cf_hand_L_00`/`cf_hand_R_00`; with the
-fitted document (`<pose.json>` = `.local/stt07d/studio-hand-fitted.json`,
+converted default-state `goo` clips of `cf_hand_L_00`/`cf_hand_R_00`.
+The fitted document reproduces the PROBE fixture (equivalent to pattern 1);
+with that document (`<pose.json>` = `.local/stt07d/studio-hand-fitted.json`,
 sample time t=0.107 s fitted on a 0.001 s grid) the gate closes at 0 outliers
 over 672 bones — the comparator's maximum rotation difference is 8.4e-05°.
 The finger-only fit metric is 6.71e-05°. Parity holds only at that fitted
 phase; the original capture never recorded its loop phase.
+Studio characters with pattern 0 have no hand animation; saved patterns 1–21
+need their own conversion in the next ST-T07 slice.
 For this fixture, body and face shape, height and static ABMX composition match
 the original player's bone transforms. Coverage is one T-posed fixture, one
 outfit and standard bone type; other animated states remain untested.
