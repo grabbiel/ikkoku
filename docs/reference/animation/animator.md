@@ -1,6 +1,6 @@
 # Original Animator assets and generic clip playback
 
-Reviewed 2026-09-25 against the working tree. See the [Character audit](../../component-audit/character-and-mods.md) for Maker integration and the [Studio audit](../../component-audit/studio.md) for animation consumers and pending tasks. Evidence counts below describe retained focused runs, not a fresh full-suite result.
+Reviewed 2026-09-27 against the working tree. See the [Character audit](../../component-audit/character-and-mods.md) for Maker integration and the [Studio audit](../../component-audit/studio.md) for animation consumers and pending tasks. Evidence counts below describe retained focused runs, not a fresh full-suite result.
 
 The native engine samples selected original idle, walking and running
 clips from the installed game's action controller. It preserves their serialized
@@ -60,13 +60,15 @@ mirroring and every other pose blend. The last Studio row `m_Lewd_00_01`
 stays excluded: `convert_clip` records cycle offsets (0.5 there) as
 `cycleOffset` but rejects any `m_LoopBlend` clip with
 `Generic loop-pose correction measured but not matched (best max error 0.0295643)`.
-Five candidate rules were measured against that row's six-phase private probe —
+Seven candidate rules were measured against that row's six-phase private probe —
 component-wise `value(u) + delta·u` 0.0295643, quaternion-channel
 `slerp(identity, q(0)·inverse(q(1)), u)·q(u)` 0.0651397 and its
 right-multiplied pairing 0.4099749, both with pre-cycle-offset `u` 0.2202807
-and 0.4067154, and cycle-offset-only sampling 0.2801431 — all above the
-0.0001 tolerance, so nothing was adopted and the runtime keeps only
-cycle-offset support.
+and 0.4067154, cycle-offset-only sampling 0.2801431, and — retested
+2026-09-27 — the component-wise correction with the corrected quaternion
+renormalized before use 0.0295643, with pre-cycle-offset `u` 0.2005066 —
+all above the 0.0001 tolerance, so nothing was adopted and the runtime
+keeps only cycle-offset support.
 
 Bindings retain their original 32-bit path hash and scalar-curve offset. CRC32 of
 the exact root-relative hierarchy resolves them against the chosen skeleton;
@@ -181,8 +183,10 @@ maximum matrix-element error `3.12e-5` and clock error `6.0e-8`. See
 Remaining work (`ST-T10`) still starts with the excluded generic
 loop-pose-correction row: every sampled candidate (component-wise
 `value(u) + (value(0) − value(1))·u`, both `delta` orders of the
-quaternion-channel `slerp` with post- or pre-cycle-offset `u`, and
-cycle-offset-only sampling) measured above the 0.0001 tolerance, so
+quaternion-channel `slerp` with post- or pre-cycle-offset `u`,
+cycle-offset-only sampling, and the same component-wise correction with
+the corrected quaternion renormalized before use, again with post- and
+pre-cycle-offset `u`) measured above the 0.0001 tolerance, so
 implementation stopped and reported without adopting any; conversion and
 sampling treat that row's clip as a closed limitation with recorded errors.
 Then controller transitions/interruptions, overrides, masks/additive layers,
