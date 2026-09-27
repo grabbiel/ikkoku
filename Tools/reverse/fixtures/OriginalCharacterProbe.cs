@@ -36,7 +36,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(error != null) { Finish(error); yield break; }
         // Moment (b): right after LoadAsync finishes, before the 10-frame wait.
         RecordFingers("afterLoadAsync");
-        for(int i=0;i<10;i++) yield return null;
+        // ST-T07c: record every frame of the wait so the first frame whose
+        // rotations match sample-list index 1 can be pinned to a frame number.
+        for(int i=0;i<10;i++){yield return null;RecordFingers("frame"+i);}
         try { Capture(); } catch(Exception e) { error=e.ToString(); }
         Finish(error);
     }
@@ -271,6 +273,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         return null;
     }
     object Flatten(object value) { // 1-D array -> flat list; 2-D array -> row-major list of rows
+        if(value is Vector2)return V((Vector2)value);
+        if(value is Vector3)return V((Vector3)value);
+        if(value is Vector4)return V((Vector4)value);
+        if(value is Quaternion)return V((Quaternion)value);
+        if(value is Color)return V((Color)value);
         var array=value as System.Array;
         if(array==null)return value;
         var list=new List<object>();
@@ -310,10 +317,48 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 current=current.parent;
             }
         }
-        fingerRecords.Add(new Dictionary<string,object>{{"moment",moment},{"bones",bones},
+        // ST-T07c: every Behaviour under the character root (not only MonoBehaviour)
+        // so the writer that curls the fingers can be attributed or excluded.
+        var flags=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.DeclaredOnly|System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.Static;
+        var rootBehaviours=new List<object>();
+        foreach(var behaviour in character.GetComponentsInChildren<Behaviour>(true)) {
+            var entry=new Dictionary<string,object>{{"type",behaviour.GetType().FullName},{"path",RelativePath(behaviour.transform)},{"enabled",Member(behaviour,"enabled")}};
+            if(behaviour.GetType().Name=="Animator") {
+                var boneController=Member(behaviour,"runtimeAnimatorController");
+                entry["runtimeAnimatorController"]=boneController==null?null:(object)new Dictionary<string,object>{{"name",Member(boneController,"name")}};
+                var avatar=Member(behaviour,"avatar");
+                entry["avatar"]=avatar==null?null:(object)new Dictionary<string,object>{{"name",Member(avatar,"name")}};
+                entry["isActiveAndEnabled"]=Member(behaviour,"isActiveAndEnabled");
+            } else if(behaviour.GetType().Name=="Animation") {
+                var clip=Member(behaviour,"clip");
+                entry["clip"]=clip==null?null:(object)new Dictionary<string,object>{{"name",Member(clip,"name")}};
+                entry["clips"]=Flatten(Member(behaviour,"clips")); // null = the member is not found; list of all clip names when it is
+                entry["isPlaying"]=Member(behaviour,"isPlaying");
+            }
+            rootBehaviours.Add(entry);
+        }
+        // ShapeHandInfo internals via reflection: whichever nested enum declares
+        // the bone names (ShapeBodyInfo calls it SrcName, ShapeHeadInfoFemale
+        // calls it SrcBoneName) maps them to plain dictSrc keys, so the recorded
+        // dictSrc/<index>/vctRot pair shows whether it holds index 0 or index 1.
+        var shapeRots=new Dictionary<string,object>();
+        Type srcEnum=null;
+        if(hand!=null) foreach(var nested in hand.GetType().GetNestedTypes(flags)) {
+            if(nested.GetField("cf_j_middle01_L",flags)!=null) { srcEnum=nested; break; }
+        }
+        var srcDict=hand==null?null:(Member(hand,"dictSrc") as IDictionary);
+        foreach(string boneName in new[]{"cf_j_middle01_L","cf_j_middle02_L","cf_j_thumb01_R"}) {
+            var srcField=srcEnum==null?null:srcEnum.GetField(boneName,flags);
+            var srcIndex=srcField==null?null:(object)Convert.ToInt32(srcField.GetValue(null)); // dictionary keys are plain ints
+            var boneInfo=srcIndex==null||srcDict==null?null:srcDict[srcIndex];
+            shapeRots[boneName]=new Dictionary<string,object>{{"sourceIndex",srcIndex},{"vctRot",Flatten(Member(boneInfo,"vctRot"))}};
+        }
+        fingerRecords.Add(new Dictionary<string,object>{{"moment",moment},{"frame",Time.frameCount},{"bones",bones},
             {"fileStatus",new Dictionary<string,object>{{"enableShapeHand",Flatten(Member(status,"enableShapeHand"))},{"shapeHandPtn",Flatten(Member(status,"shapeHandPtn"))},{"shapeHandBlendValue",Flatten(Member(status,"shapeHandBlendValue"))}}},
             {"sibHand",hand==null?null:new Dictionary<string,object>{{"type",hand.GetType().Name},{"updateMask",Flatten(Member(hand,"updateMask"))}}},
             {"animBody",new Dictionary<string,object>{{"exists",animator!=null},{"type",animator==null?null:(object)animator.GetType().Name},{"runtimeAnimatorController",controller==null?null:(object)new Dictionary<string,object>{{"name",Member(controller,"name")}}},{"enabled",Member(animator,"enabled")}}},
+            {"behaviours",rootBehaviours},
+            {"shapeHand",new Dictionary<string,object>{{"dictSrcRotations",shapeRots},{"InitEnd",hand==null?null:(object)Member(hand,"InitEnd")}}},
             {"handBoneChain",chain}});
     }
     Transform FindBone(string name) {

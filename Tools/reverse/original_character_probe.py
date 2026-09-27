@@ -18,6 +18,13 @@ def retry(vm,script,user=False):
    if 'Invalid argument' not in str(e) or attempt==2:raise
    time.sleep(.25)
 
+def retry_call(operation,*args):
+ for attempt in range(3):
+  try:return operation(*args)
+  except RuntimeError as e:
+   if 'Invalid argument' not in str(e) or attempt==2:raise
+   time.sleep(.25)
+
 def start(vm,output):
  run_path=output/'run.json'
  if run_path.exists():
@@ -43,15 +50,15 @@ def start(vm,output):
 
 def collect(vm,output):
  run=json.loads((output/'run.json').read_text());root=run['root'];folder=root+r'\BepInEx\plugins\character'
- status=json.loads(fetch(vm,folder+r'\status.json'))
+ status=json.loads(retry_call(fetch,vm,folder+r'\status.json'))
  stop_probe(vm,run);run['stopped']=True;dump(output/'run.json',run)
  for name in ['unity.log',r'BepInEx\LogOutput.log']:
-  try:(output/Path(name.replace('\\','/')).name).write_bytes(fetch(vm,root+'\\'+name))
+  try:(output/Path(name.replace('\\','/')).name).write_bytes(retry_call(fetch,vm,root+'\\'+name))
   except RuntimeError:pass
  dump(output/'status.json',status)
  if status.get('error'):raise RuntimeError(status['error'])
  retry(vm,"$ErrorActionPreference='Stop';Add-Type -AssemblyName System.IO.Compression.FileSystem;$folder="+ps_quote(folder)+";$zip="+ps_quote(root+r'\character.zip')+";if(Test-Path $zip){Remove-Item $zip};[IO.Compression.ZipFile]::CreateFromDirectory($folder,$zip)")
- data=fetch(vm,root+r'\character.zip',128*1024*1024)
+ data=retry_call(fetch,vm,root+r'\character.zip',128*1024*1024)
  with zipfile.ZipFile(io.BytesIO(data)) as archive:
   if any(Path(n).name!=n or n.startswith('.') for n in archive.namelist()):raise ValueError('Unexpected archive paths')
   if sum(i.file_size for i in archive.infolist())>512*1024*1024:raise ValueError('Capture exceeds extraction bound')
