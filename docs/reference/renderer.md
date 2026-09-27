@@ -258,7 +258,10 @@ The earlier documentation quoted mean 26.9362/p99 242 (older capture) and
 mean 0.2267/p99 5 (previous code) for the full character. Current code
 reduces the color residual below the p99 ≤4 gate on both frame variants; the
 remaining residual is geometric — thin hair/outline edges — and concentrates
-in the hair families (attribution below).
+in the hair families (attribution below). Re-running the probe with the
+opt-in draw trace (2026-09-26) reproduced every figure unchanged; the trace
+diagnostic adds records but cannot change draw order, so no gate result
+moved.
 
 Per-family attribution — each family rendered alone, compared only where it
 is front-most in both renders (`IKKOKU_ORIGINAL_FRAME_FAMILIES=1`):
@@ -280,6 +283,40 @@ and main_skin (1) — and 51 pixels are opaque only in the original capture —
 attributed to main_skin (31), none (11), overlap (2) and main_hair (7). Up
 to 20 sample coordinates per class are recorded in
 `<probe folder>/frame-comparison.json`.
+
+Draw-order trace (added 2026-09-26, opt-in via
+`IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS="x,y;…"`; writes
+`<probe folder>/native-draw-trace.json` listing every draw in the sorted
+sequence with the RGBA and reverse-Z depth remaining at each traced pixel):
+re-rendering the truncated draw list locates exactly where each residual
+class flips. Native-only pixels (e.g. 393,96; 363,98; 398,98; 400,101;
+407,101; 352,106; 422,113; 424,116; 424,118; 429,119) are transparent
+until a `main_hair` forward draw covers them and stay covered — pixels the
+original render never paints at all — while some original-only pixels
+(339,137; 347,116; 349,113; 352,109; 396,99) are covered by a
+`main_hair`/`main_skin`/`main_hair_front` forward draw and then overwritten
+by a later `main_hair_front` outline draw. Others are only ever reached by
+the `main_hair` outline shell (330,171; 423,115; 431,124). Outline passes
+in this capture write RGBA (0,0,0,0) together with depth, so an outline
+shell that wins the depth test leaves a transparent pixel; the depth values
+are reverse-Z (larger is nearer). All four candidate ordering causes were
+checked and none explains the residual: (a) per-object pass order
+`[outline, forward]` matches each family's serialized source pass list;
+(b) within-queue ordering cannot explain the crown either — queue 2000
+holds a single hair draw, and in transparent queue 2850 the three front-hair
+meshes are at distinct camera distances (vertex-bounds centres 3.832 m for
+`cf_hair_idol_hair_f_00`, 3.824 m for `_f_01`, 3.801 m for `_f_02`; the
+capture does not record renderer bounds, so these are computed from the
+captured vertices), so Unity's back-to-front sort draws them f_00, f_01,
+f_02 — the same order the probe uses; (c) both the full capture and every
+trace prefix clear only before their first draw, and the final trace prefix
+is the full draw sequence, so no mid-sequence clear or load-action change
+exists to explain the flips; (d) the `NotEqual ref 2`/`ref 2`
+stencil states between `main_hair`/`main_hair`/`main_hair_front` draws are
+carried across encoders exactly as serialized. Consequence: the flip between
+a `main_hair`/`main_skin` draw and a later `main_hair_front` outline is not
+attributable to any reordering; R1 stays open until a cause outside draw
+ordering is found.
 
 A pixel counts as front-most only where the full translated render and the family-only render have identical RGB, so blended/translucent overlaps are excluded from per-family metrics.
 
@@ -303,11 +340,14 @@ The authored-mip exporter exists, but its availability does not prove every
 comparison used authored source chains. Shader recipes, player probes and exact
 reproduction commands are in [material expansion](character/material-expansion.md).
 
-Next: attribute the hair/outline edge residual to a concrete binding or
-state difference before any gate relaxation, then integrate verified programs
-with production material/queue/pass dispatch. Compare independently loaded
-original/native scenes with matched time, camera, lights and effects after
-that integration. Orchestrator analysis of the 2026-09-26 authored-mip run
+Next: the draw-order hypotheses are now exhausted — the opt-in draw trace
+(2026-09-26, section above) shows the class flips but none of the four
+ordering checks yields a fix — so attribute the hair/outline edge residual
+to a concrete binding or state difference before any gate relaxation, then
+integrate verified programs with production material/queue/pass dispatch.
+Compare independently loaded original/native scenes with matched time,
+camera, lights and effects after that integration. Orchestrator analysis of
+the 2026-09-26 authored-mip run
 shows the silhouette residual is not a colour or alpha-output problem. At
 the hair crown (approximately x 345–423, y 96–116 of the 768x1024 frame),
 some pixels with the hair-outline colour (for example RGB 46,23,11) are
