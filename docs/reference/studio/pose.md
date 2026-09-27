@@ -204,6 +204,44 @@ into a selective Studio preview, and [full-body IK verification](full-body-ik.md
 roundtrips thirteen edited guides and 40,490 deformed vertices. These are distinct
 evidence sets with broader integration than the initial two-bone FK proof.
 
+### Finger-pose source attribution (ST-T07)
+
+An instrumented re-run of `Tools/reverse/fixtures/OriginalCharacterProbe.cs`
+(2026-09-27, two identical captures under `.local/stt07b/probe{,-2}/`) records
+the R2 outlier bones and the saved hand-control state at three moments.
+The retained evidence calls the moment after `LoadAsync` completes
+`afterCharacterFirstLateUpdate`; the corrected probe labels it `afterLoadAsync`.
+Its rank-2 `shapeHandPtn` rows contain only their first key because the old
+serializer dropped column 1. Both captured first keys are `0`; the saved card's
+Status record confirms that both complete hand-pattern rows are `0`/`0`.
+`localEulerAngles` degrees:
+
+| Moment | `cf_j_middle01_L` | `cf_j_middle02_L` | `cf_j_thumb01_R` | `enableShapeHand` / `shapeHandPtn` / blend | `sibHand.updateMask` | `animBody` |
+| --- | --- | --- | --- | --- | ---: | --- |
+| Right after `CreateFemale` | not instantiated | not instantiated | not instantiated | `false`/`false`, `0`/`0`, `0`/`0` | `0` | absent |
+| After `LoadAsync` completes | `[357.0114, 359.7383, 5.006827]` | `[-3.12e-8, -0.0003, 359.9941]` | `[280, 89.99998, 235]` | same | `0` | `Animator`, no `runtimeAnimatorController` |
+| At `frame.json` capture | `[354.3423, 357.2212, 74.13597]` | `[-3.12e-8, -0.0003, 106.7445]` | `[294.2354, 63.91316, 282.4779]` | same | `0` | same |
+
+The bones do not exist at the `CreateFemale` observation. At the first bone
+observation, just after `LoadAsync` completes, all three rotations equal
+`cf_anmShapeHand` sample-list index 0 and the prefab rest. Their rotations change
+during the 10 frames between `LoadAsync` completing and the `frame.json` capture;
+the final values equal sample-list index 1 exactly (for example,
+`cf_j_middle02_L` reaches 106.7445°). The 46 R2 outliers are finger joints with
+those sample-index-1 values, but the writer remains unattributed.
+
+The saved card's hand patterns are disabled. All three decompiled `ChaControl`
+variants gate `UpdateAlwaysShapeHand` on `fileStatus.enableShapeHand` identically,
+and that flag is `false` at every recorded moment. `ShapeHandInfo.updateMask` is
+`0`. The body prefab's `Animator` has no controller; the captured `animBody`
+`Animator` also has no `runtimeAnimatorController`.
+
+Next, record the three fingers on every frame of that 10-frame window together
+with `Time.frameCount`. List every `Behaviour` on the character hierarchy, not
+only `MonoBehaviour`, including every `Animator` and `Animation` component and
+their controller or clip names. Read `ShapeHandInfo`'s `dictSrc` rotation values
+at each moment to see whether they hold sample index 0 or index 1.
+
 ## Remaining Studio dependency inventory
 
 | Area | Recovered dependencies and remaining work |

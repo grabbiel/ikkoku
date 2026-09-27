@@ -285,10 +285,11 @@ exceeded position 1e-4 m (36) and/or rotation 0.01° (46). All 46 were under
 hand joints. The full gate fails; the diagnostic excluding hands passes. The
 snapshot output was byte-identical across two runs.
 
-The original `ChaControl` initializes its default hand-control pose through
-`InitializeControlHandAll`; native `card-pose` applies no hand pattern. Hand-pattern
-recovery belongs to ST-T07. For this fixture, body and face shape, height and
-static ABMX composition match the original player's bone transforms. Coverage is
+The 46 outliers are finger joints whose original values equal the
+`cf_anmShapeHand` sample-index-1 rotations. The card's hand patterns are disabled,
+so the writer remains unattributed; see [finger-pose source attribution](studio/pose.md#finger-pose-source-attribution-st-t07).
+Native `card-pose` applies no hand pattern. For this fixture, body and face shape,
+height and static ABMX composition match the original player's bone transforms. Coverage is
 one T-posed fixture, one outfit and standard bone type; animation is untested.
 
 ## Resource and measurement boundaries

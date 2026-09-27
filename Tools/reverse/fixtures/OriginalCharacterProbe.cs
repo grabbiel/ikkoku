@@ -17,6 +17,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     string folder; ChaControl character;
     readonly List<object> textures = new List<object>();
     readonly Dictionary<int,string> textureFiles = new Dictionary<int,string>();
+    readonly List<object> fingerRecords = new List<object>();
     IEnumerator Start()
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
@@ -33,6 +34,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             yield return step;
         }
         if(error != null) { Finish(error); yield break; }
+        // Moment (b): right after LoadAsync finishes, before the 10-frame wait.
+        RecordFingers("afterLoadAsync");
         for(int i=0;i<10;i++) yield return null;
         try { Capture(); } catch(Exception e) { error=e.ToString(); }
         Finish(error);
@@ -64,6 +67,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             }
         }
         character=Manager.Character.Instance.CreateFemale(null,1,file,true);
+        // Moment (a): right after CreateFemale returns, before LoadAsync starts.
+        RecordFingers("afterCreateFemale");
         character.name="IkkokuControlledClothedFixture";
         file.status.visibleSon=false;file.status.visibleSonAlways=false;
     }
@@ -126,6 +131,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(!character.chaFile.SaveCharaFile(Path.Combine(folder,"fixture-card.png"),1)) throw new Exception("Generated card save failed");
         var meshes=new List<object>();int meshIndex=0;
         foreach(var renderer in visible) meshes.Add(ExportMesh(renderer,meshIndex++));
+        // Moment (c): after the 10-frame wait, immediately before collecting
+        // the bone transforms written to frame.json.
+        RecordFingers("frameJsonCapture");
         var bones=new List<object>();
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) bones.Add(new Dictionary<string,object>{{"path",RelativePath(t)},{"position",V(t.localPosition)},{"rotation",V(t.localRotation)},{"scale",V(t.localScale)}});
         var globals=new Dictionary<string,object>();
@@ -137,6 +145,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var ramp=Shader.GetGlobalTexture("_RampG");if(ramp!=null) globals["_RampG"]=ExportTexture(ramp);
         var report=new Dictionary<string,object>{{"schemaVersion",1},{"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()},{"masterTextureLimit",QualitySettings.masterTextureLimit},{"lodBias",QualitySettings.lodBias},{"fixedDeltaTime",Time.fixedDeltaTime},{"maximumDeltaTime",Time.maximumDeltaTime},{"width",Width},{"height",Height},{"scope","Frozen original clothed character; source-evaluated geometry, source materials, dedicated camera/light; no Studio post-processing"},{"card","fixture-card.png"},{"color","original-color.png"},{"camera",new Dictionary<string,object>{{"position",V(camera.transform.position)},{"target",V(bounds.center)},{"rotation",V(camera.transform.rotation)},{"fov",camera.fieldOfView},{"near",camera.nearClipPlane},{"far",camera.farClipPlane},{"view",M(camera.worldToCameraMatrix)},{"projection",M(camera.projectionMatrix)}}},{"light",new Dictionary<string,object>{{"direction",V(key.transform.forward)},{"color",V(key.color)},{"intensity",key.intensity},{"ambient",V(RenderSettings.ambientLight)}}},{"bounds",new Dictionary<string,object>{{"min",V(bounds.min)},{"max",V(bounds.max)}}},{"background",V(camera.backgroundColor)},{"globals",globals},{"textures",textures},{"meshes",meshes},{"bones",bones},{"renderCPUMilliseconds",timer.Elapsed.TotalMilliseconds}};
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
+        File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
         // White-material silhouette is a geometry diagnostic; alpha cutouts are
         // deliberately excluded and therefore reported separately from color alpha.
         var whiteShader=Shader.Find("Unlit/Color");
@@ -244,5 +253,71 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var d=value as IDictionary;if(d!=null){var a=new List<string>();foreach(DictionaryEntry e in d)a.Add(J((string)e.Key)+":"+J(e.Value));return "{"+String.Join(",",a.ToArray())+"}";}
         var list=value as IEnumerable;if(list!=null){var a=new List<string>();foreach(var x in list)a.Add(J(x));return "["+String.Join(",",a.ToArray())+"]";}
         return Convert.ToString(value,CultureInfo.InvariantCulture);
+    }
+    // ST-T07b diagnostic recorder. It only observes: every existing output stays
+    // byte-identical and no game method is invoked here, so this records the
+    // decompiled behavior facts instead of re-deriving them.
+    object Member(object target,string name) {
+        // null result = member not found OR member present with a null value;
+        // every caller records that explicitly, never guesses.
+        if(target==null)return null;
+        var flags=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.DeclaredOnly|System.Reflection.BindingFlags.Instance;
+        for(var type=target.GetType();type!=null;type=type.BaseType) {
+            var property=type.GetProperty(name,flags);
+            if(property!=null){try{return property.GetValue(target,null);}catch(Exception){return "unreadable";}}
+            var field=type.GetField(name,flags);
+            if(field!=null){try{return field.GetValue(target);}catch(Exception){return "unreadable";}}
+        }
+        return null;
+    }
+    object Flatten(object value) { // 1-D array -> flat list; 2-D array -> row-major list of rows
+        var array=value as System.Array;
+        if(array==null)return value;
+        var list=new List<object>();
+        if(array.Rank==1)foreach(var item in array)list.Add(Flatten(item));
+        else if(array.Rank==2){
+            for(int i=0;i<array.GetLength(0);i++) {
+                var row=new List<object>();
+                for(int j=0;j<array.GetLength(1);j++)row.Add(Flatten(array.GetValue(i,j)));
+                list.Add(row);
+            }
+        }
+        else return "unexpected array rank "+array.Rank;
+        return list;
+    }
+    void RecordFingers(string moment) {
+        var bones=new Dictionary<string,object>();
+        foreach(string name in new[]{"cf_j_middle01_L","cf_j_middle02_L","cf_j_thumb01_R"}) {
+            var samples=new List<object>();
+            foreach(var t in character.GetComponentsInChildren<Transform>(true))
+                if(t.name==name) samples.Add(new Dictionary<string,object>{{"path",RelativePath(t)},{"localRotation",V(t.localRotation)},{"localEulerAngles",V(t.localRotation.eulerAngles)}});
+            bones[name]=samples; // empty = not instantiated yet; more than one = same-named bones on several objects
+        }
+        var status=Member(character,"fileStatus");
+        var hand=Member(character,"sibHand");
+        var animator=Member(character,"animBody");
+        var controller=Member(animator,"runtimeAnimatorController");
+        var chain=new List<object>();
+        var handBone=FindBone("cf_j_hand_L");
+        if(handBone==null)chain.Add(new Dictionary<string,object>{{"path","cf_j_hand_L"},{"found",false}});
+        else {
+            var current=handBone;
+            for(;;) {
+                var behaviours=new List<object>();
+                foreach(var behaviour in current.gameObject.GetComponents<MonoBehaviour>()) behaviours.Add(behaviour.GetType().FullName);
+                chain.Add(new Dictionary<string,object>{{"path",RelativePath(current)},{"monoBehaviours",behaviours}});
+                if(current.name=="p_cf_body_bone" || current.parent==null || chain.Count>=64) break;
+                current=current.parent;
+            }
+        }
+        fingerRecords.Add(new Dictionary<string,object>{{"moment",moment},{"bones",bones},
+            {"fileStatus",new Dictionary<string,object>{{"enableShapeHand",Flatten(Member(status,"enableShapeHand"))},{"shapeHandPtn",Flatten(Member(status,"shapeHandPtn"))},{"shapeHandBlendValue",Flatten(Member(status,"shapeHandBlendValue"))}}},
+            {"sibHand",hand==null?null:new Dictionary<string,object>{{"type",hand.GetType().Name},{"updateMask",Flatten(Member(hand,"updateMask"))}}},
+            {"animBody",new Dictionary<string,object>{{"exists",animator!=null},{"type",animator==null?null:(object)animator.GetType().Name},{"runtimeAnimatorController",controller==null?null:(object)new Dictionary<string,object>{{"name",Member(controller,"name")}}},{"enabled",Member(animator,"enabled")}}},
+            {"handBoneChain",chain}});
+    }
+    Transform FindBone(string name) {
+        foreach(var t in character.GetComponentsInChildren<Transform>(true)) if(t.name==name) return t;
+        return null;
     }
 }
