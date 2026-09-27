@@ -81,8 +81,22 @@ performance benchmark.
 
 `SourceDrawOverlays.swift` derives the seven ChaControl draw-material bindings
 from the card alone. None of these bindings is wired into composition or
-rendering yet, and none was compared with an original capture. Each keeps the
-source category name, catalog ID and RGBA values:
+rendering yet, but each slot is now compared: the controlled capture
+(`Tools/reverse/original_character_probe.py --settings .local/cmt04b/settings.tsv`,
+then `swift run --package-path Packages/Engine ikkoku-inspect draw-overlays
+<capture>/fixture-card.png`) records the original side, and
+`Tools/reverse/compare_draw_overlays.py` checks each slot against the native
+derivation from the recorded card. All seven slots match
+(`.local/cmt04b/probe/draw-overlay-comparison.json`,
+`frame.json` sha256 `5f86ea9f83d9b0b11d07a75cae4a12264f5064ebae380402ac414a71be5a79e8`,
+`fixture-card.png` sha256 `1a0d5365ec53813242b7e3bfecc6ef735c5782d13ed4e7e893a561346f3f65fe`):
+lip id 2 `cw_t_lip_001` (0.9,0.1,0.2,1), blush alpha-only 0.1, eyeshadow id
+3 `cw_t_eyeshadow_002` (0.2,0.3,0.9,1), nip id 2 `cw_t_nip_002`
+(0.8,0.4,0.5,1), underhair id 2 `cf_mnpk_02_t` (0.1,0.1,0.1,1), upper
+highlight id 5 `cw_t_hitomi_hi_u_005` (1,1,0.8,1), lower highlight id 4
+`cw_t_hitomi_hi_d_004` (0.9,0.9,1,1). Comparison is against recorded
+evidence only; nothing is rendered here. Each slot keeps the source category
+name, catalog ID and RGBA values:
 
 | Record | Slot | Category | ID / color source |
 | --- | --- | --- | --- |
@@ -93,6 +107,16 @@ source category name, catalog ID and RGBA values:
 | Body record | body overtex2 | `mt_underhair` | `underhairId` / `underhairColor` |
 | Face record | eye overtex1 | `mt_eye_hi_up` | `hlUpId` / `hlUpColor` |
 | Face record | eye overtex2 | `mt_eye_hi_down` | `hlDownId` / `hlDownColor` |
+
+**Limits of this comparison.** Texture identity is the texture name for the
+chosen ID in the original `list/characustom/00.unity3d` list-bundle row (tables
+`mt_lip_00`, `mt_eyeshadow_00`, `mt_nip_00`, `mt_underhair_00`,
+`mt_eye_hi_up_00`, and `mt_eye_hi_down_00`). The capture shows a horizontal
+texture offset of −0.02 on the left eye and +0.02 on the right eye for both
+iris-highlight slots; these bindings do not carry that offset yet, so rendering
+must add it. The body's third overlay slot is bound in the capture with color
+(1,1,1,1), but lies outside these seven bindings. Each overlay was verified at
+one ID and color, not across all catalog rows.
 
 The active makeup record is the coordinate's makeup record when its
 `enableMakeup` byte is nonzero and otherwise the face record's `baseMakeup`;
@@ -154,8 +178,8 @@ pixel comparison results are collected under `.local/reverse/original-shader-pro
 ## Remaining limits
 
 The draw-material overlays (lip, eyeshadow, blush, nip, underhair and the eye
-highlight pair) have native binding derivation only, per *Draw-material
-overlays* above; none is composed into a texture or rendered yet.
+highlight pair) match the controlled original capture per *Draw-material
+overlays* above, but none is composed into a texture or rendered yet.
 Body detail/paint, alternate create-shader families, accessory material coloring,
 emblems, extra clothing channels and arbitrary plugin shader replacements remain
 unsupported. The runtime reports omissions and preserves the original card
