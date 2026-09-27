@@ -1,0 +1,4560 @@
+{
+  "note": "Synthetic authored routes; expected values come from the recovered C# ported in this reference file (float64), not from an original CharaStudio run.",
+  "routes": {
+    "curve-aid": {
+      "loop": false,
+      "orient": "none",
+      "points": [
+        {
+          "aid": [
+            1,
+            0,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": [
+            3,
+            1,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": [
+            5,
+            2,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            4,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.25,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.75,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "2.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            2.3498178012024145,
+            0.42938221844844565,
+            0.0
+          ],
+          "segmentIndex": 1
+        }
+      }
+    },
+    "curve-loop": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": [
+            1,
+            0,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": true,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": [
+            3,
+            1,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": true,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": [
+            5,
+            2,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            4,
+            0,
+            0
+          ],
+          "speed": 4
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.10932570923846732,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2733142730961683,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5466285461923366,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.8199428192885049,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9839313831462058,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0932570923846732,
+            -0.003942919523011774,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "4.0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            4.2527815000005065,
+            0.403344322514069,
+            0.0
+          ],
+          "segmentIndex": 1
+        }
+      }
+    },
+    "ease-easeInBack": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInBack",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInBack",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInBounce": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInBounce",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInBounce",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.029027777777777874,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.009548611111110938,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.12152777777777768,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0546875,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.13874999999999993,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.27777777777777746,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInCirc": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInCirc",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInCirc",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0011114199246733403,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.006956542816433542,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.02797340563346129,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.06350832689629149,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.09212159716610868,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.11438191683587329,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInCubic": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInCubic",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInCubic",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            7.407407407407407e-05,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0011574074074074073,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.009259259259259259,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.03125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.054,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.07407407407407407,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInElastic": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInElastic",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInElastic",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0018850693731261652,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.005524271728019904,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.015625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.015080554985009305,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInExpo": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInExpo",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInExpo",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.001953125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.002460783300575925,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.003480073117735702,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.006200785359250777,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.011048543456039806,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.015625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.019686266404607376,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutBack": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutBack",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutBack",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutBounce": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutBounce",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutBounce",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.012222222222222245,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.06076388888888884,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.13888888888888873,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.234375,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.09000000000000019,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1597222222222221,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutCirc": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutCirc",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutCirc",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0022246968602822603,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.013986702816730645,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.057190958417936644,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1339745962155614,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.19999999999999996,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2546440075000701,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutCubic": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutCubic",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutCubic",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0002962962962962963,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.004629629629629629,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.037037037037037035,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.216,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2962962962962963,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutElastic": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutElastic",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutElastic",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0002691887694344198,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.007540277492504652,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0172280812438029,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutExpo": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutExpo",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutExpo",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0009765625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0015501963398126943,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0031003926796253885,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.009843133202303688,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.03125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.09921256574801243,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutQuad": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutQuad",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutQuad",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0044444444444444444,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.027777777777777776,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1111111111111111,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.25,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.36,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.4444444444444444,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutQuart": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutQuart",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutQuart",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.9753086419753087e-05,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0007716049382716048,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.012345679012345677,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1296,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.19753086419753083,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutQuint": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutQuint",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutQuint",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.316872427983539e-06,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.00012860082304526745,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.004115226337448558,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.03125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.07775999999999998,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.13168724279835387,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInOutSine": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutSine",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInOutSine",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.00547810463172671,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.03407417371093169,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1339745962155613,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2928932188134524,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.41221474770752686,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.4999999999999999,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInQuad": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInQuad",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInQuad",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0022222222222222222,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.013888888888888888,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.05555555555555555,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.18,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2222222222222222,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInQuart": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInQuart",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInQuart",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            2.469135802469136e-06,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            9.64506172839506e-05,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0015432098765432096,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0078125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0162,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.024691358024691353,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInQuint": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInQuint",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInQuint",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            8.230452674897118e-08,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            8.037551440329215e-06,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0002572016460905349,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.001953125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.004859999999999999,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.008230452674897117,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeInSine": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInSine",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeInSine",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0027409304908523335,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.017110277252379236,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.06814834742186338,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.15224093497742652,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2179869516232642,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2679491924311226,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutBack": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutBack",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutBack",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            4.440892098500626e-16,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.29940953925925995,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6977907175925937,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.2364768518518516,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.6348193750000002,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.8142645200000005,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.9115792592592593,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutBounce": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutBounce",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutBounce",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.016805555555555556,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.10503472222222221,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.42013888888888884,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9453125,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.3612499999999998,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.6805555555555554,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutCirc": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutCirc",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutCirc",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5120763831912407,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.7993052538854535,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.1055415967851332,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.3228756555322954,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.42828568570857,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.4907119849998596,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutCubic": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutCubic",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutCubic",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.19340740740740747,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.4594907407407409,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.8425925925925923,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.15625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.314,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.4074074074074072,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutElastic": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutElastic",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutElastic",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.7839802451385407,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            2.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.823223304703363,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.75,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.8479975306423175,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutExpo": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutExpo",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutExpo",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.4125989480318004,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.877537951690627,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.3700394750525633,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.6464466094067263,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.75,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.801574868503975,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutQuad": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutQuad",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutQuad",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.1311111111111111,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.3194444444444444,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.611111111111111,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.875,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.02,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.1111111111111112,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutQuart": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutQuart",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutQuart",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.25362716049382716,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5878665123456792,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0354938271604937,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.3671875,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.5198,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.604938271604938,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutQuint": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutQuint",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutQuint",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.31183958847736615,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.7055443029835393,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.196244855967078,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.525390625,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.6638600000000001,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.736625514403292,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-easeOutSine": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutSine",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "easeOutSine",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.10467191248588766,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.26105238444010315,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5176380902050415,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.7653668647301796,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9079809994790936,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9999999999999999,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-linear": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.06666666666666667,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.16666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "ease-spring": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "spring",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "spring",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.22800795848070568,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5328277134367619,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9627634345128695,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.32667341803132,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.5228398007956558,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.6450172569735293,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "line-fast-loop": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 4
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 4
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            2,
+            0
+          ],
+          "speed": 4
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.13333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.2,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "6.0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.1715728752538095,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "line-fast-no-loop": {
+      "loop": false,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 4
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 4
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            2,
+            0
+          ],
+          "speed": 4
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.13333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.2,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "2.0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            2.0,
+            0.6666666666666666,
+            0.0
+          ],
+          "segmentIndex": 1
+        }
+      }
+    },
+    "line-loop": {
+      "loop": true,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            2,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.06666666666666667,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.16666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "8.0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0571909584179369,
+            1.0571909584179369,
+            0.0
+          ],
+          "segmentIndex": 2
+        }
+      }
+    },
+    "line-no-loop": {
+      "loop": false,
+      "orient": "none",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            2,
+            0
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.06666666666666667,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.16666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.3333333333333333,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.6666666666666666,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "6.5": {
+          "finished": true,
+          "orientation": null,
+          "position": [
+            2.0,
+            2.0,
+            0.0
+          ],
+          "segmentIndex": 1
+        }
+      }
+    },
+    "linked-curves": {
+      "loop": false,
+      "orient": "none",
+      "points": [
+        {
+          "aid": [
+            1,
+            0,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": true,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": [
+            3,
+            1,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": true,
+          "position": [
+            2,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": [
+            5,
+            2,
+            0
+          ],
+          "connection": "curve",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            4,
+            0,
+            0
+          ],
+          "speed": 4
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.10932570923846732,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.2733142730961683,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.5466285461923366,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.8199428192885049,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            0.9839313831462058,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": null,
+          "position": [
+            1.0932570923846732,
+            -0.003942919523011774,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "4.5": {
+          "finished": true,
+          "orientation": null,
+          "position": [
+            4.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "orient-xy": {
+      "loop": true,
+      "orient": "xy",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            1,
+            2
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.1,
+              0.05,
+              0.1
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.14444444444444443,
+              0.07222222222222222,
+              0.14444444444444443
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.04444444444444444,
+            0.02222222222222222,
+            0.04444444444444444
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.21111111111111108,
+              0.10555555555555554,
+              0.21111111111111108
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.11111111111111109,
+            0.055555555555555546,
+            0.11111111111111109
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.3222222222222222,
+              0.1611111111111111,
+              0.3222222222222222
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.22222222222222218,
+            0.11111111111111109,
+            0.22222222222222218
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.43333333333333324,
+              0.21666666666666662,
+              0.43333333333333324
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.33333333333333326,
+            0.16666666666666663,
+            0.33333333333333326
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.4999999999999999,
+              0.24999999999999994,
+              0.4999999999999999
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.3999999999999999,
+            0.19999999999999996,
+            0.3999999999999999
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": {
+            "axis": "xy",
+            "lookTarget": [
+              0.5444444444444444,
+              0.2722222222222222,
+              0.5444444444444444
+            ],
+            "rotation": [
+              0.9105743365364628,
+              -0.1562298570518913,
+              0.3771722397422858,
+              0.06471252563850328
+            ]
+          },
+          "position": [
+            0.44444444444444436,
+            0.22222222222222218,
+            0.44444444444444436
+          ],
+          "segmentIndex": 0
+        }
+      }
+    },
+    "orient-y": {
+      "loop": true,
+      "orient": "y",
+      "points": [
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "speed": 2.0
+        },
+        {
+          "aid": null,
+          "connection": "line",
+          "easeType": "linear",
+          "link": false,
+          "position": [
+            2,
+            1,
+            2
+          ],
+          "speed": 2.0
+        }
+      ],
+      "samples": {
+        "0": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.1,
+              0.05,
+              0.1
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "segmentIndex": 0
+        },
+        "0.1": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.14444444444444443,
+              0.07222222222222222,
+              0.14444444444444443
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.04444444444444444,
+            0.02222222222222222,
+            0.04444444444444444
+          ],
+          "segmentIndex": 0
+        },
+        "0.25": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.21111111111111108,
+              0.10555555555555554,
+              0.21111111111111108
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.11111111111111109,
+            0.055555555555555546,
+            0.11111111111111109
+          ],
+          "segmentIndex": 0
+        },
+        "0.5": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.3222222222222222,
+              0.1611111111111111,
+              0.3222222222222222
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.22222222222222218,
+            0.11111111111111109,
+            0.22222222222222218
+          ],
+          "segmentIndex": 0
+        },
+        "0.75": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.43333333333333324,
+              0.21666666666666662,
+              0.43333333333333324
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.33333333333333326,
+            0.16666666666666663,
+            0.33333333333333326
+          ],
+          "segmentIndex": 0
+        },
+        "0.9": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.4999999999999999,
+              0.24999999999999994,
+              0.4999999999999999
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.3999999999999999,
+            0.19999999999999996,
+            0.3999999999999999
+          ],
+          "segmentIndex": 0
+        },
+        "1": {
+          "finished": false,
+          "orientation": {
+            "axis": "y",
+            "lookTarget": [
+              0.5444444444444444,
+              0.2722222222222222,
+              0.5444444444444444
+            ],
+            "rotation": [
+              0.9238795325112867,
+              0.0,
+              0.3826834323650897,
+              0.0
+            ]
+          },
+          "position": [
+            0.44444444444444436,
+            0.22222222222222218,
+            0.44444444444444436
+          ],
+          "segmentIndex": 0
+        }
+      }
+    }
+  },
+  "tolerance": 1e-05
+}

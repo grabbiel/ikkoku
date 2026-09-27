@@ -2,7 +2,8 @@
 
 Code-audit snapshot: 2026-09-25, base `2cfb859` plus the then-uncommitted work.
 The file inventory includes the documentation reorganization, contribution
-guide and ST-T02/A-T04 probe test additions; it does not represent a new code audit. It lists every
+guide, ST-T02/A-T04 probe test additions and the ST-T11 first-slice route
+evaluator files; it does not represent a new code audit. It lists every
 present Git-visible tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -11,13 +12,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**611 files indexed; 611 assigned; 0 unassigned.**
+**616 files indexed; 616 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 108 |
-| [Studio / IK / animation](studio.md) | 89 |
+| [Studio / IK / animation](studio.md) | 94 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 283 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 70 |
 
@@ -25,12 +26,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 80 |
+| Conversion / recovery / verification tool | 81 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 137 |
-| Test / validation | 101 |
+| Reference host / controlled fixture | 16 |
+| Runtime / shared shader declaration | 138 |
+| Test / validation | 103 |
 
 ## App / gameplay / plugins
 
@@ -250,9 +251,11 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioPluginSession.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginSession.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPose.swift](../../Packages/Engine/Sources/Studio/SourceStudioPose.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioRoute.swift](../../Packages/Engine/Sources/Studio/SourceStudioRoute.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift) | Test / validation |
@@ -272,6 +275,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
@@ -283,9 +287,11 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/studio_fullbody_oracle.py](../../Tools/reverse/analysis/studio_fullbody_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/studio_ik_bindings.py](../../Tools/reverse/analysis/studio_ik_bindings.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/studio_pose_contract.py](../../Tools/reverse/analysis/studio_pose_contract.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/studio_route_reference.py](../../Tools/reverse/analysis/studio_route_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/studio_scene_contract.py](../../Tools/reverse/analysis/studio_scene_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_animation_playback_contract.py](../../Tools/reverse/analysis/test_animation_playback_contract.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_reference.py](../../Tools/reverse/analysis/test_dynamics_reference.py) | Test / validation |
+| [Tools/reverse/analysis/test_studio_route_reference.py](../../Tools/reverse/analysis/test_studio_route_reference.py) | Test / validation |
 | [Tools/reverse/analysis/trigonometric_ik_contract.py](../../Tools/reverse/analysis/trigonometric_ik_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/animation_assets.py](../../Tools/reverse/animation_assets.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_dynamics_probe.py](../../Tools/reverse/compare_dynamics_probe.py) | Conversion / recovery / verification tool |

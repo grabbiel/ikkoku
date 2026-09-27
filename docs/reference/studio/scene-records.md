@@ -141,6 +141,30 @@ cleanup. Later animation/full-body tests add separate source pose roundtrips.
 Headless verification uses `IKKOKU_SOURCE_SCENE` with an independently generated
 synthetic source-format fixture; no original scene thumbnails are rendered.
 
+## Routes
+
+`SourceStudioRoute` is the first route runtime piece. `SourceStudioRoute(record:)`
+bridges a decoded `KoikatsuRouteRecord` (rejecting unknown connection, easing or
+orientation ordinals), `segments()` reproduces the recovered `OCIRoute.SetPath`
+segment building — line pairs with loop wrap, point/aid curve pairs, linked-curve
+joining, and the `PathLength` double-padding that times a straight two-point
+segment at three times its geometric length — and `evaluate(at:)` returns the
+tweened position, current segment, finished flag and the lookahead orientation
+(`Defaults.lookAhead` 0.05 added to the eased percentage) for a time in seconds.
+All 32 recovered `StudioTween` easings are implemented with their endpoint
+quirks, including the expo pair that stops 2⁻¹⁰/2⁻¹¹ short. Unplayable input
+(fewer than two points, non-positive or non-finite speed, non-finite positions or
+aids, zero-length paths, negative or non-finite times) throws
+`RigError.invalid` diagnostics instead of guessing.
+
+This is pure math in double precision, not playback. There is no play/stop/loop
+clock, no stateful `StudioTween.LookUpdate` smoothing (only the instantaneous
+look rotation), no `childRoot` placement, no route-point guide callbacks, no
+edited route serialization, and import still marks routes and their descendants
+unrendered. Verification is agreement with
+`Tools/reverse/analysis/studio_route_reference.py` (a ported reference, not an
+original CharaStudio capture) within that fixture's 1e-5 tolerance.
+
 ## Extended Save and preservation
 
 The installed scene load hook reads the writer marker, then a `KKEx` string,
@@ -194,6 +218,22 @@ extensions and saved-FK application. These are synthetic scene fixtures followin
 recovered source behavior, not a successful load of the user's complete original
 Studio scene collection.
 
+Route evaluation has its own reference, fixture and tests:
+
+```sh
+.local/reverse/unitypy-venv/bin/python \
+  Tools/reverse/analysis/studio_route_reference.py --out \
+  Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json
+PYTHONPATH=Tools/reverse/analysis .local/reverse/unitypy-venv/bin/python \
+  -m unittest test_studio_route_reference
+swift test --package-path Packages/Engine --filter SourceStudioRouteTests
+```
+
+The Python reference runs 25 tests against closed forms taken from the recovered
+C#; the Swift tests compare every sample of the 41 fixture routes within the
+fixture's 1e-5 tolerance. Evaluator-versus-reference agreement is not an original
+CharaStudio run.
+
 Two original installation files were also copied through the read-only,
 SHA-verified VM transfer and decoded without viewing or rendering their PNGs:
 
@@ -225,9 +265,10 @@ structure. It does not display thumbnails or instantiate scene content.
 - Extend full-body original-player evidence, dynamics topologies/world inertia and
   Animator controller coverage; existing adapters are mid-stage, not absent
   (`ST-T05`, `ST-T08`, `ST-T10`).
-- Implement route path/ease/orientation/play/stop and childRoot placement, then
-  source scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`).
-  Route records currently have no runtime or edited writer.
+- Build play/stop/loop playback, stateful `LookUpdate`, childRoot placement and an
+  edited route writer on top of the new `SourceStudioRoute` evaluator, then source
+  scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`). Route
+  records have no playback runtime or edited writer yet.
 - Add original scene topology edits/reference remapping and GUID-specific plugin
   callbacks/save adapters while preserving source identities (`ST-T03`, `ST-T13`).
 
