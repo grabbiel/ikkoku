@@ -304,6 +304,7 @@ final class StudioModel: ViewportInputHandler {
             ?? boneCatalogURL.deletingLastPathComponent().appendingPathComponent("attachments.json")
         let attachmentPath = FileManager.default.fileExists(atPath: attachmentURL.path) ? attachmentURL.path : nil
         let animationPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_CATALOG"]
+        let handPatternsPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"]
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
@@ -320,7 +321,8 @@ final class StudioModel: ViewportInputHandler {
                 let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
                     rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
                     makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath, animationCatalogFile: animationPath,
-                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"])
+                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
+                    handPatternsFile: handPatternsPath)
                 do {
                     let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
                     object.kind = .character; object.name = "Source character \(record.sourceKey)"

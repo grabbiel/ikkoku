@@ -11,12 +11,12 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**618 files indexed; 618 assigned; 0 unassigned.**
+**620 files indexed; 620 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
-| [Character / Maker / mods](character-and-mods.md) | 110 |
+| [Character / Maker / mods](character-and-mods.md) | 112 |
 | [Studio / IK / animation](studio.md) | 91 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 71 |
@@ -29,8 +29,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 139 |
-| Test / validation | 104 |
+| Runtime / shared shader declaration | 140 |
+| Test / validation | 105 |
 
 ## App / gameplay / plugins
 
@@ -151,6 +151,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceRigPreview.swift](../../Packages/Engine/Sources/Character/SourceRigPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapeChannels.swift](../../Packages/Engine/Sources/Character/SourceShapeChannels.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift](../../Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceStudioHandPose.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/CharacterTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAnimationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAnimationTests.swift) | Test / validation |
@@ -178,6 +179,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourcePreviewAppearanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePreviewAppearanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShapeChannelsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShapeChannelsTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioHandPatternsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPatternsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift) | Test / validation |
 | [Tools/mods/library.py](../../Tools/mods/library.py) | Conversion / recovery / verification tool |
 | [Tools/mods/test_library.py](../../Tools/mods/test_library.py) | Test / validation |
