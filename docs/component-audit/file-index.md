@@ -11,26 +11,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**624 files indexed; 624 assigned; 0 unassigned.**
+**629 files indexed; 629 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 112 |
-| [Studio / IK / animation](studio.md) | 95 |
+| [Studio / IK / animation](studio.md) | 99 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 71 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 72 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 83 |
+| Conversion / recovery / verification tool | 84 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 141 |
-| Test / validation | 107 |
+| Runtime / shared shader declaration | 143 |
+| Test / validation | 109 |
 
 ## App / gameplay / plugins
 
@@ -252,6 +252,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioGuide.swift](../../Packages/Engine/Sources/Studio/SourceStudioGuide.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIK.swift](../../Packages/Engine/Sources/Studio/SourceStudioIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift](../../Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPluginSession.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginSession.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPose.swift](../../Packages/Engine/Sources/Studio/SourceStudioPose.swift) | Runtime / shared shader declaration |
@@ -276,6 +277,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
@@ -309,6 +311,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/studio_attachments.py](../../Tools/reverse/studio_attachments.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_dynamics_fixture.py](../../Tools/reverse/studio_dynamics_fixture.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_hand_animation.py](../../Tools/reverse/studio_hand_animation.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/studio_look_settings.py](../../Tools/reverse/studio_look_settings.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_selection_fixture.py](../../Tools/reverse/studio_selection_fixture.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_voice.py](../../Tools/reverse/studio_voice.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_animation_assets.py](../../Tools/reverse/test_animation_assets.py) | Test / validation |
@@ -317,6 +320,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_dynamics_contract.py](../../Tools/reverse/test_dynamics_contract.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_hand_animation.py](../../Tools/reverse/test_studio_hand_animation.py) | Test / validation |
+| [Tools/reverse/test_studio_look_settings.py](../../Tools/reverse/test_studio_look_settings.py) | Test / validation |
 | [Tools/reverse/test_studio_pose_contract.py](../../Tools/reverse/test_studio_pose_contract.py) | Test / validation |
 | [Tools/reverse/test_studio_scene_contract.py](../../Tools/reverse/test_studio_scene_contract.py) | Test / validation |
 | [Tools/reverse/test_trigonometric_ik_contract.py](../../Tools/reverse/test_trigonometric_ik_contract.py) | Test / validation |
@@ -630,6 +634,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Packages/Engine/Sources/IkkokuInspect/GameplayTrace.swift](../../Packages/Engine/Sources/IkkokuInspect/GameplayTrace.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/SourceAnimationReport.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceAnimationReport.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/SourceCardPoseInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceCardPoseInspection.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/IkkokuInspect/StudioLookDataInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioLookDataInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/StudioPoseInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioPoseInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/main.swift](../../Packages/Engine/Sources/IkkokuInspect/main.swift) | Runtime / shared shader declaration |

@@ -18,7 +18,8 @@ struct SceneDocumentBytes {
     mutating func bone(_ key: Int32) { i(key); transform() }
     mutating func folder(_ key: Int32) { header(3, key); s("Child"); i(0) }
     mutating func camera() { i(2); for v: Float in [1, 2, 3, 10, 20, 30, 0, 0, -5, 23] { f(v) } }
-    mutating func character(_ card: Data, both: Bool) {
+    mutating func character(_ card: Data, both: Bool,
+                            neck: Data = Data([0, 1, 255]), eyes: Data = Data([2, 3, 254])) {
         header(0, 10); i(1); data += card
         i(2); i(1); bone(101); i(2); bone(102)
         i(1); i(3); bone(103)
@@ -31,7 +32,7 @@ struct SceneDocumentBytes {
         f(1.25); f(0.375); b(true); b(false)
         i(1); for v: Int32 in [4, 5, 6, 2] { i(v) }
         b(false); f(1.125); b(false); color(); f(0.25); f(0.75)
-        for value in [Data([0, 1, 255]), Data([2, 3, 254])] { i(Int32(value.count)); data += value }
+        for value in [neck, eyes] { i(Int32(value.count)); data += value }
         f(0.625); i(1); i(7); i(1); i(1); i(8); i(0)
     }
     mutating func route() {
@@ -51,9 +52,10 @@ struct SceneDocumentBytes {
         for no: Int32 in [12, 13] { i(2); i(no); b(false) }
         i(1); s("sample.wav"); b(false); s("background.png"); s("frame.png"); s("【KStudio】")
     }
-    static func scene(card: Data = OriginalCardFixture.card(), both: Bool = false) -> (data: Data, objectEnd: Int, baseEnd: Int) {
+    static func scene(card: Data = OriginalCardFixture.card(), both: Bool = false,
+                      neck: Data = Data([0, 1, 255]), eyes: Data = Data([2, 3, 254])) -> (data: Data, objectEnd: Int, baseEnd: Int) {
         var value = Self(data: OriginalCardFixture.png)
-        value.s("1.0.4.2"); value.i(2); value.i(10); value.character(card, both: both); value.i(20); value.route()
+        value.s("1.0.4.2"); value.i(2); value.i(10); value.character(card, both: both, neck: neck, eyes: eyes); value.i(20); value.route()
         let objectEnd = value.data.count; value.tail(); let baseEnd = value.data.count
         value.s("KKEx"); value.i(3)
         let payload = OriginalCardFixture.pack(OriginalCardFixture.map([("example.scene", .array([.integer(7), OriginalCardFixture.map([("opaque", .binary(Data([0, 255])))] )]))]))
