@@ -137,6 +137,21 @@ do {
                 [sample.childRootRotationEulerZXY.x, sample.childRootRotationEulerZXY.y, sample.childRootRotationEulerZXY.z],
              "diagnostics": sample.diagnostics] as [String: Any]
         }
+        // Segment durations per route, in depth-first record order, for the
+        // timing-alignment report. These bridge the same records through
+        // SourceStudioRoute(record:); an unplayable route reports no durations
+        // instead of a guess.
+        var segmentDurations: [[String: Any]] = []
+        func collectRouteSegments(_ record: KoikatsuObjectRecord) {
+            if let route = record.route, let durations = try? SourceStudioRoute(record: route).segments() {
+                segmentDurations.append(["sourceKey": record.sourceKey, "name": record.name as Any? ?? NSNull(),
+                                         "startIndices": durations.map(\.startIndex),
+                                         "durations": durations.map(\.duration)])
+            }
+            for child in record.children { collectRouteSegments(child) }
+        }
+        for root in document.snapshot.roots { collectRouteSegments(root) }
+        report["segmentDurations"] = segmentDurations
     case "animation-library": report.merge(try inspectSourceAnimation(url: url)) { _, new in new }
     case "animation-pose":
         guard let time = Float(arguments[4]), time.isFinite, time >= 0 else { throw RigError.invalid("Animation time must be finite and nonnegative.") }

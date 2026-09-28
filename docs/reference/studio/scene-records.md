@@ -202,28 +202,77 @@ XY orientation — saves the scene record while both routes play
 .local/reverse/unitypy-venv/bin/python Tools/reverse/compare_route_playback.py
 ```
 
+Curve aids compose through their point. The aid `KoikatsuBoneRecord` in a
+route point is the aid object's *Point-local* change amount (its
+`localPosition` under the route point), so the route-local control point is
+`pointPosition + R(pointEuler) · (pointScale ⊙ aidLocal)` with `R` the Unity
+`Quaternion.Euler` order (Z applied first, then X, then Y), staying in Unity
+route-local space. Both construction paths originally read the aid as
+route-local directly — `SourceStudioRoute(record:)` and
+`SourceStudioRoutePlayback.childRootWorld` — and both are fixed: the record
+bridge composes it with a double-precision ZXY helper (`routeLocalAid`), and
+the playback path composes it in engine space as
+`routeWorld * locals[index] * localMatrix(point.aid.transform)`. Verified
+against the capture on `IKKOKU-B` point dicKey 8 (Point at (0.8, 0.2, 0.6)
+rotated -15° about Y, aid local (-0.2683783, 0.675, -0.3895974) → route-local
+aid (0.6416017, 0.875, 0.1542164)) and point dicKey 12 (→ (-0.55, 0.525,
+-0.2999999)); an unrotated point keeps `pointPosition + aidLocal`.
+
 `Tools/reverse/compare_route_playback.py` runs
 `ikkoku-inspect route-playback route-scene.png <cumulative t>` at all 240
 recorded times and compares in a common Unity basis: positions directly,
 rotations as quaternion angles against quaternions reconstructed from the
 emitted Z-X-Y Euler angles. Because the original `StudioTween` advances in
-`Update` by whole `Time.deltaTime` steps, it reports maxima both at frame
-offset 0 and at the best constant frame offset (-2 for this capture):
-`IKKOKU-A` deviates by at most 0.030 m / 0.0° at offset 0 and 0.024 m / 0.0° at
-offset -2. `IKKOKU-B` deviates by up to 0.905 m / 175.9° at offset 0 (0.868 m /
-179.1° at -2): its first line segment matches within about 1 cm of position and
-its orientation converges to the native lookahead value, while the curve
-segments disagree on path geometry and orientation. Independent spot checks of
-the same trace show where the error comes from. On both routes the native
-position leads the original by exactly one frame from the start: the first
-recorded original frame is still at point 0, which gives a constant 0.9 cm (A)
-and 1.2 cm (B) error. Route A's error then stays constant through its first loop
-and grows linearly after the first wrap, so the loop restart timing differs. Route
-B diverges right after its first curve point: the original path swings through
-that point's aid while the native path does not. The original deactivates at
-frame 234 (3.92 s) and then holds the last point's world position. That agrees
-with the native "finished non-looping route holds its end" rule, but the native
-curve path has not reached the end by 4.0 s. The report is
+`Update` by whole `Time.deltaTime` steps, it reports maxima at offset 0, at
+the best constant frame offset (-2 for this capture) and at every constant
+offset -2…+2 (`maximumPositionErrorMetresByOffset`):
+
+| offset | `IKKOKU-A` max pos (m) | `IKKOKU-B` max pos (m) |
+|---|---|---|
+| -2 | 0.023816 | 0.159800 |
+| -1 | 0.018048 | 0.160517 |
+| 0  | 0.030087 | 0.182161 |
+| +1 | 0.049930 | 0.218115 |
+| +2 | 0.063310 | 0.249216 |
+
+`IKKOKU-A` rotation is 0.0° at every offset. `IKKOKU-B` deviates by 166.0°
+at both offset 0 and -2 — down from 0.905 m / 175.9° before the aid-frame fix.
+The remaining error is not path geometry: the first line segment matches
+to about 1 cm, and at offset -1 the native and original curve paths pass
+through the same places. The residual is along-path timing. Native runs ahead
+mid-curve (worst 0.156 m at t=3.30 s), lines up again near the linked point 12
+(about 2.7 s) and at the end, and finishes its 3.8556 s total about 0.05 s
+before the original's 3.92 s deactivation. The cause is not yet identified.
+Candidates in the recovered `StudioTween` are the equal-time-per-section
+`CRSpline.Interp` parameterization and the `PathLength` duration computed over
+the doubly padded control points. Position is independent of `LookUpdate`,
+which only smooths the aim; `LookUpdate` explains the decaying rotation
+differences at the start of each oriented segment, peaking around 55°. The
+166° rotation maximum is a separate native completion bug. From 3.86 s the
+native evaluator returns point 0's rotation (yaw 15°) and keeps the route
+active, whereas the original deactivates at 3.92 s and holds its last aim
+(yaw about -151°).
+
+On both routes the native position leads the original by exactly one frame
+from the start: the first recorded original frame is still at point 0, which
+gives a constant 0.65 cm (A) and 1.05 cm (B) error through their first
+straight segments. The report also carries a segment-timing table:
+`ikkoku-inspect route-playback` emits `segmentDurations` (native
+`segments()` start indices and durations per route), and the comparator finds
+where the original `childRoot` comes nearest each route point per loop cycle
+(`segmentTiming`). `IKKOKU-A` native durations are 2.1190 / 2.5111 / 1.4942 /
+1.4329 s (period 7.5571 s); the original passes point dicKey 1 (native t=0)
+at t=0.0173 s (lag +0.0173 s, one frame) and point dicKey 6 (native
+t=2.1190) at t=2.1374 s (lag +0.0184 s). The capture ends at t=4.003 s,
+inside the cycle, so points 10 and 14 have no arrival. Route A's loop drift
+therefore starts in segment 1 (the easeInQuad segment from point 6 at
+2.1190 s to point 10 at 4.6301 s): the offset-0 position error is a constant
+0.0065 m through segment 0 and grows monotonically 0.0002→0.0270 m through
+segment 1, so the original traverses the eased segment more slowly than the
+native duration assigns — not a wrap-time arithmetic error (the wrap itself
+is beyond this capture). `IKKOKU-B`'s chain-interior points 12 and 16 have
+nearest approaches (t=2.734 s at 0.007 m; t=3.920 s at 1e-6 m, after which it
+holds) but no native boundary to lag against. The report is
 `.local/stt11c/route-playback-comparison.json`.
 
 ## Extended Save and preservation

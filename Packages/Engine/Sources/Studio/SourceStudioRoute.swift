@@ -140,7 +140,15 @@ public struct SourceStudioRoute: Sendable, Equatable {
             guard let easeType = EaseType(rawValue: point.easeType) else {
                 throw RigError.invalid("Route point \(index) has unknown ease type \(point.easeType).")
             }
-            let aid = point.aidInitialized ? SIMD3<Double>(point.aid.transform.position) : nil
+            // The record's aid is the aid object's Point-local change amount
+            // (its `localPosition` under the route point), so compose it
+            // through the point's own local transform to route-local space.
+            let aid = point.aidInitialized
+                ? Self.routeLocalAid(pointPosition: SIMD3<Double>(point.bone.transform.position),
+                                pointEuler: SIMD3<Double>(point.bone.transform.rotationDegrees),
+                                pointScale: SIMD3<Double>(point.bone.transform.scale),
+                                aidLocal: SIMD3<Double>(point.aid.transform.position))
+                : nil
             points.append(Point(position: SIMD3<Double>(point.bone.transform.position), aid: aid,
                                 connection: connection, linked: point.linked,
                                 speed: Double(point.speed), easeType: easeType))
@@ -149,6 +157,26 @@ public struct SourceStudioRoute: Sendable, Equatable {
             throw RigError.invalid("Route has unknown orientation \(record.orientation).")
         }
         self.init(points: points, loop: record.loop, orientation: orientation)
+    }
+
+    /// Route-local aid control point: `pointPosition + R(pointEuler) ·
+    /// (pointScale ⊙ aidLocal)`, the composition Unity performs when the aid
+    /// is a child of the route point's transform. `R` is Unity
+    /// `Quaternion.Euler` (Z applied first, then X, then Y — see
+    /// `UnityCoordinates.eulerDegrees` for the order) but stays in Unity
+    /// space and Double precision: the route path is route-local Unity space,
+    /// so the engine basis change must not be applied here.
+    private static func routeLocalAid(pointPosition: SIMD3<Double>, pointEuler: SIMD3<Double>,
+                                      pointScale: SIMD3<Double>, aidLocal: SIMD3<Double>) -> SIMD3<Double> {
+        var vector = pointScale * aidLocal
+        let z = pointEuler.z * .pi / 180, x = pointEuler.x * .pi / 180, y = pointEuler.y * .pi / 180
+        var (cosine, sine) = (cos(z), sin(z))
+        vector = SIMD3(cosine * vector.x - sine * vector.y, sine * vector.x + cosine * vector.y, vector.z)
+        (cosine, sine) = (cos(x), sin(x))
+        vector = SIMD3(vector.x, cosine * vector.y - sine * vector.z, sine * vector.y + cosine * vector.z)
+        (cosine, sine) = (cos(y), sin(y))
+        vector = SIMD3(cosine * vector.x + sine * vector.z, vector.y, -sine * vector.x + cosine * vector.z)
+        return pointPosition + vector
     }
 
     /// `OCIRoute.Play` refuses a route with fewer than two points; every
