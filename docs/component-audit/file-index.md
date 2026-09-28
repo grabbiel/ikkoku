@@ -289,6 +289,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_reference.py](../../Tools/reverse/analysis/dynamics_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/neck_look_reference.py](../../Tools/reverse/analysis/neck_look_reference.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/neck_target_angle.py](../../Tools/reverse/analysis/neck_target_angle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/original_animation_reference.py](../../Tools/reverse/analysis/original_animation_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/scene_editing_oracle.py](../../Tools/reverse/analysis/scene_editing_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/studio_animation_contract.py](../../Tools/reverse/analysis/studio_animation_contract.py) | Conversion / recovery / verification tool |
@@ -299,6 +300,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/test_animation_playback_contract.py](../../Tools/reverse/analysis/test_animation_playback_contract.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_reference.py](../../Tools/reverse/analysis/test_dynamics_reference.py) | Test / validation |
 | [Tools/reverse/analysis/test_neck_look_reference.py](../../Tools/reverse/analysis/test_neck_look_reference.py) | Test / validation |
+| [Tools/reverse/analysis/test_neck_target_angle.py](../../Tools/reverse/analysis/test_neck_target_angle.py) | Test / validation |
 | [Tools/reverse/analysis/trigonometric_ik_contract.py](../../Tools/reverse/analysis/trigonometric_ik_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/animation_assets.py](../../Tools/reverse/animation_assets.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_dynamics_probe.py](../../Tools/reverse/compare_dynamics_probe.py) | Conversion / recovery / verification tool |

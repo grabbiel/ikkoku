@@ -552,6 +552,17 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(transform!=null)return transform.name;
         return "non-transform "+value.GetType().Name;
     }
+    Transform RequiredTransform(object target,string name) {
+        var transform=Required(target,name) as Transform;
+        if(transform==null)throw new Exception("the recovered look member "+name+" is missing or not a Transform");
+        return transform;
+    }
+    Dictionary<string,object> Geometry(Transform transform) {
+        // End-of-frame world pose in the exact space the recovered
+        // GetAngleToTarget/limit-check formulas read.
+        return new Dictionary<string,object>{{"name",transform.name},{"position",V(transform.position)},
+            {"rotation",V(transform.rotation)},{"lossyScale",V(transform.lossyScale)}};
+    }
     void RecordLook(int phase) {
         var record=new Dictionary<string,object>{
             {"phase",phase},{"frameCount",Time.frameCount},{"deltaTime",Time.deltaTime},
@@ -599,6 +610,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var eyeScript=Required(eyeCtrl,"eyeLookScript");
         var eyes=Flatten(Required(eyeScript,"eyeObjs")) as List<object>;
         var eyeRecord=new List<object>();
+        var eyeGeometry=new List<object>();
         for(int i=0;i<eyes.Count;i++) {
             var eye=eyes[i];
             var diagnosed=ClassifyMember(Member(eye,"eyeTransform"));
@@ -611,11 +623,47 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 if(eyeTransform==null)throw new Exception("eyeObjs["+i+"] eyeTransform is "+diagnosed+" and no fallback bone "+fallback+" was found");
             }
             eyeRecord.Add(new Dictionary<string,object>{{"eye",eyeTransform.name},{"eyeTransform",diagnosed},{"localRotation",V(eyeTransform.localRotation)},{"angleH",Required(eye,"angleH")},{"angleV",Required(eye,"angleV")}});
+            // ST-T07m: the EyeObject internals EyeLookCalc keeps per eye; the
+            // eye reference dirs are only read by this recorder, never set.
+            eyeGeometry.Add(new Dictionary<string,object>{
+                {"eye",(object)eyeTransform.name},{"target",Geometry(eyeTransform)},
+                {"origRotation",V((Quaternion)Required(eye,"origRotation"))},
+                {"referenceLookDir",V((Vector3)Required(eye,"referenceLookDir"))},
+                {"referenceUpDir",V((Vector3)Required(eye,"referenceUpDir"))},
+                {"dirUp",V((Vector3)Required(eye,"dirUp"))}});
         }
         var eyeCalcRecord=new List<object>{new Dictionary<string,object>{
             {"angleHRate",Flatten(Required(eyeScript,"angleHRate"))},
             {"angleVRate",Flatten(Required(eyeScript,"angleVRate"))}}};
         record["eyes"]=new Dictionary<string,object>{{"ptnNo",Required(eyeCtrl,"ptnNo")},{"target",V(((Transform)Required(eyeCtrl,"target")).position)},{"eyes",eyeRecord},{"calculators",eyeCalcRecord}};
+        // ST-T07m: world geometry of every transform the recovered
+        // GetAngleToTarget/limit-check formulas read (transformAim,
+        // boneCalcAngle, the last bone's neckBone and referenceCalc), the
+        // nearby neck/spine bones, the EyeLookCalc nodes and the solver
+        // members the limit check consults, so the formulas can be re-run
+        // offline against the recorded nowAngle.
+        var ptnNoValue=Convert.ToInt32(Required(neckCtrl,"ptnNo"));
+        var typeStates=Flatten(Required(neckScript,"neckTypeStates")) as List<object>;
+        if(typeStates==null||ptnNoValue<0||ptnNoValue>=typeStates.Count)throw new Exception("neckTypeStates has no entry for ptnNo "+ptnNoValue);
+        var lastBone=bones[bones.Count-1];
+        var geometryRecord=new Dictionary<string,object>{
+            {"aim",Geometry(RequiredTransform(neckScript,"transformAim"))},
+            {"neckRef",Geometry(RequiredTransform(neckScript,"boneCalcAngle"))},
+            {"headRef",Geometry(RequiredTransform(lastBone,"referenceCalc"))},
+            {"headBone",Geometry(RequiredTransform(lastBone,"neckBone"))},
+            {"changeTypeTimer",Required(neckScript,"changeTypeTimer")},
+            {"backupPos",V((Vector3)Required(neckScript,"backupPos"))},
+            {"isLimitBreakBackup",Required(typeStates[ptnNoValue],"isLimitBreakBackup")},
+            {"eyeCalc",new Dictionary<string,object>{
+                {"rootNode",Geometry(RequiredTransform(eyeScript,"rootNode"))},
+                {"trfCenter",Geometry(RequiredTransform(eyeScript,"trfCenter"))}}},
+            {"eyes",eyeGeometry}};
+        foreach(string lookBoneName in new[]{"cf_j_neck","cf_j_head","cf_j_spine03"}) {
+            var lookBone=FindBone(lookBoneName);
+            if(lookBone==null)throw new Exception("the fixture character has no "+lookBoneName+" transform");
+            geometryRecord[lookBoneName]=Geometry(lookBone);
+        }
+        record["geometry"]=geometryRecord;
         lookRecords.Add(record);
     }
     Transform FindBone(string name) {
