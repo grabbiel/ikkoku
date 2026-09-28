@@ -11,13 +11,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**631 files indexed; 631 assigned; 0 unassigned.**
+**637 files indexed; 637 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 112 |
-| [Studio / IK / animation](studio.md) | 101 |
+| [Studio / IK / animation](studio.md) | 107 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 72 |
 
@@ -25,12 +25,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 85 |
+| Conversion / recovery / verification tool | 87 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 143 |
-| Test / validation | 110 |
+| Reference host / controlled fixture | 16 |
+| Runtime / shared shader declaration | 144 |
+| Test / validation | 112 |
 
 ## App / gameplay / plugins
 
@@ -253,12 +253,14 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioIK.swift](../../Packages/Engine/Sources/Studio/SourceStudioIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift](../../Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPluginSession.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginSession.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPose.swift](../../Packages/Engine/Sources/Studio/SourceStudioPose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuBinaryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuLayoutTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift](../../Packages/Engine/Tests/EngineTests/KoikatsuSceneDocumentTests.swift) | Test / validation |
@@ -278,6 +280,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
@@ -285,6 +288,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_reference.py](../../Tools/reverse/analysis/dynamics_reference.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/neck_look_reference.py](../../Tools/reverse/analysis/neck_look_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/original_animation_reference.py](../../Tools/reverse/analysis/original_animation_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/scene_editing_oracle.py](../../Tools/reverse/analysis/scene_editing_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/studio_animation_contract.py](../../Tools/reverse/analysis/studio_animation_contract.py) | Conversion / recovery / verification tool |
@@ -294,10 +298,12 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/studio_scene_contract.py](../../Tools/reverse/analysis/studio_scene_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_animation_playback_contract.py](../../Tools/reverse/analysis/test_animation_playback_contract.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_reference.py](../../Tools/reverse/analysis/test_dynamics_reference.py) | Test / validation |
+| [Tools/reverse/analysis/test_neck_look_reference.py](../../Tools/reverse/analysis/test_neck_look_reference.py) | Test / validation |
 | [Tools/reverse/analysis/trigonometric_ik_contract.py](../../Tools/reverse/analysis/trigonometric_ik_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/animation_assets.py](../../Tools/reverse/animation_assets.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_dynamics_probe.py](../../Tools/reverse/compare_dynamics_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_hand_patterns.py](../../Tools/reverse/compare_hand_patterns.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_neck_look.py](../../Tools/reverse/compare_neck_look.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/dynamics_contract.py](../../Tools/reverse/dynamics_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/FinalIKOracle/Program.cs](../../Tools/reverse/fixtures/FinalIKOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs](../../Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs) | Reference host / controlled fixture |

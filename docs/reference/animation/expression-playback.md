@@ -177,9 +177,12 @@ loads the `p_cf_body_bone` prefab. Neck lookType values are 0 ANIMATION,
 
 `ikkoku-inspect look-data <scene.png> [studio-look-settings.json]` reports all
 of the above per character, including the effective pattern's state name.
-Not done here: no gaze solver and no `AnimationCurve` evaluation. The capture
-below records what the original controllers produce at runtime; replaying it
-in the preview remains part of the wider `ST-T07` controller integration.
+Not done here: no gaze solver (the TARGET/AWAY geometric solver, `CONTROL`
+and the eye calculator included). `AnimationCurve` evaluation and the neck
+FORWARD / FIX / ANIMATION look modes with the type-change transition are
+ported by the later slice documented below. The capture below records what
+the original controllers produce at runtime; replaying it in the preview
+remains part of the wider `ST-T07` controller integration.
 
 ### Original look capture
 
@@ -274,6 +277,84 @@ only direct transform targets are driven, so the card `eyesTargetType` and
 target-rate fields and Studio's eyes pattern 4 target guide are not
 exercised; neck pattern 5 and eyes patterns 4–7 stay outside the driver's
 accepted ranges. This is recorded ground truth, not a ported solver.
+
+### Neck look modes FORWARD / FIX / ANIMATION
+
+The next `ST-T07` slice ports the neck half of the runtime behavior against
+that capture. Every LateUpdate runs `UpdateCall(ptnNo)` and then
+`NeckUpdateCalc`, and the ported transition keeps four values per
+calculator: `lookType`, `changeTypeTimer`, and per bone (`cf_j_neck`,
+`cf_j_head`) `fixAngle` and `fixAngleBackup`.
+
+- **Type change** (`UpdateCall`): a new `lookType` zeroes `changeTypeTimer`
+  and copies `fixAngle` into `fixAngleBackup` per bone. FORWARD also clears
+  the calculator's `angleH`/`angleV`, which only the TARGET/AWAY solver
+  reads, so the port has nothing to clear.
+- **`deltaTime == 0`**: `NeckUpdateCalc` is skipped entirely — the animated
+  pose passes through untouched and the timer does not advance (a lookType
+  change still resets the timer and takes the backup).
+- **Timer and curve**: `changeTypeTimer = clamp(timer + dt, 0,
+  changeTypeLeapTime)` (settings 1.0) and `num =
+  changeTypeLerpCurve.Evaluate(timer / changeTypeLeapTime)`. The serialized
+  curve is two keys, `(0, 0.00216675, slopes 2.2096143)` and `(1, 1, slopes
+  0)`, and pre/post infinity 2 — Unity evaluates the normalized segment as
+  the cubic Hermite with tangents `outSlope*dt` / `inSlope*dt`, and the
+  clamp infinities hold the end values outside `[0, 1]`. The curve bulges
+  slightly above linear mid-segment.
+- **FORWARD**: `fixAngle` becomes identity per bone; the frame's local
+  rotation is `Slerp(fixAngleBackup, identity, num)`.
+- **FIX**: `fixAngle` keeps its value (the saved angle for a loaded state),
+  and the local rotation is `Slerp(fixAngleBackup, fixAngle, num)` — the
+  first frame of a loaded FIX state already returns the saved angle because
+  the backup equals it.
+- **ANIMATION**: `fixAngle` becomes the frame's animated local rotation and
+  the local rotation is `Slerp(fixAngleBackup, fixAngle, num)`; the animated
+  pose is assumed already inside `MaxRotateToAngle`, whose geometric clamp
+  this slice does not model.
+- At the captured `calcLerp` of 1.0, FORWARD and FIX never read the entry
+  pose: `Slerp(animated, fixAngle, calcLerp)` lands on `fixAngle` exactly.
+  TARGET and AWAY are the geometric solver and are reported as unsupported,
+  not approximated.
+
+`Tools/reverse/analysis/neck_look_reference.py` is the pure Python oracle
+(`evaluate_curve`, `slerp`, `neck_step`, 14 unittest cases), and
+`Tools/reverse/compare_neck_look.py` replays capture phases 3 (FORWARD), 4
+(FIX) and 5 (ANIMATION) of `.local/stt07i/run1/look-trace.json` frame by
+frame, seeding each phase from the frame before it. Measured maximum
+local-rotation angle error per phase, 60 frames each:
+
+| phase | lookType | cf_j_neck | cf_j_head |
+| --- | --- | --- | --- |
+| 3 | FORWARD | 0.000007° | 0.009926° |
+| 4 | FIX | 0.000000° | 0.000000° |
+| 5 | ANIMATION | 0.000000° | 0.000000° |
+
+All within the 0.01° target. `fixAngle` itself matches to 0.000000° on every
+frame of every phase. The head FORWARD residual sits just inside the target:
+the recording pipeline is internally consistent (recorded head localRotation
+equals the world-rotation reconstruction to ~6e-6°), so the gap is a Unity
+float32/native Slerp artifact on the head's ~17.2° backup arc — equivalent
+to a timer-fit offset of about −8e-5 s — not a model difference. The
+ANIMATION check only proves the no-change consequence: the trace holds no
+independent animated pose and that phase never moves the neck bones, so the
+comparator feeds the same frame's recorded pose; the moving-pose blend
+formula is covered by the Python unit tests instead.
+
+`Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift` ports this in
+Swift (`SourceStudioNeckLook`, `SourceStudioNeckLookSettings`,
+`SourceStudioNeckLookCurve`). Its `step(deltaTime:lookType:animated:)`
+returns the two Unity-basis local rotations; callers wanting the engine
+basis apply `UnityCoordinates.rotation` themselves, exactly once. Its
+float32 slerp dispatches the normalize-lerp fallback on the arc size
+(theta < 1e-4 rad) because float32 cannot represent the float `1 - 1e-8`
+threshold; within the fixture tolerance it reproduces the Python oracle
+frame for frame. `SourceStudioNeckLookTests` replays a 7-step FORWARD/FIX
+sequence plus curve samples from
+`Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json`
+(written by `compare_neck_look.py --fixture`) matching every quaternion and
+timer to ≤1e-5, checks the "saved FIX returns the saved angle from the
+first frame" case exactly, and confirms calcLerp ≠ 1, TARGET/AWAY stepping
+and degenerate inputs throw.
 
 ## Reproducible verification
 
