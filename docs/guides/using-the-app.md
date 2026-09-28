@@ -66,8 +66,10 @@ retain external file references, so referenced files must remain available.
 **File → Preview CharaStudio Scene…** parses supported source scenes, reconstructs
 selected character appearances, applies supported shape/static ABMX/expression/FK
 state and restores current/saved cameras. Original attachment and animation/IK
-kernels exist, but scene loading is incomplete: routes and their descendants and
-many original items, lights and scene effects remain unrendered or unapplied.
+kernels exist, but scene loading is incomplete: routes, their non-character
+descendants and many original items, lights and scene effects remain unrendered
+or unapplied. A character riding a route renders and moves with it but keeps an
+unrendered placeholder entry, so its edits are rejected on original export.
 
 The current UI gates all source Pose/Face/Clothes inspectors, including implemented
 source guide controls and accessory labels. Full-body IK and guide editing can be
