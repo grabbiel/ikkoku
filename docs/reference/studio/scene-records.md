@@ -170,7 +170,8 @@ caller supplies; its rotation changes only while the orientation is XY or Y
 (orient-to-path, from the evaluator's instantaneous look rotation — the
 stateful `StudioTween.LookUpdate` smoothing is not simulated), otherwise it
 keeps point 0's rotation, and a finished non-looping route holds its end
-position. The recovered assignments write position and rotation only; the
+position, holds its last aim (recomputed at percentage 1 - lookAhead on the
+final segment) and reports inactive. The recovered assignments write position and rotation only; the
 inherited route scale is kept. In the Studio preview an imported
 route's authored record lives in a runtime-only cache gated by scene identity,
 the world-matrix walks replace a route parent's authored transform with
@@ -235,23 +236,33 @@ offset -2…+2 (`maximumPositionErrorMetresByOffset`):
 | +1 | 0.049930 | 0.218115 |
 | +2 | 0.063310 | 0.249216 |
 
-`IKKOKU-A` rotation is 0.0° at every offset. `IKKOKU-B` deviates by 166.0°
-at both offset 0 and -2 — down from 0.905 m / 175.9° before the aid-frame fix.
-The remaining error is not path geometry: the first line segment matches
-to about 1 cm, and at offset -1 the native and original curve paths pass
-through the same places. The residual is along-path timing. Native runs ahead
-mid-curve (worst 0.156 m at t=3.30 s), lines up again near the linked point 12
-(about 2.7 s) and at the end, and finishes its 3.8556 s total about 0.05 s
-before the original's 3.92 s deactivation. The cause is not yet identified.
-Candidates in the recovered `StudioTween` are the equal-time-per-section
-`CRSpline.Interp` parameterization and the `PathLength` duration computed over
-the doubly padded control points. Position is independent of `LookUpdate`,
-which only smooths the aim; `LookUpdate` explains the decaying rotation
-differences at the start of each oriented segment, peaking around 55°. The
-166° rotation maximum is a separate native completion bug. From 3.86 s the
-native evaluator returns point 0's rotation (yaw 15°) and keeps the route
-active, whereas the original deactivates at 3.92 s and holds its last aim
-(yaw about -151°).
+`IKKOKU-A` rotation is 0.0° at every offset. `IKKOKU-B` deviates by 155.0°
+at offset 0 and 141.4° at -2 — down from 166.0° / 166.0° when the completion
+semantics bug was open, and 0.905 m / 175.9° before the aid-frame fix. The
+continuous evaluator's remaining position error has two sources, and the
+per-frame stepping below accounts for both:
+
+1. Timing. Each frame the original writes the position before it advances
+   its tween clock, and it drops the overshoot at every segment boundary.
+   The continuous evaluator models neither (on route A, stepping reduces the
+   error to 1e-6 m).
+2. A route B input artifact of this capture. The saved scene record holds
+   the authored point/aid rotations, all zero, while the live capture ran
+   the curve points at a compensating -15° about Y. The curve chain composed
+   from the record (3.1679 m) is therefore 2.4 % shorter than the one the
+   original walked (3.2473 m), and native reaches the end about 0.05 s
+   before the original's 3.92 s deactivation.
+
+Position is independent of
+`LookUpdate`, which only smooths the aim; the remaining rotation differences
+are `LookUpdate` decay at the start of each oriented segment (155.0° peak)
+and a frozen-smoothing offset on the held frames (14.2°). The completion
+semantics that produced the earlier 166° rotation maximum — the native
+evaluator returned point 0's rotation (yaw 15°) and kept the route active
+from 3.86 s, while the original deactivates at 3.92 s and holds its last aim
+(yaw about -151°) — are fixed: a finished non-loop route recomputes its aim
+at percentage 1 - lookAhead on the final segment, holds it, and reports
+inactive.
 
 On both routes the native position leads the original by exactly one frame
 from the start: the first recorded original frame is still at point 0, which
@@ -274,6 +285,60 @@ is beyond this capture). `IKKOKU-B`'s chain-interior points 12 and 16 have
 nearest approaches (t=2.734 s at 0.007 m; t=3.920 s at 1e-6 m, after which it
 holds) but no native boundary to lag against. The report is
 `.local/stt11c/route-playback-comparison.json`.
+
+### Per-frame stepping
+
+The `StudioTween`/`OCIRoute.Play` pair is a stateful stepper: each frame it
+re-applies the eased percentage to `childRoot`, then advances
+`percentage += deltaTime / duration`, and at a `TweenComplete` boundary moves
+to the next segment (a looping route restarts at percentage 0) inside the
+same frame, dropping the overshoot; a non-looping finish stops the tween, so
+the last written placement and aim persist and the route reports inactive.
+`SourceStudioRouteStepper` ports those rules over the same segment builder,
+durations and easing as the continuous evaluator
+(`Tools/reverse/analysis/studio_route_reference.py` gained
+`simulate_frames`; its stepping test compares both record orders), and
+`SourceStudioRoutePlayback` reports the finished route's inactive state with
+the held aim at `1 - lookAhead`. The capture is one write behind its own
+deltas: the probe snapshots at the start of the next frame, so row 0's
+`deltaTime` belongs to the `Play` frame and is never consumed. Feeding
+`deltas[1:]` and comparing capture row *k* with stepped frame *k* over the
+recorded deltas reproduces the original to the micrometre — the reference
+simulator's after-update record order gives a worst error of 1.06e-06 m on
+`IKKOKU-A` and 1.79e-06 m on `IKKOKU-B` with no active-frame disagreement
+(`Tools/reverse/compare_route_stepping.py`; the before-update order is worse,
+0.0225/0.0496 m, which confirms the write-after-update order).
+`ikkoku-inspect route-steps <scene.png> <deltas.json>` exposes the stepper and
+`Tools/reverse/compare_route_playback.py --mode {continuous,stepped,both}`
+(default `both`) runs it over the capture:
+
+| route | stepped max pos (m) | worst frame | stepped max rot (°) | active mismatches |
+|---|---|---|---|---|
+| `IKKOKU-A` | 0.00000101 | 211 | 0.0 | 0 |
+| `IKKOKU-B` | 0.160000 | 198 | 155.74 | 1 (native frame 233, original 234) |
+
+`IKKOKU-A` steps in lockstep. `IKKOKU-B`'s 0.16 m residual is an input
+artifact, not a stepping or evaluator error: the point/aid *rotations* the
+original `sceneInfo.Save` writes are the authored change amounts (all zeros
+for this scene's route points and aids), while the capture ran the curve
+points at `(0, -0.1305262, 0, 0.9914449)` — a -15° Y compensation of the
+route object's +15° Y — so the aid worlds the native evaluator composes from
+the record differ from the ones the original actually used, the chain comes
+out 3.1679 m instead of 3.2473 m, and segment 1 lasts 2.3259 s instead of
+2.3452 s. That 0.0193 s shortfall is also the single active-frame mismatch.
+Substituting only the captured aid world positions — record point positions
+otherwise, the same 239 deltas — drops the worst error to 1.25e-06 m with no
+mismatch and completion on exactly the captured frame 234
+(`.local/stt11c/route-stepping-aid-attribution.json`), so the per-frame rules,
+durations and interpolation are exact for the transforms the original walked;
+the CLI stays record-driven and reports what the serialized scene evaluates
+to. The rotation column is the unsimulated `LookUpdate` smoothing: the 155.7°
+peak decays over the six frames after the curve segment starts (frames
+92–97), and the five held frames after deactivation sit 14.2° off the
+instantaneous held aim because the original's smoothing froze where it was
+when the tween stopped. `ikkoku-inspect` exposes stepping as a diagnostic;
+the Studio preview and player are not wired to the stepper in this slice, and
+edited route serialization remains open.
 
 ## Extended Save and preservation
 

@@ -293,6 +293,86 @@ class EvaluationTests(unittest.TestCase):
                 ref.evaluate(route, time)
 
 
+class SteppingTests(unittest.TestCase):
+    """Per-frame stepping (OCIRoute Play + StudioTween TweenUpdate/Complete).
+
+    Every route here uses speed 2 on straight legs so the padded PathLength
+    gives exact 3 s segments at 1 s deltas: percentage after k advances is
+    k/3 and positions are hand-computable on the linear padded spline.
+    """
+
+    CORNER = (_point((0, 0, 0)), _point((2, 0, 0)), _point((2, 2, 0)))
+
+    def assertPositions(self, frames, expected):
+        self.assertEqual(len(frames), len(expected))
+        for frame, position in zip(frames, expected):
+            for axis in range(3):
+                self.assertAlmostEqual(frame.position[axis], position[axis], places=12)
+
+    def test_two_segment_line_hands_match_the_tween_update_order(self):
+        # apply-at-current-percentage-first means the written position lags
+        # runningTime by one frame, and the boundary frame drops its
+        # overshoot (frames 3 and 4 both sit on the corner point).
+        frames = ref.simulate_frames(self.CORNER, False, "none", [1.0] * 8)
+        self.assertPositions(frames,
+                             [(0.0, 0.0, 0.0), (2 / 3, 0.0, 0.0), (4 / 3, 0.0, 0.0),
+                              (2.0, 0.0, 0.0), (2.0, 0.0, 0.0),
+                              (2.0, 2 / 3, 0.0), (2.0, 4 / 3, 0.0), (2.0, 2.0, 0.0)])
+        # onComplete fires on the frame that applies percentage 1 with no
+        # queued segment: active flips off that frame and holds off after.
+        self.assertEqual([f.active for f in frames], [True] * 7 + [False])
+
+    def test_record_before_update_shifts_every_write_by_one_frame(self):
+        deltas = [1.0] * 8
+        after = ref.simulate_frames(self.CORNER, False, "none", deltas, record_after_update=True)
+        before = ref.simulate_frames(self.CORNER, False, "none", deltas, record_after_update=False)
+        # Play's own percentage-0 application is the first observed write.
+        self.assertEqual(before[0].position, (0.0, 0.0, 0.0))
+        self.assertEqual(before[1].position, after[0].position)
+        for index in range(1, len(before)):
+            self.assertEqual(before[index].position, after[index - 1].position)
+        # The finish write (and its active=False) is observed one frame late.
+        self.assertEqual([f.active for f in before], [True] * 8)
+
+    def test_loop_restarts_the_queue_at_percentage_zero_in_the_same_frame(self):
+        # Looping two-point route: segment 0 out (3 s) and segment 1 back to
+        # point 0 (3 s), so with 1 s deltas percentage reaches 1 on frame 7;
+        # that frame applies percentage 1 and then segment 0 at percentage 0
+        # in the SAME frame, dropping the overshoot.
+        route = (_point((0, 0, 0)), _point((2, 0, 0)))
+        frames = ref.simulate_frames(route, True, "none", [1.0] * 10)
+        self.assertEqual(len(frames), 10)
+        expected_x = [0.0, 2 / 3, 4 / 3, 2.0, 2.0, 4 / 3, 2 / 3, 0.0, 0.0, 2 / 3]
+        for frame, expected in zip(frames, expected_x):
+            self.assertAlmostEqual(frame.position[0], expected, places=12)
+        self.assertTrue(all(f.active for f in frames))
+
+    def test_completion_holds_the_last_aim_not_point_zero_rotation(self):
+        # East leg then south leg, orient "y": the aim faces the lookahead
+        # target, so after the south leg finishes the yaw must stay -90 deg
+        # (quaternion (0,0,1,0) up to sign), never back to point 0's aim.
+        route = (_point((0, 0, 0)), _point((2, 0, 0)), _point((2, 0, -2)))
+        frames = ref.simulate_frames(route, False, "y", [1.0] * 10)
+        finished = frames[7:]
+        self.assertFalse(any(f.active for f in finished))
+        for frame in finished:
+            self.assertEqual(frame.position, (2.0, 0.0, -2.0))
+            self.assertIsNotNone(frame.aim)
+            w, x, y, z = frame.aim.rotation
+            self.assertAlmostEqual(abs(y), 1.0, places=9)
+            for component in (w, x, z):
+                self.assertAlmostEqual(component, 0.0, places=9)
+
+    def test_stepping_validates_its_frame_deltas(self):
+        for delta in (-1.0, math.nan, math.inf):
+            with self.assertRaises(ref.RouteNotPlayable, msg=str(delta)):
+                ref.simulate_frames(self.CORNER, False, "none", [1.0, delta])
+
+    def test_stepping_rejects_unplayable_routes(self):
+        with self.assertRaises(ref.RouteNotPlayable):
+            ref.simulate_frames((_point((0, 0, 0)),), True, "none", [1.0])
+
+
 class FixtureTests(unittest.TestCase):
     def test_sample_times_reach_the_boundaries(self):
         self.assertIn(6.5, ref.sample_times("line-no-loop"))
