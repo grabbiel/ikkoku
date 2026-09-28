@@ -11,13 +11,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**629 files indexed; 629 assigned; 0 unassigned.**
+**631 files indexed; 631 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 112 |
-| [Studio / IK / animation](studio.md) | 99 |
+| [Studio / IK / animation](studio.md) | 101 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 72 |
 
@@ -25,12 +25,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 84 |
+| Conversion / recovery / verification tool | 85 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
 | Runtime / shared shader declaration | 143 |
-| Test / validation | 109 |
+| Test / validation | 110 |
 
 ## App / gameplay / plugins
 
@@ -314,6 +314,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/studio_look_settings.py](../../Tools/reverse/studio_look_settings.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_selection_fixture.py](../../Tools/reverse/studio_selection_fixture.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_voice.py](../../Tools/reverse/studio_voice.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/summarize_look_trace.py](../../Tools/reverse/summarize_look_trace.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_animation_assets.py](../../Tools/reverse/test_animation_assets.py) | Test / validation |
 | [Tools/reverse/test_compare_dynamics_probe.py](../../Tools/reverse/test_compare_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_compare_hand_patterns.py](../../Tools/reverse/test_compare_hand_patterns.py) | Test / validation |
@@ -323,6 +324,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_studio_look_settings.py](../../Tools/reverse/test_studio_look_settings.py) | Test / validation |
 | [Tools/reverse/test_studio_pose_contract.py](../../Tools/reverse/test_studio_pose_contract.py) | Test / validation |
 | [Tools/reverse/test_studio_scene_contract.py](../../Tools/reverse/test_studio_scene_contract.py) | Test / validation |
+| [Tools/reverse/test_summarize_look_trace.py](../../Tools/reverse/test_summarize_look_trace.py) | Test / validation |
 | [Tools/reverse/test_trigonometric_ik_contract.py](../../Tools/reverse/test_trigonometric_ik_contract.py) | Test / validation |
 
 ## Renderer / foundation / assets

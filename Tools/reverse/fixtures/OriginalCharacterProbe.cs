@@ -23,12 +23,30 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // stays as before when the file is absent.
     Dictionary<string,int> handPatterns;
     readonly List<object> handAnimeRecords = new List<object>();
+    // ST-T07i optional look-pattern mode. Non-null only when look-patterns.tsv
+    // (rows "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z") sits in the plugin
+    // folder; every existing output stays as before when the file is absent.
+    readonly List<int[]> lookPhases = new List<int[]>();
+    readonly List<Vector3> lookTargetPositions = new List<Vector3>();
+    readonly List<object> lookRecords = new List<object>();
+    string lookError;
+    Transform lookTarget; // dedicated target transform the look controllers follow; Studio owns Camera.main
     IEnumerator Start()
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
         Directory.CreateDirectory(folder);
         TryLoadHandPatterns();
+        TryLoadLookPatterns();
         for (int i=0;i<30;i++) yield return null;
+        // ST-T07i: CharaStudio's main scene load destroys freshly created
+        // objects, so look mode waits for the scene camera and then 60 more
+        // settled frames before it builds the fixture; without the tsv this
+        // block never runs and every existing output stays byte-identical.
+        if(lookPhases.Count>0) {
+            for(int i=0;i<3600&&Camera.main==null;i++) yield return null;
+            if(Camera.main==null) { Finish("Camera.main did not appear within 3600 frames; the look capture needs Studio's loaded scene"); yield break; }
+            for(int i=0;i<60;i++) yield return null;
+        }
         string error = null;
         try { CreateFixture(); } catch(Exception e) { error=e.ToString(); }
         if(error != null) { Finish(error); yield break; }
@@ -48,14 +66,29 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(handPatterns!=null)ApplyHandPatterns();
         // Moment (b): right after LoadAsync finishes, before the 10-frame wait.
         RecordFingers("afterLoadAsync");
+        // ST-T07i: the look phases run before the 10-frame wait and the capture.
+        // The controllers' own LateUpdate runs after the Animator and after a
+        // plain "yield return null" resume, so each frame is recorded at
+        // WaitForEndOfFrame, once both LateUpdates have run.
+        if(lookPhases.Count>0) {
+            yield return RunLookPhases();
+            if(lookError!=null) { Finish(lookError); yield break; }
+        }
         // ST-T07c: record every frame of the wait so the first frame whose
         // rotations match sample-list index 1 can be pinned to a frame number.
         for(int i=0;i<10;i++){yield return null;RecordFingers("frame"+i);if(handPatterns!=null)RecordHandAnime("frame"+i);}
         try { Capture(); } catch(Exception e) { error=e.ToString(); }
-        Finish(error);
+        Finish(error!=null?error:lookError); // a look failure must not be reported as a clean run
     }
     void Finish(string error) {
         File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"device",SystemInfo.graphicsDeviceName},{"graphicsAPI",SystemInfo.graphicsDeviceVersion},{"colorSpace",QualitySettings.activeColorSpace.ToString()}}));
+        // ST-T07i: written only in look mode (also when a phase failed, so the
+        // partial trace reaches --collect); absent otherwise.
+        if(lookPhases.Count>0) {
+            var phases=new List<object>();
+            for(int i=0;i<lookPhases.Count;i++)phases.Add(new Dictionary<string,object>{{"neckPattern",lookPhases[i][0]},{"eyesPattern",lookPhases[i][1]},{"frames",lookPhases[i][2]},{"targetPosition",V(lookTargetPositions[i])}});
+            File.WriteAllText(Path.Combine(folder,"look-trace.json"),J(new Dictionary<string,object>{{"error",lookError},{"frameCount",Time.frameCount},{"camera","Studio Camera.main"},{"target",lookTarget!=null?"probe IkkokuLookTarget":"none"},{"phases",phases},{"frames",lookRecords}}));
+        }
         Application.Quit();
     }
     void CreateFixture() {
@@ -444,6 +477,146 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 {"normalizedTime",state.normalizedTime},{"length",state.length},{"shortNameHash",state.shortNameHash}};
         }
         handAnimeRecords.Add(new Dictionary<string,object>{{"moment",moment},{"bones",FingerBoneSamples()},{"hands",hands}});
+    }
+    // ST-T07i optional look-pattern mode. The fixture only calls the public
+    // ChaControl.ChangeLookNeck*/ChangeLookEyes* API; the controller internals
+    // (internal fixAngle/angleH/angleV, private lookType) sit outside this
+    // assembly, so the existing Member helper (public+nonpublic walk) reads
+    // them and Required fails the run when a recovered member is missing.
+    void TryLoadLookPatterns() {
+        var file=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"look-patterns.tsv");
+        if(!File.Exists(file))return;
+        foreach(var line in File.ReadAllLines(file)) {
+            if(line.Length==0)continue;
+            var fields=line.Split('\t');
+            if(fields.Length!=4)throw new Exception("look-patterns.tsv rows need neckPtn, eyesPtn, frames and x,y,z camera position");
+            int neckPtn,eyesPtn,frames;
+            if(!Int32.TryParse(fields[0],out neckPtn)||!Int32.TryParse(fields[1],out eyesPtn)||!Int32.TryParse(fields[2],out frames))
+                throw new Exception("look-patterns.tsv pattern and frame fields must be integers");
+            if(neckPtn<0||neckPtn>4||eyesPtn<0||eyesPtn>3||frames<1||frames>600)
+                throw new Exception("look-patterns.tsv holds a pattern outside neck 0-4 / eyes 0-3 or a frame count outside 1-600");
+            var parts=fields[3].Split(',');
+            if(parts.Length!=3)throw new Exception("look-patterns.tsv camera position needs x,y,z");
+            lookPhases.Add(new[]{neckPtn,eyesPtn,frames});
+            lookTargetPositions.Add(new Vector3(float.Parse(parts[0],CultureInfo.InvariantCulture),float.Parse(parts[1],CultureInfo.InvariantCulture),float.Parse(parts[2],CultureInfo.InvariantCulture)));
+        }
+        if(lookPhases.Count==0)throw new Exception("look-patterns.tsv has no phase rows");
+    }
+    IEnumerator RunLookPhases() {
+        // The VM compiles C# 5, which forbids a yield inside a try with a catch
+        // clause, so the setup and the per-frame recording catch in ordinary
+        // helper methods and this iterator only watches lookError. The scene
+        // camera already exists: Start() waited for it before CreateFixture().
+        if(lookTarget==null)lookTarget=new GameObject("IkkokuLookTarget").transform;
+        for(int phase=0;phase<lookPhases.Count&&lookError==null;phase++) {
+            StartLookPhase(phase);
+            if(lookError!=null)yield break;
+            for(int frame=0;frame<lookPhases[phase][2];frame++) {
+                // A coroutine resuming after "yield return null" runs before
+                // the controllers' own LateUpdate; end-of-frame is after it.
+                yield return new WaitForEndOfFrame();
+                if(lookError==null)RecordLookSafe(phase);
+            }
+        }
+    }
+    void StartLookPhase(int phase) {
+        try {
+            if(lookTarget==null)throw new Exception("the probe look target is missing");
+            var head=FindBone("cf_j_head");
+            if(head==null)throw new Exception("cf_j_head is missing before the look phases start");
+            lookTarget.position=lookTargetPositions[phase];
+            lookTarget.LookAt(head.position);
+            // The trfTarg parameter makes both controllers follow this
+            // transform instead of Camera.main, which Studio's own camera
+            // controller owns and repositions.
+            character.ChangeLookNeckTarget(0,lookTarget);
+            character.ChangeLookEyesTarget(0,lookTarget);
+            character.ChangeLookNeckPtn(lookPhases[phase][0]);
+            character.ChangeLookEyesPtn(lookPhases[phase][1]);
+        } catch(Exception e) { lookError=e.ToString(); }
+    }
+    void RecordLookSafe(int phase) {
+        try { RecordLook(phase); } catch(Exception e) { lookError=e.ToString(); }
+    }
+    object Required(object target,string name) {
+        var value=Member(target,name);
+        if(value==null)throw new Exception("the recovered look member "+name+" is missing");
+        return value;
+    }
+    static string ClassifyMember(object value) {
+        // Member() cannot distinguish "field absent" from "present but null",
+        // so the two look-layout diagnostics record the distinction here.
+        if(value==null)return "null";
+        if("unreadable".Equals(value))return "unreadable";
+        var transform=value as Transform;
+        if(transform!=null)return transform.name;
+        return "non-transform "+value.GetType().Name;
+    }
+    void RecordLook(int phase) {
+        var record=new Dictionary<string,object>{
+            {"phase",phase},{"frameCount",Time.frameCount},{"deltaTime",Time.deltaTime},
+            // Studio owns and may move Camera.main, so it is recorded only as
+            // information; the driven target position is the control input.
+            {"cameraPosition",Camera.main!=null?(object)V(Camera.main.transform.position):"gone"},
+            {"targetPosition",V(lookTarget.position)}};
+        var neckCtrl=Member(character,"neckLookCtrl");
+        var eyeCtrl=Member(character,"eyeLookCtrl");
+        if(neckCtrl==null||eyeCtrl==null)throw new Exception("the fixture character has no neckLookCtrl/eyeLookCtrl");
+        var neckScript=Required(neckCtrl,"neckLookScript");
+        var bones=Flatten(Required(neckScript,"aBones")) as List<object>;
+        // The two look bones are taken by name, aBones[0] driving cf_j_neck
+        // and aBones[1] cf_j_head, because that mapping held under the
+        // scene-load capture condition; each aBones[i].neckBone slot is still
+        // recorded as a diagnostic string per entry.
+        string[] lookBoneNames={"cf_j_neck","cf_j_head"};
+        var neckRecord=new List<object>();
+        for(int i=0;i<bones.Count;i++) {
+            var bone=bones[i];
+            var angles=new Dictionary<string,object>{
+                {"neckBone",ClassifyMember(Member(bone,"neckBone"))},
+                {"angleH",Required(bone,"angleH")},{"angleV",Required(bone,"angleV")},
+                {"fixAngle",V((Quaternion)Required(bone,"fixAngle"))}};
+            if(i<lookBoneNames.Length) {
+                var neckBone=FindBone(lookBoneNames[i]);
+                if(neckBone==null)throw new Exception("the fixture character has no "+lookBoneNames[i]+" transform");
+                angles["bone"]=neckBone.name;
+                angles["localRotation"]=V(neckBone.localRotation);
+                angles["worldRotation"]=V(neckBone.rotation);
+            }
+            neckRecord.Add(angles);
+        }
+        // neckLookScript IS the NeckLookCalcVer2 component (decompiled
+        // NeckLookControllerVer2.neckLookScript), so solver state reads directly.
+        var neckCalcRecord=new List<object>{new Dictionary<string,object>{
+            {"nowAngle",V((Vector2)Required(neckScript,"nowAngle"))},
+            {"calcLerp",Required(neckScript,"calcLerp")},
+            // lookType is a NECK_LOOK_TYPE_VER2 enum; the JSON helper's final
+            // fallback would write it unquoted, so the name is taken here.
+            {"lookType",Required(neckScript,"lookType").ToString()}}};
+        // StartLookPhase passed lookTarget as trfTarg before every phase, so
+        // each controller's target is the probe look target at every frame.
+        record["neck"]=new Dictionary<string,object>{{"ptnNo",Required(neckCtrl,"ptnNo")},{"target",V(((Transform)Required(neckCtrl,"target")).position)},{"bones",neckRecord},{"calculators",neckCalcRecord}};
+        var eyeScript=Required(eyeCtrl,"eyeLookScript");
+        var eyes=Flatten(Required(eyeScript,"eyeObjs")) as List<object>;
+        var eyeRecord=new List<object>();
+        for(int i=0;i<eyes.Count;i++) {
+            var eye=eyes[i];
+            var diagnosed=ClassifyMember(Member(eye,"eyeTransform"));
+            var eyeTransform=Member(eye,"eyeTransform") as Transform;
+            if(eyeTransform==null) {
+                // Same fallback as the neck bones: the cf_J_Eye_rz_* bones are
+                // the ones the look controller drives; eyeObjs[0] is the left.
+                string fallback=i==0?"cf_J_Eye_rz_L":"cf_J_Eye_rz_R";
+                eyeTransform=FindBone(fallback);
+                if(eyeTransform==null)throw new Exception("eyeObjs["+i+"] eyeTransform is "+diagnosed+" and no fallback bone "+fallback+" was found");
+            }
+            eyeRecord.Add(new Dictionary<string,object>{{"eye",eyeTransform.name},{"eyeTransform",diagnosed},{"localRotation",V(eyeTransform.localRotation)},{"angleH",Required(eye,"angleH")},{"angleV",Required(eye,"angleV")}});
+        }
+        var eyeCalcRecord=new List<object>{new Dictionary<string,object>{
+            {"angleHRate",Flatten(Required(eyeScript,"angleHRate"))},
+            {"angleVRate",Flatten(Required(eyeScript,"angleVRate"))}}};
+        record["eyes"]=new Dictionary<string,object>{{"ptnNo",Required(eyeCtrl,"ptnNo")},{"target",V(((Transform)Required(eyeCtrl,"target")).position)},{"eyes",eyeRecord},{"calculators",eyeCalcRecord}};
+        lookRecords.Add(record);
     }
     Transform FindBone(string name) {
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) if(t.name==name) return t;

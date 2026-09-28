@@ -38,7 +38,24 @@ def hand_patterns_bytes(path):
  if set(rows)!={'L','R'}:raise ValueError('hand-patterns needs one L and one R row')
  return path.read_bytes()
 
-def start(vm,output,hand_patterns=None):
+def look_patterns_bytes(path):
+ rows=[]
+ for line in path.read_text().splitlines():
+  if not line:continue
+  fields=line.split('\t')
+  if len(fields)!=4:raise ValueError('look-patterns rows need neckPtn, eyesPtn, frames and x,y,z camera position')
+  try:neck,eyes,frames=int(fields[0]),int(fields[1]),int(fields[2])
+  except ValueError:raise ValueError('look-patterns pattern and frame fields must be integers')
+  if not 0<=neck<=4 or not 0<=eyes<=3 or not 1<=frames<=600:raise ValueError('look-patterns holds a pattern outside neck 0-4 / eyes 0-3 or a frame count outside 1-600')
+  parts=fields[3].split(',')
+  if len(parts)!=3:raise ValueError('look-patterns camera position needs x,y,z')
+  try:[float(p)for p in parts]
+  except ValueError:raise ValueError('look-patterns camera position needs x,y,z')
+  rows.append(line)
+ if not rows:raise ValueError('look-patterns has no phase rows')
+ return path.read_bytes()
+
+def start(vm,output,hand_patterns=None,look_patterns=None):
  run_path=output/'run.json'
  if run_path.exists():
   run=json.loads(run_path.read_text());root=run['root']
@@ -56,11 +73,12 @@ def start(vm,output,hand_patterns=None):
  write_small(vm,root+r'\BepInEx\plugins\shader-properties.tsv',('\n'.join(properties)+'\n').encode())
  source=Path(__file__).with_name('fixtures')/'OriginalCharacterProbe.cs'
  write_small(vm,root+r'\CharacterProbe.cs',source.read_bytes())
- result=retry(vm,"$ErrorActionPreference='Stop';$root="+ps_quote(root)+r''';$refs=@("$root\BepInEx\core\BepInEx.dll")+(Get-ChildItem "$root\CharaStudio_Data\Managed" -Filter '*.dll'|ForEach-Object {$_.FullName});& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /noconfig /nostdlib+ /target:library /out:"$root\BepInEx\plugins\IkkokuCharacterProbe.dll" /reference:$($refs -join ',') "$root\CharacterProbe.cs";if($LASTEXITCODE -ne 0){throw 'Compile failed'};if(Test-Path "$root\BepInEx\plugins\character"){Remove-Item "$root\BepInEx\plugins\character" -Recurse -Force}''')
+ result=retry(vm,"$ErrorActionPreference='Stop';$root="+ps_quote(root)+r''';$refs=@("$root\BepInEx\core\BepInEx.dll")+(Get-ChildItem "$root\CharaStudio_Data\Managed" -Filter '*.dll'|ForEach-Object {$_.FullName});$csc=& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /noconfig /nostdlib+ /target:library /out:"$root\BepInEx\plugins\IkkokuCharacterProbe.dll" /reference:$($refs -join ',') "$root\CharacterProbe.cs" 2>&1|Out-String;if($LASTEXITCODE -ne 0){throw "Compile failed:$csc"};if(Test-Path "$root\BepInEx\plugins\character"){Remove-Item "$root\BepInEx\plugins\character" -Recurse -Force}''')
  if result:print(result)
  # Uploaded after the compile step and before the player starts, so the
  # plugin can read it at Start(); an absent file keeps outputs byte-identical.
  if hand_patterns is not None:write_small(vm,root+r'\BepInEx\plugins\hand-patterns.tsv',hand_patterns_bytes(hand_patterns))
+ if look_patterns is not None:write_small(vm,root+r'\BepInEx\plugins\look-patterns.tsv',look_patterns_bytes(look_patterns))
  pid=int(retry(vm,"$root="+ps_quote(root)+r''';$p=Get-Process CharaStudio -ErrorAction SilentlyContinue|Where-Object {$_.Path -eq "$root\CharaStudio.exe"}|Select-Object -First 1;if($p){$p.Id}else{(Start-Process -FilePath "$root\CharaStudio.exe" -WorkingDirectory $root -ArgumentList @('-force-d3d11','-screen-fullscreen','0','-screen-width','768','-screen-height','1024','-logFile',"$root\unity.log") -PassThru).Id}''',True))
  run=dict(vm=vm,root=root,processID=pid,sourceSHA256=digest(source.read_bytes()),currentUser=True,stopped=False);dump(run_path,run);return run
 
@@ -85,10 +103,10 @@ def collect(vm,output):
  return dict(status=status,files=len(provenance),archiveBytes=len(data))
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');a=p.parse_args()
  if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must stay under .local')
  a.output.mkdir(parents=True,exist_ok=True)
  if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
- if a.collect and a.hand_patterns is not None:raise ValueError('--hand-patterns belongs to the capture step, not --collect')
- print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output,a.hand_patterns),indent=2))
+ if a.collect and (a.hand_patterns is not None or a.look_patterns is not None):raise ValueError('--hand-patterns/--look-patterns belong to the capture step, not --collect')
+ print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output,a.hand_patterns,a.look_patterns),indent=2))
 if __name__=='__main__':main()
