@@ -36,6 +36,13 @@ public final class SourceStudioCharacterPreview {
     public let selections: [SourceMakerLibrary.Selection]
     public let coordinate: Int
     public let expressionInputs: SourceExpressionInputs?
+    /// Saved ChaFileStatus.eyesBlink. The Studio card loader applies this flag
+    /// on load, so a card that does not blink keeps fixed blink flags.
+    public let eyesBlink: Bool
+    /// Studio-side lever over the blink clock (mirrors the Maker's automatic
+    /// blinking toggle): when off, rendering keeps the saved expression inputs
+    /// instead of the clock's current openness.
+    public var automaticBlink = true
     public let controller: SourceStudioPose
     private let baseline: RigPose
     private let attachments: SourceStudioAttachments?
@@ -45,6 +52,7 @@ public final class SourceStudioCharacterPreview {
     private let handPatternLibrary: SourceStudioHandPatterns?
     private var animationCache: [String: SourceStudioAnimation] = [:]
     private var animationPlayback = SourceStudioAnimation.Playback()
+    private var blink: SourceStudioBlink
     private let animationHeight: Float
     private let characterRoot: Int
     private let poseCatalog: [SourceStudioPose.Bone]
@@ -94,6 +102,10 @@ public final class SourceStudioCharacterPreview {
         let coordinate = status["coordinateType"]?.integerValue ?? 0
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
         self.coordinate = coordinate
+        let (eyesBlink, blinkDiagnostic) = SourceStudioBlink.decode(status)
+        self.eyesBlink = eyesBlink
+        // OCIChar.ChangeBlink applies the saved card flag right after the load.
+        self.blink = SourceStudioBlink(eyesBlink: eyesBlink)
         let library = try reference.makerLibraryFile.map { try SourceMakerLibrary.load(url: URL(fileURLWithPath: $0)) }
         var rigURL = URL(fileURLWithPath: reference.rigFile)
         let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Self.read(rigURL, maximum: 1024 * 1024))
@@ -116,6 +128,7 @@ public final class SourceStudioCharacterPreview {
         let contract = try SourceShapeContract.decode(Self.read(directory.appendingPathComponent("character-shape-contract.json"), maximum: 32 * 1024 * 1024))
         var appearance = try SourcePreviewAppearance.load(url: rigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
         var messages: [String] = []
+        if let blinkDiagnostic { messages.append(blinkDiagnostic) }
         let draft: SourceCardAppearance?
         do { draft = try SourceCardAppearance(card: card, coordinate: coordinate) }
         catch {
@@ -234,7 +247,7 @@ public final class SourceStudioCharacterPreview {
                       world: float4x4, objectID: UInt32, fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                       animationElapsed: Float = 0) throws -> RenderFrame {
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
-            expression: expressionInputs, poseOverride: editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
+            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
         return frame
@@ -321,6 +334,31 @@ public final class SourceStudioCharacterPreview {
 
     public func resetAnimationPlayback() {
         animationPlayback.reset(); evaluatedCache = nil
+    }
+
+    /// The saved expression inputs with the blink clock applied. While the card
+    /// blinks, the recovered rate drives eye and synced brow openness; with the
+    /// flag off the fixed sentinel leaves room for ChangeEyesBlinkFlag's
+    /// forced-open rates, which stay at 1. Automatic blinking off renders the
+    /// saved openness instead, like the Maker preview holding its manual rate.
+    public func effectiveExpressionInputs() -> SourceExpressionInputs? {
+        guard var inputs = expressionInputs else { return nil }
+        if automaticBlink {
+            inputs.blinkRate = blink.rate
+            if !eyesBlink { inputs.eyesOpenRate = 1; inputs.eyebrowOpenRate = 1 }
+        }
+        return inputs
+    }
+
+    /// Advances this card's recovered blink control with the monotonic Studio
+    /// animation clock (see SourceStudioBlink). Returns true only when the
+    /// rendered blink rate changed. The draw hooks mirror
+    /// SourceBlinkPlayback.update for deterministic replay.
+    @discardableResult public func updateBlink(elapsed: Float,
+        randomInteger: (Int, Int) throws -> Int = { lower, upper in lower == upper ? lower : Int.random(in: lower..<upper) },
+        randomFloat: (Float, Float) throws -> Float = { Float.random(in: $0...$1) }
+    ) throws -> Bool {
+        try blink.update(elapsed: elapsed, randomInteger: randomInteger, randomFloat: randomFloat)
     }
 
     public var hasSavedAnimation: Bool {

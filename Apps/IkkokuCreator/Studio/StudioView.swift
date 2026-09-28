@@ -402,6 +402,10 @@ struct SourcePoseInspector: View {
                 Text("Select an FK bone or IK guide in the viewport, then drag its gizmo.").font(.caption).foregroundStyle(.secondary)
                 Button("Restore saved pose") { model.resetSourcePoseEdits() }
             }
+            SectionBox(title: "Blink") {
+                Toggle("Automatic blinking", isOn: $model.sourceAutomaticBlink)
+                Text("Each character follows its saved card blink flag; this applies the Maker-style idle clock on top. Needs the idle animation button.").font(.caption).foregroundStyle(.secondary)
+            }
         } else {
             Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
         }
