@@ -66,10 +66,27 @@ public final class SourceStudioCharacterPreview {
     /// fixAngle quaternions and the pattern's lookType. Nil when the look
     /// settings are not configured or the pattern resolves to a kept pose.
     private let neckLook: (settings: SourceStudioNeckLookSettings, fixAngle: [simd_quatf], lookType: SourceStudioNeckLookType)?
+    /// The prefab settings and saved fixAngle when the effective pattern is
+    /// TARGET or AWAY; the live runtime steps from them every Studio tick.
+    private let liveNeckLook: (settings: SourceStudioNeckLookSettings, fixAngle: [simd_quatf], pattern: Int)?
+    /// The TARGET/AWAY gaze runtime, or nil when the pattern is not one of
+    /// those modes. Reset with the animation clock so a seek restarts the
+    /// transition from the saved fixAngle, like a scene reload.
+    private var neckLookRuntime: SourceStudioNeckLookRuntime?
+    /// False again after every resetNeckLook; the first step of an episode at
+    /// elapsed 0 then runs with firstFrameDelta, like applied(pose:) does.
+    private var hasSteppedNeckLook = false
+    /// Card neckTargetType; 0 (or absent) is the main camera, any other target
+    /// has no recovered meaning, so the animated pose is kept and reported.
+    private let neckTargetType: Int32?
     /// One-shot per lookType so a repeated FK neck edit does not repeat the notice.
     private var reportedNeckLookFK: Set<SourceStudioNeckLookType> = []
     public var dynamicsComponentCount: Int { dynamics?.bindings.count ?? 0 }
-    fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, guides: [SourceStudioIK.Guide])
+    /// preOverride is the FK/IK-solved pose before the neck look override
+    /// wrote anything: the pose the TARGET/AWAY gaze solver reads its Transforms
+    /// from, the way the original LateUpdate runs NeckUpdateCalc after
+    /// Animator/FK/IK and before its own rotation write.
+    fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
     private var evaluatedCache: EvaluatedPose?
     public struct DynamicsCheckpoint {
         fileprivate let owner: ObjectIdentifier
@@ -216,26 +233,49 @@ public final class SourceStudioCharacterPreview {
             }
         }
         // The scene load restores the saved neck bytes and applies the effective
-        // look pattern (card neckLookPtn wins over the saved ptnNo); only FIX
-        // and FORWARD resolve to an override here, each deferred case explains
-        // itself once at import instead of per frame.
+        // look pattern (card neckLookPtn wins over the saved ptnNo); FIX and
+        // FORWARD resolve to the deferred override above, TARGET and AWAY get
+        // the live gaze runtime the Studio tick steps, and each remaining
+        // deferred case explains itself once at import instead of per frame.
         var neckLook: (settings: SourceStudioNeckLookSettings, fixAngle: [simd_quatf], lookType: SourceStudioNeckLookType)?
+        var liveNeckLook: (settings: SourceStudioNeckLookSettings, fixAngle: [simd_quatf], pattern: Int)?
+        var neckTargetType: Int32?
         if let lookSettingsFile = reference.lookSettingsFile {
             do {
                 let lookSettings = try SourceStudioNeckLookSettings(json: Self.read(URL(fileURLWithPath: lookSettingsFile), maximum: 4 * 1024 * 1024))
                 let savedNeck = try SourceStudioNeckLookData(bytes: record.neckData)
                 let lookStatus = SourceStudioLookStatus(status: status)
+                neckTargetType = lookStatus.neckTargetType
                 let pattern = SourceStudioLookData.effectiveNeckPattern(status: lookStatus, savedNeckPatternNumber: savedNeck.patternNumber)
                 let resolution = SourceStudioNeckLookOverride.resolve(effectivePattern: pattern, settings: lookSettings, savedBoneCount: savedNeck.fixAngles.count)
-                messages.append("Neck look override \(resolution.applied.rawValue): \(resolution.reason)")
                 if let lookType = resolution.lookType, resolution.applied != .none {
                     neckLook = (lookSettings, savedNeck.fixAngles, lookType)
+                    messages.append("Neck look override \(resolution.applied.rawValue): \(resolution.reason)")
+                } else if let lookType = resolution.lookType, lookType == .target || lookType == .away,
+                          savedNeck.fixAngles.count == 2 {
+                    // NeckLookControllerVer2.target drives the gaze and its
+                    // rate is 1; type 0 reads the main camera, any other type
+                    // has no recovered meaning, so the animated pose is kept.
+                    if let target = neckTargetType, target != 0 {
+                        messages.append("Neck look target type \(target) is not the main camera (0); the animated pose is kept.")
+                    } else {
+                        liveNeckLook = (lookSettings, savedNeck.fixAngles, Int(pattern))
+                        messages.append("Neck look override live: \(lookType.rawValue) follows the Studio camera from the saved fixAngle.")
+                    }
+                } else {
+                    messages.append("Neck look override \(resolution.applied.rawValue): \(resolution.reason)")
                 }
             } catch { messages.append("Studio neck look override unavailable: \(error); the animated pose is kept.") }
         } else if let savedNeck = try? SourceStudioNeckLookData(bytes: record.neckData), savedNeck.patternNumber != 0 || !savedNeck.fixAngles.isEmpty {
             messages.append("Neck look settings are not configured; the saved neck pattern \(savedNeck.patternNumber) is not applied and the animated pose is kept.")
         }
         self.neckLook = neckLook
+        self.liveNeckLook = liveNeckLook
+        self.neckTargetType = neckTargetType
+        if let live = liveNeckLook {
+            do { neckLookRuntime = try SourceStudioNeckLookRuntime(settings: live.settings, fixAngle: live.fixAngle) }
+            catch { messages.append("Studio neck look runtime unavailable: \(error); the animated pose is kept.") }
+        }
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -324,6 +364,7 @@ public final class SourceStudioCharacterPreview {
                 enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform))
             result = solved.pose; guides = solved.guides
         } else if !ikTargets.isEmpty { throw RigError.invalid("Source IK bindings are unavailable for guide editing.") }
+        let preOverride = result
         // The NeckLookCalcVer2 override runs on the FK/IK-restored pose and
         // before hair dynamics, so dynamics sees the solved neck. The override
         // result depends on animationElapsed, which is already in the cache key.
@@ -339,6 +380,43 @@ public final class SourceStudioCharacterPreview {
                 try SourceStudioNeckLook.applied(pose: &result, rig: preview.source.rig, settings: neckLook.settings,
                     fixAngle: neckLook.fixAngle, lookType: neckLook.lookType, elapsed: animationElapsed, neckFKActive: false)
             }
+        } else if let runtime = neckLookRuntime, let live = liveNeckLook {
+            // The TARGET/AWAY gaze runtime is stepped once per Studio tick by
+            // updateNeckLook; this only writes its newest local rotations,
+            // with the same FK ownership rule and the same one-basis-conversion
+            // write as applied(pose:).
+            let lookType = live.settings.lookTypes[live.pattern]
+            if effective.enableFK, effective.activeFK.count > 1, effective.activeFK[1] {
+                if reportedNeckLookFK.insert(lookType).inserted {
+                    diagnostics.append("Neck look override skipped: FK owns the neck.")
+                }
+            } else if let rotations = runtime.lastLocalRotations {
+                do {
+                    for (bone, name) in live.settings.boneNames.enumerated() {
+                        let node = try preview.source.rig.uniqueNode(named: name)
+                        let matrix = result.localMatrices[node]
+                        let x = Float3(matrix[0].x, matrix[0].y, matrix[0].z)
+                        let y = Float3(matrix[1].x, matrix[1].y, matrix[1].z)
+                        let z = Float3(matrix[2].x, matrix[2].y, matrix[2].z)
+                        let scale = Float3(simd_length(x), simd_length(y), simd_length(z))
+                        guard (0..<3).allSatisfy({ scale[$0].isFinite && scale[$0] > 1e-8 }) else {
+                            throw RigError.invalid("Neck look override cannot read a singular local scale for '\(name)'.")
+                        }
+                        result.localMatrices[node] = Transform.trs(Float3(matrix[3].x, matrix[3].y, matrix[3].z),
+                            UnityCoordinates.rotation(rotations[bone]), scale)
+                    }
+                } catch {
+                    // A malformed saved pair (degenerate bones are rare, but a
+                    // broken rig is possible) must not kill the whole pose:
+                    // roll back any partial write, keep the animated neck,
+                    // report once and stop retrying.
+                    result = preOverride
+                    runtime.lastLocalRotations = nil
+                    if reportedNeckLookFK.insert(lookType).inserted {
+                        diagnostics.append("Neck look override skipped: \(error); the animated pose is kept.")
+                    }
+                }
+            }
         }
         if var simulation = dynamics, dynamicsStep?.elapsed == animationElapsed {
             result = try simulation.evaluate(time: animationElapsed, rig: preview.source.rig, upstream: result,
@@ -346,7 +424,7 @@ public final class SourceStudioCharacterPreview {
                 deltaTime: dynamicsStep?.elapsed == animationElapsed ? dynamicsStep?.delta : nil)
             dynamics = simulation
         }
-        evaluatedCache = (state, animationElapsed, fkRotations, ikTargets, kinematics, result, guides)
+        evaluatedCache = (state, animationElapsed, fkRotations, ikTargets, kinematics, result, preOverride, guides)
         return result
     }
 
@@ -379,7 +457,94 @@ public final class SourceStudioCharacterPreview {
     }
 
     public func resetAnimationPlayback() {
-        animationPlayback.reset(); evaluatedCache = nil
+        animationPlayback.reset(); hasSteppedNeckLook = false; resetNeckLook()
+    }
+
+    /// True when the effective neck pattern is TARGET or AWAY and the gaze
+    /// runtime exists: the Studio tick then steps updateNeckLook per frame.
+    public var hasLiveNeckLook: Bool { neckLookRuntime != nil }
+
+    /// Rebuilds the TARGET/AWAY gaze runtime from the saved fixAngle, the way
+    /// a scene load restores the calculator, so a seek or clock jump restarts
+    /// the transition instead of carrying stale smoothing across the jump.
+    public func resetNeckLook() {
+        guard let live = liveNeckLook else { return }
+        do { neckLookRuntime = try SourceStudioNeckLookRuntime(settings: live.settings, fixAngle: live.fixAngle) }
+        catch { diagnostics.append("Studio neck look runtime reset failed: \(error); the animated pose is kept.") }
+        hasSteppedNeckLook = false
+        evaluatedCache = nil
+    }
+
+    /// The Studio tick step for the TARGET/AWAY gaze: runs one LateUpdate of
+    /// NeckLookCalcVer2 — UpdateCall's write-back of the previous frame's
+    /// fixAngle for TARGET, then the limit check, angleToTarget and AWAY
+    /// adjustment read on the FK/IK-solved pose before any look override
+    /// wrote to it — and stores the frame's local rotations for editedPose to
+    /// write onto the rendered pose. `cameraModelPosition` is the Studio
+    /// camera in the same rig model space the geometry is evaluated in, in
+    /// Unity basis (the caller maps its world position with inverse(object
+    /// world) and UnityCoordinates.position; the Z reflection commutes with
+    /// the rigid part of that mapping, so the solver sees the original
+    /// world-space vectors mirrored into its own basis). The edit arguments
+    /// mirror editedPose so the gaze reads the pose the renderer actually
+    /// shows. Returns whether the stored gaze changed, which is what tells a
+    /// caller to re-render; a zero deltaTime only runs the type-change
+    /// transition, as NeckUpdateCalc early-outs then, and the tiny
+    /// firstFrameDelta replaces the delta on the first step at elapsed 0,
+    /// mirroring applied(pose:) for FIX/FORWARD.
+    @discardableResult public func updateNeckLook(deltaTime: Float, cameraModelPosition: Float3,
+        fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:],
+        kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
+        animationElapsed: Float = 0) throws -> Bool {
+        guard let runtime = neckLookRuntime, let live = liveNeckLook else { return false }
+        guard deltaTime.isFinite, deltaTime >= 0, deltaTime <= 10,
+              (0..<3).allSatisfy({ cameraModelPosition[$0].isFinite }) else {
+            throw RigError.invalid("Neck look gaze needs a finite deltaTime up to 10 s and a finite camera position.")
+        }
+        let lookType = live.settings.lookTypes[live.pattern]
+        guard lookType == .target || lookType == .away else { return false }
+        let frameDelta = !hasSteppedNeckLook && animationElapsed == 0 ? SourceStudioNeckLook.firstFrameDelta : deltaTime
+        let pose = try editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics,
+            animationState: animationState, animationElapsed: animationElapsed)
+        let rotationsBefore = runtime.lastLocalRotations
+        let fixBefore = runtime.fixAngle
+        // The solver reads the Animator's pose, not its own last write (Unity's
+        // animation update overwrites the bone each frame before LateUpdate),
+        // so the geometry comes from the cached pre-override pose.
+        var geometryPose = evaluatedCache?.preOverride ?? pose
+        if lookType == .target {
+            // UpdateCall: the TARGET calculator puts each bone's previous
+            // fixAngle back as its localRotation before the head rotation is
+            // read, which is what reconciles the capture's same-frame head
+            // rotation (within 0.082 deg). RigPose is a value type, so this
+            // write stays out of the cache entry.
+            for (bone, name) in live.settings.boneNames.enumerated() {
+                let node = try preview.source.rig.uniqueNode(named: name)
+                let matrix = geometryPose.localMatrices[node]
+                geometryPose.localMatrices[node] = Transform.trs(matrix.translation,
+                    UnityCoordinates.rotation(runtime.fixAngle[bone]), matrix.scaleFactors)
+            }
+        }
+        let world = try preview.source.rig.evaluate(geometryPose).worldMatrices
+        func converted(_ node: Int) -> (position: SIMD3<Double>, rotation: simd_quatd) {
+            let matrix = UnityCoordinates.matrix(world[node])
+            let q = matrix.rotationQuaternion
+            return (SIMD3(Double(matrix.translation.x), Double(matrix.translation.y), Double(matrix.translation.z)),
+                    simd_quatd(ix: Double(q.imag.x), iy: Double(q.imag.y), iz: Double(q.imag.z), r: Double(q.real)))
+        }
+        let aim = converted(try preview.source.rig.uniqueNode(named: "aim"))
+        let neckRef = converted(try preview.source.rig.uniqueNode(named: "NeckRef"))
+        let head = converted(try preview.source.rig.uniqueNode(
+            named: live.settings.boneNames.last ?? "cf_j_head"))
+        let target = SIMD3(Double(cameraModelPosition.x), Double(cameraModelPosition.y), Double(cameraModelPosition.z))
+        try runtime.update(deltaTime: frameDelta, lookType: lookType, pattern: live.pattern,
+            settings: live.settings,
+            geometry: SourceStudioNeckLookGeometry(aimPosition: aim.position, aimRotation: aim.rotation,
+                neckRefPosition: neckRef.position, neckRefRotation: neckRef.rotation,
+                headRotation: head.rotation, target: target))
+        hasSteppedNeckLook = true
+        evaluatedCache = nil
+        return runtime.lastLocalRotations != rotationsBefore || runtime.fixAngle != fixBefore
     }
 
     /// The saved expression inputs with the blink clock applied. While the card
