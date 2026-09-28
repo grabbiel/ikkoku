@@ -26,8 +26,10 @@ import Scene
 /// (right-handed) world matrices; the `SourceStudioRoute` evaluator still runs
 /// in the source (Unity) numeric convention and its position and aim are
 /// converted here, exactly as imported characters convert saved FK Euler.
-/// The stateful `LookUpdate` `SmoothDampAngle` smoothing is not simulated:
-/// the aim is instantaneous.
+/// The continuous evaluator reports the instantaneous aim; the stateful
+/// `LookUpdate` `SmoothDampAngle` smoothing — what `childRoot`'s rotation
+/// actually holds frame by frame — is carried by `SourceStudioRouteStepper`
+/// and reported through `steppedRoutes`.
 public enum SourceStudioRoutePlayback {
     /// Engine-space local matrices for a route record's point bones, in point
     /// order. These are the authored values; callers that edit point objects
@@ -139,9 +141,16 @@ public enum SourceStudioRoutePlayback {
     /// and their locals. A mismatched local count falls back to the record's
     /// authored transforms like `childRootWorld`; a route that cannot play
     /// yields `nil` and a diagnostic — the original's `Play` refuses it and
-    /// `childRoot` stays at its pin.
-    public static func stepper(route: KoikatsuRouteRecord, routeWorld: float4x4,
-                               pointLocals: [float4x4]) -> (stepper: SourceStudioRouteStepper?, diagnostics: [String]) {
+    /// `childRoot` stays at its pin. `playRotation` is the rotation `Play`
+    /// leaves on `childRoot` (point 0's world rotation, in the same engine
+    /// basis as `childRootWorld`'s result) and `playDeltaTime` the `Play`
+    /// frame's own `Time.deltaTime`; together they seed the `LookUpdate`
+    /// state the first frame's `LateUpdate` damps from. Without them the
+    /// stepper still plays but its rotation state starts at zero, which only
+    /// matches a route whose point 0 is unrotated.
+    public static func stepper(route: KoikatsuRouteRecord, routeWorld: float4x4, pointLocals: [float4x4],
+                               playRotation: simd_quatf? = nil, playDeltaTime: Double? = nil)
+        -> (stepper: SourceStudioRouteStepper?, diagnostics: [String]) {
         var diagnostics: [String] = []
         var locals = pointLocals
         if locals.count != route.points.count {
@@ -150,8 +159,13 @@ public enum SourceStudioRoutePlayback {
         }
         do {
             let evaluator = try Self.makeEvaluator(route: route, routeWorld: routeWorld, locals: locals)
+            // The evaluator runs in source (Unity) numeric space, so the
+            // engine-basis seed converts back through the same involutive
+            // basis change `samples` uses for its output.
             return (try SourceStudioRouteStepper(points: evaluator.points, loop: evaluator.loop,
-                                                 orientation: evaluator.orientation), diagnostics)
+                                                 orientation: evaluator.orientation,
+                                                 initialRotation: playRotation.map(UnityCoordinates.rotation),
+                                                 initialDelta: playDeltaTime), diagnostics)
         } catch {
             diagnostics.append("Route stepping unavailable: \(error) childRoot remains pinned to point 0.")
             return (nil, diagnostics)
@@ -267,9 +281,12 @@ public enum SourceStudioRoutePlayback {
         /// `childRoot` keeps its last written placement).
         public let active: Bool
         /// `false` while `childRoot` still holds point 0's `Play` rotation —
-        /// before the first valid aim, or forever when the orientation is
-        /// none. The stateful `LookUpdate` `SmoothDampAngle` smoothing is not
-        /// simulated: an oriented frame reports the instantaneous aim.
+        /// before the first frame's `LateUpdate` has damped anything, or
+        /// forever when the orientation is none (`LookUpdate` never runs, so
+        /// the rotation is never even an aim). `true` once the `LookUpdate`
+        /// state has started moving: `childRootRotationEulerZXY` is then the
+        /// damped Euler, one `SmoothDampAngle` step behind the instantaneous
+        /// aim, not the aim itself.
         public let rotationFromAim: Bool
     }
 
@@ -297,12 +314,20 @@ public enum SourceStudioRoutePlayback {
     /// tween's `Update` would observe; `Play`'s own percentage-0 application
     /// is frame 0's starting state and is not a frame of its own. A
     /// non-finite or negative `deltaTime` is reported before any route runs.
-    public static func steppedRoutes(in snapshot: KoikatsuSceneSnapshot,
-                                     deltaTimes: [Double]) throws -> [SteppedRoute] {
+    /// `playDeltaTime` — the `Play` frame's own `deltaTime`, which row 0's
+    /// `LateUpdate` damp consumed but the tween never advanced with — seeds
+    /// the `LookUpdate` rotation state alongside point 0's world rotation;
+    /// omitting it falls back to the first supplied frame delta, which only
+    /// matches a capture whose `Play` frame ran at that delta.
+    public static func steppedRoutes(in snapshot: KoikatsuSceneSnapshot, deltaTimes: [Double],
+                                     playDeltaTime: Double? = nil) throws -> [SteppedRoute] {
         for (index, delta) in deltaTimes.enumerated() {
             guard delta.isFinite, delta >= 0 else {
                 throw RigError.invalid("Route stepping deltaTime \(delta) at frame \(index) must be finite and non-negative.")
             }
+        }
+        if let playDeltaTime, !playDeltaTime.isFinite || playDeltaTime < 0 {
+            throw RigError.invalid("Route stepping playDeltaTime \(playDeltaTime) must be finite and non-negative.")
         }
         var routes: [SteppedRoute] = []
         func visit(_ record: KoikatsuObjectRecord, parentWorld: float4x4) {
@@ -314,35 +339,52 @@ public enum SourceStudioRoutePlayback {
                 let point0Rotation = point0World.rotationQuaternion
                 var diagnostics: [String] = []
                 var built: SourceStudioRouteStepper?
-                if route.active {
-                    let setup = stepper(route: route, routeWorld: world, pointLocals: locals)
+                // Seed the LookUpdate state with what `Play` actually left:
+                // point 0's world rotation and the Play frame's own delta
+                // (falling back to the first supplied frame delta, since a
+                // capture that seeds a Play frame ran one).
+                let initialDelta = playDeltaTime ?? deltaTimes.first
+                if route.active, let initialDelta {
+                    let setup = stepper(route: route, routeWorld: world, pointLocals: locals,
+                                        playRotation: point0Rotation, playDeltaTime: initialDelta)
                     built = setup.stepper
                     diagnostics = setup.diagnostics
                 }
                 var frames: [SteppedFrame] = []
+                var rotationFromLookUpdate = false
                 if var running = built {
+                    // Mirror of the stepper's LateUpdate condition, frame by
+                    // frame: the tween ran this frame (it was not finished at
+                    // the frame's start), the orientation is set, a previous
+                    // write left a valid looktarget, and a previous write's
+                    // deltaTime seeded the damp (`Play`'s own at frame 0,
+                    // guaranteed non-nil because `built` exists).
+                    var wasRunning = true
+                    var previousAimRotation = running.current().aim?.rotation != nil
                     for delta in deltaTimes {
+                        let aimWasValid = previousAimRotation
                         // Validated above, so stepping cannot throw here.
                         let written = (try? running.step(deltaTime: delta)) ?? running.current()
-                        // The stepper runs on the evaluator's source-space
-                        // (Unity) points, so its position needs no coordinate
-                        // flip — unlike the engine-space matrix `samples`
-                        // converts — while its aim quaternion still converts
-                        // to engine space before the Z-X-Y Euler decode,
-                        // exactly as `childRootWorld` does.
-                        var rotation = point0Rotation
-                        var rotationFromAim = false
-                        if let aimRotation = written.aim?.rotation {
-                            rotation = UnityCoordinates.rotation(aimRotation)
-                            rotationFromAim = true
+                        previousAimRotation = written.aim?.rotation != nil
+                        if wasRunning, route.orientation != 0, aimWasValid {
+                            rotationFromLookUpdate = true
                         }
+                        wasRunning = written.active
+                        // The stepper runs on the evaluator's source-space
+                        // (Unity) points, so neither its position nor its
+                        // LookUpdate Euler needs a coordinate flip — unlike
+                        // the engine-space matrix `samples` converts. The
+                        // rotation is the damped Euler, not the instantaneous
+                        // aim.
                         frames.append(SteppedFrame(
                             deltaTime: delta,
                             childRootPosition: Float3(Float(written.position.x),
                                                       Float(written.position.y),
                                                       Float(written.position.z)),
-                            childRootRotationEulerZXY: UnityCoordinates.sourceEulerDegrees(rotation),
-                            active: written.active, rotationFromAim: rotationFromAim))
+                            childRootRotationEulerZXY: Float3(Float(written.rotation.x),
+                                                             Float(written.rotation.y),
+                                                             Float(written.rotation.z)),
+                            active: written.active, rotationFromAim: rotationFromLookUpdate))
                     }
                 } else if !route.active {
                     // `Stop` pins every frame; an unplayable active route

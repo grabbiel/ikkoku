@@ -311,12 +311,13 @@ simulator's after-update record order gives a worst error of 1.06e-06 m on
 `ikkoku-inspect route-steps <scene.png> <deltas.json>` exposes the stepper and
 `Tools/reverse/compare_route_playback.py --mode {continuous,stepped,both}`
 (default `both`) runs it over the capture. Over the live-authoring capture
-(`.local/stt11c/probe`) the stepped maxima are:
+(`.local/stt11c/probe`) the stepped maxima are (the rotation column is the
+simulated `LookUpdate` state described below):
 
 | route | stepped max pos (m) | worst frame | stepped max rot (°) | active mismatches |
 |---|---|---|---|---|
 | `IKKOKU-A` | 0.00000101 | 211 | 0.0 | 0 |
-| `IKKOKU-B` | 0.160000 | 198 | 155.74 | 1 (native frame 233, original 234) |
+| `IKKOKU-B` | 0.160000 | 198 | 16.9 | 1 (native frame 233, original 234) |
 
 `IKKOKU-A` steps in lockstep. `IKKOKU-B`'s 0.16 m residual there is an input
 artifact, not a stepping or evaluator error: `AddObjectRoute.AddPoint` parents
@@ -361,20 +362,48 @@ and stepping the same exact deltas over the same scene record gives:
 | route | stepped max pos (m) | worst frame | stepped max rot (°) | active mismatches |
 |---|---|---|---|---|
 | `IKKOKU-A` | 0.00000073 | 238 | 0.0 | 0 |
-| `IKKOKU-B` | 0.00000098 | 220 | 155.74 | 0 |
+| `IKKOKU-B` | 0.00000098 | 220 | 0.0511 | 0 |
 
 Both routes now close the loop against the record to under a micrometre with
 no active-frame disagreement (`.local/stt11g/route-playback-stepped-comparison.json`,
 `.local/stt11g/route-stepping-comparison.json`): the native stepper is exact on
 the transforms the serialized scene actually carries, and the earlier route-B
 residual was the authoring-time `SetParent` compensation the record never
-contained. The rotation column is the unsimulated `LookUpdate` smoothing: the
-155.7° peak at the curve segment start (frame 90) decays below 5° by frame 146,
-and the held frames after the 3.91 s deactivation sit 1.4° off the
-instantaneous held aim because the original's smoothing froze where it was when
-the tween stopped. `ikkoku-inspect` exposes stepping as a diagnostic;
-the Studio preview and player are not wired to the stepper in this slice, and
-edited route serialization remains open.
+contained.
+
+The rotation column is the `LookUpdate` state itself, not the instantaneous
+aim. `StudioTween.LookUpdate` runs in `LateUpdate` on every frame the tween was
+running — the frame a non-looping route completes on is smoothed for the last
+time, and every later frame freezes at that Euler. It saves `childRoot`'s
+current Euler, lets `LookAt` write the instantaneous aim, then restores the
+saved angles and damps each axis toward that aim with `Mathf.SmoothDampAngle`
+on a fresh zero velocity every call (the damp has no memory across frames).
+Its smoothTime resolves from the tween arguments — `looktime * 0.05`, else the
+move's `time * 0.15 * 0.05`, else `Defaults.updateTime` — and because a route
+tween passes only "speed" the 0.05 s fallback applies; the capture confirms it
+rather than assuming it: with 0.05 s the stepping rotation maxima are 0.0° on
+`IKKOKU-A` and 0.0511° on `IKKOKU-B` (worst frame 166), while the `time`-branch
+scaling `segmentDuration * 0.15 * 0.05` = `segmentDuration * 0.0075` leaves
+85.1° (worst frame 93) and is rejected (`compare_route_stepping.py` reports
+both columns). The axis-"y" orientation then re-keeps the root's own x/z, and
+because Unity stores rotations as quaternions the damped Euler is written back
+through `transform.eulerAngles` — each frame damps from the canonicalised Z-X-Y
+read-back, not the raw damped angles. Row *k*'s damp targets the aim the
+previous row's tween write established and consumes that previous write's
+`deltaTime` — the `Play` frame's own delta seeds row 0 and is passed separately
+(`ikkoku-inspect route-steps`' optional fourth argument), which is why the
+rotation column lags the position/aim column by one row.
+`Fixtures/route-stepping.json` carries the reference's per-frame `rotation`
+column and `SourceStudioRouteStepper` matches it to 1e-4°. Before the port the
+captures' own rotation column was that raw lag — a 155.7° peak at the curve
+segment start (frame 90) decaying below 5° by frame 146, held frames 1.4° off
+the instantaneous held aim — and the ported rules reproduce the original's
+smoothing itself: the reload capture now sits 0.0511° off, and the
+live-authoring capture's 16.9° rotation residual goes with its `SetParent`
+position artifact.
+`ikkoku-inspect` exposes stepping as a diagnostic; the Studio preview and
+player are not wired to the stepper in this slice, and edited route
+serialization remains open.
 
 ## Extended Save and preservation
 
@@ -476,12 +505,13 @@ structure. It does not display thumbnails or instantiate scene content.
 - Extend full-body original-player evidence, dynamics topologies/world inertia and
   Animator controller coverage; existing adapters are mid-stage, not absent
   (`ST-T05`, `ST-T08`, `ST-T10`).
-- Build stateful `LookUpdate` smoothing, an editor play/stop control, route-point
-  guide callbacks and an edited route writer on top of the `SourceStudioRoute`
-  evaluator and the `SourceStudioRoutePlayback` `childRoot` placement, then source
-  scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`). Route
-  playback has synthetic-record tests only — no original capture evidence and no
-  edited writer yet.
+- Build an editor play/stop control, route-point guide callbacks and an edited
+  route writer on top of the `SourceStudioRoute` evaluator and the
+  `SourceStudioRoutePlayback` `childRoot` placement, then source
+  scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`).
+  Stateful `LookUpdate` smoothing is ported in `SourceStudioRouteStepper`
+  (per-frame stepping above) and reaches `ikkoku-inspect route-steps` only; the
+  continuous `childRootWorld` path still reports the instantaneous aim.
 - Add original scene topology edits/reference remapping and GUID-specific plugin
   callbacks/save adapters while preserving source identities (`ST-T03`, `ST-T13`).
 

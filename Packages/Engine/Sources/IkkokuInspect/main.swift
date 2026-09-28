@@ -85,7 +85,9 @@ do {
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
     let logicTrace = arguments.count == 2 && ["blink-trace", "gameplay-trace", "fixed-event-trace", "adv-trace", "scene-document", "animation-library"].contains(arguments[0])
     let routePlayback = arguments.count == 3 && arguments[0] == "route-playback"
-    let routeStepping = arguments.count == 3 && arguments[0] == "route-steps"
+    // The fourth argument is the optional Play-frame deltaTime that seeds the
+    // LookUpdate rotation state.
+    let routeStepping = (arguments.count == 3 || arguments.count == 4) && arguments[0] == "route-steps"
     let animationPose = arguments.count == 5 && arguments[0] == "animation-pose"
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
@@ -102,7 +104,7 @@ do {
                    ikkoku-inspect <fixed-event-trace|adv-trace> <trace.json>
                    ikkoku-inspect scene-document <source-scene.png>
                    ikkoku-inspect route-playback <source-scene.png> <seconds>
-                   ikkoku-inspect route-steps <source-scene.png> <deltas.json>
+                   ikkoku-inspect route-steps <source-scene.png> <deltas.json> [play-delta]
                    ikkoku-inspect animation-library <animation.json>
                    ikkoku-inspect animation-pose <animation.json> <rig-or-avatar.json> <clip-id> <seconds>
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
@@ -158,17 +160,29 @@ do {
         // `<deltas.json>` is a JSON array of `Time.deltaTime` values, one per
         // simulated frame; the capture's own trace sequence is the intended
         // input. Validation of the values themselves is in steppedRoutes.
+        // The optional `<playDelta>` is the Play frame's own deltaTime — row 0
+        // of a capture snapshots the LateUpdate damp Play's frame ran, which
+        // consumed no array entry — so it seeds the LookUpdate rotation state
+        // rather than stepping a frame of its own.
         let deltasData = try Data(contentsOf: URL(fileURLWithPath: arguments[2]).standardizedFileURL)
         guard let deltaTimes = try? JSONDecoder().decode([Double].self, from: deltasData),
               !deltaTimes.isEmpty else {
             throw RigError.invalid("Route stepping needs a non-empty JSON array of numeric deltaTimes.")
         }
+        var playDeltaTime: Double?
+        if arguments.count > 3 {
+            guard let play = Double(arguments[3]), play.isFinite, play >= 0 else {
+                throw RigError.invalid("Route stepping playDeltaTime must be a finite non-negative number.")
+            }
+            playDeltaTime = play
+        }
         let document = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: url))
         // childRoot placement per frame; see SourceStudioRoutePlayback for scope.
         report["frameCount"] = deltaTimes.count
-        report["scope"] = "per-frame childRoot world placement per route from decoded records, stepped over the supplied deltaTimes (write-after-update order); original capture animation and LookUpdate rotation smoothing are not simulated"
+        report["scope"] = "per-frame childRoot world placement per route from decoded records, stepped over the supplied deltaTimes (write-after-update order); rotation is the LookUpdate SmoothDampAngle state (one damp per frame toward the previous frame's written aim, seeded by Play's rotation and the optional Play-frame delta), so it trails the instantaneous aim by one aim step; only childRoot placement is simulated, other scene animation is not"
         report["routes"] = try SourceStudioRoutePlayback.steppedRoutes(in: document.snapshot,
-                                                                       deltaTimes: deltaTimes).map { route in
+                                                                       deltaTimes: deltaTimes,
+                                                                       playDeltaTime: playDeltaTime).map { route in
             ["sourceKey": route.sourceKey, "name": route.name as Any? ?? NSNull(),
              "recordActive": route.recordActive, "loop": route.loop,
              "visibleLine": route.visibleLine, "orientation": route.orientation,

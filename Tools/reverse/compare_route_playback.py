@@ -206,11 +206,17 @@ def compare_stepped(probe, steps, continuous=None):
     being sampled in continuous time.
 
     Row 0's ``deltaTime`` is the ``Play`` frame's and the original tween never
-    consumed it, so the CLI runs over ``deltas[1:]`` and capture row ``k``
-    (``0 <= k <= N-2``) is compared with stepped frame ``k``: the capture
-    snapshots at the start of the frame after that frame's tween update read
-    the write of the previous frame, whose time accumulated through row
-    ``k``'s predecessor. The last row's post-update state was never recorded.
+    consumed it, so the CLI runs over ``deltas[1:]`` — with ``deltas[0]``
+    passed separately as the ``Play`` frame's delta, which seeds the stepper's
+    ``LookUpdate`` rotation state — and capture row ``k`` (``0 <= k <= N-2``)
+    is compared with stepped frame ``k``: the capture snapshots at the start
+    of the frame after that frame's tween update read the write of the
+    previous frame, whose time accumulated through row ``k``'s predecessor.
+    The last row's post-update state was never recorded.
+
+    The emitted rotation is the LookUpdate-smoothed Euler (one damp per frame
+    toward the aim the previous frame wrote), so the rotation maxima measure
+    the smoothing, not the instantaneous aim.
     """
     meta = {route['expectedName']: route for route in probe['routes']}
     if len(meta) != len(probe['routes']):
@@ -219,7 +225,7 @@ def compare_stepped(probe, steps, continuous=None):
     if not deltas or not all(math.isfinite(delta) and delta >= 0 for delta in deltas):
         raise ValueError('Trace deltaTimes must be finite and non-negative')
     keys = {name: 'a' if name.endswith('-A') else 'b' for name in meta}
-    payload = steps(deltas[1:])
+    payload = steps(deltas[1:], deltas[0])
     by_name = {route['name']: route for route in payload['routes']}
     if set(by_name) != set(meta):
         raise ValueError('Native stepped route names differ')
@@ -260,9 +266,11 @@ def compare_stepped(probe, steps, continuous=None):
         routes[name] = entry
     return dict(schemaVersion=1, frames=len(deltas), framesCompared=len(deltas)-1, routes=routes,
                 scope='Native ikkoku-inspect route-steps (per-frame tween rules over the capture deltaTimes, '
-                      'write-after-update order) versus original per-frame childRoot world placement; '
-                      'rotation compared as quaternions reconstructed from the emitted Z-X-Y Euler angles; '
-                      'original LookUpdate rotation smoothing is not simulated by the stepper')
+                      'write-after-update order, Play-frame delta passed separately) versus original '
+                      'per-frame childRoot world placement; rotation is the LookUpdate SmoothDampAngle '
+                      'state (one damp per frame toward the previous frame\'s written aim) compared as '
+                      'quaternions reconstructed from the emitted Z-X-Y Euler angles; captured rotations '
+                      'are float32-serialised (7 significant digits)')
 
 
 def main():
@@ -288,14 +296,18 @@ def main():
             raise RuntimeError(result.stderr.strip() or result.stdout.strip())
         return json.loads(result.stdout)
 
-    def step(deltas):
+    def step(deltas, play_delta=None):
         deltas_path = arguments.stepped_output.parent/'route-steps-deltas.json'
         if not deltas_path.resolve().is_relative_to((REPO/'.local').resolve()):
             raise ValueError('Original-derived reports stay in .local')
         deltas_path.parent.mkdir(parents=True, exist_ok=True)
         deltas_path.write_text(json.dumps(list(deltas))+'\n')
-        result = subprocess.run([str(arguments.cli), 'route-steps', str(scene_path), str(deltas_path)],
-                                capture_output=True, text=True)
+        command = [str(arguments.cli), 'route-steps', str(scene_path), str(deltas_path)]
+        # The Play frame's own deltaTime seeds the stepper's LookUpdate state;
+        # it is never a stepped frame of its own.
+        if play_delta is not None:
+            command.append('%.9g' % play_delta)
+        result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip())
         return json.loads(result.stdout)
