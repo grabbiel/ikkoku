@@ -356,6 +356,34 @@ timer to ≤1e-5, checks the "saved FIX returns the saved angle from the
 first frame" case exactly, and confirms calcLerp ≠ 1, TARGET/AWAY stepping
 and degenerate inputs throw.
 
+Preview integration (next slice): with `IKKOKU_STUDIO_LOOK_SETTINGS` pointing
+at the `studio_look_settings.py` JSON, `SourceStudioCharacterPreview` decodes
+the saved neck bytes and the card look `Status`, resolves the effective pattern
+through `SourceStudioNeckLookOverride.resolve` (the same resolution
+`ikkoku-inspect look-data` reports as `neckOverride`) and, for FIX and FORWARD,
+runs the calculator inside `editedPose` — after the FK/IK restore and before
+hair dynamics. Because the scene load leaves a fresh `SourceStudioNeckLook`
+seeded with lookType ANIMATION and `fixAngle` = the saved angle, and FORWARD
+and FIX targets do not depend on history, ONE `step(deltaTime: elapsed, ...)`
+reproduces any clock position; `elapsed == 0` steps with a documented tiny
+positive delta (1e-5 s) because `NeckUpdateCalc` early-outs on zero, so FIX
+already shows the saved rotation on the first frame. When the effective FK
+state has the neck group active Studio forces pattern 4 instead, but the
+relative order of Studio FK and the look controller is not recovered, so the
+override is skipped and "FK owns the neck" is reported once. TARGET/AWAY are
+reported "neck gaze solver pending; animated pose kept" and ANIMATION keeps the
+animated pose. Verified only in the pure helper on a synthetic three-node rig
+(FIX writes the saved quaternions with each bone's translation/scale kept,
+FORWARD at elapsed 0.5 matches the analytic angle lerp from the Python curve
+sample, FK-animated and ANIMATION leave the pose untouched); no full-character
+rendered capture compares the override against the original preview. In the
+real showcase scene every character resolves to FIX with identity saved
+quaternions. Six of the seven have saved FK with the neck group active, so FK
+owns their neck and the override is skipped. Character 65 has FK disabled, so
+the override sets its `cf_j_neck`/`cf_j_head` to identity local rotation over
+the animated pose. `ikkoku-inspect look-data` reports the same outcome per
+character.
+
 ## Reproducible verification
 
 ```sh

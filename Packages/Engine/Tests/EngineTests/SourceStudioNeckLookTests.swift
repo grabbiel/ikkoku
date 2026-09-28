@@ -1,6 +1,7 @@
 import Foundation
 import simd
 import Testing
+import CoreMath
 import Scene
 @testable import Studio
 
@@ -109,4 +110,110 @@ private func settingsJSON(_ fixture: [String: Any]) throws -> Data {
     // A zero deltaTime passes the animated pose through untouched.
     let pose = try quaternion([0, 0.2, 0, 0.98])
     expectClose(try state.step(deltaTime: 0, lookType: .animation, animated: [pose, pose])[0], pose, tolerance: 0)
+}
+
+/// Three nodes with distinct authored translation, rotation and non-uniform
+/// scale on both neck bones, so applied(to:rig:) tests can see exactly which
+/// channels survive the override write.
+private func neckLookRig() throws -> RigDefinition {
+    try RigDefinition(nodes: [
+        .init(name: "root", sourceID: "root", parent: nil),
+        .init(name: "cf_j_neck", sourceID: "neck", parent: 0, translation: Float3(0, 0.4, 0.02),
+              rotation: simd_quatf(angle: 0.2, axis: Float3(0, 1, 0)), scale: Float3(1, 1.2, 0.8)),
+        .init(name: "cf_j_head", sourceID: "head", parent: 1, translation: Float3(0, 0.1, -0.03),
+              rotation: simd_quatf(angle: -0.3, axis: Float3(1, 0, 0)), scale: Float3(1.1, 1, 1)),
+    ], skins: [])
+}
+
+/// The fixture's loaded-FIX seed: fixAngle == fixAngleBackup, both saved.
+private func savedFixSeed(_ fixture: [String: Any]) throws -> [simd_quatf] {
+    let savedFix = try #require(fixture["savedFix"] as? [String: Any])
+    let start = try #require(savedFix["start"] as? [String: Any])
+    return try quaternions(start["fixAngle"])
+}
+
+private func expectPoseMatrix(_ pose: RigPose, _ node: Int, _ expected: float4x4, tolerance: Float = 1e-5) {
+    for column in 0..<4 { for row in 0..<4 {
+        #expect(abs(pose.localMatrices[node][column][row] - expected[column][row]) <= tolerance, "matrix \(node)")
+    } }
+}
+
+@Test func studioNeckLookAppliedFixWritesSavedQuaternionsFromTheFirstFrame() throws {
+    let fixture = try fixtureJSON()
+    let settings = try SourceStudioNeckLookSettings(json: settingsJSON(fixture))
+    let saved = try savedFixSeed(fixture)
+    let rig = try neckLookRig()
+    var pose = RigPose(rig: rig)
+    // Elapsed 0 steps with the documented tiny first-frame delta, so FIX must
+    // already show the saved rotation; each bone keeps its own TRS channels.
+    #expect(try SourceStudioNeckLook.applied(pose: &pose, rig: rig, settings: settings, fixAngle: saved,
+        lookType: .fix, elapsed: 0, neckFKActive: false) == .fix)
+    expectPoseMatrix(pose, 1, Transform.trs(Float3(0, 0.4, 0.02), UnityCoordinates.rotation(saved[0]), Float3(1, 1.2, 0.8)))
+    expectPoseMatrix(pose, 2, Transform.trs(Float3(0, 0.1, -0.03), UnityCoordinates.rotation(saved[1]), Float3(1.1, 1, 1)))
+    #expect(pose.localMatrices[0] == rig.restPose.localMatrices[0])
+}
+
+@Test func studioNeckLookAppliedForwardAtHalfASecondMatchesTheReference() throws {
+    let fixture = try fixtureJSON()
+    let settings = try SourceStudioNeckLookSettings(json: settingsJSON(fixture))
+    let saved = try savedFixSeed(fixture)
+    // The transition fraction comes from the Python-provided curve sample at
+    // t 0.5, not from the Swift curve. Both saved bones rotate about Y only,
+    // so the slerp toward identity is the analytic angle lerp (1 - num) * theta.
+    let samples = try #require(fixture["curveSamples"] as? [Any])
+    let sample = try #require(samples.compactMap { $0 as? [String: Any] }.first { number($0["t"]) == 0.5 })
+    let num = Float(number(sample["value"]))
+    #expect(abs(try settings.changeTypeLerpCurve.evaluate(0.5) - num) < 1e-5)
+    let rig = try neckLookRig()
+    var pose = RigPose(rig: rig)
+    #expect(try SourceStudioNeckLook.applied(pose: &pose, rig: rig, settings: settings, fixAngle: saved,
+        lookType: .forward, elapsed: 0.5, neckFKActive: false) == .forward)
+    for (node, bone) in [(1, 0), (2, 1)] {
+        let theta = 2 * atan2(saved[bone].imag.y, saved[bone].real)
+        let expected = Transform.trs(rig.nodes[node].translation,
+            UnityCoordinates.rotation(simd_quatf(angle: (1 - num) * theta, axis: Float3(0, 1, 0))),
+            rig.nodes[node].scale)
+        expectPoseMatrix(pose, node, expected, tolerance: 2e-5)
+    }
+}
+
+@Test func studioNeckLookAppliedLeavesThePoseToFKAndToAnimation() throws {
+    let settings = try SourceStudioNeckLookSettings(json: settingsJSON(try fixtureJSON()))
+    let saved = try savedFixSeed(fixtureJSON())
+    // An active Studio FK neck group owns the neck, so nothing may be written.
+    let rig = try neckLookRig()
+    var posed = RigPose(rig: rig)
+    #expect(try SourceStudioNeckLook.applied(pose: &posed, rig: rig, settings: settings, fixAngle: saved,
+        lookType: .fix, elapsed: 0.5, neckFKActive: true) == .none)
+    #expect(posed.localMatrices == rig.restPose.localMatrices)
+    // ANIMATION keeps the incoming (animated) pose; there is nothing to write.
+    #expect(try SourceStudioNeckLook.applied(pose: &posed, rig: rig, settings: settings, fixAngle: saved,
+        lookType: .animation, elapsed: 0.5, neckFKActive: false) == .none)
+    #expect(posed.localMatrices == rig.restPose.localMatrices)
+    #expect(throws: (any Error).self) {
+        var pose = RigPose(rig: rig)
+        try SourceStudioNeckLook.applied(pose: &pose, rig: rig, settings: settings, fixAngle: saved,
+            lookType: .fix, elapsed: -1, neckFKActive: false)
+    }
+}
+
+@Test func studioNeckLookOverrideResolutionCoversEveryBranch() throws {
+    // The test settings keep the captured order, so the lookTypes are
+    // FORWARD, TARGET, AWAY, ANIMATION, FIX, TARGET, AWAY.
+    let settings = try SourceStudioNeckLookSettings(json: settingsJSON(try fixtureJSON()))
+    func resolve(_ pattern: Int32?, bones: Int? = 2, configured: SourceStudioNeckLookSettings? = settings)
+        -> SourceStudioNeckLookOverride.Resolution { SourceStudioNeckLookOverride.resolve(effectivePattern: pattern, settings: configured, savedBoneCount: bones) }
+    #expect(resolve(4).applied == .fix && resolve(4).lookType == .fix)
+    #expect(resolve(0).applied == .forward && resolve(0).lookType == .forward)
+    let away = resolve(2)
+    #expect(away.applied == .none && away.lookType == .away && away.reason == "Neck gaze solver pending; animated pose kept.")
+    #expect(resolve(3).applied == .none && resolve(3).lookType == .animation)
+    let outside = resolve(7)
+    #expect(outside.applied == .none && outside.lookType == nil && outside.reason.contains("outside the prefab's 7 neck states"))
+    let wrongCount = resolve(4, bones: 3)
+    #expect(wrongCount.applied == .none && wrongCount.lookType == .fix && wrongCount.reason.contains("3 bones but the calculator reads 2"))
+    let unreadable = resolve(nil, bones: nil)
+    #expect(unreadable.applied == .none && unreadable.lookType == nil)
+    let missing = resolve(4, configured: nil)
+    #expect(missing.applied == .none && missing.lookType == nil && missing.reason.contains("not configured"))
 }

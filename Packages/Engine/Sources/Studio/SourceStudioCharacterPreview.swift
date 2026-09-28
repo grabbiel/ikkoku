@@ -18,12 +18,13 @@ public struct SourceStudioCharacterReference: Codable, Sendable, Equatable {
     public let animationCatalogFile: String?
     public let dynamicsFile: String?
     public let handPatternsFile: String?
-    public init(sceneFile: String, sceneSHA256: String, rigFile: String, boneCatalogFile: String, objectKey: Int32, makerLibraryFile: String? = nil, attachmentCatalogFile: String? = nil, animationCatalogFile: String? = nil, dynamicsFile: String? = nil, handPatternsFile: String? = nil) {
+    public let lookSettingsFile: String?
+    public init(sceneFile: String, sceneSHA256: String, rigFile: String, boneCatalogFile: String, objectKey: Int32, makerLibraryFile: String? = nil, attachmentCatalogFile: String? = nil, animationCatalogFile: String? = nil, dynamicsFile: String? = nil, handPatternsFile: String? = nil, lookSettingsFile: String? = nil) {
         self.sceneFile = sceneFile; self.sceneSHA256 = sceneSHA256; self.rigFile = rigFile
         self.boneCatalogFile = boneCatalogFile; self.objectKey = objectKey; self.makerLibraryFile = makerLibraryFile
         self.attachmentCatalogFile = attachmentCatalogFile
         self.animationCatalogFile = animationCatalogFile; self.dynamicsFile = dynamicsFile
-        self.handPatternsFile = handPatternsFile
+        self.handPatternsFile = handPatternsFile; self.lookSettingsFile = lookSettingsFile
     }
 }
 
@@ -31,7 +32,9 @@ public final class SourceStudioCharacterPreview {
     public let reference: SourceStudioCharacterReference
     public let preview: SourceRigPreview
     public let pose: RigPose
-    public let diagnostics: [String]
+    /// Import-time messages plus one-shot runtime notices (for example the FK
+    /// neck conflict reported by editedPose); never grows per frame.
+    public private(set) var diagnostics: [String]
     public let record: KoikatsuCharacterRecord
     public let selections: [SourceMakerLibrary.Selection]
     public let coordinate: Int
@@ -59,6 +62,12 @@ public final class SourceStudioCharacterPreview {
     private var ikSolver: SourceStudioIK?
     private var dynamics: SourceStudioDynamics?
     private var dynamicsStep: (elapsed: Float, delta: Float)?
+    /// Resolved FIX/FORWARD neck look override: the prefab settings, the saved
+    /// fixAngle quaternions and the pattern's lookType. Nil when the look
+    /// settings are not configured or the pattern resolves to a kept pose.
+    private let neckLook: (settings: SourceStudioNeckLookSettings, fixAngle: [simd_quatf], lookType: SourceStudioNeckLookType)?
+    /// One-shot per lookType so a repeated FK neck edit does not repeat the notice.
+    private var reportedNeckLookFK: Set<SourceStudioNeckLookType> = []
     public var dynamicsComponentCount: Int { dynamics?.bindings.count ?? 0 }
     fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, guides: [SourceStudioIK.Guide])
     private var evaluatedCache: EvaluatedPose?
@@ -206,6 +215,27 @@ public final class SourceStudioCharacterPreview {
                 messages.append("Saved Studio hand patterns \(savedPatterns) have no converted pattern library, so both hands keep the incoming pose; the pattern is never guessed.")
             }
         }
+        // The scene load restores the saved neck bytes and applies the effective
+        // look pattern (card neckLookPtn wins over the saved ptnNo); only FIX
+        // and FORWARD resolve to an override here, each deferred case explains
+        // itself once at import instead of per frame.
+        var neckLook: (settings: SourceStudioNeckLookSettings, fixAngle: [simd_quatf], lookType: SourceStudioNeckLookType)?
+        if let lookSettingsFile = reference.lookSettingsFile {
+            do {
+                let lookSettings = try SourceStudioNeckLookSettings(json: Self.read(URL(fileURLWithPath: lookSettingsFile), maximum: 4 * 1024 * 1024))
+                let savedNeck = try SourceStudioNeckLookData(bytes: record.neckData)
+                let lookStatus = SourceStudioLookStatus(status: status)
+                let pattern = SourceStudioLookData.effectiveNeckPattern(status: lookStatus, savedNeckPatternNumber: savedNeck.patternNumber)
+                let resolution = SourceStudioNeckLookOverride.resolve(effectivePattern: pattern, settings: lookSettings, savedBoneCount: savedNeck.fixAngles.count)
+                messages.append("Neck look override \(resolution.applied.rawValue): \(resolution.reason)")
+                if let lookType = resolution.lookType, resolution.applied != .none {
+                    neckLook = (lookSettings, savedNeck.fixAngles, lookType)
+                }
+            } catch { messages.append("Studio neck look override unavailable: \(error); the animated pose is kept.") }
+        } else if let savedNeck = try? SourceStudioNeckLookData(bytes: record.neckData), savedNeck.patternNumber != 0 || !savedNeck.fixAngles.isEmpty {
+            messages.append("Neck look settings are not configured; the saved neck pattern \(savedNeck.patternNumber) is not applied and the animated pose is kept.")
+        }
+        self.neckLook = neckLook
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -294,6 +324,22 @@ public final class SourceStudioCharacterPreview {
                 enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform))
             result = solved.pose; guides = solved.guides
         } else if !ikTargets.isEmpty { throw RigError.invalid("Source IK bindings are unavailable for guide editing.") }
+        // The NeckLookCalcVer2 override runs on the FK/IK-restored pose and
+        // before hair dynamics, so dynamics sees the solved neck. The override
+        // result depends on animationElapsed, which is already in the cache key.
+        // Studio forces pattern 4 while the FK neck group is active; the
+        // relative order of Studio FK and the look controller is not recovered,
+        // so FK wins there and the conflict is reported once.
+        if let neckLook {
+            if effective.enableFK, effective.activeFK.count > 1, effective.activeFK[1] {
+                if reportedNeckLookFK.insert(neckLook.lookType).inserted {
+                    diagnostics.append("Neck look override skipped: FK owns the neck.")
+                }
+            } else {
+                try SourceStudioNeckLook.applied(pose: &result, rig: preview.source.rig, settings: neckLook.settings,
+                    fixAngle: neckLook.fixAngle, lookType: neckLook.lookType, elapsed: animationElapsed, neckFKActive: false)
+            }
+        }
         if var simulation = dynamics, dynamicsStep?.elapsed == animationElapsed {
             result = try simulation.evaluate(time: animationElapsed, rig: preview.source.rig, upstream: result,
                 enableFK: effective.enableFK, activeFK: effective.activeFK,

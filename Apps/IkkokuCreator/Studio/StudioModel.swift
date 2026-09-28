@@ -329,7 +329,8 @@ final class StudioModel: ViewportInputHandler {
                     rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
                     makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath, animationCatalogFile: animationPath,
                     dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
-                    handPatternsFile: handPatternsPath)
+                    handPatternsFile: handPatternsPath,
+                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
                 do {
                     let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
                     preview.automaticBlink = sourceAutomaticBlink
