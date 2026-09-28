@@ -26,6 +26,19 @@ private func quaternions(_ value: Any?) throws -> [simd_quatf] {
     return try rows.map { try quaternion(($0 as? [Any]) ?? []) }
 }
 
+/// A TARGET/AWAY fixture rotation row: null means the original wrote nothing
+/// back that frame (deltaTime 0), a list is the local rotation.
+private func optionalQuaternions(_ value: Any?) throws -> [simd_quatf?] {
+    guard let rows = value as? [Any] else { throw RigError.invalid("Fixture quaternion list missing.") }
+    return try rows.map { row in
+        if row is NSNull { return nil }
+        guard let components = row as? [Any] else {
+            throw RigError.invalid("Fixture solver rotation is neither a list nor null.")
+        }
+        return try quaternion(components)
+    }
+}
+
 private func number(_ value: Any?) -> Double { (value as? NSNumber)?.doubleValue ?? .nan }
 
 private func lookType(_ name: Any?) throws -> SourceStudioNeckLookType {
@@ -42,14 +55,14 @@ private func expectClose(_ a: simd_quatf, _ b: simd_quatf, tolerance: Float = 1e
 }
 
 /// The settings document shape the loader boundary-checks, with the fixture's
-/// curve and the captured seven neck states.
+/// curve and the captured seven neck states (lookType, leapSpeed and aParam
+/// bending limits, written into the fixture from the reference's settings).
 private func settingsJSON(_ fixture: [String: Any]) throws -> Data {
     let curve = try JSONSerialization.data(withJSONObject: fixture["changeTypeLerpCurve"] as Any)
-    let states = ["FORWARD", "TARGET", "AWAY", "ANIMATION", "FIX", "TARGET", "AWAY"]
-        .map { "{\"lookType\":{\"name\":\"\($0)\"}}" }.joined(separator: ",")
+    let states = try JSONSerialization.data(withJSONObject: fixture["neckTypeStates"] as Any)
     return Data("""
     {"neck":{"calcLerp":1,"changeTypeLeapTime":1,"changeTypeLerpCurve":\(String(decoding: curve, as: UTF8.self)),\
-    "aBones":[{"neckBone":"cf_j_neck"},{"neckBone":"cf_j_head"}],"neckTypeStates":[\(states)]}}
+    "aBones":[{"neckBone":"cf_j_neck"},{"neckBone":"cf_j_head"}],"neckTypeStates":\(String(decoding: states, as: UTF8.self))}}
     """.utf8)
 }
 
@@ -82,6 +95,60 @@ private func settingsJSON(_ fixture: [String: Any]) throws -> Data {
     }
 }
 
+@Test func studioNeckLookSolverSequenceMatchesReferenceFixture() throws {
+    let fixture = try fixtureJSON()
+    let settings = try SourceStudioNeckLookSettings(json: settingsJSON(fixture))
+    let start = try #require(fixture["solverStart"] as? [String: Any])
+    var state = try SourceStudioNeckLook(settings: settings, lookType: lookType(start["lookType"]),
+        fixAngle: try quaternions(start["fixAngle"]))
+    var sawZeroDelta = false, sawHeadSpill = false
+    for step in try #require(fixture["solverSequence"] as? [Any]) {
+        let row = try #require(step as? [String: Any])
+        let now = try #require(row["nowAngle"] as? [Any])
+        let deltaTime = Float(number(row["deltaTime"]))
+        let rotations = try state.stepSolver(deltaTime: deltaTime, lookType: lookType(row["lookType"]),
+            pattern: Int(number(row["pattern"])),
+            nowAngle: (x: Float(number(now[0])), y: Float(number(now[1]))))
+        for (returned, expected) in zip(rotations, try optionalQuaternions(row["localRotations"])) {
+            guard let expected else {  // deltaTime 0: the original wrote nothing back
+                #expect(returned == nil); sawZeroDelta = true; continue
+            }
+            #expect(returned != nil, "the reference wrote a rotation here")
+            if let returned { expectClose(returned, expected) }
+        }
+        for (kept, expected) in zip(state.fixAngle, try quaternions(row["fixAngle"])) { expectClose(kept, expected) }
+        for (kept, expected) in zip(state.fixAngleBackup, try quaternions(row["fixAngleBackup"])) { expectClose(kept, expected) }
+        #expect(abs(state.changeTypeTimer - Float(number(row["timer"]))) < 1e-5)
+        let angles = try #require(row["angles"] as? [Any])
+        for (bone, angle) in angles.enumerated() {
+            let pair = try #require(angle as? [Any])
+            #expect(abs(state.angles[bone].h - Float(number(pair[0]))) < 1e-5)
+            #expect(abs(state.angles[bone].v - Float(number(pair[1]))) < 1e-5)
+        }
+        // The saturated AWAY frame where the -50 deg demand spills: the head
+        // (bone 1) must sit exactly on its own minBendingAngle and the neck
+        // (bone 0) holds the leftover, because the loop distributes head first.
+        if Int(number(row["pattern"])) == 2, deltaTime > 1 {
+            sawHeadSpill = true
+            let limit = settings.bendingLimits[2][1].minBendingAngle
+            #expect(abs(state.angles[1].h - limit) < 1e-5)
+            #expect(abs(state.angles[0].h - (Float(number(now[1])) - limit)) < 1e-5)
+        }
+    }
+    #expect(sawZeroDelta && sawHeadSpill, "the fixture must exercise the zero-delta and spill frames")
+}
+
+/// The yx basis keeps the Hamilton product's x/z cross terms: a pure yaw or
+/// pure pitch has a zero component where the product of both angles does not,
+/// and the recorded fixAngle quaternions show exactly that.
+@Test func studioNeckLookYxBasisKeepsTheCrossTerms() throws {
+    let both = SourceStudioNeckLook.yxBasis(angleH: 30, angleV: 20)
+    #expect(abs(both.imag.x - sin(20 * .pi / 360) * cos(30 * .pi / 360)) < 1e-6)
+    #expect(abs(both.imag.z - (-sin(30 * .pi / 360) * sin(20 * .pi / 360))) < 1e-6)
+    #expect(abs(SourceStudioNeckLook.yxBasis(angleH: 30, angleV: 0).imag.x) < 1e-9)
+    #expect(abs(SourceStudioNeckLook.yxBasis(angleH: 0, angleV: 20).imag.z) < 1e-9)
+}
+
 @Test func studioNeckLookSavedFixReturnsTheSavedAngleFromTheFirstFrame() throws {
     let fixture = try fixtureJSON()
     let savedFix = try #require(fixture["savedFix"] as? [String: Any])
@@ -103,9 +170,19 @@ private func settingsJSON(_ fixture: [String: Any]) throws -> Data {
     #expect(throws: (any Error).self) { try SourceStudioNeckLookSettings(json: Data(settingsText.replacingOccurrences(of: "\"calcLerp\":1", with: "\"calcLerp\":0.5").utf8)) }
     var state = try SourceStudioNeckLook(settings: try SourceStudioNeckLookSettings(json: settingsJSON(fixture)),
         lookType: .animation, fixAngle: [SourceStudioNeckLook.identity, SourceStudioNeckLook.identity])
-    // TARGET/AWAY step is reported, not silently solved.
+    // step() has no solver angle input, so TARGET/AWAY there stay reported;
+    // stepSolver takes the angle and rejects non-solver types and patterns.
     #expect(throws: (any Error).self) {
         try state.step(deltaTime: 0.016, lookType: .away, animated: [SourceStudioNeckLook.identity, SourceStudioNeckLook.identity])
+    }
+    #expect(throws: (any Error).self) {
+        try state.stepSolver(deltaTime: 0.016, lookType: .fix, pattern: 4, nowAngle: (0, 0))
+    }
+    #expect(throws: (any Error).self) {
+        try state.stepSolver(deltaTime: 0.016, lookType: .target, pattern: 7, nowAngle: (0, 0))
+    }
+    #expect(throws: (any Error).self) {
+        try state.stepSolver(deltaTime: 0.016, lookType: .target, pattern: 1, nowAngle: (0, .nan))
     }
     // A zero deltaTime passes the animated pose through untouched.
     let pose = try quaternion([0, 0.2, 0, 0.98])

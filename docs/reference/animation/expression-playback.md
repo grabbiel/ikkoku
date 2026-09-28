@@ -313,15 +313,17 @@ calculator: `lookType`, `changeTypeTimer`, and per bone (`cf_j_neck`,
   this slice does not model.
 - At the captured `calcLerp` of 1.0, FORWARD and FIX never read the entry
   pose: `Slerp(animated, fixAngle, calcLerp)` lands on `fixAngle` exactly.
-  TARGET and AWAY are the geometric solver and are reported as unsupported,
-  not approximated.
+  TARGET and AWAY are covered in the next subsection; they take the frame's
+  `nowAngle` from the geometric solver as an input rather than approximating
+  that solver.
 
 `Tools/reverse/analysis/neck_look_reference.py` is the pure Python oracle
-(`evaluate_curve`, `slerp`, `neck_step`, 14 unittest cases), and
-`Tools/reverse/compare_neck_look.py` replays capture phases 3 (FORWARD), 4
-(FIX) and 5 (ANIMATION) of `.local/stt07i/run1/look-trace.json` frame by
-frame, seeding each phase from the frame before it. Measured maximum
-local-rotation angle error per phase, 60 frames each:
+(`evaluate_curve`, `slerp`, `neck_step`, `neck_target_step`, 21 unittest
+cases), and `Tools/reverse/compare_neck_look.py` replays capture phases 3
+(FORWARD), 4 (FIX) and 5 (ANIMATION) of
+`.local/stt07i/run1/look-trace.json` frame by frame, seeding each phase from
+the frame before it. Measured maximum local-rotation angle error per phase,
+60 frames each:
 
 | phase | lookType | cf_j_neck | cf_j_head |
 | --- | --- | --- | --- |
@@ -348,13 +350,16 @@ basis apply `UnityCoordinates.rotation` themselves, exactly once. Its
 float32 slerp dispatches the normalize-lerp fallback on the arc size
 (theta < 1e-4 rad) because float32 cannot represent the float `1 - 1e-8`
 threshold; within the fixture tolerance it reproduces the Python oracle
-frame for frame. `SourceStudioNeckLookTests` replays a 7-step FORWARD/FIX
-sequence plus curve samples from
+frame for frame. `stepSolver(deltaTime:lookType:pattern:nowAngle:)`, described
+in the next subsection, steps TARGET/AWAY. `SourceStudioNeckLookTests` replays
+the 7-step FORWARD/FIX sequence, the 6-step TARGET/AWAY sequence and curve
+samples from
 `Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json`
 (written by `compare_neck_look.py --fixture`) matching every quaternion and
 timer to ≤1e-5, checks the "saved FIX returns the saved angle from the
-first frame" case exactly, and confirms calcLerp ≠ 1, TARGET/AWAY stepping
-and degenerate inputs throw.
+first frame" case exactly, and confirms calcLerp ≠ 1, `step`'s TARGET/AWAY
+(no angle input), a `stepSolver` type/pattern/nowAngle violation and other
+degenerate inputs throw.
 
 Preview integration (next slice): with `IKKOKU_STUDIO_LOOK_SETTINGS` pointing
 at the `studio_look_settings.py` JSON, `SourceStudioCharacterPreview` decodes
@@ -383,6 +388,107 @@ owns their neck and the override is skipped. Character 65 has FK disabled, so
 the override sets its `cf_j_neck`/`cf_j_head` to identity local rotation over
 the animated pose. `ikkoku-inspect look-data` reports the same outcome per
 character.
+
+### Neck look modes TARGET / AWAY
+
+TARGET and AWAY drive the neck from a solver angle rather than a target
+rotation. `GetAngleToTarget` — the geometry that turns the look target's
+position into the frame's `nowAngle` — is not ported: `neck_target_step`
+(Swift `stepSolver(deltaTime:lookType:pattern:nowAngle:)`) takes
+`nowAngle` as its input, so everything below is verified downstream of
+that geometry, not against it.
+
+- **Distribution** (`NeckUpdateCalc`, bones last → first, so the head —
+  index 1 — claims first): `nowAngle` is a residual the two bones take
+  turns carving up. Each bone claims `h = clamp(residual.y,
+  minBendingAngle, maxBendingAngle)` horizontally and `v = clamp(residual.x,
+  upBendingAngle, downBendingAngle)` vertically — `nowAngle[1]` is the
+  horizontal, `nowAngle[0]` the vertical component — and passes the exact
+  leftover `residual − (v, h)` on. The head's `aParam` may be narrower than
+  the neck's (TARGET: ±40°/±25° on both bones; AWAY: ±40°/±25° neck but
+  only ±20° horizontal on the head), so a saturated head spills its excess
+  onto the neck.
+- **Smoothing**: per bone `angleH += (h − angleH) · t`, `angleV += (v −
+  angleV) · t` with `t = clamp01(deltaTime · leapSpeed)` (captured leapSpeed
+  2.0: 0.0166 s moves 3.3% of the way per frame, and a big deltaTime
+  saturates at 1). At `deltaTime == 0` `NeckUpdateCalc` early-outs — no
+  distribution, no timer advance, and nothing written back over the
+  animated pose (the reference returns two `None`s, Swift `[nil, nil]`).
+- **`fixAngle`** becomes `AngleAxis(angleH, Y) · AngleAxis(angleV, X)` per
+  bone, the full Hamilton product `[cos(h/2)sin(v/2), sin(h/2)cos(v/2),
+  −sin(h/2)sin(v/2), cos(h/2)cos(v/2)]`. The x/z cross terms are real: the
+  recorded head `fixAngle` at frame 535 (angleH −17.26851, angleV 10.31902)
+  holds x 0.08890961 where the half-angle product predicts 0.08890960 and z
+  0.0135007 where it predicts 0.013500689; a yaw-plus-pitch-only
+  reconstruction misses both.
+- **Type change** does not clear `angleH`/`angleV` for TARGET/AWAY — only
+  FORWARD's own `UpdateCall` branch clears them — so the TARGET → AWAY
+  switch carries the smoothed angles over, and the replay matches recorded
+  `fixAngle` through that switch to 1.3e-5°.
+- **Output**: `localRotation = Slerp(fixAngleBackup, fixAngle, num)`, the
+  same clamped timer and curve as FORWARD/FIX.
+
+`compare_neck_look.py` replays capture phases 0 and 1 (TARGET) and 2
+(AWAY) as one continuous run — 90 frames each, seeded at the first TARGET
+frame with lookType FORWARD, identity `fixAngle` and zero angles (that
+frame's implied blend fraction pins the pattern switch onto the frame
+itself with the neck still unrotated), state carried untouched across the
+phase 0 → 1 boundary, every frame feeding its recorded `nowAngle`.
+Maximum errors (degrees):
+
+| phase | lookType | bone | angleH/angleV | `fixAngle` | localRotation (frame) |
+| --- | --- | --- | --- | --- | --- |
+| 0 | TARGET | cf_j_neck | 0.000000 | 0.000000 | 0.000000 |
+| 0 | TARGET | cf_j_head | 0.000001 | 0.000002 | 0.000007 (274) |
+| 1 | TARGET | cf_j_neck | 0.000001 | 0.000002 | 0.000002 (366) |
+| 1 | TARGET | cf_j_head | 0.000013 | 0.000016 | 0.000016 (411) |
+| 2 | AWAY | cf_j_neck | 0.000010 | 0.000010 | 0.033771 (481) |
+| 2 | AWAY | cf_j_head | 0.000013 | 0.000013 | 0.053021 (471) |
+
+`angleH`/`angleV` and `fixAngle` match to ≤1.3e-5° / ≤1.6e-5° everywhere
+against targets 1e-4° and 0.05°. Two local facts:
+
+- An earlier ≈0.04° `fixAngle` "residual" was a comparator phantom, not a
+  model difference: the probe serializes float32 components at ~7
+  significant digits, and the raw check took `2·acos|dot|` without
+  normalizing either side. With the normalized comparator every other
+  rotation in this document uses (`compare_hand_patterns.angle_degrees`),
+  the worst is 1.6e-5°.
+- The AWAY rotation maxima (head 0.053021° at frame 471, neck 0.033771° at
+  481) sit inside a transition-schedule artifact: for frames 462–471 the
+  implied blend fraction runs up to 0.00133 s ahead of the summed
+  deltaTime, then tracks it to 1e-6 s again. The blend formula is ruled
+  out — every other transition frame of this and the FORWARD capture
+  matches, angles and `fixAngle` match throughout, and the head matches
+  exactly from frame 472 on — and the trace records no timer field to
+  identify what advanced it, so `compare_neck_look.py` gives this run1
+  feature a documented ceiling
+  (`AWAY_BLEND_ANOMALY_CEILING_DEGREES` 0.06) instead of the 0.05° TARGET
+  rotation target; TARGET rotations stay at 1.6e-5°.
+
+Still missing, all visible in the capture:
+
+- `GetAngleToTarget`'s geometry (target transform → `nowAngle`).
+- **AWAY's own `nowAngle` adjustment**: the run1 AWAY phase holds `nowAngle`
+  y at a constant −60 on all 90 frames (x drifts 11.299–11.360) while the
+  neck turns; −60 is that state's `hAngleLimit` 80 minus `limitAway` 10, so
+  the original offsets the demand by the limit margin. The replay feeds the
+  recorded `nowAngle` unchanged and matches downstream of that adjustment.
+- **Limit-break handling**: `hAngleLimit`/`vAngleLimit`, `limitAway`,
+  `limitBreakCorrectionValue` and the `isLimitBreakBackup` flag are
+  unmodeled; nothing in these 270 frames needed them.
+- No live `nowAngle` source is wired, so the preview override still reports
+  TARGET/AWAY as "Neck gaze solver pending; animated pose kept." — the
+  solver step exists, the geometry feeding it does not.
+
+`SourceStudioNeckLook.stepSolver` ports the distribution, smoothing, basis
+and blend above; its settings loader decodes each type state's `aParam`
+bending limits and `leapSpeed`, and `SourceStudioNeckLookTests` replays the
+fixture's 6-step `solverSequence` (two TARGET frames, a zero-delta frame
+where both rotations come back nil, the TARGET → AWAY switch, a
+saturated-factor frame where the head's ±20° share spills onto the neck, and
+a steady AWAY frame) to ≤1e-5, asserting the spill lands the head exactly on
+its own `minBendingAngle`.
 
 ## Reproducible verification
 
