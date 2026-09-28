@@ -50,10 +50,16 @@ public enum SourceStudioRoutePlayback {
     /// cannot build playable segments (fewer than two points, coincident or
     /// nonfinite positions, curve without aid, unknown enum ordinal) is
     /// reported and leaves `childRoot` pinned to point 0, like the `Stop`
-    /// pin. The recovered assignments write position and rotation only; the
-    /// inherited route scale is kept for every placement.
+    /// pin. `activeOverride` replaces the record's saved `active` flag for
+    /// the runtime-only Studio play controls (nil = the record): an override
+    /// of `false` pins `childRoot` to point 0 like `Stop` even for a
+    /// record-active route, and `true` runs the evaluator even for a
+    /// record-inactive route the user pressed Play on. The recovered
+    /// assignments write position and rotation only; the inherited route
+    /// scale is kept for every placement.
     public static func childRootWorld(route: KoikatsuRouteRecord, routeWorld: float4x4,
-                                      pointLocals: [float4x4], elapsed: Double)
+                                      pointLocals: [float4x4], elapsed: Double,
+                                      activeOverride: Bool? = nil)
         -> (matrix: float4x4, diagnostics: [String]) {
         var diagnostics: [String] = []
         var locals = pointLocals
@@ -65,7 +71,7 @@ public enum SourceStudioRoutePlayback {
         let point0World = routeWorld * (locals.first ?? matrix_identity_float4x4)
         let routeScale = routeWorld.scaleFactors
         let pinned = Transform.trs(point0World.translation, point0World.rotationQuaternion, routeScale)
-        guard route.active else { return (pinned, diagnostics) }
+        guard activeOverride ?? route.active else { return (pinned, diagnostics) }
         guard !route.points.isEmpty else {
             diagnostics.append("Route has no points; childRoot remains at the route transform.")
             return (routeWorld, diagnostics)

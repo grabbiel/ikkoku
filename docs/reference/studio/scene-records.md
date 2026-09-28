@@ -183,8 +183,12 @@ characters stay gated as unrendered. After undo/redo the cache is empty and
 route children fall back to the route object's authored transform rather than a
 guess derived from edited document data. `ikkoku-inspect route-playback
 <scene.png> <seconds>` samples every route of a decoded scene at one clock
-position. Still missing: play/stop UI, route-point guide callbacks, edited
-route serialization and rendered route descendants.
+position. Since the tenth slice the Studio editor exposes the recovered
+`Play`/`Stop` presses as runtime controls (a selected route's Play/Stop button
+plus a Play-all/Replay-all/Stop-all menu; see the preview-wiring paragraph at
+the end of this section), and a route whose authored record is inactive can
+be played from the editor through that state. Still missing: route-point
+guide callbacks, edited route serialization and rendered route descendants.
 
 An original capture now exists. `Tools/reverse/original_route_probe.py` runs
 `Tools/reverse/fixtures/OriginalRouteProbe.cs` inside the isolated VM player
@@ -436,6 +440,32 @@ evidence; an interactive app-session comparison of the wired preview against
 the original player was not run in this slice, and edited route serialization
 remains open.
 
+**Play/stop controls (tenth slice).** The editor now offers the recovered
+`RouteControl` presses. `SourceStudioRouteClock` gained a play instant:
+`play(at:routeWorld:)` records the clock time the route's tween starts, the
+stepper's tween time is `clockTime - playStart`, and `stop()` drops the stepper
+so the route answers nothing until the next `play`. That mirrors the
+original's rule that pressing `OCIRoute.Play` starts the tween at the press
+frame (`childRoot` shows point 0 with `deltaTime` 0 that frame, then advances),
+while scrubbing to before the press has no tween to evaluate
+(`lastAction == .notPlayingYet`) and the placement falls back to the caller's
+pin until the clock reaches the press again, where a live query re-arms the
+stepper exactly as the live crossing would. Import seeds each route's play
+state from the record's `active` flag at clock time 0, so an imported
+active route behaves as before (its tween runs from the start of the preview),
+and an editor Play press on an inactive route plays it by overriding that flag
+(`SourceStudioRoutePlayback.childRootWorld`'s `activeOverride`), including the
+point-0 `Play` placement at the press instant and the `Stop` pin when the user
+stops it. Undo, redo and a new scene clear the play state along with the route
+cache. **This is runtime-only by design:** the `active` flag a scene record
+serializes is the state the original's `sceneInfo.Save` captured, and
+`SourceSceneExportValidation` rejects changing it, so the export keeps the
+saved route state and the controls only move the preview. Engine tests cover
+the press-time offset (a press at 3 s then 13 live ticks equals a fresh stepper
+stepped 13 times; a jump to 1/30 past the press sees one tween frame, not 91),
+the before-press instant, and replay-then-stop (`swift test --package-path
+Packages/Engine --filter RouteClockTests`, 2026-09-28; eight tests).
+
 ## Extended Save and preservation
 
 The installed scene load hook reads the writer marker, then a `KKEx` string,
@@ -536,8 +566,8 @@ structure. It does not display thumbnails or instantiate scene content.
 - Extend full-body original-player evidence, dynamics topologies/world inertia and
   Animator controller coverage; existing adapters are mid-stage, not absent
   (`ST-T05`, `ST-T08`, `ST-T10`).
-- Build an editor play/stop control, route-point guide callbacks and an edited
-  route writer on top of the `SourceStudioRoute` evaluator and the
+- Build route-point guide callbacks and an edited route writer on top of the
+  `SourceStudioRoute` evaluator and the
   `SourceStudioRoutePlayback` `childRoot` placement, then source
   scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`).
   Stateful `LookUpdate` smoothing is ported in `SourceStudioRouteStepper`
@@ -545,8 +575,10 @@ structure. It does not display thumbnails or instantiate scene content.
   through the `SourceStudioRouteClock`-mirrored stepper, the Studio preview's
   `childRoot` placement (ninth slice); the continuous `childRootWorld` path
   still reports the instantaneous aim and remains the fallback for off-frame
-  instants and past-budget rebuilds. An interactive app-session comparison of
-  the wired preview against the original player is still open.
+  instants and past-budget rebuilds. The editor play/stop control is
+  implemented (tenth slice, play/stop controls above) as a runtime-only play
+  state over the record's saved `active` flag. An interactive app-session
+  comparison of the wired preview against the original player is still open.
 - Add original scene topology edits/reference remapping and GUID-specific plugin
   callbacks/save adapters while preserving source identities (`ST-T03`, `ST-T13`).
 

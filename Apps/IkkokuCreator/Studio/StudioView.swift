@@ -121,6 +121,17 @@ struct StudioView: View {
                 Button("Focus selection (F)") { model.focusSelection() }
                 Button("Reset camera") { model.resetCamera() }
             } label: { Image(systemName: "camera") }.fixedSize()
+            if model.hasSourceRoutes {
+                Menu {
+                    Button("Play all routes") { model.playAllSourceRoutes() }
+                    Button("Replay all routes") { model.replayAllSourceRoutes() }
+                    Button("Stop all routes") { model.stopAllSourceRoutes() }
+                    Divider()
+                    Text("Runtime only — original export keeps the saved route state.")
+                } label: { Image(systemName: "arrow.triangle.swap") }
+                .fixedSize()
+                .help("Route playback (Play all starts the stopped routes, Replay all restarts every route)")
+            }
             Spacer()
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }.disabled(model.undoStack.isEmpty)
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(model.redoStack.isEmpty)
@@ -307,6 +318,16 @@ struct ObjectInspector: View {
                         }
                     }
                 case .folder: EmptyView()
+                }
+                if model.selectedRouteIsSource {
+                    SectionBox(title: "Route") {
+                        Text("Route: \(model.selectedRoutePlaying ? "Playing" : "Stopped")").font(.callout)
+                        HStack {
+                            Button(model.selectedRoutePlaying ? "Stop" : "Play") { model.toggleSourceRoute(o.id) }
+                                .help(model.selectedRoutePlaying ? "Stop this route (Stop pins its children to point 0)" : "Play this route from the current time")
+                        }
+                        Text("Runtime only — original export keeps the saved route state.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
         } else {

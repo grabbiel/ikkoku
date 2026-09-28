@@ -22,6 +22,12 @@ import Scene
 ///   last damped rotation), which is what the original leaves on `childRoot`.
 ///   A record-inactive route never builds a stepper, so `frame` never answers
 ///   and the caller keeps its `Stop` pin.
+/// - `play(at:routeWorld:)` marks the instant the route's tween starts: the
+///   stepper's tween time is `clockTime - playStart`, so a jump before
+///   `playStart` — or a stopped or never-played clock — has no frame and the
+///   caller's pin (or point-0 `Play` start) answers; `stop()` drops the
+///   stepper, which is the model-level `Stop` on top of the builder's refusal
+///   and the completion hold.
 /// - A jump (`jump`, or a `frame(at:routeWorld:)` whose route world changed
 ///   since the build, including a never-built clock at a clock position
 ///   already past zero) rebuilds a fresh `Play` and fast-forwards in fixed
@@ -60,6 +66,13 @@ public final class SourceStudioRouteClock {
         /// stepper is dropped and the caller must use the continuous
         /// evaluator for this route.
         case rebuiltWithFallback(steps: Int)
+        /// A jump before `playStart`: the route is not playing yet at the
+        /// requested instant, so no frame exists and the caller's fallback
+        /// answers; `builtWorld` is kept and a later jump at or past
+        /// `playStart` re-arms the stepper.
+        case notPlayingYet
+        /// A `stop()` dropped the stepper.
+        case stopped
     }
 
     /// The preview's fixed frame delta: live ticks should pass it and jump
@@ -87,10 +100,24 @@ public final class SourceStudioRouteClock {
     /// The mirrored clock time (see the type comment).
     private var reached: Float = 0
     private var lastFrame: Frame?
+    /// Whether the clock is currently answering from its stepper (`play`) or
+    /// pinning (`stop`, or never played). A stopped clock has no frame even
+    /// at its mirrored time, like the original's `Stop` pin.
+    public private(set) var playing = false
+    /// The clock instant the stepper's tween time 0 maps to: the route's
+    /// tween time is `clockTime - playStart` (see the type comment).
+    public private(set) var playStart: Float = 0
 
+    /// `playing`/`playStart` mirror a play state created alongside the clock:
+    /// a record-active route imported at play start 0 is armed from the
+    /// first query, while a clock built for a stopped route answers nothing
+    /// until `play` or `rewind`.
     public init(maxRebuildSteps: Int = SourceStudioRouteClock.maxRebuildSteps,
+                playing: Bool = false, playStart: Float = 0,
                 stepper buildStepper: @escaping (float4x4) -> SourceStudioRouteStepper?) {
         self.maxRebuildSteps = maxRebuildSteps
+        self.playing = playing
+        self.playStart = playStart
         self.buildStepper = buildStepper
     }
 
@@ -106,26 +133,73 @@ public final class SourceStudioRouteClock {
 
     /// The frame to render when the clock is at `time` with the route at
     /// `routeWorld`, or `nil` when the caller's continuous evaluator answers:
-    /// no playable stepper, the frame belongs to another instant under
-    /// `tolerance`, the route finished (see the type comment), or the last
-    /// rebuild hit the fast-forward budget. A route world that is not the one
+    /// the clock is stopped (never played or `stop`ed), no playable stepper,
+    /// the frame belongs to another instant under `tolerance`, the route
+    /// finished (see the type comment), or the last rebuild hit the
+    /// fast-forward budget. A route world that is not the one
     /// the stepper was built from — an edit to the route object itself moves
     /// its child objects and the whole path — first rebuilds and
-    /// fast-forwards, like a jump.
+    /// fast-forwards, like a jump. A playing clock whose stepper was dropped
+    /// (a jump before `playStart`, or the fast-forward budget) re-arms the
+    /// same way once a query reaches `playStart`, like a live crossing of the
+    /// press instant would.
     public func frame(at time: Float, routeWorld: float4x4,
                       tolerance: Float = SourceStudioRouteClock.defaultTolerance) -> Frame? {
-        guard time.isFinite, time >= 0 else { return nil }
-        if builtWorld != routeWorld { _ = jump(to: time, routeWorld: routeWorld) }
+        guard time.isFinite, time >= 0, playing else { return nil }
+        if builtWorld != routeWorld {
+            _ = jump(to: time, routeWorld: routeWorld)
+        } else if lastFrame == nil, stepper == nil, time >= playStart {
+            // The route became steppable again at this instant: the clock
+            // lived past `playStart` across a jump that fell outside the
+            // fast-forward budget, or crossed the press instant after a jump
+            // to before it. Re-arm exactly as the live crossing of the press
+            // would; a route whose builder still refuses just drops the frame
+            // again each query (the refusal is a guard check, not a walk).
+            _ = jump(to: time)
+        }
         // Both are validated finite and non-negative, so the difference is exact-free.
         guard abs(time - reached) <= tolerance else { return nil }
         return lastFrame
     }
 
-    /// A fresh `Play` at clock time 0: what an import installs. An unplayable
-    /// route clears the state, like the original's `Play` refusal leaving
-    /// `childRoot` on its pin.
+    /// The press-time `Play` at clock time 0 (the stepper's tween time starts
+    /// here; see `play(at:routeWorld:)`). An unplayable route clears the
+    /// stepper, like the original's `Play` refusal leaving `childRoot` on its
+    /// pin.
     public func rewind(routeWorld: float4x4) {
-        lastAction = rebuild(to: 0, routeWorld: routeWorld, exactTime: false)
+        playing = true
+        playStart = 0
+        lastAction = rebuild(to: 0, routeWorld: routeWorld, playStart: 0, exactTime: false)
+    }
+
+    /// The press-time `Play` at `time` (the `RouteControl` button pressing
+    /// `OCIRoute.Play`): the tween's time 0 maps to this clock instant, the
+    /// stepper is a fresh `Play` (point 0's placement, `deltaTime` 0 frame),
+    /// and `reached` mirrors `time` so the press frame answers. A later jump
+    /// evaluates the tween at `time - playStart`, so the placement matches a
+    /// fresh stepper stepped by the elapsed live frames. Replaying a playing
+    /// route resets `playStart` and restarts the tween from point 0, like the
+    /// original restarting its segment queue.
+    @discardableResult
+    public func play(at time: Float, routeWorld: float4x4) -> Action {
+        guard time.isFinite, time >= 0 else { return lastAction }
+        playing = true
+        playStart = time
+        lastAction = rebuild(to: time, routeWorld: routeWorld, playStart: time, exactTime: true)
+        return lastAction
+    }
+
+    /// `Stop`: drop the stepper and its frame, so `frame` never answers again
+    /// until a `play` or `rewind`; the caller pins `childRoot` through its
+    /// fallback (`activeOverride == false`). `builtWorld` and the mirrored
+    /// clock are kept, so `step` still mirrors and a later `play` rebuilds.
+    @discardableResult
+    public func stop() -> Action {
+        playing = false
+        stepper = nil
+        lastFrame = nil
+        lastAction = .stopped
+        return lastAction
     }
 
     /// A live tick: advance the stepper by the same delta the clock advanced.
@@ -149,16 +223,19 @@ public final class SourceStudioRouteClock {
     }
 
     /// A jump (`setSourceAnimationTime`, a checkpoint restore, a rewind):
-    /// rebuild `Play` and fast-forward fixed `1/30` frames to the nearest
-    /// frame to the new time, so the placement matches what live
-    /// `1/30` stepping produces there. Rebuilds against the last route world
-    /// this clock was built at; the caller's next `frame(at:routeWorld:)`
-    /// notices a route that moved in the meantime and rebuilds again.
+    /// rebuild `Play` and fast-forward fixed `1/30` frames from `playStart`
+    /// to the nearest frame to the new time, so the placement matches what
+    /// live `1/30` stepping produces there. A jump to a time before
+    /// `playStart` — while the route was not playing yet — drops the frame
+    /// and stepper (`notPlayingYet`) and leaves the mirrored clock alone, so
+    /// placement falls back to the caller until a jump at or past
+    /// `playStart` re-arms it. Rebuilds against the last route world this
+    /// clock was built at; the caller's next `frame(at:routeWorld:)` notices
+    /// a route that moved in the meantime and rebuilds again.
     @discardableResult
     public func jump(to time: Float) -> Action {
         guard let routeWorld = builtWorld, time.isFinite, time >= 0 else { return lastAction }
-        lastAction = rebuild(to: time, routeWorld: routeWorld, exactTime: true)
-        return lastAction
+        return jumpPrepared(to: time, routeWorld: routeWorld)
     }
 
     /// A jump whose route world is already known (a route-object edit moves
@@ -166,17 +243,30 @@ public final class SourceStudioRouteClock {
     @discardableResult
     public func jump(to time: Float, routeWorld: float4x4) -> Action {
         guard time.isFinite, time >= 0 else { return lastAction }
-        lastAction = rebuild(to: time, routeWorld: routeWorld, exactTime: true)
+        return jumpPrepared(to: time, routeWorld: routeWorld)
+    }
+
+    private func jumpPrepared(to time: Float, routeWorld: float4x4) -> Action {
+        guard playing, time >= playStart else {
+            stepper = nil
+            lastFrame = nil
+            lastAction = .notPlayingYet
+            return lastAction
+        }
+        lastAction = rebuild(to: time, routeWorld: routeWorld, playStart: playStart, exactTime: true)
         return lastAction
     }
 
-    /// `Play` plus `steps` fixed frames, with `reached` ending at `time`
-    /// exactly when `exactTime` (a jump) or at 0 (a rewind). A dropped or
-    /// unplayable stepper leaves no frame, so placement stays on the
-    /// continuous evaluator; the caller's next live tick still mirrors the
-    /// clock because `reached` keeps advancing.
-    private func rebuild(to time: Float, routeWorld: float4x4, exactTime: Bool) -> Action {
-        let steps = Int((Double(time) / Double(Self.frameDelta)).rounded(.toNearestOrAwayFromZero))
+    /// `Play` plus `steps` fixed frames (the tween frames elapsed between
+    /// `playStart` and `time`, never negative — callers guard), with
+    /// `reached` ending at `time` exactly when `exactTime` (a jump or press)
+    /// or at 0 (a rewind). A dropped or unplayable stepper leaves no frame,
+    /// so placement stays on the continuous evaluator; the caller's next live
+    /// tick still mirrors the clock because `reached` keeps advancing.
+    private func rebuild(to time: Float, routeWorld: float4x4,
+                         playStart: Float, exactTime: Bool) -> Action {
+        let steps = Int(((Double(time) - Double(playStart)) / Double(Self.frameDelta))
+            .rounded(.toNearestOrAwayFromZero))
         guard steps <= maxRebuildSteps, let built = buildStepper(routeWorld) else {
             stepper = nil
             // `builtWorld` is kept so a later jump back inside the budget (or

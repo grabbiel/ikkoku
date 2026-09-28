@@ -304,3 +304,31 @@ func samplesPinFixtureRoute() throws {
     #expect(columnwiseEqual(Transform.rotation(UnityCoordinates.eulerDegrees(sample.childRootRotationEulerZXY)),
                             Transform.rotation(expected.rotationQuaternion), tolerance: 0.001))
 }
+
+@Test("activeOverride replaces the record's saved active flag")
+func activeOverrideReplacesRecordFlag() throws {
+    let points = [routePoint([0, 0, 1]), routePoint([2, 0, 1])]
+    let locals = SourceStudioRoutePlayback.pointLocals(from: routeRecord(points))
+    let stopped = routeRecord(points, active: false)
+    let playing = routeRecord(points, active: true)
+    // A record-inactive route the user pressed Play on evaluates like the
+    // record-active copy at the same elapsed time (mid-segment at 1.5 s).
+    let (played, playDiagnostics) = SourceStudioRoutePlayback.childRootWorld(
+        route: stopped, routeWorld: matrix_identity_float4x4, pointLocals: locals,
+        elapsed: 1.5, activeOverride: true)
+    #expect(playDiagnostics.isEmpty)
+    #expect(approximately(played.translation, SIMD3<Float>(1, 0, -1)))
+    let (recorded, _) = SourceStudioRoutePlayback.childRootWorld(
+        route: playing, routeWorld: matrix_identity_float4x4, pointLocals: locals, elapsed: 1.5)
+    #expect(columnwiseEqual(played, recorded))
+    // A nil override keeps the record; a false override pins a record-active
+    // route to point 0, like `Stop`.
+    let (recordInactive, _) = SourceStudioRoutePlayback.childRootWorld(
+        route: stopped, routeWorld: matrix_identity_float4x4, pointLocals: locals, elapsed: 1.5)
+    #expect(columnwiseEqual(recordInactive, Transform.translation(SIMD3<Float>(0, 0, -1))))
+    let (stoppedActive, stopDiagnostics) = SourceStudioRoutePlayback.childRootWorld(
+        route: playing, routeWorld: matrix_identity_float4x4, pointLocals: locals,
+        elapsed: 1.5, activeOverride: false)
+    #expect(stopDiagnostics.isEmpty)
+    #expect(columnwiseEqual(stoppedActive, recordInactive))
+}
