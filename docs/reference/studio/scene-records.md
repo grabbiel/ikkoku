@@ -157,13 +157,32 @@ quirks, including the expo pair that stops 2⁻¹⁰/2⁻¹¹ short. Unplayable 
 aids, zero-length paths, negative or non-finite times) throws
 `RigError.invalid` diagnostics instead of guessing.
 
-This is pure math in double precision, not playback. There is no play/stop/loop
-clock, no stateful `StudioTween.LookUpdate` smoothing (only the instantaneous
-look rotation), no `childRoot` placement, no route-point guide callbacks, no
-edited route serialization, and import still marks routes and their descendants
-unrendered. Verification is agreement with
-`Tools/reverse/analysis/studio_route_reference.py` (a ported reference, not an
-original CharaStudio capture) within that fixture's 1e-5 tolerance.
+This is pure math in double precision, not playback. Verification is agreement
+with `Tools/reverse/analysis/studio_route_reference.py` (a ported reference, not
+an original CharaStudio capture) within that fixture's 1e-5 tolerance.
+
+`SourceStudioRoutePlayback.childRootWorld` is the second piece: it applies the
+recovered `OCIRoute.Play`/`Stop` world placement of `childRoot`, the transform
+route child objects are parented under. An inactive route pins it to point 0's
+world position and rotation every frame. An active route starts from point 0's
+world placement and translates along the segments for the elapsed time the
+caller supplies; its rotation changes only while the orientation is XY or Y
+(orient-to-path, from the evaluator's instantaneous look rotation — the
+stateful `StudioTween.LookUpdate` smoothing is not simulated), otherwise it
+keeps point 0's rotation, and a finished non-looping route holds its end
+position. The recovered assignments write position and rotation only; the
+inherited route scale is kept. In the Studio preview an imported
+route's authored record lives in a runtime-only cache gated by scene identity,
+the world-matrix walks replace a route parent's authored transform with
+`childRoot`, and route descendants inherit it; the cache never becomes a
+document node, so original export validation is untouched, and route child
+characters stay gated as unrendered. After undo/redo the cache is empty and
+route children fall back to the route object's authored transform rather than a
+guess derived from edited document data. `ikkoku-inspect route-playback
+<scene.png> <seconds>` samples every route of a decoded scene at one clock
+position. Still missing: play/stop UI, route-point guide callbacks, edited
+route serialization, rendered route descendants and any original playback
+capture; the tests use authored synthetic records.
 
 ## Extended Save and preservation
 
@@ -265,10 +284,12 @@ structure. It does not display thumbnails or instantiate scene content.
 - Extend full-body original-player evidence, dynamics topologies/world inertia and
   Animator controller coverage; existing adapters are mid-stage, not absent
   (`ST-T05`, `ST-T08`, `ST-T10`).
-- Build play/stop/loop playback, stateful `LookUpdate`, childRoot placement and an
-  edited route writer on top of the new `SourceStudioRoute` evaluator, then source
+- Build stateful `LookUpdate` smoothing, an editor play/stop control, route-point
+  guide callbacks and an edited route writer on top of the `SourceStudioRoute`
+  evaluator and the `SourceStudioRoutePlayback` `childRoot` placement, then source
   scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`). Route
-  records have no playback runtime or edited writer yet.
+  playback has synthetic-record tests only — no original capture evidence and no
+  edited writer yet.
 - Add original scene topology edits/reference remapping and GUID-specific plugin
   callbacks/save adapters while preserving source identities (`ST-T03`, `ST-T13`).
 

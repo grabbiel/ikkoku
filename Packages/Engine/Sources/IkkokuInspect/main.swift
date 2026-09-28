@@ -84,13 +84,14 @@ do {
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
     let logicTrace = arguments.count == 2 && ["blink-trace", "gameplay-trace", "fixed-event-trace", "adv-trace", "scene-document", "animation-library"].contains(arguments[0])
+    let routePlayback = arguments.count == 3 && arguments[0] == "route-playback"
     let animationPose = arguments.count == 5 && arguments[0] == "animation-pose"
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
     let converting = arguments.count == 4 && arguments[0] == "layout"
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
-    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardMods || logicTrace || studioPose || animationPose else {
+    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardMods || logicTrace || studioPose || animationPose || routePlayback else {
         throw GLTFError.io("""
             Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card> <local-file>
                    ikkoku-inspect mod-library <library.json>
@@ -99,6 +100,7 @@ do {
                    ikkoku-inspect <blink-trace|gameplay-trace> <trace.json>
                    ikkoku-inspect <fixed-event-trace|adv-trace> <trace.json>
                    ikkoku-inspect scene-document <source-scene.png>
+                   ikkoku-inspect route-playback <source-scene.png> <seconds>
                    ikkoku-inspect animation-library <animation.json>
                    ikkoku-inspect animation-pose <animation.json> <rig-or-avatar.json> <clip-id> <seconds>
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
@@ -117,6 +119,24 @@ do {
     case "fixed-event-trace": report.merge(try inspectFixedEventExecution(url: url)) { _, new in new }
     case "adv-trace": report.merge(try inspectADVExecution(url: url)) { _, new in new }
     case "scene-document": report.merge(try inspectStudioScene(url: url)) { _, new in new }
+    case "route-playback":
+        // Negative values are allowed through so the clamping diagnostic is
+        // visible; nonfinite values cannot be serialized as JSON numbers.
+        guard let elapsed = Double(arguments[2]), elapsed.isFinite else { throw RigError.invalid("Route playback time must be a finite number.") }
+        let document = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: url))
+        // childRoot placement only; see SourceStudioRoutePlayback for scope.
+        report["elapsedSeconds"] = elapsed
+        report["scope"] = "childRoot world placement per route from decoded records; original capture animation and LookUpdate smoothing are not simulated"
+        report["routes"] = SourceStudioRoutePlayback.samples(in: document.snapshot, elapsed: elapsed).map { sample in
+            ["sourceKey": sample.sourceKey, "name": sample.name as Any? ?? NSNull(),
+             "active": sample.active, "loop": sample.loop,
+             "visibleLine": sample.visibleLine, "orientation": sample.orientation,
+             "pointCount": sample.pointCount, "childRootWorldPosition":
+                [sample.childRootPosition.x, sample.childRootPosition.y, sample.childRootPosition.z],
+             "childRootWorldRotationEulerZXY":
+                [sample.childRootRotationEulerZXY.x, sample.childRootRotationEulerZXY.y, sample.childRootRotationEulerZXY.z],
+             "diagnostics": sample.diagnostics] as [String: Any]
+        }
     case "animation-library": report.merge(try inspectSourceAnimation(url: url)) { _, new in new }
     case "animation-pose":
         guard let time = Float(arguments[4]), time.isFinite, time >= 0 else { throw RigError.invalid("Animation time must be finite and nonnegative.") }
