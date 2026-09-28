@@ -3,7 +3,8 @@
 Code-audit snapshot: 2026-09-25, base `2cfb859` plus the then-uncommitted work.
 The file inventory includes the documentation reorganization, contribution
 guide, ST-T02/A-T04 probe test additions, the ST-T11 first-slice route
-evaluator files and the ST-T11 second-slice route playback files; it does not
+evaluator files, the ST-T11 second-slice route playback files and the ST-T11
+third-slice original route capture/comparison files; it does not
 represent a new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
@@ -13,13 +14,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**618 files indexed; 618 assigned; 0 unassigned.**
+**622 files indexed; 622 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 108 |
-| [Studio / IK / animation](studio.md) | 94 |
+| [Studio / IK / animation](studio.md) | 100 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 283 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 70 |
 
@@ -27,12 +28,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 81 |
+| Conversion / recovery / verification tool | 83 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 16 |
+| Reference host / controlled fixture | 17 |
 | Runtime / shared shader declaration | 139 |
-| Test / validation | 104 |
+| Test / validation | 105 |
 
 ## App / gameplay / plugins
 
@@ -298,15 +299,18 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/trigonometric_ik_contract.py](../../Tools/reverse/analysis/trigonometric_ik_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/animation_assets.py](../../Tools/reverse/animation_assets.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_dynamics_probe.py](../../Tools/reverse/compare_dynamics_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_route_playback.py](../../Tools/reverse/compare_route_playback.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/dynamics_contract.py](../../Tools/reverse/dynamics_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/FinalIKOracle/Program.cs](../../Tools/reverse/fixtures/FinalIKOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs](../../Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/UnityShim.cs](../../Tools/reverse/fixtures/FinalIKOracle/UnityShim.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalAnimationProbe.cs](../../Tools/reverse/fixtures/OriginalAnimationProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalRouteProbe.cs](../../Tools/reverse/fixtures/OriginalRouteProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/dynamics-reference.json](../../Tools/reverse/fixtures/dynamics-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/original_animation_probe.py](../../Tools/reverse/original_animation_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_route_probe.py](../../Tools/reverse/original_route_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_animation.py](../../Tools/reverse/studio_animation.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_attachments.py](../../Tools/reverse/studio_attachments.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_dynamics_fixture.py](../../Tools/reverse/studio_dynamics_fixture.py) | Conversion / recovery / verification tool |
@@ -314,6 +318,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/studio_voice.py](../../Tools/reverse/studio_voice.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_animation_assets.py](../../Tools/reverse/test_animation_assets.py) | Test / validation |
 | [Tools/reverse/test_compare_dynamics_probe.py](../../Tools/reverse/test_compare_dynamics_probe.py) | Test / validation |
+| [Tools/reverse/test_compare_route_playback.py](../../Tools/reverse/test_compare_route_playback.py) | Test / validation |
 | [Tools/reverse/test_dynamics_contract.py](../../Tools/reverse/test_dynamics_contract.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_pose_contract.py](../../Tools/reverse/test_studio_pose_contract.py) | Test / validation |

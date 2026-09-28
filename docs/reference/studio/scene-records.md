@@ -181,8 +181,50 @@ route children fall back to the route object's authored transform rather than a
 guess derived from edited document data. `ikkoku-inspect route-playback
 <scene.png> <seconds>` samples every route of a decoded scene at one clock
 position. Still missing: play/stop UI, route-point guide callbacks, edited
-route serialization, rendered route descendants and any original playback
-capture; the tests use authored synthetic records.
+route serialization and rendered route descendants.
+
+An original capture now exists. `Tools/reverse/original_route_probe.py` runs
+`Tools/reverse/fixtures/OriginalRouteProbe.cs` inside the isolated VM player
+copy: it authors two routes in an empty scene — `IKKOKU-A`, four points, line
+connections, linear/easeInQuad/easeOutCubic easings at speeds 1.5/2/3, looping,
+no orientation; `IKKOKU-B`, four points with two curve connections (one aid
+offset from the auto-initialised midpoint, one linked curve), speed 2, non-loop,
+XY orientation — saves the scene record while both routes play
+(`route-scene.png` via the real `sceneInfo.Save`), and records 240 frames of
+`Time.frameCount`, `deltaTime`, the running cumulative time and each route's
+`childRoot` world position, rotation and `active` flag (`route-trace.json`):
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_route_probe.py \
+  --output .local/stt11c/probe        # launch; the probe self-quits when done
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_route_probe.py \
+  --output .local/stt11c/probe --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_route_playback.py
+```
+
+`Tools/reverse/compare_route_playback.py` runs
+`ikkoku-inspect route-playback route-scene.png <cumulative t>` at all 240
+recorded times and compares in a common Unity basis: positions directly,
+rotations as quaternion angles against quaternions reconstructed from the
+emitted Z-X-Y Euler angles. Because the original `StudioTween` advances in
+`Update` by whole `Time.deltaTime` steps, it reports maxima both at frame
+offset 0 and at the best constant frame offset (-2 for this capture):
+`IKKOKU-A` deviates by at most 0.030 m / 0.0° at offset 0 and 0.024 m / 0.0° at
+offset -2. `IKKOKU-B` deviates by up to 0.905 m / 175.9° at offset 0 (0.868 m /
+179.1° at -2): its first line segment matches within about 1 cm of position and
+its orientation converges to the native lookahead value, while the curve
+segments disagree on path geometry and orientation. Independent spot checks of
+the same trace show where the error comes from. On both routes the native
+position leads the original by exactly one frame from the start: the first
+recorded original frame is still at point 0, which gives a constant 0.9 cm (A)
+and 1.2 cm (B) error. Route A's error then stays constant through its first loop
+and grows linearly after the first wrap, so the loop restart timing differs. Route
+B diverges right after its first curve point: the original path swings through
+that point's aid while the native path does not. The original deactivates at
+frame 234 (3.92 s) and then holds the last point's world position. That agrees
+with the native "finished non-looping route holds its end" rule, but the native
+curve path has not reached the end by 4.0 s. The report is
+`.local/stt11c/route-playback-comparison.json`.
 
 ## Extended Save and preservation
 
