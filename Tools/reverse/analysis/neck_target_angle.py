@@ -15,10 +15,14 @@ x maximum is one unexplained recorded-nowAngle step at frame 328 (2.174659 to
 step); every other changed frame of the capture matches within 0.0033 deg on
 x, and a TARGET frame whose recorded nowAngle is byte-identical to the
 previous frame of its phase is counted as held (the solver did not recompute
-it).  AWAY frames report the raw formula output next to the adjusted recorded
-value instead of asserting equality.  Vectors are plain x,y,z lists and
-quaternions Unity x,y,z,w lists; every vector read is re-derived from the
-recorded rotation instead of trusting Unity-axis fields.
+it).  AWAY frames get the raw formula output through the recovered AWAY
+adjustment, which collapses the vertical angle onto one of the aParam
+bending-limit sums and negates the horizontal angle using the previous
+recorded frame's bone angleH sum; across the 90 AWAY frames of the capture
+the adjusted prediction matches the recorded nowAngle within 0.0037 deg on x
+and exactly on y.  Vectors are plain x,y,z lists and quaternions Unity
+x,y,z,w lists; every vector read is re-derived from the recorded rotation
+instead of trusting Unity-axis fields.
 """
 from __future__ import annotations
 
@@ -195,6 +199,47 @@ def get_angle_to_target(*, target: list[float], aim_position: list[float], aim_r
     return [x, y]
 
 
+def away_adjust(*, now_angle: list[float], bone_angle_h: list[float],
+                a_param: list[dict], limit_away: float) -> list[float]:
+    """The recovered AWAY adjustment applied to the raw (unlimited) nowAngle.
+
+    Only a frame whose limit check is intact reaches it; `bone_angle_h` are
+    the bones' angleH before this frame's smoothing (the previous recorded
+    frame's end-of-frame values).  The vertical angle collapses onto one of
+    the two sums of the aParam bending limits — the maximum-bending sum when
+    the target is past it or the raw angle already bends the other way, the
+    minimum-bending sum otherwise — and the horizontal angle is negated.
+    """
+    if len(now_angle) != 2 or not all(math.isfinite(value) for value in now_angle):
+        raise ValueError(f'away-adjust nowAngle is not a finite xy pair: {now_angle!r}')
+    if not bone_angle_h or not all(math.isfinite(value) for value in bone_angle_h):
+        raise ValueError('away-adjust needs finite per-bone angleH values')
+    if not a_param:
+        raise ValueError('away-adjust needs the aParam bending limits')
+    for entry in a_param:
+        for key in ('minBendingAngle', 'maxBendingAngle'):
+            if not math.isfinite(float(entry[key])):
+                raise ValueError(f'away-adjust aParam {key} is not finite: {entry!r}')
+    if not math.isfinite(float(limit_away)):
+        raise ValueError('away-adjust limitAway is not finite')
+    x, y = [float(value) for value in now_angle]
+    limit_away = float(limit_away)
+    horizontal_bones = sum(float(value) for value in bone_angle_h)
+    maximum_bending = sum(float(entry['maxBendingAngle']) for entry in a_param)
+    minimum_bending = sum(float(entry['minBendingAngle']) for entry in a_param)
+    if y <= horizontal_bones:
+        if y <= maximum_bending - limit_away or y < 0.0:
+            y = maximum_bending
+        else:
+            y = minimum_bending
+    else:
+        if y >= minimum_bending + limit_away or y > 0.0:
+            y = minimum_bending
+        else:
+            y = maximum_bending
+    return [-x, y]
+
+
 def predict_now_angle(*, frame: dict, head_rotation: list[float], state: dict) -> list[float]:
     """Predict one recorded frame's nowAngle from its geometry.
 
@@ -245,8 +290,9 @@ def verify_trace(trace: dict, settings: dict) -> dict:
     A TARGET frame whose recorded nowAngle is byte-identical to the previous
     recorded frame of its phase is held (the solver did not recompute it) and
     counted per phase; the moved-frame maximum excludes held frames.  AWAY
-    frames get the raw (unlimited) formula output next to the recorded
-    adjusted nowAngle, without an equality claim.
+    frames get the raw (unlimited) formula output, the AWAY adjustment
+    applied to it under the previous recorded frame's bone angleH sum, and
+    the adjusted-vs-recorded maximum per phase.
     """
     if trace.get('error'):
         raise ValueError(f'the capture reported an error: {trace["error"]}')
@@ -261,10 +307,12 @@ def verify_trace(trace: dict, settings: dict) -> dict:
     for phase, phase_frames in phases.items():
         if any(frame.get('geometry') is None for frame in phase_frames):
             raise ValueError(f'phase {phase} has frames without recorded geometry (needs the ST-T07m probe)')
+    global_index = {id(frame): index for index, frame in enumerate(frames)}
     report: dict = {'phases': {}, 'targetFrames': 0, 'awayFrames': []}
     for phase in sorted(phases):
         phase_report = {'targetFrames': 0, 'previousMaxDegrees': [0.0, 0.0], 'sameFrameMaxDegrees': [0.0, 0.0],
-                        'movedMaxDegrees': [0.0, 0.0], 'heldFrames': 0, 'awayFrames': 0}
+                        'movedMaxDegrees': [0.0, 0.0], 'heldFrames': 0, 'awayFrames': 0,
+                        'awayMaxDegrees': [0.0, 0.0]}
         report['phases'][phase] = phase_report
         for index, frame in enumerate(phases[phase]):
             look_type = frame['neck']['calculators'][0]['lookType']
@@ -304,11 +352,123 @@ def verify_trace(trace: dict, settings: dict) -> dict:
                                          reference_position=frame['geometry']['neckRef']['position'],
                                          reference_rotation=frame['geometry']['neckRef']['rotation'],
                                          head_rotation=current_head)
+                # The adjustment reads the bones' angleH before this frame's
+                # smoothing, i.e. the previous recorded frame's end-of-frame
+                # values; the AWAY phase's first frame inherits them from the
+                # frame before the type change.
+                previous = frames[global_index[id(frame)] - 1] if global_index[id(frame)] > 0 else None
+                if previous is None:
+                    raise ValueError(f'AWAY frame {frame["frameCount"]} has no previous frame to read angleH from')
+                if broken:
+                    adjusted = [0.0, 0.0]
+                else:
+                    adjusted = away_adjust(now_angle=raw,
+                                           bone_angle_h=[float(bone['angleH']) for bone in previous['neck']['bones']],
+                                           a_param=state['aParam'], limit_away=float(state['limitAway']))
+                maximum = phase_report['awayMaxDegrees']
+                phase_report['awayMaxDegrees'] = [max(maximum[0], abs(adjusted[0] - float(recorded[0]))),
+                                                  max(maximum[1], abs(adjusted[1] - float(recorded[1])))]
                 report['awayFrames'].append({'phase': phase, 'frameCount': frame['frameCount'],
-                                             'recorded': recorded, 'raw': raw, 'limitBroken': broken,
-                                             'limitAngles': [horizontal, vertical]})
+                                             'recorded': recorded, 'raw': raw, 'adjusted': adjusted,
+                                             'limitBroken': broken, 'limitAngles': [horizontal, vertical]})
                 phase_report['awayFrames'] += 1
     return report
+
+
+def write_fixture(path, seed: int = 20260928) -> int:
+    """Write seeded SYNTHETIC target-angle cases (with Python outputs) to `path`.
+
+    The geometry is random but fully determined by `seed`: NeckRef and aim
+    transforms, a head yaw, and targets ahead / to the side / behind, spread
+    over TARGET and AWAY look types, over both AWAY branches (the previous
+    bone angleH sum picked from the raw y so each case exercises its branch),
+    and over limit breaks with and without isLimitBreakBackup (a backup frame
+    reads correction 0, so a target just past the limit still breaks).  The
+    outputs are the Python formulas themselves, not original-game data: the
+    Swift port is expected to reproduce them to 1e-6 deg.  Returns the case
+    count.
+    """
+    import json
+    import random
+
+    rng = random.Random(seed)
+
+    def yaw_radians(degrees: float) -> list[float]:
+        half = math.radians(degrees) / 2.0
+        return [0.0, math.sin(half), 0.0, math.cos(half)]
+
+    def unit_quaternion() -> list[float]:
+        while True:
+            components = [rng.uniform(-1.0, 1.0) for _ in range(4)]
+            size = math.sqrt(sum(component * component for component in components))
+            if size > 0.5:
+                return [component / size for component in components]
+
+    targets = ([0.0, 12.0], [35.0, 0.0], [-35.0, 0.0], [85.0, 0.0], [95.0, -8.0], [150.0, 6.0], [178.0, 0.0])
+    cases: list[dict] = []
+    for transform_index in range(4):
+        reference = {'position': [rng.uniform(-0.6, 0.6), rng.uniform(1.2, 1.6), rng.uniform(-0.3, 0.3)],
+                     'rotation': unit_quaternion()}
+        aim = {'position': [reference['position'][0] + rng.uniform(-0.1, 0.1),
+                            reference['position'][1] + rng.uniform(-0.15, 0.05),
+                            reference['position'][2] + rng.uniform(-0.1, 0.1)],
+               'rotation': multiply_quaternions(reference['rotation'], yaw_radians(rng.uniform(-30.0, 30.0)))}
+        head_rotation = multiply_quaternions(yaw_radians(rng.uniform(-60.0, 60.0)), unit_quaternion())
+        for target_index, (azimuth, elevation) in enumerate(targets):
+            look_type = 'TARGET' if (transform_index + target_index) % 3 == 0 else 'AWAY'
+            # A backup frame has no state and reads correction 0, so a target
+            # at the 85 deg azimuth against the 80 deg limit still breaks.
+            backup = transform_index % 2 == 1 and target_index % 3 == 1
+            limits = ({'hAngleLimit': 0.0, 'vAngleLimit': 0.0, 'correction': 0.0, 'isLimitBreakBackup': True}
+                      if backup else
+                      {'hAngleLimit': 90.0, 'vAngleLimit': 90.0, 'correction': 10.0, 'isLimitBreakBackup': False})
+            radius = rng.uniform(1.5, 3.0)
+            direction = rotate(aim['rotation'],
+                               rotate(yaw_radians(azimuth), rotate(angle_axis(elevation, RIGHT), FORWARD)))
+            target = [aim['position'][0] + radius * direction[0],
+                      aim['position'][1] + radius * direction[1],
+                      aim['position'][2] + radius * direction[2]]
+            broken, horizontal, vertical = limit_check(
+                target=target, reference_position=reference['position'], reference_rotation=reference['rotation'],
+                horizontal_limit=limits['hAngleLimit'], vertical_limit=limits['vAngleLimit'],
+                correction=limits['correction'])
+            raw = get_angle_to_target(target=target, aim_position=aim['position'], aim_rotation=aim['rotation'],
+                                      reference_position=reference['position'], reference_rotation=reference['rotation'],
+                                      head_rotation=head_rotation)
+            case: dict = {'lookType': look_type, 'target': target, 'aim': aim, 'neckRef': reference,
+                          'headRotation': head_rotation, 'limits': limits,
+                          'limit': {'broken': broken, 'horizontal': horizontal, 'vertical': vertical},
+                          'raw': raw}
+            if look_type == 'AWAY':
+                a_param = [{'minBendingAngle': -rng.choice([20.0, 25.0, 30.0, 40.0]),
+                            'maxBendingAngle': rng.choice([20.0, 25.0, 30.0, 40.0])},
+                           {'minBendingAngle': -rng.choice([15.0, 20.0]),
+                            'maxBendingAngle': rng.choice([15.0, 20.0])}]
+                limit_away = rng.choice([5.0, 10.0, 15.0])
+                maximum_bending = sum(entry['maxBendingAngle'] for entry in a_param)
+                if broken:
+                    bone_angle_h = [rng.uniform(-30.0, 30.0), rng.uniform(-30.0, 30.0)]
+                elif target_index % 2 == 0:  # raw y above the bone sum: the y > num4 branch
+                    bone_angle_h = [raw[1] / 2.0 - rng.uniform(2.0, 6.0), rng.uniform(-2.0, 2.0)]
+                elif raw[1] <= maximum_bending - limit_away:  # y <= num4 inside the band: max-bending
+                    bone_angle_h = [raw[1] + rng.uniform(3.0, 8.0), rng.uniform(0.5, 5.0)]
+                else:  # y <= num4 past the band edge (maxSum - limitAway)
+                    bone_angle_h = [raw[1] + rng.uniform(3.0, 8.0), rng.uniform(-2.0, 2.0)]
+                case['away'] = {'boneAngleH': bone_angle_h, 'aParam': a_param, 'limitAway': limit_away}
+                case['adjusted'] = [0.0, 0.0] if broken else away_adjust(
+                    now_angle=raw, bone_angle_h=bone_angle_h, a_param=a_param, limit_away=limit_away)
+            else:
+                case['adjusted'] = [0.0, 0.0] if broken else raw
+            case['id'] = f'{transform_index}-{target_index}-{look_type.lower()}'
+            cases.append(case)
+    document = {'kind': 'neck-target-angle', 'schemaVersion': 1,
+                'source': 'SYNTHETIC seeded geometry from Tools/reverse/analysis/neck_target_angle.py, '
+                          'not original-game data',
+                'cases': cases}
+    path = path if path.suffix == '.json' else path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=1) + '\n')
+    return len(cases)
 
 
 def main():
@@ -316,27 +476,36 @@ def main():
     import json
     from pathlib import Path
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('capture', type=Path, help='capture directory or look-trace.json')
-    parser.add_argument('--settings', type=Path, required=True,
+    parser.add_argument('capture', type=Path, nargs='?',
+                        help='capture directory or look-trace.json')
+    parser.add_argument('--settings', type=Path,
                         help='studio look settings json holding neck.neckTypeStates (limits)')
+    parser.add_argument('--fixture', type=Path, metavar='PATH',
+                        help='write SYNTHETIC seeded fixture cases (with Python outputs) to PATH and exit')
     args = parser.parse_args()
+    if args.fixture is not None:
+        print(f'Wrote {write_fixture(args.fixture)} fixture cases to {args.fixture}')
+        return
+    if args.capture is None or args.settings is None:
+        parser.error('a capture and --settings are required unless --fixture is given')
     path = args.capture if args.capture.suffix == '.json' else args.capture / 'look-trace.json'
     report = verify_trace(json.loads(path.read_text()), json.loads(args.settings.read_text()))
     print('| phase | TARGET frames | held | x ° (k-1 head) | y ° (k-1 head) | x ° (k head) | y ° (k head) '
-          '| x ° (k head, changed) | y ° (k head, changed) | AWAY frames |')
-    print('|---|---|---|---|---|---|---|---|---|---|')
+          '| x ° (k head, changed) | y ° (k head, changed) | AWAY frames | x ° (AWAY adjusted) | y ° (AWAY adjusted) |')
+    print('|---|---|---|---|---|---|---|---|---|---|---|---|')
     for phase in sorted(report['phases']):
         entry = report['phases'][phase]
-        print('| {} | {} | {} | {:.6f} | {:.6f} | {:.6f} | {:.6f} | {:.6f} | {:.6f} | {} |'.format(
+        print('| {} | {} | {} | {:.6f} | {:.6f} | {:.6f} | {:.6f} | {:.6f} | {:.6f} | {} | {:.6f} | {:.6f} |'.format(
             phase, entry['targetFrames'], entry['heldFrames'],
             entry['previousMaxDegrees'][0], entry['previousMaxDegrees'][1],
             entry['sameFrameMaxDegrees'][0], entry['sameFrameMaxDegrees'][1],
             entry['movedMaxDegrees'][0], entry['movedMaxDegrees'][1],
-            entry['awayFrames']))
+            entry['awayFrames'], entry['awayMaxDegrees'][0], entry['awayMaxDegrees'][1]))
     print(f'TARGET frames checked: {report["targetFrames"]}')
     for entry in report['awayFrames']:
         print(f'AWAY phase {entry["phase"]} frame {entry["frameCount"]}: recorded {entry["recorded"]} '
-              f'raw {entry["raw"]} limitBroken={entry["limitBroken"]} limitAngles={entry["limitAngles"]}')
+              f'raw {entry["raw"]} adjusted {entry["adjusted"]} '
+              f'limitBroken={entry["limitBroken"]} limitAngles={entry["limitAngles"]}')
 
 
 if __name__ == '__main__':

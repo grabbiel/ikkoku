@@ -344,9 +344,14 @@ phase 5 stays inside the limits (worst yaw 85.89° against 90 + 10). The 90
 AWAY frames of phase 2 never break (worst limit angles 44.63°/20.96° against
 80 + 10 / 90 + 10); their raw formula output sits at ≈[−11.30, +44.62] while
 the recorded `nowAngle` is all-frame-held at x ≈ 11.30 and y exactly −60:
-recorded x is the raw x negated to ≤0.0037°, and −60 is again the
-`hAngleLimit` 80 − `limitAway` 10 adjustment documented below. AWAY's own
-`nowAngle` adjustment is reported, not modeled. `backupPos` equals the
+recorded x is the raw x negated to ≤0.0037°, and −60 is the `aParam`
+minimum-bending sum −40 + −20 (not `hAngleLimit` 80 − `limitAway` 10, which
+is 70) that the AWAY adjustment — the four-branch rule in the Neck look
+modes TARGET / AWAY subsection below — collapses the vertical angle onto.
+The verifier now applies that adjustment (`away_adjust` with the previous
+frame's recorded bone angleH sum): across all 90 AWAY frames the adjusted
+prediction matches the recorded `nowAngle` within 0.003664° x / 0.000000° y,
+so AWAY is modeled here, not just reported. `backupPos` equals the
 phase's recorded target position on all 570 frames; `changeTypeTimer` rises
 from ~0.017 to 1 during every phase — each phase enters through a type
 change — and sits at exactly 1 throughout the continuous TARGET phases 1 and
@@ -466,11 +471,15 @@ character.
 ### Neck look modes TARGET / AWAY
 
 TARGET and AWAY drive the neck from a solver angle rather than a target
-rotation. `GetAngleToTarget` — the geometry that turns the look target's
-position into the frame's `nowAngle` — is not ported: `neck_target_step`
-(Swift `stepSolver(deltaTime:lookType:pattern:nowAngle:)`) takes
-`nowAngle` as its input, so everything below is verified downstream of
-that geometry, not against it.
+rotation. `neck_target_step` (Swift
+`stepSolver(deltaTime:lookType:pattern:nowAngle:)`) takes `nowAngle` as its
+input, so the distribution/smoothing replay below is verified downstream of
+that geometry; the geometry itself — `GetAngleToTarget` and its pre-check
+limit test, which turn the look target's position into the frame's
+`nowAngle`, plus AWAY's own `nowAngle` adjustment — is recovered in Python
+(`analysis/neck_target_angle.py`, under Original look capture) and ported in
+`SourceStudioNeckTargetAngle.swift`, pitted against that capture's frames
+and a seeded fixture as described at the end of this subsection.
 
 - **Distribution** (`NeckUpdateCalc`, bones last → first, so the head —
   index 1 — claims first): `nowAngle` is a residual the two bones take
@@ -540,28 +549,43 @@ against targets 1e-4° and 0.05°. Two local facts:
   (`AWAY_BLEND_ANOMALY_CEILING_DEGREES` 0.06) instead of the 0.05° TARGET
   rotation target; TARGET rotations stay at 1.6e-5°.
 
-Still missing, all visible in the capture:
+Recovered, ported and capture-verified since (the angle-geometry slice and
+its port are described after the fixture paragraph below); what remains:
 
-- `GetAngleToTarget`'s geometry (target transform → `nowAngle`) is recovered
-  and capture-verified in Python (`analysis/neck_target_angle.py`, see the
-  geometry slice under Original look capture) but not ported to Swift and not
-  wired as a live angle source.
-- **AWAY's own `nowAngle` adjustment**: the run1 AWAY phase holds `nowAngle`
+- `GetAngleToTarget`'s geometry (target transform → `nowAngle`) is ported
+  (`SourceStudioNeckTargetAngle.angleToTarget`) but not wired as a live
+  angle source.
+- **AWAY's own `nowAngle` adjustment** — the run1 AWAY phase holds `nowAngle`
   y at a constant −60 on all 90 frames (x drifts 11.299–11.360) while the
-  neck turns; −60 is that state's `hAngleLimit` 80 minus `limitAway` 10, so
-  the original offsets the demand by the limit margin. The replay feeds the
-  recorded `nowAngle` unchanged and matches downstream of that adjustment;
-  the geometry capture's 90 AWAY frames agree (recorded x is the reconstructed
-  raw x negated to ≤0.0037°; recorded y is exactly −60 against raw +44.62).
-- **Limit-break handling**: `hAngleLimit`/`vAngleLimit`, `limitAway`,
-  `limitBreakCorrectionValue` and the `isLimitBreakBackup` flag are unmodeled
-  in Swift; nothing in these 270 frames needed them, and the geometry
-  capture's behind-target phase shows what they do (limit test breaks →
-  `nowAngle` `[0, 0]`, `isLimitBreakBackup` set on the live state).
+  neck turns — is `away_adjust` (Python) /
+  `SourceStudioNeckTargetAngle.awayAdjust`, applied to the raw angle only
+  when the limit check is intact: with `num4` the bones' pre-smoothing
+  `angleH` sum, if raw y ≤ `num4` it becomes the `aParam` maximum-bending
+  sum (here +40 + 20 = +60) when raw y ≤ that sum − `limitAway` or raw y < 0,
+  otherwise the minimum-bending sum; if raw y > `num4` it becomes the
+  minimum-bending sum (−40 − 20 = −60) when raw y ≥ that sum + `limitAway`
+  or raw y > 0, otherwise the maximum-bending sum; then x is negated. The
+  −60 the capture holds is that minimum-bending sum — the earlier
+  "`hAngleLimit` 80 − `limitAway` 10" reading gives 70 and was wrong. All
+  90 AWAY frames read raw y ≈ +44.62 above the previous recorded frame's
+  `angleH` sum and above 0, take that branch, and the adjusted prediction
+  then matches the recorded `nowAngle` to 0.003664° x / 0.000000° y. The
+  replay above still feeds the recorded `nowAngle` unchanged and matches
+  downstream of that adjustment.
+- **Limit-break handling**: the limit test (|signed angle about NeckRef's up
+  or right axis| > limit + correction, correction 0 while the live state is
+  `isLimitBreakBackup`) and its `nowAngle` `[0, 0]` zeroing are ported as
+  `SourceStudioNeckTargetAngle.limitCheck`, matching the geometry capture's
+  behind-target phase (broken on all 60 frames, recorded `[0, 0]` on every
+  one), and AWAY's adjustment runs only on intact frames.
+  `SourceStudioNeckLookSettings` still decodes only `aParam`/`leapSpeed` per
+  state; the limit fields are plain per-call arguments, and a caller must
+  read `isLimitBreakBackup` and pass correction 0 itself.
 - No live `nowAngle` source is wired, so the preview override still reports
   TARGET/AWAY as "Neck gaze solver pending; animated pose kept." — the
-  solver step exists and the geometry behind `nowAngle` is verified in
-  Python, but nothing computes it natively yet.
+  solver step and the geometry behind `nowAngle` now exist natively, but
+  nothing feeds a live camera target, the frame's head rotation and the
+  bones' `angleH` into them.
 
 `SourceStudioNeckLook.stepSolver` ports the distribution, smoothing, basis
 and blend above; its settings loader decodes each type state's `aParam`
@@ -571,6 +595,29 @@ where both rotations come back nil, the TARGET → AWAY switch, a
 saturated-factor frame where the head's ±20° share spills onto the neck, and
 a steady AWAY frame) to ≤1e-5, asserting the spill lands the head exactly on
 its own `minBendingAngle`.
+
+`Packages/Engine/Sources/Studio/SourceStudioNeckTargetAngle.swift` ports the
+angle geometry itself, in double precision over plain positions and Unity
+x,y,z,w quaternions with no rig access: `angleAroundAxis`, `fromToRotation`
+(shortest arc; antiparallel pairs rotate 180° about `Cross(RIGHT, from)`,
+`Cross(UP, from)` when that degenerates), `limitCheck`, `angleToTarget`
+(the frame-k-head formula of the capture slice) and `awayAdjust` (Float
+widens to Double exactly, so the bending sums match the oracle bit for
+bit). `neck_target_angle.py --fixture` writes 28 seeded SYNTHETIC cases (no
+original-game data) to
+`Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json` — four
+randomized aim/NeckRef/head transform sets × seven target azimuths, 10
+TARGET / 18 AWAY, 17 breaking the limit (4 under `isLimitBreakBackup`,
+where correction 0 still leaves them broken) and the 7 intact AWAY cases
+splitting 2 raw-y-above / 5 at-or-below the bone `angleH` sum — each with
+the oracle's limit angles, raw and adjusted angles.
+`SourceStudioNeckTargetAngleTests` re-runs every case natively and matches
+to ≤1e-6°, asserts broken cases zero the adjusted angle and TARGET cases
+pass the raw angle through, and checks degenerate inputs (target on the aim
+origin, zero-length direction, empty bone list, non-finite angle) throw.
+What the port does not yet have is preview wiring: no caller feeds it a
+live camera target, the frame's own head rotation and the bones' current
+`angleH`, so TARGET/AWAY still render the animated pose.
 
 ## Reproducible verification
 
