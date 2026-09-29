@@ -102,7 +102,7 @@ separate SHA-256 manifest. The main character wrapper is also available under
 | System | Recovered entry points and data dependencies | Native status |
 | --- | --- | --- |
 | Controller loading and state playback | `ChaControl.LoadAnimation`, `AnimPlay`, `syncPlay`, `setAnimPtnCrossFade`, parameter/layer setters; `EasyLoader.Motion` | Generic Transform clips and flat 1D states execute. Studio adds exact normal catalog identity, height/speed/time/force-loop handling. Transitions, masks/layers, overrides, callbacks and broad Mecanim compatibility remain pending. |
-| Controller/clip assets | Runtime-loaded controllers/parameter data, Avatar bindings and generic Transform curves | Action Idle/Locomotion clips are converted; the base normal Studio catalog has 287/288 executable rows. The remaining row needs loop-pose correction. Exact binding is required; catalog breadth is not full controller semantics or installed-mod coverage. |
+| Controller/clip assets | Runtime-loaded controllers/parameter data, Avatar bindings and generic Transform curves | Action Idle/Locomotion clips are converted; all 288 base normal Studio rows convert after `m_Lewd_00_01`'s cycle offset and `loopBlend` flag were recorded — every loop-pose correction candidate failed verification within tolerance and is reported (best 0.0296 vs 0.0001). Exact binding is required; catalog breadth is not full controller semantics or installed-mod coverage. |
 | Player locomotion | `ActionGame.Chara.Mover.PlayerMover`: `Idle`, `Locomotion`, `squat_walk`, `squat_loop`, `MotionSpeed`, mover/reactive/NavMesh dependencies | Selected Idle/walk/run clips sample natively. The player state-selection, movement/navigation and gameplay host do not execute; animation sampling is not locomotion integration. |
 | NPC locomotion | `NPCMover`: idle/talking handling, escape action 20, anger locomotion and random alternative locomotion; arrival state controls updates. | Source recovered; dependent AI/navigation and animator behavior remain unported. |
 | Lip sync | `ChaControl.UpdateBlendShapeVoice` selects `WavInfoData` or `FBSAssist.AudioAssist` (1024 channel-zero samples, RMS, gain clamp and asymmetric smoothing) | Studio voice playlist/repeat/gain/pitch scheduling exists, but original files are not converted in the retained catalog. No source audio-output sampler, precomputed mouth timeline or lip-sync driver is integrated. |
@@ -181,8 +181,9 @@ Not done here: no gaze solver (the TARGET/AWAY geometric solver, `CONTROL`
 and the eye calculator included). `AnimationCurve` evaluation and the neck
 FORWARD / FIX / ANIMATION look modes with the type-change transition are
 ported by the later slice documented below. The capture below records what
-the original controllers produce at runtime; replaying it in the preview
-remains part of the wider `ST-T07` controller integration.
+the original controllers produce at runtime; replaying the eye modes in the
+preview remains part of the wider `ST-T07` controller integration (the neck
+TARGET/AWAY gaze is wired by the final gaze-wiring slice below).
 
 ### Original look capture
 
@@ -454,8 +455,9 @@ positive delta (1e-5 s) because `NeckUpdateCalc` early-outs on zero, so FIX
 already shows the saved rotation on the first frame. When the effective FK
 state has the neck group active Studio forces pattern 4 instead, but the
 relative order of Studio FK and the look controller is not recovered, so the
-override is skipped and "FK owns the neck" is reported once. TARGET/AWAY are
-reported "neck gaze solver pending; animated pose kept" and ANIMATION keeps the
+override is skipped and "FK owns the neck" is reported once. TARGET/AWAY
+were then reported "neck gaze solver pending; animated pose kept" (wired by
+the later gaze-wiring slice below) and ANIMATION keeps the
 animated pose. Verified only in the pure helper on a synthetic three-node rig
 (FIX writes the saved quaternions with each bone's translation/scale kept,
 FORWARD at elapsed 0.5 matches the analytic angle lerp from the Python curve
@@ -550,11 +552,12 @@ against targets 1e-4° and 0.05°. Two local facts:
   rotation target; TARGET rotations stay at 1.6e-5°.
 
 Recovered, ported and capture-verified since (the angle-geometry slice and
-its port are described after the fixture paragraph below); what remains:
+its port are described after the fixture paragraph below); what remained at
+that slice, all wired since (gaze-wiring paragraph after the fixture):
 
-- `GetAngleToTarget`'s geometry (target transform → `nowAngle`) is ported
-  (`SourceStudioNeckTargetAngle.angleToTarget`) but not wired as a live
-  angle source.
+- `GetAngleToTarget`'s geometry (target transform → `nowAngle`) was ported
+  (`SourceStudioNeckTargetAngle.angleToTarget`) with no caller feeding it a
+  live target.
 - **AWAY's own `nowAngle` adjustment** — the run1 AWAY phase holds `nowAngle`
   y at a constant −60 on all 90 frames (x drifts 11.299–11.360) while the
   neck turns — is `away_adjust` (Python) /
@@ -578,14 +581,14 @@ its port are described after the fixture paragraph below); what remains:
   `SourceStudioNeckTargetAngle.limitCheck`, matching the geometry capture's
   behind-target phase (broken on all 60 frames, recorded `[0, 0]` on every
   one), and AWAY's adjustment runs only on intact frames.
-  `SourceStudioNeckLookSettings` still decodes only `aParam`/`leapSpeed` per
-  state; the limit fields are plain per-call arguments, and a caller must
-  read `isLimitBreakBackup` and pass correction 0 itself.
-- No live `nowAngle` source is wired, so the preview override still reports
-  TARGET/AWAY as "Neck gaze solver pending; animated pose kept." — the
-  solver step and the geometry behind `nowAngle` now exist natively, but
-  nothing feeds a live camera target, the frame's head rotation and the
-  bones' `angleH` into them.
+  At that slice `SourceStudioNeckLookSettings` decoded only `aParam`/
+  `leapSpeed` per state and the limit fields were plain per-call arguments;
+  the gaze-wiring slice below moved them into the loader as per-state
+  `hAngleLimit`/`vAngleLimit`/`limitBreakCorrectionValue`/`limitAway` arrays.
+- No live `nowAngle` source was wired then, so the preview override reported
+  TARGET/AWAY as "Neck gaze solver pending; animated pose kept."; the
+  gaze-wiring slice below feeds the live camera target, the frame's own head
+  rotation and the bones' `angleH` through a new `SourceStudioNeckLookRuntime`.
 
 `SourceStudioNeckLook.stepSolver` ports the distribution, smoothing, basis
 and blend above; its settings loader decodes each type state's `aParam`
@@ -615,9 +618,85 @@ the oracle's limit angles, raw and adjusted angles.
 to ≤1e-6°, asserts broken cases zero the adjusted angle and TARGET cases
 pass the raw angle through, and checks degenerate inputs (target on the aim
 origin, zero-length direction, empty bone list, non-finite angle) throw.
-What the port does not yet have is preview wiring: no caller feeds it a
-live camera target, the frame's own head rotation and the bones' current
-`angleH`, so TARGET/AWAY still render the animated pose.
+What the port did not yet have was preview wiring; the gaze-wiring slice
+below feeds a live camera target, the frame's own head rotation and the
+bones' current `angleH` and writes the result onto the pose.
+
+### TARGET / AWAY gaze wiring in the Studio preview
+
+`Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift` carries
+the TARGET/AWAY half of `NeckLookCalcVer2` across frames: a
+`SourceStudioNeckLook` solver plus the per-state `isLimitBreakBackup` flag,
+seeded the way a loaded scene finds it (lookType ANIMATION, `fixAngle` = the
+saved angle, so the first frame runs the same `UpdateCall` type-change
+transition FIX/FORWARD use). `update(deltaTime:lookType:pattern:settings:
+geometry:)` runs the original LateUpdate order per frame: the type-change
+transition (a zero deltaTime stops there, as `NeckUpdateCalc` early-outs),
+then `limitCheck` on the `NeckRef` Transform with the pattern's
+`hAngleLimit`/`vAngleLimit` and correction 0 while `isLimitBreakBackup` is
+set. That lifecycle is the recovered one: `NeckUpdateCalc` uses
+`isLimitBreakBackup ? 0 : limitBreakCorrectionValue` and stores the frame's
+broken result back into the flag. It matches the recorded broken frame's
+zeroing and the intact frame's restore in phase 4. Otherwise `angleToTarget`, plus
+AWAY's `awayAdjust` on intact frames only with the bones' pre-smoothing
+`angleH` sum (the same end-of-frame semantics as the capture's
+previous-recorded-frame reading), then `stepSolver` with the angle pair
+narrowed to Float at that seam. The geometry arrives as a
+`SourceStudioNeckLookGeometry` in the Unity basis — `aim` position/rotation,
+`NeckRef` position/rotation, the head's current world rotation (the last
+configured bone's own Transform: the probe records `headBone` as
+`RequiredTransform(lastBone, "neckBone")`) and the target position — so the
+runtime is testable with hand-made geometry and no rig.
+
+The settings loader gained the four captured limit fields per state
+(`hAngleLimit`/`vAngleLimit`/`limitBreakCorrectionValue`/`limitAway`) and
+`SourceStudioCharacterPreview` keeps one runtime per character when the
+effective pattern is TARGET or AWAY with `neckTargetType` 0 (the main
+camera; any other target type has no recovered meaning and keeps the
+animated pose with a diagnostic). `updateNeckLook(deltaTime:
+cameraModelPosition:…)` builds the geometry from the cached
+*pre-override* pose — the FK/IK-solved pose before the look override wrote
+anything, the pose the original `LateUpdate` reads, since Unity's animation
+update overwrites the bones each frame before `LateUpdate` and the solver
+never reads its own last write — with `UpdateCall`'s TARGET write-back
+applied first: each bone's previous `fixAngle` goes back onto
+`cf_j_neck`/`cf_j_head` before the head rotation is read, which is what
+reconciles the capture's same-frame head rotation (≤0.082° x / ≤0.017° y
+over all 300 TARGET frames). The camera enters rig model space as
+`UnityCoordinates.position(world.inverse.transformPoint(camera.position))`
+against the character's object world matrix; the Z reflection commutes with
+that mapping exactly for rigid world matrices, the same rigidity assumption
+the engine's placement already makes (non-uniform or sheared object scales
+would break it — not exercised anywhere in the Studio preview). The Studio
+tick calls `updateNeckLook` (1/30 s) per live-gaze character *before*
+`setDynamicsStep` and `refresh`, so the pose the solver samples integrates
+no hair particles and `refresh` integrates them exactly once;
+`editedPose` then writes `lastLocalRotations` onto the two bones for
+TARGET/AWAY exactly like FIX/FORWARD (translation and matrix-derived scale
+kept, FK-owned neck skipped with the same once-per-lookType report).
+A malformed pair is dropped after one diagnostic — a partial write rolls
+back to the pre-override pose, so the animated neck keeps rendering instead
+of failing every later frame. `resetNeckLook` rebuilds the runtime from the
+saved `fixAngle` on every `resetAnimationPlayback` (seek, scene load), and
+the first step of an episode at elapsed 0 runs with the documented 1e-5
+first-frame delta, mirroring `applied(pose:)`.
+
+`SourceStudioNeckLookRuntimeTests` (5 tests, hand-derived numbers cross-
+checked against the `neck_target_angle.py` oracle, no rig): a straight-ahead
+target solves to identity everywhere; a level 30° side target distributes
+head-first and smooths 1/15 per frame (first frame's written yaw is exactly
+2 × the hand-evaluated curve value 0.07424433815920793; 400 frames converge
+the head onto 30° with the neck's share pinned at 0); a behind target
+breaks, relaxes 30·14/15° in one frame, and the `isLimitBreakBackup` →
+correction-0 → restore lifecycle tracks the check across break → intact →
+break; AWAY holds the −60 demand split −40/−20 and ten broken frames relax
+the neck to −40·(14/15)^10; and foreign settings, non-solver types, a
+pattern outside the seven states, a negative deltaTime and a target on the
+aim origin throw without mutating the carried state (a zero-delta frame
+still leaves a written pair untouched). The Studio tick, the camera mapping
+and the write-back geometry have no rig-level test and no rendered
+comparison against the original preview — the wiring is verified by the two
+app/Engine builds and the runtime tests alone.
 
 ### Eye look solver
 

@@ -80,10 +80,14 @@ private func object(_ source: KoikatsuObjectRecord) -> [String: Any] {
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card"].contains(arguments[0])
+    let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card", "draw-overlays"].contains(arguments[0])
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
     let logicTrace = arguments.count == 2 && ["blink-trace", "gameplay-trace", "fixed-event-trace", "adv-trace", "scene-document", "animation-library"].contains(arguments[0])
+    let routePlayback = arguments.count == 3 && arguments[0] == "route-playback"
+    // The fourth argument is the optional Play-frame deltaTime that seeds the
+    // LookUpdate rotation state.
+    let routeStepping = (arguments.count == 3 || arguments.count == 4) && arguments[0] == "route-steps"
     let animationPose = arguments.count == 5 && arguments[0] == "animation-pose"
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
@@ -92,15 +96,17 @@ do {
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
     let lookData = (arguments.count == 2 || arguments.count == 3) && arguments[0] == "look-data"
-    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose || lookData else {
+    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose || lookData || routePlayback || routeStepping else {
         throw GLTFError.io("""
-            Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card> <local-file>
+            Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card|draw-overlays> <local-file>
                    ikkoku-inspect mod-library <library.json>
                    ikkoku-inspect mod-catalog <library.json> <catalog-contract.json>
                    ikkoku-inspect card-mods <card.png> <library.json> <catalog-contract.json>
                    ikkoku-inspect <blink-trace|gameplay-trace> <trace.json>
                    ikkoku-inspect <fixed-event-trace|adv-trace> <trace.json>
                    ikkoku-inspect scene-document <source-scene.png>
+                   ikkoku-inspect route-playback <source-scene.png> <seconds>
+                   ikkoku-inspect route-steps <source-scene.png> <deltas.json> [play-delta]
                    ikkoku-inspect animation-library <animation.json>
                    ikkoku-inspect animation-pose <animation.json> <rig-or-avatar.json> <clip-id> <seconds>
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
@@ -124,6 +130,77 @@ do {
     case "look-data":
         report.merge(try inspectStudioLookData(url: url,
             settingsURL: arguments.count == 3 ? URL(fileURLWithPath: arguments[2]).standardizedFileURL : nil)) { _, new in new }
+    case "route-playback":
+        // Negative values are allowed through so the clamping diagnostic is
+        // visible; nonfinite values cannot be serialized as JSON numbers.
+        guard let elapsed = Double(arguments[2]), elapsed.isFinite else { throw RigError.invalid("Route playback time must be a finite number.") }
+        let document = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: url))
+        // childRoot placement only; see SourceStudioRoutePlayback for scope.
+        report["elapsedSeconds"] = elapsed
+        report["scope"] = "childRoot world placement per route from decoded records; original capture animation and LookUpdate smoothing are not simulated"
+        report["routes"] = SourceStudioRoutePlayback.samples(in: document.snapshot, elapsed: elapsed).map { sample in
+            ["sourceKey": sample.sourceKey, "name": sample.name as Any? ?? NSNull(),
+             "active": sample.active, "loop": sample.loop,
+             "visibleLine": sample.visibleLine, "orientation": sample.orientation,
+             "pointCount": sample.pointCount, "childRootWorldPosition":
+                [sample.childRootPosition.x, sample.childRootPosition.y, sample.childRootPosition.z],
+             "childRootWorldRotationEulerZXY":
+                [sample.childRootRotationEulerZXY.x, sample.childRootRotationEulerZXY.y, sample.childRootRotationEulerZXY.z],
+             "diagnostics": sample.diagnostics] as [String: Any]
+        }
+        // Segment durations per route, in depth-first record order, for the
+        // timing-alignment report. These bridge the same records through
+        // SourceStudioRoute(record:); an unplayable route reports no durations
+        // instead of a guess.
+        var segmentDurations: [[String: Any]] = []
+        func collectRouteSegments(_ record: KoikatsuObjectRecord) {
+            if let route = record.route, let durations = try? SourceStudioRoute(record: route).segments() {
+                segmentDurations.append(["sourceKey": record.sourceKey, "name": record.name as Any? ?? NSNull(),
+                                         "startIndices": durations.map(\.startIndex),
+                                         "durations": durations.map(\.duration)])
+            }
+            for child in record.children { collectRouteSegments(child) }
+        }
+        for root in document.snapshot.roots { collectRouteSegments(root) }
+        report["segmentDurations"] = segmentDurations
+    case "route-steps":
+        // `<deltas.json>` is a JSON array of `Time.deltaTime` values, one per
+        // simulated frame; the capture's own trace sequence is the intended
+        // input. Validation of the values themselves is in steppedRoutes.
+        // The optional `<playDelta>` is the Play frame's own deltaTime — row 0
+        // of a capture snapshots the LateUpdate damp Play's frame ran, which
+        // consumed no array entry — so it seeds the LookUpdate rotation state
+        // rather than stepping a frame of its own.
+        let deltasData = try Data(contentsOf: URL(fileURLWithPath: arguments[2]).standardizedFileURL)
+        guard let deltaTimes = try? JSONDecoder().decode([Double].self, from: deltasData),
+              !deltaTimes.isEmpty else {
+            throw RigError.invalid("Route stepping needs a non-empty JSON array of numeric deltaTimes.")
+        }
+        var playDeltaTime: Double?
+        if arguments.count > 3 {
+            guard let play = Double(arguments[3]), play.isFinite, play >= 0 else {
+                throw RigError.invalid("Route stepping playDeltaTime must be a finite non-negative number.")
+            }
+            playDeltaTime = play
+        }
+        let document = try KoikatsuSceneReader.decodeDocument(Data(contentsOf: url))
+        // childRoot placement per frame; see SourceStudioRoutePlayback for scope.
+        report["frameCount"] = deltaTimes.count
+        report["scope"] = "per-frame childRoot world placement per route from decoded records, stepped over the supplied deltaTimes (write-after-update order); rotation is the LookUpdate SmoothDampAngle state (one damp per frame toward the previous frame's written aim, seeded by Play's rotation and the optional Play-frame delta), so it trails the instantaneous aim by one aim step; only childRoot placement is simulated, other scene animation is not"
+        report["routes"] = try SourceStudioRoutePlayback.steppedRoutes(in: document.snapshot,
+                                                                       deltaTimes: deltaTimes,
+                                                                       playDeltaTime: playDeltaTime).map { route in
+            ["sourceKey": route.sourceKey, "name": route.name as Any? ?? NSNull(),
+             "recordActive": route.recordActive, "loop": route.loop,
+             "visibleLine": route.visibleLine, "orientation": route.orientation,
+             "pointCount": route.pointCount, "diagnostics": route.diagnostics,
+             "frames": route.frames.map { frame in
+                ["deltaTime": frame.deltaTime, "active": frame.active,
+                 "rotationFromAim": frame.rotationFromAim,
+                 "childRootWorldPosition": [frame.childRootPosition.x, frame.childRootPosition.y, frame.childRootPosition.z],
+                 "childRootWorldRotationEulerZXY": [frame.childRootRotationEulerZXY.x, frame.childRootRotationEulerZXY.y, frame.childRootRotationEulerZXY.z]] as [String: Any]
+             }] as [String: Any]
+        }
     case "animation-library": report.merge(try inspectSourceAnimation(url: url)) { _, new in new }
     case "animation-pose":
         guard let time = Float(arguments[4]), time.isFinite, time >= 0 else { throw RigError.invalid("Animation time must be finite and nonnegative.") }
@@ -159,6 +236,8 @@ do {
         catch { diagnostics.append("Mod references: \(error)") }
         report["diagnostics"] = diagnostics
         report["scope"] = "Original bytes preserved; current character framing, shape records, supported ABMX data and saved mod-reference metadata decoded. Hair, outfits, materials, other plugins and edited-card serialization remain unfinished."
+    case "draw-overlays":
+        report.merge(try inspectDrawOverlays(url: url)) { _, new in new }
     case "card-mods":
         let card = try SourceCharacterCard.load(url: url)
         let libraryURL = URL(fileURLWithPath: arguments[2]).standardizedFileURL

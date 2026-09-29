@@ -57,9 +57,18 @@ private func expectClose(_ a: simd_quatf, _ b: simd_quatf, tolerance: Float = 1e
 /// The settings document shape the loader boundary-checks, with the fixture's
 /// curve and the captured seven neck states (lookType, leapSpeed and aParam
 /// bending limits, written into the fixture from the reference's settings).
+/// The fixture predates the limit-check fields, so the captured prefab's
+/// TARGET-state values (90/90/10/0 degrees) are added to every state here;
+/// only the new runtime tests read them.
 private func settingsJSON(_ fixture: [String: Any]) throws -> Data {
     let curve = try JSONSerialization.data(withJSONObject: fixture["changeTypeLerpCurve"] as Any)
-    let states = try JSONSerialization.data(withJSONObject: fixture["neckTypeStates"] as Any)
+    let rawStates = try #require(fixture["neckTypeStates"] as? [Any])
+    let states = try JSONSerialization.data(withJSONObject: rawStates.map { step -> [String: Any] in
+        var state = (step as? [String: Any]) ?? [:]
+        state["hAngleLimit"] = 90.0; state["vAngleLimit"] = 90.0
+        state["limitBreakCorrectionValue"] = 10.0; state["limitAway"] = 0.0
+        return state
+    })
     return Data("""
     {"neck":{"calcLerp":1,"changeTypeLeapTime":1,"changeTypeLerpCurve":\(String(decoding: curve, as: UTF8.self)),\
     "aBones":[{"neckBone":"cf_j_neck"},{"neckBone":"cf_j_head"}],"neckTypeStates":\(String(decoding: states, as: UTF8.self))}}
