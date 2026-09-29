@@ -6,6 +6,42 @@ import simd
 import CoreMath
 import ShaderTypes
 
+/// One source draw in the fixture's draw order: its render queue, the flat index
+/// of its item in `frame.items`, its source mesh, its shader family, and the
+/// programs to draw — outline before forward when the family has both programs,
+/// otherwise a single forward program.
+public struct TranslatedDraw {
+    public let queue: Int
+    public let item: Int
+    public let mesh: String
+    public let family: String
+    public let passes: [(pass: String, program: URL)]
+    public init(queue: Int, item: Int, mesh: String, family: String, passes: [(pass: String, program: URL)]) {
+        self.queue = queue; self.item = item; self.mesh = mesh; self.family = family; self.passes = passes
+    }
+}
+
+/// One snapshot of the draw trace: everything drawn so far in the full render
+/// (list index `draw`, 1…N) plus the RGBA and depth remaining at each traced pixel.
+public struct DrawTraceRecord: Codable, Sendable {
+    public let draw: Int
+    public let family: String
+    public let mesh: String
+    public let pass: String
+    public let queue: Int
+    public let pixels: [String: DrawTraceSample]
+    public init(draw: Int, family: String, mesh: String, pass: String, queue: Int, pixels: [String: DrawTraceSample]) {
+        self.draw = draw; self.family = family; self.mesh = mesh; self.pass = pass; self.queue = queue; self.pixels = pixels
+    }
+}
+
+/// Original RGBA bytes and reverse-Z depth sampled at one traced pixel.
+public struct DrawTraceSample: Codable, Sendable {
+    public let rgba: [Int]
+    public let depth: Float
+    public init(rgba: [Int], depth: Float) { self.rgba = rgba; self.depth = depth }
+}
+
 /// Runs a recovered, hash-identified shader stage pair against the exact source
 /// fixture inputs. Unknown constant bindings/pass states fail instead of silently
 /// substituting the native toon shader. Derived MSL stays in private local assets.
@@ -18,27 +54,8 @@ public extension OriginalFrameProbe {
         let programs = FileManager.default.fileExists(atPath: outline.path) ? [outline, programURL] : [programURL]
         var jobs: [(program: URL, item: Int?)] = programs.map { ($0, nil) }
         if allFamilies || families != nil {
-            guard let source = try JSONSerialization.jsonObject(with: Data(contentsOf: frameURL)) as? [String: Any], let meshes = source["meshes"] as? [[String: Any]] else { throw ProbeError.invalid("Source mesh list") }
-            var draws: [(queue: Int, index: Int, programs: [URL])] = [], index = 0
-            let directory = programURL.deletingLastPathComponent().deletingLastPathComponent()
-            for mesh in meshes {
-                guard let materials = mesh["materials"] as? [[String: Any]], let count = mesh["submeshes"] as? Int, count <= materials.count else { throw ProbeError.invalid("Source material list") }
-                for material in materials.prefix(count) {
-                    defer { index += 1 }
-                    guard let shader = material["shader"] as? String, let renderQueue = material["queue"] as? Int else { throw ProbeError.invalid("Source shader identity") }
-                    // This original shader contains only a ShadowCaster pass;
-                    // the controlled camera has shadows disabled.
-                    if shader == "Shader Forge/shadowcast" { continue }
-                    guard shader.hasPrefix("Shader Forge/"), shader.split(separator: "/").count == 2 else { throw ProbeError.invalid("Unknown source shader family") }
-                    let name = String(shader.split(separator: "/")[1])
-                    if let filter = families, !filter.contains(name) { continue }
-                    let forward = directory.appendingPathComponent(name + "/program.json")
-                    let outline = directory.appendingPathComponent(name + "_outline/program.json")
-                    guard FileManager.default.fileExists(atPath: forward.path) else { throw ProbeError.invalid("Missing translated shader \(shader)") }
-                    draws.append((renderQueue, index, FileManager.default.fileExists(atPath: outline.path) ? [outline, forward] : [forward]))
-                }
-            }
-            jobs = draws.sorted { $0.queue == $1.queue ? $0.index < $1.index : $0.queue < $1.queue }.flatMap { draw in draw.programs.map { ($0, Optional(draw.index)) } }
+            jobs = try translatedDrawOrder(frameURL: frameURL, programURL: programURL, families: families)
+                .flatMap { draw in draw.passes.map { ($0.program, Optional(draw.item)) } }
         }
         for (index, job) in jobs.enumerated() { try encodeTranslatedShader(frameURL: frameURL, programURL: job.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selectedItem: job.item, sourceBackground: allFamilies) }
         command.commit(); command.waitUntilCompleted()
@@ -46,6 +63,79 @@ public extension OriginalFrameProbe {
         var bytes = [UInt8](repeating: 0, count: width * height * 4); bytes.withUnsafeMutableBytes { color.getBytes($0.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
         guard let provider = CGDataProvider(data: Data(bytes) as CFData), let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue), provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else { throw ProbeError.gpu("Source shader image") }
         return image
+    }
+
+    /// Traces every draw in the full-character sequence — the same sorted draws
+    /// `captureTranslatedShader` renders — re-rendering the truncated list so each
+    /// record shows what remains at each traced pixel after draw `k`, to locate
+    /// exactly which draw erases or moves a silhouette pixel. Depth reaches the
+    /// report through a blit copy of the 4-byte float depth plane into a shared
+    /// buffer using `.depthFromDepthStencil`: `getBytes` is not usable on
+    /// `depth32Float_stencil8` textures (the synchronous copy crashes).
+    func captureTranslatedDrawTrace(frameURL: URL, programURL: URL, resources: ResourceStore, queue: any MTLCommandQueue, pixels: [(x: Int, y: Int)]) throws -> [DrawTraceRecord] {
+        guard (1...256).contains(pixels.count) else { throw ProbeError.invalid("Trace pixel list must contain 1–256 pixels") }
+        guard pixels.allSatisfy({ (0..<width).contains($0.x) && (0..<height).contains($0.y) }) else { throw ProbeError.invalid("Trace pixel outside the capture") }
+        struct Unit { let queue: Int; let item: Int; let mesh: String; let family: String; let pass: String; let program: URL }
+        let order = try translatedDrawOrder(frameURL: frameURL, programURL: programURL, families: nil)
+        let units: [Unit] = order.flatMap { draw in draw.passes.map { Unit(queue: draw.queue, item: draw.item, mesh: draw.mesh, family: draw.family, pass: $0.pass, program: $0.program) } }
+        let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height, mipmapped: false); colorDescriptor.usage = .renderTarget; colorDescriptor.storageMode = .shared
+        let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float_stencil8, width: width, height: height, mipmapped: false); depthDescriptor.usage = [.renderTarget, .shaderRead]; depthDescriptor.storageMode = .private
+        guard let color = resources.device.makeTexture(descriptor: colorDescriptor), let depth = resources.device.makeTexture(descriptor: depthDescriptor) else { throw ProbeError.gpu("Source shader trace targets") }
+        var records: [DrawTraceRecord] = []
+        for count in 1...units.count {
+            guard let command = queue.makeCommandBuffer() else { throw ProbeError.gpu("Source shader trace command") }
+            for (index, unit) in units.prefix(count).enumerated() {
+                try encodeTranslatedShader(frameURL: frameURL, programURL: unit.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selectedItem: unit.item, sourceBackground: true)
+            }
+            guard let readback = resources.device.makeBuffer(length: 4 * pixels.count) else { throw ProbeError.gpu("Source shader trace readback") }
+            guard let blit = command.makeBlitCommandEncoder() else { throw ProbeError.gpu("Source shader trace blit") }
+            for (slot, pixel) in pixels.enumerated() {
+                blit.copy(from: depth, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: pixel.x, y: pixel.y, z: 0), sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: readback, destinationOffset: 4 * slot, destinationBytesPerRow: 4, destinationBytesPerImage: 4, options: .depthFromDepthStencil)
+            }
+            blit.endEncoding()
+            command.commit(); command.waitUntilCompleted()
+            if let error = command.error { throw ProbeError.gpu("Source shader trace draw \(count): \(error.localizedDescription)") }
+            var colorBytes = [UInt8](repeating: 0, count: width * height * 4)
+            colorBytes.withUnsafeMutableBytes { color.getBytes($0.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
+            var samples: [String: DrawTraceSample] = [:]
+            for (slot, pixel) in pixels.enumerated() {
+                let depth = readback.contents().load(fromByteOffset: 4 * slot, as: Float.self)
+                let offset = (pixel.y * width + pixel.x) * 4
+                samples["\(pixel.x),\(pixel.y)"] = DrawTraceSample(rgba: Array(colorBytes[offset..<(offset + 4)]).map(Int.init), depth: depth)
+            }
+            let last = units[count - 1]
+            records.append(DrawTraceRecord(draw: count, family: last.family, mesh: last.mesh, pass: last.pass, queue: last.queue, pixels: samples))
+        }
+        return records
+    }
+
+    /// Builds the fixture's whole draw list: one source draw per material that
+    /// has a translated program, sorted by render queue first and source mesh
+    /// order second; within one object the outline program precedes the forward
+    /// program. No per-queue distance ordering or shader pass order yet (R1).
+    private func translatedDrawOrder(frameURL: URL, programURL: URL, families: Set<String>?) throws -> [TranslatedDraw] {
+        guard let source = try JSONSerialization.jsonObject(with: Data(contentsOf: frameURL)) as? [String: Any], let meshes = source["meshes"] as? [[String: Any]] else { throw ProbeError.invalid("Source mesh list") }
+        var draws: [TranslatedDraw] = [], index = 0
+        let directory = programURL.deletingLastPathComponent().deletingLastPathComponent()
+        for mesh in meshes {
+            guard let materials = mesh["materials"] as? [[String: Any]], let count = mesh["submeshes"] as? Int, count <= materials.count else { throw ProbeError.invalid("Source material list") }
+            for material in materials.prefix(count) {
+                defer { index += 1 }
+                guard let shader = material["shader"] as? String, let renderQueue = material["queue"] as? Int else { throw ProbeError.invalid("Source shader identity") }
+                // This original shader contains only a ShadowCaster pass;
+                // the controlled camera has shadows disabled.
+                if shader == "Shader Forge/shadowcast" { continue }
+                guard shader.hasPrefix("Shader Forge/"), shader.split(separator: "/").count == 2 else { throw ProbeError.invalid("Unknown source shader family") }
+                let name = String(shader.split(separator: "/")[1])
+                if let filter = families, !filter.contains(name) { continue }
+                let forward = directory.appendingPathComponent(name + "/program.json")
+                let outline = directory.appendingPathComponent(name + "_outline/program.json")
+                guard FileManager.default.fileExists(atPath: forward.path) else { throw ProbeError.invalid("Missing translated shader \(shader)") }
+                draws.append(TranslatedDraw(queue: renderQueue, item: index, mesh: (mesh["name"] as? String) ?? name, family: name,
+                    passes: FileManager.default.fileExists(atPath: outline.path) ? [("outline", outline), ("forward", forward)] : [("forward", forward)]))
+            }
+        }
+        return draws.sorted { $0.queue == $1.queue ? $0.item < $1.item : $0.queue < $1.queue }
     }
 
     private func encodeTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, color: any MTLTexture, depth: any MTLTexture, command: any MTLCommandBuffer, clear: Bool, selectedItem: Int?, sourceBackground: Bool) throws {

@@ -33,6 +33,17 @@ extension AppState {
                             guard FileManager.default.fileExists(atPath: program.path) else { throw OriginalFrameProbe.ProbeError.invalid("Missing translated shader \(family)") }
                             try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: program, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, families: [family]), to: output.appendingPathComponent("native-translated-\(family).png"))
                         }
+                        if let traceSpec = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS"] {
+                            var pixels: [(x: Int, y: Int)] = []
+                            for spec in traceSpec.split(separator: ";") {
+                                let parts = spec.split(separator: ",")
+                                guard parts.count == 2, let x = Int(parts[0]), let y = Int(parts[1]) else { throw OriginalFrameProbe.ProbeError.invalid("Invalid trace pixel \(spec)") }
+                                pixels.append((x: x, y: y))
+                            }
+                            let trace = try probe.captureTranslatedDrawTrace(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, pixels: pixels)
+                            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                            try encoder.encode(trace).write(to: output.appendingPathComponent("native-draw-trace.json"))
+                        }
                     }
                 }
             }
