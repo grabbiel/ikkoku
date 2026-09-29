@@ -113,9 +113,11 @@ private func animationLibrary(_ document: [String: Any] = animationDocument()) t
     #expect(try library.applying(stateID: "idle", normalizedTime: 10.25, floatParameters: ["Speed": 0.25], to: rig).localMatrices == pose.localMatrices)
 }
 
-@Test func sourceAnimationInstalledCurvesMatchIndependentSampler() throws {
-    let environment = ProcessInfo.processInfo.environment
-    guard let libraryPath = environment["IKKOKU_ANIMATION_LIBRARY"], let referencePath = environment["IKKOKU_ANIMATION_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ANIMATION_LIBRARY", "IKKOKU_ANIMATION_REFERENCE"]),
+               "Requires IKKOKU_ANIMATION_LIBRARY, IKKOKU_ANIMATION_REFERENCE"))
+func sourceAnimationInstalledCurvesMatchIndependentSampler() throws {
+    let libraryPath = try SourceFixtureSupport.require("IKKOKU_ANIMATION_LIBRARY")
+    let referencePath = try SourceFixtureSupport.require("IKKOKU_ANIMATION_REFERENCE")
     struct Reference: Decodable {
         struct Sample: Decodable { let clipID: String, time: Float, values: [Float] }
         let samples: [Sample]
@@ -130,7 +132,7 @@ private func animationLibrary(_ document: [String: Any] = animationDocument()) t
             #expect(abs(a - b) < max(0.00002, abs(b) * 0.00002))
         }
     }
-    if let rigPath = environment["IKKOKU_SOURCE_AVATAR"] {
+    if let rigPath = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"] {
         let rig = try SourceRig.loadModel(url: URL(fileURLWithPath: rigPath)).rig
         let idle = try #require(library.clips.first { $0.name == "f_stand_00_00" })
         let a = try library.applying(clipID: idle.id, time: 0, to: rig)
