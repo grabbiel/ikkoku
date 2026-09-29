@@ -207,9 +207,9 @@ private struct AppearanceOracle: Decodable {
     let cardSHA256: String, cardFile: String, sex: Int, expectedAppliedFields: [String], expectedRecipeCount: Int, recipes: [Recipe]
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_APPEARANCE_REFERENCE_ROOT"] != nil && MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_APPEARANCE_REFERENCE_ROOT"]) && MTLCreateSystemDefaultDevice() != nil, "Requires IKKOKU_APPEARANCE_REFERENCE_ROOT and a Metal device"))
 func sourceCardAppearanceFemaleAndMalePixelsMatchIndependentRawRGBAOracle() throws {
-    let root = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["IKKOKU_APPEARANCE_REFERENCE_ROOT"]))
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_APPEARANCE_REFERENCE_ROOT"))
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     for (folder, name) in [("rigs", "source-avatar"), ("male", "source-male-avatar")] {
         let directory = root.appendingPathComponent(folder)

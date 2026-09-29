@@ -241,16 +241,95 @@ state and captured textures. It compiles translated programs per job. Production
 `Renderer` still selects authored native toon/eye/outline materials; there is no
 live source-program registry integration.
 
-The retained `.local/reverse/original-character-probe/frame-comparison.json`
-compares a frozen original character frame. These are recorded results, not new
-captures made during documentation revision:
+Comparing a frozen original character frame (controls in the commands below;
+re-run against current code on 2026-09-26 into `.local/r1b/probe`, starting
+from the original captures `.local/reverse/original-character-probe/{frame.json,frame-mips.json}`;
+both frame variants reference the same source capture, SHA-256
+`13bd11c2805ac99172dc7ce7539c3cb98f06edcb858af4a1136ce3570b66f039`):
 
 | Compared path | Silhouette IoU | Color error (0–255) | Result and scope |
 | --- | ---: | --- | --- |
 | Geometry diagnostic | 0.9998196 | Not a color gate | 18 differing silhouette pixels; depth p99 0 m, normals 0 bytes; passes frozen geometry |
-| Production native toon | See geometry diagnostic | Mean 31.2589; p99 239 | Fails source color parity |
-| Translated garments | 0.9995455 | Mean 0.1330; p99 2 | Passes selected garment color gate |
-| Translated full character | 0.9988685 | Mean 26.9362; p99 242 | Fails full-character silhouette and color gates |
+| Production native toon | See geometry diagnostic | Mean 31.2763; p99 239 | Fails source color parity |
+| Translated garments | 0.9995455 | Mean 0.1169; p99 2 | Passes selected garment color gate |
+| Translated full character (reference run `frame-mips.json`; identical on `frame.json`) | 0.9988685 | Mean 0.2087; p99 4 | Fails full-character silhouette gate (112 differing pixels); color gate passes |
+
+The earlier documentation quoted mean 26.9362/p99 242 (older capture) and
+mean 0.2267/p99 5 (previous code) for the full character. Current code
+reduces the color residual below the p99 ≤4 gate on both frame variants; the
+remaining residual is geometric — thin hair/outline edges — and concentrates
+in the hair families (attribution below). Re-running the probe with the
+opt-in draw trace (2026-09-26) reproduced every figure unchanged; the trace
+diagnostic adds records but cannot change draw order, so no gate result
+moved.
+
+Per-family attribution — each family rendered alone, compared only where it
+is front-most in both renders (`IKKOKU_ORIGINAL_FRAME_FAMILIES=1`):
+
+| Family | Pixels | Mean | p99 | Result |
+| --- | ---: | ---: | ---: | --- |
+| main_opaque | 76709 | 0.117 | 2 | Passes color gate |
+| main_skin | 13515 | 0.202 | 1 | Passes color gate |
+| main_hair | 3528 | 0.998 | 24 | Fails p99 gate; thin hair edges |
+| main_hair_front | 6181 | 0.844 | 22 | Fails p99 gate; thin hair edges |
+| toon_eye_lod0 | 368 | 0.010 | 0 | Passes color gate |
+| toon_eyew_lod0 | 303 | 0.002 | 0 | Passes color gate |
+| toon_nose_lod0 / main_item | 0 | — | — | Never front-most in the frozen frame |
+
+Whole-character silhouette attribution (`translatedSilhouette`): 61 pixels
+are opaque only in the full translated render — attributed to main_hair
+alone (30), hair/outline overlap (23), main_opaque (4), main_hair_front (3)
+and main_skin (1) — and 51 pixels are opaque only in the original capture —
+attributed to main_skin (31), none (11), overlap (2) and main_hair (7). Up
+to 20 sample coordinates per class are recorded in
+`<probe folder>/frame-comparison.json`.
+
+Draw-order trace (added 2026-09-26, opt-in via
+`IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS="x,y;…"`; writes
+`<probe folder>/native-draw-trace.json` listing every draw in the sorted
+sequence with the RGBA and reverse-Z depth remaining at each traced pixel):
+re-rendering the truncated draw list locates exactly where each residual
+class flips. Native-only pixels (e.g. 393,96; 363,98; 398,98; 400,101;
+407,101; 352,106; 422,113; 424,116; 424,118; 429,119) are transparent
+until a `main_hair` forward draw covers them and stay covered — pixels the
+original render never paints at all — while some original-only pixels
+(339,137; 347,116; 349,113; 352,109; 396,99) are covered by a
+`main_hair`/`main_skin`/`main_hair_front` forward draw and then overwritten
+by a later `main_hair_front` outline draw. Others are only ever reached by
+the `main_hair` outline shell (330,171; 423,115; 431,124). Outline passes
+in this capture write RGBA (0,0,0,0) together with depth, so an outline
+shell that wins the depth test leaves a transparent pixel; the depth values
+are reverse-Z (larger is nearer). All four candidate ordering causes were
+checked and none explains the residual: (a) per-object pass order
+`[outline, forward]` matches each family's serialized source pass list;
+(b) within-queue ordering cannot explain the crown either — queue 2000
+holds a single hair draw, and in transparent queue 2850 the three front-hair
+meshes are at distinct camera distances (vertex-bounds centres 3.832 m for
+`cf_hair_idol_hair_f_00`, 3.824 m for `_f_01`, 3.801 m for `_f_02`; the
+capture does not record renderer bounds, so these are computed from the
+captured vertices), so Unity's back-to-front sort draws them f_00, f_01,
+f_02 — the same order the probe uses; (c) both the full capture and every
+trace prefix clear only before their first draw, and the final trace prefix
+is the full draw sequence, so no mid-sequence clear or load-action change
+exists to explain the flips; (d) the `NotEqual ref 2`/`ref 2`
+stencil states between `main_hair`/`main_hair`/`main_hair_front` draws are
+carried across encoders exactly as serialized. Consequence: the flip between
+a `main_hair`/`main_skin` draw and a later `main_hair_front` outline is not
+attributable to any reordering; R1 stays open until a cause outside draw
+ordering is found.
+
+A pixel counts as front-most only where the full translated render and the family-only render have identical RGB, so blended/translucent overlaps are excluded from per-family metrics.
+
+Reproduction: build with `xcodebuild -project Ikkoku.xcodeproj -scheme
+IkkokuCreator -configuration Debug -derivedDataPath .local/build
+-destination 'platform=macOS,arch=arm64' build`; run
+`IKKOKU_ORIGINAL_FRAME_PROBE=$PWD/.local/r1b/probe/frame-mips.json
+IKKOKU_ORIGINAL_FRAME_FAMILIES=1
+.local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku`;
+compare with `Tools/reverse/compare_original_frame.py .local/r1b/probe`.
+Swap `frame.json` for `frame-mips.json` to reproduce the original capture
+variant. These are frozen-evaluated-geometry diagnostics, not
+live-renderer parity.
 
 The silhouette gate is IoU ≥0.999; the color gate is mean ≤1 and p99 ≤4.
 The fixture disables shadows. Original
@@ -261,10 +340,87 @@ The authored-mip exporter exists, but its availability does not prove every
 comparison used authored source chains. Shader recipes, player probes and exact
 reproduction commands are in [material expansion](character/material-expansion.md).
 
-Next: close skin/face/hair color differences and sampling/color-space semantics,
-then integrate verified programs with production material/queue/pass dispatch.
-Compare independently loaded original/native scenes with matched time, camera,
-lights and effects after that integration. Track R1/R2 and CMT-04.
+Next: the draw-order hypotheses are now exhausted — the opt-in draw trace
+(2026-09-26, section above) shows the class flips but none of the four
+ordering checks yields a fix — so attribute the hair/outline edge residual
+to a concrete binding or state difference before any gate relaxation, then
+integrate verified programs with production material/queue/pass dispatch.
+Compare independently loaded original/native scenes with matched time,
+camera, lights and effects after that integration. Orchestrator analysis of
+the 2026-09-26 authored-mip run
+shows the silhouette residual is not a colour or alpha-output problem. At
+the hair crown (approximately x 345–423, y 96–116 of the 768x1024 frame),
+some pixels with the hair-outline colour (for example RGB 46,23,11) are
+covered in the `main_hair`-only render but empty in the full translated
+render; neighbouring pixels show the reverse. This points to interactions
+between families in the full draw, most likely inter-family depth or stencil
+state/order at the hair crown (for example, the stencil that lets eyebrows
+and eyelines show through front hair). Next compare the pass states
+(`stencilRef`, `stencilReadMask`, `stencilWriteMask`, comparison ops and queue
+order) of `main_hair`, `main_hair_front`, `toon_eyew_lod0` and their outlines.
+The boundary-pixel classes are now attributed and
+re-measured (2026-09-26 re-run on both frame variants: same
+`sourceFrameSHA256` 13bd11c2…; 61 native-only / 51 original-only pixels),
+but none of the hypotheses yields an explainable fix: no translated program
+binds `_ScreenParams`, `_ProjectionParams`, `unity_MatrixV`,
+`unity_CameraProjection`, `glstate_matrix_projection` or
+`unity_WorldTransformParams` (only `unity_ObjectToWorld`,
+`unity_WorldToObject` and `unity_MatrixVP`, bound from computed values per
+the conversion tables above), every hair/outline fragment keeps the
+`discard`-under-`_Cutoff`/`_alpha_a`-`_alpha_b` semantics unchanged from
+the DXBC, and the stored outline pass states map to the same culling
+(0→none/1→front/2→back), depth and stencil states the probe already
+applies. Track R1/R2 and CMT-04; R1 remains open — per-family isolation and
+silhouette-class attribution exist, but the full-character silhouette gate
+still fails (112 differing pixels) and no cause has been confirmed for the
+hair-edge residual.
+
+### Native pose gate
+
+The R2 transform gate compares original-player local bone transforms composed into
+world space with native `card-pose` world matrices, matching hierarchy suffixes
+from `p_cf_body_bone`. Generate the native snapshot with
+`ikkoku-inspect card-pose <avatar.json> <card.png>`, then run
+`compare_original_pose.py <probe folder> <native.json>`; the comparator takes the
+avatar path from the snapshot's `source` field unless `--avatar` is supplied.
+
+For the retained controlled clothed capture (source frame SHA-256
+`9aa4de394acbae5e9a7d336b5990aa67f9619931dfce3cac6d1e8711c8bcc750`),
+672 bones matched. Five ambiguous duplicate original paths were excluded; the
+report lists 84 original-only keys, including clothing/accessory roots such as
+`ct_clothesBot` and `ct_bra`, and 61 native-only keys. Position p50 was
+7.9e-8 m; maximum scale error was 1.9e-6, with none over 1e-4. Forty-six bones
+exceeded position 1e-4 m (36) and/or rotation 0.01° (46). All 46 were under
+hand joints. The full gate fails; the diagnostic excluding hands passes. The
+snapshot output was byte-identical across two runs.
+
+The 46 outliers are finger joints whose original values equal the
+`cf_anmShapeHand` sample-index-1 rotations. The card's hand patterns are disabled.
+Recovered CharaStudio source shows that `AddObjectAssist` calls
+`HandAnimeCtrl.Init(sex)` for every added character, setting pattern 0. The
+Studio `HandAnime_00_00`/`HandAnime_01_00` tables list only IDs 1–21
+(1 = `goo`, 2 = `scissors`, 3 = `par`, …, 17 = `ok`, 21 = `par_straight`),
+so pattern 0 has no entry and `LoadAnime` disables the hand Animator. Saved
+scenes apply `OICharInfo.handPtn[L/R]` through `OCIChar.ChangeHandAnime`.
+The controlled probe uses `Manager.Character.CreateFemale` and never calls
+`Init`, leaving the prefab hand Animators enabled to play their controller
+default state `goo`, the same clip as Studio pattern 1; see
+[finger-pose source attribution](studio/pose.md#finger-pose-source-attribution-st-t07).
+Native `card-pose` applies no hand pattern unless `--studio-hands` names a
+converted hand-pose document, so the full gate still fails on those 46 bones
+without that flag. `card-pose --studio-hands <pose.json>` applies the
+converted default-state `goo` clips of `cf_hand_L_00`/`cf_hand_R_00`.
+The fitted document reproduces the PROBE fixture (equivalent to pattern 1);
+with that document (`<pose.json>` = `.local/stt07d/studio-hand-fitted.json`,
+sample time t=0.107 s fitted on a 0.001 s grid) the gate closes at 0 outliers
+over 672 bones — the comparator's maximum rotation difference is 8.4e-05°.
+The finger-only fit metric is 6.71e-05°. Parity holds only at that fitted
+phase; the original capture never recorded its loop phase.
+Studio characters with pattern 0 have no hand animation; saved patterns 1–21
+need their own conversion in the next ST-T07 slice.
+For this fixture, body and face shape, height and static ABMX composition match
+the original player's bone transforms. Coverage is one T-posed fixture, one
+outfit and standard bone type; other animated states remain untested.
 
 ## Resource and measurement boundaries
 
