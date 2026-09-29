@@ -141,8 +141,10 @@ private struct GameplayOracle: Decodable {
     var cases: [Case]
 }
 
-@Test func sourceGameplayIndependentSourceOracle() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_GAMEPLAY_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_GAMEPLAY_REFERENCE"]),
+               "Requires IKKOKU_GAMEPLAY_REFERENCE"))
+func sourceGameplayIndependentSourceOracle() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_GAMEPLAY_REFERENCE")
     let oracle = try JSONDecoder().decode(GameplayOracle.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     #expect(oracle.schemaVersion == 1)
     #expect(oracle.periods == SourceGameplayPeriod.allCases.map(\.sourceName))
