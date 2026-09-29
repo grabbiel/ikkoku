@@ -95,7 +95,7 @@ capabilities.
 
 Bounded translated plugins and two exact native adapters exist. Arbitrary managed
 DLLs do not execute in the app. The Mute adapter's headless startup crash is fixed
-in code, but its release acceptance run is pending. The source inspector gate
+and passed Release mount/save/reload and focus-gain acceptance. The source inspector gate
 hides accessory-name controls. See
 [plugin execution](../reference/mods/plugin-execution.md) for supported callbacks,
 installation paths and the remaining integration work.

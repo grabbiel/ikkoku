@@ -100,8 +100,7 @@ Source-rig, card, scene, plugin and matched-player capture recipes live with the
 before `NSApplication` finishes launching. The Mute native adapter therefore defers
 its initial focus sample instead of reading `NSApp`; this fixes the recorded
 startup trap. `IKKOKU_APPLICATION_FOCUS` and `IKKOKU_NATIVE_PLUGIN_REPORT` supply
-and record focus for captures. The release adapter capture that closes A-T04 and
-ST-T02 has not been rerun yet; see
+and record focus for captures. The Release adapter captures closing A-T04/ST-T02 passed in PR #2; see
 [native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
 
 ## Inspect without the GUI

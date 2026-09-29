@@ -77,17 +77,21 @@ Priorities are local to this project: **P0** is a confirmed broken current
 workflow, **P1** closes a principal porting/integration gap, **P2** expands coverage
 or hardens the implementation. Task IDs in the reports are stable references.
 
+**Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
+(head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
+identical reload frames; enabled tone gain muted/restored. See
+[recorded acceptance](../reference/mods/native-adapters.md#verified-release-acceptance).
+
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
-| 1 | **ST-T02 / A-T04** | Code fix in place: Mute focus is initialized once `NSApp` exists, each mount owns one observer set, and headless focus reports are available. Remaining: pass the previously crashing release mount/save/reload/continue probe with both original packages, focus loss/gain and generated-tone gain checks, and original package identities intact. |
-| 2 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. |
-| 3 | **T-T04, E-T03, CMT-11** | Make source-fixture execution explicit and reproducible. Preserve original/native input hashes, distinguish skips from executed checks, and add app workflows alongside kernel tests. |
-| 4 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
-| 5 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
-| 6 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
-| 7 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. |
-| 8 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. |
-| 9 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. |
+| 1 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. |
+| 2 | **T-T04, E-T03, CMT-11** | Make source-fixture execution explicit and reproducible. Preserve original/native input hashes, distinguish skips from executed checks, and add app workflows alongside kernel tests. |
+| 3 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
+| 4 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
+| 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
+| 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. |
+| 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. |
+| 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. |
 
 Do not resume these as one undifferentiated “finish the port” task. Each linked
 task states entry points and a measurable acceptance condition; preserve the
@@ -103,7 +107,7 @@ historical reports are dated results, not a fresh all-project test certification
 
 Two important confirmed defects were recorded: the unreachable source Studio
 inspectors (open) and the native Mute adapter's headless startup trap (fixed in
-code; release acceptance run pending, ST-T02/A-T04). Existing successful
+code and verified in the PR #2 acceptance follow-up, ST-T02/A-T04). Existing successful
 IR-plugin tests do not invalidate either finding. The audit also records incomplete or unverified areas without
 presenting them as discovered runtime bugs.
 

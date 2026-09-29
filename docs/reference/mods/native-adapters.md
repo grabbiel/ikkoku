@@ -2,8 +2,8 @@
 
 Reviewed 2026-09-25. Two exact installed revisions have verified **bounded Swift
 behavior adapters** and immutable package tests. Actual app integration is
-incomplete. The Mute startup trap before `NSApp` exists is fixed in code, but the
-release acceptance run is still pending. The source character inspector gate
+incomplete overall. The Mute startup trap before `NSApp` exists is fixed and
+passed local Release acceptance at PR #2 (`93e6b06`, merge `aa4bcb9`). The source character inspector gate
 prevents reaching accessory labels. The successful IR-only release capture does
 not validate either workflow. See
 [A-T04 / P-T03](../../component-audit/app-gameplay-and-plugins.md) and
@@ -24,8 +24,8 @@ python3 Tools/translation/plugin.py path/to/KK_StudioAccessoryNames.dll \
 ```
 
 The app exposes **Mods → Load Converted Original Plugin…** for each `manifest.json`.
-This menu wiring is not a completed mount/save/reload verification; the known
-startup failure is described below. The package retains original assembly and
+Environment mounts and saved-scene restores passed Release verification below;
+interactive menu selection itself remains a separate UI workflow. The package retains original assembly and
 configuration bytes, GUID, version, type and process restrictions. The DLL is identity evidence; the Swift adapter
 implements the recovered behavior. A different DLL revision requires its own
 verified adapter, or passes through the strict C# translator. Rejected conversion
@@ -34,7 +34,7 @@ never publishes a loadable manifest. Existing package directories are immutable.
 The persistence model stores enabled mounts and package hashes in native scene
 cards. Its restore code validates the entire package, including original config
 bytes, before applying it; package tests cover the saved references. The actual
-release mount/save/reload/continue test has not passed. New-scene and
+release mount/save/reload/continue test passed for both exact adapter packages. New-scene and
 original-scene-import code retain current global mount references. The accessory
 label consumer is enabled only by its mount, but its inspector remains unreachable.
 Adapter mounts do not alter card/mod GUIDs, source object keys, source KKEx payloads or original config files. These global
@@ -118,9 +118,33 @@ Add `--mute-config` with an enabled copy of the configuration to check audible
 muting through the app bus. The probe passes it as `IKKOKU_MUTE_BACKGROUND_CONFIG`,
 which remounts the adapter with that configuration after the package mounts.
 Saved package references keep the original configuration. `test_studio_execution_probe.py` tests these report rules without
-launching the app. This fix has not yet been built or run through the probe. The
-resulting `report.json` is the evidence that closes ST-T02 and A-T04; record its
-path, hashes and executed focus events in the audit.
+launching the app. The acceptance below closes ST-T02/A-T04 for this revision.
+The probe currently trusts the report's effective enabled setting; independently
+compare it with the requested config until the non-blocking expected-setting
+assertion from PR #2's review is implemented.
+
+## Verified Release acceptance
+
+On 2026-09-25, [PR #2](https://github.com/grabbiel/ikkoku/pull/2) head `93e6b06`
+was built and reviewed in an isolated Apple Silicon checkout (Xcode 26.0.1).
+Merge `aa4bcb9` has the identical source tree. Private evidence is retained at
+`.local/reverse/plugin-execution/accepted-pr-2/`:
+
+- `installed-config/report.json` and `enabled-config/report.json`: both original
+  packages plus the IR motion fixture complete run/save/reload/continue; original
+  manifests/settings and object identity remain intact, reload frames are identical,
+  Start stays 1, continuation reaches approximately 2 seconds and each mount has
+  two focus observers while `NSApp` is absent.
+- Disabled gain remains 1. Independently checked enabled master gain is 1 → 0 → 1,
+  tone RMS 0.125052124 → 0 → 0.125052124, and voice gain is unchanged in all phases.
+- Seven Swift checks passed with original Mute/package fixtures explicitly set;
+  six new Python report checks and the original-package Python check passed.
+- `gui-smoke.json`: actual Release GUI launch with enabled Mute and both packages
+  survives five OS activation changes and exits normally. This measures launch/
+  focus stability; audio gains were measured by the separate headless tone probes.
+
+The inspector gate, live config watching and general observer/timer lifetime work
+are separate tasks. No complete plugin or original Studio parity is implied.
 
 ## Accessory label UI gate
 
