@@ -12,7 +12,7 @@ public struct KoikatsuChangeAmount: Sendable, Equatable {
     }
 }
 
-public enum KoikatsuObjectKind: Int32, Sendable {
+public enum KoikatsuObjectKind: Int32, Sendable, Codable {
     case character = 0, item = 1, light = 2, folder = 3, route = 4, camera = 5
 }
 

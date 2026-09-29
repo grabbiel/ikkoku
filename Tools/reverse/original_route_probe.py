@@ -8,9 +8,9 @@ collected route-scene.png is the uploaded file itself. No characters,
 cards, saves or third-party plug-ins are read or copied.
 """
 from __future__ import annotations
-import argparse, json, re, uuid
+import argparse, json
 from pathlib import Path
-from original_character_probe import retry
+from original_character_probe import retry, player_root
 from original_shader_probe import write_small, stop_probe, fetch, dump, digest
 from vm_source import powershell, ps_quote
 ROOT=Path(__file__).resolve().parents[2]
@@ -18,15 +18,7 @@ ROOT=Path(__file__).resolve().parents[2]
 
 def start(vm,output,source=None,load_scene=None):
     run_file=output/'run.json'
-    if run_file.exists():
-        run=json.loads(run_file.read_text());root=run['root']
-        if not re.fullmatch(r'C:\\Temp\\IkkokuShaderProbe-[0-9a-f]{32}',root):raise ValueError('Unknown private player root')
-        if int(run['processID'])>0:stop_probe(vm,run)
-    else:
-        root=r'C:\Temp\IkkokuShaderProbe-'+uuid.uuid4().hex
-        retry(vm,"$ErrorActionPreference='Stop';$root="+ps_quote(root)+r''';$original='C:\Illusion\Koikatsu';New-Item -ItemType Directory "$root\BepInEx\plugins" -Force|Out-Null;New-Item -ItemType Directory "$root\BepInEx\config" -Force|Out-Null;foreach($name in @('CharaStudio.exe','winhttp.dll','doorstop_config.ini')){Copy-Item "$original\$name" "$root\$name"};Copy-Item "$original\BepInEx\core" "$root\BepInEx\core" -Recurse;foreach($name in @('abdata','CharaStudio_Data')){New-Item -ItemType Junction -Path "$root\$name" -Value "$original\$name"|Out-Null};[IO.File]::WriteAllText("$root\BepInEx\config\BepInEx.cfg","[Logging.Console]`nEnabled = false`n")''')
-        # Save before compile so a failed build can reuse this private directory.
-        dump(run_file,dict(vm=vm,root=root,processID=0,stopped=True))
+    root=player_root(vm,output)
     source=source or Path(__file__).with_name('fixtures')/'OriginalRouteProbe.cs'
     (output/'probe-source.cs').write_bytes(source.read_bytes())
     write_small(vm,root+r'\RouteProbe.cs',source.read_bytes())

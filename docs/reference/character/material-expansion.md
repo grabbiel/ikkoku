@@ -108,6 +108,28 @@ name, catalog ID and RGBA values:
 | Face record | eye overtex1 | `mt_eye_hi_up` | `hlUpId` / `hlUpColor` |
 | Face record | eye overtex2 | `mt_eye_hi_down` | `hlDownId` / `hlDownColor` |
 
+**Capture settings file.** `original_character_probe.py --settings <tsv>`
+uploads the file as `character-settings.tsv` into the probe's `character`
+output folder, so it is collected with the capture, and
+`OriginalCharacterProbe.cs` applies it to the freshly generated fixture before
+`CreateFemale`. Each line is `key<TAB>value` with exactly one tab (no blank or
+comment lines); IDs are integers, colors are `r,g,b,a` floats, both parsed
+with the invariant culture. Keys are optional and an omitted key keeps the
+fixture default; a repeated key's last line wins. The driver does not
+pre-check this file: an unknown key or unparsable line ends the run with the
+error in `status.json`. `--settings` belongs to the capture step and is
+rejected together with `--collect`. The accepted keys:
+
+| Key | Fixture field set | Meaning |
+| --- | --- | --- |
+| `lipId` / `lipColor` | `custom.face.baseMakeup.lipId` / `.lipColor` | Lip overlay catalog ID (`mt_lip`) and RGBA |
+| `eyeshadowId` / `eyeshadowColor` | `custom.face.baseMakeup.eyeshadowId` / `.eyeshadowColor` | Eyeshadow overlay catalog ID (`mt_eyeshadow`) and RGBA |
+| `hohoAkaRate` | `status.hohoAkaRate` | Blush rate (float) that drives the prefab blush overlay alpha |
+| `nipId` / `nipColor` | `custom.body.nipId` / `.nipColor` | Nipple overlay catalog ID (`mt_nip`) and RGBA |
+| `underhairId` / `underhairColor` | `custom.body.underhairId` / `.underhairColor` | Underhair overlay catalog ID (`mt_underhair`) and RGBA |
+| `hlUpId` / `hlUpColor` | `custom.face.hlUpId` / `.hlUpColor` | Upper iris highlight catalog ID (`mt_eye_hi_up`) and RGBA |
+| `hlDownId` / `hlDownColor` | `custom.face.hlDownId` / `.hlDownColor` | Lower iris highlight catalog ID (`mt_eye_hi_down`) and RGBA |
+
 **Limits of this comparison.** Texture identity is the texture name for the
 chosen ID in the original `list/characustom/00.unity3d` list-bundle row (tables
 `mt_lip_00`, `mt_eyeshadow_00`, `mt_nip_00`, `mt_underhair_00`,
@@ -142,7 +164,12 @@ failed to create its DX11 window and produced no valid comparison.
 
 The material-blit probe renders only configured face/clothing material blits. Collection stops
 only the recorded private player process after checking its executable path;
-`--stop` is available if a probe fails before producing its report. It
+`--stop` is available if a probe fails before producing its report. The
+character, animation, dynamics, light and route drivers record their root in
+`run.json` and reuse it on the next start into the same output folder; a
+recorded root that no longer exists on the VM (for example after a cleanup of
+old `IkkokuShaderProbe-*` folders) is recreated with the same player copy as a
+new root, and a partly deleted one is refused rather than written into. It
 does not capture the desktop, a card thumbnail or an arbitrary game camera.
 Source texture catalog names and material parameters are recorded; every input
 bundle hash is checked against the recovered local source. Original

@@ -1,0 +1,774 @@
+{
+ "conventions": "Unity left-handed axes; positions in metres; rotations as quaternion x,y,z,w; local.rotation and authoredRotation are Unity Euler degrees applied z, x, then y",
+ "loadCases": [
+  {
+   "activeAfterLoad": "IKKOKU-B",
+   "camera": {
+    "fov": 35,
+    "position": [
+     0.11563,
+     0.842979,
+     -0.183796
+    ],
+    "rotation": [
+     0.043184,
+     -0.567063,
+     0.111665,
+     0.814927
+    ]
+   },
+   "flagsAfterLoad": {
+    "IKKOKU-A": false,
+    "IKKOKU-B": true
+   },
+   "name": "x",
+   "records": [
+    {
+     "active": true,
+     "dicKey": 0,
+     "kind": 5,
+     "local": {
+      "position": [
+       1,
+       2,
+       3
+      ],
+      "rotation": [
+       10,
+       70,
+       25
+      ]
+     },
+     "name": "IKKOKU-A",
+     "parent": null
+    },
+    {
+     "dicKey": 1,
+     "kind": 3,
+     "local": {
+      "position": [
+       -0.5,
+       0.2,
+       0.5
+      ],
+      "rotation": [
+       0.0,
+       -30.0,
+       10.0
+      ]
+     },
+     "name": "IKKOKU-F",
+     "parent": null
+    },
+    {
+     "active": true,
+     "dicKey": 2,
+     "kind": 5,
+     "local": {
+      "position": [
+       0.3,
+       0.6,
+       -0.9
+      ],
+      "rotation": [
+       5,
+       -40,
+       0
+      ]
+     },
+     "name": "IKKOKU-B",
+     "parent": "IKKOKU-F"
+    }
+   ],
+   "restoredCamera": {
+    "fov": 35,
+    "position": [
+     1.191098,
+     1.876457,
+     3.02302
+    ],
+    "rotation": [
+     -0.022666,
+     0.976383,
+     -0.128543,
+     -0.172163
+    ]
+   },
+   "savedCamera": {
+    "distance": [
+     0,
+     0,
+     -3
+    ],
+    "fov": 35,
+    "position": [
+     0.2,
+     1.1,
+     0.3
+    ],
+    "rotate": [
+     15,
+     200,
+     0
+    ]
+   },
+   "savedViewCamera": {
+    "fov": 35,
+    "position": [
+     1.191098,
+     1.876457,
+     3.02302
+    ],
+    "rotation": [
+     -0.022666,
+     0.976383,
+     -0.128543,
+     -0.172163
+    ]
+   }
+  },
+  {
+   "activeAfterLoad": "IKKOKU-A",
+   "camera": {
+    "fov": 35,
+    "position": [
+     1,
+     2,
+     3
+    ],
+    "rotation": [
+     0.193374,
+     0.542397,
+     0.127817,
+     0.807512
+    ]
+   },
+   "flagsAfterLoad": {
+    "IKKOKU-A": true,
+    "IKKOKU-B": false
+   },
+   "name": "y",
+   "records": [
+    {
+     "dicKey": 1,
+     "kind": 3,
+     "local": {
+      "position": [
+       -0.5,
+       0.2,
+       0.5
+      ],
+      "rotation": [
+       0.0,
+       -30.0,
+       10.0
+      ]
+     },
+     "name": "IKKOKU-F",
+     "parent": null
+    },
+    {
+     "active": true,
+     "dicKey": 2,
+     "kind": 5,
+     "local": {
+      "position": [
+       0.3,
+       0.6,
+       -0.9
+      ],
+      "rotation": [
+       5,
+       -40,
+       0
+      ]
+     },
+     "name": "IKKOKU-B",
+     "parent": "IKKOKU-F"
+    },
+    {
+     "active": true,
+     "dicKey": 0,
+     "kind": 5,
+     "local": {
+      "position": [
+       1,
+       2,
+       3
+      ],
+      "rotation": [
+       10,
+       70,
+       25
+      ]
+     },
+     "name": "IKKOKU-A",
+     "parent": null
+    }
+   ],
+   "restoredCamera": {
+    "fov": 35,
+    "position": [
+     1.191098,
+     1.876457,
+     3.02302
+    ],
+    "rotation": [
+     -0.022666,
+     0.976383,
+     -0.128543,
+     -0.172163
+    ]
+   },
+   "savedCamera": {
+    "distance": [
+     0,
+     0,
+     -3
+    ],
+    "fov": 35,
+    "position": [
+     0.2,
+     1.1,
+     0.3
+    ],
+    "rotate": [
+     15,
+     200,
+     0
+    ]
+   },
+   "savedViewCamera": {
+    "fov": 35,
+    "position": [
+     1.191098,
+     1.876457,
+     3.02302
+    ],
+    "rotation": [
+     -0.022666,
+     0.976383,
+     -0.128543,
+     -0.172163
+    ]
+   }
+  },
+  {
+   "activeAfterLoad": null,
+   "camera": {
+    "fov": 35,
+    "position": [
+     1.191098,
+     1.876457,
+     3.02302
+    ],
+    "rotation": [
+     -0.022666,
+     0.976383,
+     -0.128543,
+     -0.172163
+    ]
+   },
+   "flagsAfterLoad": {
+    "IKKOKU-A": false,
+    "IKKOKU-B": false
+   },
+   "name": "none",
+   "records": [
+    {
+     "active": false,
+     "dicKey": 0,
+     "kind": 5,
+     "local": {
+      "position": [
+       1,
+       2,
+       3
+      ],
+      "rotation": [
+       10,
+       70,
+       25
+      ]
+     },
+     "name": "IKKOKU-A",
+     "parent": null
+    },
+    {
+     "dicKey": 1,
+     "kind": 3,
+     "local": {
+      "position": [
+       -0.5,
+       0.2,
+       0.5
+      ],
+      "rotation": [
+       0.0,
+       -30.0,
+       10.0
+      ]
+     },
+     "name": "IKKOKU-F",
+     "parent": null
+    },
+    {
+     "active": false,
+     "dicKey": 2,
+     "kind": 5,
+     "local": {
+      "position": [
+       0.3,
+       0.6,
+       -0.9
+      ],
+      "rotation": [
+       5,
+       -40,
+       0
+      ]
+     },
+     "name": "IKKOKU-B",
+     "parent": "IKKOKU-F"
+    }
+   ],
+   "restoredCamera": null,
+   "savedCamera": {
+    "distance": [
+     0,
+     0,
+     -3
+    ],
+    "fov": 35,
+    "position": [
+     0.2,
+     1.1,
+     0.3
+    ],
+    "rotate": [
+     15,
+     200,
+     0
+    ]
+   },
+   "savedViewCamera": {
+    "fov": 35,
+    "position": [
+     1.191098,
+     1.876457,
+     3.02302
+    ],
+    "rotation": [
+     -0.022666,
+     0.976383,
+     -0.128543,
+     -0.172163
+    ]
+   }
+  }
+ ],
+ "objectCases": [
+  {
+   "camera": {
+    "fov": 23,
+    "position": [
+     1,
+     2,
+     3
+    ],
+    "rotation": [
+     0.193374,
+     0.542397,
+     0.127817,
+     0.807512
+    ]
+   },
+   "cameraBefore": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   },
+   "local": {
+    "position": [
+     1,
+     2,
+     3
+    ],
+    "rotation": [
+     10,
+     70,
+     25
+    ]
+   },
+   "name": "root",
+   "parent": null,
+   "restoredCamera": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   }
+  },
+  {
+   "camera": {
+    "fov": 23,
+    "position": [
+     1.5,
+     1.75,
+     3.75
+    ],
+    "rotation": [
+     0.238818,
+     0.364037,
+     0.217591,
+     0.873554
+    ]
+   },
+   "cameraBefore": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   },
+   "local": {
+    "position": [
+     1.5,
+     1.75,
+     3.75
+    ],
+    "rotation": [
+     15,
+     50,
+     35
+    ]
+   },
+   "name": "root-moved",
+   "parent": null,
+   "restoredCamera": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   }
+  },
+  {
+   "camera": {
+    "fov": 23,
+    "position": [
+     0.024514,
+     0.907201,
+     -1.525886
+    ],
+    "rotation": [
+     0.193021,
+     0.797161,
+     0.176768,
+     0.544087
+    ]
+   },
+   "cameraBefore": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   },
+   "local": {
+    "position": [
+     0.3,
+     0.6,
+     -0.9
+    ],
+    "rotation": [
+     10,
+     70,
+     25
+    ]
+   },
+   "name": "folder",
+   "parent": {
+    "authoredPosition": [
+     0.5,
+     0.25,
+     -0.75
+    ],
+    "authoredRotation": [
+     0,
+     40,
+     15
+    ],
+    "authoredScale": [
+     2,
+     2,
+     2
+    ],
+    "scaleApplied": false,
+    "world": {
+     "position": [
+      0.5,
+      0.25,
+      -0.75
+     ],
+     "rotation": [
+      0.044643,
+      0.339094,
+      0.122655,
+      0.931653
+     ],
+     "scale": [
+      1,
+      1.0,
+      1.0
+     ]
+    }
+   },
+   "restoredCamera": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   }
+  },
+  {
+   "camera": {
+    "fov": 23,
+    "position": [
+     -1.350973,
+     1.614403,
+     -0.951772
+    ],
+    "rotation": [
+     0.193021,
+     0.797161,
+     0.176768,
+     0.544087
+    ]
+   },
+   "cameraBefore": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   },
+   "local": {
+    "position": [
+     0.3,
+     0.6,
+     -0.9
+    ],
+    "rotation": [
+     10,
+     70,
+     25
+    ]
+   },
+   "name": "item-uniform",
+   "parent": {
+    "authoredPosition": [
+     -0.4,
+     0.3,
+     0.6
+    ],
+    "authoredRotation": [
+     0,
+     40,
+     15
+    ],
+    "authoredScale": [
+     2,
+     2,
+     2
+    ],
+    "scaleApplied": true,
+    "world": {
+     "position": [
+      -0.4,
+      0.3,
+      0.6
+     ],
+     "rotation": [
+      0.044643,
+      0.339094,
+      0.122655,
+      0.931653
+     ],
+     "scale": [
+      2,
+      2.0,
+      2.0
+     ]
+    }
+   },
+   "restoredCamera": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   }
+  },
+  {
+   "camera": {
+    "fov": 23,
+    "position": [
+     -0.705192,
+     1.536757,
+     0.268653
+    ],
+    "rotation": [
+     0.193021,
+     0.797161,
+     0.176768,
+     0.544087
+    ]
+   },
+   "cameraBefore": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   },
+   "local": {
+    "position": [
+     0.3,
+     0.6,
+     -0.9
+    ],
+    "rotation": [
+     10,
+     70,
+     25
+    ]
+   },
+   "name": "item-nonuniform",
+   "parent": {
+    "authoredPosition": [
+     -0.4,
+     0.3,
+     0.6
+    ],
+    "authoredRotation": [
+     0,
+     40,
+     15
+    ],
+    "authoredScale": [
+     1,
+     2,
+     0.5
+    ],
+    "scaleApplied": true,
+    "world": {
+     "position": [
+      -0.4,
+      0.3,
+      0.6
+     ],
+     "rotation": [
+      0.044643,
+      0.339094,
+      0.122655,
+      0.931653
+     ],
+     "scale": [
+      1,
+      2.0,
+      0.5
+     ]
+    }
+   },
+   "restoredCamera": {
+    "fov": 23,
+    "position": [
+     0,
+     2.09,
+     4.21
+    ],
+    "rotation": [
+     0.0,
+     0.995056,
+     -0.09932,
+     0.0
+    ]
+   }
+  }
+ ],
+ "schemaVersion": 1,
+ "source": "Original CharaStudio capture of synthetic Studio camera objects (ST-A06); inputs are authored test values, outputs rounded to 1e-6",
+ "tolerances": {
+  "fov": 0.0001,
+  "position": 0.0001,
+  "rotationDegrees": 0.01
+ }
+}

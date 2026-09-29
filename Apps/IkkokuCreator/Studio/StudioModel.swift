@@ -113,6 +113,70 @@ final class StudioModel: ViewportInputHandler {
     /// import and dropped whenever a document replaces the current one.
     @ObservationIgnored private var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
     @ObservationIgnored private var lastSourceRouteDiagnostic: String?
+    /// The imported scene record's `charaLight` as a scene-static native key
+    /// light (PR #41's rot mapping). Runtime-only: original export requires
+    /// `doc.mainLight` to stay default, so the preview overrides it through
+    /// `effectiveMainLight` and nothing writes it into the document. Like the
+    /// route caches it carries the scene identity and is dropped wherever a
+    /// document replaces the current one.
+    @ObservationIgnored private var sourceSceneLight: (sceneSHA256: String, light: MainLight)?
+    /// The light preview frames render with: the scene's character light while
+    /// the document is that source scene and the native light is still the
+    /// untouched default, otherwise the user's edited document light.
+    private var effectiveMainLight: MainLight {
+        guard let cached = sourceSceneLight, cached.sceneSHA256 == doc.sourceSceneSHA256,
+              doc.mainLight == MainLight() else { return doc.mainLight }
+        return cached.light
+    }
+    /// Imported camera objects (`KoikatsuObjectKind.camera`), keyed by the
+    /// placeholder entry's id. Runtime-only like `sourceSceneLight`: the
+    /// placeholder stays a `.folder` and `doc.camera` keeps the saved scene
+    /// camera verbatim, so original export is unaffected and only the preview
+    /// looks through the camera object. Carries the scene identity and is
+    /// dropped wherever a document replaces the current one.
+    @ObservationIgnored private var sourceCameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
+    /// The entry for a still-valid placeholder: the same scene-identity guard
+    /// as the route caches, so a stale id after undo or object deletion reads
+    /// as absent everywhere.
+    private func sourceCameraEntry(of id: UUID) -> (sceneSHA256: String, objectKey: Int32, name: String)? {
+        guard let entry = sourceCameras[id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+              doc.object(id) != nil else { return nil }
+        return entry
+    }
+    /// The camera object the render camera currently follows, the counterpart
+    /// of the original's single `ChangeCamera` active slot. `nil` while the
+    /// orbit controller owns the view.
+    private(set) var activeSourceCamera: UUID?
+    /// The active source camera's name while the guard holds, otherwise `nil`.
+    var activeSourceCameraName: String? {
+        activeSourceCamera.flatMap { sourceCameraEntry(of: $0)?.name }
+    }
+    /// The preview camera: looks through the active camera object (its world
+    /// position and rotation copied every `LateUpdate`, scale ignored and the
+    /// scene field of view kept) while the guard holds; otherwise the document
+    /// camera. `doc.camera` is never written here, so a throw — or any guard
+    /// miss — returns the saved camera untouched.
+    var viewCamera: OrbitCamera {
+        guard let id = activeSourceCamera, let entry = sourceCameraEntry(of: id) else { return doc.camera }
+        do {
+            return try SourceStudioCameraObjects.viewCamera(
+                world: sourceWorldMatrix(of: id, document: doc, previews: sourceInstances), base: doc.camera)
+        } catch {
+            let message = "Source camera \(entry.objectKey) view unresolved: \(error); using the saved camera."
+            if status != message { status = message }
+            return doc.camera
+        }
+    }
+    /// Whether the selected object is a source camera placeholder, so the
+    /// Camera controls appear only where they can do something.
+    var selectedSourceCameraName: String? {
+        selection.flatMap { sourceCameraEntry(of: $0)?.name }
+    }
+    /// Whether the workspace row should show the camera icon for the folder
+    /// placeholder of a source camera object.
+    func isSourceCameraPlaceholder(_ id: UUID) -> Bool {
+        sourceCameraEntry(of: id) != nil
+    }
     let sourceAudioBus = SourceStudioAudioBus()
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
@@ -192,7 +256,7 @@ final class StudioModel: ViewportInputHandler {
                   object.sourceCharacter != nil, doc.isVisible(id) else { continue }
             do {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
-                let camera = UnityCoordinates.position(world.inverse.transformPoint(doc.camera.position))
+                let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
                 _ = try preview.updateNeckLook(deltaTime: 1 / 30, cameraModelPosition: camera,
                     fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
                     kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
@@ -392,8 +456,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -490,6 +554,15 @@ final class StudioModel: ViewportInputHandler {
         imported.sourceSceneFile = sceneURL.path; imported.sourceSceneSHA256 = hash
         imported.sourceVoiceCatalogFile = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_VOICE_CATALOG"]
         var diagnostics = ["Source scene preview uses converted card selections, shape settings, static ABMX, expressions and saved FK. Missing assets and unimplemented consumers remain listed below."]
+        var sceneLightOverride: MainLight?
+        do {
+            let characterLight = source.settings.characterLight
+            let light = try SourceStudioSceneLight.mainLight(from: characterLight)
+            sceneLightOverride = light
+            diagnostics.append("Scene character light applied: colour (\(String(format: "%.2f", characterLight.color.x)), \(String(format: "%.2f", characterLight.color.y)), \(String(format: "%.2f", characterLight.color.z))), intensity \(String(format: "%.2f", characterLight.intensity)), rot (\(String(format: "%.1f", characterLight.rotation.x)), \(String(format: "%.1f", characterLight.rotation.y))), shadows \(characterLight.shadow ? "on" : "off"); map light and map pending.")
+        } catch {
+            diagnostics.append("Scene character light not applied: \(error)")
+        }
         let makerLibrary = try EngineHost.locateMakerLibrary()
         let attachmentURL = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ATTACHMENT_CATALOG"].map { URL(fileURLWithPath: $0) }
             ?? boneCatalogURL.deletingLastPathComponent().appendingPathComponent("attachments.json")
@@ -511,9 +584,11 @@ final class StudioModel: ViewportInputHandler {
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
+        var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
+            object.sourceRecordKind = record.kind
             object.sourceAttachmentPoint = attachmentPoint
             object.transform.position = UnityCoordinates.position(record.transform.position)
             object.transform.scale = record.transform.scale
@@ -552,6 +627,14 @@ final class StudioModel: ViewportInputHandler {
                     if routeChild, record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
                     diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)")
                 }
+            } else if record.kind == .camera {
+                // The placeholder stays a `.folder` (export keeps validating);
+                // the preview resolves its world matrix every frame, so a
+                // route child camera inherits `childRoot` like any other
+                // parent transform and is not special-cased here.
+                object.name = record.name ?? "Source camera \(record.sourceKey)"
+                cameras[object.id] = (sceneSHA256: hash, objectKey: record.sourceKey, name: object.name)
+                diagnostics.append("Camera \(record.sourceKey) (\"\(object.name)\") available for look-through.")
             } else if record.kind != .folder {
                 object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
                 // A route's `childRoot` is resolved every frame, so a non-character
@@ -572,6 +655,14 @@ final class StudioModel: ViewportInputHandler {
                 }
             }
         }
+        // `ChangeCamera(camera, record.active)` ran for every camera record in
+        // load order, so the last active record is the one CharaStudio shows.
+        var activeCameraAtLoad: UUID?
+        if let key = SourceStudioCameraObjects.activeAtLoad(source.snapshot),
+           let cameraID = cameras.keys.first(where: { cameras[$0]?.objectKey == key }) {
+            activeCameraAtLoad = cameraID
+            diagnostics.append("Camera \(key) (\"\(cameras[cameraID]!.name)\") active at load (saved active flag).")
+        }
         imported.sourcePreviewDiagnostics = diagnostics
         try imported.validateHierarchy()
         // Published before the bounds walk so attachment matrices through a
@@ -580,7 +671,7 @@ final class StudioModel: ViewportInputHandler {
         sourceRouteCharacterPreviews = routeCharacterPreviews
         for object in imported.objects {
             if let preview = previews[object.id] ?? routeCharacterPreviews[object.id], imported.isVisible(object.id) {
-                let f = try preview.frame(camera: imported.camera, mainLight: imported.mainLight, effects: imported.effects,
+                let f = try preview.frame(camera: imported.camera, mainLight: sceneLightOverride ?? imported.mainLight, effects: imported.effects,
                     world: try sourceWorldMatrix(of: object.id, document: imported, previews: previews), objectID: 1)
                 bounds.expand(f.sceneBounds)
             }
@@ -588,7 +679,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; activeSourceCamera = activeCameraAtLoad; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -620,7 +711,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -920,7 +1011,7 @@ final class StudioModel: ViewportInputHandler {
                             fresh.automaticBlink = sourceAutomaticBlink
                             sourceInstances[o.id] = fresh; preview = fresh
                         }
-                        let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
+                        let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         if showGizmos, selection == o.id { gizmos += try sourceCharacterGizmos(o, preview: preview, world: world) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
@@ -1001,11 +1092,23 @@ final class StudioModel: ViewportInputHandler {
                 // so none are passed and original export rejects them.
                 if let preview = sourceRouteCharacterPreview(of: o.id, document: doc) {
                     do {
-                        let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
+                        let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, animationElapsed: sourceAnimationTime)
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
                     } catch { status = "Route character \(o.sourceObjectKey ?? 0): \(error)" }
+                }
+                // Native `.camera` objects get the three-line camera glyph; an
+                // active one hides its icon, the others keep it. The view
+                // direction is the object's world rotation looking along
+                // native (0, 0, -1) — scale is ignored, like `LateUpdate`.
+                if let entry = sourceCameras[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+                   activeSourceCamera != o.id {
+                    let p = world.translation
+                    let f = world.rotationQuaternion.act(Float3(0, 0, -1))
+                    lightGlyphs.append((p - Float3(0.08, 0, 0), p + Float3(0.08, 0, 0)))
+                    lightGlyphs.append((p - Float3(0, 0.08, 0), p + Float3(0, 0.08, 0)))
+                    lightGlyphs.append((p, p + f * 0.3))
                 }
             }
         }
@@ -1018,12 +1121,12 @@ final class StudioModel: ViewportInputHandler {
                 let m = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
                 let origin = m.translation
                 let orient = try localSpace ? sourceWorldRotation(of: sel.id) : .identity
-                let size = doc.camera.worldUnitsPerPixel(at: origin, viewport: viewportSize) * 110
+                let size = viewCamera.worldUnitsPerPixel(at: origin, viewport: viewportSize) * 110
                 gizmos += GizmoBuilder.build(mode: gizmoMode, origin: origin, orientation: orient, size: size, highlight: hoverAxis)
             } catch { status = "Source object guide: \(error)" }
         }
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
-        var f = RenderFrame(camera: doc.camera, mainLight: doc.mainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
+        var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
         frame = f
         host.renderer.submit(f)
@@ -1031,34 +1134,63 @@ final class StudioModel: ViewportInputHandler {
 
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview]) throws -> float4x4 {
-        guard var object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
-        var world = object.transform.matrix, visited: Set<UUID> = [id]
-        while let parentID = object.parent {
-            guard visited.insert(parentID).inserted, let parent = document.object(parentID) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
-            if let point = object.sourceAttachmentPoint {
-                if let preview = previews[parentID] {
-                    world = try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * world
-                } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
-                    // A route character's placeholder entry cannot carry edits,
-                    // so only the saved record's animation is resolved here.
-                    world = try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime) * world
-                } else { throw RigError.invalid("Attachment parent has no converted character.") }
-            }
+        try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [])
+    }
+
+    /// The `GuideObject.LateUpdate` walk for source-scene objects (ST-A06):
+    /// each object's world scale is its own authored scale when it is
+    /// scalable and `(1, 1, 1)` otherwise, so scale never compounds down the
+    /// chain and a folder's authored scale is never applied, while position
+    /// and rotation still compose through the parent's actual world frame.
+    /// Native objects keep full-TRS composition, so a native scene renders
+    /// exactly as `StudioDocument.worldMatrix(of:)` places it.
+    private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
+                                   previews: [UUID: SourceStudioCharacterPreview],
+                                   visited: Set<UUID>) throws -> float4x4 {
+        guard let object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
+        var visited = visited
+        guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+        var parentFrame = matrix_identity_float4x4
+        if let parentID = object.parent {
+            guard let parent = document.object(parentID) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
             if let route = sourceRouteRuntime(id: parentID, document: document) {
                 // `childRoot` replaces the route object as the parent frame
                 // (`AddObjectRoute.cs` parents children under it, and the
                 // `OCIRoute.cs` placement already folds in the route object's
                 // world matrix). Because that placement is an absolute world
                 // matrix, the walk stops here; the route's ancestors are
-                // already applied inside it.
+                // already applied inside it. Only a character is ever an
+                // attachment parent, so the route frame never needs the
+                // attachment multiplication below.
                 let (matrix, diagnostics) = try routeChildRootWorld(id: parentID, route: route,
                     document: document, previews: previews)
                 reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey)
-                return matrix * world
+                parentFrame = matrix
+            } else {
+                parentFrame = try sourceWorldMatrix(of: parentID, document: document, previews: previews, visited: visited)
+                if let point = object.sourceAttachmentPoint {
+                    if let preview = previews[parentID] {
+                        parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+                    } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
+                        // A route character's placeholder entry cannot carry edits,
+                        // so only the saved record's animation is resolved here.
+                        parentFrame *= try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime)
+                    } else { throw RigError.invalid("Attachment parent has no converted character.") }
+                }
             }
-            world = parent.transform.matrix * world; object = parent
         }
-        return world
+        // Native objects (no source key) keep the native full-TRS composition
+        // of `StudioDocument.worldMatrix(of:)`, which setParent and native
+        // gizmo edits also use; only source records follow the Studio rule.
+        guard object.sourceObjectKey != nil else { return parentFrame * object.transform.matrix }
+        // Documents saved before `sourceRecordKind` was recorded carry no
+        // record kind; their import made every non-character placeholder a
+        // `.folder`, so those fall back to the non-scalable rule (an item's
+        // authored scale is then dropped) and characters stay scalable.
+        let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
+        return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
+            localPosition: object.transform.position, localRotation: object.transform.quaternion,
+            localScale: object.transform.scale, scalable: scalable)
     }
 
     /// The import's authored route data, but only while the document still
@@ -1147,6 +1279,9 @@ final class StudioModel: ViewportInputHandler {
             let rotation = UnityCoordinates.eulerDegrees(Float3(Float(frame.placement.rotation.x),
                                                                 Float(frame.placement.rotation.y),
                                                                 Float(frame.placement.rotation.z)))
+            // A route is not scalable under the Studio scale rule, so
+            // `routeWorld.scaleFactors` is `(1, 1, 1)`; the placement keeps
+            // the expression for a uniform (1, 1, 1) TRS scale.
             return (Transform.trs(position, rotation, routeWorld.scaleFactors), [])
         }
         if case .rebuiltWithFallback = clock.lastAction, !sourceRouteFallbackReported.contains(id) {
@@ -1189,6 +1324,32 @@ final class StudioModel: ViewportInputHandler {
             status = "Route \(route.objectKey) playing from \(String(format: "%.2f", sourceAnimationTime)) s"
         }
         refresh()
+    }
+
+    /// Right-clicking the object's tree node toggles the camera: `ChangeCamera(c)`
+    /// activates `c` if it is not the active one and deactivates it if it is,
+    /// which re-enables the orbit controller. The document camera was never
+    /// edited, so the view returns to the saved scene camera.
+    func toggleSourceCamera(_ id: UUID) {
+        guard let entry = sourceCameras[id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+              doc.object(id) != nil else { return }
+        if activeSourceCamera == id {
+            activeSourceCamera = nil
+            status = "Source camera \"\(entry.name)\" deactivated; orbit controls restored."
+        } else {
+            activeSourceCamera = id
+            status = "Looking through source camera \"\(entry.name)\"."
+        }
+        refresh()
+    }
+
+    /// While a source camera object is active the original disables the orbit
+    /// controller, so mouse orbit, pan, zoom and pinch do nothing; the status
+    /// explains why instead of silently dropping the gesture.
+    private func reportSourceCameraInputBlocked() -> Bool {
+        guard let name = activeSourceCameraName else { return false }
+        status = "Viewing through source camera \"\(name)\"; deactivate it to move the editor camera."
+        return true
     }
 
     /// "Play all" (`OnClickALL`): `Play` on every route that is not playing
@@ -1299,7 +1460,7 @@ final class StudioModel: ViewportInputHandler {
         var result: [GizmoBatch] = []
         for target in preview.controller.targets where target.hasGuide {
             let matrix = world * evaluated.worldMatrices[target.node]
-            let size = doc.camera.worldUnitsPerPixel(at: matrix.translation, viewport: viewportSize)
+            let size = viewCamera.worldUnitsPerPixel(at: matrix.translation, viewport: viewportSize)
             result.append(GizmoBuilder.handle(at: matrix.translation, size: size * (selectedBone == target.node ? 9 : 6),
                 color: selectedBone == target.node ? Float4(1, 0.9, 0.2, 1) : Float4(0.3, 0.9, 1, 0.85), id: PickIDs.bone(target.node)))
             if selectedBone == target.node {
@@ -1322,7 +1483,7 @@ final class StudioModel: ViewportInputHandler {
     private func sourceIKGizmos(_ object: StudioObject, preview: SourceStudioCharacterPreview, world: float4x4) throws -> [GizmoBatch] {
         var result: [GizmoBatch] = []
         for guide in try sourceGuides(object, preview: preview) {
-            let origin = world.transformPoint(guide.position), size = doc.camera.worldUnitsPerPixel(at: world.transformPoint(guide.position), viewport: viewportSize)
+            let origin = world.transformPoint(guide.position), size = viewCamera.worldUnitsPerPixel(at: world.transformPoint(guide.position), viewport: viewportSize)
             let selected = selectedSourceIK == guide.targetID
             let color = selected ? Float4(1,0.9,0.2,1) : guide.active ? Float4(0.3,1,0.5,1) : Float4(0.7,0.7,0.75,0.85)
             result.append(GizmoBuilder.handle(at: origin, size: size * (selected ? 10 : 7), color: color, id: SourceStudioIKEditing.pickID(guide.targetID)))
@@ -1395,7 +1556,7 @@ final class StudioModel: ViewportInputHandler {
         var out: [GizmoBatch] = []
         guard let skel = inst.skeleton else { return out }
         let root = inst.rootMatrix
-        let px = doc.camera.worldUnitsPerPixel(at: root.translation, viewport: viewportSize)
+        let px = viewCamera.worldUnitsPerPixel(at: root.translation, viewport: viewportSize)
         if poseMode == .fk {
             var lines: [(Float3, Float3)] = []
             for (i, b) in skel.bones.enumerated() where i < r.worldMatrices.count && fkGroup.contains(b.name) {
@@ -1407,7 +1568,7 @@ final class StudioModel: ViewportInputHandler {
             out.append(GizmoBuilder.lines(lines, color: Float4(0.3, 0.9, 1, 0.8)))
             if let bi = selectedBone, bi < r.worldMatrices.count {
                 let m = root * r.worldMatrices[bi]
-                let size = doc.camera.worldUnitsPerPixel(at: m.translation, viewport: viewportSize) * 90
+                let size = viewCamera.worldUnitsPerPixel(at: m.translation, viewport: viewportSize) * 90
                 out += GizmoBuilder.build(mode: .rotate, origin: m.translation, orientation: localSpace ? m.rotationQuaternion : .identity, size: size, highlight: hoverAxis)
             }
         } else if poseMode == .ik {
@@ -1421,7 +1582,7 @@ final class StudioModel: ViewportInputHandler {
             }
             if let chain = selectedIK, let t = o.ikTargets[chain], t.enabled {
                 let origin = root.transformPoint(t.position)
-                let size = doc.camera.worldUnitsPerPixel(at: origin, viewport: viewportSize) * 90
+                let size = viewCamera.worldUnitsPerPixel(at: origin, viewport: viewportSize) * 90
                 out += GizmoBuilder.build(mode: .translate, origin: origin, orientation: .identity, size: size, highlight: hoverAxis)
             }
         }
@@ -1434,13 +1595,13 @@ final class StudioModel: ViewportInputHandler {
         host.renderer.pick(frame: frame, pixel: p, size: (Int(viewportSize.x), Int(viewportSize.y)))
     }
 
-    private func ray(_ p: SIMD2<Float>) -> Ray { doc.camera.ray(atPixel: p, viewport: viewportSize) }
+    private func ray(_ p: SIMD2<Float>) -> Ray { viewCamera.ray(atPixel: p, viewport: viewportSize) }
 
     func mouseDown(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) {
         if button != 0 || modifiers.contains(.option) { drag = modifiers.contains(.shift) || button == 2 ? .pan : .orbit; return }
         let id = pick(p)
         let r = ray(p)
-        let camF = doc.camera.forward
+        let camF = viewCamera.forward
         if let axis = PickIDs.axis(from: id) {
             if poseMode == .fk, let sel = selectedObject, let preview = sourceInstances[sel.id], let bi = selectedBone,
                let target = preview.controller.targets.first(where: { $0.node == bi && $0.hasGuide }) {
@@ -1551,8 +1712,12 @@ final class StudioModel: ViewportInputHandler {
                 }
                 doc.objects[i].sourceKinematics = state
             }
-        case .orbit: doc.camera.orbit(dx: delta.x * 0.005, dy: delta.y * 0.005)
-        case .pan: doc.camera.pan(dx: delta.x, dy: delta.y)
+        case .orbit:
+            guard !reportSourceCameraInputBlocked() else { return }
+            doc.camera.orbit(dx: delta.x * 0.005, dy: delta.y * 0.005)
+        case .pan:
+            guard !reportSourceCameraInputBlocked() else { return }
+            doc.camera.pan(dx: delta.x, dy: delta.y)
         case .gizmo(let gd, let start):
             guard let id = selection, let i = doc.index(of: id) else { return }
             var t = start
@@ -1577,7 +1742,7 @@ final class StudioModel: ViewportInputHandler {
                     t.rotation = local.eulerXYZ.radiansToDegrees
                 }
             case .scale:
-                if let s = gd.scale(for: r, size: doc.camera.worldUnitsPerPixel(at: gd.origin, viewport: viewportSize) * 110) { t.scale = start.scale * s }
+                if let s = gd.scale(for: r, size: viewCamera.worldUnitsPerPixel(at: gd.origin, viewport: viewportSize) * 110) { t.scale = start.scale * s }
             }
             doc.objects[i].transform = t
         case .bone(let gd, let bi, let startWorldRot, let startDelta):
@@ -1628,9 +1793,13 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func scrolled(delta: SIMD2<Float>, modifiers: NSEvent.ModifierFlags) {
+        guard !reportSourceCameraInputBlocked() else { return }
         if modifiers.contains(.shift) { doc.camera.pan(dx: -delta.x * 4, dy: delta.y * 4) } else { doc.camera.dolly(delta.y * 0.5) }
     }
-    func magnified(by amount: Float) { doc.camera.dolly(amount * 10) }
+    func magnified(by amount: Float) {
+        guard !reportSourceCameraInputBlocked() else { return }
+        doc.camera.dolly(amount * 10)
+    }
 
     func keyDown(_ event: NSEvent) -> Bool {
         let chars = event.charactersIgnoringModifiers ?? ""
@@ -1678,8 +1847,8 @@ final class StudioModel: ViewportInputHandler {
     private func gazeTarget(for o: StudioObject, root: float4x4) -> Float3? {
         guard let e = o.card?.expression else { return nil }
         switch e.gazeMode {
-        case 1: return doc.camera.position
-        case 2: return doc.camera.position + Float3(0.9, 0.35, 0)
+        case 1: return viewCamera.position
+        case 2: return viewCamera.position + Float3(0.9, 0.35, 0)
         case 3: return e.gazeTarget
         default: return nil
         }
@@ -1692,7 +1861,7 @@ final class StudioModel: ViewportInputHandler {
         var pd = doc.objects[i].poseDelta
         if mode == 0 { pd.rotations["eye_L"] = nil; pd.rotations["eye_R"] = nil }
         else {
-            let target: Float3 = mode == 1 ? doc.camera.position : (mode == 2 ? doc.camera.position + Float3(0.8, 0.3, 0) : card.expression.gazeTarget)
+            let target: Float3 = mode == 1 ? viewCamera.position : (mode == 2 ? viewCamera.position + Float3(0.8, 0.3, 0) : card.expression.gazeTarget)
             let root = inst.rootMatrix
             let pose = combinedPoseDelta(doc.objects[i]).apply(to: skel)
             let world = pose.worldMatrices(skeleton: skel)
