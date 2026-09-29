@@ -15,6 +15,16 @@ the row's position by one frame: the tween's first advance consumes row 1's delt
 (row 0's is the ``Play`` frame's and is never consumed). Simulating over ``deltas[1:]``
 and comparing frames ``0 .. N-2`` reproduces the capture to micrometres; the last row's
 post-update state was never recorded.
+
+Rotation follows the ST-T11h finding: each row's Euler is one ``LookUpdate``
+SmoothDamp step (fresh zero velocity) from the previous row's Euler toward the
+aim the previous row's tween write established, so the rotation column lags
+position by one frame, the Play frame's own LateUpdate seeds row 0 on the Play
+deltaTime, and the completion frame smooths for the last time before the
+Euler freezes. Two smoothTime hypotheses are scored per route:
+``defaultsUpdateTime`` (0.05 s, the ``Defaults.updateTime`` fallback route
+tweens fall to because they carry neither ``looktime`` nor ``time``) and
+``segmentDurationTimes0.0075``; the capture picks the former decisively.
 """
 from __future__ import annotations
 import argparse
@@ -27,6 +37,33 @@ from dynamics_contract import REPO
 
 ORIENTATIONS = ("none", "xy", "y")  # OIRouteInfo.Orient ordinal -> reference string
 CONNECTIONS = ("line", "curve")     # OIRoutePointInfo.Connection ordinal
+
+# LookUpdate smoothTime hypotheses scored against the capture. Route tweens
+# pass "speed" (never "time") and carry no "looktime", so the recovered
+# fallback chain lands on Defaults.updateTime; the second entry is the
+# rejected alternative (segmentDuration * 0.0075) kept as scored evidence.
+SMOOTH_TIME_HYPOTHESES = {
+    "defaultsUpdateTime": lambda duration: ref.DEFAULT_UPDATE_TIME,
+    "segmentDurationTimes0.0075": lambda duration: duration * 0.0075,
+}
+
+
+def _as_wxyz(quaternion):
+    """``simulate_frames``' (w, x, y, z) from a trace-space (x, y, z, w)."""
+    x, y, z, w = quaternion
+    return (w, x, y, z)
+
+
+def _as_xyzw(quaternion):
+    """Trace-space (x, y, z, w) from a ``from_euler``-style (w, x, y, z)."""
+    w, x, y, z = quaternion
+    return (x, y, z, w)
+
+
+def _quaternion_angle(left, right):
+    """Degrees between two xyzw unit quaternions (sign-agnostic)."""
+    dot = abs(sum(a * b for a, b in zip(left, right)))
+    return 2 * math.degrees(math.acos(min(1.0, dot)))
 
 
 def _route_points(route):
@@ -57,12 +94,14 @@ def compare_stepping(trace):
     for name, route in meta.items():
         points = _route_points(route)
         recorded = [frame[keys[name]]["position"] for frame in trace["trace"]]
+        recorded_rotation = [tuple(frame[keys[name]]["rotation"]) for frame in trace["trace"]]
         orientation = ORIENTATIONS[route["orientation"]]
         entry = {"sourceKey": route["dicKey"], "loop": route["loop"],
                  "orientation": orientation, "pointCount": len(points),
                  "frames": len(deltas), "framesCompared": len(deltas) - 1,
                  "recordOrder": {}}
         for record_after_update in (True, False):
+            order = "afterUpdate" if record_after_update else "beforeUpdate"
             # Row 0's deltaTime belongs to the Play frame and the tween never
             # consumed it; every other advance matches the previous row's.
             frames = ref.simulate_frames(points, route["loop"], orientation, deltas[1:],
@@ -71,13 +110,38 @@ def compare_stepping(trace):
             worst = max(range(len(errors)), key=lambda i: errors[i]) if errors else None
             active_mismatch = sum(1 for i, cell in enumerate(frames)
                                   if cell.active != trace["trace"][i][keys[name]]["active"])
-            order = "afterUpdate" if record_after_update else "beforeUpdate"
-            entry["recordOrder"][order] = {
+            order_entry = {
                 "maximumPositionErrorMetres": max(errors) if errors else None,
                 "worstFrame": worst,
                 "worstFrameCumulativeSeconds": times[worst] if worst is not None else None,
                 "framesActiveMismatch": active_mismatch,
+                "rotation": {},
             }
+            # Position does not see smoothTime, so each hypothesis re-runs
+            # only to score its rotation column against the capture. For an
+            # unoriented route LookUpdate never runs and every hypothesis is
+            # inertly zero.
+            for hypothesis, smooth_time in SMOOTH_TIME_HYPOTHESES.items():
+                cells = ref.simulate_frames(
+                    points, route["loop"], orientation, deltas[1:],
+                    record_after_update=record_after_update,
+                    initial_rotation=_as_wxyz(route["points"][0]["worldRotation"]),
+                    initial_delta=deltas[0], smooth_time=smooth_time)
+                rotation_errors = [_quaternion_angle(_as_xyzw(ref.from_euler(cell.rotation)),
+                                                     rotation)
+                                   for cell, rotation in zip(cells, recorded_rotation)]
+                worst_rotation = (max(range(len(rotation_errors)),
+                                      key=lambda i: rotation_errors[i])
+                                  if rotation_errors else None)
+                order_entry["rotation"][hypothesis] = {
+                    "maximumRotationErrorDegrees": (max(rotation_errors)
+                                                    if rotation_errors else None),
+                    "worstRotationFrame": worst_rotation,
+                    "worstRotationFrameCumulativeSeconds": (times[worst_rotation]
+                                                            if worst_rotation is not None
+                                                            else None),
+                }
+            entry["recordOrder"][order] = order_entry
         orders = entry["recordOrder"]
         entry["bestRecordOrder"] = min(orders, key=lambda order: orders[order]["maximumPositionErrorMetres"])
         routes[name] = entry
@@ -85,8 +149,13 @@ def compare_stepping(trace):
             "scope": "Per-frame simulate_frames stepping over the capture deltaTimes, which lag "
                      "their row's snapshot by one frame (the Play frame's delta is never consumed, "
                      "the last row's post-update state was never recorded), versus the original "
-                     "childRoot world position; both probe record orders measured; "
-                     "LookUpdate rotation smoothing is not simulated (instantaneous aim only)"}
+                     "childRoot world position and rotation; both probe record orders measured; "
+                     "rotation runs the LookUpdate SmoothDamp chain (one damp per row toward the "
+                     "previous row's written aim, seeded by Play's LateUpdate on the Play delta, "
+                     "frozen from the frame after the non-loop completion) under both smoothTime "
+                     "hypotheses; captured rotations are float32-serialised (7 significant "
+                     "digits), and the best residual of 0.051112 degrees sits at that "
+                     "serialisation floor"}
 
 
 def main():

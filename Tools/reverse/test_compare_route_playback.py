@@ -34,10 +34,14 @@ def native(delay=0.0, source_key=None, segment_durations=None):
 
 
 def stepped(delay=0.0, source_key=None, active_override=None, frame_count=None,
-            position_override=None):
+            position_override=None, play_deltas=None):
     """Stub of `ikkoku-inspect route-steps`: frame `k` reproduces capture row
-    `k` (the CLI is fed ``deltas[1:]``), optionally skewed."""
-    def step(deltas):
+    `k` (the CLI is fed ``deltas[1:]`` plus the Play frame's delta), optionally
+    skewed. ``play_deltas`` collects the Play deltas the driver forwards so
+    tests can assert the seed arrives."""
+    def step(deltas, play_delta=None):
+        if play_deltas is not None:
+            play_deltas.append(play_delta)
         trace = probe_trace()['trace']
         count = len(deltas) if frame_count is None else frame_count
         routes = []
@@ -189,6 +193,13 @@ class SteppedComparisonTests(unittest.TestCase):
                              continuous['routes'][name]['atOffset0']['maximumPositionErrorMetres'])
             self.assertEqual(entry['maximumRotationErrorDegreesContinuous'],
                              continuous['routes'][name]['atOffset0']['maximumRotationErrorDegrees'])
+
+    def test_play_frame_delta_is_forwarded_as_the_lookupdate_seed(self):
+        trace = probe_trace()
+        trace['trace'][0]['deltaTime'] = 0.019  # distinguishable from the consumed rows
+        play_deltas = []
+        compare_stepped(trace, stepped(play_deltas=play_deltas))
+        self.assertEqual(play_deltas, [0.019])
 
     def test_identity_frame_count_and_finite_violations_raise(self):
         with self.assertRaises(ValueError):  # wrong sourceKey

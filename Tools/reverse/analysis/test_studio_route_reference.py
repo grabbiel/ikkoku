@@ -373,6 +373,149 @@ class SteppingTests(unittest.TestCase):
             ref.simulate_frames((_point((0, 0, 0)),), True, "none", [1.0])
 
 
+class LookUpdateRotationTests(unittest.TestCase):
+    """LookUpdate smoothing (ST-T11h): Mathf.DeltaAngle / SmoothDampAngle,
+    Unity's Z-X-Y euler store, and the one-row aim and delta lag
+    ``simulate_frames`` reproduces from the capture."""
+
+    L_ROUTE = (_point((0, 0, 0)), _point((2, 0, 0)), _point((2, 0, -2)))
+
+    def test_delta_angle_wraps_to_the_shortest_signed_turn(self):
+        # Mathf.DeltaAngle result is (-180, 180], so +180 and -180 targets
+        # both read as a half turn in the positive direction.
+        self.assertEqual(ref.delta_angle(0.0, 180.0), 180.0)
+        self.assertEqual(ref.delta_angle(0.0, -180.0), 180.0)
+        self.assertEqual(ref.delta_angle(179.0, -179.0), 2.0)
+        self.assertEqual(ref.delta_angle(10.0, 350.0), -20.0)
+        self.assertEqual(ref.delta_angle(-170.0, 170.0), -20.0)
+        self.assertEqual(ref.delta_angle(45.0, 45.0), 0.0)
+
+    def test_smooth_damp_angle_one_step_from_rest(self):
+        # velocity 0: out = target + (change + temp) * exp, closed-form at
+        # current 0, target 90, smoothTime 0.05 (omega 40), deltaTime 1/60.
+        den = 1.0 + 40 / 60 + 0.48 * (40 / 60) ** 2 + 0.235 * (40 / 60) ** 3
+        value, velocity = ref.smooth_damp_angle(0.0, 90.0, 0.05, 1 / 60)
+        self.assertAlmostEqual(value, 90.0 - 150.0 / den, places=12)
+        self.assertAlmostEqual(velocity, 2400.0 / den, places=9)
+        # Wrapped across the half turn: the damp chases current+DeltaAngle,
+        # so 10 -> -170 damps toward +190, not -170.
+        wrapped, wrapped_velocity = ref.smooth_damp_angle(10.0, -170.0, 0.05, 1 / 60)
+        self.assertGreater(wrapped, 0.0)  # moving the positive way
+        self.assertAlmostEqual(wrapped, 190.0 - 300.0 / den, places=12)
+        self.assertAlmostEqual(wrapped_velocity, 4800.0 / den, places=9)
+
+    def test_smooth_damp_angle_edge_branches(self):
+        # nonPositive smoothTime teleports; the overshoot guard lands exactly
+        # on the wrapped target when a carried velocity would jump past it.
+        self.assertEqual(ref.smooth_damp_angle(0.0, 90.0, 0.0, 0.1), (90.0, 0.0))
+        self.assertEqual(ref.smooth_damp_angle(0.0, 90.0, 0.05, 1 / 60, 10000.0)[0], 90.0)
+        self.assertEqual(ref.smooth_damp_angle(0.0, -90.0, 0.05, 1 / 60, -10000.0)[0], -90.0)
+        # LookUpdate calls this with a FRESH zero velocity every frame — the
+        # returned velocity is discarded, so consecutive steps are independent.
+
+    def test_euler_round_trip_matches_the_zx_y_store(self):
+        # Quaternion.Euler applies Z-X-Y; to_euler inverts it and keeps
+        # pitch in [-90, 90], yaw/roll in (-180, 180].
+        for euler in ((0.0, 90.0, 0.0), (30.0, -75.0, 120.0), (-45.0, 170.0, -160.0)):
+            quaternion = ref.from_euler(euler)
+            for axis in range(3):
+                self.assertAlmostEqual(ref.to_euler(quaternion)[axis], euler[axis], places=9)
+        yaw_quaternion = ref.from_euler((0.0, 90.0, 0.0))
+        self.assertAlmostEqual(yaw_quaternion[0], 2 ** 0.5 / 2, places=9)       # w
+        self.assertAlmostEqual(yaw_quaternion[2], 2 ** 0.5 / 2, places=9)       # y
+        for component in (yaw_quaternion[1], yaw_quaternion[3]):                # x, z
+            self.assertAlmostEqual(component, 0.0, places=9)
+
+    def test_look_update_smooths_per_axis_and_keeps_x_z_for_axis_y(self):
+        # One damp per axis from the current euler toward the aim.
+        smoothed = ref.look_update((30.0, 45.0, 60.0), (10.0, 100.0, 20.0), 0.05, 0.5, "xy")
+        for axis, expected in enumerate((10.200668896321073, 99.44816053511707,
+                                         20.40133779264215)):
+            self.assertAlmostEqual(smoothed[axis], expected, places=9)
+        # axis "y": e3 keeps the current e0.x/e0.z and takes only e3.y, and
+        # the eulerAngles write-back canonicalizes the result.
+        y_smoothed = ref.look_update((30.0, 45.0, 60.0), (10.0, 100.0, 20.0), 0.05, 0.5, "y")
+        self.assertAlmostEqual(y_smoothed[0], 30.0, places=9)
+        self.assertAlmostEqual(y_smoothed[2], 60.0, places=9)
+        self.assertAlmostEqual(y_smoothed[1], 99.44816053511708, places=9)
+
+    def test_look_update_smooth_time_fallback_chain(self):
+        self.assertAlmostEqual(ref.look_update_smooth_time(0.4, None), 0.02, places=12)
+        self.assertAlmostEqual(ref.look_update_smooth_time(None, 4.0), 0.03, places=12)
+        self.assertEqual(ref.look_update_smooth_time(None, None), ref.DEFAULT_UPDATE_TIME)
+        self.assertEqual(ref.look_update_smooth_time(), ref.DEFAULT_UPDATE_TIME)
+
+    def test_first_row_damps_with_the_play_frames_delta(self):
+        # Row 0 is Play's own LateUpdate: one damp toward Play's looktarget
+        # (here yaw 90) with initial_delta 0.2 — not with row 0's own delta.
+        frames = ref.simulate_frames(self.L_ROUTE, False, "y", [1.0] * 8,
+                                     initial_rotation=(1.0, 0.0, 0.0, 0.0),
+                                     initial_delta=0.2)
+        self.assertAlmostEqual(frames[0].rotation[1], 84.93876530867281, places=9)
+        wrong_delta = ref.smooth_damp_angle(0.0, 90.0, 0.05, 1.0)[0]
+        self.assertGreater(abs(frames[0].rotation[1] - wrong_delta), 4.0)
+        self.assertAlmostEqual(frames[0].rotation[0], 0.0, places=9)
+
+    def test_rotation_lags_the_written_aim_and_delta_by_one_row(self):
+        deltas = [0.1, 2.9, 0.1, 0.1, 1.0, 0.5, 0.25, 0.25]
+        frames = ref.simulate_frames(self.L_ROUTE, False, "y", deltas)
+        # Row 2's rotation damps row 1's euler toward ROW 1's written aim
+        # (segment 0's looktarget, yaw 90) with row 1's delta (2.9).
+        previous_yaw = frames[1].rotation[1]
+        previous_aim_yaw = ref.to_euler(frames[1].aim.rotation)[1]
+        self.assertAlmostEqual(previous_aim_yaw, 89.99999999999999, places=9)
+        expected = ref.smooth_damp_angle(previous_yaw, previous_aim_yaw, 0.05, 2.9)[0]
+        self.assertAlmostEqual(frames[2].rotation[1], expected, places=9)
+        # The two wrong alignments are far away: this row's own aim (yaw 180)
+        # and this row's own delta (0.1).
+        wrong_aim = ref.smooth_damp_angle(previous_yaw,
+                                          ref.to_euler(frames[2].aim.rotation)[1],
+                                          0.05, 2.9)[0]
+        wrong_delta = ref.smooth_damp_angle(previous_yaw, previous_aim_yaw, 0.05, 0.1)[0]
+        self.assertGreater(abs(frames[2].rotation[1] - wrong_aim), 80.0)
+        self.assertGreater(abs(frames[2].rotation[1] - wrong_delta), 2.0)
+
+    def test_rotation_freezes_after_the_non_loop_completion(self):
+        # Fine deltas keep the aim away from its limit, so the completion
+        # frame's LateUpdate smoothing is visible as the LAST euler change:
+        # the tween stopped, so every later row freezes at that euler.
+        frames = ref.simulate_frames(self.L_ROUTE, False, "y", [0.01] * 610,
+                                     initial_rotation=(1.0, 0.0, 0.0, 0.0),
+                                     initial_delta=0.01)
+        completion = next(index for index, frame in enumerate(frames) if not frame.active)
+        self.assertGreater(completion, 2)
+        self.assertNotEqual(frames[completion].rotation, frames[completion - 1].rotation)
+        for frame in frames[completion + 1:]:
+            self.assertEqual(frame.rotation, frames[completion].rotation)
+        # A degenerate looktarget leaves the previous aim in place; the
+        # frozen rotation is not necessarily the aim's own euler.
+
+    def test_unoriented_route_never_touches_the_rotation(self):
+        seed = (0.5, 0.5, 0.5, 0.5)  # unit (w, x, y, z)
+        expected = ref.to_euler(seed)
+        frames = ref.simulate_frames(self.L_ROUTE, False, "none", [0.25] * 12,
+                                     initial_rotation=seed, initial_delta=0.25)
+        for frame in frames:
+            self.assertEqual(frame.rotation, expected)
+
+    def test_initial_rotation_requires_its_play_delta(self):
+        with self.assertRaises(ref.RouteNotPlayable):
+            ref.simulate_frames(self.L_ROUTE, False, "y", [1.0] * 3,
+                                initial_rotation=(1.0, 0.0, 0.0, 0.0))
+
+    def test_smooth_time_override_slows_the_chain(self):
+        # Only the fallback 0.05 s smoothTime matches the capture; a slower
+        # override must visibly lag the default row-0 damp.
+        default = ref.simulate_frames(self.L_ROUTE, False, "y", [0.1] * 8,
+                                      initial_rotation=(1.0, 0.0, 0.0, 0.0),
+                                      initial_delta=0.1)
+        slower = ref.simulate_frames(self.L_ROUTE, False, "y", [0.1] * 8,
+                                     initial_rotation=(1.0, 0.0, 0.0, 0.0),
+                                     initial_delta=0.1,
+                                     smooth_time=lambda duration: 0.5)
+        self.assertLess(slower[1].rotation[1], default[1].rotation[1])
+
+
 class FixtureTests(unittest.TestCase):
     def test_sample_times_reach_the_boundaries(self):
         self.assertIn(6.5, ref.sample_times("line-no-loop"))
