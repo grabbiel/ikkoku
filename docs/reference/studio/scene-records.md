@@ -175,7 +175,9 @@ final segment) and reports inactive. The recovered assignments write position an
 inherited route scale is kept. In the Studio preview an imported
 route's authored record lives in a runtime-only cache gated by scene identity,
 the world-matrix walks replace a route parent's authored transform with
-`childRoot`, and route descendants inherit it; the cache never becomes a
+`childRoot` (since the ninth slice placed by the per-frame stepper of the
+next section, falling back to the continuous evaluator off-frame or past the
+rebuild budget), and route descendants inherit it; the cache never becomes a
 document node, so original export validation is untouched, and route child
 characters stay gated as unrendered. After undo/redo the cache is empty and
 route children fall back to the route object's authored transform rather than a
@@ -401,9 +403,38 @@ the instantaneous held aim — and the ported rules reproduce the original's
 smoothing itself: the reload capture now sits 0.0511° off, and the
 live-authoring capture's 16.9° rotation residual goes with its `SetParent`
 position artifact.
-`ikkoku-inspect` exposes stepping as a diagnostic; the Studio preview and
-player are not wired to the stepper in this slice, and edited route
-serialization remains open.
+`ikkoku-inspect` exposes stepping as a diagnostic.
+
+**Preview wiring (ninth slice).** The Studio preview now places imported
+route `childRoot`s through this stepper instead of only the continuous
+evaluator. `SourceStudioRouteClock` (Engine) keeps one clock mirror per
+imported route, following the hair-dynamics "step on tick, clear on jump"
+pattern: each live tick steps the stepper by the same `1 / 30` delta (the
+mirror consumes the identical `Float` additions, so it matches the preview
+clock bit for bit), and a jump — a scrub, a checkpoint restore or an import —
+rebuilds a fresh `Play` and fast-forwards in fixed `1 / 30` frames to the
+nearest frame, so the placement matches what live stepping produces there.
+`sourceWorldMatrix`/`sourceWorldRotation` answer from the stepper's latest
+frame only while it belongs to the queried instant (1e-6 s) and the route
+object has not moved (a moved route object carries its whole path and
+rebuilds, like a jump); a completed non-looping route keeps answering with its
+frozen inactive hold frame, and a record-inactive route never builds a stepper,
+so `childRoot` keeps its `Stop` pin. A rebuild that would need more than
+18,000 frames (10 minutes) drops the stepper, reports a one-time status
+diagnostic and keeps the continuous evaluator for that route until a later
+in-budget jump re-arms it. The stepper is built through the same
+`SourceStudioRoutePlayback.stepper` composition `ikkoku-inspect route-steps`
+validates against the reload captures — no second stepping implementation —
+and its frame is converted through the same `UnityCoordinates` basis change
+`samples` reports. The bookkeeping has five pure Engine tests
+(`swift test --package-path Packages/Engine --filter RouteClockTests`,
+2026-09-28: live per-frame equality against a hand-stepped stepper, a jump
+matching 120 live `1 / 30` steps exactly, the cap falling back and re-arming,
+the non-loop hold surviving both live stepping and a rebuild to the same time,
+and a route-world change rebuilding like a jump). That is Engine-test
+evidence; an interactive app-session comparison of the wired preview against
+the original player was not run in this slice, and edited route serialization
+remains open.
 
 ## Extended Save and preservation
 
@@ -510,8 +541,12 @@ structure. It does not display thumbnails or instantiate scene content.
   `SourceStudioRoutePlayback` `childRoot` placement, then source
   scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`).
   Stateful `LookUpdate` smoothing is ported in `SourceStudioRouteStepper`
-  (per-frame stepping above) and reaches `ikkoku-inspect route-steps` only; the
-  continuous `childRootWorld` path still reports the instantaneous aim.
+  (per-frame stepping above) and reaches `ikkoku-inspect route-steps` and,
+  through the `SourceStudioRouteClock`-mirrored stepper, the Studio preview's
+  `childRoot` placement (ninth slice); the continuous `childRootWorld` path
+  still reports the instantaneous aim and remains the fallback for off-frame
+  instants and past-budget rebuilds. An interactive app-session comparison of
+  the wired preview against the original player is still open.
 - Add original scene topology edits/reference remapping and GUID-specific plugin
   callbacks/save adapters while preserving source identities (`ST-T03`, `ST-T13`).
 
