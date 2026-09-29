@@ -247,6 +247,22 @@ struct KoikatsuBinaryReader {
         }
         throw invalid("unterminated .NET string length")
     }
+    static func dotNetString(_ value: String) throws -> Data {
+        let bytes = Data(value.utf8)
+        guard bytes.count <= maximumStringBytes else { throw KoikatsuReadError.limitExceeded("string exceeds 1 MiB") }
+        var length = bytes.count, encoded = Data()
+        while length >= 128 { encoded.append(UInt8(length & 127) | 128); length >>= 7 }
+        encoded.append(UInt8(length)); encoded.append(bytes)
+        return encoded
+    }
+    /// Folder, camera and route name: the full span (seven-bit length prefix plus
+    /// UTF-8 bytes) is recorded so a rename can replace it even when it resizes.
+    mutating func nameString(objectKey: Int32) throws -> String {
+        let start = offset
+        let value = try string()
+        editSpans.names[objectKey] = start..<offset
+        return value
+    }
 
     mutating func skipPNG() throws {
         guard try take(8) == Data([137, 80, 78, 71, 13, 10, 26, 10]) else { throw KoikatsuReadError.invalidPNG }
@@ -327,11 +343,11 @@ struct KoikatsuBinaryReader {
         var children: [KoikatsuObjectRecord] = []
         var characterRecord: KoikatsuCharacterRecord?, routeRecord: KoikatsuRouteRecord?
         switch kind {
-        case .folder: name = try string()
-        case .camera: name = try string(); active = try bool()
+        case .folder: name = try nameString(objectKey: key)
+        case .camera: name = try nameString(objectKey: key); active = try bool()
         case .character: characterRecord = try character(depth: depth, objectKey: key)
         case .route:
-            name = try string()
+            name = try nameString(objectKey: key)
             for _ in 0..<(try count()) { children.append(try object(depth: depth + 1, rootKey: nil)) }
             routeRecord = try route()
         case .item: itemRecord = try item(objectKey: key)
