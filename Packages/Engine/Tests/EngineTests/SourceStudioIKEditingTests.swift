@@ -70,10 +70,13 @@ private func allIKTargetFixture(_ bytes: Data, values: [Int32:SourceStudioIKEdit
     #expect(try after.editedData(reverse) == bytes)
 }
 
-@Test(.enabled(if:MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceIKEditedAllBodyProximalAndDistalGuidesMatchOriginalSceneReloadWhenSupplied() throws {
-    let env=ProcessInfo.processInfo.environment
-    guard let directory=env["IKKOKU_STUDIO_EXPANSION"],let library=env["IKKOKU_MAKER_LIBRARY"],let avatar=env["IKKOKU_SOURCE_AVATAR"],let catalog=env["IKKOKU_STUDIO_POSE_CONTRACT"] else{return}
+    let directory = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let library = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let avatar = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
     let folder=URL(fileURLWithPath:directory),originalURL=folder.appendingPathComponent("studio-female-head200-bone1.png")
     let originalData=try Data(contentsOf:originalURL),resources=ResourceStore(device:try #require(MTLCreateSystemDefaultDevice()))
     func load(_ url:URL,_ data:Data)throws->SourceStudioCharacterPreview {
@@ -116,8 +119,10 @@ func sourceIKEditedAllBodyProximalAndDistalGuidesMatchOriginalSceneReloadWhenSup
     try JSONSerialization.data(withJSONObject:capture,options:.prettyPrinted).write(to:folder.appendingPathComponent("ik-capture-edits.json"))
 }
 
-@Test func sourceIKAppCapturePreservesAllGuideRecordsWhenSupplied() throws {
-    guard let file = ProcessInfo.processInfo.environment["IKKOKU_IK_APP_ENVIRONMENT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_IK_APP_ENVIRONMENT"]),
+               "Requires IKKOKU_IK_APP_ENVIRONMENT"))
+func sourceIKAppCapturePreservesAllGuideRecordsWhenSupplied() throws {
+    let file = try SourceFixtureSupport.require("IKKOKU_IK_APP_ENVIRONMENT")
     let environment = try JSONDecoder().decode([String:String].self, from: Data(contentsOf: URL(fileURLWithPath:file)))
     func bytes(_ key:String) throws -> Data { try Data(contentsOf:URL(fileURLWithPath:try #require(environment[key]))) }
     let original = try KoikatsuSceneReader.decodeDocument(bytes("IKKOKU_SOURCE_SCENE"))
