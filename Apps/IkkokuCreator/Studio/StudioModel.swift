@@ -656,9 +656,10 @@ final class StudioModel: ViewportInputHandler {
         }
         // `ChangeCamera(camera, record.active)` ran for every camera record in
         // load order, so the last active record is the one CharaStudio shows.
+        var activeCameraAtLoad: UUID?
         if let key = SourceStudioCameraObjects.activeAtLoad(source.snapshot),
            let cameraID = cameras.keys.first(where: { cameras[$0]?.objectKey == key }) {
-            activeSourceCamera = cameraID
+            activeCameraAtLoad = cameraID
             diagnostics.append("Camera \(key) (\"\(cameras[cameraID]!.name)\") active at load (saved active flag).")
         }
         imported.sourcePreviewDiagnostics = diagnostics
@@ -677,7 +678,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; activeSourceCamera = activeCameraAtLoad; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."

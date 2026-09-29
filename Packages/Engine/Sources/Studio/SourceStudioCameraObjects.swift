@@ -29,9 +29,10 @@ public enum SourceStudioCameraObjects {
     }
 
     /// The preview camera looking through a source camera object: `world` is
-    /// the object's native world matrix, whose translation and rotation
-    /// `CameraControl.LateUpdate` copies onto the render camera every frame
-    /// (scale is ignored and the field of view stays the scene camera's).
+    /// the object's native world matrix, whose translation and rotation the
+    /// active `OCICamera`'s LateUpdate subscription copies onto the render
+    /// camera every frame (scale is ignored and the field of view stays the
+    /// scene camera's).
     public static func viewCamera(world: float4x4, base: OrbitCamera) throws -> OrbitCamera {
         let columns = [world.columns.0, world.columns.1, world.columns.2]
         guard (0..<4).allSatisfy({ c in (0..<4).allSatisfy({ world[c][$0].isFinite }) }),
