@@ -56,7 +56,17 @@ make them Humanoid muscle animations. Every selected binding is a generic
 Transform (`typeID=4`), with attributes 1/2/3 representing local position,
 quaternion and scale. The converter rejects Humanoid/other component attributes,
 object-reference curves, clip events, legacy/compressed rotation representations,
-mirroring and loop-pose correction instead of approximating them.
+mirroring and every other pose blend. The last Studio row `m_Lewd_00_01`
+stays excluded: `convert_clip` records cycle offsets (0.5 there) as
+`cycleOffset` but rejects any `m_LoopBlend` clip with
+`Generic loop-pose correction measured but not matched (best max error 0.0295643)`.
+Five candidate rules were measured against that row's six-phase private probe —
+component-wise `value(u) + delta·u` 0.0295643, quaternion-channel
+`slerp(identity, q(0)·inverse(q(1)), u)·q(u)` 0.0651397 and its
+right-multiplied pairing 0.4099749, both with pre-cycle-offset `u` 0.2202807
+and 0.4067154, and cycle-offset-only sampling 0.2801431 — all above the
+0.0001 tolerance, so nothing was adopted and the runtime keeps only
+cycle-offset support.
 
 Bindings retain their original 32-bit path hash and scalar-curve offset. CRC32 of
 the exact root-relative hierarchy resolves them against the chosen skeleton;
@@ -107,7 +117,7 @@ and [its animation converter](https://github.com/Perfare/AssetStudio/blob/master
 The state projection returns motion weights for a flat 1D tree and the authored
 speed multiplier. `stateDuration` computes the weighted clip duration, while
 `applying(stateID:normalizedTime:...)` samples a shared normalized clock with
-cycle offsets and blends local translation/scale plus quaternion rotation. At
+state, motion and clip cycle offsets and blends local translation/scale plus quaternion rotation. At
 most two adjacent motions contribute at a time, even for a tree with three
 threshold entries. It does not perform transitions, dispatch events, execute
 behaviours, extract/apply root motion or evaluate additional layers. Sampling a
@@ -156,9 +166,10 @@ IKKOKU_SOURCE_AVATAR="$PWD/.local/reverse/rigs/source-avatar.json" \
 
 The retained initial run of six Swift tests covers sampling, exact binding, coordinate conversion,
 loop boundaries, explicit unbound-track handling, state parameter projection and
-malformed documents. Nine Python tests cover streamed framing, scalar sampling,
-hierarchy identity, unsupported channels/events, clip dimensions and controller
-projection failure cases. Eighteen original clip/time combinations compare 39,696
+malformed documents. Twelve Python tests cover streamed framing, scalar sampling,
+hierarchy identity, unsupported channels/events, clip dimensions, controller
+projection failure cases, cycle-offset conversion, and the standing
+`m_LoopBlend`/pose-blend rejections. Eighteen original clip/time combinations compare 39,696
 scalar results against the independent Python sampler, then evaluate original
 avatar poses and skin palettes. Numeric tolerance is 2e-5 absolute/relative;
 these comparisons validate the two native/offline implementations, not bit-for-bit agreement with a running Unity player. A separate later
@@ -167,9 +178,16 @@ Studio comparison executes the original Unity 5.6.2f1 player: 180 cases and
 maximum matrix-element error `3.12e-5` and clock error `6.0e-8`. See
 [Studio animation](../studio/animation.md) for reproduction and exact scope.
 
-Remaining work (`ST-T10`) starts with the rejected generic loop-pose correction
-row, then controller transitions/interruptions, overrides, masks/additive layers,
-root-motion/navigation coupling, humanoid retargeting, events/behaviours and nested
-or time-scaled motion nodes. Verify each accepted family against actual source
-pose/clock traces; flat 1D blending does not cover these features. Blink timing is
-separately documented in [expression playback](expression-playback.md).
+Remaining work (`ST-T10`) still starts with the excluded generic
+loop-pose-correction row: every sampled candidate (component-wise
+`value(u) + (value(0) − value(1))·u`, both `delta` orders of the
+quaternion-channel `slerp` with post- or pre-cycle-offset `u`, and
+cycle-offset-only sampling) measured above the 0.0001 tolerance, so
+implementation stopped and reported without adopting any; conversion and
+sampling treat that row's clip as a closed limitation with recorded errors.
+Then controller transitions/interruptions, overrides, masks/additive layers,
+root-motion/navigation coupling, humanoid retargeting, events/behaviours and
+nested or time-scaled motion nodes. Verify each accepted
+family against actual source pose/clock traces; flat 1D blending does not cover
+these features. Blink timing is separately documented in
+[expression playback](expression-playback.md).
