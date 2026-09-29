@@ -58,6 +58,64 @@ lighting, background/environment/outside sound settings, background and frame.
 `floatSettings`, `boolSettings` and `colorSettings` use recovered source field
 names. Reading these values does not apply Unity's post-processing or shaders.
 
+### Character light
+
+The scene tail's character light is the `charaLight` record: `color`,
+`intensity`, a two-element `rot` and one `shadow` flag. `CameraLightCtrl.Reflect()`
+applies it through its private nested `LightCalc` (fields `light` and
+`transRoot`): the color and intensity are copied onto the `Light`,
+`transRoot.localRotation` becomes `Quaternion.Euler(rot[0], rot[1], 0)`, and
+`shadows` becomes `Soft`/`None` with the `shadow` flag. The first light slice
+measured this on the installed player (`Tools/reverse/fixtures/OriginalLightProbe.cs`
+through `Tools/reverse/original_light_probe.py`; Unity 5.6.2f1, one light per
+record, status error null): it set color (0.9, 0.7, 0.5), intensity 1.3 and
+`shadow` false and applied four rot pairs, (0, 0), (30, −45), (−20, 90) and
+(10, 180), under the startup camera view and a second pose two frames after
+`cameraCtrl.cameraAngle = (20, 135, 0)`. The applied light is the scene's
+static "Directional Chara" (directional, enabled) under
+`StudioScene → Light Chara → Directional Chara`; the chain is *not* under
+`Camera.main` (`cameraIsAncestor` false). `Light Chara` is `transRoot` — its
+local rotation matched `Euler(rot[0], rot[1], 0)` on all eight records to
+5.0e-06° — while the light's own local rotation is the fixed `Euler(40, 180, 0)`
+and `StudioScene` is identity, so the world rotation follows
+`light.rotation == Q_root * Euler(rot[0], rot[1], 0) * Q_light` with `Q_root`
+identity: the chain formula held on every record to a maximum of 9.7e-06°
+(`Tools/reverse/analysis/chara_light_mapping.py`, derived from the capture's own
+chains). Equal rot pairs gave identical world rotations under both camera
+poses, and the camera-relative candidate
+`light.rotation == Camera.main.rotation * Q1 * Euler(rot) * Q2` is refuted by
+the same capture (best conjugation-solved fit leaves a 45.8° residual, matching
+the 45.8° spread of `Q_base`, the rot (0,0) camera-space light rotation, between
+the two poses). The world forward is therefore a function of `rot` alone, while
+the forward in camera space (`InverseTransformDirection` against `Camera.main`)
+also moves with the live view:
+
+| rot | world forward | camera-space forward (default view) | camera-space forward (tilt pose) |
+| --- | --- | --- | --- |
+| (0, 0) | (0.0000, −0.6428, −0.7660) | (0.0000, −0.4787, 0.8780) | (0.5417, −0.4188, 0.7289) |
+| (30, −45) | (0.6964, −0.1736, −0.6964) | (−0.6964, −0.0326, 0.7169) | (0.0000, 0.1736, 0.9848) |
+| (−20, 90) | (−0.5000, −0.8660, 0.0000) | (0.5000, −0.8489, 0.1712) | (0.3536, −0.9347, −0.0360) |
+| (10, 180) | (0.0000, −0.5000, 0.8660) | (0.0000, −0.6613, −0.7501) | (−0.6124, −0.6793, −0.4044) |
+
+Reproduce the capture and the derivation with:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_light_probe.py \
+  --output .local/stt11k/probe            # starts the isolated VM player capture
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_light_probe.py \
+  --output .local/stt11k/probe --collect  # fetches light-trace.json, stops the player
+.local/reverse/unitypy-venv/bin/python \
+  Tools/reverse/analysis/chara_light_mapping.py   # writes mapping.json beside the trace
+PYTHONPATH=Tools/reverse/analysis .local/reverse/unitypy-venv/bin/python \
+  -m unittest discover -s Tools/reverse/analysis -p 'test_chara_light_mapping.py'
+```
+
+This is one default startup scene, two camera poses and four rot pairs on the
+installed CharaStudio 1.0.4.2: it establishes where the character light sits and
+how `rot` maps to its world direction, not rendered lighting appearance, the
+default `charaLight` values (the probe overwrote them) or map/gradient light
+behavior.
+
 ## Native APIs and integration
 
 ```swift
