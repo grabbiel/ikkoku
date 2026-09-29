@@ -588,6 +588,7 @@ final class StudioModel: ViewportInputHandler {
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
+            object.sourceRecordKind = record.kind
             object.sourceAttachmentPoint = attachmentPoint
             object.transform.position = UnityCoordinates.position(record.transform.position)
             object.transform.scale = record.transform.scale
@@ -1133,34 +1134,57 @@ final class StudioModel: ViewportInputHandler {
 
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview]) throws -> float4x4 {
-        guard var object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
-        var world = object.transform.matrix, visited: Set<UUID> = [id]
-        while let parentID = object.parent {
-            guard visited.insert(parentID).inserted, let parent = document.object(parentID) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
-            if let point = object.sourceAttachmentPoint {
-                if let preview = previews[parentID] {
-                    world = try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * world
-                } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
-                    // A route character's placeholder entry cannot carry edits,
-                    // so only the saved record's animation is resolved here.
-                    world = try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime) * world
-                } else { throw RigError.invalid("Attachment parent has no converted character.") }
-            }
+        try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [])
+    }
+
+    /// The `GuideObject.LateUpdate` walk for source-scene objects (ST-A06):
+    /// each object's world scale is its own authored scale when it is
+    /// scalable and `(1, 1, 1)` otherwise, so scale never compounds down the
+    /// chain and a folder's authored scale is never applied, while position
+    /// and rotation still compose through the parent's actual world frame.
+    /// Native documents keep the full-TRS `StudioDocument.worldMatrix(of:)`.
+    private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
+                                   previews: [UUID: SourceStudioCharacterPreview],
+                                   visited: Set<UUID>) throws -> float4x4 {
+        guard let object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
+        var visited = visited
+        guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
+        var parentFrame = matrix_identity_float4x4
+        if let parentID = object.parent {
+            guard let parent = document.object(parentID) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
             if let route = sourceRouteRuntime(id: parentID, document: document) {
                 // `childRoot` replaces the route object as the parent frame
                 // (`AddObjectRoute.cs` parents children under it, and the
                 // `OCIRoute.cs` placement already folds in the route object's
                 // world matrix). Because that placement is an absolute world
                 // matrix, the walk stops here; the route's ancestors are
-                // already applied inside it.
+                // already applied inside it. Only a character is ever an
+                // attachment parent, so the route frame never needs the
+                // attachment multiplication below.
                 let (matrix, diagnostics) = try routeChildRootWorld(id: parentID, route: route,
                     document: document, previews: previews)
                 reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey)
-                return matrix * world
+                parentFrame = matrix
+            } else {
+                parentFrame = try sourceWorldMatrix(of: parentID, document: document, previews: previews, visited: visited)
+                if let point = object.sourceAttachmentPoint {
+                    if let preview = previews[parentID] {
+                        parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+                    } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
+                        // A route character's placeholder entry cannot carry edits,
+                        // so only the saved record's animation is resolved here.
+                        parentFrame *= try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime)
+                    } else { throw RigError.invalid("Attachment parent has no converted character.") }
+                }
             }
-            world = parent.transform.matrix * world; object = parent
         }
-        return world
+        // Documents saved before `sourceRecordKind` was recorded carry no
+        // record kind, and the import made every non-character placeholder a
+        // `.folder`, so the fallback reproduces their old (unscaled) rule.
+        let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
+        return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
+            localPosition: object.transform.position, localRotation: object.transform.quaternion,
+            localScale: object.transform.scale, scalable: scalable)
     }
 
     /// The import's authored route data, but only while the document still
@@ -1249,6 +1273,9 @@ final class StudioModel: ViewportInputHandler {
             let rotation = UnityCoordinates.eulerDegrees(Float3(Float(frame.placement.rotation.x),
                                                                 Float(frame.placement.rotation.y),
                                                                 Float(frame.placement.rotation.z)))
+            // A route is not scalable under the Studio scale rule, so
+            // `routeWorld.scaleFactors` is `(1, 1, 1)`; the placement keeps
+            // the expression for a uniform (1, 1, 1) TRS scale.
             return (Transform.trs(position, rotation, routeWorld.scaleFactors), [])
         }
         if case .rebuiltWithFallback = clock.lastAction, !sourceRouteFallbackReported.contains(id) {
