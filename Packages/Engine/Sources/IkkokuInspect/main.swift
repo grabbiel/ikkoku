@@ -80,7 +80,7 @@ private func object(_ source: KoikatsuObjectRecord) -> [String: Any] {
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card"].contains(arguments[0])
+    let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card", "draw-overlays"].contains(arguments[0])
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
     let logicTrace = arguments.count == 2 && ["blink-trace", "gameplay-trace", "fixed-event-trace", "adv-trace", "scene-document", "animation-library"].contains(arguments[0])
@@ -88,12 +88,14 @@ do {
     let animationPose = arguments.count == 5 && arguments[0] == "animation-pose"
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
+    let cardPose = (arguments.count == 3 || (arguments.count == 5 && arguments[3] == "--studio-hands")) && arguments[0] == "card-pose"
     let converting = arguments.count == 4 && arguments[0] == "layout"
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
-    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardMods || logicTrace || studioPose || animationPose || routePlayback else {
+    let lookData = (arguments.count == 2 || arguments.count == 3) && arguments[0] == "look-data"
+    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose || lookData || routePlayback else {
         throw GLTFError.io("""
-            Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card> <local-file>
+            Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card|draw-overlays> <local-file>
                    ikkoku-inspect mod-library <library.json>
                    ikkoku-inspect mod-catalog <library.json> <catalog-contract.json>
                    ikkoku-inspect card-mods <card.png> <library.json> <catalog-contract.json>
@@ -105,10 +107,12 @@ do {
                    ikkoku-inspect animation-pose <animation.json> <rig-or-avatar.json> <clip-id> <seconds>
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
                    ikkoku-inspect bone-modifier-snapshot <rig-or-avatar.json> <modifiers.json>
+                   ikkoku-inspect card-pose <avatar.json> <card.png> [--studio-hands <pose.json>]
                    ikkoku-inspect layout <source-scene.png> <converted-catalog.json> <native-scene.png>
                    ikkoku-inspect rig-snapshot <source-rig.json> <shape-contract.json> <rest|height-rate>
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
                    ikkoku-inspect expression-snapshot <rig-or-avatar.json> <expression-contract.json> <defaults|preset-id|inputs.json>
+                   ikkoku-inspect look-data <source-scene.png> [studio-look-settings.json]
             """)
     }
     let url = URL(fileURLWithPath: arguments[1]).standardizedFileURL
@@ -119,6 +123,9 @@ do {
     case "fixed-event-trace": report.merge(try inspectFixedEventExecution(url: url)) { _, new in new }
     case "adv-trace": report.merge(try inspectADVExecution(url: url)) { _, new in new }
     case "scene-document": report.merge(try inspectStudioScene(url: url)) { _, new in new }
+    case "look-data":
+        report.merge(try inspectStudioLookData(url: url,
+            settingsURL: arguments.count == 3 ? URL(fileURLWithPath: arguments[2]).standardizedFileURL : nil)) { _, new in new }
     case "route-playback":
         // Negative values are allowed through so the clamping diagnostic is
         // visible; nonfinite values cannot be serialized as JSON numbers.
@@ -172,6 +179,8 @@ do {
         catch { diagnostics.append("Mod references: \(error)") }
         report["diagnostics"] = diagnostics
         report["scope"] = "Original bytes preserved; current character framing, shape records, supported ABMX data and saved mod-reference metadata decoded. Hair, outfits, materials, other plugins and edited-card serialization remain unfinished."
+    case "draw-overlays":
+        report.merge(try inspectDrawOverlays(url: url)) { _, new in new }
     case "card-mods":
         let card = try SourceCharacterCard.load(url: url)
         let libraryURL = URL(fileURLWithPath: arguments[2]).standardizedFileURL
@@ -224,6 +233,9 @@ do {
             ["name": part.mesh.name, "positions": try source.deformedPositions(part: part, evaluation: evaluation).map(values)]
         }
         report["scope"] = "Recovered static ABMX baseline behavior at coordinate0; dynamic, animation and accessory modifier behavior remains unsupported."
+    case "card-pose":
+        let handsURL = arguments.count == 5 ? URL(fileURLWithPath: arguments[4]).standardizedFileURL : nil
+        report.merge(try inspectSourceCardPose(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL, studioHandURL: handsURL)) { _, new in new }
     case "mod":
         let package = try SourceModPackage.load(url: url)
         report["modGUID"] = package.source.guid
