@@ -320,7 +320,9 @@ struct KoikatsuBinaryReader {
         guard sourceKeys.insert(key).inserted else { throw invalid("duplicate object key") }
         let transformStart = offset, transform = try changeAmount()
         editSpans.transforms[.object(key)] = transformStart..<offset
-        let treeState = try int32(), visible = try bool()
+        let treeState = try int32()
+        let visibleStart = offset, visible = try bool()
+        editSpans.visibility[key] = visibleStart..<offset
         var name: String?, active: Bool?, itemRecord: KoikatsuItemRecord?, lightRecord: KoikatsuLightRecord?
         var children: [KoikatsuObjectRecord] = []
         var characterRecord: KoikatsuCharacterRecord?, routeRecord: KoikatsuRouteRecord?
