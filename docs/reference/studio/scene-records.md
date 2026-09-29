@@ -141,10 +141,12 @@ the last record with `active == true` in the depth-first file-order walk
 (`SourceStudioCameraObjects.activeAtLoad` mirrors the importer's pre-order:
 roots in order, record before children, children in order, then a character's
 accessory children by ascending index key). While a camera object is active
-`ChangeCamera` disables the orbit controller, and `CameraControl.LateUpdate`
-copies the object's world position and world rotation onto the render camera
-every frame — scale is ignored and the field of view stays the scene camera's.
-Deactivating re-enables the orbit controller on the previously saved camera.
+`ChangeCamera` disables the orbit controller, and the active `OCICamera`'s
+LateUpdate subscription copies the object's world position and world rotation
+onto the render camera every frame — scale is ignored and the field of view
+stays the scene camera's. Deactivating re-enables the orbit controller on the
+previously saved camera. All of this is confirmed on the original player in
+[Camera objects (original capture)](#camera-objects-original-capture).
 
 `SourceStudioCameraObjects.viewCamera(world:base:)` builds the native preview
 camera from an object's native world matrix: position is the translation, the
@@ -159,12 +161,21 @@ never written), and the first import of a scene whose records carry an active
 flag starts the view through that camera, reported in the source compatibility
 diagnostics. Selecting a camera placeholder offers a Look through / Stop
 looking through toggle in its inspector, mirroring `ChangeCamera`'s toggle
-semantics. What has not been verified: camera animation and
+semantics.
+
+Known deviation: the preview resolves the object's world matrix through the
+native world walk, which composes every ancestor's authored scale. The capture
+shows that Studio never applies folder scale and never compounds scale (each
+object's world scale is its own `changeAmount.scale`, or 1 when it is not
+scalable), so a camera under a parent whose scale is not 1 is placed
+differently from the original until that walk follows the captured rule. The
+committed `Tools/reverse/fixtures/camera-object-reference.json` is not yet
+replayed by a Swift test. Also not verified: camera animation and
 route-driven camera motion (a camera parented to a moving route is followed
 through the ordinary world-matrix walk, but no original capture of that case
 exists), writing an in-app toggled `active` flag back on export (deactivating
 in-app keeps the record's saved flag intact, and export intentionally does not
-persist the runtime choice), and any in-app run against the original game.
+persist the runtime choice), and any in-app run of the preview.
 
 ## Native APIs and integration
 
@@ -578,6 +589,95 @@ the press-time offset (a press at 3 s then 13 live ticks equals a fresh stepper
 stepped 13 times; a jump to 1/30 past the press sees one tween frame, not 91),
 the before-press instant, and replay-then-stop (`swift test --package-path
 Packages/Engine --filter RouteClockTests`, 2026-09-28; eight tests).
+
+## Camera objects (original capture)
+
+Ground truth for `ST-A06`. The source contract comes from the recovered
+`OCICamera.SetActive`, `AddObjectCamera.Load`, `Studio.ChangeCamera`/`LoadScene`,
+`CameraControl` and `GuideObject`. On 2026-09-28 it was checked on the original
+player: `Tools/reverse/original_camera_object_probe.py` runs
+`Tools/reverse/fixtures/OriginalCameraObjectProbe.cs` in the shared private
+player root. The probe authors synthetic camera objects in code and saves the
+load-rule scenes into that root with the steps of `Studio.SaveScene`
+(`OnSavePreprocessing`, `cameraSaveData = cameraCtrl.Export()`,
+`SceneInfo.Save`). It reloads them with `Studio.LoadScene` and records every
+snapshot at `WaitForEndOfFrame`, after that frame's LateUpdates. No installed
+card, save or screenshot is read; the optional look-at case adds one character
+built from a default `ChaFileControl`. The private capture is
+`.local/reverse/original-camera-object-probe/` (one 42-second run).
+
+`Camera.main` is `cameraCtrl`'s own camera (same `Camera` and `Transform`).
+Its parent is a transform named `Camera`, which is also `cameraCtrl.transBase`.
+The start-up view is (0, 2.09, 4.21), Euler (11.4, 180, 0), FOV 23;
+`optionSystem.initialPosition` is 0.
+
+| Assumption | Verdict | Captured evidence |
+| --- | --- | --- |
+| (a) After load, the last camera record in depth-first file order with `active` set is the active camera | **Confirmed** | Record X (root A active, then folder F holding active B) loads with B active. Record Y (root order F{B}, A; same objects and keys) loads with A. First-active (A, B), root-first (A, A), lowest-key (A, A) and highest-key (B, B) are all refuted. The losing record's `cameraInfo.active` is false after load, because activating the winner calls `SetActive(false)` on the earlier camera, so a re-save keeps one flag. With no flag set, no camera is active and `cameraCtrl` stays enabled. |
+| (b) While active, `cameraCtrl.enabled` is false; every LateUpdate copies the object's world position and rotation, scale ignored; the icon renderer is off | **Confirmed**, see the scale rule below | `cameraCtrl.enabled` is false in every active frame. `Camera.main` equals the object's world pose within 1.7e-7 m and 2.4e-6°, from the first frame after `ChangeCamera`, and follows a move of the active object in the same frame. `Camera.main.lossyScale` is unchanged (≤ 5.2e-7). The icon `meshRenderer` is hidden while active and shown again after toggle-off. |
+| (c) FOV stays the scene camera's | **Confirmed** | FOV stays `cameraCtrl`'s: 23 in the authored cases, and 35 (the record's `cameraSaveData.parse`) after loading a scene whose camera object is active. `CameraControl.Import` sets the FOV even while `cameraCtrl` is disabled. |
+| (d) Toggling off re-enables `cameraCtrl` and restores its saved view | **Confirmed** | `cameraCtrl.enabled` is true on the first frame after the toggle, and `Camera.main` returns exactly (0 deviation) to the pre-activation pose. After a load it returns to the view imported from `cameraSaveData`; that import happens while the object is active, and `cameraCtrl`'s data equals the saved data (0 deviation). |
+| (e) Neck and eye "look at camera" targets follow the render camera | **Confirmed** | `ChangeLookNeckTarget(0)`/`ChangeLookEyesTarget(0)` resolve to `Camera.main.transform` in every frame (Studio uses the same eye target except eye pattern 4, the look-at object). While the object is active the target sits at the object's position (0 deviation), and the head turns 31.0° toward it. Neck smoothing is slow: 86 frames to settle within 0.5°, and 90 frames after toggle-off the head is still 6.8° from its earlier pose. |
+
+**Scale rule, which the Swift reconstruction must follow: folders never carry
+scale, and scale does not compound.** Every `GuideObject.LateUpdate` rescales its
+Studio object so that its lossy (world) scale equals its own
+`changeAmount.scale`, or (1, 1, 1) when `enableScale` is false. Folders and
+cameras have `enableScale` false; items take it from the catalog's `isScale`.
+The capture shows three things:
+- A folder authored with scale 2 has world scale 1. Applying the authored
+  scale would put the nested camera 1.12 m away from where the original
+  renders.
+- A scalable item keeps its authored scale as its world scale, uniform
+  (2, 2, 2) or non-uniform (1, 2, 0.5). A nested camera's world position
+  includes that scale (`parent.TransformPoint`). Its rotation is the parent
+  rotation × the local Euler rotation, unaffected by non-uniform scale.
+- The camera object's own `localScale` is counter-scaled, 0.5 under scale 2
+  and a skewed (1.20, 0.59, 1.03) under (1, 2, 0.5), so its world scale stays 1.
+
+The render camera's world pose is therefore
+`parentWorldPosition + parentWorldRotation · (parentWorldScale ⊙ localPosition)`
+with rotation `parentWorldRotation · Euler(localRotation)`. Here each ancestor's
+world scale is its own `changeAmount.scale` when it is scalable and 1 otherwise,
+not the product of local scales. Only one nesting level was captured; the claim
+that scale does not compound across several scaled ancestors rests on
+`GuideObject.CalcScale` in source.
+
+Tolerances are 1e-4 m, 0.01° and 1e-4 of FOV. The largest captured deviations
+of the recomputed pose from `Camera.main` are 2.3e-7 m and 8.0e-6°. FOV, the
+restored views and the imported saved view deviate by exactly 0. The committed
+`Tools/reverse/fixtures/camera-object-reference.json` holds synthetic inputs
+and captured outputs only, with no catalog identities; its values are rounded
+to 1e-6 and regenerate byte-identically. For each object case it lists:
+- the parent's authored changeAmount and its effective world position,
+  rotation and scale;
+- the camera's local position and Euler rotation;
+- `Camera.main`'s world position, quaternion and FOV before activation, while
+  active and after toggle-off.
+
+For each load case it lists the record order with keys and flags, the saved
+camera view, the winner, the flags after load and the resulting camera pose.
+`compare_camera_objects.py --reference` recomputes every pose and winner from
+it, with deviations up to 2.5e-6 m and 8.9e-5° after rounding.
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_camera_object_probe.py
+# repeat until status.json exists; collecting also stops the private player:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_camera_object_probe.py --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_camera_objects.py \
+  .local/reverse/original-camera-object-probe
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_camera_objects.py \
+  --reference Tools/reverse/fixtures/camera-object-reference.json
+```
+
+Limits: this is one nesting level and one scalable catalog item, the first
+`isScale` item without a named child root, so its `childRoot` is the item
+itself; an item whose child root is a sub-transform adds that sub-transform's
+own transform. The two-active records are hand-authored, since the UI keeps at
+most one camera active. Cameras attached to character bones were not captured.
+A camera created in code needs `cameraSelector.Init()` before `ChangeCamera`,
+as `Studio.AddCamera` does, or `CameraSelector.SetCamera` throws on its
+uninitialized list. That is a probe detail, not a runtime difference.
 
 ## Extended Save and preservation
 
