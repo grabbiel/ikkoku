@@ -25,7 +25,7 @@ def retry_call(operation,*args):
    if 'Invalid argument' not in str(e) or attempt==2:raise
    time.sleep(.25)
 
-def start(vm,output):
+def start(vm,output,settings=None):
  run_path=output/'run.json'
  if run_path.exists():
   run=json.loads(run_path.read_text());root=run['root']
@@ -45,6 +45,11 @@ def start(vm,output):
  write_small(vm,root+r'\CharacterProbe.cs',source.read_bytes())
  result=retry(vm,"$ErrorActionPreference='Stop';$root="+ps_quote(root)+r''';$refs=@("$root\BepInEx\core\BepInEx.dll")+(Get-ChildItem "$root\CharaStudio_Data\Managed" -Filter '*.dll'|ForEach-Object {$_.FullName});& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /noconfig /nostdlib+ /target:library /out:"$root\BepInEx\plugins\IkkokuCharacterProbe.dll" /reference:$($refs -join ',') "$root\CharacterProbe.cs";if($LASTEXITCODE -ne 0){throw 'Compile failed'};if(Test-Path "$root\BepInEx\plugins\character"){Remove-Item "$root\BepInEx\plugins\character" -Recurse -Force}''')
  if result:print(result)
+ if settings:
+  # The C# probe reads the tsv from the `character` folder under the plugin
+  # directory; recreate it first because the compile step deletes it each run.
+  retry(vm,"$ErrorActionPreference='Stop';New-Item -ItemType Directory "+ps_quote(root+r'\BepInEx\plugins\character')+" -Force|Out-Null")
+  write_small(vm,root+r'\BepInEx\plugins\character\character-settings.tsv',settings.read_bytes())
  pid=int(retry(vm,"$root="+ps_quote(root)+r''';$p=Get-Process CharaStudio -ErrorAction SilentlyContinue|Where-Object {$_.Path -eq "$root\CharaStudio.exe"}|Select-Object -First 1;if($p){$p.Id}else{(Start-Process -FilePath "$root\CharaStudio.exe" -WorkingDirectory $root -ArgumentList @('-force-d3d11','-screen-fullscreen','0','-screen-width','768','-screen-height','1024','-logFile',"$root\unity.log") -PassThru).Id}''',True))
  run=dict(vm=vm,root=root,processID=pid,sourceSHA256=digest(source.read_bytes()),currentUser=True,stopped=False);dump(run_path,run);return run
 
@@ -69,9 +74,9 @@ def collect(vm,output):
  return dict(status=status,files=len(provenance),archiveBytes=len(data))
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path);a=p.parse_args()
  if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must stay under .local')
  a.output.mkdir(parents=True,exist_ok=True)
  if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
- print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output),indent=2))
+ print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output,a.settings),indent=2))
 if __name__=='__main__':main()

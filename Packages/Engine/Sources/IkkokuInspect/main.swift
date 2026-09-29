@@ -80,7 +80,7 @@ private func object(_ source: KoikatsuObjectRecord) -> [String: Any] {
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card"].contains(arguments[0])
+    let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card", "draw-overlays"].contains(arguments[0])
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
     let logicTrace = arguments.count == 2 && ["blink-trace", "gameplay-trace", "fixed-event-trace", "adv-trace", "scene-document", "animation-library"].contains(arguments[0])
@@ -93,7 +93,7 @@ do {
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
     guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose else {
         throw GLTFError.io("""
-            Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card> <local-file>
+            Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card|draw-overlays> <local-file>
                    ikkoku-inspect mod-library <library.json>
                    ikkoku-inspect mod-catalog <library.json> <catalog-contract.json>
                    ikkoku-inspect card-mods <card.png> <library.json> <catalog-contract.json>
@@ -154,6 +154,8 @@ do {
         catch { diagnostics.append("Mod references: \(error)") }
         report["diagnostics"] = diagnostics
         report["scope"] = "Original bytes preserved; current character framing, shape records, supported ABMX data and saved mod-reference metadata decoded. Hair, outfits, materials, other plugins and edited-card serialization remain unfinished."
+    case "draw-overlays":
+        report.merge(try inspectDrawOverlays(url: url)) { _, new in new }
     case "card-mods":
         let card = try SourceCharacterCard.load(url: url)
         let libraryURL = URL(fileURLWithPath: arguments[2]).standardizedFileURL
