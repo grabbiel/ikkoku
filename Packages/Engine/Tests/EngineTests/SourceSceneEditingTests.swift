@@ -87,6 +87,35 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     #expect(result.baseSceneEndOffset - original.baseSceneEndOffset == after.preservedData.count - card.count)
 }
 
+@Test func sourceSceneEditingWritesEmbeddedFaceShapeEditsAndNoChangeEditsKeepEveryByte() throws {
+    let card = OriginalCardFixture.card()
+    let scene = SceneDocumentBytes.scene(card: card).data
+    let original = try KoikatsuSceneReader.decodeDocument(scene)
+    let before = try SourceCharacterCard.decode(card)
+    let savedFace = try before.customization().faceValues
+    // Passing the card's own saved values patches no numeric token, so the
+    // whole scene file stays byte-identical even though a card edit is asked for.
+    #expect(try original.editedData(.init(cards: [10: .init(faceValues: savedFace)])) == scene)
+    var face = savedFace; face[3] = savedFace[3] == 0.5 ? 0.25 : 0.5
+    let edited = try KoikatsuSceneReader.decodeDocument(original.editedData(.init(cards: [10: .init(faceValues: face)])))
+    #expect(edited.settings == original.settings && edited.trailingData == original.trailingData)
+    #expect(edited.snapshot.roots[1] == original.snapshot.roots[1])
+    let after = try #require(edited.snapshot.roots[0].character).card()
+    #expect(try after.customization().faceValues == face)
+    // Only the edited face array moved; every other card byte is untouched.
+    #expect(try after.customization().bodyValues == before.customization().bodyValues)
+    #expect(after.thumbnailData == before.thumbnailData && after.faceThumbnailData == before.faceThumbnailData)
+    #expect(after.block(named: "Parameter")?.data == before.block(named: "Parameter")?.data)
+    #expect(after.block(named: "FutureOpaque")?.data == before.block(named: "FutureOpaque")?.data)
+    #expect(after.trailingData == before.trailingData)
+    // Writing the saved values back restores the saved numbers. Edited tokens are
+    // re-encoded as float32 while this fixture packs float64, so the reversal is
+    // value-level here; everything outside the edited array keeps its own bytes.
+    let reverted = try KoikatsuSceneReader.decodeDocument(edited.editedData(.init(cards: [10: .init(faceValues: savedFace)])))
+    #expect(try #require(reverted.snapshot.roots[0].character).card().customization().faceValues == savedFace)
+    #expect(reverted.trailingData == original.trailingData && reverted.snapshot.roots[1] == original.snapshot.roots[1])
+}
+
 @Test func sourceSceneEditingRejectsUnknownDuplicateInvalidAndIdentityChangingEdits() throws {
     let original = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
     let transform = editedSceneTransform(), object = SourceSceneEdits.TransformEdit(.object(10), transform: transform)

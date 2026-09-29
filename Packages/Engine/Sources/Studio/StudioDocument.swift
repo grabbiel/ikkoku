@@ -42,6 +42,12 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// the prototype skeleton's rest-relative pose deltas.
     public var sourceFKRotations: [Int: Float3]?
     public var sourceIKOverrides: [Int32: SourceStudioIKEdit]?
+    /// Edited face shape slot rates in contract order; nil keeps the card's
+    /// saved values. Export writes the array back into the embedded card.
+    public var sourceFaceValues: [Float]?
+    /// Edited body shape slot rates in contract order; nil keeps the card's
+    /// saved values. Export writes the array back into the embedded card.
+    public var sourceBodyValues: [Float]?
     public var sourceKinematics: SourceStudioKinematicState?
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState?
