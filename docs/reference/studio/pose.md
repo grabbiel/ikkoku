@@ -378,7 +378,8 @@ Without the tsv the finger snapshots keep their previous shape: the
 `handPatterns` field and `hand-anime.json` exist only in pattern mode (a
 regression capture without the tsv on the amended fixture confirmed all 13
 records carrying the previous nine keys in the previous order and no new
-file).
+file). A tsv the probe cannot parse ends the run before any capture with
+`status.json` error `Probe input rejected: …` naming the problem.
 `Tools/reverse/original_character_probe.py --hand-patterns <tsv>` uploads
 the file after the compile step and before the player starts, the way the
 character-settings overlay is uploaded. Three VM captures (2026-09-27) ran
