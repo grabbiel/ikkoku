@@ -81,6 +81,24 @@ public final class SourceStudioCharacterPreview {
     private let neckTargetType: Int32?
     /// One-shot per lookType so a repeated FK neck edit does not repeat the notice.
     private var reportedNeckLookFK: Set<SourceStudioNeckLookType> = []
+    /// Resolved live eye look: the same settings document's eyes block, the
+    /// effective pattern and the saved angles (nil before scene version
+    /// 0.0.8). Nil when the pattern resolves to kept animated eyes.
+    private let liveEyeLook: (settings: SourceStudioEyeLookSettings, pattern: Int,
+                              savedAngles: (horizontal: [Double], vertical: [Double])?)?
+    /// Why the eyes are not live, for the inspector's kept-pose readout; nil
+    /// while the gaze runs or when the character never had an eye pattern.
+    private let eyeLookNote: String?
+    /// The EyeLookCalc runtime, Init'ed from the first evaluated frame after
+    /// every resetEyeLook; the step runs for the rates only, nothing writes
+    /// eye bones yet (the iris writeback is the next slice).
+    private var eyeLookRuntime: SourceStudioEyeLookRuntime?
+    /// Card eyesTargetType; 0 (or absent) is the main camera, any other target
+    /// has no recovered meaning, so the animated eyes are kept and reported.
+    private let eyesTargetType: Int32?
+    /// Set when the Init from a live pattern failed: the pattern retires until
+    /// resetEyeLook (diagnosed once) so the tick does not knock per frame.
+    private var eyeLookFailure: String?
     public var dynamicsComponentCount: Int { dynamics?.bindings.count ?? 0 }
     /// preOverride is the FK/IK-solved pose before the neck look override
     /// wrote anything: the pose the TARGET/AWAY gaze solver reads its Transforms
@@ -276,6 +294,52 @@ public final class SourceStudioCharacterPreview {
             do { neckLookRuntime = try SourceStudioNeckLookRuntime(settings: live.settings, fixAngle: live.fixAngle) }
             catch { messages.append("Studio neck look runtime unavailable: \(error); the animated pose is kept.") }
         }
+        // The same settings document's eyes block drives the eye calculator.
+        // AddObjectAssist restores LoadAngle first and ChangeLookEyesPtn last,
+        // so the card eyesLookPtn wins over the prefab's eyeController.ptnNo,
+        // and EyeLookCalc reads the main camera when eyesTargetType is 0 or
+        // absent. NO_LOOK is reported and skipped: its fixAngle write is not
+        // recorded by the look trace, so the animated eyes are kept.
+        var liveEyeLook: (settings: SourceStudioEyeLookSettings, pattern: Int,
+                          savedAngles: (horizontal: [Double], vertical: [Double])?)?
+        var eyeLookNote: String?
+        var eyesTargetType: Int32?
+        if let lookSettingsFile = reference.lookSettingsFile {
+            do {
+                let eyeSettings = try SourceStudioEyeLookSettings(json: Self.read(URL(fileURLWithPath: lookSettingsFile), maximum: 4 * 1024 * 1024))
+                let lookStatus = SourceStudioLookStatus(status: status)
+                eyesTargetType = lookStatus.eyesTargetType
+                let savedEyes = try SourceStudioEyeLookData(bytes: record.eyesData, sceneVersion: scene.snapshot.version)
+                if let pattern = lookStatus.eyesLookPtn ?? eyeSettings.eyeControllerPattern,
+                   pattern >= 0, eyeSettings.eyeTypeStates.indices.contains(Int(pattern)) {
+                    let lookType = eyeSettings.eyeTypeStates[Int(pattern)].lookType
+                    if let target = eyesTargetType, target != 0 {
+                        eyeLookNote = "target type \(target) is not the main camera"
+                        messages.append("Eye look target type \(target) is not the main camera (0); the animated eyes are kept.")
+                    } else if lookType == .noLook {
+                        eyeLookNote = "pattern \(pattern) is NO_LOOK"
+                        messages.append("Eye look pattern \(pattern) is NO_LOOK; its fixAngle write is not recorded, so the animated eyes are kept.")
+                    } else {
+                        let angles: (horizontal: [Double], vertical: [Double])?
+                        if let angleH = savedEyes.angleH, let angleV = savedEyes.angleV {
+                            angles = (horizontal: angleH.map(Double.init), vertical: angleV.map(Double.init))
+                        } else {
+                            angles = nil
+                            messages.append("Scene version \(scene.snapshot.version) saves no eye angles; the calculator Inits flat instead.")
+                        }
+                        liveEyeLook = (eyeSettings, Int(pattern), angles)
+                        messages.append("Eye look live: \(lookType.rawValue) pattern \(pattern) follows the Studio camera.")
+                    }
+                } else {
+                    let shown = (lookStatus.eyesLookPtn ?? eyeSettings.eyeControllerPattern).map(String.init) ?? "unset"
+                    eyeLookNote = "pattern \(shown) has no eyeTypeStates entry"
+                    messages.append("Eye look pattern is unset or outside the prefab's \(eyeSettings.eyeTypeStates.count) states; the animated eyes are kept.")
+                }
+            } catch { messages.append("Studio eye look override unavailable: \(error); the animated eyes are kept.") }
+        }
+        self.liveEyeLook = liveEyeLook
+        self.eyeLookNote = eyeLookNote
+        self.eyesTargetType = eyesTargetType
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -457,7 +521,7 @@ public final class SourceStudioCharacterPreview {
     }
 
     public func resetAnimationPlayback() {
-        animationPlayback.reset(); hasSteppedNeckLook = false; resetNeckLook()
+        animationPlayback.reset(); hasSteppedNeckLook = false; resetNeckLook(); resetEyeLook()
     }
 
     /// True when the effective neck pattern is TARGET or AWAY and the gaze
@@ -474,6 +538,30 @@ public final class SourceStudioCharacterPreview {
         hasSteppedNeckLook = false
         evaluatedCache = nil
     }
+
+    /// True when the effective eye pattern is live: the Studio tick then steps
+    /// updateEyeLook per frame. Unlike the neck the runtime Inits from the
+    /// first evaluated frame, so the flag reads the resolved pattern.
+    public var hasLiveEyeLook: Bool { liveEyeLook != nil }
+
+    /// The inspector readout: the pattern's lookType with the last frame's
+    /// iris-shift rates, or nil while the eyes are animated (then
+    /// `eyeLookKeptReason` explains why).
+    public var eyeLookRates: (lookType: SourceStudioEyeLookType, horizontal: [Double], vertical: Double)? {
+        guard let live = liveEyeLook, eyeLookFailure == nil, let runtime = eyeLookRuntime else { return nil }
+        return (live.settings.eyeTypeStates[live.pattern].lookType, runtime.angleHRates, runtime.angleVRate)
+    }
+    /// Why the eye gaze is not running for an imported source character with a
+    /// resolved-but-refused pattern; nil while live or never configured.
+    public var eyeLookKeptReason: String? {
+        if let failure = eyeLookFailure { return "pattern \(liveEyeLook!.pattern) Init failed: \(failure)" }
+        return eyeLookNote
+    }
+
+    /// Drops the eye runtime so the next updateEyeLook Inits it from that
+    /// frame's pose, the way a scene reload re-runs EyeLookCalc's Init; a seek
+    /// therefore restarts the convergence instead of carrying stale smoothing.
+    public func resetEyeLook() { eyeLookRuntime = nil; eyeLookFailure = nil }
 
     /// The Studio tick step for the TARGET/AWAY gaze: runs one LateUpdate of
     /// NeckLookCalcVer2 — UpdateCall's write-back of the previous frame's
@@ -545,6 +633,80 @@ public final class SourceStudioCharacterPreview {
         hasSteppedNeckLook = true
         evaluatedCache = nil
         return runtime.lastLocalRotations != rotationsBefore || runtime.fixAngle != fixBefore
+    }
+
+    /// The Studio tick step for the eye gaze: one EyeLookCalc frame over the
+    /// FK/IK-solved pose before any look override wrote to it, kept fully
+    /// independent of the neck runtime. The settings' rootNode name is
+    /// `p_cf_head_bone`, which is not a merged-rig node; the capture reports
+    /// it sharing cf_j_head's world transform in every frame, so that bone is
+    /// the root here, and trfCenter / the eye parents are cf_J_Eye_tz /
+    /// cf_J_Eye_tx_L+R. The EyeTargets sit on their parent pivots (the Maker
+    /// skeleton authors them at translation 0), so the parents' world
+    /// positions are the eye positions, and their origRotation is the identity
+    /// the capture recorded. This slice reads the rates out of the frame and
+    /// writes no bones; the iris writeback is the next slice. Returns whether
+    /// the frame's iris-shift rates changed, the signal a caller will use to
+    /// re-render once the iris offset reads them.
+    @discardableResult public func updateEyeLook(deltaTime: Float, cameraModelPosition: Float3,
+        fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:],
+        kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
+        animationElapsed: Float = 0) throws -> Bool {
+        guard let live = liveEyeLook, eyeLookFailure == nil else { return false }
+        guard deltaTime.isFinite, deltaTime >= 0, deltaTime <= 10,
+              (0..<3).allSatisfy({ cameraModelPosition[$0].isFinite }) else {
+            throw RigError.invalid("Eye look gaze needs a finite deltaTime up to 10 s and a finite camera position.")
+        }
+        let pose = try editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics,
+            animationState: animationState, animationElapsed: animationElapsed)
+        // Same pre-override read as the neck: EyeLookCalc runs after
+        // Animator/FK/IK and before its own writeback, and the eye runtime
+        // Inits from this frame's head and eye-parent rotations.
+        let geometryPose = evaluatedCache?.preOverride ?? pose
+        let world = try preview.source.rig.evaluate(geometryPose).worldMatrices
+        func node(_ name: String) throws -> SourceStudioEyeLookGeometry.Node {
+            let matrix = UnityCoordinates.matrix(world[try preview.source.rig.uniqueNode(named: name)])
+            let q = matrix.rotationQuaternion
+            let scale = matrix.scaleFactors
+            return .init(position: SIMD3(Double(matrix.translation.x), Double(matrix.translation.y), Double(matrix.translation.z)),
+                         rotation: simd_quatd(ix: Double(q.imag.x), iy: Double(q.imag.y), iz: Double(q.imag.z), r: Double(q.real)),
+                         lossyScale: SIMD3(Double(scale.x), Double(scale.y), Double(scale.z)))
+        }
+        func position(_ name: String) throws -> SIMD3<Double> { try node(name).position }
+        let root = try node("cf_j_head")
+        let center = try node(live.settings.trfCenter ?? "cf_J_Eye_tz")
+        let parentNames = ["cf_J_Eye_tx_L", "cf_J_Eye_tx_R"]
+        let parentPositions = try parentNames.map { try position($0) }
+        let parentRotations = try parentNames.map { try node($0).rotation }
+        let identityQ = simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+        if eyeLookRuntime == nil {
+            do {
+                eyeLookRuntime = try SourceStudioEyeLookRuntime(settings: live.settings,
+                    rootRotation: root.rotation,
+                    eyeParents: parentRotations.map { .init(rotation: $0, localRotation: identityQ) },
+                    savedAngles: live.savedAngles)
+            } catch {
+                // Retire the pattern until resetEyeLook: the inspector readout
+                // reports the kept animated eyes instead of knocking per frame.
+                eyeLookFailure = "\(error)"
+                diagnostics.append("Studio eye look runtime unavailable: \(error); the animated eyes are kept.")
+                return false
+            }
+        }
+        guard let runtime = eyeLookRuntime else { return false }
+        let reference = runtime.reference
+        let target = SIMD3(Double(cameraModelPosition.x), Double(cameraModelPosition.y), Double(cameraModelPosition.z))
+        let ratesBefore = (runtime.angleHRates, runtime.angleVRate)
+        try runtime.update(deltaTime: Double(deltaTime), target: target,
+            geometry: SourceStudioEyeLookGeometry(rootNode: root, trfCenter: center,
+                eyes: [
+                    .init(worldPosition: parentPositions[0], origRotation: identityQ,
+                          referenceLookDir: reference[0].lookDir, referenceUpDir: reference[0].upDir),
+                    .init(worldPosition: parentPositions[1], origRotation: identityQ,
+                          referenceLookDir: reference[1].lookDir, referenceUpDir: reference[1].upDir),
+                ]),
+            pattern: live.pattern)
+        return runtime.angleHRates != ratesBefore.0 || runtime.angleVRate != ratesBefore.1
     }
 
     /// The saved expression inputs with the blink clock applied. While the card
