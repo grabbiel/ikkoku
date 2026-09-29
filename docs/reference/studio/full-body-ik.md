@@ -72,10 +72,14 @@ diagnostics; regenerate bindings to enable full-body stages.
 ## Studio editing and serialization
 
 The viewport selection and source pose-inspector implementation cover all thirteen
-guides, separate from prototype IK chain IDs. The normal UI currently intercepts
-source Pose, Face and Clothes tabs before reaching that inspector (`ST-B01` in
-the audit). Solver/capture verification therefore does not establish a usable
-source pose-editing UI; removing that gate and exercising the controls is pending.
+guides, separate from prototype IK chain IDs. The gate that previously intercepted
+source Pose, Face and Clothes tabs (`ST-B01` in the audit) was removed 2026-09-25;
+the `IKKOKU_CAPTURE_UI_REPORT` JSON records the inspector view that SwiftUI actually
+rendered (`inspectorView` from each rendered branch's `onAppear`, cleared on
+`onDisappear`; a gated or blank view reports `none`), and re-inserting the gate makes
+that report differ — the PNGs omit most SwiftUI content, so they are not visual
+evidence. Real mouse-driven guide editing, undo/redo, save/reload and original-scene
+export remain unverified (`ST-T01` pending).
 
 The implemented drag callback translates world deltas through the complete
 character parent frame, including attachment transforms. Distal rotation uses the

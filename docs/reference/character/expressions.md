@@ -217,6 +217,22 @@ argument to at least 1 despite the serialized .15 default. The native
 `SourceBlinkPlayback` preserves this behavior, with deterministic timing fixtures
 and Maker integration described in [temporal playback](../animation/expression-playback.md).
 
+**Studio blinking.** The Studio preview reads `ChaFileStatus.eyesBlink` from the
+embedded card's Status block: a missing field is the true card default, and a
+non-bool value is reported as a diagnostic and keeps that default instead of
+guessing. Like `OCIChar.ChangeBlink` on card load, the flag becomes the control's
+fixed flags (`0` blinks, `1` does not, per `ChaControl.ChangeEyesBlinkFlag`); a
+non-blinking card renders at open eye and eyebrow rates 1 with the fixed sentinel.
+A blinking card advances the control once per displayed frame on the monotonic
+Studio animation clock and supplies `expressionBlinkRate` as `blinkRate` at render
+time, so the ordering matches `FaceBlendShape.LateUpdate` (blink first, then
+eyebrow/eyes/mouth). The control cannot run backwards, so a clock rewind
+(seek/rebase) rebuilds it with the saved flag instead. The Studio pose inspector's
+"Automatic blinking" toggle is a preview-only lever, like the Maker's: it is not saved
+into the scene or the card, and with it off the saved openness renders unchanged. Limits: there is no
+original Studio blink capture yet; look-at, neck/eye serialized state and
+voice-driven mouth remain pending.
+
 The mouth prefab enables random width adjustment, with interval .5–.7 seconds,
 scale endpoints .9–1, and `openRefValue: .2`. It interpolates between randomly
 selected scale endpoints, subtracts `.2 * mouthOpenRate`, and floors the result
