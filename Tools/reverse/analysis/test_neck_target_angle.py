@@ -2,7 +2,7 @@ import math
 import unittest
 
 from neck_target_angle import (FORWARD, UP, angle_around_axis, angle_axis, angle_degrees,
-                               cross, dot, from_to_rotation, get_angle_to_target,
+                               away_adjust, cross, dot, from_to_rotation, get_angle_to_target,
                                limit_check, multiply_quaternions, predict_now_angle,
                                project, rotate, verify_trace)
 
@@ -24,7 +24,10 @@ def geometry_frame(*, target, head_rotation=None):
                          'isLimitBreakBackup': False}}
 
 
-STATE = {'hAngleLimit': 90.0, 'vAngleLimit': 90.0, 'limitBreakCorrectionValue': 10.0}
+STATE = {'hAngleLimit': 90.0, 'vAngleLimit': 90.0, 'limitBreakCorrectionValue': 10.0,
+         'limitAway': 10.0,
+         'aParam': [{'minBendingAngle': -40.0, 'maxBendingAngle': 40.0},
+                    {'minBendingAngle': -20.0, 'maxBendingAngle': 20.0}]}
 
 
 class VectorHelperTests(unittest.TestCase):
@@ -168,6 +171,51 @@ class FormulaTests(unittest.TestCase):
         self.assertAlmostEqual(angle_degrees([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]), 0.0, places=12)
 
 
+class AwayAdjustTests(unittest.TestCase):
+    # aParam sums to maxBending 60 and minBending -60, limitAway 10, so the
+    # only reachable vertical values are +60 and -60 and the tests below pin
+    # which side each raw angle collapses onto.
+    A_PARAM = STATE['aParam']
+
+    def adjust(self, now_angle, angle_h):
+        return away_adjust(now_angle=now_angle, bone_angle_h=angle_h,
+                           a_param=self.A_PARAM, limit_away=10.0)
+
+    def test_above_bone_sum_positive_y_takes_the_minimum_bending_sum(self):
+        # 45 > num4 = 20 and 45 > 0: the away target flips the vertical onto
+        # the min-bending sum and negates the horizontal angle.
+        self.assertEqual(self.adjust([3.0, 45.0], [10.0, 10.0]), [-3.0, -60.0])
+
+    def test_above_bone_sum_small_negative_y_takes_the_maximum_bending_sum(self):
+        # -55 > num4 = -70 but -55 < -60 + 10 and not > 0: the negative bend
+        # is kept and lands on the max-bending sum instead.
+        self.assertEqual(self.adjust([3.0, -55.0], [-50.0, -20.0]), [-3.0, 60.0])
+
+    def test_at_or_below_bone_sum_large_positive_y_takes_the_minimum_bending_sum(self):
+        # 55 <= num4 = 60 (the branch test is <=) but past 60 - 10 and not
+        # negative: the away rule sends it to the min-bending sum.
+        self.assertEqual(self.adjust([3.0, 55.0], [40.0, 20.0]), [-3.0, -60.0])
+
+    def test_at_or_below_bone_sum_small_positive_y_takes_the_maximum_bending_sum(self):
+        # 7 <= num4 = 20 and 7 <= 60 - 10: inside the away band it bends the
+        # max way; the equality case 50 == 60 - 10 breaks the same way.
+        self.assertEqual(self.adjust([3.0, 7.0], [10.0, 10.0]), [-3.0, 60.0])
+        self.assertEqual(self.adjust([3.0, 50.0], [40.0, 20.0]), [-3.0, 60.0])
+
+    def test_negative_y_below_bone_sum_takes_the_maximum_bending_sum(self):
+        # -5 <= num4 = 20 and < 0: the or-clause fires even inside the band.
+        self.assertEqual(self.adjust([3.0, -5.0], [10.0, 10.0]), [-3.0, 60.0])
+
+    def test_rejects_degenerate_input(self):
+        for kwargs in ({'now_angle': [float('nan'), 0.0], 'bone_angle_h': [1.0]},
+                       {'now_angle': [0.0, 1.0], 'bone_angle_h': []},
+                       {'now_angle': [0.0, 1.0], 'bone_angle_h': [1.0], 'a_param': []}):
+            call = {'a_param': self.A_PARAM, 'limit_away': 10.0}
+            call.update(kwargs)
+            with self.assertRaises(ValueError):
+                away_adjust(**call)
+
+
 class VerifyTraceTests(unittest.TestCase):
     def settings(self):
         return {'neck': {'neckTypeStates': [{'hAngleLimit': 0.0, 'vAngleLimit': 0.0, 'limitBreakCorrectionValue': 0.0},
@@ -204,16 +252,37 @@ class VerifyTraceTests(unittest.TestCase):
         self.assertAlmostEqual(entry['sameFrameMaxDegrees'][1], 30.0, delta=1e-6)
         self.assertAlmostEqual(entry['movedMaxDegrees'][1], 0.0, delta=1e-6)
 
-    def test_away_frames_report_without_equality(self):
-        frame = geometry_frame(target=[2.0, 1.4, 2.0])
-        frame['neck']['calculators'][0]['lookType'] = 'AWAY'
-        frame['neck']['calculators'][0]['nowAngle'] = [-135.0, 0.0]
-        report = verify_trace({'error': None, 'frames': [frame], 'phases': [{'frames': 1}]}, self.settings())
-        self.assertEqual(report['targetFrames'], 0)
+    def test_away_frames_compare_the_adjusted_prediction(self):
+        # A TARGET frame with bone angleH 10 + 10 precedes the AWAY frame, so
+        # the adjustment reads num4 = 20 (the previous frame's end-of-frame
+        # values): raw y = 45 > 20 and > 0 collapses onto the min-bending sum
+        # -60 and raw x = 0 negates onto the recorded 11.29876-free zero.
+        ahead = geometry_frame(target=[0.0, 1.4, 2.0])
+        ahead['neck']['bones'] = [{'neckBone': 'cf_j_neck', 'angleH': 10.0},
+                                  {'neckBone': 'cf_j_head', 'angleH': 10.0}]
+        away = geometry_frame(target=[2.0, 1.4, 2.0])
+        away['phase'] = 2
+        away['neck']['bones'] = [{'neckBone': 'cf_j_neck', 'angleH': 3.0},
+                                 {'neckBone': 'cf_j_head', 'angleH': 5.0}]
+        away['neck']['calculators'][0]['lookType'] = 'AWAY'
+        away['neck']['calculators'][0]['nowAngle'] = [0.0, -60.0]
+        report = verify_trace({'error': None, 'frames': [ahead, away], 'phases': [{'frames': 1}]}, self.settings())
+        self.assertEqual(report['targetFrames'], 1)
         self.assertEqual(len(report['awayFrames']), 1)
-        self.assertAlmostEqual(report['awayFrames'][0]['raw'][0], 0.0, delta=1e-6)
-        self.assertAlmostEqual(report['awayFrames'][0]['raw'][1], 45.0, delta=1e-6)
-        self.assertEqual(report['phases'][0]['awayFrames'], 1)
+        entry = report['awayFrames'][0]
+        self.assertAlmostEqual(entry['raw'][0], 0.0, delta=1e-6)
+        self.assertAlmostEqual(entry['raw'][1], 45.0, delta=1e-6)
+        self.assertAlmostEqual(entry['adjusted'][0], 0.0, delta=1e-6)
+        self.assertAlmostEqual(entry['adjusted'][1], -60.0, delta=1e-6)
+        self.assertAlmostEqual(report['phases'][2]['awayMaxDegrees'][0], 0.0, delta=1e-6)
+        self.assertAlmostEqual(report['phases'][2]['awayMaxDegrees'][1], 0.0, delta=1e-6)
+        self.assertEqual(report['phases'][2]['awayFrames'], 1)
+
+    def test_away_frame_without_a_previous_frame_is_rejected(self):
+        away = geometry_frame(target=[2.0, 1.4, 2.0])
+        away['neck']['calculators'][0]['lookType'] = 'AWAY'
+        with self.assertRaises(ValueError):
+            verify_trace({'error': None, 'frames': [away], 'phases': [{'frames': 1}]}, self.settings())
 
     def test_rejects_broken_traces(self):
         with self.assertRaises(ValueError):
@@ -225,6 +294,41 @@ class VerifyTraceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             verify_trace({'error': None, 'frames': [geometry_frame(target=[0.0, 1.4, 2.0])]},
                          {'neck': {}})
+
+
+class FixtureTests(unittest.TestCase):
+    def test_fixture_is_deterministic_and_covers_the_branches(self):
+        import json
+        import tempfile
+        from pathlib import Path
+
+        from neck_target_angle import write_fixture
+
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / 'fixture.json'
+            second = Path(directory) / 'again.json'
+            self.assertGreaterEqual(write_fixture(first), 24)
+            write_fixture(second)
+            self.assertEqual(first.read_text(), second.read_text())
+            document = json.loads(first.read_text())
+        cases = document['cases']
+        self.assertTrue(all(case['id'] for case in cases))
+        self.assertTrue(any(case['limits']['isLimitBreakBackup'] and case['limit']['broken'] for case in cases))
+        self.assertTrue(any(not case['limits']['isLimitBreakBackup'] and case['limit']['broken'] for case in cases))
+        above = below = 0
+        for case in cases:
+            if case['limit']['broken']:
+                self.assertEqual(case['adjusted'], [0.0, 0.0])
+                continue
+            if case['lookType'] == 'TARGET':
+                self.assertEqual(case['adjusted'], case['raw'])
+                continue
+            if case['raw'][1] > sum(case['away']['boneAngleH']):
+                above += 1
+            else:
+                below += 1
+        self.assertGreaterEqual(above, 2)
+        self.assertGreaterEqual(below, 2)
 
 
 if __name__ == '__main__':
