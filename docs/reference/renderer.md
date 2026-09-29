@@ -211,12 +211,16 @@ patterns, line/outline, shadow color, emission and light cancel are **not**
 covered. The OUTLINE pass (main shader only) and both SHADOWCASTER passes were
 not disassembled.
 
-Open question: both basic-shape materials (`m_koi_stu_kihon00_02`,
-`m_koi_stu_kihon01_02`) leave `_ColorMask` unbound, so by this chain their
-saved `_Color` does not tint them and the export is `_MainTex` × white. How
-Studio's color picker nonetheless recolors a cube (for example a mask or
-texture assigned at runtime) is not recovered; capture a colored cube on the
-original player before record colors are applied to converted props.
+Basic-shape color: both basic-shape materials (`m_koi_stu_kihon00_02`,
+`m_koi_stu_kihon01_02`) bind `_ColorMask` `t_koi_stu_kihon00mc_02`, an 8×8
+texture of uniform pure red (255, 0, 0, 255), so the chain reduces to a tint of
+exactly `_Color` over the whole surface. Their saved `_Color` is white, which
+is the exported factor. `ItemComponent.UpdateColor` writes the scene record's
+`color[0]` into `_Color` for slot 0 (and pattern values only where the slot
+uses a pattern), so a converted basic shape takes the record's `color[0]` as
+its base color factor; applying it is a later slice. (The first write-up of
+this slice called the mask unbound; the exporter had already read the bound
+mask's pixels, so the exported factor was unaffected.)
 
 Evidence in `.local/reverse/shaders/`: `item-studio-evidence.json` /
 `item-studio-alpha-evidence.json` (contracts and refusals), `-summary.json`

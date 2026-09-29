@@ -129,9 +129,9 @@ private catalog renders its 19 cube (0/0/1) props at their saved transforms with
 no unmapped keys, and original-scene export of that preview still succeeds.
 
 Not applied yet: item colors, patterns, animation, FK and dynamics (the exported
-cube/cylinder carry only the verified base-color contract, and the
-basic-shape materials carry the open color-mask question in the
-[renderer reference](../renderer.md)). An item's `childRoot` sub-transform,
+cube/cylinder carry only the verified base-color contract; their uniform
+red `_ColorMask` makes the record's `color[0]` the whole-surface tint through
+`_Color`, see the [renderer reference](../renderer.md)). An item's `childRoot` sub-transform,
 where its children attach, is not modeled — children attach to the item root.
 `ST-T04` continues to track item materials/patterns, animation, FK/dynamics and
 accessory attachment frames.
