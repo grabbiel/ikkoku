@@ -48,6 +48,10 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Edited body shape slot rates in contract order; nil keeps the card's
     /// saved values. Export writes the array back into the embedded card.
     public var sourceBodyValues: [Float]?
+    /// Edited card colors keyed by the draft color ID; nil keeps the card's
+    /// saved colors. Export writes each differing color back into the embedded
+    /// card together with any shape arrays.
+    public var sourceColorEdits: [String: Float4]?
     public var sourceKinematics: SourceStudioKinematicState?
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState?

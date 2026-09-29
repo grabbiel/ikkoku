@@ -588,6 +588,26 @@ struct FaceInspector: View {
                 }
                 Text("Edits rebuild the character from the edited shape values; export writes them back into the embedded card.")
                     .font(.caption).foregroundStyle(.secondary)
+                if !preview.draftColors.isEmpty {
+                    SectionBox(title: "Colors") {
+                        if preview.appliedColorFields.isEmpty {
+                            Text("This assembly has no card appearance bindings, so color editing is unsupported.").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(preview.draftColors.filter { preview.appliedColorFields.contains($0.id) }) { color in
+                                        ColorPicker(color.label, selection: sourceColorBinding(o, preview: preview, colorID: color.id), supportsOpacity: false)
+                                    }
+                                }
+                            }.frame(maxHeight: 200)
+                            Button("Reset to card") { resetSourceColors(o) }
+                            if let diagnostics = preview.colorEditDiagnostics, !diagnostics.isEmpty {
+                                Text(diagnostics.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("studio.face.source.colors")
+                }
             }
             .onAppear { model.displayedInspectorView = "FaceInspector.sourceShape" }
             .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceShape" { model.displayedInspectorView = "none" } }
@@ -651,6 +671,29 @@ struct FaceInspector: View {
             else { try model.setSourceShapeValues(o.id, face: o.sourceFaceValues, body: nil) }
             model.status = face ? "Face shape reset to the card's saved values" : "Body shape reset to the card's saved values"
         } catch { model.status = "Shape reset: \(error)" }
+    }
+
+    /// Picker state for one draft color: the document's edit when present, the
+    /// card's saved color otherwise. Writes rebuild the preview appearance
+    /// through the model so a rejected color keeps both preview and document.
+    private func sourceColorBinding(_ o: StudioObject, preview: SourceStudioCharacterPreview, colorID: String) -> Binding<Color> {
+        Binding(get: {
+            let value = o.sourceColorEdits?[colorID] ?? preview.savedColors[colorID] ?? .one
+            return Color(.sRGB, red: Double(value.x), green: Double(value.y), blue: Double(value.z), opacity: Double(value.w))
+        }, set: { value in
+            guard let rgb = NSColor(value).usingColorSpace(.sRGB) else { return }
+            do {
+                try model.setSourceColorEdit(o.id, colorID: colorID,
+                    rgba: SIMD4<Float>(Float(rgb.redComponent), Float(rgb.greenComponent), Float(rgb.blueComponent), Float(rgb.alphaComponent)))
+            } catch { model.status = "Color edit: \(error)" }
+        })
+    }
+
+    private func resetSourceColors(_ o: StudioObject) {
+        do {
+            try model.resetSourceColorEdits(o.id)
+            model.status = "Colors reset to the card's saved values"
+        } catch { model.status = "Color reset: \(error)" }
     }
 }
 

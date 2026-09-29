@@ -116,6 +116,61 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     #expect(reverted.trailingData == original.trailingData && reverted.snapshot.roots[1] == original.snapshot.roots[1])
 }
 
+/// The default fixture's Custom block owns no Unity Color arrays, so the
+/// color tests use a face record with an eyebrowColor field next to the
+/// shape array plus an unknown extension that must survive untouched.
+private func colorCustom() -> Data {
+    typealias F = OriginalCardFixture
+    let color: F.Value = .array([.float(0.1), .float(0.2), .float(0.3), .float(1)])
+    let face = F.pack(F.map([("version", .string("0.0.2")), ("headId", .integer(0)),
+        ("shapeValueFace", .array(F.faceValues)), ("eyebrowColor", color),
+        ("unknownFace", .ext(4, Data([8, 7, 6])))]))
+    let body = F.pack(F.map([("version", .string("0.0.2")), ("shapeValueBody", .array(F.bodyValues))]))
+    return F.lengthData(face) + F.lengthData(body) + F.lengthData(Data([0xc1, 0xfe, 0xed]))
+}
+private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
+    let fields = try card.recordFields(.face)
+    let members = try #require(fields["eyebrowColor"]?.arrayValue)
+    return try members.map { if case .float(let value) = $0 { return Float(value) }; throw SourceCharacterCardError.invalid("Expected numeric color.") }
+}
+
+@Test func sourceSceneEditingEmbeddedColorEditsCombineWithFaceShapesAndRejectUnknownDestinations() throws {
+    let card = OriginalCardFixture.card(blocks: OriginalCardFixture.blocks(custom: colorCustom()))
+    let scene = SceneDocumentBytes.scene(card: card).data
+    let original = try KoikatsuSceneReader.decodeDocument(scene)
+    let before = try SourceCharacterCard.decode(card)
+    let savedColor: [Float] = [0.1, 0.2, 0.3, 1], editedColor: [Float] = [0.8, 0.4, 0.2, 0.9]
+    // Writing the card's own saved color patches no numeric token, so the
+    // whole scene file stays byte-identical even though a color edit is asked for.
+    let noop = SourceCharacterCard.ColorEdit(record: .face, path: [.key("eyebrowColor")], rgba: savedColor)
+    #expect(try original.editedData(.init(cards: [10: .init(colors: [noop])])) == scene)
+    // A color and a face-shape edit on one character ride in a single Edits.
+    var face = try before.customization().faceValues
+    face[3] = face[3] == 0.5 ? 0.25 : 0.5
+    let colorEdit = SourceCharacterCard.ColorEdit(record: .face, path: [.key("eyebrowColor")], rgba: editedColor)
+    let edited = try KoikatsuSceneReader.decodeDocument(original.editedData(.init(cards: [10: .init(faceValues: face, colors: [colorEdit])])))
+    #expect(edited.settings == original.settings && edited.trailingData == original.trailingData)
+    #expect(edited.snapshot.roots[1] == original.snapshot.roots[1])
+    let after = try #require(edited.snapshot.roots[0].character).card()
+    #expect(try eyebrowColor(after) == editedColor)
+    #expect(try after.customization().faceValues == face)
+    // Only the edited tokens moved; every other card byte keeps its own bytes.
+    #expect(try after.customization().bodyValues == before.customization().bodyValues)
+    #expect(after.thumbnailData == before.thumbnailData && after.faceThumbnailData == before.faceThumbnailData)
+    #expect(try after.recordFields(.face)["unknownFace"] == before.recordFields(.face)["unknownFace"])
+    #expect(after.block(named: "Parameter")?.data == before.block(named: "Parameter")?.data)
+    #expect(after.block(named: "FutureOpaque")?.data == before.block(named: "FutureOpaque")?.data)
+    #expect(after.trailingData == before.trailingData)
+    // Unknown destinations reject the whole edit before any bytes are returned:
+    // a color field the record does not own, and an object key the scene lacks.
+    #expect(throws: (any Error).self) {
+        try original.editedData(.init(cards: [10: .init(colors: [.init(record: .face, path: [.key("missingColor")], rgba: editedColor)])]))
+    }
+    #expect(throws: (any Error).self) {
+        try original.editedData(.init(cards: [99: .init(colors: [colorEdit])]))
+    }
+}
+
 @Test func sourceSceneEditingRejectsUnknownDuplicateInvalidAndIdentityChangingEdits() throws {
     let original = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
     let transform = editedSceneTransform(), object = SourceSceneEdits.TransformEdit(.object(10), transform: transform)
