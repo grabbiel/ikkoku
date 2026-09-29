@@ -8,14 +8,14 @@ import Character
 public struct SourceStudioItemTint: Sendable, Equatable {
     /// The saved Unity `Color` components verbatim. CharaStudio is a gamma-space
     /// project, so this is the same sRGB-encoded space the serialized `_Color`
-    /// was exported in; `MaterialBuilder.itemMaterial` takes it through
-    /// `RGB.linear`, exactly as it does any native tint, and white is the
-    /// identity in both spaces.
+    /// was exported in. It REPLACES the exported base factor (the serialized
+    /// `_Color`), as `UpdateColor` overwrites `_Color` at runtime; the caller
+    /// converts it with `RGB.linear` like any native color.
     public let color: RGB
-    /// Multiplied into the material's base alpha, which carries the serialized
-    /// `_alpha` the alpha shader scales `_MainTex.a` with — the same float
-    /// `UpdateColor` overwrites with the record's alpha at runtime.
-    public let alphaScale: Float
+    /// The record alpha that REPLACES the exported base alpha (the serialized
+    /// `_alpha` the alpha shader scales `_MainTex.a` with), as `UpdateColor`
+    /// overwrites `_alpha`; nil when the material has no alpha property.
+    public let alpha: Float?
 }
 
 public enum SourceStudioItemColor {
@@ -36,11 +36,11 @@ public enum SourceStudioItemColor {
         else { return nil }
         let color = colors[Int(slot)]
         guard color.x.isFinite, color.y.isFinite, color.z.isFinite else { return nil }
-        var alphaScale: Float = 1
+        var recordAlpha: Float?
         if extras?["itemAlphaProperty"]?.stringValue == "_alpha" {
             guard alpha.isFinite else { return nil }
-            alphaScale = min(max(alpha, 0), 1)
+            recordAlpha = min(max(alpha, 0), 1)
         }
-        return SourceStudioItemTint(color: RGB(color.x, color.y, color.z), alphaScale: alphaScale)
+        return SourceStudioItemTint(color: RGB(color.x, color.y, color.z), alpha: recordAlpha)
     }
 }

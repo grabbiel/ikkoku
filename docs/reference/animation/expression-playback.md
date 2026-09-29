@@ -1027,9 +1027,10 @@ shift the iris textures by: `eyeLookRates` gives the pattern's lookType with
 `Eye look: TARGET · H L/R +0.22/−0.22 · V −0.05` for the selected source
 character (2 decimals, signed), or `Eye look: animated (<reason>)` when a
 resolved pattern was refused. **No eye bone is written**: the predicted
-rotations are carried in `lastRotations` but not applied, and applying them —
-the iris rendering as the `angleHRate`/`angleVRate` offset — is the next
-slice. `SourceStudioEyeLookRuntimeTests` (3 tests, synthetic eye strip at
+rotations are carried in `lastRotations` but not applied (the eye-bone write
+stays open); the iris rendering — the `angleHRate`/`angleVRate` offset onto the
+iris textures — arrived in the iris rendering slice below.
+`SourceStudioEyeLookRuntimeTests` (3 tests, synthetic eye strip at
 the captured ±0.046 m spread, no rig, no capture data): a straight-ahead
 camera gives mirror-symmetric eye angles and exactly opposite horizontal
 rates (neither zero, in [−1, 1]); a zero-delta frame keeps angles, rates and
@@ -1120,11 +1121,70 @@ re-rolls every `YureTime` is unmodeled (the entry returns its unjittered
 offset and identity texture scale with `yure` set, so callers can tell); the
 card fields that drive `offset`/`scale`/`hlUpOffsetY`/`hlDownOffsetY` at run
 time are unrecovered, so `textureTransforms` takes them as per-call
-arguments and the export carries the prefab's serialized snapshot; and no
-preview code calls it yet — writing the transforms onto the iris materials,
-like the predicted rotations onto the eye bones, is the next slice. Engine
-`swift test` 498 pass (the 9 new tests), the `eye_look_reference` module is
-42 with the per-eye-parent case.
+arguments and the export carries the prefab's serialized snapshot. Writing
+the transforms onto the iris materials arrived in the iris rendering slice
+below; the predicted rotations onto the eye bones are still not applied.
+Engine `swift test` 498 pass (the 9 new tests), the `eye_look_reference`
+module is 42 with the per-eye-parent case.
+
+### Iris rendering
+
+The transforms now reach the GPU. `MaterialUniforms` gained three
+`vector_float4` iris `_ST` vectors — `irisST0` (`_MainTex`), `irisST1`
+(`_overtex1`), `irisST2` (`_overtex2`) — in the Unity layout
+`(scaleU, scaleV, offsetU, offsetV)` that is exactly what `textureTransforms`
+already returns, and `MaterialUniforms.make` defaults each to the identity
+`(1, 1, 0, 0)`; the stride went 288 → 336 and moved `sourceAlphaA`/
+`sourceAlphaB` from 280/284 to 328/332 (both layout assertions updated).
+`Toon.metal` applies `uv' = uv * irisST.xy + irisST.zw` to the base sample and
+to the two highlight overlays, each only under
+`MaterialFlagSourceIrisHighlights`, so every non-iris material keeps its
+previous sampling untouched and an identity `_ST` reads the identical texel.
+The sampler question settled with the uniforms: `cw_t_hitomi_012`,
+`cw_t_hitomi_hi_u_002` and `cw_t_hitomi_hi_d_002` all serialize the legacy
+`m_WrapMode` 1 (Clamp; the read was validated against a known-Repeat texture
+in the same bundle), so the three iris samples use a linear clamp-to-edge
+sampler and the old "authored repeat" expectation for out-of-range iris UVs
+became a clamp expectation — uv1 1.375 and uv2 −0.375 now read the edge
+texels (composition (0.140625, 0.2265625, 0.33203125, 0.125)).
+
+`SourceStudioCharacterPreview` loads the `eyeMaterial` block from the same
+`IKKOKU_STUDIO_LOOK_SETTINGS` document with the iris-offsets decoder (a
+malformed block reports one message at init and leaves the irises at
+identity), and `frame(camera:...)` rewrites the iris items' uniforms after the
+world multiply on every frame. An item is an iris when its material carries
+`MaterialFlagSourceIrisHighlights` and its mesh name resolves to an exported
+eye through `SourceStudioIrisRendering.eye(ofMeshNamed:)` — the loaded
+`cf_Ohitomi_L02/0` carries the GLTF primitive suffix the export's `gameObject`
+does not, so the match strips a trailing `/digits` component. The rates come
+from the published `eyeLookRates` — `angleHRates[eyeLR]` per eye and the
+shared `angleVRate` — and (0, 0) when the look is not live, which is not "no
+offset": the original's `Update` runs its resting readout too, so an idle eye
+shows the resting ±0.020000001247972264 / +0.020000001247972264 write of the
+prefab snapshot (the card fields that drive `offset`/`scale` at run time are
+still unrecovered, and a one-shot diagnostic says so when the block loads). A
+refused transform — only an inverted exported clamp range can throw — appends
+one diagnostics line per eye instead of repeating per frame. `StudioModel`'s
+tick calls `refresh()` unconditionally after stepping eye look and
+`frame(camera:)` recomputes the rates per call, so a rate change reaches the
+next render; that is verified by inspection, not by an automated redraw test.
+
+`SourceIrisHighlightTests` adds five Metal expectations to the existing 1×1
+harness: `irisST0` offset 0.25 moves uv0 0.125 onto base texel 1's center and
+scale 2 onto the 0/1 midpoint, `irisST1`/`irisST2` offset 0.25 move the
+highlights onto texels whose alpha wins the component maximum (texel 3's
+alpha 1 taking the alpha channel), and an explicit identity `_ST` triple
+reproduces the pre-existing composition value bit-for-bit.
+`SourceStudioIrisRenderingTests` (3 tests, no Metal, the exported JSON fixture)
+pins the mesh-name match (L/R resolve, a material name and a body mesh resolve
+to no eye), the resting write of the pinned ±0.02 doubles — narrowed to the
+Float the shader reads — into all three `_ST` vectors with scale (1, 1), and
+that a live rateH +1 moves the u write to 0.08000000350177286 while a vertical
+−1 (normalized onto the unit circle) moves both components. Engine
+`swift test` 501 pass; the app builds for macOS arm64. Unchanged from the
+previous slice: no rendered comparison against the original game's iris motion
+exists, the Yure jitter and card-driven offset/scale stay unmodeled, and the
+predicted eye rotations still never reach the eye bones.
 
 ## Reproducible verification
 

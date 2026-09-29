@@ -1218,11 +1218,18 @@ final class StudioModel: ViewportInputHandler {
                     for part in a.parts {
                         let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
                             extras: part.material.extras)
-                        var mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: tint?.color, emissive: 0)
-                        // BLEND exports carry the serialized `_alpha` in the
-                        // base factor and Toon.metal outputs `baseColor.w ×
-                        // tex.a`, the source `_MainTex.a · _alpha` contract.
-                        mat.uniforms.baseColor.w *= tint?.alphaScale ?? 1
+                        var mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
+                        if let tint {
+                            // The exported factor is the serialized `_Color`
+                            // (and, for BLEND, `_alpha`); UpdateColor replaces
+                            // both, so the record values replace the factor
+                            // rather than multiplying it. Toon.metal outputs
+                            // `baseColor.w × tex.a`, the `_MainTex.a · _alpha`
+                            // contract.
+                            let c = tint.color.linear
+                            mat.uniforms.baseColor.x = c.x; mat.uniforms.baseColor.y = c.y; mat.uniforms.baseColor.z = c.z
+                            if let alpha = tint.alpha { mat.uniforms.baseColor.w = alpha }
+                        }
                         let model = world * part.worldMatrix
                         var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                         ri.order = 35

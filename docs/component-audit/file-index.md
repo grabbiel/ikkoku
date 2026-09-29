@@ -11,9 +11,9 @@ scene character-light preview override files, the original-player probe
 robustness test, the ST-A06 camera-object capture files, the ST-A06
 source camera-object look-through files, the ST-A06 source scale rule files,
 the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
-Studio preview runtime files and the ST-T04 studio item shader contract and record color files;
-it does not
-represent a new code audit. It lists every present Git-visible
+Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
+studio item shader contract and record color files; it does not represent a
+new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -22,13 +22,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**709 files indexed; 709 assigned; 0 unassigned.**
+**711 files indexed; 711 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 160 |
+| [Studio / IK / animation](studio.md) | 162 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 289 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
@@ -40,8 +40,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
-| Runtime / shared shader declaration | 159 |
-| Test / validation | 139 |
+| Runtime / shared shader declaration | 160 |
+| Test / validation | 140 |
 
 ## App / gameplay / plugins
 
@@ -269,6 +269,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioIK.swift](../../Packages/Engine/Sources/Studio/SourceStudioIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift](../../Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioItemColor.swift](../../Packages/Engine/Sources/Studio/SourceStudioItemColor.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
@@ -314,6 +315,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIrisOffsetTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIrisOffsetTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioIrisRenderingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIrisRenderingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |

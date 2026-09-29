@@ -184,6 +184,9 @@ typedef struct {
     vector_float4 eye;            // x = iris scale, y = iris offset u, z = iris offset v, w = highlight strength
     vector_float4 emissive;       // rgb, a = strength
     vector_float4 uvTransform;    // scale u, scale v, offset u, offset v (pattern)
+    vector_float4 irisST0;        // _MainTex _ST: scale u, scale v, offset u, offset v (source iris)
+    vector_float4 irisST1;        // _overtex1 _ST (upper highlight)
+    vector_float4 irisST2;        // _overtex2 _ST (lower highlight)
     IKUInt        kind;           // MaterialKind
     IKUInt        flags;          // MaterialFlags
     float         sourceAlphaA;   // source body-mask R control (1 = apply mask)

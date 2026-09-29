@@ -145,13 +145,16 @@ selected) and, for the alpha shader only, `_alpha`. `SourceStudioItemColor.tint`
 maps those extras and the item record to a tint — `record.colors[slot]` and
 `record.alpha` — and the frame builder applies them to the imported part.
 
-The color goes in as `MaterialBuilder.itemMaterial(tint:)`, so it takes the same
-`RGB.linear` conversion as any native tint: CharaStudio is a gamma-space project,
-which means the saved Unity `Color` components are already in the space the
-serialized `_Color` factor was exported in, and white is the identity either
-way. The alpha is multiplied into the material's base alpha, which `Toon.metal`
-scales by the sampled texture alpha exactly as the source `_MainTex.a · _alpha`
-contract does. The record's colors and alpha ride along in `sourceItemAssets`,
+The record color REPLACES the exported base factor (the serialized `_Color`)
+and the record alpha REPLACES the exported base alpha (the serialized `_alpha`),
+as `UpdateColor` overwrites both material properties at runtime. The color takes
+the same `RGB.linear` conversion as any native color: CharaStudio is a
+gamma-space project, so the saved Unity `Color` components are already in the
+space the serialized `_Color` factor was exported in. `Toon.metal` scales the
+base alpha by the sampled texture alpha exactly as the source
+`_MainTex.a · _alpha` contract does. (The basic shapes serialize white and
+alpha 1, so replacing and multiplying agree for them; replacing is the recovered
+behavior for any other value.) The record's colors and alpha ride along in `sourceItemAssets`,
 so the frame builder never re-reads the scene file.
 
 A part whose material exports no color slot — a partial or multi-channel

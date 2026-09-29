@@ -27,7 +27,7 @@ func slotSelectsRecordColor() throws {
         let color = record.colors[slot]
         // Passed verbatim; itemMaterial's RGB.linear completes the space change.
         #expect(tint.color == RGB(color.x, color.y, color.z))
-        #expect(tint.alphaScale == 1)  // no itemAlphaProperty: exported alpha stands
+        #expect(tint.alpha == nil)  // no itemAlphaProperty: exported alpha stands
     }
 }
 
@@ -43,19 +43,19 @@ func nullSlotIsNoTint() {
     }
 }
 
-@Test("Alpha property multiplies the exported base alpha by the record alpha")
+@Test("Alpha property replaces the exported base alpha with the record alpha")
 func alphaPropertyScalesBaseAlpha() throws {
     let tint = try #require(SourceStudioItemColor.tint(record: itemRecord(alpha: 0.5),
         extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_alpha")])))
     #expect(tint.color == RGB(0, 0.25, 0.75))
-    #expect(tint.alphaScale == 0.5)
+    #expect(tint.alpha == 0.5)
     #expect(SourceStudioItemColor.tint(record: itemRecord(alpha: 3),
-        extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_alpha")]))?.alphaScale == 1)
+        extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_alpha")]))?.alpha == 1)
     #expect(SourceStudioItemColor.tint(record: itemRecord(alpha: -1),
-        extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_alpha")]))?.alphaScale == 0)
+        extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_alpha")]))?.alpha == 0)
     // An unrelated property name must not scale anything.
     #expect(SourceStudioItemColor.tint(record: itemRecord(alpha: 0.5),
-        extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_Color2")]))?.alphaScale == 1)
+        extras: extras(["itemColorSlot": .number(0), "itemAlphaProperty": .string("_Color2")]))?.alpha == nil)
 }
 
 @Test("Non-finite colors and alphas reject the tint")

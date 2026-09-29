@@ -194,7 +194,12 @@ fragment float4 toon_fragment(
     float2 uv = in.uv;
     float4 base = mat.baseColor;
     if (mat.flags & MaterialFlagHasBaseTexture) {
-        float4 t = baseTex.sample(linearRepeat, uv);
+        // Iris materials carry the EyeLookMaterialControll _MainTex transform and
+        // the Clamp-imported wrap; other materials keep the repeat pattern path.
+        float2 buv = (mat.flags & MaterialFlagSourceIrisHighlights)
+            ? uv * mat.irisST0.xy + mat.irisST0.zw : uv;
+        float4 t = (mat.flags & MaterialFlagSourceIrisHighlights)
+            ? baseTex.sample(linearClamp, buv) : baseTex.sample(linearRepeat, uv);
         base *= t;
     }
     if (mat.flags & MaterialFlagHasVertexColor && mat.kind != MaterialKindHair && mat.kind != MaterialKindCloth) {
@@ -217,9 +222,11 @@ fragment float4 toon_fragment(
     // Overlays (blush, eyeshadow, lipstick, tan lines …): alpha masks × colour
     if (mat.flags & MaterialFlagSourceIrisHighlights) {
         // toon_eye_lod0 prelighting composition. UV1/UV2 are authored independently
-        // of base UV0; source gaze, eye rotation and expression sampling remain separate.
-        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(linearRepeat, in.uv1).a : 0.0;
-        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(linearRepeat, in.uv2).a : 0.0;
+        // of base UV0; each carries the EyeLookMaterialControll _overtexN transform
+        // and the Clamp-imported wrap. Source gaze, eye rotation and expression
+        // sampling remain separate.
+        float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(linearClamp, in.uv1 * mat.irisST1.xy + mat.irisST1.zw).a : 0.0;
+        float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(linearClamp, in.uv2 * mat.irisST2.xy + mat.irisST2.zw).a : 0.0;
         float4 highlight = max(upperAlpha * mat.overlayColor0, lowerAlpha * mat.overlayColor1);
         float factor = highlight.a * mat.eye.w;
         base.rgb = mix(base.rgb, highlight.rgb, factor);

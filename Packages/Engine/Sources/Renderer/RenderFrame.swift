@@ -203,6 +203,7 @@ public extension MaterialUniforms {
         m.eye = Float4(1, 0, 0, 1)
         m.emissive = Float4(0, 0, 0, 0)
         m.uvTransform = Float4(1, 1, 0, 0)
+        m.irisST0 = Float4(1, 1, 0, 0); m.irisST1 = Float4(1, 1, 0, 0); m.irisST2 = Float4(1, 1, 0, 0)
         m.kind = UInt32(kind.rawValue)
         m.flags = MaterialFlagReceiveShadow.rawValue
         m.sourceAlphaA = 1
