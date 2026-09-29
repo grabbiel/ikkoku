@@ -206,7 +206,7 @@ private func baseCamera(fov: Float) -> OrbitCamera {
     }
     // A parent frame whose basis columns collapsed (zero or near-zero scale)
     // cannot carry a child position.
-    for scale in [SIMD3<Float>.zero, SIMD3(repeating: 1e-7)] {
+    for scale: SIMD3<Float> in [.zero, SIMD3(repeating: 1e-7)] {
         let degenerate = Transform.trs(.zero, rotation, scale)
         #expect(throws: RigError.self) {
             try SourceStudioWorldTransform.world(parentFrame: degenerate,
@@ -245,7 +245,7 @@ private func baseCamera(fov: Float) -> OrbitCamera {
 
 @Test func localRejectsSingularAndNonFiniteFrames() {
     let rotation = UnityCoordinates.eulerDegrees(SIMD3(10, 20, 30))
-    for scale in [SIMD3<Float>.zero, SIMD3(repeating: 1e-7)] {
+    for scale: SIMD3<Float> in [.zero, SIMD3(repeating: 1e-7)] {
         let degenerate = Transform.trs(.zero, rotation, scale)
         #expect(throws: RigError.self) {
             try SourceStudioWorldTransform.local(world: (SIMD3(1, 2, 3), rotation), parentFrame: degenerate)
