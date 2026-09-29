@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 import unittest
 
-from export_prefab import convert_ag_normal, convert_tangent, convert_triangles, convert_uv, reflect, studio_material_contract
+from export_prefab import convert_ag_normal, convert_tangent, convert_triangles, convert_uv, item_material_contract, reflect, studio_material_contract
 
 
 def subtract(a, b):
@@ -25,6 +25,51 @@ class ConversionTests(unittest.TestCase):
     def test_shader_cutout_uses_texture_alpha_and_ignores_stale_mode(self):
         result = studio_material_contract([0.2, 0.4, 0.6, 0.1], {"_Mode": 0, "_Cutoff": 0.375, "_CutoutClip": 0})
         self.assertEqual(result, {"baseColorFactor": [0.2, 0.4, 0.6, 1], "alphaMode": "MASK", "alphaCutoff": 0.375})
+
+    def test_item_studio_mask_cutoff_is_the_verified_constant(self):
+        # FORWARD discards saturate(2*_MainTex.a) < 0.5 and there is no _Cutoff binding;
+        # unbound _ColorMask defaults to "black", so the tint is white and _Color is unused.
+        result = item_material_contract("Shader Forge/main_item_studio",
+                                        {"_Color": [0.25, 0.5, 0.75, 1], "_Color2": [0, 0, 0, 1], "_Color3": [1, 1, 0, 1]},
+                                        {"_Cutoff": 0.5, "_Mode": 3}, None, None)
+        self.assertEqual(result["baseColorFactor"], [1, 1, 1, 1])
+        self.assertEqual((result["alphaMode"], result["alphaCutoff"], result["doubleSided"]), ("MASK", 0.25, True))
+
+    def test_item_studio_color_mask_channel_selects_its_color_group(self):
+        colors = {"_Color": [0.25, 0.5, 0.625, 1], "_Color2": [0, 1, 0, 1], "_Color3": [1, 0, 1, 1]}
+        # Full red channel must select _Color exactly, ignoring _Color2/_Color3.
+        red = item_material_contract("Shader Forge/main_item_studio", colors, {}, {(255, 0, 0, 255)}, None)
+        self.assertEqual(red["baseColorFactor"], [0.25, 0.5, 0.625, 1])
+        blue = item_material_contract("Shader Forge/main_item_studio", colors, {}, {(0, 0, 255, 255)}, None)
+        self.assertEqual(blue["baseColorFactor"], [1, 0, 1, 1])
+
+    def test_item_studio_refuses_ambiguous_color_masks(self):
+        colors = {"_Color": [1, 0, 0, 1], "_Color2": [0, 1, 0, 1], "_Color3": [0, 0, 1, 1]}
+        with self.assertRaisesRegex(ValueError, "varies"):  # two different selections
+            item_material_contract("Shader Forge/main_item_studio", colors, {}, {(255, 0, 0, 255), (0, 255, 0, 255)}, None)
+        with self.assertRaisesRegex(ValueError, "blends"):  # half r + half g cannot name one group
+            item_material_contract("Shader Forge/main_item_studio", colors, {}, {(128, 128, 0, 255)}, None)
+
+    def test_item_studio_mask_refuses_fractional_forward_coverage(self):
+        # 64 <= _MainTex.a byte < 128 survives the constant discard but blends with 2*sat(2a)-1 < 1.
+        with self.assertRaisesRegex(ValueError, "fractional FORWARD coverage"):
+            item_material_contract("Shader Forge/main_item_studio", {}, {}, None, {(255, 255, 255, 100)})
+        # Below 0.25 the fragment is discarded, which MASK represents exactly.
+        ok = item_material_contract("Shader Forge/main_item_studio", {}, {}, None, {(255, 255, 255, 0), (255, 255, 255, 255)})
+        self.assertEqual(ok["alphaMode"], "MASK")
+
+    def test_item_studio_alpha_uses_alpha_blend_with_alpha_multiplier(self):
+        # BLEND variant: output alpha is _MainTex.a * _alpha and baseColorFactor carries _alpha.
+        result = item_material_contract("Shader Forge/main_item_studio_alpha", {"_Color": [0.25, 0.5, 0.75, 1]},
+                                        {"_alpha": 0.5}, None, None)
+        self.assertEqual(result["baseColorFactor"], [1, 1, 1, 0.5])  # unbound black mask keeps tint white
+        self.assertEqual((result["alphaMode"], result["doubleSided"]), ("BLEND", False))
+        self.assertNotIn("alphaCutoff", result)
+        # Fractional main alpha is representable by BLEND, so it must not be refused.
+        blended = item_material_contract("Shader Forge/main_item_studio_alpha", {}, {"_alpha": 1}, None, {(9, 9, 9, 100)})
+        self.assertEqual(blended["alphaMode"], "BLEND")
+        with self.assertRaisesRegex(ValueError, "No verified base-color mapping"):
+            item_material_contract("Shader Forge/main_StandardMDK_studio", {}, {}, None, None)
 
     def test_ag_normal_unpack_preserves_verified_shader_direction(self):
         # Arbitrary R/B must have no effect; source A/G drive X/Y.
