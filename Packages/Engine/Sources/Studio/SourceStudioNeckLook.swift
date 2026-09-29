@@ -30,7 +30,7 @@ public enum SourceStudioNeckLookType: String, Codable, Sendable, CaseIterable {
 /// The serialized changeTypeLerpCurve (pre/post infinity 2, clamp to ends)
 /// evaluated like Unity AnimationCurve.Evaluate: cubic Hermite on the
 /// normalized key segment with tangents outSlope*dt and inSlope*dt.
-public struct SourceStudioNeckLookCurve: Decodable, Sendable {
+public struct SourceStudioNeckLookCurve: Decodable, Sendable, Equatable {
     public struct Key: Decodable, Sendable, Equatable {
         public let time, value, inSlope, outSlope: Float
     }
@@ -69,19 +69,27 @@ public struct SourceStudioNeckLookCurve: Decodable, Sendable {
 }
 
 /// The settings JSON subset the look modes need: the neck states' lookType,
-/// aParam bending limits and leapSpeed, changeTypeLeapTime, calcLerp,
-/// changeTypeLerpCurve and the bone names.
-public struct SourceStudioNeckLookSettings: Decodable, Sendable {
+/// aParam bending limits, leapSpeed and the per-state limit-check fields
+/// (hAngleLimit / vAngleLimit / limitBreakCorrectionValue / limitAway),
+/// changeTypeLeapTime, calcLerp, changeTypeLerpCurve and the bone names.
+/// Equatable so SourceStudioNeckLookRuntime can pin the document it was built
+/// with: a runtime whose per-frame settings came from another character would
+/// split the limit check from the smoothing that follows it.
+public struct SourceStudioNeckLookSettings: Decodable, Sendable, Equatable {
     private struct LookType: Decodable { let name: String }
     /// The bending limits one aParam entry keeps; the same shape recurs in
     /// the exported animator controller but is not decoded there.
-    public struct BendingLimits: Decodable, Sendable {
+    public struct BendingLimits: Decodable, Sendable, Equatable {
         public let minBendingAngle, maxBendingAngle, upBendingAngle, downBendingAngle: Float
     }
     private struct TypeState: Decodable {
         let lookType: LookType
         let aParam: [BendingLimits]
         let leapSpeed: Float
+        let hAngleLimit: Float
+        let vAngleLimit: Float
+        let limitBreakCorrectionValue: Float
+        let limitAway: Float
     }
     private struct Bone: Decodable { let neckBone: String }
     private struct Neck: Decodable {
@@ -100,6 +108,17 @@ public struct SourceStudioNeckLookSettings: Decodable, Sendable {
     public let bendingLimits: [[BendingLimits]]
     /// One leapSpeed per neck state (the captured prefab keeps 2.0 on all 7).
     public let leapSpeeds: [Float]
+    /// One hAngleLimit / vAngleLimit (degrees) per neck state; the limit
+    /// check compares the signed target angles about NeckRef's up/right
+    /// axes against these plus the correction.
+    public let hAngleLimits: [Float]
+    public let vAngleLimits: [Float]
+    /// One limitBreakCorrectionValue (degrees) per neck state; the check
+    /// reads 0 while the runtime state is isLimitBreakBackup.
+    public let limitBreakCorrectionValues: [Float]
+    /// One limitAway (degrees) per neck state; AWAY's adjustment compares
+    /// the raw angle against the bending sums offset by this.
+    public let limitAways: [Float]
     /// cf_j_neck and cf_j_head, in the order the calculator reads them.
     public let boneNames: [String]
     public let changeTypeLeapTime: Float
@@ -120,9 +139,11 @@ public struct SourceStudioNeckLookSettings: Decodable, Sendable {
                     [limits.minBendingAngle, limits.maxBendingAngle,
                      limits.upBendingAngle, limits.downBendingAngle].allSatisfy(\.isFinite)
                 }
-                && state.leapSpeed.isFinite }),
+                && state.leapSpeed.isFinite
+                && [state.hAngleLimit, state.vAngleLimit,
+                    state.limitBreakCorrectionValue, state.limitAway].allSatisfy(\.isFinite) }),
               neck.neckTypeStates.count > 1 else {
-            throw RigError.invalid("Every neck look state needs two finite bending limits and a finite leapSpeed.")
+            throw RigError.invalid("Every neck look state needs two finite bending limits, a finite leapSpeed and finite limit-check fields.")
         }
         lookTypes = try neck.neckTypeStates.map { state in
             guard let lookType = SourceStudioNeckLookType(rawValue: state.lookType.name) else {
@@ -132,6 +153,10 @@ public struct SourceStudioNeckLookSettings: Decodable, Sendable {
         }
         bendingLimits = neck.neckTypeStates.map(\.aParam)
         leapSpeeds = neck.neckTypeStates.map(\.leapSpeed)
+        hAngleLimits = neck.neckTypeStates.map(\.hAngleLimit)
+        vAngleLimits = neck.neckTypeStates.map(\.vAngleLimit)
+        limitBreakCorrectionValues = neck.neckTypeStates.map(\.limitBreakCorrectionValue)
+        limitAways = neck.neckTypeStates.map(\.limitAway)
         boneNames = neck.aBones.map(\.neckBone)
         guard boneNames.count == 2 else {
             throw RigError.invalid("The neck calculator reads exactly two bones.")

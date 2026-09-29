@@ -119,6 +119,23 @@ final class StudioModel: ViewportInputHandler {
         // schedules blinks; this tick already rebuilds the frame every step, so a
         // rate change needs no extra refresh condition here.
         if sourceAutomaticBlink { for preview in sourceInstances.values { try? preview.updateBlink(elapsed: sourceAnimationTime) } }
+        // The TARGET/AWAY gaze steps before setDynamicsStep so the pose the
+        // solver reads stays a pure sample (dynamicsStep still holds the
+        // previous tick's elapsed) and refresh integrates hair once. The
+        // camera enters rig model space through the object world matrix; the
+        // Z reflection commutes with its rigid part (UnityCoordinates.matrix).
+        for (id, preview) in sourceInstances where preview.hasLiveNeckLook {
+            guard let object = doc.object(id), object.kind == .character,
+                  object.sourceCharacter != nil, doc.isVisible(id) else { continue }
+            do {
+                let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
+                let camera = UnityCoordinates.position(world.inverse.transformPoint(doc.camera.position))
+                _ = try preview.updateNeckLook(deltaTime: 1 / 30, cameraModelPosition: camera,
+                    fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                    kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
+                    animationElapsed: sourceAnimationTime)
+            } catch { status = "Source neck gaze: \(error)" }
+        }
         for preview in sourceInstances.values { try? preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: 1 / 30) }
         refresh()
     }
