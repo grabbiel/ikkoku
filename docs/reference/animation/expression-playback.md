@@ -1120,8 +1120,9 @@ Not done here: the random `YureAddScale`/`YureAddVec` jitter a Yure texture
 re-rolls every `YureTime` is unmodeled (the entry returns its unjittered
 offset and identity texture scale with `yure` set, so callers can tell); the
 card fields that drive `offset`/`scale`/`hlUpOffsetY`/`hlDownOffsetY` at run
-time are unrecovered, so `textureTransforms` takes them as per-call
-arguments and the export carries the prefab's serialized snapshot. Writing
+time were unrecovered then, so `textureTransforms` takes them as per-call
+arguments and the export carries the prefab's serialized snapshot (the card
+pupil slice below recovers the driving fields and applies them). Writing
 the transforms onto the iris materials arrived in the iris rendering slice
 below; the predicted rotations onto the eye bones are still not applied.
 Engine `swift test` 498 pass (the 9 new tests), the `eye_look_reference`
@@ -1159,15 +1160,43 @@ eye through `SourceStudioIrisRendering.eye(ofMeshNamed:)` — the loaded
 does not, so the match strips a trailing `/digits` component. The rates come
 from the published `eyeLookRates` — `angleHRates[eyeLR]` per eye and the
 shared `angleVRate` — and (0, 0) when the look is not live, which is not "no
-offset": the original's `Update` runs its resting readout too, so an idle eye
-shows the resting ±0.020000001247972264 / +0.020000001247972264 write of the
-prefab snapshot (the card fields that drive `offset`/`scale` at run time are
-still unrecovered, and a one-shot diagnostic says so when the block loads). A
-refused transform — only an inverted exported clamp range can throw — appends
-one diagnostics line per eye instead of repeating per frame. `StudioModel`'s
+offset": the original's `Update` runs its resting readout too, on whichever
+`offset`/`scale`/`hl` values the load carries — the card-driven ones since
+the pupil slice below, the prefab snapshot only while the card's face record
+lacks the fields. A refused transform — only an inverted exported clamp
+range can throw — appends one diagnostics line per eye instead of repeating
+per frame. `StudioModel`'s
 tick calls `refresh()` unconditionally after stepping eye look and
 `frame(camera:)` recomputes the rates per call, so a rate change reaches the
 next render; that is verified by inspection, not by an automated redraw test.
+
+At character load CharaStudio overrides the prefab's serialized values on both
+eyes' `EyeLookMaterialControll` from the card's face record, in six
+`ChangeSettingEye*` calls: `hlUpOffsetY = Mathf.Lerp(0.1, -0.1, face.hlUpY)`,
+`hlDownOffsetY = Mathf.Lerp(0.1, -0.1, face.hlDownY)`,
+`offset.x = Mathf.Lerp(0.2, -0.6, face.pupilX)` handed to both eyes'
+`SetEyeTexOffsetX` — which stores the negation for the right eye —
+`offset.y = Mathf.Lerp(-0.5, 0.5, face.pupilY)`, and
+`scale = (Mathf.Lerp(1.8, -0.2, face.pupilWidth), Mathf.Lerp(1.8, -0.2,
+face.pupilHeight))`. `Mathf.Lerp` clamps `t` to 0…1. Every one of the six
+returns early, applying nothing and keeping the prefab values, when
+`sex == 0 && exType == 1` (the special male assembly).
+`SourceStudioIrisRendering.cardOverrides` replays these once per character
+from the face record's `face.pupilX/pupilY/pupilWidth/pupilHeight/`
+`face.hlUpY/face.hlDownY` (the `ChaFileFace` defaults 0.5, 0.5, 0.9, 0.9,
+0.5, 0.5 are what an untouched card carries, and `ComplementWithVersion`
+fills them with 0.5 for face versions below 0.0.2), returns nil under
+the skip condition, and `transforms(rateH:rateV:settings:card:)` substitutes
+the values for the snapshot — negating `offset.x` per eye where
+`SetEyeTexOffsetX` does. At the defaults the resting write is
+(−0.02/+0.02, 0): the horizontal coincides with the prefab snapshot's
+±0.020000001247972264 but the vertical grounds from its +0.020000001247972264
+to 0. A face record without all six fields keeps the whole snapshot with a
+diagnostic — the original's decoded records always carry the fields, so a
+per-field fallback is not recovered. Eye tilt (`ChangeSettingEyeTilt`: shape
+value index 33 sets the eye material float `_rotation` to
+`Mathf.Lerp(0.02, -0.02, v)` for L and `Mathf.Lerp(-0.02, 0.02, v)` for R) is
+not implemented: its shader meaning is not recovered.
 
 `SourceIrisHighlightTests` adds five Metal expectations to the existing 1×1
 harness: `irisST0` offset 0.25 moves uv0 0.125 onto base texel 1's center and
@@ -1175,16 +1204,20 @@ scale 2 onto the 0/1 midpoint, `irisST1`/`irisST2` offset 0.25 move the
 highlights onto texels whose alpha wins the component maximum (texel 3's
 alpha 1 taking the alpha channel), and an explicit identity `_ST` triple
 reproduces the pre-existing composition value bit-for-bit.
-`SourceStudioIrisRenderingTests` (3 tests, no Metal, the exported JSON fixture)
+`SourceStudioIrisRenderingTests` (9 tests, no Metal, the exported JSON fixture)
 pins the mesh-name match (L/R resolve, a material name and a body mesh resolve
 to no eye), the resting write of the pinned ±0.02 doubles — narrowed to the
 Float the shader reads — into all three `_ST` vectors with scale (1, 1), and
 that a live rateH +1 moves the u write to 0.08000000350177286 while a vertical
-−1 (normalized onto the unit circle) moves both components. Engine
-`swift test` 501 pass; the app builds for macOS arm64. Unchanged from the
+−1 (normalized onto the unit circle) moves both components. Six card tests
+add the ChaFileFace defaults (offset −0.2/0, scale (0, 0), hl 0), the Lerp
+endpoints, out-of-range clamping, the `sex == 0 && exType == 1` nil with the
+prefab snapshot kept, the right-eye-only negation (+0.03/−0.03 for `offsetX`
+0.3) and the default card's end-to-end resting (−0.02/+0.02, 0). Engine
+`swift test` 509 pass; the app builds for macOS arm64. Unchanged from the
 previous slice: no rendered comparison against the original game's iris motion
-exists, the Yure jitter and card-driven offset/scale stay unmodeled, and the
-predicted eye rotations still never reach the eye bones.
+exists, the Yure jitter stays unmodeled, the eye tilt `_rotation` float is not
+applied, and the predicted eye rotations still never reach the eye bones.
 
 ## Reproducible verification
 
