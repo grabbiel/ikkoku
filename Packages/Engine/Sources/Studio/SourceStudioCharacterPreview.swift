@@ -116,6 +116,11 @@ public final class SourceStudioCharacterPreview {
     /// Eyes whose _ST math threw once (inverted exported limits); the notice
     /// must not repeat per frame.
     private var reportedIrisTransform: Set<Int> = []
+    /// Eye-tilt _rotation per eyeLR (0 = L, 1 = R), in turns: ChaControl's
+    /// ChangeSettingEyeTilt lerps card face shape value 33 from +0.02 (L) and
+    /// -0.02 (R), so R is exactly -L; toon_eye_lod0 multiplies it by 2*pi
+    /// (asm L61), so the value is stored unnormalized.
+    private let irisRotations: [Double]
     public var dynamicsComponentCount: Int { dynamics?.bindings.count ?? 0 }
     /// preOverride is the FK/IK-solved pose before the neck look override
     /// wrote anything: the pose the TARGET/AWAY gaze solver reads its Transforms
@@ -230,6 +235,11 @@ public final class SourceStudioCharacterPreview {
         let settings = try card.previewSettings(contract: contract, sex: identity.sex, headID: identity.headID, boneType: identity.boneType)
         let baseline = try preview.pose(bodyValues: settings.bodyValues, faceValues: settings.faceValues, boneModifiers: settings.boneModifiers, coordinate: coordinate)
         self.baseline = baseline
+        // ChangeSettingEyeTilt lerps face shape value 33 unclamped (Mathf.Lerp),
+        // L from +0.02 toward -0.02 and R as its negation (SetEyeRot negates the
+        // shared value for the R eye).
+        let eyeTilt = 0.02 - 0.04 * Double(settings.faceValues[33])
+        irisRotations = [eyeTilt, -eyeTilt]
         struct Catalog: Decodable { let bones: [SourceStudioPose.Bone] }
         let catalog = try JSONDecoder().decode(Catalog.self, from: Self.read(URL(fileURLWithPath: reference.boneCatalogFile), maximum: 16 * 1024 * 1024))
         poseCatalog = catalog.bones
@@ -453,6 +463,9 @@ public final class SourceStudioCharacterPreview {
             guard let name = resources.mesh(frame.items[i].mesh)?.name,
                   let eye = SourceStudioIrisRendering.eye(ofMeshNamed: name, in: irisEyes) else { continue }
             let settings = irisEyes[eye]
+            // The eye-tilt _rotation is a card value, independent of the live
+            // rates, so it survives a refused _ST transform below.
+            frame.items[i].material.uniforms.irisRotation = Float(irisRotations[settings.eyeLR])
             var rateH = 0.0, rateV = 0.0
             if let live = rates, live.horizontal.indices.contains(settings.eyeLR) {
                 rateH = live.horizontal[settings.eyeLR]; rateV = live.vertical

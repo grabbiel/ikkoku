@@ -208,6 +208,7 @@ public extension MaterialUniforms {
         m.flags = MaterialFlagReceiveShadow.rawValue
         m.sourceAlphaA = 1
         m.sourceAlphaB = 1
+        m.irisRotation = 0
         switch kind {
         case MaterialKindSkin:
             m.shadowColor = Float4(0.82, 0.66, 0.70, 0.52)

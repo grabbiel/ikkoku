@@ -7,10 +7,12 @@ import Renderer
 
 @Test func sourceBodyMaskUniformsKeepSharedLayoutAndExplicitDefaults() {
     let material = MaterialUniforms.make(kind: MaterialKindSkin)
-    #expect(MemoryLayout<MaterialUniforms>.stride == 336)
+    #expect(MemoryLayout<MaterialUniforms>.stride == 352)
     // The iris _ST vectors sit between uvTransform and the mask controls.
     #expect(MemoryLayout<MaterialUniforms>.offset(of: \MaterialUniforms.sourceAlphaA) == 328)
     #expect(MemoryLayout<MaterialUniforms>.offset(of: \MaterialUniforms.sourceAlphaB) == 332)
+    // _rotation follows the mask controls and pads the 16-aligned struct to 352.
+    #expect(MemoryLayout<MaterialUniforms>.offset(of: \MaterialUniforms.irisRotation) == 336)
     #expect(material.sourceAlphaA == 1 && material.sourceAlphaB == 1)
     #expect(material.flags & MaterialFlagSourceBodyMask.rawValue == 0)
 }

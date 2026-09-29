@@ -30,10 +30,12 @@ private func exportedSettings() throws -> [SourceStudioEyeMaterialSettings] {
 @Test func irisRenderingRestingRatesWriteExportedOffsetsIntoAllThreeSTVectors() throws {
     // Rates (0, 0) — eye look not live — must still write the resting offset
     // the original applies, exactly the double values the offset tests pin,
-    // narrowed to the Float the shader reads: +-0.02 / +0.02 per eye.
+    // narrowed to the Float the shader reads: Unity (+-0.02, +0.02) per eye,
+    // written in native V (SourceRig stores 1 - v) as 1 - scale.y - offset.y
+    // = -0.02 at texture scale 1.
     let eyes = try exportedSettings()
-    let resting = [SIMD2<Double>(-0.020000001247972264, 0.020000001247972264),
-                   SIMD2<Double>(0.020000001247972264, 0.020000001247972264)]
+    let resting = [SIMD2<Double>(-0.020000001247972264, -0.020000001247972264),
+                   SIMD2<Double>(0.020000001247972264, -0.020000001247972264)]
     for (eye, expected) in zip(eyes, resting) {
         let st = try SourceStudioIrisRendering.transforms(rateH: 0, rateV: 0, settings: eye)
         #expect(st.count == 3)
@@ -56,20 +58,21 @@ private func exportedSettings() throws -> [SourceStudioEyeMaterialSettings] {
     let st = try SourceStudioIrisRendering.transforms(rateH: 1, rateV: 0, settings: l)
     for vector in st {
         #expect(abs(Double(vector.z) - 0.08000000350177286) <= 1e-7, "live offset u")
-        #expect(abs(Double(vector.w) - 0.020000001247972264) <= 1e-7, "live offset v")
+        #expect(abs(Double(vector.w) - (-0.020000001247972264)) <= 1e-7, "live offset v (native V)")
         #expect(vector.x == 1 && vector.y == 1)
     }
     // The resting write differs on the u axis, so a frame at (0, 0) is not
     // the same uniform as one at (1, 0): the irises visibly follow the gaze.
-    // rateV is 0 here, so v stays on its resting 0.02.
+    // rateV is 0 here, so v stays on its resting value (Unity 0.02, native -0.02).
     let resting = try SourceStudioIrisRendering.transforms(rateH: 0, rateV: 0, settings: l)
     #expect(resting[0].z != st[0].z && resting[0].w == st[0].w)
     // A vertical rate moves both components: v = (-0.2, -1.2) normalizes to
     // (-0.164, -0.986) on the unit circle, so u drifts with it and num2 reads
-    // 100 - 200 * 0.0068 down the Down/Up waits -> (-0.0164, 0.0986).
+    // 100 - 200 * 0.0068 down the Down/Up waits -> Unity (-0.0164, 0.0986),
+    // native V offset 1 - 1 - 0.0986 = -0.0986.
     let down = try SourceStudioIrisRendering.transforms(rateH: 0, rateV: -1, settings: l)
     #expect(abs(Double(down[0].z) - (-0.016439899710016248)) <= 1e-7, "vertical offset u")
-    #expect(abs(Double(down[0].w) - 0.09863939703522955) <= 1e-7, "vertical offset v")
+    #expect(abs(Double(down[0].w) - (-0.09863939703522955)) <= 1e-7, "vertical offset v (native V)")
     #expect(down[0].w != resting[0].w, "the gaze moves the vertical write")
 }
 
@@ -190,4 +193,17 @@ private func defaults(
             #expect(abs(Double(vector.w)) <= 1e-7, "offset v eye \(eye.eyeLR)")
         }
     }
+}
+
+@Test func irisRenderingConvertsUnityTextureTransformsToNativeV() {
+    // SourceRig stores (u, 1 - v) over upright textures, so a Unity sample
+    // at v_u * sy + oy must land on native 1 - that: v_n * sy + (1 - sy - oy).
+    let st = SourceStudioIrisRendering.nativeST(scale: SIMD2(2, 3), offset: SIMD2(0.25, 0.1))
+    #expect(st == SIMD4<Float>(2, 3, 0.25, 1 - 3 - 0.1))
+    for v in [0.0, 0.3, 1.0] {
+        let unity = v * 3 + 0.1                      // Unity V sample of Unity v
+        let native = (1 - v) * 3 + Double(st.w)      // native V sample of native 1 - v
+        #expect(abs(native - (1 - unity)) < 1e-6)
+    }
+    #expect(SourceStudioIrisRendering.nativeST(scale: SIMD2(1, 1), offset: .zero) == SIMD4<Float>(1, 1, 0, 0))
 }

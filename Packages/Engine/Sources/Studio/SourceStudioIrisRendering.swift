@@ -77,6 +77,14 @@ public enum SourceStudioIrisRendering {
             offset: offset, scale: card?.scale ?? settings.scale,
             hlUpOffsetY: card?.hlUp ?? settings.hlUpOffsetY,
             hlDownOffsetY: card?.hlDown ?? settings.hlDownOffsetY)
-            .map { Float4(Float($0.scale.x), Float($0.scale.y), Float($0.offset.x), Float($0.offset.y)) }
+            .map { nativeST(scale: $0.scale, offset: $0.offset) }
+    }
+
+    /// Converts a Unity `_ST` (uv' = uv·scale + offset, Unity V) to the shader
+    /// layout in native V. `SourceRig` stores source UVs as (u, 1 − v) over
+    /// upright textures, so the native sample must equal 1 − (the Unity
+    /// sample): v' = v·scale.y + (1 − scale.y − offset.y). U is unchanged.
+    public static func nativeST(scale: SIMD2<Double>, offset: SIMD2<Double>) -> Float4 {
+        Float4(Float(scale.x), Float(scale.y), Float(offset.x), Float(1 - scale.y - offset.y))
     }
 }
