@@ -100,6 +100,15 @@ source bytes; it does not make every retained feature visible or editable. See
 conversion using an explicit converted-item catalog. It does not load a full
 original scene. See [item conversion](../reference/studio/item-catalog.md).
 
+Previewed original scenes gain route playback controls: selecting a route
+object shows a Route Play/Stop button, and a toolbar menu offers Play all
+routes (starts the stopped routes), Replay all routes (restarts every route
+from its first point at the current time) and Stop all routes. A route that
+starts the scene stopped can therefore be played, and a running one stopped,
+while scrubbing shows the tween relative to the press instant. These controls
+are runtime only: the original export keeps the saved route state, so the
+scene's serialized playing/stopped flag never changes.
+
 ## Mods and plugins
 
 **Mods → Open Mod Library…** opens a generated `library.json` and selects its

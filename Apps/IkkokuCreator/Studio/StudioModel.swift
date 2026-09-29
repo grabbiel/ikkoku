@@ -79,6 +79,28 @@ final class StudioModel: ViewportInputHandler {
     /// place `childRoot` from the stepper's latest frame while it belongs to
     /// the current frame. Same lifecycle as `sourceRoutes`.
     @ObservationIgnored private var sourceRouteClocks: [UUID: SourceStudioRouteClock] = [:]
+    /// Runtime route play state, the counterpart of the original's
+    /// `routeInfo.active` the `RouteControl` buttons toggle (`OnPlay` per
+    /// route, `OnClickALL`/`OnClickReAll`/`Stop all` for the scene): seeded
+    /// from each record's saved flag at import (play start 0), never written
+    /// to the document — the original export keeps the record's flag because
+    /// edited route serialization is unsupported (`SourceSceneExportValidation`).
+    /// `start` is the `sourceAnimationTime` the route's tween runs from;
+    /// a stop pins `childRoot` to point 0 like `Stop`.
+    private(set) var sourceRoutePlayState: [UUID: (playing: Bool, start: Float)] = [:]
+    /// Whether the imported scene brought route objects, so the route play
+    /// controls appear only where they can do something.
+    var hasSourceRoutes: Bool { !sourceRoutes.isEmpty }
+    /// Whether the selected object is an imported route with a runtime.
+    var selectedRouteIsSource: Bool {
+        selection.flatMap { sourceRouteRuntime(id: $0, document: doc) } != nil
+    }
+    /// The play state label for the selected route: seeded from the record,
+    /// toggled by the controls.
+    var selectedRoutePlaying: Bool {
+        guard let id = selection else { return false }
+        return sourceRoutePlayState[id]?.playing ?? sourceRoutes[id]?.route.active ?? false
+    }
     /// Routes whose rebuild exceeded the fast-forward budget, reported once
     /// while they stay on the continuous evaluator.
     @ObservationIgnored private var sourceRouteFallbackReported: Set<UUID> = []
@@ -370,8 +392,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -566,7 +588,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -598,7 +620,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -863,6 +885,7 @@ final class StudioModel: ViewportInputHandler {
                 && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == runtime.objectKey })
         }
         sourceRouteClocks = sourceRouteClocks.filter { sourceRoutes[$0.key] != nil }
+        sourceRoutePlayState = sourceRoutePlayState.filter { sourceRoutes[$0.key] != nil }
         sourceRouteFallbackReported = sourceRouteFallbackReported.filter { sourceRoutes[$0] != nil }
         // Route-character previews are likewise authored data with no document
         // counterpart to edit; the prune only drops gone objects.
@@ -1070,34 +1093,48 @@ final class StudioModel: ViewportInputHandler {
     }
 
     /// The parent route's `childRoot` world matrix at the current clock: the
-    /// per-frame stepper's latest frame when its mirrored clock has reached
-    /// `sourceAnimationTime` (within 1 µs), else the continuous evaluator —
-    /// the unchanged `SourceStudioRoutePlayback.childRootWorld` path. The
-    /// stepper is the one `ikkoku-inspect route-steps` validates against the
-    /// original captures: built through `SourceStudioRoutePlayback.stepper`
-    /// with the route world folded into the points, seeded with point 0's
-    /// world rotation and the preview's `1/30` Play-frame delta; the clock
-    /// bookkeeping (live step, jump rebuild + fast-forward, 10-minute cap
-    /// fallback) is `SourceStudioRouteClock`'s.
+    /// per-frame stepper's latest frame when the route is playing and its
+    /// mirrored clock has reached `sourceAnimationTime` (within 1 µs), else
+    /// the continuous evaluator — the unchanged
+    /// `SourceStudioRoutePlayback.childRootWorld` path, fed the runtime play
+    /// state: a playing route evaluates from its `start` (the tween offset
+    /// `Play` established), and a stopped one — even record-active — pins
+    /// `childRoot` to point 0 like the original's `Stop`. The stepper is the
+    /// one `ikkoku-inspect route-steps` validates against the original
+    /// captures: built through `SourceStudioRoutePlayback.stepper` with the
+    /// route world folded into the points, seeded with point 0's world
+    /// rotation and the preview's `1/30` Play-frame delta; the clock
+    /// bookkeeping (press instant, live step, jump rebuild + fast-forward,
+    /// 10-minute cap fallback) is `SourceStudioRouteClock`'s.
     private func routeChildRootWorld(id: UUID, route: SourceRouteRuntime,
                                      document: StudioDocument,
                                      previews: [UUID: SourceStudioCharacterPreview]) throws
         -> (matrix: float4x4, diagnostics: [String]) {
         let routeWorld = try sourceWorldMatrix(of: id, document: document, previews: previews)
+        let state = sourceRoutePlayState[id] ?? (playing: route.route.active, start: 0)
         let clock: SourceStudioRouteClock
         if let existing = sourceRouteClocks[id] {
             clock = existing
         } else {
-            // A record-inactive route is never stepped: `Play` refuses it and
-            // `childRoot` keeps its `Stop` pin through the continuous path.
-            clock = SourceStudioRouteClock { world in
-                guard route.route.active else { return nil }
+            // A route the play state stops never gets a stepper until a
+            // press: `frame` answers nothing before that, so `childRoot`
+            // keeps its `Stop` pin through the continuous path.
+            clock = SourceStudioRouteClock(playing: state.playing, playStart: state.start) { world in
                 let point0 = world * (route.pointLocals.first ?? matrix_identity_float4x4)
                 return SourceStudioRoutePlayback.stepper(route: route.route, routeWorld: world,
                     pointLocals: route.pointLocals, playRotation: point0.rotationQuaternion,
                     playDeltaTime: Double(SourceStudioRouteClock.frameDelta)).stepper
             }
             sourceRouteClocks[id] = clock
+        }
+        if clock.playing != state.playing || (state.playing && clock.playStart != state.start) {
+            // A play-state press (per-route toggle or play-all) or a stop.
+            if state.playing {
+                _ = clock.play(at: state.start, routeWorld: routeWorld)
+                if clock.reachedTime != sourceAnimationTime { _ = clock.jump(to: sourceAnimationTime) }
+            } else {
+                _ = clock.stop()
+            }
         }
         if let frame = clock.frame(at: sourceAnimationTime, routeWorld: routeWorld) {
             // The stepper runs on the evaluator's source-space (Unity) route,
@@ -1116,8 +1153,76 @@ final class StudioModel: ViewportInputHandler {
             sourceRouteFallbackReported.insert(id)
             status = "Route \(route.objectKey) stepped past the \(SourceStudioRouteClock.maxRebuildSteps)-frame fast-forward budget; continuous route evaluation is used."
         }
+        // The continuous fallback follows the play state: a stopped route
+        // pins `childRoot` to point 0 like `Stop` (overriding a record-active
+        // flag), a pressed record-inactive one evaluates through the override,
+        // and the continuous time is the tween offset — the same
+        // `clockTime - playStart` the clock answers from. An instant before
+        // the press is "not playing yet" like the clock's answer there, so
+        // the route stays pinned rather than showing the tween's percentage-0
+        // aim.
         return SourceStudioRoutePlayback.childRootWorld(route: route.route, routeWorld: routeWorld,
-            pointLocals: route.pointLocals, elapsed: Double(sourceAnimationTime))
+            pointLocals: route.pointLocals,
+            elapsed: state.playing ? max(0, Double(sourceAnimationTime - state.start)) : Double(sourceAnimationTime),
+            activeOverride: state.playing && sourceAnimationTime >= state.start)
+    }
+
+    // MARK: Route play controls
+
+    /// The per-route `RouteControl` button (`OnPlay`): a playing route
+    /// `Stop`s, a stopped one `Play`s — which the original refuses (returns
+    /// false, changes nothing) for a route with fewer than two points. The
+    /// press is stamped with the current clock instant, the same stamp the
+    /// original's `Play` leaves on a tween built at the press; the stepper
+    /// re-syncs on the next placement walk.
+    func toggleSourceRoute(_ id: UUID) {
+        guard let route = sourceRoutes[id] else { return }
+        if sourceRoutePlayState[id]?.playing ?? route.route.active {
+            sourceRoutePlayState[id] = (playing: false, start: 0)
+            status = "Route \(route.objectKey) stopped"
+        } else {
+            guard route.route.points.count >= 2 else {
+                status = "Route \(route.objectKey) has fewer than two points; Play does nothing."
+                return
+            }
+            sourceRoutePlayState[id] = (playing: true, start: sourceAnimationTime)
+            status = "Route \(route.objectKey) playing from \(String(format: "%.2f", sourceAnimationTime)) s"
+        }
+        refresh()
+    }
+
+    /// "Play all" (`OnClickALL`): `Play` on every route that is not playing
+    /// — the original restarts none of the running ones; routes the original
+    /// `Play` refuses (fewer than two points) are left stopped.
+    func playAllSourceRoutes() {
+        var started = 0
+        for (id, route) in sourceRoutes {
+            guard !(sourceRoutePlayState[id]?.playing ?? route.route.active) else { continue }
+            guard route.route.points.count >= 2 else { continue }
+            sourceRoutePlayState[id] = (playing: true, start: sourceAnimationTime)
+            started += 1
+        }
+        status = "Route play all: \(started) route\(started == 1 ? "" : "s") started"
+        refresh()
+    }
+
+    /// "Replay all" (`OnClickReAll`): `Play` on every route, restarting the
+    /// running ones from point 0 at the current instant.
+    func replayAllSourceRoutes() {
+        var started = 0
+        for (id, route) in sourceRoutes where route.route.points.count >= 2 {
+            sourceRoutePlayState[id] = (playing: true, start: sourceAnimationTime)
+            started += 1
+        }
+        status = "Route replay all: \(started) route\(started == 1 ? "" : "s") restarted"
+        refresh()
+    }
+
+    /// "Stop all": `Stop` on every route, playable or not.
+    func stopAllSourceRoutes() {
+        for id in sourceRoutes.keys { sourceRoutePlayState[id] = (playing: false, start: 0) }
+        status = "All routes stopped"
+        refresh()
     }
 
     /// Live tick: every route stepper advances by the same delta the clock
