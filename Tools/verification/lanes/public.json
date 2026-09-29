@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "engine-unit-tests",
+      "argv": ["swift", "test", "--package-path", "Packages/Engine"],
+      "env": {},
+      "minimumTests": 300,
+      "referenceTier": "synthetic",
+      "tolerance": "Synthetic contracts only. With the T-T04 Swift change (PR #4) fixture-gated tests report named skips; without it they early-return and look like passes. Do not read the green count as source-data coverage.",
+      "timeout": 600
+    },
+    {
+      "id": "mod-tools-tests",
+      "argv": ["python3", "-m", "unittest", "discover", "-s", "Tools/mods", "-p", "test_*.py"],
+      "env": {},
+      "minimumTests": 5,
+      "referenceTier": "synthetic",
+      "tolerance": "Unit tests run without private fixtures; some cases gate on IKKOKU_* paths and pass by early return.",
+      "timeout": 300
+    },
+    {
+      "id": "translation-tests",
+      "argv": ["python3", "-m", "unittest", "discover", "-s", "Tools/translation/tests", "-p", "test_*.py"],
+      "env": {},
+      "minimumTests": 10,
+      "referenceTier": "synthetic",
+      "tolerance": "Translation frontend checks run against generated fixtures only.",
+      "timeout": 300
+    },
+    {
+      "id": "runner-self-tests",
+      "argv": ["python3", "-m", "unittest", "discover", "-s", "Tools/verification", "-p", "test_*.py"],
+      "env": {},
+      "minimumTests": 25,
+      "referenceTier": "synthetic",
+      "tolerance": "Unit tests of the verification runner itself on sample runner output.",
+      "timeout": 120
+    },
+    {
+      "id": "studio-inspector-validator-tests",
+      "argv": ["python3", "-m", "unittest", "discover", "-s", "Tools/verification/checks", "-p", "test_*.py"],
+      "env": {},
+      "minimumTests": 6,
+      "referenceTier": "synthetic",
+      "tolerance": "Unit tests of the Studio-inspector report validator on sample report JSON.",
+      "timeout": 120
+    }
+  ]
+}
