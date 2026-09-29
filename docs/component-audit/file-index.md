@@ -22,7 +22,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**727 files indexed; 727 assigned; 0 unassigned.**
+**728 files indexed; 728 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -30,12 +30,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 114 |
 | [Studio / IK / animation](studio.md) | 166 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 95 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 96 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
-| Build / repository configuration | 5 |
+| Build / repository configuration | 6 |
 | Conversion / recovery / verification tool | 120 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
@@ -709,6 +709,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 
 | File | Role |
 | --- | --- |
+| [.github/workflows/ci.yml](../../.github/workflows/ci.yml) | Build / repository configuration |
 | [.gitignore](../../.gitignore) | Build / repository configuration |
 | [CONTRIBUTING.md](../../CONTRIBUTING.md) | Documentation / historical evidence |
 | [Ikkoku.xcodeproj/project.pbxproj](../../Ikkoku.xcodeproj/project.pbxproj) | Build / repository configuration |
