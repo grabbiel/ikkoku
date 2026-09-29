@@ -349,6 +349,71 @@ def sorasi_horizontal(*, previous_angle: float, measured: float, state: dict,
     return previous_angle, num5
 
 
+def _rate_inverse_lerp(a: float, b: float, value: float) -> float:
+    """The EyeLookCalc rate InverseLerp: like Mathf.InverseLerp's clamped 0..1
+    readout except an empty range (a == b) reads 0, not 1."""
+    if a == b:
+        return 0.0
+    return _clamp((value - a) / (b - a), 0.0, 1.0)
+
+
+def angle_rates(eyes_state: list[dict], eye_type_state: dict) -> tuple[list[float], float]:
+    """The frame-end angle RATES EyeLookCalc computes from the new angles and
+    the CURRENT pattern's eye type state (the values EyeLookMaterialControll
+    shifts the iris textures by).  `eyes_state` is the L, R per-eye state (the
+    optional `eyeLR` entry field selects the mirroring, defaulting to the
+    index); returns (angleHRate [L, R], angleVRate).  The R eye's horizontal
+    rate mirrors through (-maxBending, -minBending), the L eye reads
+    (minBending, maxBending) directly; the single vertical rate comes from
+    entry 0's angleV (the calculator's angleV[0], the eyeLR 0 eye in the
+    capture's L, R order) and swaps the up/down ranges when downBendingAngle
+    exceeds upBendingAngle (the shipped -30/10 pair takes that branch)."""
+    if not isinstance(eyes_state, list) or len(eyes_state) != 2:
+        raise ValueError('angle rates need a two-eye state list')
+    min_bending = _finite(eye_type_state['minBendingAngle'], 'minBendingAngle')
+    max_bending = _finite(eye_type_state['maxBendingAngle'], 'maxBendingAngle')
+    up_bending = _finite(eye_type_state['upBendingAngle'], 'upBendingAngle')
+    down_bending = _finite(eye_type_state['downBendingAngle'], 'downBendingAngle')
+    vertical_angle = _finite(eyes_state[0].get('angleV'), 'rate eye 0 angleV')
+    h_rates: list[float] = []
+    for index, entry in enumerate(eyes_state):
+        angle_h = _finite(entry.get('angleH'), f'rate eye {index} angleH')
+        eye_lr = entry.get('eyeLR', index)
+        if isinstance(eye_lr, bool) or eye_lr not in (0, 1):
+            raise ValueError(f'rate eye {index} eyeLR must be 0 or 1: {eye_lr!r}')
+        if eye_lr == 1:
+            h_rates.append(lerp(-1.0, 1.0, _rate_inverse_lerp(-max_bending, -min_bending, angle_h)))
+        else:
+            h_rates.append(lerp(-1.0, 1.0, _rate_inverse_lerp(min_bending, max_bending, angle_h)))
+    if up_bending <= down_bending:
+        low, high = up_bending, down_bending
+    else:
+        low, high = down_bending, up_bending
+    if vertical_angle >= 0.0:
+        v_rate = -_rate_inverse_lerp(0.0, high, vertical_angle)
+    else:
+        v_rate = _rate_inverse_lerp(0.0, low, vertical_angle)
+    return h_rates, v_rate
+
+
+def initial_eye_state(*, eye_parent_rotation: list[float], eye_local_rotation: list[float],
+                      root_node_rotation: list[float], head_look_vector: list[float],
+                      head_up_vector: list[float]) -> dict:
+    """One eye's EyeLookCalc.Init, from the explicit world rotations the scene
+    carries at initialization: q = inverse(eyeTransform.parent.rotation), the
+    reference look / up dirs are q * rootNode.rotation applied to the
+    normalized headLookVector / headUpVector, angleH / angleV start at 0 with
+    dirUp = referenceUpDir and origRotation = the eye's localRotation."""
+    q = inverse_quaternion(_quaternion(eye_parent_rotation, 'eye parent rotation'))
+    root = _quaternion(root_node_rotation, 'eye root node rotation')
+    base = multiply_quaternions(q, root)
+    look_dir = rotate(base, _normalize_strict(head_look_vector, 'headLookVector'))
+    up_dir = rotate(base, _normalize_strict(head_up_vector, 'headUpVector'))
+    return {'angleH': 0.0, 'angleV': 0.0, 'dirUp': up_dir,
+            'referenceLookDir': look_dir, 'referenceUpDir': up_dir,
+            'origRotation': _quaternion(eye_local_rotation, 'eye local rotation')}
+
+
 def state_values(state: dict) -> list[dict]:
     """Validate the per-eye state the solver carries between frames."""
     eyes = state.get('eyes') if isinstance(state, dict) else None
@@ -372,15 +437,20 @@ def eye_update(*, state: dict, geometry: dict, target: list[float], dt: float,
     frame's eyeTypeStates entry (lookType a name or a {name, value} record)
     and `settings` the exported eyes block (correct, centerEyeLength,
     sorasiRate).  Returns the new per-eye state, each entry extended with the
-    predicted `localRotation`, world `rotation` and the frame's final sorasi
-    `num5`.  `num5` is frame-local like the transcription (reset to -1 each
+    predicted `localRotation`, world `rotation`, the frame's final sorasi
+    `num5` and the frame-end `angleHRate` / `angleVRate` the original computes
+    from the new angles (recomputed the same way on the `dt == 0` path).  `num5` is frame-local like the transcription (reset to -1 each
     frame; the AWAY branch arms it on the L eye and the R eye reads it).
     NO_LOOK would write the fixAngle the trace does not record and is a
     diagnostic error.
     """
     dt = _finite(dt, 'eye deltaTime')
     if dt == 0.0:
-        return [dict(entry, localRotation=None, rotation=None, num5=None) for entry in state_values(state)]
+        carried = state_values(state)
+        h_rates, v_rate = angle_rates(carried, st)
+        return [dict(entry, localRotation=None, rotation=None, num5=None,
+                     angleHRate=h_rates[index], angleVRate=v_rate)
+                for index, entry in enumerate(carried)]
     look_type = st['lookType']
     if isinstance(look_type, dict):
         look_type = look_type['name']
@@ -445,6 +515,10 @@ def eye_update(*, state: dict, geometry: dict, target: list[float], dt: float,
         results.append({'angleH': angle_h, 'angleV': angle_v, 'dirUp': dir_up, 'num5': num5,
                         'localRotation': local_rotation,
                         'rotation': multiply_quaternions(parent, local_rotation)})
+    h_rates, v_rate = angle_rates(results, st)
+    for index, entry in enumerate(results):
+        entry['angleHRate'] = h_rates[index]
+        entry['angleVRate'] = v_rate
     return results
 
 
@@ -549,7 +623,8 @@ def run_fixture_sequence(name: str, pattern: int, schedule: list,
                                                 state=states[pattern],
                                                 look_type=FIXTURE_EYE_TYPES[pattern])[0],
             'outputs': [{key: entry.get(key) for key in
-                         ('angleH', 'angleV', 'dirUp', 'localRotation', 'num5')}
+                         ('angleH', 'angleV', 'dirUp', 'localRotation', 'num5',
+                          'angleHRate', 'angleVRate')}
                         for entry in results]})
     return sequence
 

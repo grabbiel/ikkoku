@@ -709,7 +709,8 @@ in Python (the Swift port arrived with the following slice; see the port
 paragraph at the end of this section). One frame, in execution order:
 
 - `deltaTime == 0` returns the carried state untouched — no rotation, no
-  `num5` (the reference returns `None` rotation fields).
+  `num5` (the reference returns `None` rotation fields) — but the frame's two
+  angle rates are still recomputed, from the carried angles (below).
 - The target resolution runs once per frame for both eyes: non-TARGET types
   first push a closer-than-`nearDis` target out to `normalize(v) · nearDis`;
   the horizontal check `Angle((v.x, root.forward.y, v.z), forward)` and the
@@ -864,7 +865,10 @@ string or the capture's `{name, value}` record). Unity math missing from the nec
 quaternion, `TransformPoint`/`InverseTransformPoint` with `lossyScale` —
 lives as internal helpers there, reusing the neck port's
 `SourceStudioNeckTargetAngle` rotate/angleAxis. `deltaTime == 0` returns
-`nil` rotations and leaves the state untouched, mirroring the reference.
+`nil` rotations and leaves the angles and `dirUp` untouched while recomputing
+the frame's rates from them, mirroring the reference — the consequence of
+resolving the pattern before that early return is that an unknown pattern now
+throws on a zero-delta frame too, as it already did in the reference.
 `eye_look_reference.py --fixture` writes
 `Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json` — 25
 SYNTHETIC sequences (hand-picked numbers, no capture data; the reference
@@ -874,12 +878,111 @@ types, both limit switches and the nearDis push-out at 1.0/1.99/2.0, all
 four sorasi routes (keep / push-negative / push-positive / exactly-equal,
 plus armed-`num5` reads on both eyes), a zero-delta frame, tilted eye
 references, a moving root, non-uniform `lossyScale` and a target sitting on
-an eye pivot. `SourceStudioEyeLookTests` replays it to ≤1e-5° on angles and
-1e-6 on quaternion/direction components, pins the bend dead-band, the L/R
-mirror clamps and the four sorasi routes against hand-computed reference
-values, and checks non-finite inputs, out-of-range patterns, NO_LOOK,
+an eye pivot, every frame recording its `angleHRate` pair and single
+`angleVRate`. `SourceStudioEyeLookTests` replays it to ≤1e-5° on angles,
+1e-6 on quaternion/direction components and 1e-6 on both rates, pins the bend
+dead-band, the L/R mirror clamps and the four sorasi routes against
+hand-computed reference values, checks the rate formula and the
+initialization composition against hand-computed values (next subsection),
+and checks non-finite inputs, out-of-range patterns, NO_LOOK,
 wrong eye counts, zero forward/up directions (`lookRotation`, `project` and
 the correct frame's "parallel to the up axis" error) throw.
+
+### Angle rates and initialization
+
+Two numbers per frame leave the calculator besides the angles, and
+`EyeLookMaterialControll` is their consumer: it shifts the iris textures by
+them (the horizontal pair per eye, one vertical for both). They are read
+straight off the calculator, so a preview that wants the iris motion needs
+them and the initialized reference frame the solver measures against.
+
+`EyeUpdateCalc` recomputes them at the very end of every frame, from the
+frame's NEW `angleH`/`angleV` and the pattern's type state — including the
+`deltaTime == 0` frame, where nothing stepped and the angles are the carried
+ones:
+
+- `angleHRate` per eye: `Lerp(−1, 1, ratio)` over the bending range, with the
+  left eye reading `InverseLerp(minBendingAngle, maxBendingAngle, angleH)`
+  and the right eye the mirror `InverseLerp(−maxBendingAngle,
+  −minBendingAngle, angleH)` — the same pair of ranges the angle clamps use.
+  The rate's `InverseLerp` is `Mathf.InverseLerp`'s clamped 0…1 readout except
+  that an empty range (`a == b`) reads 0 rather than 1, so a degenerate type
+  state gives `Lerp(−1, 1, 0) = −1` instead of saturating.
+- One `angleVRate`, from **eye 0's** `angleV` only: if
+  `downBendingAngle <= upBendingAngle` a non-negative angle reads
+  `−InverseLerp(0, upBendingAngle, v)` and a negative one
+  `InverseLerp(0, downBendingAngle, v)`; otherwise the two divisors swap. The
+  shipped pair (`upBendingAngle` −30, `downBendingAngle` 10) has 10 > −30 and
+  takes the swapped branch: a non-negative angleV — a target below the
+  reference plane in this axis's convention — divides by `downBendingAngle`
+  10 and is negated, a negative one by `upBendingAngle` −30. Because the
+  final `Lerp` keeps the value in [−1, 1] and the `InverseLerp` clamps, an
+  angle past its range saturates.
+
+`angle_rates` (Python) and `angleRates` (Swift, the rate `InverseLerp` its
+own `rateInverseLerp`) implement this, and the capture pins the arithmetic:
+phase 0 frame 5 has L `angleH` 0.04187133 → `angleHRate` 0.2217584, R
+−0.04111683 → −0.2217328, and eye 0 `angleV` 0.472471 → `angleVRate`
+−0.0472471 (0.472471 / 10 negated). Both are recomputed by `step` and read
+back as `angleHRates` (L, R order) and `angleVRate`, zero before the first
+frame — the original's field default.
+
+`compare_eye_look.py` now replays the rates against every frame's recorded
+`calculators[0].angleHRate` / `angleVRate` (a two-entry `angleHRate` and a
+finite `angleVRate` are required per frame). Maxima, in rate units:
+
+| phase | lookType | \|ΔangleHRate\| L / R | \|ΔangleVRate\| |
+| --- | --- | --- | --- |
+| 0 | TARGET | 0.000016 (2) / 0.000006 (1) | 0.000021 (56) |
+| 1 | TARGET | 0.000001 (175) / 0.000001 (96) | 0.000007 (175) |
+| 2 | AWAY | 0.048374 (189) / 0.048233 (189) | 0.012809 (203) |
+| 3 | FORWARD | 0.000001 (328) / 0.000005 (328) | 0.000001 (288) |
+| 4 | TARGET | 0.000036 (367) / 0.000036 (367) | 0.000000 (367) |
+| 5 | TARGET | 0.000001 (442) / 0.000001 (421) | 0.000018 (442) |
+| 6 | CONTROL | 1.368147 (450) / 0.948737 (450) | 0.315824 (450) |
+| 7 | TARGET | 0.000000 (510) / 0.000000 (522) | 0.000001 (541) |
+
+The five phases whose angles match (0/1/3/5/7) reproduce the rates to
+≤0.000016 horizontal and ≤0.000021 vertical, and the phase that sits a hair
+past the angle target (4) to 0.000036 horizontal. The two real misses carry
+through as
+far as their angles do (AWAY 0.048 of rate against 1.43° of angle, CONTROL
+1.368 / 0.949 against 40.4° / 28.0°, the saturated-looking magnitudes being
+what `Lerp(−1, 1, ·)` of an out-of-range `InverseLerp` looks like). Rates are
+therefore **reported, not gated** by the comparator — they inherit the
+documented AWAY and CONTROL angle misses, and the comparator still exits 1
+on those. The worst measured pair is `angleHRate` 1.368147 and `angleVRate`
+0.315824, both phase 6 frame 450; frame 0 stays seed-only.
+
+`initial_eye_state` (Python) / `SourceStudioEyeLookSolver.initialState`
+reproduce the calculator's `Init`, which builds the frame every later angle
+is measured in. Per eye, with `q = inverse(eyeTransform.parent.rotation)`:
+`referenceLookDir = q · rootNode.rotation · normalize(headLookVector)`,
+likewise `referenceUpDir` from `headUpVector`, `angleH = angleV = 0`,
+`dirUp = referenceUpDir` and `origRotation = eyeTransform.localRotation`.
+The settings give `headLookVector` (0, 0, 1), `headUpVector` (0, 1, 0),
+`rootNode` `p_cf_head_bone`, `trfCenter` `cf_J_Eye_tz` and the two eyes as
+`eyeLR` 0 → `EyeTargetL`, 1 → `EyeTargetR`; outputs come back in `eyeLR`
+order whichever order the eyes arrive in, and the Swift helper throws unless
+there is exactly one eye per `eyeLR`, a non-finite input or a zero head
+vector. The head vectors are normalized, so a longer `(0, 0, 2)` reads
+identically. A scene load then restores over the initialized state: the
+saved eye bytes (`SourceStudioEyeLookData`: two `fixAngle` quaternions, plus
+`angleH[0..1]`/`angleV[0..1]` when the scene data version is ≥ 0.0.8)
+replace the two zero angles, while `dirUp` keeps the Init value — nothing in
+the saved bytes carries it.
+
+Verified by 9 new unittest cases (`AngleRatesTests`, `InitialEyeStateTests`,
+41 in the module) and 1 new Swift test (5 in the file, `swift test` 478
+passing): the check values above at 1e-6 / 1e-9, ±13/59 for both eyes at
+angle 0, saturation at ±100, the empty-range 0 readout, both vertical branch
+orders, rates on both `step` paths, and an Init whose root is rotated 90°
+about x under an eye parent rotated 90° about z — base 180° about
+(−1, 0, 0)/√2, head forward (0, 0, 1) → (−1, 0, 0) and head up (0, 1, 0) →
+(0, 0, 1) — at 1e-9. The rates are also in the regenerated
+`eye-look-reference.json`, which stays byte-stable across regenerations.
+What remains is still the preview wiring: the Studio camera as the eye
+target, and these rates as the iris-offset input.
 
 ## Reproducible verification
 
