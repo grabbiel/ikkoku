@@ -214,3 +214,127 @@ private func baseCamera(fov: Float) -> OrbitCamera {
         }
     }
 }
+
+@Test func localRoundTripsWorldAcrossParentFrames() throws {
+    let localPosition = UnityCoordinates.position(SIMD3(0.3, 0.6, -0.9))
+    let localRotation = UnityCoordinates.eulerDegrees(SIMD3(10, 70, 25))
+    let parents: [(name: String, frame: float4x4)] = [
+        ("identity", Transform.identity),
+        ("rotated-scaled", try SourceStudioWorldTransform.world(parentFrame: Transform.identity,
+            localPosition: UnityCoordinates.position(SIMD3(1, 0.5, 2)),
+            localRotation: UnityCoordinates.eulerDegrees(SIMD3(0, 40, 15)),
+            localScale: SIMD3(repeating: 3), scalable: true)),
+        ("non-uniform-scaled", try SourceStudioWorldTransform.world(parentFrame: Transform.identity,
+            localPosition: UnityCoordinates.position(SIMD3(-0.4, 0.3, 0.6)),
+            localRotation: UnityCoordinates.eulerDegrees(SIMD3(20, 40, 15)),
+            localScale: SIMD3(1, 2, 0.5), scalable: true)),
+    ]
+    for parent in parents {
+        let world = try SourceStudioWorldTransform.world(parentFrame: parent.frame, localPosition: localPosition,
+            localRotation: localRotation, localScale: SIMD3(repeating: 2), scalable: true)
+        // The rotation composes through the scale-free parent rotation, which
+        // is what `local` must undo for a non-uniform parent.
+        #expect(angleDegrees(world.rotationQuaternion, parent.frame.rotationQuaternion * localRotation) < 0.001,
+            "\(parent.name)")
+        let restored = try SourceStudioWorldTransform.local(
+            world: (world.translation, world.rotationQuaternion), parentFrame: parent.frame)
+        #expect(length(restored.position - localPosition) < 0.00001, "\(parent.name)")
+        #expect(angleDegrees(restored.rotation, localRotation) < 0.00001, "\(parent.name)")
+    }
+}
+
+@Test func localRejectsSingularAndNonFiniteFrames() {
+    let rotation = UnityCoordinates.eulerDegrees(SIMD3(10, 20, 30))
+    for scale in [SIMD3<Float>.zero, SIMD3(repeating: 1e-7)] {
+        let degenerate = Transform.trs(.zero, rotation, scale)
+        #expect(throws: RigError.self) {
+            try SourceStudioWorldTransform.local(world: (SIMD3(1, 2, 3), rotation), parentFrame: degenerate)
+        }
+    }
+    #expect(throws: RigError.self) {
+        try SourceStudioWorldTransform.local(world: (SIMD3(Float.nan, 0, 0), rotation), parentFrame: Transform.identity)
+    }
+    #expect(throws: RigError.self) {
+        try SourceStudioWorldTransform.local(world: (SIMD3(1, 2, 3), simd_quatf(ix: .infinity, iy: 0, iz: 0, r: 1)),
+            parentFrame: Transform.identity)
+    }
+    var nonFiniteFrame = Transform.identity
+    nonFiniteFrame.columns.3 = Float4(Float.nan, 0, 0, 1)
+    #expect(throws: RigError.self) {
+        try SourceStudioWorldTransform.local(world: (SIMD3(1, 2, 3), rotation), parentFrame: nonFiniteFrame)
+    }
+}
+
+@Test func reparentedSourceChildKeepsWorldPoseAndDropsAttachment() throws {
+    // A source item hangs under a scalable scale-2 parent, where the Studio
+    // rule still moves the child by the parent's scale. Reparenting to the
+    // root must keep the world position and rotation, drop a stale attachment
+    // point and keep the item's own authored scale.
+    let parentFrame = try SourceStudioWorldTransform.world(parentFrame: Transform.identity,
+        localPosition: UnityCoordinates.position(SIMD3(1, 0.5, 2)),
+        localRotation: UnityCoordinates.eulerDegrees(SIMD3(0, 40, 15)),
+        localScale: SIMD3(repeating: 2), scalable: true)
+    var child = StudioObject(name: "Source item", kind: .item)
+    child.sourceObjectKey = 7; child.sourceRecordKind = .item
+    child.transform.position = UnityCoordinates.position(SIMD3(0.3, 0.6, -0.9))
+    let localRotation = UnityCoordinates.eulerDegrees(SIMD3(10, 70, 25))
+    child.transform.rotation = localRotation.eulerXYZ.radiansToDegrees
+    child.transform.rotationOverride = localRotation.vector
+    child.transform.scale = SIMD3(repeating: 2)
+    child.sourceAttachmentPoint = 17
+    let world = try SourceStudioWorldTransform.world(parentFrame: parentFrame,
+        localPosition: child.transform.position, localRotation: child.transform.quaternion,
+        localScale: child.transform.scale, scalable: true)
+    // The parent's scale really moved the child, so the placement is real.
+    #expect(length(world.translation - parentFrame.translation) > 1)
+    let moved = try SourceStudioWorldTransform.reparented(child, world: world, parentFrame: Transform.identity)
+    let worldAfter = try SourceStudioWorldTransform.world(parentFrame: Transform.identity,
+        localPosition: moved.transform.position, localRotation: moved.transform.quaternion,
+        localScale: moved.transform.scale, scalable: true)
+    #expect(length(worldAfter.translation - world.translation) < 0.00001)
+    #expect(angleDegrees(worldAfter.rotationQuaternion, world.rotationQuaternion) < 0.001)
+    #expect(moved.sourceAttachmentPoint == nil)
+    #expect(moved.transform.scale == child.transform.scale)
+    #expect(moved.sourceObjectKey == child.sourceObjectKey)
+}
+
+@Test func reparentedStoresRotationExactlyAsQuaternionOverride() throws {
+    // The import keeps the exact quaternion as `rotationOverride`; the native
+    // reparent walk wrote Euler and lost it. Reparenting under the same frame
+    // must hand that quaternion back: an Euler-decomposed replacement misses
+    // the exact rotation at the 1e-5 degrees asserted here.
+    var object = StudioObject(name: "Source child", kind: .folder)
+    object.sourceObjectKey = 3
+    let localRotation = UnityCoordinates.eulerDegrees(SIMD3(12, 51, 77))
+    object.transform.position = UnityCoordinates.position(SIMD3(0.5, 1.5, -2.5))
+    object.transform.rotation = localRotation.eulerXYZ.radiansToDegrees
+    object.transform.rotationOverride = localRotation.vector
+    let parentFrame = try SourceStudioWorldTransform.world(parentFrame: Transform.identity,
+        localPosition: UnityCoordinates.position(SIMD3(2, 1, 3)), localRotation: localRotation,
+        localScale: SIMD3(repeating: 0.5), scalable: true)
+    let world = try SourceStudioWorldTransform.world(parentFrame: parentFrame,
+        localPosition: object.transform.position, localRotation: object.transform.quaternion,
+        localScale: .one, scalable: false)
+    // Reparenting away and back to the same frame keeps the rotation a
+    // quaternion: each move stores `local`'s exact product as the override —
+    // bit-for-bit, not an Euler-quantised replacement — and the transform
+    // answers its rotation from that override, as the import's does.
+    let toRoot = try SourceStudioWorldTransform.reparented(object, world: world, parentFrame: Transform.identity)
+    let toRootExpected = try SourceStudioWorldTransform.local(
+        world: (world.translation, world.rotationQuaternion), parentFrame: Transform.identity).rotation
+    #expect(toRoot.transform.rotationOverride == toRootExpected.vector)
+    let toRootWorld = try SourceStudioWorldTransform.world(parentFrame: Transform.identity,
+        localPosition: toRoot.transform.position, localRotation: toRoot.transform.quaternion,
+        localScale: .one, scalable: false)
+    #expect(angleDegrees(toRootWorld.rotationQuaternion, world.rotationQuaternion) < 0.001)
+    let back = try SourceStudioWorldTransform.reparented(toRoot, world: toRootWorld, parentFrame: parentFrame)
+    let backExpected = try SourceStudioWorldTransform.local(
+        world: (toRootWorld.translation, toRootWorld.rotationQuaternion), parentFrame: parentFrame).rotation
+    let override = try #require(back.transform.rotationOverride)
+    #expect(override == backExpected.vector)
+    #expect(back.transform.quaternion == simd_quatf(vector: override))
+    // Back under the original frame the rotation agrees with the authored one
+    // to float32 matrix-extraction accuracy (the same ~0.09° noise source the
+    // fixture helper above documents), never to Euler-quantisation accuracy.
+    #expect(angleDegrees(back.transform.quaternion, localRotation) < 0.05)
+}

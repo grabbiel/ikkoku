@@ -566,6 +566,39 @@ final class StudioModel: ViewportInputHandler {
     func setParent(_ id: UUID, to parent: UUID?) {
         guard let i = doc.index(of: id) else { return }
         if let p = parent, p == id || doc.isDescendant(p, of: id) { return }
+        let object = doc.objects[i]
+        if object.sourceObjectKey != nil {
+            // Source records place through the Studio rule, so world
+            // placement must be kept with the exact inverse of that rule
+            // (`SourceStudioWorldTransform.reparented`), not the native walk:
+            // the native decomposition compounds the parent's scale into the
+            // position, loses the imported quaternion to its Euler write and
+            // leaves a stale attachment point that would make
+            // `sourceWorldMatrix` stop rendering the object.
+            if let p = parent, sourceRouteRuntime(id: p, document: doc) != nil {
+                status = "Reparenting under a route is not supported yet."
+                return
+            }
+            if object.sourceAttachmentPoint != nil, let p = parent, sourceInstances[p] != nil {
+                status = "Moving an attached source object to another parent is not supported yet."
+                return
+            }
+            do {
+                let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
+                // The new parent is not an attachment, so its frame is its own
+                // world matrix — a route parent is refused above, so the
+                // childRoot replacement a route's children get never applies.
+                let parentFrame = try parent.map { try sourceWorldMatrix(of: $0, document: doc,
+                    previews: sourceInstances) } ?? matrix_identity_float4x4
+                pushUndo(force: true)
+                doc.objects[i] = try SourceStudioWorldTransform.reparented(object, world: world,
+                    parentFrame: parentFrame)
+                doc.objects[i].parent = parent
+            } catch {
+                status = "Reparent failed: \(error)"
+            }
+            return
+        }
         pushUndo(force: true)
         let world = doc.worldMatrix(of: id)
         doc.objects[i].parent = parent

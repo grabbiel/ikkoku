@@ -201,7 +201,12 @@ that multiplied full TRS matrices would miss the camera nested under the
 scale-2 folder by 1.12 m, and a test pins that the fixture discriminates
 the rule. Native objects keep the full-TRS composition of
 `StudioDocument.worldMatrix(of:)`, which native parenting and gizmo edits
-also use, so a native scene renders where it is edited.
+also use, so a native scene renders where it is edited. Editor reparenting
+of a source object keeps its world placement with the exact inverse of this
+rule (`SourceStudioWorldTransform.reparented`): position and the imported
+quaternion are re-authored under the new parent frame, the object's own
+scale is kept and a stale attachment point is cleared, instead of the native
+walk's scale-compounding Euler decomposition.
 
 ## Native APIs and integration
 

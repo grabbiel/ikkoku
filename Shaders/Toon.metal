@@ -67,16 +67,13 @@ inline float sampleShadow(float4 sc, depth2d<float> shadowMap, constant FrameUni
     return mix(1.0, s, frame.mainLightDirection.w);
 }
 
-// toon_eye_lod0 FORWARD L61-L69: _rotation (turns; EyeLookMaterialControll writes
-// +-0.02 = +-7.2 degrees) rotates the base iris UV about (0.5,0.5) by 2*pi*turns,
-// applied before the _MainTex _ST scale/offset (L70). The dp2 rows are the
-// swapped-form rotation u' = sin*d.u + cos*d.v, v' = -cos*d.u + sin*d.v about the
-// center, which equals the standard rotation by (angle - pi/2); the source
-// default _rotation = 0 therefore carries a constant -90-degree term. PR #59
-// matched the live Studio frame sampling the converted _MainTex without it, so
-// the conversion pipeline already absorbs that constant and only the tilt delta
-// is applied here (standard rotation by 2*pi*turns). The residual -90-degree
-// convention is an open evidence limit (eye-hitomi-evidence.json).
+// toon_eye_lod0 FORWARD L61-L70: _rotation (turns; ChangeSettingEyeTilt writes
+// +-0.02 = +-7.2 degrees) rotates the base iris UV about (0.5,0.5) by
+// a = 2*pi*turns before the _MainTex _ST scale/offset. In Unity V the asm is
+// x' = d.u*cos a + d.v*sin a, y' = -d.u*sin a + d.v*cos a (identity at 0).
+// SourceRig stores (u, 1 - v) over upright textures, so in native V the same
+// rotation is the standard counter-clockwise R(+a) below, and the Unity _ST is
+// converted to native V by SourceStudioIrisRendering.nativeST.
 inline float2 rotateIrisUV(float2 uv, float turns) {
     float angle = turns * 6.283185;
     float s = sin(angle);

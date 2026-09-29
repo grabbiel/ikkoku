@@ -108,6 +108,11 @@ public final class SourceStudioCharacterPreview {
     /// every frame. Empty when the block is missing or malformed (reported at
     /// init), and the irises then keep their identity uniforms.
     private let irisEyes: [SourceStudioEyeMaterialSettings]
+    /// The load-time ChangeSettingEye* values read once off the card's face
+    /// record, substituted for each eye's prefab offset/scale/hl snapshot in
+    /// every frame's _ST math.  Nil while the fields are unreadable (the
+    /// prefab snapshot stays; reported at init) or under the special-male skip.
+    private let irisCardValues: SourceStudioIrisRendering.CardValues?
     /// Eyes whose _ST math threw once (inverted exported limits); the notice
     /// must not repeat per frame.
     private var reportedIrisTransform: Set<Int> = []
@@ -368,11 +373,34 @@ public final class SourceStudioCharacterPreview {
         self.eyeLookNote = eyeLookNote
         self.eyesTargetType = eyesTargetType
         self.irisEyes = irisEyes
+        // The ChangeSettingEye* calls run once at load off the face record's
+        // six fields; a field the card does not carry keeps the whole prefab
+        // snapshot (the original's decoded fields always exist, so a per-field
+        // fallback is not recovered) instead of inventing a constructor default.
+        var irisCardValues: SourceStudioIrisRendering.CardValues?
         if !irisEyes.isEmpty {
-            // One-shot: the frame's _ST math needs an offset/scale per eye and
-            // only the bo_head_00 prefab's snapshot is recovered so far.
-            messages.append("Iris rendering applies the bo_head_00 prefab offset/scale snapshot; card-driven iris offset and scale are not recovered.")
+            let paths = ["face.pupilX", "face.pupilY", "face.pupilWidth", "face.pupilHeight",
+                         "face.hlUpY", "face.hlDownY"]
+            let unprefixed = ["pupil X", "pupil Y", "pupil width", "pupil height", "highlight up Y", "highlight down Y"]
+            var fields: [Double] = [], missing: [String] = []
+            for (path, label) in zip(paths, unprefixed) {
+                guard let value = draft?.number(path) else { missing.append(label); continue }
+                fields.append(Double(value))
+            }
+            if fields.count == paths.count {
+                irisCardValues = SourceStudioIrisRendering.cardOverrides(
+                    pupilX: fields[0], pupilY: fields[1], pupilWidth: fields[2], pupilHeight: fields[3],
+                    hlUpY: fields[4], hlDownY: fields[5], sex: identity.sex, exType: identity.exType)
+                if irisCardValues != nil {
+                    messages.append("Iris rendering applies the card pupil offset/scale and highlight offsets over the bo_head_00 prefab snapshot.")
+                } else {
+                    messages.append("Iris rendering keeps the bo_head_00 prefab offset/scale snapshot: the special-male ChangeSettingEye skip applies to this card.")
+                }
+            } else {
+                messages.append("Iris card fields \(missing.joined(separator: ", ")) are missing from the card record; the bo_head_00 prefab offset/scale snapshot is kept.")
+            }
         }
+        self.irisCardValues = irisCardValues
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -442,7 +470,8 @@ public final class SourceStudioCharacterPreview {
             if let live = rates, live.horizontal.indices.contains(settings.eyeLR) {
                 rateH = live.horizontal[settings.eyeLR]; rateV = live.vertical
             }
-            guard let st = try? SourceStudioIrisRendering.transforms(rateH: rateH, rateV: rateV, settings: settings),
+            guard let st = try? SourceStudioIrisRendering.transforms(rateH: rateH, rateV: rateV, settings: settings,
+                                                                     card: irisCardValues),
                   st.count == 3 else {
                 if reportedIrisTransform.insert(settings.eyeLR).inserted {
                     diagnostics.append("Iris texture transform refused the eye \(settings.eyeLR) rates; its irises keep the identity transform.")

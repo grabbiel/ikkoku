@@ -248,12 +248,16 @@ transforms PR #59 assumed for the iris materials:
 
 - **(a) `_MainTex` UV.** Not `uv * _MainTex_ST.xy + _MainTex_ST.zw` alone: a
   `_rotation` term (cb0[12]) rotates the base UV about (0.5,0.5) *before* the
-  `_ST` transform. The asm matrix rows `sin/cos` and `−cos/sin` are the
-  swapped-form rotation R_std(2π·_rotation − π/2); at the serialized
-  `_rotation = 0` that is a constant −90° rotation, yet PR #59 matched the
-  live Studio frame with plain `uv * _ST`, so the conversion pipeline absorbs
-  that quarter turn (which exact step, texture axis or uv export, is not
-  pinned down — recorded as the open limit in the evidence JSON).
+  `_ST` transform. With `a = 2π·_rotation` (`sincos` writes sin to the first
+  destination), the rows give `x′ = u′·cos a + v′·sin a`,
+  `y′ = −u′·sin a + v′·cos a` in Unity V — the identity at `_rotation = 0`.
+  Because `SourceRig` stores source UVs as `(u, 1 − v)` over upright textures,
+  the native equivalent is the standard counter-clockwise `R(+a)`, and a Unity
+  `_ST` becomes `(sx, sy, ox, 1 − sy − oy)` in native V
+  (`SourceStudioIrisRendering.nativeST`). The first write-up of this slice read
+  the `sincos` destinations swapped and reported a constant −90° term; the
+  orchestrator's review corrected it, and also found that #59 had written the
+  Unity V offset unconverted, inverting vertical iris motion (fixed here).
 - **(b) overlay UV channels.** The `_overtex1` second sample reads the second
   UV0 channel (`TEXCOORD0.zw`), `_overtex2` reads `TEXCOORD1.xy`, and
   `_expression` reads `TEXCOORD0.xy` after a parallax nudge
