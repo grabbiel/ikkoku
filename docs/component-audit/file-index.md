@@ -11,12 +11,12 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**623 files indexed; 623 assigned; 0 unassigned.**
+**625 files indexed; 625 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
-| [Character / Maker / mods](character-and-mods.md) | 108 |
+| [Character / Maker / mods](character-and-mods.md) | 110 |
 | [Studio / IK / animation](studio.md) | 89 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 283 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 82 |
@@ -29,8 +29,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 137 |
-| Test / validation | 105 |
+| Runtime / shared shader declaration | 138 |
+| Test / validation | 106 |
 
 ## App / gameplay / plugins
 
@@ -139,6 +139,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceCharacterCard.swift](../../Packages/Engine/Sources/Character/SourceCharacterCard.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceCharacterCardEditing.swift](../../Packages/Engine/Sources/Character/SourceCharacterCardEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceColorComposition.swift](../../Packages/Engine/Sources/Character/SourceColorComposition.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceDrawOverlays.swift](../../Packages/Engine/Sources/Character/SourceDrawOverlays.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceDynamicBone.swift](../../Packages/Engine/Sources/Character/SourceDynamicBone.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceExpressionPlayback.swift](../../Packages/Engine/Sources/Character/SourceExpressionPlayback.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceExpressions.swift](../../Packages/Engine/Sources/Character/SourceExpressions.swift) | Runtime / shared shader declaration |
@@ -163,6 +164,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourceCharacterCardEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceCharacterCardEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceCharacterCardTests.swift](../../Packages/Engine/Tests/EngineTests/SourceCharacterCardTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceColorCompositionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceColorCompositionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceDrawOverlaysTests.swift](../../Packages/Engine/Tests/EngineTests/SourceDrawOverlaysTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceExpressionPlaybackTests.swift](../../Packages/Engine/Tests/EngineTests/SourceExpressionPlaybackTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceExpressionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceExpressionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceFaceShapePoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceFaceShapePoseTests.swift) | Test / validation |
