@@ -141,6 +141,13 @@ Parallels VM. A green CI run therefore says nothing about source-data parity or
 app behavior; record the local lane results in the pull request as before. The
 workflow does not gate merges (no required status check).
 
+The jobs use the runner image's default Xcode, which can be newer than the
+reference machine's (Xcode 26.6 on the `macos-26-arm64` 20260907 image
+against 26.0.1 locally on 2026-09-29). CI therefore also catches compiler
+differences: its first run found a heterogeneous array literal in
+`SourceStudioWorldTransformTests.swift` that Xcode 26.6 no longer infers as
+`[SIMD3<Float>]`.
+
 ## Report fields
 
 A report records `git.revision`, the dirty flag and the sha256 of
