@@ -1274,8 +1274,9 @@ the load-time setters consume, shape value 33, `sex` and `exType`. Without
 The 2026-09-29 capture under `.local/stt07x/run1` ran the same six-phase
 450-frame `look-patterns.tsv` as `.local/stt07i/run1` on the fixture card
 (pupilX/Y 0.5, pupilWidth/Height 0.9, hlUpY/hlDownY 0.5, shape value 33 0.5,
-sex 1, exType 0 — settings keys do not cover the pupil values, so the card
-carries the `ChaFileFace` defaults; the recorded `scale` field confirms it).
+sex 1, exType 0 — the capture settings keys did not cover the pupil values
+yet, so the card carried the `ChaFileFace` defaults; the recorded `scale`
+field confirms it).
 `Tools/reverse/analysis/iris_reference.py` (21 unittest cases) ports
 `textureTransforms` plus the `cardOverrides` and `ChangeSettingEyeTilt` field
 reads — not `nativeST` — into pure Python, every arithmetic step round-tripped
@@ -1297,6 +1298,27 @@ from the exact 0 the reference computes from narrowed endpoints, and
 `1 + scale` rounds back to exactly 1.0 in float32, so the recorded texture
 scale still matches exactly. No Swift formula is refuted; this is a
 material-value agreement, not a rendered comparison.
+
+The 2026-09-29 capture under `.local/stt07y/run1` ran the same six-phase
+450-frame tsv with a `--settings` file exercising every branch the iris
+formulas read: `pupilX 0.2`, `pupilY 0.8`, `pupilWidth 0.3`, `pupilHeight
+0.6`, `hlUpY 0.7`, `hlDownY 0.25` and `faceShape33 0.9`, applied through the
+seven settings keys added for this run (see "Capture settings file" in
+[material expansion](../character/material-expansion.md)). The recorded
+`irisCard` header holds exactly those seven values, so the card branch of
+`card_values` predicts offset 0.04/0.3, scale 1.2/0.6, hl −0.04/0.05 and
+`iris_rotations(0.9)` = (−0.016, +0.016). Lag 1 again wins on both eyes
+(worst offset/scale 1.91e-7 and 4.92e-7 against 1.2 at lag 0). Under the
+fitted lag every phase/eye/texture offset matches to at most 0.000000492
+(phase 5 `cf_Ohitomi_R02`, frame 392) and every scale to at most
+0.000000191 — all inside the 1e-6 tolerance, exit 0 — and on every compared
+frame the `_MainTex` `_rotation` sits within 0.000000001 of the expected
+∓0.016: the NON-ZERO tilt matches `iris_rotations(0.9)`, not just the
+default-card zero. The
+controller field drift from `eye_fields` is at most offset.x 8e-9, offset.y
+1.2e-8, scale 7.2e-8 and hl 1e-9 (reported, not gated). Frame 0 is again
+seed-only (worst difference 1.2, reported not measured). Same conclusion as
+the default-card run: material-value agreement, not a rendered comparison.
 
 ## Reproducible verification
 
