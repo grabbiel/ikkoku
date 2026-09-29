@@ -58,6 +58,9 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Local converted glTF/GLB path. Kept separate from catalog IDs and persisted in scene cards.
     public var assetFile: String?
     public var sourceObjectKey: Int32?
+    /// The source record's kind, which selects the Studio scale rule; nil in
+    /// documents saved before it was recorded, whose placeholders are folders.
+    public var sourceRecordKind: KoikatsuObjectKind?
     public var tint: RGB?
     public var emissive: Float = 0
     // light

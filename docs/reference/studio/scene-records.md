@@ -163,19 +163,36 @@ diagnostics. Selecting a camera placeholder offers a Look through / Stop
 looking through toggle in its inspector, mirroring `ChangeCamera`'s toggle
 semantics.
 
-Known deviation: the preview resolves the object's world matrix through the
-native world walk, which composes every ancestor's authored scale. The capture
-shows that Studio never applies folder scale and never compounds scale (each
-object's world scale is its own `changeAmount.scale`, or 1 when it is not
-scalable), so a camera under a parent whose scale is not 1 is placed
-differently from the original until that walk follows the captured rule. The
-committed `Tools/reverse/fixtures/camera-object-reference.json` is not yet
-replayed by a Swift test. Also not verified: camera animation and
-route-driven camera motion (a camera parented to a moving route is followed
-through the ordinary world-matrix walk, but no original capture of that case
-exists), writing an in-app toggled `active` flag back on export (deactivating
-in-app keeps the record's saved flag intact, and export intentionally does not
-persist the runtime choice), and any in-app run of the preview.
+Not verified: camera animation and route-driven camera motion (a camera
+parented to a moving route is followed through the ordinary world-matrix
+walk, but no original capture of that case exists), writing an in-app
+toggled `active` flag back on export (deactivating in-app keeps the
+record's saved flag intact, and export intentionally does not persist the
+runtime choice), and any in-app run of the preview.
+
+Hierarchy scale: the Studio preview walk for source objects follows the
+captured `GuideObject.LateUpdate` rule (`SourceStudioWorldTransform.world`):
+every guide rescales its own transform so its world scale is its own
+`changeAmount.scale` when it is scalable and `(1, 1, 1)` when it is not, so
+scale never compounds down the chain and a folder's authored scale is never
+applied. Scalable kinds are characters and items; folders, cameras, lights
+and routes are not. Because the importer has no form of the catalog
+`isScale` flag the original also consults for items, every item counts as
+scalable — the UI cannot give a non-scalable item a scale other than 1.
+Position and rotation still compose through the parent's actual world
+matrix (the rotation through the parent's scale-free rotation, so a
+non-uniform parent scale cannot shear the child), which is why a parent
+with scale 2 moves its children without resizing them. Swift replays the
+capture in `SourceStudioWorldTransformTests` against a byte-for-byte copy
+of the committed fixture (`Fixtures/camera-object-reference.json`): over
+all five `objectCases` the parent frames match the captured world
+position, rotation and scale to 0.0 m, 0.0° and 0.0; the
+`viewCamera(world:base:)` result is within 7.8e-7 m in position and 0.0° in
+rotation of the captured camera pose with the FOV identical; and all three
+`loadCases` resolve `activeAtLoad` to the captured camera. The old walk
+that multiplied full TRS matrices would miss the camera nested under the
+scale-2 folder by 1.12 m, and a test pins that the fixture discriminates
+the rule.
 
 ## Native APIs and integration
 
