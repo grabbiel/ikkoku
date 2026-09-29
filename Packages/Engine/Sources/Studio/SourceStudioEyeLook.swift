@@ -101,13 +101,58 @@ public struct SourceStudioEyeLookSettings: Decodable, Sendable, Equatable {
         }
     }
 
+    /// One `eyeObjs` record: the eyeLR discriminator (0 = L, 1 = R) and the
+    /// EyeTarget Transform the calculator walks under that eye.
+    public struct EyeObject: Decodable, Sendable, Equatable {
+        public let eyeLR: Int
+        public let eyeTransform: String
+    }
+
     private struct Eyes: Decodable {
         let correct: Double
         let centerEyeLength: Double
         let sorasiRate: Double
         let eyeTypeStates: [TypeState]
+        var rootNode: String?
+        var trfCenter: String?
+        var headLookVector: SIMD3<Double>?
+        var headUpVector: SIMD3<Double>?
+        var eyeObjs: [EyeObject]?
+
+        private enum CodingKeys: String, CodingKey {
+            case correct, centerEyeLength, sorasiRate, eyeTypeStates
+            case rootNode, trfCenter, headLookVector, headUpVector, eyeObjs
+        }
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            correct = try container.decode(Double.self, forKey: .correct)
+            centerEyeLength = try container.decode(Double.self, forKey: .centerEyeLength)
+            sorasiRate = try container.decode(Double.self, forKey: .sorasiRate)
+            eyeTypeStates = try container.decode([TypeState].self, forKey: .eyeTypeStates)
+            // The Init and per-frame geometry need the node names and the two
+            // head vectors, but they stay nil here when a document only
+            // carries the solver numbers (the reference's minimal fixture),
+            // so their absence is the caller's diagnostic instead of a
+            // guessed name or vector.
+            rootNode = try container.decodeIfPresent(String.self, forKey: .rootNode)
+            trfCenter = try container.decodeIfPresent(String.self, forKey: .trfCenter)
+            func vector(_ key: CodingKeys) throws -> SIMD3<Double>? {
+                guard let raw = try container.decodeIfPresent([Double].self, forKey: key) else { return nil }
+                guard raw.count == 3, raw.allSatisfy(\.isFinite) else {
+                    throw RigError.invalid("Eye look settings \(key.rawValue) is not a finite three-component vector.")
+                }
+                return SIMD3<Double>(raw[0], raw[1], raw[2])
+            }
+            headLookVector = try vector(.headLookVector)
+            headUpVector = try vector(.headUpVector)
+            eyeObjs = try container.decodeIfPresent([EyeObject].self, forKey: .eyeObjs)
+        }
     }
-    private struct Document: Decodable { let eyes: Eyes }
+    private struct Controller: Decodable { let ptnNo: Int32? }
+    private struct Document: Decodable {
+        let eyes: Eyes
+        var eyeController: Controller?
+    }
 
     /// Nonzero selects the trfCenter correct frame for TARGET / FORWARD.
     public let correct: Double
@@ -117,19 +162,48 @@ public struct SourceStudioEyeLookSettings: Decodable, Sendable, Equatable {
     public let sorasiRate: Double
     /// One state per eye pattern, in saved order.
     public let eyeTypeStates: [TypeState]
+    /// The calculator's rootNode Transform name; the captured prefab keeps
+    /// `p_cf_head_bone`, whose world transform equals the head bone's.
+    public let rootNode: String?
+    /// The correct frame's center Transform name (`cf_J_Eye_tz` in the
+    /// capture).
+    public let trfCenter: String?
+    /// The head-local look/up vectors Init normalizes into each eye's
+    /// reference frame.
+    public let headLookVector: SIMD3<Double>?
+    public let headUpVector: SIMD3<Double>?
+    /// The per-eye EyeTarget records, in saved order; the capture walks
+    /// EyeTargetL (eyeLR 0) and EyeTargetR (eyeLR 1).
+    public let eyeObjs: [EyeObject]?
+    /// The sibling prefab EyeLookController.ptnNo, the pattern fallback when
+    /// the card Status has no eyesLookPtn.
+    public let eyeControllerPattern: Int32?
 
-    public init(json data: Data) throws {
-        let eyes = try JSONDecoder().decode(Document.self, from: data).eyes
+    private init(eyes: Eyes, eyeControllerPattern: Int32?) throws {
         guard eyes.correct.isFinite, eyes.centerEyeLength.isFinite, eyes.sorasiRate.isFinite else {
             throw RigError.invalid("Eye look settings need finite correct, centerEyeLength and sorasiRate.")
         }
         guard !eyes.eyeTypeStates.isEmpty else {
             throw RigError.invalid("Eye look settings need at least one eyeTypeStates entry.")
         }
+        if let eyeObjs = eyes.eyeObjs, Set(eyeObjs.map(\.eyeLR)) != [0, 1] {
+            throw RigError.invalid("Eye look settings eyeObjs need exactly one eyeLR 0 and one eyeLR 1.")
+        }
         correct = eyes.correct
         centerEyeLength = eyes.centerEyeLength
         sorasiRate = eyes.sorasiRate
         eyeTypeStates = eyes.eyeTypeStates
+        rootNode = eyes.rootNode
+        trfCenter = eyes.trfCenter
+        headLookVector = eyes.headLookVector
+        headUpVector = eyes.headUpVector
+        eyeObjs = eyes.eyeObjs
+        self.eyeControllerPattern = eyeControllerPattern
+    }
+
+    public init(json data: Data) throws {
+        let document = try JSONDecoder().decode(Document.self, from: data)
+        try self.init(eyes: document.eyes, eyeControllerPattern: document.eyeController?.ptnNo)
     }
 
     /// The frame's state for a pattern index.

@@ -981,8 +981,75 @@ about x under an eye parent rotated 90° about z — base 180° about
 (−1, 0, 0)/√2, head forward (0, 0, 1) → (−1, 0, 0) and head up (0, 1, 0) →
 (0, 0, 1) — at 1e-9. The rates are also in the regenerated
 `eye-look-reference.json`, which stays byte-stable across regenerations.
-What remains is still the preview wiring: the Studio camera as the eye
-target, and these rates as the iris-offset input.
+
+### Eye look in the Studio preview
+
+The preview now runs the calculator itself and reports its rates; what it
+does not yet do is render them. `SourceStudioEyeLookRuntime` (Engine
+`Studio`) carries one `EyeLookCalc` across frames — the solver, the fixed
+Init reference and the last predicted eye rotations — and
+`SourceStudioCharacterPreview` keeps one per character when the effective
+pattern resolves: the card `eyesLookPtn` wins over the prefab's
+`eyeController.ptnNo` (the `AddObjectAssist` order, `LoadAngle` first and
+`ChangeLookEyesPtn` last), `eyesTargetType` 0 or absent selects the main
+camera while any other target keeps the animated eyes with a diagnostic, and
+NO_LOOK is refused there too because its `fixAngle` write is not recorded by
+the look trace. The saved `angleH`/`angleV` pairs (scene version ≥ 0.0.8,
+`SourceStudioEyeLookData`) replace the Init zeros through the runtime's
+`savedAngles`; before that version the calculator Inits flat instead.
+
+The rig names come from the capture, not from the settings verbatim: the
+settings' `rootNode` `p_cf_head_bone` is not a merged-rig node, but the
+capture reports it sharing `cf_j_head`'s world position and rotation in
+every frame, so `updateEyeLook` uses `cf_j_head` as the root; `trfCenter` is
+`cf_J_Eye_tz` (the settings name, with that literal as fallback) and the two
+eyes are the `cf_J_Eye_tx_L`/`cf_J_Eye_tx_R` parents. The Maker skeleton
+authors the EyeTargets at translation 0 on those parents and the capture
+recorded their local rotation as the identity, so the parents' world
+positions are the eye positions and `origRotation` is identity. That is
+consistent with the eye strip's shape: the capture's EyeTargetL sits about
+(−0.0460, +0.0035, +0.0001) m from trfCenter in frame 5 (head nearly
+unrotated). The geometry is built exactly like the neck's — the
+*pre-override* pose (`evaluatedCache?.preOverride`),
+`rig.evaluate(...).worldMatrices`, `UnityCoordinates.matrix` — and the
+camera enters rig model space through the same
+`UnityCoordinates.position(world.inverse.transformPoint(camera.position))`
+mapping as `updateNeckLook`, in its own tick loop so a failing eye frame
+never disturbs the neck. The runtime Inits lazily from the first evaluated
+frame (Init needs live rig rotations), and `resetEyeLook` — called from
+every `resetAnimationPlayback`, the way a scene reload re-runs EyeLookCalc's
+`Init` — drops it so a seek re-Inits and restarts the convergence instead of
+carrying stale smoothing.
+
+What the slice publishes is the rate pair `EyeLookMaterialControll` would
+shift the iris textures by: `eyeLookRates` gives the pattern's lookType with
+`angleHRates` (L, R) and `angleVRate`, and the Studio inspector shows
+`Eye look: TARGET · H L/R +0.22/−0.22 · V −0.05` for the selected source
+character (2 decimals, signed), or `Eye look: animated (<reason>)` when a
+resolved pattern was refused. **No eye bone is written**: the predicted
+rotations are carried in `lastRotations` but not applied, and applying them —
+the iris rendering as the `angleHRate`/`angleVRate` offset — is the next
+slice. `SourceStudioEyeLookRuntimeTests` (3 tests, synthetic eye strip at
+the captured ±0.046 m spread, no rig, no capture data): a straight-ahead
+camera gives mirror-symmetric eye angles and exactly opposite horizontal
+rates (neither zero, in [−1, 1]); a zero-delta frame keeps angles, rates and
+the last written rotations bit-identical while still recomputing the rates
+from the carried angles; and saved angles override the Init zeros with the
+dirUp frame kept, while a malformed saved pair or settings without head
+vectors throw without half-applying. The Studio tick, the camera mapping and
+the node-name choices have no rig-level test and no rendered comparison —
+verified by the Engine test run (489 passing) and the app build alone.
+
+Known simplification carried from the verified reference: the solver step
+treats the root node's rotation as every eye's parent frame (the reference's
+`v2 = parent^-1 * dir`), which held in the capture because the fixture's
+`cf_J_Eye_tx_L/R` share the head rotation. The original uses each eye's own
+`eyeTransform.parent.rotation` in both Init and the step, and this slice's
+Init already reads the real `cf_J_Eye_tx_L/R` rotations. A face shape that
+tilts the eyes (the eye-angle slider rotates `cf_J_Eye_rz_L/R`) would make
+the two disagree, so passing per-eye parent rotations into the step belongs
+with the iris-rendering slice. The inspector readout is not observed per
+tick: it refreshes when the inspector redraws for another reason.
 
 ## Reproducible verification
 
