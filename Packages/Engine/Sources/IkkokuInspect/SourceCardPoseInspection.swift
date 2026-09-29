@@ -22,7 +22,7 @@ private func columns(_ matrix: float4x4) -> [[Float]] {
     [values(matrix.columns.0), values(matrix.columns.1), values(matrix.columns.2), values(matrix.columns.3)]
 }
 
-func inspectSourceCardPose(avatarURL: URL, cardURL: URL) throws -> [String: Any] {
+func inspectSourceCardPose(avatarURL: URL, cardURL: URL, studioHandURL: URL? = nil) throws -> [String: Any] {
     let source = try SourceRig.loadModel(url: avatarURL)
     // The app resolves the contract next to the avatar manifest; a missing or
     // invalid contract is an explicit error, never a silent rest-pose fallback.
@@ -44,8 +44,20 @@ func inspectSourceCardPose(avatarURL: URL, cardURL: URL) throws -> [String: Any]
     }
     let settings = try SourceCharacterCard.load(url: cardURL).previewSettings(contract: contract)
     // Default coordinate 0 and standard bone type match the app's capture path.
-    let pose = try preview.pose(bodyValues: settings.bodyValues, faceValues: settings.faceValues,
+    var pose = try preview.pose(bodyValues: settings.bodyValues, faceValues: settings.faceValues,
         boneModifiers: settings.boneModifiers)
+    var studioHands: [String: Any]?
+    if let studioHandURL {
+        // One frozen document covers both hands; applying it on top of the card
+        // pose replaces only the bone channels its clips animated at the fitted time.
+        let hands = try SourceStudioHandPose.load(url: studioHandURL)
+        pose = try hands.applying(to: source.rig, basePose: pose)
+        studioHands = [
+            "states": hands.hands.mapValues { $0.state },
+            "clipTimes": hands.hands.mapValues { $0.sampleTime.clipTime },
+            "bones": hands.hands.mapValues { Array($0.bones.keys.sorted()) },
+        ]
+    }
     let evaluation = try source.rig.evaluate(pose)
     return [
         "sourcePrefab": source.sourcePrefab,
@@ -63,12 +75,16 @@ func inspectSourceCardPose(avatarURL: URL, cardURL: URL) throws -> [String: Any]
             "boneType": 0,
             "diagnostics": settings.diagnostics,
         ] as [String: Any],
+        "studioHands": studioHands ?? ["applied": false],
         "scope": """
             Native pose parity against the retained original-player capture of the \
             controlled clothed fixture: card-derived body/face values, static ABMX \
             if present, and the default coordinate-0 / standard-bone-type assembly. \
-            Animated states, other coordinate outfits, corrected bone types and \
-            per-variant rigs remain uncovered.
+            With --studio-hands the frozen CharaStudio hand-pose document is applied \
+            on top of that pose, replacing only the bone channels its clips \
+            animated at the fitted capture phase. Other animated states, other \
+            coordinate outfits, corrected bone types and per-variant rigs remain \
+            uncovered.
             """,
     ]
 }
