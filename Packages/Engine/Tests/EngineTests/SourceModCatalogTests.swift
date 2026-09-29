@@ -238,10 +238,11 @@ private func compareCatalogOracle(_ catalog: SourceModCatalog, generated: Catalo
     }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_MOD_LIBRARY"] != nil && ProcessInfo.processInfo.environment["IKKOKU_MOD_CATALOG_CONTRACT"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MOD_LIBRARY", "IKKOKU_MOD_CATALOG_CONTRACT"]),
+               "Requires IKKOKU_MOD_LIBRARY, IKKOKU_MOD_CATALOG_CONTRACT"))
 func sourceModCatalogMatchesRecoveredRowsResolverOracleAndEightRealDependencies() throws {
-    let libraryPath = try #require(ProcessInfo.processInfo.environment["IKKOKU_MOD_LIBRARY"])
-    let contractPath = try #require(ProcessInfo.processInfo.environment["IKKOKU_MOD_CATALOG_CONTRACT"])
+    let libraryPath = try SourceFixtureSupport.require("IKKOKU_MOD_LIBRARY")
+    let contractPath = try SourceFixtureSupport.require("IKKOKU_MOD_CATALOG_CONTRACT")
     let data = try Data(contentsOf: URL(fileURLWithPath: contractPath))
     let contract = try SourceModCatalogContract.decode(data), oracle = try JSONDecoder().decode(CatalogSourceOracle.self, from: data)
     let profile = try SourceModProfile.load(libraryURL: URL(fileURLWithPath: libraryPath))
@@ -270,10 +271,11 @@ func sourceModCatalogMatchesRecoveredRowsResolverOracleAndEightRealDependencies(
     }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_MOD_CATALOG_CONTRACT"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MOD_CATALOG_CONTRACT"]),
+               "Requires IKKOKU_MOD_CATALOG_CONTRACT"))
 func sourceModCatalogMatchesIndependentRecoveredCSVAndResolverFixtures() throws {
     let directory = try catalogTestDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
-    let path = try #require(ProcessInfo.processInfo.environment["IKKOKU_MOD_CATALOG_CONTRACT"])
+    let path = try SourceFixtureSupport.require("IKKOKU_MOD_CATALOG_CONTRACT")
     let data = try Data(contentsOf: URL(fileURLWithPath: path))
     let contract = try SourceModCatalogContract.decode(data), oracle = try JSONDecoder().decode(CatalogSourceOracle.self, from: data)
     var fixturesCompared = 0, lookupsCompared = 0
