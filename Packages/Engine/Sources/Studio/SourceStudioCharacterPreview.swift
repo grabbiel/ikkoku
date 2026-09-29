@@ -6,6 +6,7 @@ import CoreMath
 import Scene
 import Character
 import Renderer
+import ShaderTypes
 
 /// Native scene cards retain a verified reference to the original scene. This
 /// preview resolves converted card selections with the same identity rules as Maker.
@@ -99,6 +100,17 @@ public final class SourceStudioCharacterPreview {
     /// Set when the Init from a live pattern failed: the pattern retires until
     /// resetEyeLook (diagnosed once) so the tick does not knock per frame.
     private var eyeLookFailure: String?
+    /// The store backing the preview's meshes, so a render item's MeshHandle
+    /// resolves back to its source mesh name when the iris overrides apply.
+    private let resources: ResourceStore
+    /// The same settings document's eyeMaterial block: the per-eye
+    /// EyeLookMaterialControll snapshot whose _ST values the renderer applies
+    /// every frame. Empty when the block is missing or malformed (reported at
+    /// init), and the irises then keep their identity uniforms.
+    private let irisEyes: [SourceStudioEyeMaterialSettings]
+    /// Eyes whose _ST math threw once (inverted exported limits); the notice
+    /// must not repeat per frame.
+    private var reportedIrisTransform: Set<Int> = []
     public var dynamicsComponentCount: Int { dynamics?.bindings.count ?? 0 }
     /// preOverride is the FK/IK-solved pose before the neck look override
     /// wrote anything: the pose the TARGET/AWAY gaze solver reads its Transforms
@@ -125,6 +137,7 @@ public final class SourceStudioCharacterPreview {
 
     public init(reference: SourceStudioCharacterReference, resources: ResourceStore) throws {
         self.reference = reference
+        self.resources = resources
         attachments = try reference.attachmentCatalogFile.map { try SourceStudioAttachments.load(url: URL(fileURLWithPath: $0)) }
         let data = try Self.read(URL(fileURLWithPath: reference.sceneFile), maximum: 256 * 1024 * 1024)
         guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == reference.sceneSHA256 else {
@@ -304,9 +317,11 @@ public final class SourceStudioCharacterPreview {
                           savedAngles: (horizontal: [Double], vertical: [Double])?)?
         var eyeLookNote: String?
         var eyesTargetType: Int32?
+        var irisEyes: [SourceStudioEyeMaterialSettings] = []
         if let lookSettingsFile = reference.lookSettingsFile {
             do {
-                let eyeSettings = try SourceStudioEyeLookSettings(json: Self.read(URL(fileURLWithPath: lookSettingsFile), maximum: 4 * 1024 * 1024))
+                let lookData = try Self.read(URL(fileURLWithPath: lookSettingsFile), maximum: 4 * 1024 * 1024)
+                let eyeSettings = try SourceStudioEyeLookSettings(json: lookData)
                 let lookStatus = SourceStudioLookStatus(status: status)
                 eyesTargetType = lookStatus.eyesTargetType
                 let savedEyes = try SourceStudioEyeLookData(bytes: record.eyesData, sceneVersion: scene.snapshot.version)
@@ -335,11 +350,19 @@ public final class SourceStudioCharacterPreview {
                     eyeLookNote = "pattern \(shown) has no eyeTypeStates entry"
                     messages.append("Eye look pattern is unset or outside the prefab's \(eyeSettings.eyeTypeStates.count) states; the animated eyes are kept.")
                 }
+                do { irisEyes = try SourceStudioEyeMaterialSettings.document(json: lookData) }
+                catch { messages.append("Studio eye material settings unavailable: \(error); the irises keep their resting offset.") }
             } catch { messages.append("Studio eye look override unavailable: \(error); the animated eyes are kept.") }
         }
         self.liveEyeLook = liveEyeLook
         self.eyeLookNote = eyeLookNote
         self.eyesTargetType = eyesTargetType
+        self.irisEyes = irisEyes
+        if !irisEyes.isEmpty {
+            // One-shot: the frame's _ST math needs an offset/scale per eye and
+            // only the bo_head_00 prefab's snapshot is recovered so far.
+            messages.append("Iris rendering applies the bo_head_00 prefab offset/scale snapshot; card-driven iris offset and scale are not recovered.")
+        }
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -383,8 +406,40 @@ public final class SourceStudioCharacterPreview {
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
             expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
+        applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
         return frame
+    }
+
+    /// The renderer-side half of EyeLookMaterialControll.Update: the frame's
+    /// iris-shift rates become the two iris materials' _ST uniforms, matched by
+    /// source mesh name against the eyeMaterial block's gameObject. Rates
+    /// (0, 0) when the eye look is not live — the resting offset the original
+    /// still applies. Iris materials are exactly the ones carrying
+    /// MaterialFlagSourceIrisHighlights; a refused transform (inverted limits)
+    /// keeps the identity uniforms and is diagnosed once per eye.
+    private func applyIrisTransforms(to frame: inout RenderFrame) {
+        guard !irisEyes.isEmpty else { return }
+        let rates = eyeLookRates
+        for i in frame.items.indices where (frame.items[i].material.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) != 0 {
+            guard let name = resources.mesh(frame.items[i].mesh)?.name,
+                  let eye = SourceStudioIrisRendering.eye(ofMeshNamed: name, in: irisEyes) else { continue }
+            let settings = irisEyes[eye]
+            var rateH = 0.0, rateV = 0.0
+            if let live = rates, live.horizontal.indices.contains(settings.eyeLR) {
+                rateH = live.horizontal[settings.eyeLR]; rateV = live.vertical
+            }
+            guard let st = try? SourceStudioIrisRendering.transforms(rateH: rateH, rateV: rateV, settings: settings),
+                  st.count == 3 else {
+                if reportedIrisTransform.insert(settings.eyeLR).inserted {
+                    diagnostics.append("Iris texture transform refused the eye \(settings.eyeLR) rates; its irises keep the identity transform.")
+                }
+                continue
+            }
+            frame.items[i].material.uniforms.irisST0 = st[0]
+            frame.items[i].material.uniforms.irisST1 = st[1]
+            frame.items[i].material.uniforms.irisST2 = st[2]
+        }
     }
 
     public func editedPose(fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,

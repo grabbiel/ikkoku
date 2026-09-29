@@ -32,7 +32,7 @@ func sourceIrisExtraUVBuffersPreserveAuthoredValuesAndFallbackToUV0() throws {
     #expect(zero.texcoords1 === zero.texcoords && zero.texcoords2 === zero.texcoords)
     #expect(zero.texcoords.contents().load(as: Float2.self) == .zero)
     #expect(MemoryLayout<Float2>.stride == 8)
-    #expect(MemoryLayout<MaterialUniforms>.stride == 288)
+    #expect(MemoryLayout<MaterialUniforms>.stride == 336)
     #expect(MaterialUniforms.make(kind: MaterialKindEye).flags & MaterialFlagSourceIrisHighlights.rawValue == 0)
 }
 
@@ -96,7 +96,9 @@ func sourceIrisHighlightsUseOriginalUVChannelsAndRecoveredMetalComposition() thr
     var lights = LightsUniforms()
 
     func render(mesh data: MeshData = irisProbeMesh(), source: Bool = true, strength: Float = 1,
-                hasUpper: Bool = true, hasLower: Bool = true, baseAlpha: Float = 1) throws -> Float4 {
+                hasUpper: Bool = true, hasLower: Bool = true, baseAlpha: Float = 1,
+                st0: Float4 = Float4(1, 1, 0, 0), st1: Float4 = Float4(1, 1, 0, 0),
+                st2: Float4 = Float4(1, 1, 0, 0)) throws -> Float4 {
         let handle = try resources.register(mesh: data)
         defer { resources.unregister(mesh: handle) }
         let mesh = try #require(resources.mesh(handle))
@@ -109,6 +111,9 @@ func sourceIrisHighlightsUseOriginalUVChannelsAndRecoveredMetalComposition() thr
         material.overlayColor0 = Float4(1, 0.25, 0.125, 0.5)
         material.overlayColor1 = Float4(0.125, 0.5, 1, 1)
         material.eye.w = strength
+        // Identity _ST matches make()'s defaults; the offset/scale cases below
+        // replay SetTextureOffset/SetTextureScale values.
+        material.irisST0 = st0; material.irisST1 = st1; material.irisST2 = st2
         let pass = MTLRenderPassDescriptor(); pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
         let command = try #require(queue.makeCommandBuffer())
@@ -148,9 +153,31 @@ func sourceIrisHighlightsUseOriginalUVChannelsAndRecoveredMetalComposition() thr
     expect(try render(hasUpper: false), Float4(0.1015625, 0.34375, 0.65625, 0.75), "lower only")
     expect(try render(hasUpper: false, hasLower: false), unchanged, "absent masks")
     expect(try render(mesh: irisProbeMesh(uv1: 0.625, uv2: 0.375)), Float4(0.5625, 0.25, 0.3125, 0.5), "channel direction")
-    expect(try render(mesh: irisProbeMesh(uv1: 1.375, uv2: -0.375)), Float4(0.40625, 0.34375, 0.65625, 0.75), "authored repeat sampling")
+    // cw_t_hitomi_hi_* import with m_WrapMode 1 (Clamp), so out-of-range iris
+    // UVs clamp to the edge texels instead of the old repeat assumption:
+    // uv1 1.375 reads upper texel 3 (alpha 0.25), uv2 -0.375 reads lower texel 0
+    // (alpha 0), giving a 0.125 highlight factor over base texel 0.
+    expect(try render(mesh: irisProbeMesh(uv1: 1.375, uv2: -0.375)), Float4(0.140625, 0.2265625, 0.33203125, 0.125), "imported clamp-to-edge wrap")
     expect(try render(mesh: irisProbeMesh(uv1: nil, uv2: nil)), unchanged, "legacy buffers alias UV0")
     expect(try render(baseAlpha: 14), Float4(0.40625, 0.34375, 0.65625, 0.875), "preserves greater base alpha")
     expect(try render(source: false), unchanged, "generic overlays use UV0")
     expect(try render(mesh: irisProbeMesh(uv0: 0.375), source: false), Float4(0.390625, 0.0888671875, 0.1953125, 0.25), "generic tint composition preserved")
+    // The EyeLookMaterialControll _ST transforms: uv' = uv * st.xy + st.zw.
+    // uv0 0.125 + offset 0.25 lands exactly on base texel 1's center (u*4 =
+    // 1.5), so the sampled base becomes (0.5, 0.125, 0.25, 0.25) under the
+    // unchanged 0.75 highlight factor.
+    expect(try render(st0: Float4(1, 1, 0.25, 0)), Float4(0.5, 0.3125, 0.625, 0.75), "irisST0 offset shifts the base texel")
+    // Scale 2: uv0 reads 0.25, the midpoint between texels 0 and 1, giving a
+    // (0.3125, 0.1875, 0.3125, 0.15625) base under the same composition.
+    expect(try render(st0: Float4(2, 2, 0, 0)), Float4(0.453125, 0.328125, 0.640625, 0.75), "irisST0 scale shifts the base texel")
+    // irisST1 offset 0.25 moves uv1 0.375 onto upper texel 2 (alpha 1), so the
+    // upper term's 1.0 * overlayColor0 wins the r/g channels of the maximum.
+    expect(try render(st1: Float4(1, 1, 0.25, 0)), Float4(0.78125, 0.34375, 0.65625, 0.75), "irisST1 offset shifts the upper highlight")
+    // irisST2 offset 0.25 moves uv2 0.625 onto lower texel 3 (alpha 1), so
+    // 1.0 * overlayColor1 dominates both the maximum and the alpha.
+    expect(try render(st2: Float4(1, 1, 0.25, 0)), Float4(0.5, 0.5, 1, 1), "irisST2 offset shifts the lower highlight")
+    // Identity _ST is the default uniform and reproduces the composition above
+    // bit-for-bit: the transform path cannot change a (1,1,0,0) sampling.
+    expect(try render(st0: Float4(1, 1, 0, 0), st1: Float4(1, 1, 0, 0), st2: Float4(1, 1, 0, 0)),
+           Float4(0.40625, 0.34375, 0.65625, 0.75), "identity _ST is the composition")
 }

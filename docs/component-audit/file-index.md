@@ -22,13 +22,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**707 files indexed; 707 assigned; 0 unassigned.**
+**709 files indexed; 709 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 158 |
+| [Studio / IK / animation](studio.md) | 160 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 289 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
@@ -40,8 +40,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
-| Runtime / shared shader declaration | 158 |
-| Test / validation | 138 |
+| Runtime / shared shader declaration | 159 |
+| Test / validation | 139 |
 
 ## App / gameplay / plugins
 
@@ -269,6 +269,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioIK.swift](../../Packages/Engine/Sources/Studio/SourceStudioIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift](../../Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
@@ -313,6 +314,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIrisOffsetTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIrisOffsetTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioIrisRenderingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIrisRenderingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
