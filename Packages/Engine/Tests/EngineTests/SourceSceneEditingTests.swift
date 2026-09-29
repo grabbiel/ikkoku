@@ -195,6 +195,55 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     #expect(throws: (any Error).self) { try original.editedData(.init(currentCamera: bad)) }
 }
 
+@Test func sourceSceneEditingVisibilityPatchesOwnFlagBytesAndReversesExactly() throws {
+    let bytes = SceneDocumentBytes.scene().data, original = try KoikatsuSceneReader.decodeDocument(bytes)
+    func changedOffsets(_ data: Data) -> [Int] { (0..<bytes.count).filter { data[$0] != bytes[$0] } }
+    // A transform-only edit locates each object's 36-byte span; its visible byte sits
+    // 40 bytes later (after treeState). Every fixture header stores visible = true.
+    // The probe's byte patterns differ from the header's [1,2,3,0,15,0,1,1,1] at every
+    // position, so exactly 36 contiguous bytes change.
+    let probe = KoikatsuChangeAmount(
+        position: SIMD3(Float(bitPattern:0x2468ACE1), Float(bitPattern:0x13579BD0), Float(bitPattern:0x02468AC8)),
+        rotationDegrees: SIMD3(Float(bitPattern:0x79BDF135), Float(bitPattern:0x2468ACE0), Float(bitPattern:0x13579BDF)),
+        scale: SIMD3(Float(bitPattern:0x2468ACE1), Float(bitPattern:0x13579BD0), Float(bitPattern:0x02468AC8)))
+    func transformSpanStart(_ key: Int32) throws -> Int {
+        let span = changedOffsets(try original.editedData(.init(transforms: [.init(.object(key), transform: probe)])))
+        let start = try #require(span.first)
+        try #require(span.count == 36 && span.last == start + 35)
+        return start
+    }
+    let visibleOffsets = [try transformSpanStart(11) + 40, try transformSpanStart(20) + 40].sorted()
+    let hidden = try original.editedData(.init(visibility: [11: false, 20: false]))
+    #expect(hidden.count == bytes.count && changedOffsets(hidden) == visibleOffsets)
+    #expect(visibleOffsets.allSatisfy { bytes[$0] == 1 && hidden[$0] == 0 })
+    let result = try KoikatsuSceneReader.decodeDocument(hidden)
+    let before = sceneObjects(original.snapshot.roots), after = sceneObjects(result.snapshot.roots)
+    #expect(Set(before.keys) == Set(after.keys))
+    #expect(after[11]?.visible == false && after[20]?.visible == false)
+    #expect(after[10]?.visible == true && after[21]?.visible == true)
+    for key in before.keys where key != 10 && key != 11 && key != 20 { #expect(after[key] == before[key]) }
+    let root = try #require(after[10]), originalRoot = try #require(before[10])
+    #expect(root.transform == originalRoot.transform && root.treeState == originalRoot.treeState && root.visible)
+    #expect(root.character?.cardData == originalRoot.character?.cardData && root.character?.bones == originalRoot.character?.bones)
+    #expect(result.settings == original.settings && result.trailingData == original.trailingData)
+    // Reversing restores every source byte; an edit to the current value is identity.
+    #expect(try result.editedData(.init(visibility: [11: true, 20: true])) == bytes)
+    #expect(try original.editedData(.init(visibility: [10: true, 11: true])) == bytes)
+    #expect(throws: (any Error).self) { try original.editedData(.init(visibility: [999: false])) }
+}
+
+@Test func sourceSceneEditingVisibilityAndTransformOnOneObjectCombineAndReverse() throws {
+    let bytes = SceneDocumentBytes.scene().data, original = try KoikatsuSceneReader.decodeDocument(bytes)
+    let before = try #require(original.snapshot.roots[0].character?.accessoryChildren[7]?.first)
+    let transform = editedSceneTransform()
+    let data = try original.editedData(.init(transforms: [.init(.object(11), transform: transform)], visibility: [11: false]))
+    let result = try KoikatsuSceneReader.decodeDocument(data)
+    let after = try #require(result.snapshot.roots[0].character?.accessoryChildren[7]?.first)
+    #expect(after.transform == transform && !after.visible)
+    #expect(data.count == bytes.count)
+    #expect(try result.editedData(.init(transforms: [.init(.object(11), transform: before.transform)], visibility: [11: true])) == bytes)
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES"]),
                "Requires IKKOKU_STUDIO_SCENE_FIXTURES"))
 func sourceSceneEditingRoundTripsIndependentSceneFixturesWhenSupplied() throws {
