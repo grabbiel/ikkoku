@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "studio-scenario-visibility-folder",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/visibility-folder.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-visibility-folder.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-visibility-folder.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/visibility-folder.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-rename-folder",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/rename-folder.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-rename-folder.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Renames source object key 622 (folder), exports the original scene and reimports it: the new name reads back. Camera and route renames are not exercised because the fixture scene contains neither object type; the character-name rejection half of ST-T03 rename is a StudioModel export guard covered by the Engine suite.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-rename-folder.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/rename-folder.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-face-shape",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/face-shape.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-face-shape.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Edits face slot 20 on character key 0 and body slot 0 on character key 65, exports the original scene and reimports it: both rates read back within 1e-5. The inspector's live visual update and Reset to card are not covered (no headless pixel or reset assertion).",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-face-shape.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/face-shape.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-color-edit",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/color-edit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-color-edit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Edits the body.skinMainColor card color on character key 0, exports the original scene and reimports it: the edited rgba reads back on every component within 1e-5. The hair color edit is NOT part of this scenario: hair.parts.0.baseColor is a draft color on this card but binds no material on the imported assembly, so export skips the writeback; the live preview update and Reset to card stay unchecked.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-color-edit.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/color-edit.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-item-props",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
+        {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/item-props.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-item-props.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "With IKKOKU_STUDIO_ITEM_CATALOG set, the import diagnostics must report `Items rendered from the converted catalog: 19; unmapped keys: none.`, and an export of all 19 placeholder items plus a reimport must still report that line. The rendered transforms and saved colors of the props (the visual half of ST-T04) are not asserted.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-item-props.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/item-props.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    }
+  ]
+}

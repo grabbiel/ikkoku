@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"op": "setFace", "key": 0, "index": 20, "value": 0.75},
+    {"op": "assert", "key": 0, "face": {"index": 20, "value": 0.75}},
+    {"op": "setBody", "key": 65, "index": 0, "value": 0.65},
+    {"op": "assert", "key": 65, "body": {"index": 0, "value": 0.65}},
+    {"op": "export", "path": ".local/verification/scenario-exports/face-shape.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/face-shape.png"},
+    {"op": "assert", "key": 0, "face": {"index": 20, "value": 0.75}},
+    {"op": "assert", "key": 65, "body": {"index": 0, "value": 0.65}}
+  ]
+}

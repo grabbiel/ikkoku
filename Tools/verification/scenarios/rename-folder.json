@@ -1,0 +1,9 @@
+{
+  "steps": [
+    {"op": "rename", "key": 622, "name": "TT04 renamed folder"},
+    {"op": "assert", "key": 622, "name": "TT04 renamed folder"},
+    {"op": "export", "path": ".local/verification/scenario-exports/rename-folder.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/rename-folder.png"},
+    {"op": "assert", "key": 622, "name": "TT04 renamed folder"}
+  ]
+}
