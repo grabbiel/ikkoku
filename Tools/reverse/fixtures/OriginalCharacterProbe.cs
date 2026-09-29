@@ -18,10 +18,16 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     readonly List<object> textures = new List<object>();
     readonly Dictionary<int,string> textureFiles = new Dictionary<int,string>();
     readonly List<object> fingerRecords = new List<object>();
+    // ST-T07f optional hand-pattern mode. Non-null only when hand-patterns.tsv
+    // (rows "L<TAB>k" and "R<TAB>k") sits in the plugin folder; every output
+    // stays as before when the file is absent.
+    Dictionary<string,int> handPatterns;
+    readonly List<object> handAnimeRecords = new List<object>();
     IEnumerator Start()
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
         Directory.CreateDirectory(folder);
+        TryLoadHandPatterns();
         for (int i=0;i<30;i++) yield return null;
         string error = null;
         try { CreateFixture(); } catch(Exception e) { error=e.ToString(); }
@@ -34,11 +40,17 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             yield return step;
         }
         if(error != null) { Finish(error); yield break; }
+        // ST-T07f: recovered Studio behavior is HandAnimeCtrl.Init(sex) then
+        // ptn=k, where the ptn setter calls LoadAnime, which for patterns 1-21
+        // enables the hand Animator and Play()s the named clip. Play() writes
+        // bones on the next Animator update, so the moment-(b) snapshot below
+        // still holds the default-state pose and frame0 starts the pattern.
+        if(handPatterns!=null)ApplyHandPatterns();
         // Moment (b): right after LoadAsync finishes, before the 10-frame wait.
         RecordFingers("afterLoadAsync");
         // ST-T07c: record every frame of the wait so the first frame whose
         // rotations match sample-list index 1 can be pinned to a frame number.
-        for(int i=0;i<10;i++){yield return null;RecordFingers("frame"+i);}
+        for(int i=0;i<10;i++){yield return null;RecordFingers("frame"+i);if(handPatterns!=null)RecordHandAnime("frame"+i);}
         try { Capture(); } catch(Exception e) { error=e.ToString(); }
         Finish(error);
     }
@@ -118,6 +130,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // ChaControl as well, so it must be disabled before native pose export.
         Manager.Character.Instance.enabled=false;
         foreach(var b in character.GetComponentsInChildren<Behaviour>(true)) b.enabled=false;
+        // Animator state info is read-only observation, so sampling it here,
+        // while the frozen pose is still the one frame.json will write, gives
+        // the playhead that produced the exported bone rotations.
+        if(handPatterns!=null)RecordHandAnime("frozenPose");
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) t.gameObject.layer=Layer;
         foreach(var light in FindObjectsOfType<Light>()) light.enabled=false;
         var lightObject=new GameObject("IkkokuProbeKey");var key=lightObject.AddComponent<Light>();
@@ -157,6 +173,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // Moment (c): after the 10-frame wait, immediately before collecting
         // the bone transforms written to frame.json.
         RecordFingers("frameJsonCapture");
+        if(handPatterns!=null)RecordHandAnime("frameJsonCapture");
         var bones=new List<object>();
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) bones.Add(new Dictionary<string,object>{{"path",RelativePath(t)},{"position",V(t.localPosition)},{"rotation",V(t.localRotation)},{"scale",V(t.localScale)}});
         var globals=new Dictionary<string,object>();
@@ -169,6 +186,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var report=new Dictionary<string,object>{{"schemaVersion",1},{"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()},{"masterTextureLimit",QualitySettings.masterTextureLimit},{"lodBias",QualitySettings.lodBias},{"fixedDeltaTime",Time.fixedDeltaTime},{"maximumDeltaTime",Time.maximumDeltaTime},{"width",Width},{"height",Height},{"scope","Frozen original clothed character; source-evaluated geometry, source materials, dedicated camera/light; no Studio post-processing"},{"card","fixture-card.png"},{"color","original-color.png"},{"camera",new Dictionary<string,object>{{"position",V(camera.transform.position)},{"target",V(bounds.center)},{"rotation",V(camera.transform.rotation)},{"fov",camera.fieldOfView},{"near",camera.nearClipPlane},{"far",camera.farClipPlane},{"view",M(camera.worldToCameraMatrix)},{"projection",M(camera.projectionMatrix)}}},{"light",new Dictionary<string,object>{{"direction",V(key.transform.forward)},{"color",V(key.color)},{"intensity",key.intensity},{"ambient",V(RenderSettings.ambientLight)}}},{"bounds",new Dictionary<string,object>{{"min",V(bounds.min)},{"max",V(bounds.max)}}},{"background",V(camera.backgroundColor)},{"globals",globals},{"textures",textures},{"meshes",meshes},{"bones",bones},{"renderCPUMilliseconds",timer.Elapsed.TotalMilliseconds}};
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
+        if(handPatterns!=null)File.WriteAllText(Path.Combine(folder,"hand-anime.json"),J(handAnimeRecords));
         // White-material silhouette is a geometry diagnostic; alpha cutouts are
         // deliberately excluded and therefore reported separately from color alpha.
         var whiteShader=Shader.Find("Unlit/Color");
@@ -314,7 +332,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         else return "unexpected array rank "+array.Rank;
         return list;
     }
-    void RecordFingers(string moment) {
+    object FingerBoneSamples() {
         var bones=new Dictionary<string,object>();
         foreach(string name in new[]{"cf_j_middle01_L","cf_j_middle02_L","cf_j_thumb01_R"}) {
             var samples=new List<object>();
@@ -322,6 +340,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 if(t.name==name) samples.Add(new Dictionary<string,object>{{"path",RelativePath(t)},{"localRotation",V(t.localRotation)},{"localEulerAngles",V(t.localRotation.eulerAngles)}});
             bones[name]=samples; // empty = not instantiated yet; more than one = same-named bones on several objects
         }
+        return bones;
+    }
+    void RecordFingers(string moment) {
+        var bones=FingerBoneSamples();
         var status=Member(character,"fileStatus");
         var hand=Member(character,"sibHand");
         var animator=Member(character,"animBody");
@@ -375,13 +397,75 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             var boneInfo=srcIndex==null||srcDict==null?null:srcDict[srcIndex];
             shapeRots[boneName]=new Dictionary<string,object>{{"sourceIndex",srcIndex},{"vctRot",Flatten(Member(boneInfo,"vctRot"))}};
         }
-        fingerRecords.Add(new Dictionary<string,object>{{"moment",moment},{"frame",Time.frameCount},{"bones",bones},
+        var record=new Dictionary<string,object>{{"moment",moment},{"frame",Time.frameCount},{"bones",bones},
             {"fileStatus",new Dictionary<string,object>{{"enableShapeHand",Flatten(Member(status,"enableShapeHand"))},{"shapeHandPtn",Flatten(Member(status,"shapeHandPtn"))},{"shapeHandBlendValue",Flatten(Member(status,"shapeHandBlendValue"))}}},
             {"sibHand",hand==null?null:new Dictionary<string,object>{{"type",hand.GetType().Name},{"updateMask",Flatten(Member(hand,"updateMask"))}}},
             {"animBody",new Dictionary<string,object>{{"exists",animator!=null},{"type",animator==null?null:(object)animator.GetType().Name},{"runtimeAnimatorController",controller==null?null:(object)new Dictionary<string,object>{{"name",Member(controller,"name")}}},{"enabled",Member(animator,"enabled")}}},
             {"behaviours",rootBehaviours},
             {"shapeHand",new Dictionary<string,object>{{"dictSrcRotations",shapeRots},{"InitEnd",hand==null?null:(object)Member(hand,"InitEnd")}}},
-            {"handBoneChain",chain}});
+            {"handBoneChain",chain}};
+        // The pattern IDs are recorded only in pattern mode, so a capture
+        // without hand-patterns.tsv keeps its previous bytes exactly.
+        if(handPatterns!=null)record["handPatterns"]=handPatterns;
+        fingerRecords.Add(record);
+    }
+    // ST-T07f optional hand-pattern mode. CharaStudio.dll is not referenced,
+    // so the Studio type is located by type name and its recovered members
+    // are invoked reflectively: Init(sex) then ptn=k, the same sequence
+    // AddObjectAssist and OCIChar.ChangeHandAnime run in Studio.
+    void TryLoadHandPatterns() {
+        var file=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"hand-patterns.tsv");
+        if(!File.Exists(file))return;
+        var patterns=new Dictionary<string,int>();
+        foreach(var line in File.ReadAllLines(file)) {
+            if(line.Length==0)continue;
+            var fields=line.Split('\t');
+            if(fields.Length!=2 || (fields[0]!="L"&&fields[0]!="R"))throw new Exception("hand-patterns.tsv rows need an L or R side and one pattern number");
+            int pattern;
+            if(!Int32.TryParse(fields[1],out pattern)||pattern<0||pattern>21||patterns.ContainsKey(fields[0]))
+                throw new Exception("hand-patterns.tsv repeats a side or holds a pattern outside the converted 0-21 range");
+            patterns[fields[0]]=pattern;
+        }
+        if(patterns.Count!=2)throw new Exception("hand-patterns.tsv needs one L and one R row");
+        handPatterns=patterns;
+    }
+    void ApplyHandPatterns() {
+        var flags=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.DeclaredOnly|System.Reflection.BindingFlags.Instance;
+        foreach(var component in character.GetComponentsInChildren<MonoBehaviour>(true)) {
+            if(component.GetType().FullName!="Studio.HandAnimeCtrl")continue;
+            var side=component.transform.name=="cf_s_hand_L"?"L":component.transform.name=="cf_s_hand_R"?"R":null;
+            if(side==null)continue; // a HandAnimeCtrl of another object; only the character's two are driven
+            int pattern;
+            if(!handPatterns.TryGetValue(side,out pattern))throw new Exception("hand-patterns.tsv has no row for "+component.transform.name);
+            System.Reflection.MethodInfo init=null;
+            System.Reflection.PropertyInfo property=null;
+            for(var type=component.GetType();type!=null&&(init==null||property==null);type=type.BaseType) {
+                if(init==null)init=type.GetMethod("Init",flags);
+                if(property==null)property=type.GetProperty("ptn",flags);
+            }
+            if(init==null||property==null)throw new Exception("Studio.HandAnimeCtrl is missing the recovered Init or ptn member");
+            try {
+                init.Invoke(component,new object[]{1}); // the fixture's sex; Studio passes ChaControl.parameter.sex
+                property.SetValue(component,pattern,null); // setter runs LoadAnime, which enables and Play()s patterns 1-21
+            } catch(Exception e) { throw new Exception("HandAnimeCtrl pattern "+pattern+" setup failed on "+component.transform.name+": "+e.Message,e); }
+        }
+    }
+    Animator FindHandAnimator(string side) {
+        foreach(var animator in character.GetComponentsInChildren<Animator>(true))
+            if(animator.name=="cf_s_hand_"+side)return animator;
+        return null;
+    }
+    void RecordHandAnime(string moment) {
+        var hands=new Dictionary<string,object>();
+        foreach(string side in new[]{"L","R"}) {
+            var animator=FindHandAnimator(side);
+            if(animator==null) { hands[side]=new Dictionary<string,object>{{"exists",false}}; continue; }
+            var state=animator.GetCurrentAnimatorStateInfo(0);
+            hands[side]=new Dictionary<string,object>{{"exists",true},{"isActiveAndEnabled",Member(animator,"isActiveAndEnabled")},
+                {"frameCount",Time.frameCount},{"deltaTime",Time.deltaTime},
+                {"normalizedTime",state.normalizedTime},{"length",state.length},{"shortNameHash",state.shortNameHash}};
+        }
+        handAnimeRecords.Add(new Dictionary<string,object>{{"moment",moment},{"bones",FingerBoneSamples()},{"hands",hands}});
     }
     Transform FindBone(string name) {
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) if(t.name==name) return t;

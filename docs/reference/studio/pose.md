@@ -353,12 +353,84 @@ saved patterns are `[5, 6]`: the posed finger differs from the unpatterned
 pose, equals the same pair applied directly between animation and FK/IK, and
 repeats one loop period later.
 
-Evidence limits: no original capture has Studio playing patterns 2–21, so
-only pattern 1 has a numeric anchor, and it holds only at the fitted phase
-because the capture never recorded its loop phase. The synthetic fixture's
-`[5, 6]` exercises the mechanism with authored inputs, not an imported
-original scene. Cross-fades between patterns and the `Studio.Preparation`
-Animator enable/disable toggling are not executed.
+Evidence limits: the pattern captures below anchor patterns 3, 5, 9, 14, 17
+and 21 at their recorded phase; the other fifteen converted patterns still
+have no original capture, and the default-state pattern 1 anchor holds only
+at its fitted phase because that capture never recorded its loop phase. The
+synthetic fixture's `[5, 6]` exercises the mechanism with authored inputs,
+not an imported original scene. Cross-fades between patterns and the
+`Studio.Preparation` Animator enable/disable toggling are not executed, and
+the captures compare the rotation channel only.
+
+Original pattern captures (ST-T07f) add the missing numeric anchor.
+`Tools/reverse/fixtures/OriginalCharacterProbe.cs` gained an optional
+hand-pattern mode: when `hand-patterns.tsv` (rows `L<TAB>k` and `R<TAB>k`)
+sits in the plugin folder the probe replays the recovered Studio sequence
+right after `LoadAsync` — `Studio.HandAnimeCtrl.Init(1)` and then `ptn = k`
+through reflection, the setter whose `LoadAnime` enables the hand Animator
+and `Play`s the named clip — and records per frame, beside the existing
+finger rotations, each hand Animator's `GetCurrentAnimatorStateInfo(0)`
+(`normalizedTime`, `length`, `shortNameHash`) with `Time.frameCount` and
+`Time.deltaTime` into `hand-anime.json`. The snapshots are `frame0`…`frame9`
+plus `frozenPose` and `frameJsonCapture` recorded inside `Capture`, where
+the animator state is read again while the frozen pose equals `frame.json`.
+Without the tsv the finger snapshots keep their previous shape: the
+`handPatterns` field and `hand-anime.json` exist only in pattern mode (a
+regression capture without the tsv on the amended fixture confirmed all 13
+records carrying the previous nine keys in the previous order and no new
+file).
+`Tools/reverse/original_character_probe.py --hand-patterns <tsv>` uploads
+the file after the compile step and before the player starts, the way the
+character-settings overlay is uploaded. Three VM captures (2026-09-27) ran
+the sequence and collected cleanly:
+
+```sh
+cp -R .local/reverse/original-character-probe/shaders .local/stt07f/r3-17/
+printf 'L\t3\nR\t17\n' > .local/stt07f/tsv/p3-17.tsv
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07f/r3-17 --hand-patterns .local/stt07f/tsv/p3-17.tsv
+sleep 90
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07f/r3-17 --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_hand_patterns.py \
+  --capture .local/stt07f/r3-17 \
+  --library .local/stt07f/studio-hand-patterns.json
+```
+
+`Tools/reverse/compare_hand_patterns.py` replays the converted library the
+way `SourceStudioHandPatterns.pose` does — loop wrap into
+`[startTime, stopTime)`, componentwise interpolation between adjacent dense
+frames, quaternion normalize — at each snapshot's own recorded playhead.
+The playhead is the fractional part of the recorded `normalizedTime` scaled
+by the converted clip length: `Animator.GetCurrentAnimatorStateInfo` reports
+whole loop counts with an f32 state length, and folding them out before the
+multiplication keeps the recorded seam at keyframe 0 instead of the final
+keyframe. The measured angle normalizes both quaternions first, because a
+captured f32 local rotation whose norm sits 1e-8 off one otherwise reads as
+a phantom 0.015° between identical rotations. Captured rotations are raw f32
+transform values, so the two converters agree componentwise. Max rotation
+angle over all twelve snapshots and every sampled bone of the hand:
+
+| Capture | Left state / max | Right state / max | Recorded clip window per hand |
+| --- | --- | --- | --- |
+| `3/17` | `par` 0.000000° | `ok` 0.000007° | `0…0.153` / `0…0.167` s |
+| `5/9` | `grip_normal` 0.000005° | `gun_grip` 0.000004° | `0…0.167` / `0…0.167` s |
+| `21/14` | `par_straight` 0.000002° | `index_finger1` 0.000005° | `0…0.141` / `0…0.167` s |
+
+At `frameJsonCapture`, the comparator also checks all 15 finger bones per
+hand in `frame.json` at the recorded capture phase. The maximum rotation
+angles are `3/17`: L 4.83e-06°, R 7.44e-06°; `5/9`: L 7.64e-06°, R
+6.83e-06°; and `21/14`: L 6.16e-06°, R 5.66e-06° (15 bones per hand).
+These angles contribute to the comparator's overall 0.01° pass threshold.
+
+Every hand-side capture records `normalizedTime` 0 at `frame0`, the first
+frame after `Play` lands: the pattern setter restarts the loop at keyframe
+0, so the replay phase of this driving path is recorded evidence, where the
+earlier default-state capture had to fit `t = 0.107 s` because its
+free-running `goo` state never reported its phase. The six hand recordings show six
+distinct `shortNameHash` values, one per played state; the library names its
+states but cannot recompute Unity's hashes. The fourteen comparator unittest
+cases pass, one of them pinning the loop-seam fold.
 
 ## Remaining Studio dependency inventory
 
