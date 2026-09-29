@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import CoreMath
 import Scene
 
 /// The recovered NeckLookCalcVer2 look modes FORWARD / FIX / ANIMATION with
@@ -217,5 +218,101 @@ public struct SourceStudioNeckLook: Sendable {
             rotations.append(try Self.slerp(fixAngleBackup[bone], target, num))
         }
         return rotations
+    }
+
+    /// The first-frame clock advance. NeckUpdateCalc early-outs on a zero
+    /// deltaTime, which would pass the animated pose through even for FIX, so
+    /// a fresh preview showing elapsed 0 uses this tiny positive step instead
+    /// and FIX already lands on the saved rotation. FORWARD is unaffected: at
+    /// this size the transition curve is still at its clamped first key.
+    static let firstFrameDelta: Float = 1e-5
+
+    /// Applies one NeckLookCalcVer2 override to a posed character: seeds the
+    /// calculator with the saved `fixAngle` and an ANIMATION entry type (what
+    /// ChaControl init leaves behind), steps once by `elapsed`, and writes the
+    /// two resulting local rotations onto `settings.boneNames`, converting each
+    /// to the engine basis exactly once and keeping each bone's current
+    /// translation and scale. The animated input is never read for FIX or
+    /// FORWARD (calcLerp 1 lands the slerp on fixAngle), so it is not passed in.
+    /// ANIMATION, TARGET and AWAY leave the pose untouched (the animated pose is
+    /// already there / the gaze solver is unwired), and an active Studio FK
+    /// neck group owns the neck, so both return without writing.
+    @discardableResult
+    public static func applied(pose: inout RigPose, rig: RigDefinition, settings: SourceStudioNeckLookSettings,
+                               fixAngle: [simd_quatf], lookType: SourceStudioNeckLookType, elapsed: Float,
+                               neckFKActive: Bool) throws -> SourceStudioNeckLookOverride.Applied {
+        guard lookType == .fix || lookType == .forward else { return .none }
+        guard !neckFKActive else { return .none }
+        guard elapsed.isFinite, elapsed >= 0 else { throw RigError.invalid("Neck look override needs a finite non-negative clock time.") }
+        var state = try SourceStudioNeckLook(settings: settings, lookType: .animation, fixAngle: fixAngle)
+        let deltaTime = elapsed == 0 ? firstFrameDelta : elapsed
+        let identity = Self.identity
+        let rotations = try state.step(deltaTime: deltaTime, lookType: lookType, animated: [identity, identity])
+        for (bone, name) in settings.boneNames.enumerated() {
+            let node = try rig.uniqueNode(named: name)
+            let matrix = pose.localMatrices[node]
+            let x = Float3(matrix[0].x, matrix[0].y, matrix[0].z)
+            let y = Float3(matrix[1].x, matrix[1].y, matrix[1].z)
+            let z = Float3(matrix[2].x, matrix[2].y, matrix[2].z)
+            let scale = Float3(simd_length(x), simd_length(y), simd_length(z))
+            guard (0..<3).allSatisfy({ scale[$0].isFinite && scale[$0] > 1e-8 }) else {
+                throw RigError.invalid("Neck look override cannot read a singular local scale for '\(name)'.")
+            }
+            pose.localMatrices[node] = Transform.trs(Float3(matrix[3].x, matrix[3].y, matrix[3].z),
+                                                     UnityCoordinates.rotation(rotations[bone]), scale)
+        }
+        return lookType == .fix ? .fix : .forward
+    }
+}
+
+/// The single resolution of the effective neck pattern to the preview override
+/// the look controller can actually apply, shared by the Studio preview
+/// (SourceStudioCharacterPreview) and `ikkoku-inspect look-data` so both report
+/// one source of truth. Data only: it runs no solver, evaluates no curve and
+/// reads no clock; it maps the pattern to its lookType and explains, in one
+/// reason string, why the override applies or is deferred to the animated pose.
+public enum SourceStudioNeckLookOverride {
+    public enum Applied: String, Codable, Sendable, Equatable {
+        case fix = "FIX", forward = "FORWARD", none = "none"
+    }
+    public struct Resolution: Sendable, Equatable {
+        /// The pattern's lookType, or nil when no single pattern resolves (no
+        /// settings, no saved pattern, a pattern outside the prefab's states,
+        /// or unreadable saved neck bytes).
+        public let lookType: SourceStudioNeckLookType?
+        public let applied: Applied
+        public let reason: String
+    }
+
+    /// Resolves `effectivePattern` (the card neckLookPtn wins over the saved
+    /// neck bytes' ptnNo - see SourceStudioLookData.effectiveNeckPattern)
+    /// against the prefab settings. `savedBoneCount` is the number of
+    /// quaternions in the decoded saved neck bytes, or nil when those bytes did
+    /// not decode. The calculator reads exactly two bones.
+    public static func resolve(effectivePattern: Int32?, settings: SourceStudioNeckLookSettings?, savedBoneCount: Int?) -> Resolution {
+        guard let settings else {
+            return Resolution(lookType: nil, applied: .none, reason: "Neck look settings are not configured; the neck look override is disabled and the animated pose is kept.")
+        }
+        guard let pattern = effectivePattern else {
+            return Resolution(lookType: nil, applied: .none, reason: "No saved neck pattern is present; the animated pose is kept.")
+        }
+        guard settings.lookTypes.indices.contains(Int(pattern)) else {
+            return Resolution(lookType: nil, applied: .none, reason: "Effective neck pattern \(pattern) is outside the prefab's \(settings.lookTypes.count) neck states; the animated pose is kept.")
+        }
+        let lookType = settings.lookTypes[Int(pattern)]
+        guard savedBoneCount == settings.boneNames.count else {
+            let count = savedBoneCount.map(String.init) ?? "unreadable"
+            return Resolution(lookType: lookType, applied: .none, reason: "Saved neck bytes hold \(count) bones but the calculator reads \(settings.boneNames.count); the animated pose is kept.")
+        }
+        switch lookType {
+        case .fix:
+            return Resolution(lookType: lookType, applied: .fix, reason: "FIX holds the saved neck rotation.")
+        case .forward:
+            return Resolution(lookType: lookType, applied: .forward, reason: "FORWARD returns the neck toward the camera along the transition curve.")
+        case .target, .away:
+            return Resolution(lookType: lookType, applied: .none, reason: "Neck gaze solver pending; animated pose kept.")
+        case .animation:
+            return Resolution(lookType: lookType, applied: .none, reason: "ANIMATION keeps the animated neck pose.")
+        }
     }
 }

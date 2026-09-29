@@ -8,8 +8,10 @@ import Studio
 /// Saved look-at data per character for the `look-data` command: card Status
 /// look fields, the decoded neck/eyes record payloads, the effective neck
 /// pattern, and - when the prefab look settings JSON is supplied - the state
-/// name and lookType name the effective patterns resolve to. Data extraction
-/// only; no gaze solver, curve evaluation or look capture is executed here.
+/// name and lookType name the effective patterns resolve to, plus the
+/// neckOverride the Studio preview would apply (SourceStudioNeckLookOverride).
+/// Data extraction only; no gaze solver, curve evaluation or look capture is
+/// executed here.
 func inspectStudioLookData(url: URL, settingsURL: URL?) throws -> [String: Any] {
     let file = try FileHandle(forReadingFrom: url)
     defer { try? file.close() }
@@ -52,10 +54,28 @@ func inspectStudioLookData(url: URL, settingsURL: URL?) throws -> [String: Any] 
             // Studio's UpdateState order ends with ChangeLookNeckPtn, so the
             // card pattern wins over the saved neck bytes' ptnNo. Without a
             // readable card the saved ptnNo is all that remains.
-            var effectiveNeck: Int32?
-            if let status { effectiveNeck = status.neckLookPtn ?? neck?.patternNumber }
-            else { effectiveNeck = neck?.patternNumber }
+            let effectiveNeck: Int32?
+            if let status, let neck { effectiveNeck = SourceStudioLookData.effectiveNeckPattern(status: status, savedNeckPatternNumber: neck.patternNumber) }
+            else { effectiveNeck = status?.neckLookPtn ?? neck?.patternNumber }
             entry["effectiveNeckPattern"] = effectiveNeck.map { Int($0) } ?? NSNull()
+
+            // The override the Studio preview resolves from the same inputs.
+            // Settings that exist but fail the preview's strict neck loader are
+            // reported instead of guessing a lookType.
+            if settings != nil, settings?.neckLookSettings == nil {
+                diagnostics.append("Look settings JSON does not satisfy the preview's neck look loader; neckOverride reports no lookType.")
+            }
+            let neckOverride = SourceStudioNeckLookOverride.resolve(effectivePattern: effectiveNeck,
+                settings: settings?.neckLookSettings, savedBoneCount: neck?.fixAngles.count)
+            // editedPose skips the override while the saved FK neck group is
+            // active (FK owns the neck), so report what the preview renders.
+            let fkOwnsNeck = record.enableFK && record.activeFK.count > 1 && record.activeFK[1]
+            let applied = fkOwnsNeck ? SourceStudioNeckLookOverride.Applied.none : neckOverride.applied
+            let reason = fkOwnsNeck && neckOverride.applied != .none
+                ? "FK owns the neck (saved FK neck group active); the preview skips the \(neckOverride.applied.rawValue) override."
+                : neckOverride.reason
+            entry["neckOverride"] = ["lookType": neckOverride.lookType?.rawValue ?? NSNull(),
+                                     "applied": applied.rawValue, "reason": reason]
 
             // No scene record stores an eye pattern, so the card value is the
             // only saved one and the prefab EyeLookController.ptnNo is the
@@ -122,9 +142,15 @@ private struct PrefabLookSettings {
     let neckStates: [State]
     let eyeStates: [State]
     let eyeControllerPattern: Int32?
+    /// The same JSON through the Studio preview's strict loader, so the
+    /// neckOverride line is resolved by the preview's own code; nil when the
+    /// preview would refuse the file (missing curve, calcLerp, ...).
+    let neckLookSettings: SourceStudioNeckLookSettings?
 
     init(url: URL) throws {
-        guard let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else {
+        let data = try Data(contentsOf: url)
+        neckLookSettings = try? SourceStudioNeckLookSettings(json: data)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RigError.invalid("Look settings JSON is not a JSON object.")
         }
         func states(_ component: String, _ stateKey: String, _ nameKey: String) throws -> [State] {
