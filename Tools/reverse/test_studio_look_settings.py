@@ -1,9 +1,9 @@
 """Synthetic typetree coverage for the look-settings converter (no bundle reads)."""
 import unittest
 
-from studio_look_settings import (NECK_LOOK_TYPES, eye_controller_settings, eyes_settings,
-                                  enum, neck_controller_settings, neck_settings, pointer_name,
-                                  quaternion, transform_root, vector3)
+from studio_look_settings import (NECK_LOOK_TYPES, eye_controller_settings, eye_material_settings,
+                                  eyes_settings, enum, neck_controller_settings, neck_settings,
+                                  pointer_name, quaternion, transform_root, vector2, vector3)
 
 
 class FakeObject:
@@ -57,6 +57,7 @@ class EnumTests(unittest.TestCase):
 
     def test_vectors_and_quaternions_keep_source_component_order(self):
         self.assertEqual(vector3({'x': 1, 'y': 2, 'z': 3}), [1, 2, 3])
+        self.assertEqual(vector2({'x': 0.25, 'y': -0.75}), [0.25, -0.75])
         self.assertEqual(quaternion({'x': 0, 'y': 0, 'z': 0, 'w': 1}), [0, 0, 0, 1])
 
 
@@ -131,6 +132,49 @@ class ConverterTests(unittest.TestCase):
         tree['neckTypeStates'][0]['lookType'] = 9
         with self.assertRaises(ValueError):
             neck_settings(tree, self.names)
+
+
+def eye_material_tree():
+    """Synthetic EyeLookMaterialControll typetree in the captured field
+    layout (texID/texName/isYure texStates), with hand-picked values."""
+    return {
+        'eyeLR': 1,
+        'InsideWait': -100, 'OutsideWait': 100, 'UpWait': -100, 'DownWait': 100,
+        'InsideLimit': -100.0, 'OutsideLimit': 100.0, 'UpLimit': -80.0, 'DownLimit': 80.0,
+        'power': 0.001,
+        'offset': {'x': 0.2, 'y': -0.2}, 'hlUpOffsetY': 0.0, 'hlDownOffsetY': 0.0,
+        'scale': {'x': 0.0, 'y': 0.0},
+        'texStates': [{'texID': -1, 'texName': '_MainTex', 'isYure': 0},
+                      {'texID': -1, 'texName': '_overtex1', 'isYure': 1},
+                      {'texID': -1, 'texName': '_overtex2', 'isYure': 0}],
+        'YureInside': 4, 'YureOutside': -4, 'YureUp': 4, 'YureDown': -4, 'YureTime': 0.3,
+    }
+
+
+class EyeMaterialConverterTests(unittest.TestCase):
+    def test_keeps_eye_lr_waits_limits_offsets_and_tex_states(self):
+        result = eye_material_settings(eye_material_tree(), 'cf_Ohitomi_R02', ['cf_m_hitomi_00'])
+        self.assertEqual(result['eyeLR'], 1)
+        self.assertEqual(result['InsideWait'], -100)
+        self.assertEqual(result['DownWait'], 100)
+        self.assertEqual(result['UpLimit'], -80.0)
+        self.assertEqual(result['power'], 0.001)
+        self.assertEqual(result['offset'], [0.2, -0.2])
+        self.assertEqual(result['scale'], [0.0, 0.0])
+        self.assertEqual([state['texName'] for state in result['texStates']],
+                         ['_MainTex', '_overtex1', '_overtex2'])
+        self.assertEqual([state['isYure'] for state in result['texStates']], [0, 1, 0])
+        self.assertEqual(result['YureInside'], 4)
+        self.assertEqual(result['YureTime'], 0.3)
+        self.assertEqual(result['gameObject'], 'cf_Ohitomi_R02')
+        self.assertEqual(result['materials'], ['cf_m_hitomi_00'])
+
+    def test_missing_required_field_is_a_diagnostic_not_a_default(self):
+        for drop in ('power', 'texStates', 'YureTime'):
+            tree = eye_material_tree()
+            del tree[drop]
+            with self.assertRaises(KeyError):
+                eye_material_settings(tree, 'cf_Ohitomi_L02', [])
 
 
 if __name__ == '__main__':

@@ -433,7 +433,9 @@ def eye_update(*, state: dict, geometry: dict, target: list[float], dt: float,
     {'eyes': [{'angleH', 'angleV', 'dirUp'}, ...]}; `geometry` is the frame's
     recorded geometry, {'eyeCalc': {rootNode, trfCenter}, 'eyes': [{eye,
     target, origRotation, referenceLookDir, referenceUpDir, dirUp}, ...]};
-    `target` the probe target position; `dt` the frame's deltaTime; `st` the
+    an eye may carry a `parent` world rotation (its own cf_J_Eye_tx parent,
+    tilting its angle frame and its writeback) — without one the root
+    rotation applies, as in the fixture replay; `target` the probe target position; `dt` the frame's deltaTime; `st` the
     frame's eyeTypeStates entry (lookType a name or a {name, value} record)
     and `settings` the exported eyes block (correct, centerEyeLength,
     sorasiRate).  Returns the new per-eye state, each entry extended with the
@@ -469,11 +471,17 @@ def eye_update(*, state: dict, geometry: dict, target: list[float], dt: float,
                                            center_eye_length=settings['centerEyeLength']))
     else:
         targets = [resolved, resolved]
-    parent = _quaternion(root['rotation'], 'eye parent rotation')
-    parent_inverse = inverse_quaternion(parent)
+    root_parent = _quaternion(root['rotation'], 'eye parent rotation')
     num5 = -1.0
     results: list[dict] = []
     for index, eye in enumerate(eye_geometry):
+        # Each eye is measured against its own parent (the original's
+        # cf_J_Eye_tx_L/R world rotation, recorded per eye as 'parent' when
+        # the internals carry one); the fixture replay never records one and
+        # keeps the root rotation, byte for byte as before.
+        parent = (root_parent if eye.get('parent') is None
+                  else _quaternion(eye['parent'], 'per-eye parent rotation'))
+        parent_inverse = inverse_quaternion(parent)
         look_dir = _vector(eye['referenceLookDir'], 'eye referenceLookDir')
         up_dir = _vector(eye['referenceUpDir'], 'eye referenceUpDir')
         orig = _quaternion(eye['origRotation'], 'eye origRotation')

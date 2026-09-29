@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Extract the prefab look-at settings (neck/eyes) from oo_base.unity3d.
+"""Extract the prefab look-at settings (neck/eyes) from oo_base.unity3d and
+the EyeLookMaterialControll iris-shift settings from the head prefab bundles.
 
 Only serialized MonoBehaviour typetrees are decoded. Every Transform pointer
 is resolved to its GameObject name (path id 0 becomes null). The typetree ->
@@ -14,6 +15,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 BUNDLE = 'chara/oo_base.unity3d'
+HEAD_BUNDLE_GLOB = 'bo_head_*.unity3d'
+EYE_MATERIAL_CLASS = 'EyeLookMaterialControll'
 NECK_ROOT = 'p_cf_body_bone'
 HEAD_ROOT = 'p_cf_head_bone'
 NECK_LOOK_TYPES = {0: 'ANIMATION', 1: 'TARGET', 2: 'AWAY', 3: 'FORWARD', 4: 'FIX', 5: 'CONTROL'}
@@ -47,6 +50,10 @@ def pointer_name(pointer, names):
     if path_id not in names:
         raise ValueError(f'Transform pointer {path_id} has no GameObject name')
     return names[path_id]
+
+
+def vector2(value):
+    return [value['x'], value['y']]
 
 
 def vector3(value):
@@ -125,6 +132,32 @@ def eye_controller_settings(tree, names=None):
     return {'ptnNo': tree['ptnNo']}
 
 
+def eye_material_settings(tree, game_object, renderer_materials):
+    """One EyeLookMaterialControll record: the eyeLR discriminator, every
+    serialized iris-shift field (the offsets and scale are private in the
+    compiled script but serialized in the prefab, so they are exported and
+    never assumed to be the script's Reset defaults), the texStates and the
+    eye renderer's GameObject name and material names."""
+    tex_states = [{'texID': state['texID'], 'texName': state['texName'], 'isYure': int(state['isYure'])}
+                  for state in tree['texStates']]
+    return {
+        'eyeLR': tree['eyeLR'],
+        'InsideWait': tree['InsideWait'], 'OutsideWait': tree['OutsideWait'],
+        'UpWait': tree['UpWait'], 'DownWait': tree['DownWait'],
+        'InsideLimit': tree['InsideLimit'], 'OutsideLimit': tree['OutsideLimit'],
+        'UpLimit': tree['UpLimit'], 'DownLimit': tree['DownLimit'],
+        'power': tree['power'],
+        'offset': vector2(tree['offset']),
+        'hlUpOffsetY': tree['hlUpOffsetY'], 'hlDownOffsetY': tree['hlDownOffsetY'],
+        'scale': vector2(tree['scale']),
+        'texStates': tex_states,
+        'YureInside': tree['YureInside'], 'YureOutside': tree['YureOutside'],
+        'YureUp': tree['YureUp'], 'YureDown': tree['YureDown'], 'YureTime': tree['YureTime'],
+        'gameObject': game_object,
+        'materials': list(renderer_materials),
+    }
+
+
 def game_object_name(reader_by_path, path_id):
     return reader_by_path[path_id].read().m_Name
 
@@ -192,8 +225,49 @@ def extract(rigs: Path) -> dict:
                        **convert(tree, names)}
     if set(result) != {value[2] for value in targets.values()}:
         raise ValueError(f'Missing look settings: {sorted({value[2] for value in targets.values()} - set(result))}')
-    return {'schema': 1, 'evidence': [{'path': evidence_path(path), 'sha256': hashed}],
-            **result, 'excluded': excluded}
+
+    # The EyeLookMaterialControll behaviours sit on the eye renderers of the
+    # character head prefab bundles (bo_head_*.unity3d), not on oo_base.
+    eye_material, eye_evidence = [], []
+    for head_path in sorted((rigs / 'source/abdata/chara').glob(HEAD_BUNDLE_GLOB)):
+        head_provenance = json.loads(head_path.with_suffix(head_path.suffix + '.provenance.json').read_text())
+        head_hashed = digest(head_path)
+        head_expected = head_provenance.get('sha256') or head_provenance.get('source', {}).get('sha256')
+        if head_expected != head_hashed:
+            raise ValueError(f'Bundle provenance hash mismatch: {head_path}')
+        head_env = UnityPy.load(str(head_path))
+        head_readers = {obj.path_id: obj for obj in head_env.objects}
+        found = []
+        for obj in head_env.objects:
+            if obj.type.name != 'MonoBehaviour':
+                continue
+            behavior = obj.read()
+            if not behavior.m_GameObject.path_id:
+                continue
+            if behavior.m_Script.read().m_ClassName != EYE_MATERIAL_CLASS:
+                continue
+            go_tree = head_readers[behavior.m_GameObject.path_id].read_typetree()
+            # The serialized _renderer PPtr is null in the capture; the eye's
+            # own SkinnedMeshRenderer component is the renderer the script
+            # shifts, so its material names come from there.
+            materials = []
+            for component in go_tree['m_Component']:
+                ref = head_readers[component['component']['m_PathID']]
+                if not ref.type.name.endswith('Renderer'):
+                    continue
+                materials += [head_readers[m['m_PathID']].read().m_Name
+                              for m in ref.read_typetree().get('m_Materials', []) if m['m_PathID']]
+            found.append(eye_material_settings(obj.read_typetree(), go_tree['m_Name'], materials))
+        if not found:
+            continue
+        eye_evidence.append({'path': evidence_path(head_path), 'sha256': head_hashed})
+        eye_material += found
+    eye_material.sort(key=lambda entry: entry['eyeLR'])
+    if [entry['eyeLR'] for entry in eye_material] != [0, 1]:
+        raise ValueError(f'Expected one EyeLookMaterialControll per eyeLR 0/1, found '
+                         f'{[entry["eyeLR"] for entry in eye_material]}')
+    return {'schema': 1, 'evidence': [{'path': evidence_path(path), 'sha256': hashed}] + eye_evidence,
+            **result, 'eyeMaterial': eye_material, 'excluded': excluded}
 
 
 def main():

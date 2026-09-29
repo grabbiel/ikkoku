@@ -4,9 +4,9 @@ import unittest
 from eye_look_reference import (IDENTITY, _bend, add, angle_between_quaternions, angle_rates,
                                 correct_eye_targets, cross, eye_bending, eye_update,
                                 initial_eye_state, inverse_lerp, inverse_quaternion,
-                                local_to_world, look_rotation, lerp, normalize_or_zero,
-                                ortho_normalize, resolve_target, scale, slerp_vector,
-                                sorasi_horizontal, world_to_local)
+                                local_to_world, look_rotation, lerp, multiply_quaternions,
+                                normalize_or_zero, ortho_normalize, resolve_target, scale,
+                                slerp_vector, sorasi_horizontal, world_to_local)
 from neck_target_angle import FORWARD, RIGHT, UP, angle_axis, rotate
 
 # The run1 studio settings the replay uses: pattern 1 (TARGET) bending numbers
@@ -548,6 +548,39 @@ class EyeUpdateTests(unittest.TestCase):
                                st=AWAY_STATE, settings=SETTINGS)
         self.assertAlmostEqual(predicted[0]['angleH'], 36.0, places=6)
         self.assertAlmostEqual(predicted[0]['num5'], 1.0, places=9)
+
+    def test_per_eye_parent_tilts_only_its_eye(self):
+        # Each eye is measured against its own parent (the original's
+        # cf_J_Eye_tx_L/R): a 20 deg yaw tilt on the L eye's parent swings the
+        # aim direction in that eye's frame (about -20 deg azimuth, bent by
+        # 0.4) while the R eye keeps the root rotation and the exact baseline
+        # values.  The writeback composes with the eye's own parent.
+        baseline = eye_update(state=zero_state(),
+                              geometry=synthetic_geometry(eye_positions=self.EYES),
+                              target=[-0.05, 1.5, 5.0], dt=1.0,
+                              st=TARGET_STATE, settings=SETTINGS)
+        tilt = angle_axis(20.0, UP)
+        tilted = synthetic_geometry(eye_positions=self.EYES)
+        tilted['eyes'][0]['parent'] = tilt
+        out = eye_update(state=zero_state(), geometry=tilted,
+                         target=[-0.05, 1.5, 5.0], dt=1.0,
+                         st=TARGET_STATE, settings=SETTINGS)
+        self.assertGreater(abs(out[0]['angleH'] - baseline[0]['angleH']), 1.0)
+        self.assertAlmostEqual(out[1]['angleH'], baseline[1]['angleH'], delta=1e-12)
+        self.assertAlmostEqual(out[1]['angleV'], baseline[1]['angleV'], delta=1e-12)
+        for component, want in zip(out[0]['rotation'],
+                                   multiply_quaternions(tilt, out[0]['localRotation'])):
+            self.assertAlmostEqual(component, want, delta=1e-12)
+        # A recorded parent equal to the root rotation — the fixture case,
+        # where the internals carry no tilt — changes nothing at all.
+        untilted = synthetic_geometry(eye_positions=self.EYES)
+        untilted['eyes'][0]['parent'] = list(IDENTITY)
+        same = eye_update(state=zero_state(), geometry=untilted,
+                          target=[-0.05, 1.5, 5.0], dt=1.0,
+                          st=TARGET_STATE, settings=SETTINGS)
+        for entry, want in zip(same, baseline):
+            for key in ('angleH', 'angleV'):
+                self.assertAlmostEqual(entry[key], want[key], delta=1e-12)
 
 
 class AngleRatesTests(unittest.TestCase):
