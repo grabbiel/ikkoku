@@ -11,26 +11,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**628 files indexed; 628 assigned; 0 unassigned.**
+**631 files indexed; 631 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 110 |
 | [Studio / IK / animation](studio.md) | 89 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 83 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 287 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 84 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 88 |
+| Conversion / recovery / verification tool | 89 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 15 |
-| Runtime / shared shader declaration | 139 |
-| Test / validation | 107 |
+| Runtime / shared shader declaration | 140 |
+| Test / validation | 108 |
 
 ## App / gameplay / plugins
 
@@ -588,6 +588,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/assets/verify.py](../../Tools/assets/verify.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_draw_overlays.py](../../Tools/reverse/compare_draw_overlays.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_original_frame.py](../../Tools/reverse/compare_original_frame.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_original_pose.py](../../Tools/reverse/compare_original_pose.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/export_prefab.py](../../Tools/reverse/export_prefab.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/OriginalCharacterProbe.cs](../../Tools/reverse/fixtures/OriginalCharacterProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalShaderProbe.cs](../../Tools/reverse/fixtures/OriginalShaderProbe.cs) | Reference host / controlled fixture |
@@ -599,6 +600,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_avatar_parity.py](../../Tools/reverse/test_avatar_parity.py) | Test / validation |
 | [Tools/reverse/test_compare_draw_overlays.py](../../Tools/reverse/test_compare_draw_overlays.py) | Test / validation |
 | [Tools/reverse/test_compare_original_frame.py](../../Tools/reverse/test_compare_original_frame.py) | Test / validation |
+| [Tools/reverse/test_compare_original_pose.py](../../Tools/reverse/test_compare_original_pose.py) | Test / validation |
 | [Tools/reverse/test_export_prefab.py](../../Tools/reverse/test_export_prefab.py) | Test / validation |
 | [Tools/reverse/test_original_shader_probe.py](../../Tools/reverse/test_original_shader_probe.py) | Test / validation |
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |
@@ -622,6 +624,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Packages/Engine/Sources/IkkokuInspect/GameplayExecutionInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/GameplayExecutionInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/GameplayTrace.swift](../../Packages/Engine/Sources/IkkokuInspect/GameplayTrace.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/SourceAnimationReport.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceAnimationReport.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/IkkokuInspect/SourceCardPoseInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceCardPoseInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/StudioPoseInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioPoseInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/StudioSceneInspection.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/IkkokuInspect/main.swift](../../Packages/Engine/Sources/IkkokuInspect/main.swift) | Runtime / shared shader declaration |
