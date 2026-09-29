@@ -1248,6 +1248,56 @@ assumed, not implemented: the `_expression`/`_exppower` tint and the full
 lighting are absent from our pre-lighting branch, and no rendered comparison
 against the original game's iris tilt exists.
 
+#### Original capture
+
+The write path above now has original-game evidence. In look mode the probe
+records a per-frame `iris` block — for each eye material (`cf_Ohitomi_L02` /
+`cf_Ohitomi_R02`, the `EyeLookMaterialControll` components ChaControl holds in
+`eyeLookMatCtrl[2]`, resolved by reflection) `GetTextureOffset`/
+`GetTextureScale` for `_MainTex`, `_overtex1` and `_overtex2`, the `_rotation`
+float, and the controller's own `offset`/`scale`/`hlUpOffsetY`/`hlDownOffsetY`
+fields — plus a once-per-run `irisCard` header with the six card face values
+the load-time setters consume, shape value 33, `sex` and `exType`. Without
+`look-patterns.tsv` every output stays byte-identical.
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07x/run1 --look-patterns .local/stt07i/look-patterns.tsv
+# after the player reports done:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07x/run1 --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_iris.py \
+  --trace .local/stt07x/run1/look-trace.json \
+  --settings .local/stt07h/studio-look-settings.json
+```
+
+The 2026-09-29 capture under `.local/stt07x/run1` ran the same six-phase
+450-frame `look-patterns.tsv` as `.local/stt07i/run1` on the fixture card
+(pupilX/Y 0.5, pupilWidth/Height 0.9, hlUpY/hlDownY 0.5, shape value 33 0.5,
+sex 1, exType 0 — settings keys do not cover the pupil values, so the card
+carries the `ChaFileFace` defaults; the recorded `scale` field confirms it).
+`Tools/reverse/analysis/iris_reference.py` (21 unittest cases) ports
+`textureTransforms` plus the `cardOverrides` and `ChangeSettingEyeTilt` field
+reads — not `nativeST` — into pure Python, every arithmetic step round-tripped
+through float32 in the decompiled operand order, and
+`Tools/reverse/compare_iris.py` replays it against the captured materials.
+`EyeLookMaterialControll.Update` runs in Update while `EyeLookCalc` refreshes
+the rates in LateUpdate, so the comparator fits the frame lag empirically per
+eye: lag 1 wins on both eyes (worst difference 5.1e-8 against 0.079/0.081 at
+lag 0), confirming each frame's texture write reads the rates LateUpdate left
+the frame before. Under the fitted lag every phase/eye/texture offset matches
+to at most 0.000000051 — two orders inside the 1e-6 tolerance — every texture
+scale difference is exactly 0, and every recorded `_rotation` sits exactly on
+`iris_rotations(0.5)` = (0, 0). Frame 0 is seed-only like
+`compare_eye_look.py`'s frame 0 (the material holds a write from before the
+trace began; 0.0067, reported not measured). The controller's own reflected
+fields drift at most offset.x 3e-9 and scale 4.0233e-8 from `eye_fields`: the
+game's float32 `Mathf.Lerp(1.8f, -0.2f, 0.9f)` holds 4.023313e-08, one ulp
+from the exact 0 the reference computes from narrowed endpoints, and
+`1 + scale` rounds back to exactly 1.0 in float32, so the recorded texture
+scale still matches exactly. No Swift formula is refuted; this is a
+material-value agreement, not a rendered comparison.
+
 ## Reproducible verification
 
 ```sh
