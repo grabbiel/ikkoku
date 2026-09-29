@@ -53,6 +53,16 @@ public struct SourceSceneEdits: Sendable {
     /// only — other record kinds serialize no name (a character's name lives
     /// in its card). The replacement may resize the stored string.
     public var names: [Int32: String]
+    /// Camera records' own `active` bool byte (a one-byte patch): the saved
+    /// look-through state. CharaStudio saves the current view — the camera
+    /// being looked through is true and every other camera false — so a
+    /// switched camera means rewriting every camera record's flag, not one.
+    /// Keys are camera record source IDs.
+    public var cameraActive: [Int32: Bool]
+    /// Route records' own `active` bool byte (a one-byte patch): the saved
+    /// play state, true when the route was playing at save time; loading a
+    /// true record resumes playback. Keys are route record source IDs.
+    public var routeActive: [Int32: Bool]
     /// Keys are source object IDs, including nested accessory children.
     /// The existing card editor preserves asset and saved resolver identities.
     public var cards: [Int32: SourceCharacterCard.Edits]
@@ -68,9 +78,11 @@ public struct SourceSceneEdits: Sendable {
                 kinematics: [Int32: KinematicEdit] = [:], animations: [Int32: SourceStudioAnimationState] = [:],
                 voices: [Int32: SourceStudioVoiceState] = [:], currentCamera: KoikatsuCameraRecord? = nil,
                 cameraSlots: [Int: KoikatsuCameraRecord] = [:], thumbnailData: Data? = nil,
-                visibility: [Int32: Bool] = [:], names: [Int32: String] = [:]) {
+                visibility: [Int32: Bool] = [:], names: [Int32: String] = [:],
+                cameraActive: [Int32: Bool] = [:], routeActive: [Int32: Bool] = [:]) {
         self.transforms = transforms; self.cards = cards; self.kinematics = kinematics; self.thumbnailData = thumbnailData
         self.visibility = visibility; self.names = names
+        self.cameraActive = cameraActive; self.routeActive = routeActive
         self.currentCamera = currentCamera; self.cameraSlots = cameraSlots
         self.animations = animations
         self.voices = voices
@@ -87,6 +99,8 @@ struct SourceSceneEditSpans {
     var transforms: [SourceSceneEdits.Destination: Range<Int>] = [:]
     var visibility: [Int32: Range<Int>] = [:]
     var names: [Int32: Range<Int>] = [:]
+    var cameraActive: [Int32: Range<Int>] = [:]
+    var routeActive: [Int32: Range<Int>] = [:]
     var cards: [Int32: Range<Int>] = [:]
     var kinematics: [Int32: Kinematics] = [:]
     var animations: [Int32: Animation] = [:]
@@ -99,8 +113,8 @@ public extension KoikatsuSceneDocument {
     /// Any unsupported/missing destination or invalid input rejects the whole
     /// edit before bytes are returned; source data is never mutated.
     func editedData(_ edits: SourceSceneEdits) throws -> Data {
-        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty else { return preservedData }
-        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
+        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty else { return preservedData }
+        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         let thumbnailRange = 0..<reader.offset
@@ -146,6 +160,20 @@ public extension KoikatsuSceneDocument {
                 throw reader.invalid("unavailable scene visibility destination")
             }
             add(range, Data([edits.visibility[key]! ? 1 : 0]))
+        }
+        for key in edits.cameraActive.keys.sorted() {
+            guard let range = reader.editSpans.cameraActive[key],
+                  range.count == 1, (0...1).contains(preservedData[preservedData.startIndex + range.lowerBound]) else {
+                throw reader.invalid("unavailable scene camera active destination")
+            }
+            add(range, Data([edits.cameraActive[key]! ? 1 : 0]))
+        }
+        for key in edits.routeActive.keys.sorted() {
+            guard let range = reader.editSpans.routeActive[key],
+                  range.count == 1, (0...1).contains(preservedData[preservedData.startIndex + range.lowerBound]) else {
+                throw reader.invalid("unavailable scene route active destination")
+            }
+            add(range, Data([edits.routeActive[key]! ? 1 : 0]))
         }
         for key in edits.names.keys.sorted() {
             guard let span = reader.editSpans.names[key] else { throw reader.invalid("unavailable scene name destination") }
