@@ -15,7 +15,7 @@ milestones; a successful extractor does not complete a gameplay feature.
 | T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no checked-in release automation, installer, notarization procedure or converted-library setup UI. App sandbox is disabled. | T-T02: write and exercise a release process, including private-content exclusion and user-owned external library access. |
 | T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. | T-T03: unify output policy and provenance checks; verify distributable artifact contents rather than relying only on Git ignore. |
 | T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Blender and local ILSpy/oracle tools are still environment prerequisites. | T-T01: record supported tool versions/install checks, lock a reproducible tool environment, fail helpfully when optional tools are absent. |
-| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe, and no CI workflow was wired to execute any lane. | T-T04 (partial): wire the four lanes into CI and add Maker UI/session scenarios — import, outfit switch, edits and export — and make the declared source-inspector checks pass when PR #5 is merged. |
+| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe. Since 2026-09-29 `.github/workflows/ci.yml` runs the `public.json` lane skip-tolerant (no `--strict`) and an unsigned Debug app build on `macos-26` runners for pull requests and pushes to `main`; it is not a required status check, and the private lanes stay local because they need `.local/` fixtures or the VM. | T-T04 (partial): add Maker UI/session scenarios — import, outfit switch, edits and export — and make the declared source-inspector checks pass when PR #5 is merged. |
 
 ## E. Original installation access and recovery
 
@@ -118,9 +118,11 @@ data is deliberately not copied into the documentation or distribution.
   `optional`, so the Engine suite runs with or without an environment file and
   records supplied/missing fixtures per check; `--strict` fails any check with
   a missing fixture. PR #4 supplies named per-test fixture skips, so the lane
-  reports missing source cases explicitly. Still remaining: CI wiring — nothing
-  schedules these lanes yet — and Maker
-  UI/session scenarios for import, outfit switch, edits and export.
+  reports missing source cases explicitly. CI wiring (2026-09-29):
+  `.github/workflows/ci.yml` runs the public lane skip-tolerant and an unsigned
+  Debug app build on pull requests and pushes to `main`; the private lanes stay
+  local. Still remaining: Maker UI/session scenarios for import, outfit switch,
+  edits and export.
 - **T-T05 — Capability-driven diagnostics/docs (P2, partial).** The 2026-09-25
   documentation revision organized maintained guides/references and archived
   historical checkpoints with links to this audit. Remaining work: replace stale
@@ -148,7 +150,8 @@ data is deliberately not copied into the documentation or distribution.
   the environment file (`passedEnvironment`), values only for the check's own
   settings (`env`), `suppliedFixtures`/`missingFixtures` with paths and hashes,
   declared reference tier, tolerance text, and artifacts hashed **after** the
-  run — a missing artifact fails the check. Still remaining: CI wiring, and the
+  run — a missing artifact fails the check. Still remaining (CI now runs the
+  public lane, see T-T04): the
   `original-managed-dll` / `original-player-probe` tiers have no checks that
   execute them yet — no claim of source parity is made from resemblance.
 - **E-T04 — Conversion orchestration and coverage (P2).** Build a resumable job

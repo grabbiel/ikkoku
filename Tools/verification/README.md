@@ -120,6 +120,34 @@ the check never produced (or an oversized one) FAILS the check, e.g.
 `studio-inspector-capture` while the PR #5 hooks are absent, or
 `build-debug-app` if the build itself fails.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request to `main`, every push to
+`main` and on manual dispatch. It runs two jobs on GitHub-hosted `macos-26`
+runners (the app's deployment target is macOS 26, so it needs Xcode 26):
+
+- `public-lane` builds the Engine tests (`swift build --build-tests`, so the
+  lane's 600 s `swift test` timeout does not include a cold build), then runs
+  `public.json` **without `--strict`**. Fixture-gated Swift tests report named
+  skips instead of failing; the report and per-check logs are uploaded as the
+  `public-lane-report` artifact.
+- `app-build` builds `IkkokuCreator` Debug with code signing disabled
+  (`CODE_SIGNING_ALLOWED=NO`), because the runner has no development-team
+  identity. It checks that the app compiles and links, and nothing more.
+
+The `private-source`, `maker`, `app-smoke` and `studio-scenarios` lanes stay
+local: they need the original installation, `.local/` fixtures or the
+Parallels VM. A green CI run therefore says nothing about source-data parity or
+app behavior; record the local lane results in the pull request as before. The
+workflow does not gate merges (no required status check).
+
+The jobs use the runner image's default Xcode, which can be newer than the
+reference machine's (Xcode 26.6 on the `macos-26-arm64` 20260907 image
+against 26.0.1 locally on 2026-09-29). CI therefore also catches compiler
+differences: its first run found a heterogeneous array literal in
+`SourceStudioWorldTransformTests.swift` that Xcode 26.6 no longer infers as
+`[SIMD3<Float>]`.
+
 ## Report fields
 
 A report records `git.revision`, the dirty flag and the sha256 of
