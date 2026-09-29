@@ -91,7 +91,8 @@ do {
     let converting = arguments.count == 4 && arguments[0] == "layout"
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
-    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose else {
+    let lookData = (arguments.count == 2 || arguments.count == 3) && arguments[0] == "look-data"
+    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose || lookData else {
         throw GLTFError.io("""
             Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card|draw-overlays> <local-file>
                    ikkoku-inspect mod-library <library.json>
@@ -109,6 +110,7 @@ do {
                    ikkoku-inspect rig-snapshot <source-rig.json> <shape-contract.json> <rest|height-rate>
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
                    ikkoku-inspect expression-snapshot <rig-or-avatar.json> <expression-contract.json> <defaults|preset-id|inputs.json>
+                   ikkoku-inspect look-data <source-scene.png> [studio-look-settings.json]
             """)
     }
     let url = URL(fileURLWithPath: arguments[1]).standardizedFileURL
@@ -119,6 +121,9 @@ do {
     case "fixed-event-trace": report.merge(try inspectFixedEventExecution(url: url)) { _, new in new }
     case "adv-trace": report.merge(try inspectADVExecution(url: url)) { _, new in new }
     case "scene-document": report.merge(try inspectStudioScene(url: url)) { _, new in new }
+    case "look-data":
+        report.merge(try inspectStudioLookData(url: url,
+            settingsURL: arguments.count == 3 ? URL(fileURLWithPath: arguments[2]).standardizedFileURL : nil)) { _, new in new }
     case "animation-library": report.merge(try inspectSourceAnimation(url: url)) { _, new in new }
     case "animation-pose":
         guard let time = Float(arguments[4]), time.isFinite, time >= 0 else { throw RigError.invalid("Animation time must be finite and nonnegative.") }

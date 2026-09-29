@@ -106,8 +106,8 @@ separate SHA-256 manifest. The main character wrapper is also available under
 | Player locomotion | `ActionGame.Chara.Mover.PlayerMover`: `Idle`, `Locomotion`, `squat_walk`, `squat_loop`, `MotionSpeed`, mover/reactive/NavMesh dependencies | Selected Idle/walk/run clips sample natively. The player state-selection, movement/navigation and gameplay host do not execute; animation sampling is not locomotion integration. |
 | NPC locomotion | `NPCMover`: idle/talking handling, escape action 20, anger locomotion and random alternative locomotion; arrival state controls updates. | Source recovered; dependent AI/navigation and animator behavior remain unported. |
 | Lip sync | `ChaControl.UpdateBlendShapeVoice` selects `WavInfoData` or `FBSAssist.AudioAssist` (1024 channel-zero samples, RMS, gain clamp and asymmetric smoothing) | Studio voice playlist/repeat/gain/pitch scheduling exists, but original files are not converted in the retained catalog. No source audio-output sampler, precomputed mouth timeline or lip-sync driver is integrated. |
-| Eye gaze | `EyeLookController` and `EyeLookCalc`, eye type states, reference directions, transform hierarchy, fixed angles and current target; zero delta-time and enable flags affect evaluation. | Detailed source recovered. Existing neutral expression rendering does not implement these controllers. |
-| Neck gaze | `NeckLookControllerVer2`, `NeckLookCalcVer2`, per-bone settings, look-mode changes, previous rotations, target history and an `AnimationCurve`. | Detailed source and saved quaternion framing recovered. Solver, curve evaluation and composition order still needed. |
+| Eye gaze | `EyeLookController` and `EyeLookCalc`, eye type states, reference directions, transform hierarchy, fixed angles and current target; zero delta-time and enable flags affect evaluation. | Detailed source recovered and the saved record bytes plus card Status look fields now decode natively ("Saved look data" below). Existing neutral expression rendering does not implement these controllers. |
+| Neck gaze | `NeckLookControllerVer2`, `NeckLookCalcVer2`, per-bone settings, look-mode changes, previous rotations, target history and an `AnimationCurve`. | Detailed source recovered and the saved neck record bytes plus card Status look fields now decode natively ("Saved look data" below). Solver, curve evaluation and composition order still needed. |
 | Motion IK | `MotionIK`, `MotionIKData`, state/frame mappings, partner targets and FinalIK's full-body biped solver | A schema-2 Studio biped solver is implemented and independently compared with recovered C#. MotionIK state/frame/partner data and its runtime callbacks remain separate pending consumers. |
 | Secondary motion | `DynamicBone` particles, distributions, collider rebinding and scheduling; separate Ver01/Ver02 families | Selected source hair components execute in Maker and Studio; offline motion-oracle evidence and actual-player parameter/curve evidence are separate. Other variants/topologies, Studio world-object inertia and full player trajectory comparison remain pending. |
 
@@ -123,6 +123,63 @@ expression state, then add neck/eye look-at and source mouth consumers with
 explicit evaluation order. Acceptance should compare numeric morph/bone outputs
 and saved field roundtrips, including interrupted transitions and paused/seek
 behavior (`ST-T07`), rather than only demonstrating a visibly blinking prototype.
+
+## Saved look data
+
+`ST-T07` extracted (data only; no solver runs) the look-at data a scene stores.
+
+Saved bytes per character record, decoded by `SourceStudioNeckLookData` and
+`SourceStudioEyeLookData`:
+
+- Neck bytes (`NeckLookControllerVer2.SaveNeckLookCtrl` payload): Int32
+  `ptnNo`, Int32 count, then count `(x, y, z, w)` float quaternions in Unity
+  source component order — one `aBones[i].fixAngle` each. Short input,
+  trailing bytes, a negative/oversized count or a non-finite float is rejected.
+- Eyes bytes (`EyeLookCalc.SaveAngle` payload): `fixAngle[0]` (x, y, z, w),
+  `fixAngle[1]` (x, y, z, w), then `angleH[0]`, `angleH[1]`, `angleV[0]`,
+  `angleV[1]`. The four angle floats exist only from scene data version
+  0.0.8 on (`LoadAngle` gates on it); older versions leave them nil.
+
+Card `Status` look fields decoded by `SourceStudioLookStatus` from the card's
+MessagePack `Status` block: `eyesLookPtn`, `neckLookPtn`, `eyesTargetType`,
+`neckTargetType`, `eyesTargetRate`, `neckTargetRate`, `eyesTargetAngle`,
+`neckTargetAngle`, `eyesTargetRange` and `neckTargetRange`. A missing field
+stays nil; a wrong type is reported as a diagnostic and also stays nil.
+
+Studio's `AddObjectAssist.UpdateState` restores these in the order
+`ChangeLookEyesPtn` → eyes `LoadAngle` → neck `LoadNeckLookCtrl` →
+`ChangeLookNeckPtn`. `ChangeLookNeckPtn` runs last, so the card's
+`neckLookPtn` overrides the `ptnNo` just restored from the saved neck bytes;
+`SourceStudioLookData.effectiveNeckPattern` applies exactly that precedence.
+
+The prefab settings in `chara/oo_base.unity3d` (sha256
+`2bb9017d29b12352a859f54623728e4dea587392d3677a0a7158a7f9784fba67`, exported by
+`Tools/reverse/studio_look_settings.py`) are `NeckLookCalcVer2` on `cf_j_neck`
+under root `p_cf_body_bone` with seven neck states, and `EyeLookCalc` on
+`p_cf_head_bone` with eight eye states. Default patterns:
+`NeckLookControllerVer2.ptnNo = 0` (rate 1.0), `EyeLookController.ptnNo = 1`.
+The low-poly `NeckLookCalcVer2`/`NeckLookControllerVer2` under
+`p_cf_body_bone_low` (only five neck states) are excluded because CharaStudio
+loads the `p_cf_body_bone` prefab. Neck lookType values are 0 ANIMATION,
+1 TARGET, 2 AWAY, 3 FORWARD, 4 FIX, 5 CONTROL; eye lookType values are
+0 NO_LOOK, 1 TARGET, 2 AWAY, 3 FORWARD, 4 CONTROL.
+
+| Neck pattern | Name | lookType | | Eye pattern | Name | lookType |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 正面 | FORWARD | | 0 | 正面 | FORWARD |
+| 1 | こっち | TARGET | | 1 | こっち | TARGET |
+| 2 | あっち | AWAY | | 2 | 制御 | CONTROL |
+| 3 | アニメ依存 | ANIMATION | | 3 | そらす | AWAY |
+| 4 | 固定？ | FIX | | 4 | H正面 | FORWARD |
+| 5 | Hこっち | TARGET | | 5 | Hこっち | TARGET |
+| 6 | Hあっち | AWAY | | 6 | H制御 | CONTROL |
+| | | | | 7 | Hそらす | AWAY |
+
+`ikkoku-inspect look-data <scene.png> [studio-look-settings.json]` reports all
+of the above per character, including the effective pattern's state name.
+Not done here: no gaze solver, no `AnimationCurve` evaluation and no look
+capture into the preview; that remains part of the wider `ST-T07` controller
+integration.
 
 ## Reproducible verification
 
