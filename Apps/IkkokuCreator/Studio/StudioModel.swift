@@ -1179,8 +1179,9 @@ final class StudioModel: ViewportInputHandler {
             }
         }
         // Documents saved before `sourceRecordKind` was recorded carry no
-        // record kind, and the import made every non-character placeholder a
-        // `.folder`, so the fallback reproduces their old (unscaled) rule.
+        // record kind; their import made every non-character placeholder a
+        // `.folder`, so those fall back to the non-scalable rule (an item's
+        // authored scale is then dropped) and characters stay scalable.
         let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
         return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
             localPosition: object.transform.position, localRotation: object.transform.quaternion,
