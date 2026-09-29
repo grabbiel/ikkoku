@@ -70,8 +70,9 @@ private struct MuteOracle: Decodable {
     let inputs: Inputs, results: Results
 }
 
-@Test func sourceMuteMatchesUntouchedRecoveredCSharpAndInstalledConfigReader() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_MUTE_PLUGIN_ORACLE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MUTE_PLUGIN_ORACLE"]), "Requires IKKOKU_MUTE_PLUGIN_ORACLE"))
+func sourceMuteMatchesUntouchedRecoveredCSharpAndInstalledConfigReader() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_MUTE_PLUGIN_ORACLE")
     let oracle = try JSONDecoder().decode(MuteOracle.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     #expect(oracle.inputs.configurations.count == oracle.results.configurations.count)
     for (input, result) in zip(oracle.inputs.configurations, oracle.results.configurations) {

@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "engine-source-suite",
+      "argv": [
+        "swift",
+        "test",
+        "--package-path",
+        "Packages/Engine"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_POSE_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_TRIGONOMETRIC_IK_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ACCESSORY_NAMES_ORACLE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MOD_CATALOG_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_SCENE_FIXTURES",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_ORIGINAL_SCENES",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_EXPANSION",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_MAKER_DYNAMICS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_IK_BINDINGS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_DYNAMICS_FIXTURE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MOD_LIBRARY",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ABMX_MODIFIERS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ABMX_BONE_DATA",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ABMX_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SHAPE_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_GAMEPLAY_EXECUTION_REFERENCE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_GAMEPLAY_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_RESOLVER_FIXTURES",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_MALE_AVATAR",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_DYNAMICS_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_DYNAMICS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_CARD_ORACLE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_CARD_FIXTURE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_NATIVE_PLUGIN_PACKAGES",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MUTE_PLUGIN_ORACLE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MOD_PACKAGE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_PLUGIN_FIXTURE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_IK_APP_ENVIRONMENT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ORIGINAL_ANIMATOR_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_EXPRESSION_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_EXPRESSION_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_APPEARANCE_REFERENCE_ROOT",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ANIMATION_PLAYBACK_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ANIMATION_LIBRARY",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_ANIMATION_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_FULLBODY_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_HEAD_RIG",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_BODY_SHAPE_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MATERIAL_LAYER_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MATERIAL_IMAGE_REFERENCE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MAKER_SELECTION_FIXTURES",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_MAKER_ASSEMBLIES",
+          "kind": "file",
+          "optional": true
+        }
+      ],
+      "env": {},
+      "referenceTier": "recovered-code-oracle",
+      "tolerance": "Gated tests run whatever fixture the environment file supplies; without the file the whole check is skipped (failed under --strict). Where a fixture drives an independent oracle, comparison is exact-decoded or documented tolerance, not resemblance.",
+      "timeout": 900
+    }
+  ]
+}
