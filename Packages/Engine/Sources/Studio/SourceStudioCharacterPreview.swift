@@ -32,7 +32,7 @@ public struct SourceStudioCharacterReference: Codable, Sendable, Equatable {
 public final class SourceStudioCharacterPreview {
     public let reference: SourceStudioCharacterReference
     public let preview: SourceRigPreview
-    public let pose: RigPose
+    public private(set) var pose: RigPose
     /// Import-time messages plus one-shot runtime notices (for example the FK
     /// neck conflict reported by editedPose); never grows per frame.
     public private(set) var diagnostics: [String]
@@ -47,10 +47,18 @@ public final class SourceStudioCharacterPreview {
     /// blinking toggle): when off, rendering keeps the saved expression inputs
     /// instead of the clock's current openness.
     public var automaticBlink = true
-    public let controller: SourceStudioPose
-    private let baseline: RigPose
+    public private(set) var controller: SourceStudioPose
+    private var baseline: RigPose
     private let attachments: SourceStudioAttachments?
-    public let ikGuides: [SourceStudioIK.Guide]
+    public private(set) var ikGuides: [SourceStudioIK.Guide]
+    /// The card's saved shape slot rates in contract order — the import
+    /// baseline. Export writes back only edited arrays that differ from these.
+    public let savedFaceValues: [Float]
+    public let savedBodyValues: [Float]
+    /// The current edited face/body slot rates; nil keeps the card's saved
+    /// arrays. setShapeValues rebuilds the baseline once per accepted edit.
+    public private(set) var sourceFaceValues: [Float]?
+    public private(set) var sourceBodyValues: [Float]?
     private let animationCatalog: SourceStudioAnimationCatalog?
     private let animationDirectory: URL?
     private let handPatternLibrary: SourceStudioHandPatterns?
@@ -58,6 +66,10 @@ public final class SourceStudioCharacterPreview {
     private var animationPlayback = SourceStudioAnimation.Playback()
     private var blink: SourceStudioBlink
     private let animationHeight: Float
+    /// The animation clip's height parameter follows the effective body height
+    /// slot, the way rebuilding an original character recomputes the load-time
+    /// height after a shape edit.
+    private var effectiveAnimationHeight: Float { sourceBodyValues?.first ?? animationHeight }
     private let characterRoot: Int
     private let poseCatalog: [SourceStudioPose.Bone]
     private var ikSolver: SourceStudioIK?
@@ -123,6 +135,11 @@ public final class SourceStudioCharacterPreview {
     /// Animator/FK/IK and before its own rotation write.
     fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
     private var evaluatedCache: EvaluatedPose?
+    /// The import-time shape/binding inputs setShapeValues replays when the
+    /// edited arrays replace the card's saved shape values.
+    private let shapeBoneModifiers: SourceBoneModifiers?
+    private let shapeIKBindings: SourceStudioIK.Bindings?
+    private let shapeDynamicsBindings: [SourceStudioDynamics.Binding]?
     public struct DynamicsCheckpoint {
         fileprivate let owner: ObjectIdentifier
         fileprivate let simulation: SourceStudioDynamics?
@@ -230,6 +247,9 @@ public final class SourceStudioCharacterPreview {
         let settings = try card.previewSettings(contract: contract, sex: identity.sex, headID: identity.headID, boneType: identity.boneType)
         let baseline = try preview.pose(bodyValues: settings.bodyValues, faceValues: settings.faceValues, boneModifiers: settings.boneModifiers, coordinate: coordinate)
         self.baseline = baseline
+        savedFaceValues = settings.faceValues
+        savedBodyValues = settings.bodyValues
+        shapeBoneModifiers = settings.boneModifiers
         struct Catalog: Decodable { let bones: [SourceStudioPose.Bone] }
         let catalog = try JSONDecoder().decode(Catalog.self, from: Self.read(URL(fileURLWithPath: reference.boneCatalogFile), maximum: 16 * 1024 * 1024))
         poseCatalog = catalog.bones
@@ -396,10 +416,12 @@ public final class SourceStudioCharacterPreview {
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
         controller = restored.controller
         let ikURL = URL(fileURLWithPath: reference.boneCatalogFile).deletingLastPathComponent().appendingPathComponent("ik-bindings.json")
+        var shapeIK: SourceStudioIK.Bindings?
         if FileManager.default.fileExists(atPath: ikURL.path) {
             do {
                 let bindings = try JSONDecoder().decode(SourceStudioIK.Bindings.self, from: Self.read(ikURL, maximum: 1024 * 1024))
                 let solver = try SourceStudioIK(rig: source.rig, bindings: bindings, initializationPose: baseline)
+                shapeIK = bindings
                 ikSolver = solver
                 let result = try solver.apply(rig: source.rig, baseline: restored.pose, savedTargets: record.ikTargets,
                     enabled: controller.enableIK, activeGroups: controller.activeIK, characterRoot: roots[0])
@@ -413,26 +435,30 @@ public final class SourceStudioCharacterPreview {
             pose = restored.pose; ikGuides = []
             if record.enableIK { messages.append("Recovered IK prefab bindings are missing.") }
         }
+        shapeIKBindings = shapeIK
         let dynamicsURL = reference.dynamicsFile.map { URL(fileURLWithPath: $0) }
             ?? URL(fileURLWithPath: reference.rigFile).deletingLastPathComponent().appendingPathComponent("source-dynamics.json")
+        var shapeDynamics: [SourceStudioDynamics.Binding]?
         if FileManager.default.fileExists(atPath: dynamicsURL.path) {
             do {
                 let bound = try SourceStudioDynamics.bindHair(SourceDynamicsDocument.load(url: dynamicsURL), rig: source.rig)
                 dynamics = try SourceStudioDynamics(rig: source.rig, initializationPose: baseline, bindings: bound.bindings)
+                shapeDynamics = bound.bindings
                 messages += bound.diagnostics
                 messages.append("\(bound.bindings.count) source hair DynamicBone components run after animation/FK/IK in character space; unrelated cloth/accessory dynamics and object-motion inertia are not restored.")
             } catch { messages.append("Source hair dynamics unavailable: \(error)") }
         } else { messages.append("Converted source hair dynamics are not configured.") }
+        shapeDynamicsBindings = shapeDynamics
         let hasNativeIK = ikSolver != nil
         diagnostics = ["Converted card assets, shape, static ABMX, expression settings and saved kinematics restored. Catalog-selected animation is evaluated before FK/IK and available source hair dynamics."]
             + messages + settings.diagnostics + restored.diagnostics.filter { !$0.hasPrefix("Character appearance,") && !(hasNativeIK && $0.hasPrefix("Source IK is enabled;")) }
     }
 
     public func frame(camera: OrbitCamera, mainLight: MainLight, effects: SceneEffects,
-                      world: float4x4, objectID: UInt32, fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
+                      world: float4x4, objectID: UInt32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                       animationElapsed: Float = 0) throws -> RenderFrame {
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
-            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
+            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
@@ -471,14 +497,83 @@ public final class SourceStudioCharacterPreview {
         }
     }
 
-    public func editedPose(fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
+    /// Validates edited face/body slot rates and rebuilds the shape baseline
+    /// when they replace the card's saved arrays. The arguments are the
+    /// effective values on every entry point (nil keeps the card's saved
+    /// shape), so the rebuild runs once per accepted edit and a per-frame
+    /// repeat of the same arrays only pays the comparison; a rejected edit
+    /// throws before any state is mutated. Export diffs the document's arrays
+    /// against `savedFaceValues`/`savedBodyValues` for the card writeback.
+    public func setShapeValues(face: [Float]?, body: [Float]?) throws {
+        guard face != sourceFaceValues || body != sourceBodyValues else { return }
+        func validate(_ values: [Float]?, _ id: String) throws {
+            guard let values else { return }
+            guard let domain = preview.contract?.domain(id) else {
+                throw RigError.invalid("This rig has no \(id) shape contract, so \(id) shape editing is unsupported.")
+            }
+            guard values.count == domain.valueCount else {
+                throw RigError.invalid("Edited \(id) shape values must contain exactly \(domain.valueCount) rates in contract order.")
+            }
+            guard values.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
+                throw RigError.invalid("Edited \(id) shape values must be finite and between 0 and 1.")
+            }
+        }
+        try validate(face, "face")
+        try validate(body, "body")
+        // Build the whole replacement chain into locals first; a throw in any
+        // stage leaves the previous baseline, controller, solver and dynamics
+        // untouched and the rejected edit keeps rendering the old shape.
+        let shapeBaseline = try preview.pose(bodyValues: body ?? savedBodyValues, faceValues: face ?? savedFaceValues,
+            boneModifiers: shapeBoneModifiers, coordinate: coordinate)
+        var animationBaseline = shapeBaseline
+        let savedState = SourceStudioAnimationState(record: record)
+        if let animation = animationCache["\(savedState.group)/\(savedState.category)/\(savedState.no)"] {
+            animationBaseline = try animation.pose(state: savedState, elapsed: 0,
+                height: (body ?? savedBodyValues).first ?? animationHeight, rig: preview.source.rig, baseline: shapeBaseline)
+        }
+        let restored = try record.makePose(rig: preview.source.rig, catalog: poseCatalog, baseline: animationBaseline,
+            characterRoot: characterRoot, bodyRoot: preview.source.rig.uniqueNode(named: "p_cf_body_bone"),
+            hairRoot: preview.source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
+        var pose = restored.pose
+        var guides: [SourceStudioIK.Guide] = []
+        var solver = ikSolver
+        if let ikBindings = shapeIKBindings {
+            let rebuilt = try SourceStudioIK(rig: preview.source.rig, bindings: ikBindings, initializationPose: shapeBaseline)
+            let solved = try rebuilt.apply(rig: preview.source.rig, baseline: restored.pose, savedTargets: record.ikTargets,
+                enabled: restored.controller.enableIK, activeGroups: restored.controller.activeIK, characterRoot: characterRoot)
+            pose = solved.pose; guides = solved.guides; solver = rebuilt
+        }
+        var simulation: SourceStudioDynamics?
+        if let dynamicsBindings = shapeDynamicsBindings {
+            simulation = try SourceStudioDynamics(rig: preview.source.rig, initializationPose: shapeBaseline, bindings: dynamicsBindings)
+        }
+        baseline = shapeBaseline
+        controller = restored.controller
+        self.pose = pose
+        ikGuides = guides
+        ikSolver = solver
+        clearDynamicsStep()
+        dynamics = simulation
+        sourceFaceValues = face
+        sourceBodyValues = body
+        // The look runtimes and the animation clock carry the replaced
+        // baseline's geometry; restart them the way a scene reload does. Init
+        // reported every record-derived restored/solver diagnostic once, so a
+        // per-edit rebuild never appends them again.
+        animationPlayback.reset()
+        hasSteppedNeckLook = false
+        resetNeckLook(); resetEyeLook()
+    }
+
+    public func editedPose(fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                            animationElapsed: Float = 0) throws -> RigPose {
+        try setShapeValues(face: faceValues, body: bodyValues)
         let state = animationState ?? SourceStudioAnimationState(record: record)
         if let cache = evaluatedCache, cache.state == state, cache.elapsed == animationElapsed, cache.fk == fkRotations, cache.ik == ikTargets, cache.kinematics == kinematics { return cache.pose }
         try SourceStudioIKEditing.validate(ikTargets); try kinematics?.validate()
         var result: RigPose
         if let animation = try resolvedAnimation(state, required: animationState != nil) {
-            result = try animation.pose(state: state, elapsed: animationElapsed, height: animationHeight, rig: preview.source.rig, baseline: baseline, playback: &animationPlayback)
+            result = try animation.pose(state: state, elapsed: animationElapsed, height: effectiveAnimationHeight, rig: preview.source.rig, baseline: baseline, playback: &animationPlayback)
         } else { result = baseline }
         // The hand Animator is independent of the body animation, so saved
         // patterns replay at their own loop phase after the body pose exists
@@ -585,9 +680,9 @@ public final class SourceStudioCharacterPreview {
         evaluatedCache = nil
     }
 
-    public func editedIKGuides(fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil,
+    public func editedIKGuides(fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil,
                                animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> [SourceStudioIK.Guide] {
-        _ = try editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed)
+        _ = try editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed)
         return evaluatedCache?.guides ?? []
     }
 
@@ -599,7 +694,7 @@ public final class SourceStudioCharacterPreview {
     public func savedAnimationState(animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> SourceStudioAnimationState {
         var state = animationState ?? SourceStudioAnimationState(record: record)
         if let animation = try resolvedAnimation(state, required: animationState != nil) {
-            state.normalizedTime = try animation.clock(state: state, elapsed: animationElapsed, height: animationHeight, playback: &animationPlayback).normalizedTime
+            state.normalizedTime = try animation.clock(state: state, elapsed: animationElapsed, height: effectiveAnimationHeight, playback: &animationPlayback).normalizedTime
         }
         return state
     }
@@ -665,7 +760,7 @@ public final class SourceStudioCharacterPreview {
     /// firstFrameDelta replaces the delta on the first step at elapsed 0,
     /// mirroring applied(pose:) for FIX/FORWARD.
     @discardableResult public func updateNeckLook(deltaTime: Float, cameraModelPosition: Float3,
-        fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:],
+        fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:],
         kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
         animationElapsed: Float = 0) throws -> Bool {
         guard let runtime = neckLookRuntime, let live = liveNeckLook else { return false }
@@ -676,7 +771,7 @@ public final class SourceStudioCharacterPreview {
         let lookType = live.settings.lookTypes[live.pattern]
         guard lookType == .target || lookType == .away else { return false }
         let frameDelta = !hasSteppedNeckLook && animationElapsed == 0 ? SourceStudioNeckLook.firstFrameDelta : deltaTime
-        let pose = try editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics,
+        let pose = try editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics,
             animationState: animationState, animationElapsed: animationElapsed)
         let rotationsBefore = runtime.lastLocalRotations
         let fixBefore = runtime.fixAngle
@@ -733,7 +828,7 @@ public final class SourceStudioCharacterPreview {
     /// the frame's iris-shift rates changed, the signal a caller will use to
     /// re-render once the iris offset reads them.
     @discardableResult public func updateEyeLook(deltaTime: Float, cameraModelPosition: Float3,
-        fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:],
+        fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:],
         kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
         animationElapsed: Float = 0) throws -> Bool {
         guard let live = liveEyeLook, eyeLookFailure == nil else { return false }
@@ -741,7 +836,7 @@ public final class SourceStudioCharacterPreview {
               (0..<3).allSatisfy({ cameraModelPosition[$0].isFinite }) else {
             throw RigError.invalid("Eye look gaze needs a finite deltaTime up to 10 s and a finite camera position.")
         }
-        let pose = try editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics,
+        let pose = try editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics,
             animationState: animationState, animationElapsed: animationElapsed)
         // Same pre-override read as the neck: EyeLookCalc runs after
         // Animator/FK/IK and before its own writeback, and the eye runtime
@@ -838,15 +933,15 @@ public final class SourceStudioCharacterPreview {
         } catch { if required { throw error }; return nil }
     }
 
-    public func attachmentMatrix(pointID: Int32, fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> float4x4 {
+    public func attachmentMatrix(pointID: Int32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> float4x4 {
         guard let attachments else { throw RigError.invalid("Source Studio attachment catalog is missing.") }
-        return try attachments.matrix(pointID: pointID, rig: preview.source.rig, pose: editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
+        return try attachments.matrix(pointID: pointID, rig: preview.source.rig, pose: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
     }
 
-    public func attachmentRotation(pointID: Int32, fkRotations: [Int: Float3] = [:], ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> simd_quatf {
+    public func attachmentRotation(pointID: Int32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil, animationElapsed: Float = 0) throws -> simd_quatf {
         guard let point = attachments?.points.first(where: { $0.id == pointID }) else { throw RigError.invalid("Source Studio attachment is unavailable.") }
         return try SourceStudioGuide.rotation(node: preview.source.rig.uniqueNode(named: point.nodeName),
-            rig: preview.source.rig, pose: editedPose(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
+            rig: preview.source.rig, pose: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
     }
 
     private static func read(_ url: URL, maximum: Int) throws -> Data {

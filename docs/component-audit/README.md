@@ -118,6 +118,10 @@ set:
       stays rejected at the inspector export.
 - [ ] ST-T03 active flags: switch the source camera / stop a playing route, export the
       original scene, reload: the new camera is active and the route stays stopped.
+- [ ] ST-T06 shape values: change a source character's face shape slider: the face
+      updates; export and reload keep the new value. Body shape and Reset to card
+      behave the same way, and a value edited back to the card's saved rate exports
+      byte-identical bytes (first slice; no PR number yet).
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates
