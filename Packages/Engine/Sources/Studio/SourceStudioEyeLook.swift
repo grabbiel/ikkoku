@@ -236,19 +236,26 @@ public struct SourceStudioEyeLookGeometry: Sendable {
     /// One eye's frame geometry: its world position (the eye's own Transform)
     /// and the fixed origRotation / referenceLookDir / referenceUpDir the
     /// calculator keeps per eye.  Eye order is the writeback order; index 0
-    /// is the L eye whose bending clamps apply unmirrored.
+    /// is the L eye whose bending clamps apply unmirrored.  `parentRotation`,
+    /// when supplied, is that eye's own parent world rotation (the original
+    /// measures each eye against its own cf_J_Eye_tx parent); the solver uses
+    /// its inverse for that eye's angle read.  Nil keeps the root rotation,
+    /// which is what the reference fixture geometries measured against.
     public struct Eye: Sendable {
         public let worldPosition: SIMD3<Double>
         public let origRotation: simd_quatd
         public let referenceLookDir: SIMD3<Double>
         public let referenceUpDir: SIMD3<Double>
+        public let parentRotation: simd_quatd?
 
         public init(worldPosition: SIMD3<Double>, origRotation: simd_quatd,
-                    referenceLookDir: SIMD3<Double>, referenceUpDir: SIMD3<Double>) {
+                    referenceLookDir: SIMD3<Double>, referenceUpDir: SIMD3<Double>,
+                    parentRotation: simd_quatd? = nil) {
             self.worldPosition = worldPosition
             self.origRotation = origRotation
             self.referenceLookDir = referenceLookDir
             self.referenceUpDir = referenceUpDir
+            self.parentRotation = parentRotation
         }
     }
 
@@ -349,10 +356,19 @@ public struct SourceStudioEyeLookSolver: Sendable {
         num5 = -1
         var rotations: [simd_quatd?] = [nil, nil]
         for index in geometry.eyes.indices {
+            // The eye's own parent (cf_J_Eye_tx_L/R) tilts its angle frame;
+            // without one the root inverse the fixture replay used applies.
+            let eyeParentInverse: simd_quatd
+            if let parentRotation = geometry.eyes[index].parentRotation {
+                eyeParentInverse = try Self.inverseQuaternion(
+                    Self.checked(parentRotation, "per-eye parent rotation"))
+            } else {
+                eyeParentInverse = parentInverse
+            }
             let result = try Self.stepEye(index: index, eye: geometry.eyes[index],
                                           aim: targets[index], effective: effective,
                                           resolved: resolved, previous: previous[index],
-                                          state: state, parentInverse: parentInverse,
+                                          state: state, parentInverse: eyeParentInverse,
                                           sorasiRate: settings.sorasiRate,
                                           deltaTime: deltaTime, num5: &num5)
             rotations[index] = result.localRotation

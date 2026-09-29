@@ -1040,16 +1040,91 @@ vectors throw without half-applying. The Studio tick, the camera mapping and
 the node-name choices have no rig-level test and no rendered comparison —
 verified by the Engine test run (489 passing) and the app build alone.
 
-Known simplification carried from the verified reference: the solver step
-treats the root node's rotation as every eye's parent frame (the reference's
-`v2 = parent^-1 * dir`), which held in the capture because the fixture's
-`cf_J_Eye_tx_L/R` share the head rotation. The original uses each eye's own
-`eyeTransform.parent.rotation` in both Init and the step, and this slice's
-Init already reads the real `cf_J_Eye_tx_L/R` rotations. A face shape that
-tilts the eyes (the eye-angle slider rotates `cf_J_Eye_rz_L/R`) would make
-the two disagree, so passing per-eye parent rotations into the step belongs
-with the iris-rendering slice. The inspector readout is not observed per
-tick: it refreshes when the inspector redraws for another reason.
+Simplification resolved by the iris-offset slice: the solver step used to
+treat the root node's rotation as every eye's parent frame (the reference's
+`v2 = parent^-1 * dir`), which held in the capture only because the fixture's
+`cf_J_Eye_tx_L/R` share the head rotation — the original uses each eye's own
+`eyeTransform.parent.rotation` in both Init and the step, and a face shape
+that tilts the eyes (the eye-angle slider rotates `cf_J_Eye_rz_L/R`) makes
+the two disagree. `SourceStudioEyeLookGeometry.Eye` now carries an optional
+`parentRotation`; when present the step reads that eye's angles through its
+inverse and its writeback composes through that parent, when absent the root
+inverse the fixtures measured against is kept. No existing fixture eye
+carries one, so the 25-sequence replay is byte-identical — the Python
+`eye_update` mirrors this through each eye geometry's optional `parent`, and
+`test_per_eye_parent_tilts_only_its_eye` shows a 20° tilt on eye 0's parent
+moving eye 0 alone (>1° of `angleH`; eye 1 identical to 1e-12), the writeback
+equal to the parent composed with the returned `localRotation`, and an
+identity parent matching the root-only result to 1e-12. `updateEyeLook`
+supplies the live `cf_J_Eye_tx_L/R` world rotations — the same ones the Init
+path already reads. The inspector readout is not observed per tick: it
+refreshes when the inspector redraws for another reason.
+
+### Iris offsets
+
+`EyeLookMaterialControll` is the rates' consumer: each frame it shifts the
+iris textures on the eye's materials. Its settings are serialized in the
+head prefab, and `Tools/reverse/studio_look_settings.py` now exports them —
+every `bo_head_*.unity3d` under the chara bundle dir is provenance-sha
+checked and every `EyeLookMaterialControll` MonoBehaviour written into a
+top-level `eyeMaterial` array (per eye: `eyeLR`, every serialized field, the
+renderer's GameObject name and material names), bundles without the
+component skipped and anything but exactly one L and one R a diagnostic.
+Only `bo_head_00.unity3d` carries it, on `cf_Ohitomi_L02` (eyeLR 0) and
+`cf_Ohitomi_R02` (eyeLR 1); the component's `_renderer` PPtr is null in the
+prefab, so the material names (`cf_m_hitomi_00`) come from the eye's own
+SkinnedMeshRenderer. Rerunning the exporter produced a document identical to
+the previous settings JSON except the added `eyeMaterial` block and its two
+evidence entries (`test_studio_look_settings` 11 cases: a synthetic typetree
+keeps every field, and dropping `power`, `texStates` or `YureTime` throws).
+
+Both exported eyes carry `InsideWait` −100 / `OutsideWait` 100, `UpWait`
+−100 / `DownWait` 100, limits −100/+100 horizontal and `UpLimit` −80 /
+`DownLimit` 80, power 0.0010000000474974513, `offset` L (−0.2, −0.2) /
+R (+0.2, −0.2) (float32 0.20000000298023224), `scale` (0, 0), both highlight
+offsets 0, texStates `_MainTex`/`_overtex1`/`_overtex2` (texID −1 sentinels,
+none Yure), Yure 4/−4/4/−4 at `YureTime` 0.30000001192092896.
+`Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift` decodes the
+block (`SourceStudioEyeMaterialSettings`, a sibling document decoder so the
+solver's minimal fixtures keep parsing) and `textureTransforms` replays
+`EyeLookMaterialControll.Update`:
+
+- `v = (rateH + offset.x, rateV + offset.y)`, re-normalized onto the unit
+  circle only when |v| > 1 (strict — |v| = 1 stays as authored);
+- `num = Lerp(InsideWait, OutsideWait, InverseLerp(−1, 1, v.x))` and
+  `num2 = Lerp(DownWait, UpWait, InverseLerp(−1, 1, v.y))` — **Down first**,
+  so with the exported waits v.y +1 reads `UpWait` −100 and v.y −1 reads
+  `DownWait` 100;
+- `num3`/`num4` = `Lerp(1, 5, scale.x)`/`Lerp(1, 5, scale.y)`;
+- per texState the offset is `(Clamp(num·power·num3, InsideLimit,
+  OutsideLimit), Clamp(num2·power·num4, UpLimit, DownLimit))` with power
+  stepped by (0.8, 0.5) on a Yure texture, and `hlUpOffsetY`/`hlDownOffsetY`
+  added to texStates 1/2's y **after** the clamp (never to x, never to
+  texState 0);
+- a non-Yure entry then subtracts `scale/2` from its offset and writes
+  texture scale `1 + scale`; a Yure entry writes neither.
+
+`SourceStudioIrisOffsetTests` (9 tests) pins every branch at 1e-15 relative
+against hand-computed double values: the exported block decodes field by
+field and malformed vectors/texStates throw; rates (0, 0) with the exported
+Reset-default snapshot rest the main tex at (−0.020000001247972264,
++0.020000001247972264) L / (+0.020000001247972264, +0.020000001247972264) R
+with texture scale (1, 1) on all three textures; (3, 4) and (0.6, 0.8) read
+the identical shift (the normalization gate and the waits' signs); tightened
+`OutsideLimit`/`DownLimit` stop a full deflection while an inverted clamp
+range throws; the highlight offsets touch only textures 1 and 2; a non-Yure
+scale (2, 4) gives offset −0.75/−2 and texture scale (3, 5).
+
+Not done here: the random `YureAddScale`/`YureAddVec` jitter a Yure texture
+re-rolls every `YureTime` is unmodeled (the entry returns its unjittered
+offset and identity texture scale with `yure` set, so callers can tell); the
+card fields that drive `offset`/`scale`/`hlUpOffsetY`/`hlDownOffsetY` at run
+time are unrecovered, so `textureTransforms` takes them as per-call
+arguments and the export carries the prefab's serialized snapshot; and no
+preview code calls it yet — writing the transforms onto the iris materials,
+like the predicted rotations onto the eye bones, is the next slice. Engine
+`swift test` 498 pass (the 9 new tests), the `eye_look_reference` module is
+42 with the per-eye-parent case.
 
 ## Reproducible verification
 
