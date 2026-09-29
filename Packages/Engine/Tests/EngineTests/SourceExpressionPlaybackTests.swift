@@ -190,8 +190,10 @@ private struct PlaybackReference: Decodable {
     let progressActions: [ProgressAction], randomProgressActions: [ProgressAction]
 }
 
-@Test func sourceExpressionProgressMatchesIndependentFloat32TemporalOracle() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_ANIMATION_PLAYBACK_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ANIMATION_PLAYBACK_REFERENCE"]),
+               "Requires IKKOKU_ANIMATION_PLAYBACK_REFERENCE"))
+func sourceExpressionProgressMatchesIndependentFloat32TemporalOracle() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_ANIMATION_PLAYBACK_REFERENCE")
     let reference = try JSONDecoder().decode(PlaybackReference.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     var progress = try SourceExpressionProgress()
     for action in reference.progressActions {
@@ -226,8 +228,10 @@ private struct PlaybackReference: Decodable {
     }
 }
 
-@Test func sourceBlinkMatchesIndependentFloat32TemporalOracle() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_ANIMATION_PLAYBACK_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ANIMATION_PLAYBACK_REFERENCE"]),
+               "Requires IKKOKU_ANIMATION_PLAYBACK_REFERENCE"))
+func sourceBlinkMatchesIndependentFloat32TemporalOracle() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_ANIMATION_PLAYBACK_REFERENCE")
     let reference = try JSONDecoder().decode(PlaybackReference.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
     #expect(reference.schemaVersion == 1 && reference.scenarios.count == 8)
     for scenario in reference.scenarios {

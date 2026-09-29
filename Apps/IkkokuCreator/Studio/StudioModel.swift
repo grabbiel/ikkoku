@@ -60,6 +60,12 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored private var startTime = CFAbsoluteTimeGetCurrent()
     @ObservationIgnored private var animTime: Double = 0
     private(set) var sourceAnimationTime: Float = 0
+    /// Loaded from `IKKOKU_STUDIO_ANIMATION_CATALOG` at source-scene import; nil when unset.
+    private(set) var sourceAnimationCatalog: SourceStudioAnimationCatalog?
+    private(set) var sourceAnimationCatalogError: String?
+    /// Set by `SourceAnimationInspector`'s `onAppear`/`onDisappear` so the headless
+    /// UI report reflects the inspector that actually rendered.
+    var sourceAnimationInspectorShown = false
     @ObservationIgnored var sourcePluginSession: SourceStudioPluginSession?
     let sourceFocus = SourceApplicationFocusHost()
     @ObservationIgnored var sourceFocusObservers: [NSObjectProtocol] = []
@@ -142,6 +148,67 @@ final class StudioModel: ViewportInputHandler {
         refresh()
     }
 
+    /// The selected source character's saved or edited animation selection, so the
+    /// inspector can show and change it. Nil for native or unconverted objects.
+    var selectedSourceAnimationState: SourceStudioAnimationState? {
+        guard let object = selectedObject, let preview = sourceInstances[object.id] else { return nil }
+        return object.sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+    }
+
+    /// Bakes every character's evaluated time before resetting the shared clock.
+    func rebaseSourceAnimationClock() throws {
+        var objects = doc.objects
+        for i in doc.objects.indices {
+            let object = doc.objects[i]
+            if let preview = sourceInstances[object.id], preview.hasSavedAnimation || object.sourceAnimation != nil {
+                objects[i].sourceAnimation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+            }
+        }
+        doc.objects = objects
+        sourceAnimationTime = 0
+        for preview in sourceInstances.values { preview.resetAnimationPlayback() }
+    }
+
+    private func editSourceAnimation(_ id: UUID, change: (inout SourceStudioAnimationState) -> Void) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else { throw RigError.invalid("Studio animation edit has no loaded source character.") }
+        var candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+        change(&candidate)
+        _ = try preview.editedPose(fkRotations: doc.objects[i].sourceFKRotations ?? [:], ikTargets: doc.objects[i].sourceIKOverrides ?? [:],
+            kinematics: doc.objects[i].sourceKinematics, animationState: candidate, animationElapsed: 0)
+        try rebaseSourceAnimationClock()
+        candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+        change(&candidate)
+        doc.objects[i].sourceAnimation = candidate
+        refresh()
+    }
+
+    /// New selections start at phase zero after other characters' phases are baked.
+    func setSourceAnimation(_ id: UUID, group: Int32, category: Int32, no: Int32) throws {
+        try editSourceAnimation(id) { state in
+            state.group = group; state.category = category; state.no = no; state.normalizedTime = 0
+        }
+    }
+
+    func setSourceAnimationSpeed(_ id: UUID, _ speed: Float) throws {
+        guard speed.isFinite, speed >= 0 else { throw RigError.invalid("Studio animation speed must be finite and non-negative.") }
+        try editSourceAnimation(id) { $0.speed = speed }
+    }
+
+    func setSourceAnimationForceLoop(_ id: UUID, _ on: Bool) throws {
+        try editSourceAnimation(id) { $0.forceLoop = on }
+    }
+
+    func restartSourceAnimation(_ id: UUID) throws {
+        try editSourceAnimation(id) { $0.normalizedTime = 0 }
+    }
+
+    func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
+        sourceAnimationCatalog?.entries
+            .filter { $0.group == group && (category == nil || $0.category == category) && $0.file != nil }
+            .min { $0.category < $1.category || ($0.category == $1.category && $0.no < $1.no) }
+            .map { (category: $0.category, no: $0.no) }
+    }
+
     func advancePluginAnimation(by delta: Float) throws {
         guard delta.isFinite, delta >= 0, sourceAnimationTime + delta <= 86_400 else { throw SourcePluginError.invalid("Studio simulation clock is out of range.") }
         sourceAnimationTime += delta
@@ -189,6 +256,9 @@ final class StudioModel: ViewportInputHandler {
 
     func addKeyframe() {
         guard let o = selectedObject, o.kind == .character || o.kind == .item || o.kind == .light else { return }
+        // Original characters keep their saved pose/animation; keyframes would only store
+        // prototype fields (pose delta, IK chains, gestures, preset, expression).
+        guard !selectedIsSourceCharacter else { status = "Original characters keep their saved poses; Timeline keys are not supported."; return }
         pushUndo(force: true)
         doc.timeline.insert(Keyframe(time: timelineTime, object: o))
         status = "Keyframe at \(String(format: "%.2f", timelineTime)) s"
@@ -214,6 +284,36 @@ final class StudioModel: ViewportInputHandler {
     var library: AssetLibrary { host.library }
     var selectedObject: StudioObject? { selection.flatMap { doc.object($0) } }
     var selectedInstance: CharacterInstance? { selection.flatMap { instances[$0] } }
+
+    /// Whether the current selection is an original-game character. The inspectors
+    /// gate their prototype-only controls on this so the UI and the headless UI
+    /// report (`AppState.snapshotWindowIfRequested`) cannot drift apart.
+    var selectedIsSourceCharacter: Bool { selectedObject?.sourceCharacter != nil }
+
+    /// Set by the inspector branch that actually rendered (`onAppear` in `StudioView`);
+    /// the headless UI report writes this as `inspectorView` so it cannot lie about
+    /// the expected `inspectorViewName` computed from model state below.
+    var displayedInspectorView = "none"
+
+    /// Expected inspector view for the current tab/selection, computed from model state.
+    /// Keep these branches in sync with `StudioView`'s inspector switch.
+    var inspectorViewName: String {
+        switch inspectorTab {
+        case .object: return selectedObject == nil ? "none" : "ObjectInspector"
+        case .pose:
+            if selectedObject?.kind != .character { return "none" }
+            return selectedIsSourceCharacter ? "SourcePoseInspector" : "PoseInspector"
+        case .face:
+            if selectedIsSourceCharacter { return "FaceInspector.sourceUnsupported" }
+            guard let o = selectedObject, o.card != nil else { return "none" }
+            return "FaceInspector"
+        case .clothes:
+            if selectedIsSourceCharacter { return "ClothesInspector.sourceAccessoryLabels" }
+            guard let o = selectedObject, o.card != nil else { return "none" }
+            return "ClothesInspector"
+        case .scene: return "SceneInspector"
+        }
+    }
 
     // MARK: Object management
 
@@ -328,6 +428,18 @@ final class StudioModel: ViewportInputHandler {
             ?? boneCatalogURL.deletingLastPathComponent().appendingPathComponent("attachments.json")
         let attachmentPath = FileManager.default.fileExists(atPath: attachmentURL.path) ? attachmentURL.path : nil
         let animationPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_CATALOG"]
+        if let animationPath {
+            do {
+                sourceAnimationCatalog = try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: animationPath))
+                sourceAnimationCatalogError = nil
+            } catch {
+                sourceAnimationCatalog = nil
+                sourceAnimationCatalogError = String(describing: error)
+            }
+        } else {
+            sourceAnimationCatalog = nil
+            sourceAnimationCatalogError = nil
+        }
         let handPatternsPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"]
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
@@ -526,10 +638,12 @@ final class StudioModel: ViewportInputHandler {
     /// Deterministic integration input using original object/bone IDs. This
     /// exercises the same document fields and guide callbacks as the viewport.
     func applySourceCaptureEdits(_ data: Data) throws {
-        struct Edit: Decodable { let objectKey: Int32; let position: [Float]?; let fkRotations: [String: [Float]]?; let ikTargets: [String: SourceStudioIKEdit]?; let kinematics: SourceStudioKinematicState? }
+        struct AnimationEdit: Decodable { let group: Int32; let category: Int32; let no: Int32; let speed: Float?; let forceLoop: Bool? }
+        struct Edit: Decodable { let objectKey: Int32; let position: [Float]?; let fkRotations: [String: [Float]]?; let ikTargets: [String: SourceStudioIKEdit]?; let kinematics: SourceStudioKinematicState?; let animation: AnimationEdit? }
         let edits = try JSONDecoder().decode([Edit].self, from: data)
         guard edits.count <= 1000, Set(edits.map(\.objectKey)).count == edits.count else { throw RigError.invalid("Duplicate or oversized Studio capture edit set.") }
         var candidate = doc
+        var animations: [(object: UUID, edit: AnimationEdit)] = []
         for edit in edits {
             guard let i = candidate.objects.firstIndex(where: { $0.sourceObjectKey == edit.objectKey }) else { throw RigError.invalid("Studio capture object is missing.") }
             func vector(_ values: [Float]) throws -> Float3 {
@@ -559,8 +673,28 @@ final class StudioModel: ViewportInputHandler {
                 candidate.objects[i].sourceIKOverrides = changes
             }
             if let state = edit.kinematics { try state.validate(); candidate.objects[i].sourceKinematics = state }
+            if let animation = edit.animation {
+                guard let preview = sourceInstances[candidate.objects[i].id] else { throw RigError.invalid("Studio capture animation has no source character.") }
+                var state = candidate.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+                state.group = animation.group; state.category = animation.category; state.no = animation.no; state.normalizedTime = 0
+                if let speed = animation.speed {
+                    guard speed.isFinite, speed >= 0 else { throw RigError.invalid("Studio animation speed must be finite and non-negative.") }
+                    state.speed = speed
+                }
+                if let forceLoop = animation.forceLoop { state.forceLoop = forceLoop }
+                _ = try preview.editedPose(fkRotations: candidate.objects[i].sourceFKRotations ?? [:], ikTargets: candidate.objects[i].sourceIKOverrides ?? [:],
+                    kinematics: candidate.objects[i].sourceKinematics, animationState: state, animationElapsed: 0)
+                animations.append((object: candidate.objects[i].id, edit: animation))
+            }
         }
         doc = candidate
+        for animation in animations {
+            try editSourceAnimation(animation.object) { state in
+                state.group = animation.edit.group; state.category = animation.edit.category; state.no = animation.edit.no; state.normalizedTime = 0
+                if let speed = animation.edit.speed { state.speed = speed }
+                if let forceLoop = animation.edit.forceLoop { state.forceLoop = forceLoop }
+            }
+        }
     }
 
     func sourceBenchmarkMetadata() -> [String: Any] {
