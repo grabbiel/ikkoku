@@ -102,6 +102,11 @@ set:
 - [ ] ST-T07 neck look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, FIX/FORWARD characters
       hold their saved neck/head, TARGET/AWAY characters follow or avoid the Studio
       camera as it orbits, and FK-neck characters are untouched (PRs #26–#38).
+- [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
+      object is hidden; reloading in CharaStudio shows it hidden.
+- [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,
+      reload it: the new name shows; renaming a character (whose name lives in its card)
+      stays rejected at the inspector export.
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; export unchanged) (PRs #19–#39).

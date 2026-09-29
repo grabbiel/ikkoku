@@ -770,8 +770,19 @@ final class StudioModel: ViewportInputHandler {
         for object in doc.objects {
             guard let key = object.sourceObjectKey, let (original, parent, attachment) = records[key],
                   object.parent.flatMap({ doc.object($0)?.sourceObjectKey }) == parent,
-                  object.sourceAttachmentPoint == attachment, object.visible == original.visible else {
-                throw RigError.invalid("Original-scene export does not yet support reparenting or visibility edits.")
+                  object.sourceAttachmentPoint == attachment else {
+                throw RigError.invalid("Original-scene export does not yet support reparenting.")
+            }
+            if object.visible != original.visible { edits.visibility[key] = object.visible }
+            // Only folder, camera and route records serialize a name; the
+            // validator already rejects renames for every other kind. The
+            // baseline is the validator's: documents saved before
+            // sourcePreviewName existed fall back to the import's placeholder
+            // label, which must never be written over the record's name.
+            if original.kind == .folder || original.kind == .camera || original.kind == .route {
+                let baseline = object.sourcePreviewName ?? (original.kind == .folder
+                    ? original.name ?? "Source object \(key)" : "Unrendered source \(original.kind) \(key)")
+                if object.name != baseline { edits.names[key] = object.name }
             }
             let originalRotation = UnityCoordinates.eulerDegrees(original.transform.rotationDegrees)
             let rotationChanged = object.transform.quaternion.vector != originalRotation.vector

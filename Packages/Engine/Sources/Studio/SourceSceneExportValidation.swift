@@ -51,8 +51,9 @@ public enum SourceSceneExportValidation {
                 fallbackName = original.kind == .folder || (original.character != nil && !routeChild)
                     ? original.name ?? "Source object \(key)" : "Unrendered source \(original.kind) \(key)"
             }
-            guard object.name.utf8.elementsEqual((object.sourcePreviewName ?? fallbackName).utf8) else {
-                throw RigError.invalid("Original-scene export does not yet serialize object name edits.")
+            guard object.name.utf8.elementsEqual((object.sourcePreviewName ?? fallbackName).utf8)
+                    || original.kind == .folder || original.kind == .camera || original.kind == .route else {
+                throw RigError.invalid("Original-scene export does not serialize name edits for \(original.kind) records (the name lives elsewhere).")
             }
             guard object.card == nil, object.handGestureL == 0, object.handGestureR == 0,
                   object.clothingVisible, object.accessoriesVisible else {

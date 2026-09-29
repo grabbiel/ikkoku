@@ -45,6 +45,14 @@ public struct SourceSceneEdits: Sendable {
         }
     }
     public var transforms: [TransformEdit]
+    /// Each object's own saved `visible` flag (a one-byte patch; parents are
+    /// never propagated). Keys are source object IDs, including nested
+    /// accessory children.
+    public var visibility: [Int32: Bool]
+    /// Renames keyed by source object ID, folder, camera and route records
+    /// only — other record kinds serialize no name (a character's name lives
+    /// in its card). The replacement may resize the stored string.
+    public var names: [Int32: String]
     /// Keys are source object IDs, including nested accessory children.
     /// The existing card editor preserves asset and saved resolver identities.
     public var cards: [Int32: SourceCharacterCard.Edits]
@@ -59,8 +67,10 @@ public struct SourceSceneEdits: Sendable {
     public init(transforms: [TransformEdit] = [], cards: [Int32: SourceCharacterCard.Edits] = [:],
                 kinematics: [Int32: KinematicEdit] = [:], animations: [Int32: SourceStudioAnimationState] = [:],
                 voices: [Int32: SourceStudioVoiceState] = [:], currentCamera: KoikatsuCameraRecord? = nil,
-                cameraSlots: [Int: KoikatsuCameraRecord] = [:], thumbnailData: Data? = nil) {
+                cameraSlots: [Int: KoikatsuCameraRecord] = [:], thumbnailData: Data? = nil,
+                visibility: [Int32: Bool] = [:], names: [Int32: String] = [:]) {
         self.transforms = transforms; self.cards = cards; self.kinematics = kinematics; self.thumbnailData = thumbnailData
+        self.visibility = visibility; self.names = names
         self.currentCamera = currentCamera; self.cameraSlots = cameraSlots
         self.animations = animations
         self.voices = voices
@@ -75,6 +85,8 @@ struct SourceSceneEditSpans {
         let enableIK: Range<Int>, activeIK: Range<Int>, enableFK: Range<Int>, activeFK: Range<Int>
     }
     var transforms: [SourceSceneEdits.Destination: Range<Int>] = [:]
+    var visibility: [Int32: Range<Int>] = [:]
+    var names: [Int32: Range<Int>] = [:]
     var cards: [Int32: Range<Int>] = [:]
     var kinematics: [Int32: Kinematics] = [:]
     var animations: [Int32: Animation] = [:]
@@ -87,8 +99,8 @@ public extension KoikatsuSceneDocument {
     /// Any unsupported/missing destination or invalid input rejects the whole
     /// edit before bytes are returned; source data is never mutated.
     func editedData(_ edits: SourceSceneEdits) throws -> Data {
-        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil else { return preservedData }
-        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
+        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty else { return preservedData }
+        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         let thumbnailRange = 0..<reader.offset
@@ -127,6 +139,17 @@ public extension KoikatsuSceneDocument {
             } }
             guard range.count == 36 else { throw reader.invalid("scene transform span is not 36 bytes") }
             add(range, bytes)
+        }
+        for key in edits.visibility.keys.sorted() {
+            guard let range = reader.editSpans.visibility[key],
+                  range.count == 1, (0...1).contains(preservedData[preservedData.startIndex + range.lowerBound]) else {
+                throw reader.invalid("unavailable scene visibility destination")
+            }
+            add(range, Data([edits.visibility[key]! ? 1 : 0]))
+        }
+        for key in edits.names.keys.sorted() {
+            guard let span = reader.editSpans.names[key] else { throw reader.invalid("unavailable scene name destination") }
+            add(span, try KoikatsuBinaryReader.dotNetString(edits.names[key]!))
         }
         for (key, edit) in edits.cards {
             guard let character = objects[key]?.character, let range = reader.editSpans.cards[key] else { throw reader.invalid("embedded card object is unavailable") }

@@ -102,6 +102,28 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(renamed, against: source.snapshot) }
 }
 
+@Test func sourceSceneExportValidationAllowsRenamesOnlyForSerializedNameKinds() throws {
+    let source = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    let baseline = exportValidationDocument(source)
+    // Folder (11, 21) and route (20) records serialize a name; the rename may
+    // differ freely from the preview name the import recorded.
+    for key: Int32 in [11, 20, 21] {
+        guard let index = baseline.objects.firstIndex(where: { $0.sourceObjectKey == key }) else {
+            throw RigError.invalid("Fixture record \(key) is missing.")
+        }
+        var document = baseline
+        document.objects[index].name += " — renamed"
+        try SourceSceneExportValidation.validate(document, against: source.snapshot)
+    }
+    // A character record carries no name (it lives in the card).
+    guard let characterIndex = baseline.objects.firstIndex(where: { $0.sourceObjectKey == 10 }) else {
+        throw RigError.invalid("Fixture character is missing.")
+    }
+    var renamed = baseline
+    renamed.objects[characterIndex].name += " renamed"
+    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(renamed, against: source.snapshot) }
+}
+
 @Test func sourceSceneExportValidationHandlesLegacyUnrenderedRouteCharacters() throws {
     var bytes = SceneDocumentBytes(data: OriginalCardFixture.png)
     bytes.s("1.0.4.2"); bytes.i(1); bytes.i(20)
