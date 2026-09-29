@@ -128,8 +128,10 @@ private func expectMatrix(_ actual: float4x4, _ expected: float4x4, tolerance: F
     #expect(throws: RigError.self) { try SourceBodyShapePose.make(rig: bodyPoseRig(authoredIndex: 3), state: state) }
 }
 
-@Test func sourceBodyShapeMatchesLocalRecoveredCSharpReferenceWhenRequested() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_BODY_SHAPE_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_BODY_SHAPE_REFERENCE"]),
+               "Requires IKKOKU_BODY_SHAPE_REFERENCE"))
+func sourceBodyShapeMatchesLocalRecoveredCSharpReferenceWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_BODY_SHAPE_REFERENCE")
     struct TransformRecord: Decodable { let name: String?, position: [Float], rotation: [Float], scale: [Float] }
     struct StateRecord: Decodable {
         let position: [Float], rotationDegrees: [Float], scale: [Float]
@@ -236,8 +238,10 @@ private func bodyCompleteState() -> [String: SourceShapeTransform] {
     expectMatrix(skipped.localMatrices[0], rig.nodes[0].localMatrix)
 }
 
-@Test func sourceBodyShapeCoverageReportsReducedRigAndEveryRecoveredSlotWhenRequested() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SHAPE_CONTRACT"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SHAPE_CONTRACT"]),
+               "Requires IKKOKU_SHAPE_CONTRACT"))
+func sourceBodyShapeCoverageReportsReducedRigAndEveryRecoveredSlotWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SHAPE_CONTRACT")
     let contract = try SourceShapeContract.decode(Data(contentsOf: URL(fileURLWithPath: path)))
     let domain = try #require(contract.domain("body"))
     let reduced = try SourceBodyShapePose.coverage(rig: bodyPoseRig(), domain: domain)
@@ -252,9 +256,10 @@ private func bodyCompleteState() -> [String: SourceShapeTransform] {
     #expect(coverage.missingDestinations.isEmpty)
 }
 
-@Test func sourceBodyShapeAllSlotsAffectBoundDestinationsOnTheAssembledAvatarWhenRequested() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"] else { return }
-    let url = URL(fileURLWithPath: path)
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_AVATAR"]),
+               "Requires IKKOKU_SOURCE_AVATAR"))
+func sourceBodyShapeAllSlotsAffectBoundDestinationsOnTheAssembledAvatarWhenRequested() throws {
+    let url = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"))
     let source = try SourceAvatar.load(url: url)
     let contract = try SourceShapeContract.decode(Data(contentsOf: url.deletingLastPathComponent().appendingPathComponent("character-shape-contract.json")))
     let domain = try #require(contract.domain("body"))

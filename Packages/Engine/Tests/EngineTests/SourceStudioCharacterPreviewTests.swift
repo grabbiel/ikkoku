@@ -10,10 +10,10 @@ import Studio
 import Character
 @testable import Renderer
 
-private func sourceStudioPreviewInputs() -> (scene: URL, rig: URL, catalog: URL)? {
-    let env = ProcessInfo.processInfo.environment
-    guard let scenes = env["IKKOKU_STUDIO_SCENE_FIXTURES"], let rig = env["IKKOKU_SOURCE_AVATAR"],
-          let catalog = env["IKKOKU_STUDIO_POSE_CONTRACT"] else { return nil }
+private func sourceStudioPreviewInputs() throws -> (scene: URL, rig: URL, catalog: URL) {
+    let scenes = try SourceFixtureSupport.require("IKKOKU_STUDIO_SCENE_FIXTURES")
+    let rig = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
     return (URL(fileURLWithPath: scenes).appendingPathComponent("synthetic-current.png"),
             URL(fileURLWithPath: rig), URL(fileURLWithPath: catalog))
 }
@@ -42,9 +42,10 @@ private func sourceStudioReference(scene: URL, data: Data, rig: URL, catalog: UR
     try decoded.validateHierarchy()
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioCharacterPreviewBuildsSupportedSyntheticPoseAndFiniteWorldBoundsWhenSupplied() throws {
-    guard let input = sourceStudioPreviewInputs() else { return }
+    let input = try sourceStudioPreviewInputs()
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     let data = try Data(contentsOf: input.scene)
     var preview: SourceStudioCharacterPreview? = try SourceStudioCharacterPreview(
@@ -69,9 +70,10 @@ func sourceStudioCharacterPreviewBuildsSupportedSyntheticPoseAndFiniteWorldBound
     #expect(weakPreview != nil)
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioCharacterPreviewRejectsChangedSceneBeforeAssetRegistrationWhenSupplied() throws {
-    guard let input = sourceStudioPreviewInputs() else { return }
+    let input = try sourceStudioPreviewInputs()
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     let reference = SourceStudioCharacterReference(sceneFile: input.scene.path, sceneSHA256: String(repeating: "0", count: 64),
         rigFile: input.rig.path, boneCatalogFile: input.catalog.path, objectKey: 10)
@@ -84,9 +86,10 @@ func sourceStudioCharacterPreviewRejectsChangedSceneBeforeAssetRegistrationWhenS
     }
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioCharacterPreviewRejectsUnsupportedEmbeddedSexAndHeadWhenSupplied() throws {
-    guard let input = sourceStudioPreviewInputs() else { return }
+    let input = try sourceStudioPreviewInputs()
     let data = try Data(contentsOf: input.scene), parsed = try KoikatsuSceneReader.decodeDocument(data)
     let original = try #require(parsed.snapshot.roots.first?.character)
     let range = try #require(data.range(of: original.cardData))
