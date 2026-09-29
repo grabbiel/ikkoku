@@ -105,6 +105,11 @@ set:
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; export unchanged) (PRs #19–#39).
+- [ ] ST-A06 camera objects: loading a scene with an active camera object starts the view
+      through it (reported in the source compatibility diagnostics); orbit/pan/zoom are
+      refused with an explanation while it is active, and Look through / Stop looking
+      through on a camera placeholder switches between the camera object and the saved
+      scene camera (runtime only; export unchanged).
 - [ ] CMT-04 and R1/R2: source draw-material overlays render in the live preview as in
       the matched captures (PRs #6–#13).
 - [ ] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with

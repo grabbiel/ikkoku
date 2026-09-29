@@ -39,7 +39,8 @@ struct StudioView: View {
             ScrollView {
                 LazyVStack(spacing: 1) {
                     ForEach(model.doc.flattened(), id: \.object.id) { entry in
-                        WorkspaceRow(object: entry.object, depth: entry.depth, selected: model.selection == entry.object.id) {
+                        WorkspaceRow(object: entry.object, depth: entry.depth, selected: model.selection == entry.object.id,
+                                    cameraPlaceholder: model.isSourceCameraPlaceholder(entry.object.id)) {
                             model.selection = entry.object.id
                         } toggleVisible: {
                             model.update(entry.object.id) { $0.visible.toggle() }
@@ -209,7 +210,12 @@ struct StudioView: View {
                 }.padding(12)
             }
             Divider()
-            Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1).padding(6)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                if let cameraName = model.activeSourceCameraName {
+                    Text("Viewing through source camera \"\(cameraName)\" (runtime only)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }.padding(6)
         }
     }
 }
@@ -218,9 +224,11 @@ struct WorkspaceRow: View {
     let object: StudioObject
     let depth: Int
     let selected: Bool
+    var cameraPlaceholder = false
     let select: () -> Void
     let toggleVisible: () -> Void
     var icon: String {
+        if cameraPlaceholder { return "camera.fill" }
         switch object.kind {
         case .character: return "person.fill"; case .item: return "cube.fill"; case .light: return "lightbulb.fill"
         case .camera: return "camera.fill"; case .folder: return "folder.fill"
@@ -321,6 +329,17 @@ struct ObjectInspector: View {
                         }
                     }
                 case .folder: EmptyView()
+                }
+                if let cameraName = model.selectedSourceCameraName {
+                    SectionBox(title: "Camera") {
+                        Text("Source camera: \(cameraName)").font(.callout)
+                        HStack {
+                            Button(model.activeSourceCamera == o.id ? "Stop looking through" : "Look through") { model.toggleSourceCamera(o.id) }
+                                .help(model.activeSourceCamera == o.id ? "Deactivate this camera object (the saved scene camera returns)" : "Look through this camera object (the orbit controller is disabled while it is active)")
+                        }
+                        Text(model.activeSourceCamera == o.id ? "Active" : "Inactive").font(.callout)
+                        Text("Runtime only — original export keeps the saved camera and active flag.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if model.selectedRouteIsSource {
                     SectionBox(title: "Route") {
