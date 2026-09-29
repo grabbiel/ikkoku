@@ -1186,6 +1186,32 @@ previous slice: no rendered comparison against the original game's iris motion
 exists, the Yure jitter and card-driven offset/scale stay unmodeled, and the
 predicted eye rotations still never reach the eye bones.
 
+The iris shader itself was opened and verified in ST-T07:
+`Tools/reverse/eye_shader_contract.py` disassembled `Shader Forge/
+toon_eye_lod0` (the shader `cf_m_hitomi_00` resolves to) and both FORWARD
+keyword variants agree. Verified: the `uv * _ST.xy + _ST.zw` formula, the
+independent second-UV0/TEXCOORD1 channels for `_overtex1`/`_overtex2`, and
+that FORWARD contains no `discard` at all — eye transparency is pure
+`SrcAlpha/OneMinusSrcAlpha` blending. The one assumption that did not hold:
+`_MainTex` is first rotated about (0.5, 0.5) by 2π·`_rotation` — the eye
+tilt — before `_MainTex_ST`, and only `_MainTex` is ever rotated.
+`Toon.metal` now replays that as `irisRotation` (a standard rotation applied
+before `irisST0`; the asm's swapped dp2 rows carry a constant −90° at
+`_rotation = 0` that PR #59's live-frame match shows the conversion pipeline
+absorbs — an open limit in `.local/reverse/shaders/eye-hitomi-evidence.json`).
+`SourceStudioCharacterPreview` computes the per-eye tilt from face shape
+value 33 in turns — L = 0.02 − 0.04·value, R = −L, the `ChangeSettingEyeTilt`
+lerp plus `SetEyeRot`'s R negation (±0.02 turns = ±7.2° at value 0) — and
+writes it before the possibly-refused `_ST` math, so a card tilt survives a
+refused gaze transform. `SourceIrisHighlightTests` pins the rotation on the
+GPU: half a turn moves the probe uv0 onto base texel 3's center, and half a
+turn plus offset 0.25 lands on the clamped texel-3 edge instead of the texel
+2 an offset-then-rotation order would read, fixing the rotation-before-`_ST`
+order. Engine `swift test` 508 pass; the app builds for macOS arm64. Still
+assumed, not implemented: the `_expression`/`_exppower` tint and the full
+lighting are absent from our pre-lighting branch, and no rendered comparison
+against the original game's iris tilt exists.
+
 ## Reproducible verification
 
 ```sh

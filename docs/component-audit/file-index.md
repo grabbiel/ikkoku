@@ -22,26 +22,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**711 files indexed; 711 assigned; 0 unassigned.**
+**713 files indexed; 713 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
 | [Studio / IK / animation](studio.md) | 162 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 289 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 107 |
+| Conversion / recovery / verification tool | 108 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
 | Runtime / shared shader declaration | 160 |
-| Test / validation | 140 |
+| Test / validation | 141 |
 
 ## App / gameplay / plugins
 
@@ -678,6 +678,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/compare_original_frame.py](../../Tools/reverse/compare_original_frame.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_original_pose.py](../../Tools/reverse/compare_original_pose.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/export_prefab.py](../../Tools/reverse/export_prefab.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/eye_shader_contract.py](../../Tools/reverse/eye_shader_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/OriginalCharacterProbe.cs](../../Tools/reverse/fixtures/OriginalCharacterProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalShaderProbe.cs](../../Tools/reverse/fixtures/OriginalShaderProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/item_shader_contract.py](../../Tools/reverse/item_shader_contract.py) | Conversion / recovery / verification tool |
@@ -691,6 +692,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_compare_original_frame.py](../../Tools/reverse/test_compare_original_frame.py) | Test / validation |
 | [Tools/reverse/test_compare_original_pose.py](../../Tools/reverse/test_compare_original_pose.py) | Test / validation |
 | [Tools/reverse/test_export_prefab.py](../../Tools/reverse/test_export_prefab.py) | Test / validation |
+| [Tools/reverse/test_eye_shader_contract.py](../../Tools/reverse/test_eye_shader_contract.py) | Test / validation |
 | [Tools/reverse/test_original_character_probe.py](../../Tools/reverse/test_original_character_probe.py) | Test / validation |
 | [Tools/reverse/test_original_shader_probe.py](../../Tools/reverse/test_original_shader_probe.py) | Test / validation |
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |

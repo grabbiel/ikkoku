@@ -67,6 +67,24 @@ inline float sampleShadow(float4 sc, depth2d<float> shadowMap, constant FrameUni
     return mix(1.0, s, frame.mainLightDirection.w);
 }
 
+// toon_eye_lod0 FORWARD L61-L69: _rotation (turns; EyeLookMaterialControll writes
+// +-0.02 = +-7.2 degrees) rotates the base iris UV about (0.5,0.5) by 2*pi*turns,
+// applied before the _MainTex _ST scale/offset (L70). The dp2 rows are the
+// swapped-form rotation u' = sin*d.u + cos*d.v, v' = -cos*d.u + sin*d.v about the
+// center, which equals the standard rotation by (angle - pi/2); the source
+// default _rotation = 0 therefore carries a constant -90-degree term. PR #59
+// matched the live Studio frame sampling the converted _MainTex without it, so
+// the conversion pipeline already absorbs that constant and only the tilt delta
+// is applied here (standard rotation by 2*pi*turns). The residual -90-degree
+// convention is an open evidence limit (eye-hitomi-evidence.json).
+inline float2 rotateIrisUV(float2 uv, float turns) {
+    float angle = turns * 6.283185;
+    float s = sin(angle);
+    float c = cos(angle);
+    float2 d = uv - 0.5;
+    return float2(c * d.x - s * d.y, s * d.x + c * d.y) + 0.5;
+}
+
 struct Surface {
     float3 albedo;      // linear
     float  alpha;
@@ -196,8 +214,10 @@ fragment float4 toon_fragment(
     if (mat.flags & MaterialFlagHasBaseTexture) {
         // Iris materials carry the EyeLookMaterialControll _MainTex transform and
         // the Clamp-imported wrap; other materials keep the repeat pattern path.
+        // The eye-tilt _rotation only ever rotates the base UV (asm L61-L71 never
+        // rotates the _expression/_overtex samples), so it lives in this branch.
         float2 buv = (mat.flags & MaterialFlagSourceIrisHighlights)
-            ? uv * mat.irisST0.xy + mat.irisST0.zw : uv;
+            ? rotateIrisUV(uv, mat.irisRotation) * mat.irisST0.xy + mat.irisST0.zw : uv;
         float4 t = (mat.flags & MaterialFlagSourceIrisHighlights)
             ? baseTex.sample(linearClamp, buv) : baseTex.sample(linearRepeat, uv);
         base *= t;
@@ -223,8 +243,9 @@ fragment float4 toon_fragment(
     if (mat.flags & MaterialFlagSourceIrisHighlights) {
         // toon_eye_lod0 prelighting composition. UV1/UV2 are authored independently
         // of base UV0; each carries the EyeLookMaterialControll _overtexN transform
-        // and the Clamp-imported wrap. Source gaze, eye rotation and expression
-        // sampling remain separate.
+        // and the Clamp-imported wrap. The source _rotation leaves these samples
+        // untouched (asm L79/L84/L87); source gaze and expression sampling remain
+        // separate.
         float upperAlpha = (mat.flags & MaterialFlagHasOverlay0) ? overlay0.sample(linearClamp, in.uv1 * mat.irisST1.xy + mat.irisST1.zw).a : 0.0;
         float lowerAlpha = (mat.flags & MaterialFlagHasOverlay1) ? overlay1.sample(linearClamp, in.uv2 * mat.irisST2.xy + mat.irisST2.zw).a : 0.0;
         float4 highlight = max(upperAlpha * mat.overlayColor0, lowerAlpha * mat.overlayColor1);

@@ -237,6 +237,57 @@ Evidence in `.local/reverse/shaders/`: `item-studio-evidence.json` /
 `cube01`/`cylinder00` in `.local/reverse/exports/` and cataloged in
 `.local/reverse/catalog/studio-items.json`.
 
+### Eye (hitomi) shader evidence (added 2026-09-29, ST-T07)
+
+`Tools/reverse/eye_shader_contract.py` resolves `cf_m_hitomi_00`'s `m_Shader`
+PPtr in `chara/bo_head_00.unity3d` to `Shader Forge/toon_eye_lod0` and reuses
+`item_shader_contract.shader_evidence` to preserve both FORWARD pixel variants
+(blob indices 4/5, keywords `DIRECTIONAL` / `DIRECTIONAL SHADOWS_SCREEN`; both
+disassemble to the same assembly digest `038462b79e…`). This checks the
+transforms PR #59 assumed for the iris materials:
+
+- **(a) `_MainTex` UV.** Not `uv * _MainTex_ST.xy + _MainTex_ST.zw` alone: a
+  `_rotation` term (cb0[12]) rotates the base UV about (0.5,0.5) *before* the
+  `_ST` transform. The asm matrix rows `sin/cos` and `−cos/sin` are the
+  swapped-form rotation R_std(2π·_rotation − π/2); at the serialized
+  `_rotation = 0` that is a constant −90° rotation, yet PR #59 matched the
+  live Studio frame with plain `uv * _ST`, so the conversion pipeline absorbs
+  that quarter turn (which exact step, texture axis or uv export, is not
+  pinned down — recorded as the open limit in the evidence JSON).
+- **(b) overlay UV channels.** The `_overtex1` second sample reads the second
+  UV0 channel (`TEXCOORD0.zw`), `_overtex2` reads `TEXCOORD1.xy`, and
+  `_expression` reads `TEXCOORD0.xy` after a parallax nudge
+  (`uv − 0.06 · dot(tan/bitangent, viewDir)`); each then gets its own `_ST`.
+  This matches PR #59's independent UV1/UV2 buffers.
+- **(c) what `_rotation` does.** A UV rotation of `_MainTex` only — angle
+  2π·_rotation radians (turns), center (0.5,0.5), applied before `_MainTex_ST`,
+  never touching `_expression`/`_overtexN`. `EyeLookMaterialControll` writes
+  ±0.02 turns (±7.2°) as the eye tilt.
+- **(d) sample composition.** Base, then expression tint
+  `base += (expr.a · _exppower) · (expr − base)`, then the two overcolor
+  premultiplied highlights combined by component maximum, factor
+  `highlight.a · _isHighLight`, rgb mixed by that factor and alpha maximized
+  with it — all before lighting multiplies by
+  `max(_LightColor0 · 0.6 + 0.4, _ambientshadowG.rgb)`. Our pre-lighting iris
+  branch implements the highlight half only; the expression tint stays an
+  explicit approximation.
+- **(e) cull/blend/alpha.** FORWARD is Cull Back, ZTest Less/equal class with
+  ZWrite off, `SrcAlpha/OneMinusSrcAlpha` blend (the same serialized values as
+  `main_item_studio_alpha`, whose alphaMode is BLEND), and there is no
+  `discard`/alpha-test anywhere in FORWARD — eye transparency is pure blend,
+  as PR #59's studio handling assumed.
+- **(f) sampler wrap.** The DXBC carries no SAMP chunk at all (3 chunks:
+  ISGN/OSGN/SHDR), so wrap state lives only in the imported texture data —
+  which PR #59 already read (`m_WrapMode` 1 = Clamp for the iris textures).
+
+Impact on PR #59: its base and overlay sampling is exact at the shipped
+`_rotation = 0`, and the new `irisRotation` uniform applies only the tilt
+delta (standard rotation before `irisST0`), wired in
+`SourceStudioCharacterPreview` from face shape value 33 (L =
+`0.02 − 0.04 · value`, R = −L, per `ChangeSettingEyeTilt`/`SetEyeRot`).
+Evidence in `.local/reverse/shaders/`: `eye-hitomi-evidence.json`,
+`eye-hitomi-summary.json` and `eye-hitomi-forward-4/5.asm`.
+
 ## Production deformation and material contracts
 
 The toon vertex shader transforms tangents using the model's linear matrix rather
@@ -264,7 +315,12 @@ material samples exactly as before. The imported iris textures serialize
 legacy `m_WrapMode` 1 (Clamp), so those three samples use the linear
 clamp-to-edge sampler rather than the repeat sampler the earlier tests
 assumed. Studio writes per-frame gaze-driven values into these uniforms; the
-shader change alone is identity for every existing material.
+shader change alone is identity for every existing material. A fourth float,
+`irisRotation`, carries the source `_rotation` eye tilt in turns: the base
+iris sample is rotated about (0.5,0.5) by 2π·irisRotation *before* `irisST0`
+is applied, exactly where `toon_eye_lod0` FORWARD does it, while both
+highlight samples stay unrotated. Default 0 keeps every other material and
+every untilted iris bit-identical.
 
 ### Deformation safety
 
