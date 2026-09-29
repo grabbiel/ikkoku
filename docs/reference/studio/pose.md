@@ -277,9 +277,88 @@ replays that frozen document on top of the card pose, so
 The matching sample time t=0.107 s was fitted on a 0.001 s grid over the
 looping clip (finger-only fit metric 6.71e-05°, versus 0.0441° at t=0);
 the capture never records which loop phase it sampled, so parity holds only
-at the fitted phase. Studio characters with pattern 0 have no hand animation;
-saved patterns 1–21 need their own conversion in the next ST-T07 slice.
-Deferred FK activation effects still need routing.
+at the fitted phase. Studio characters with pattern 0 have no hand animation.
+Saved patterns 1–21 are converted and replayed by the following slice,
+documented in the next section. Deferred FK activation effects still need
+routing.
+
+### Saved hand pattern replay (ST-T07)
+
+`Tools/reverse/studio_hand_animation.py --all-patterns` now converts every
+saved pattern state. It reads the Studio tables `HandAnime_00_00` (left) and
+`HandAnime_01_00` (right) from `.local/reverse/source/abdata/studio/info/00.unity3d`,
+finds each named state's clip on the matching `cf_hand_L_00`/`cf_hand_R_00`
+controller in the base bundle, and writes the ignored library
+`.local/stt07e/studio-hand-patterns.json`: 21 patterns per hand, each one
+looping clip sampled at its native 30 Hz grid across 15 finger bones. Clip
+durations cluster at 0.1666665–0.1666670 s; patterns 9, 13, 17, 20 and 21
+carry a single constant frame and the rest six or seven dense frames. Every
+pattern animates rotation on all fifteen bones; nine bones per left clip and
+thirteen per right clip also animate scale, and no converted clip animates a
+position. Pattern names come from the table state names:
+
+| ID | State | ID | State | ID | State |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `goo` | 8 | `par_grip` | 15 | `index_finger2` |
+| 2 | `scissors` | 9 | `gun_grip` | 16 | `thumb_finger` |
+| 3 | `par` | 10 | `soft_grip` | 17 | `ok` |
+| 4 | `grip_hard` | 11 | `dirty_grip` | 18 | `soft_hold` |
+| 5 | `grip_normal` | 12 | `natural_pose` | 19 | `go` |
+| 6 | `grip_soft` | 13 | `hug` | 20 | `hard_hold` |
+| 7 | `par_soft` | 14 | `index_finger1` | 21 | `par_straight` |
+
+Pattern 0 has no table row, and `LoadAnime` then disables the hand Animator,
+so a saved 0 has no pose at all: the evaluator reports `noChange` and the
+incoming pose stays untouched. A saved ID outside the converted range reports
+a diagnostic naming the info bundle and leaves its hand unchanged; the hand
+pose is never guessed from a neighbor.
+
+`Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift` loads and
+validates the library (header identities, both source hashes, gapless unique
+IDs from 1, uniform dense frame grids, finite non-degenerate frames), folds
+the Studio clock into `[startTime, stopTime)`, interpolates componentwise
+between adjacent frames, normalizes the quaternion, and replaces only the
+animated channels through the same `SourceStudioHandPose.applyChannels` rule
+as the default-pose replay. `applySaved` applies the record's saved `[L, R]`
+pair in one call.
+
+The Studio preview wires this through `IKKOKU_STUDIO_HAND_PATTERNS` into
+`SourceStudioCharacterReference.handPatternsFile`. `editedPose` applies the
+saved pair after the body animation and before FK/IK, because the hand
+Animator runs at speed 1 independently of the body animation speed and its
+bones must carry the pattern before the solvers read them. A saved scene does
+not record the loop phase it starts from, so elapsed 0 restarts the loop at
+frame 0 and initialization says so. A nonzero saved pattern with no configured
+library keeps both hands on the incoming pose and reports that the pattern is
+never guessed; an ID without a converted clip is reported at initialization,
+when the diagnostic does not depend on the clock.
+
+```sh
+.local/reverse/unitypy-venv/bin/python -m unittest discover \
+  -s Tools/reverse -p test_studio_hand_animation.py
+IKKOKU_STUDIO_HAND_PATTERN_CONTRACT="$PWD/.local/stt07e/hand-pattern-crosscheck.json" \
+IKKOKU_STUDIO_HAND_PATTERNS="$PWD/.local/stt07e/studio-hand-patterns.json" \
+  swift test --package-path Packages/Engine --filter studioHandPattern
+```
+
+Sixteen converter unittest cases pass. The converted pattern 1 matches the PR
+#18 fitted default-pose document componentwise at t=0.107 s across 186 float
+components with a maximum difference of 2.37e-11, which shows the two
+converters agree about the same clip, not original replay parity. Nine engine
+cases cover adjacent-frame interpolation and constant broadcast clips, loop
+wrapping, the pattern-0 no-change rule, unknown-ID diagnostics,
+animated-channel-only replacement, twenty malformed-library shapes, the saved
+`[L, R]` pair, and an env-gated real preview of the synthetic scene whose
+saved patterns are `[5, 6]`: the posed finger differs from the unpatterned
+pose, equals the same pair applied directly between animation and FK/IK, and
+repeats one loop period later.
+
+Evidence limits: no original capture has Studio playing patterns 2–21, so
+only pattern 1 has a numeric anchor, and it holds only at the fitted phase
+because the capture never recorded its loop phase. The synthetic fixture's
+`[5, 6]` exercises the mechanism with authored inputs, not an imported
+original scene. Cross-fades between patterns and the `Studio.Preparation`
+Animator enable/disable toggling are not executed.
 
 ## Remaining Studio dependency inventory
 

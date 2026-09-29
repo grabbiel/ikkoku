@@ -17,11 +17,13 @@ public struct SourceStudioCharacterReference: Codable, Sendable, Equatable {
     public let attachmentCatalogFile: String?
     public let animationCatalogFile: String?
     public let dynamicsFile: String?
-    public init(sceneFile: String, sceneSHA256: String, rigFile: String, boneCatalogFile: String, objectKey: Int32, makerLibraryFile: String? = nil, attachmentCatalogFile: String? = nil, animationCatalogFile: String? = nil, dynamicsFile: String? = nil) {
+    public let handPatternsFile: String?
+    public init(sceneFile: String, sceneSHA256: String, rigFile: String, boneCatalogFile: String, objectKey: Int32, makerLibraryFile: String? = nil, attachmentCatalogFile: String? = nil, animationCatalogFile: String? = nil, dynamicsFile: String? = nil, handPatternsFile: String? = nil) {
         self.sceneFile = sceneFile; self.sceneSHA256 = sceneSHA256; self.rigFile = rigFile
         self.boneCatalogFile = boneCatalogFile; self.objectKey = objectKey; self.makerLibraryFile = makerLibraryFile
         self.attachmentCatalogFile = attachmentCatalogFile
         self.animationCatalogFile = animationCatalogFile; self.dynamicsFile = dynamicsFile
+        self.handPatternsFile = handPatternsFile
     }
 }
 
@@ -40,6 +42,7 @@ public final class SourceStudioCharacterPreview {
     public let ikGuides: [SourceStudioIK.Guide]
     private let animationCatalog: SourceStudioAnimationCatalog?
     private let animationDirectory: URL?
+    private let handPatternLibrary: SourceStudioHandPatterns?
     private var animationCache: [String: SourceStudioAnimation] = [:]
     private var animationPlayback = SourceStudioAnimation.Playback()
     private let animationHeight: Float
@@ -160,6 +163,7 @@ public final class SourceStudioCharacterPreview {
         characterRoot = roots[0]; animationHeight = identity.bodyValues.first ?? 0.5
         animationDirectory = reference.animationCatalogFile.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
         animationCatalog = try reference.animationCatalogFile.map { try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: $0)) }
+        handPatternLibrary = try reference.handPatternsFile.map { try SourceStudioHandPatterns.load(url: URL(fileURLWithPath: $0)) }
         var animationBaseline = baseline
         if let animationCatalog, let animationDirectory {
             do {
@@ -174,6 +178,21 @@ public final class SourceStudioCharacterPreview {
                 if animation.entry.optionItems { messages.append("Animation option-item assets are not yet instantiated.") }
             } catch { messages.append("Saved Studio animation unavailable: \(error)") }
         } else { messages.append("Studio animation catalog is not configured.") }
+        let savedPatterns = record.handPatterns
+        if savedPatterns.contains(where: { $0 != 0 }) {
+            if let handPatternLibrary {
+                messages.append("Saved Studio hand patterns replay converted looping clips; the original capture phase is not recorded, so elapsed 0 restarts the loop at frame 0.")
+                do {
+                    for (index, hand) in ["L", "R"].enumerated() where savedPatterns.indices.contains(index) && savedPatterns[index] != 0 {
+                        if case let .unknown(diagnostic) = try handPatternLibrary.pose(hand: hand, pattern: Int(savedPatterns[index]), elapsed: 0) {
+                            messages.append(diagnostic)
+                        }
+                    }
+                } catch { messages.append("Studio hand pattern check unavailable: \(error)") }
+            } else {
+                messages.append("Saved Studio hand patterns \(savedPatterns) have no converted pattern library, so both hands keep the incoming pose; the pattern is never guessed.")
+            }
+        }
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -230,6 +249,14 @@ public final class SourceStudioCharacterPreview {
         if let animation = try resolvedAnimation(state, required: animationState != nil) {
             result = try animation.pose(state: state, elapsed: animationElapsed, height: animationHeight, rig: preview.source.rig, baseline: baseline, playback: &animationPlayback)
         } else { result = baseline }
+        // The hand Animator is independent of the body animation, so saved
+        // patterns replay at their own loop phase after the body pose exists
+        // and before FK/IK edits the bones. A saved ID without a clip left its
+        // hand untouched and was already reported at initialization, because
+        // that report does not depend on the clock.
+        if let handPatternLibrary {
+            try handPatternLibrary.applySaved(record.handPatterns, to: preview.source.rig, on: &result, elapsed: animationElapsed)
+        }
         var effective = kinematics ?? SourceStudioKinematicState(record: record)
         for (id, angles) in fkRotations {
             guard let target = controller.targets.first(where: { $0.bone.id == id && $0.hasGuide }),

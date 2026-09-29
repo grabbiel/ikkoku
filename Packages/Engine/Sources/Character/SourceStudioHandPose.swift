@@ -90,24 +90,30 @@ public struct SourceStudioHandPose: Decodable, Sendable {
         var result = basePose ?? rig.restPose
         for hand in hands.values {
             for (bone, value) in hand.bones {
-                let node = try rig.uniqueNode(named: bone)
-                let baseline = try SourceShapePoseBaseline.components(result.localMatrices[node])
-                var translation = baseline.position
-                if let position = value.position {
-                    translation = UnityCoordinates.position(Float3(position[0], position[1], position[2]))
-                }
-                var rotation = baseline.rotation
-                if let quaternion = value.rotation {
-                    let q = Float4(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
-                    rotation = UnityCoordinates.rotation(simd_quatf(vector: q))
-                }
-                var scale = baseline.scale
-                if let scaling = value.scale {
-                    scale = Float3(scaling[0], scaling[1], scaling[2])
-                }
-                result.localMatrices[node] = Transform.trs(translation, rotation, scale)
+                try Self.applyChannels(value, at: try rig.uniqueNode(named: bone), to: &result)
             }
         }
         return result
+    }
+
+    /// Replace only the channels one record carries on an already-resolved node.
+    /// Shared with `SourceStudioHandPatterns` so sampled pattern frames follow
+    /// the same channel rule as the frozen default pose.
+    static func applyChannels(_ value: Bone, at node: Int, to result: inout RigPose) throws {
+        let baseline = try SourceShapePoseBaseline.components(result.localMatrices[node])
+        var translation = baseline.position
+        if let position = value.position {
+            translation = UnityCoordinates.position(Float3(position[0], position[1], position[2]))
+        }
+        var rotation = baseline.rotation
+        if let quaternion = value.rotation {
+            let q = Float4(quaternion[0], quaternion[1], quaternion[2], quaternion[3])
+            rotation = UnityCoordinates.rotation(simd_quatf(vector: q))
+        }
+        var scale = baseline.scale
+        if let scaling = value.scale {
+            scale = Float3(scaling[0], scaling[1], scaling[2])
+        }
+        result.localMatrices[node] = Transform.trs(translation, rotation, scale)
     }
 }
