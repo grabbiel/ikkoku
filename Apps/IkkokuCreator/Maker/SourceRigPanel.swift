@@ -244,7 +244,7 @@ struct SourceRigPanel: View {
     }
 
     // Display translations only. Slot identity and runtime mappings come from recovered data.
-    private static let faceLabels = [
+    static let faceLabels = [
         "Face width", "Upper face depth", "Upper face height", "Upper face size", "Lower face depth", "Lower face width",
         "Lower chin height", "Lower chin depth", "Jaw height", "Jaw width", "Jaw depth", "Chin tip height", "Chin tip depth", "Chin tip width",
         "Cheekbone width", "Cheekbone depth", "Cheek width", "Cheek depth", "Cheek height", "Brow height", "Brow spacing", "Brow angle",

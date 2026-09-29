@@ -274,7 +274,7 @@ final class StudioModel: ViewportInputHandler {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
                 let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
                 _ = try preview.updateNeckLook(deltaTime: 1 / 30, cameraModelPosition: camera,
-                    fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                    fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
                     kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
                     animationElapsed: sourceAnimationTime)
             } catch { status = "Source neck gaze: \(error)" }
@@ -289,7 +289,7 @@ final class StudioModel: ViewportInputHandler {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
                 let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
                 _ = try preview.updateEyeLook(deltaTime: 1 / 30, cameraModelPosition: camera,
-                    fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                    fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
                     kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
                     animationElapsed: sourceAnimationTime)
             } catch { status = "Source eye gaze: \(error)" }
@@ -348,7 +348,7 @@ final class StudioModel: ViewportInputHandler {
         guard let i = doc.index(of: id), let preview = sourceInstances[id] else { throw RigError.invalid("Studio animation edit has no loaded source character.") }
         var candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
         change(&candidate)
-        _ = try preview.editedPose(fkRotations: doc.objects[i].sourceFKRotations ?? [:], ikTargets: doc.objects[i].sourceIKOverrides ?? [:],
+        _ = try preview.editedPose(fkRotations: doc.objects[i].sourceFKRotations ?? [:], faceValues: doc.objects[i].sourceFaceValues, bodyValues: doc.objects[i].sourceBodyValues, ikTargets: doc.objects[i].sourceIKOverrides ?? [:],
             kinematics: doc.objects[i].sourceKinematics, animationState: candidate, animationElapsed: 0)
         try rebaseSourceAnimationClock()
         candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
@@ -375,6 +375,23 @@ final class StudioModel: ViewportInputHandler {
 
     func restartSourceAnimation(_ id: UUID) throws {
         try editSourceAnimation(id) { $0.normalizedTime = 0 }
+    }
+
+    /// Live preview for shape editing; route-character placeholder entries
+    /// have no editable preview and keep showing the saved-only inspector.
+    func sourceShapePreview(for id: UUID) -> SourceStudioCharacterPreview? { sourceInstances[id] }
+
+    /// Shape edit entry point. Rebuilds the preview baseline first, so a
+    /// rejected array leaves both the preview and the document untouched;
+    /// nil restores the card's saved values for that domain.
+    func setSourceShapeValues(_ id: UUID, face: [Float]?, body: [Float]?) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Shape editing needs a loaded source character.")
+        }
+        try preview.setShapeValues(face: face, body: body)
+        pushUndo()
+        doc.objects[i].sourceFaceValues = face
+        doc.objects[i].sourceBodyValues = body
     }
 
     func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
@@ -425,8 +442,8 @@ final class StudioModel: ViewportInputHandler {
         guard let point = child.sourceAttachmentPoint, let preview = sourceInstances[parent.id] else {
             throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
         }
-        return try (preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime),
-            preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime))
+        return try (preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime),
+            preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime))
     }
 
     // MARK: Timeline
@@ -481,7 +498,9 @@ final class StudioModel: ViewportInputHandler {
             if selectedObject?.kind != .character { return "none" }
             return selectedIsSourceCharacter ? "SourcePoseInspector" : "PoseInspector"
         case .face:
-            if selectedIsSourceCharacter { return "FaceInspector.sourceUnsupported" }
+            if let object = selectedObject, object.sourceCharacter != nil {
+                return sourceShapePreview(for: object.id) == nil ? "FaceInspector.sourceUnsupported" : "FaceInspector.sourceShape"
+            }
             guard let o = selectedObject, o.card != nil else { return "none" }
             return "FaceInspector"
         case .clothes:
@@ -948,6 +967,15 @@ final class StudioModel: ViewportInputHandler {
                 }
                 edits.kinematics[key] = .init(enableFK: true, enableIK: false, activeFK: groups)
             }
+            if object.sourceFaceValues != nil || object.sourceBodyValues != nil {
+                // Export writes back only the arrays that actually differ from
+                // the embedded card's saved values; an array edited back to the
+                // saved rate produces no card edit and stays byte-identical.
+                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape edits require a loaded source character.") }
+                let face = object.sourceFaceValues != preview.savedFaceValues ? object.sourceFaceValues : nil
+                let body = object.sourceBodyValues != preview.savedBodyValues ? object.sourceBodyValues : nil
+                if face != nil || body != nil { edits.cards[key] = .init(faceValues: face, bodyValues: body) }
+            }
             if let character = original.character {
                 try SourceStudioIKEditing.appendEdits(objectKey: key, record: character, overrides: object.sourceIKOverrides ?? [:], state: object.sourceKinematics, to: &edits)
             }
@@ -966,7 +994,7 @@ final class StudioModel: ViewportInputHandler {
             guard i < source.settings.cameraSlots.count, let camera else { throw RigError.invalid("Original scene export cannot remove a camera slot.") }
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
-        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
+        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try ImageIO.pngData(image)
@@ -998,7 +1026,7 @@ final class StudioModel: ViewportInputHandler {
                     guard let id = Int(key) else { throw RigError.invalid("Studio capture bone key is not an integer.") }
                     changes[id] = try vector(values)
                 }
-                _ = try preview.editedPose(fkRotations: changes)
+                _ = try preview.editedPose(fkRotations: changes, faceValues: candidate.objects[i].sourceFaceValues, bodyValues: candidate.objects[i].sourceBodyValues)
                 candidate.objects[i].sourceFKRotations = changes
             }
             if let targets = edit.ikTargets {
@@ -1009,7 +1037,7 @@ final class StudioModel: ViewportInputHandler {
                     changes[id] = value
                 }
                 try SourceStudioIKEditing.validate(changes)
-                _ = try preview.editedPose(fkRotations: candidate.objects[i].sourceFKRotations ?? [:], ikTargets: changes, kinematics: edit.kinematics, animationState: candidate.objects[i].sourceAnimation, animationElapsed: sourceAnimationTime)
+                _ = try preview.editedPose(fkRotations: candidate.objects[i].sourceFKRotations ?? [:], faceValues: candidate.objects[i].sourceFaceValues, bodyValues: candidate.objects[i].sourceBodyValues, ikTargets: changes, kinematics: edit.kinematics, animationState: candidate.objects[i].sourceAnimation, animationElapsed: sourceAnimationTime)
                 candidate.objects[i].sourceIKOverrides = changes
             }
             if let state = edit.kinematics { try state.validate(); candidate.objects[i].sourceKinematics = state }
@@ -1022,7 +1050,7 @@ final class StudioModel: ViewportInputHandler {
                     state.speed = speed
                 }
                 if let forceLoop = animation.forceLoop { state.forceLoop = forceLoop }
-                _ = try preview.editedPose(fkRotations: candidate.objects[i].sourceFKRotations ?? [:], ikTargets: candidate.objects[i].sourceIKOverrides ?? [:],
+                _ = try preview.editedPose(fkRotations: candidate.objects[i].sourceFKRotations ?? [:], faceValues: candidate.objects[i].sourceFaceValues, bodyValues: candidate.objects[i].sourceBodyValues, ikTargets: candidate.objects[i].sourceIKOverrides ?? [:],
                     kinematics: candidate.objects[i].sourceKinematics, animationState: state, animationElapsed: 0)
                 animations.append((object: candidate.objects[i].id, edit: animation))
             }
@@ -1164,7 +1192,7 @@ final class StudioModel: ViewportInputHandler {
                             sourceInstances[o.id] = fresh; preview = fresh
                         }
                         let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
-                            world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
+                            world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         if showGizmos, selection == o.id { gizmos += try sourceCharacterGizmos(o, preview: preview, world: world) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
@@ -1355,7 +1383,7 @@ final class StudioModel: ViewportInputHandler {
                 parentFrame = try sourceWorldMatrix(of: parentID, document: document, previews: previews, visited: visited)
                 if let point = object.sourceAttachmentPoint {
                     if let preview = previews[parentID] {
-                        parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+                        parentFrame *= try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
                     } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
                         // A route character's placeholder entry cannot carry edits,
                         // so only the saved record's animation is resolved here.
@@ -1597,7 +1625,7 @@ final class StudioModel: ViewportInputHandler {
             guard visited.insert(parentID).inserted, let parent = doc.object(parentID) else { throw RigError.invalid("Invalid Studio guide hierarchy.") }
             if let point = object.sourceAttachmentPoint {
                 if let preview = sourceInstances[parentID] {
-                    rotation = try preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * rotation
+                    rotation = try preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * rotation
                 } else if let preview = sourceRouteCharacterPreview(of: parentID, document: doc) {
                     // Same saved-animation-only resolution as `sourceWorldMatrix`.
                     rotation = try preview.attachmentRotation(pointID: point, animationElapsed: sourceAnimationTime) * rotation
@@ -1627,8 +1655,8 @@ final class StudioModel: ViewportInputHandler {
             guard let parent = doc.object(parentID), let preview = sourceInstances[parentID] else {
                 throw RigError.invalid("Missing source attachment parent for guide edit.")
             }
-            matrix = try matrix * preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
-            rotation = try rotation * preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+            matrix = try matrix * preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
+            rotation = try rotation * preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime)
         }
         guard matrix.determinant.isFinite, abs(matrix.determinant) > 1e-8 else {
             throw RigError.invalid("Cannot edit through a singular parent transform.")
@@ -1640,7 +1668,7 @@ final class StudioModel: ViewportInputHandler {
         if poseMode == .ik { return try sourceIKGizmos(object, preview: preview, world: world) }
         guard poseMode == .fk else { return [] }
         let rig = preview.preview.source.rig
-        let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+        let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
         let evaluated = try rig.evaluate(pose)
         var result: [GizmoBatch] = []
         for target in preview.controller.targets where target.hasGuide {
@@ -1657,10 +1685,10 @@ final class StudioModel: ViewportInputHandler {
     }
 
     private func sourceGuides(_ object: StudioObject, preview: SourceStudioCharacterPreview) throws -> [SourceStudioIK.Guide] {
-        try preview.editedIKGuides(fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+        try preview.editedIKGuides(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
     }
     private func sourceIKCharacterFrame(_ object: StudioObject, preview: SourceStudioCharacterPreview) throws -> (matrix: float4x4, rotation: simd_quatf) {
-        let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+        let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
         let parent = try preview.ikCharacterFrame(pose: pose)
         return (try sourceWorldMatrix(of: object.id, document: doc, previews: sourceInstances) * parent.matrix,
                 try sourceWorldRotation(of: object.id) * parent.rotation)
@@ -1704,7 +1732,7 @@ final class StudioModel: ViewportInputHandler {
         if let value = object.sourceIKOverrides?[target] { return value }
         if let value = preview.record.ikTargets[target]?.transform { return .init(value) }
         guard let guide = try sourceGuides(object, preview: preview).first(where: { $0.targetID == target }) else { throw RigError.invalid("Source IK target is unavailable.") }
-        let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+        let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
         let character = try preview.ikCharacterFrame(pose: pose)
         return try SourceStudioIKEditing.fromWorld(target: target, position: guide.position, rotation: guide.rotationEnabled ? guide.rotation : nil, characterWorld: character.matrix, characterRotation: character.rotation, preserving: .init(position: .zero))
     }
@@ -1792,7 +1820,7 @@ final class StudioModel: ViewportInputHandler {
                let target = preview.controller.targets.first(where: { $0.node == bi && $0.hasGuide }) {
                 do {
                     let rig = preview.preview.source.rig
-                    let pose = try preview.editedPose(fkRotations: sel.sourceFKRotations ?? [:], ikTargets: sel.sourceIKOverrides ?? [:], kinematics: sel.sourceKinematics, animationState: sel.sourceAnimation, animationElapsed: sourceAnimationTime)
+                    let pose = try preview.editedPose(fkRotations: sel.sourceFKRotations ?? [:], faceValues: sel.sourceFaceValues, bodyValues: sel.sourceBodyValues, ikTargets: sel.sourceIKOverrides ?? [:], kinematics: sel.sourceKinematics, animationState: sel.sourceAnimation, animationElapsed: sourceAnimationTime)
                     let evaluated = try rig.evaluate(pose)
                     let root = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
                     let matrix = root * evaluated.worldMatrices[bi]

@@ -557,8 +557,43 @@ struct SourceAnimationInspector: View {
 struct FaceInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
-        if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
-            Text("Source face editing is not supported yet. The original character's face is driven by its saved card data; the prototype expression controls below would only write unused native fields, so they are hidden for this reference avatar.")
+        if let o = model.selectedObject, o.kind == .character, let preview = model.sourceShapePreview(for: o.id) {
+            VStack(alignment: .leading, spacing: 10) {
+                if preview.preview.supportsBodyCustomization, let body = preview.preview.contract?.domain("body") {
+                    SectionBox(title: "Body shape") {
+                        ForEach(body.slots, id: \.index) { slot in
+                            if preview.preview.bodyCoverage?.boundSlots.contains(slot.index) == true {
+                                FloatRow(label: slot.label, value: sourceShapeBinding(o, preview: preview, face: false, index: slot.index))
+                                    .disabled(preview.record.sex == 0 && slot.index == 0)
+                            }
+                        }
+                        Text("\(preview.preview.bodyCoverage?.completeSlots.count ?? 0) complete body controls. Normal male height follows the original fixed value.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Reset to card") { resetSourceShape(o, face: false) }
+                    }
+                    .accessibilityIdentifier("studio.face.source.bodyShape")
+                }
+                if preview.preview.supportsFaceCustomization, let face = preview.preview.contract?.domain("face") {
+                    SectionBox(title: "Face shape") {
+                        ForEach(face.slots, id: \.index) { slot in
+                            FloatRow(label: SourceRigPanel.faceLabels.indices.contains(slot.index) ? SourceRigPanel.faceLabels[slot.index] : slot.label,
+                                     value: sourceShapeBinding(o, preview: preview, face: true, index: slot.index))
+                        }
+                        Button("Reset to card") { resetSourceShape(o, face: true) }
+                    }
+                    .accessibilityIdentifier("studio.face.source.faceShape")
+                }
+                if !preview.preview.supportsBodyCustomization, !preview.preview.supportsFaceCustomization {
+                    Text("No supported shape curves were found for this rig.").font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Edits rebuild the character from the edited shape values; export writes them back into the embedded card.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .onAppear { model.displayedInspectorView = "FaceInspector.sourceShape" }
+            .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceShape" { model.displayedInspectorView = "none" } }
+            .accessibilityIdentifier("studio.face.source.shape")
+        } else if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
+            Text("Shape editing is not available for this character reference.")
                 .font(.callout).foregroundStyle(.secondary)
                 .onAppear { model.displayedInspectorView = "FaceInspector.sourceUnsupported" }
                 .onDisappear { if model.displayedInspectorView == "FaceInspector.sourceUnsupported" { model.displayedInspectorView = "none" } }
@@ -589,6 +624,33 @@ struct FaceInspector: View {
         } else {
             ContentUnavailableView("Select a character", systemImage: "face.smiling", description: Text("Expressions work on characters."))
         }
+    }
+
+    /// Slider state for one contract slot: the document array when edited, the
+    /// card's saved array otherwise. Writes rebuild the preview through the
+    /// model so a rejected edit keeps both the preview and the document.
+    private func sourceShapeBinding(_ o: StudioObject, preview: SourceStudioCharacterPreview, face: Bool, index: Int) -> Binding<Float> {
+        func effective(_ doc: [Float]?, _ saved: [Float]) -> [Float] { doc ?? saved }
+        return Binding(get: {
+            let values = effective(face ? o.sourceFaceValues : o.sourceBodyValues, face ? preview.savedFaceValues : preview.savedBodyValues)
+            return values.indices.contains(index) ? values[index] : 0
+        }, set: { value in
+            var values = effective(face ? o.sourceFaceValues : o.sourceBodyValues, face ? preview.savedFaceValues : preview.savedBodyValues)
+            guard values.indices.contains(index) else { return }
+            values[index] = value
+            do {
+                if face { try model.setSourceShapeValues(o.id, face: values, body: o.sourceBodyValues) }
+                else { try model.setSourceShapeValues(o.id, face: o.sourceFaceValues, body: values) }
+            } catch { model.status = "Shape edit: \(error)" }
+        })
+    }
+
+    private func resetSourceShape(_ o: StudioObject, face: Bool) {
+        do {
+            if face { try model.setSourceShapeValues(o.id, face: nil, body: o.sourceBodyValues) }
+            else { try model.setSourceShapeValues(o.id, face: o.sourceFaceValues, body: nil) }
+            model.status = face ? "Face shape reset to the card's saved values" : "Body shape reset to the card's saved values"
+        } catch { model.status = "Shape reset: \(error)" }
     }
 }
 
