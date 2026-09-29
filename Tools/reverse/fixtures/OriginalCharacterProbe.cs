@@ -156,6 +156,13 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 case "hlUpColor": face.hlUpColor=ParseColor(fields[1]);break;
                 case "hlDownId": face.hlDownId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 case "hlDownColor": face.hlDownColor=ParseColor(fields[1]);break;
+                case "pupilX": face.pupilX=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "pupilY": face.pupilY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "pupilWidth": face.pupilWidth=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "pupilHeight": face.pupilHeight=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "hlUpY": face.hlUpY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "hlDownY": face.hlDownY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "faceShape33": face.shapeValueFace[33]=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 default: throw new Exception("Unknown character-settings key: "+fields[0]);
             }
         }
