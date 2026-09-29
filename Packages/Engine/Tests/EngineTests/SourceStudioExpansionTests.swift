@@ -36,12 +36,14 @@ import Renderer
     #expect(edited.orientationOverride == nil)
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_SOURCE_MALE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_SOURCE_MALE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioExpandedCardsUseMakerSelectionsAndAttachmentCatalogWhenSupplied() throws {
-    let env = ProcessInfo.processInfo.environment
-    guard let path = env["IKKOKU_STUDIO_EXPANSION"], let library = env["IKKOKU_MAKER_LIBRARY"],
-          let female = env["IKKOKU_SOURCE_AVATAR"], let male = env["IKKOKU_SOURCE_MALE_AVATAR"],
-          let catalog = env["IKKOKU_STUDIO_POSE_CONTRACT"] else { return }
+    let path = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let library = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let male = try SourceFixtureSupport.require("IKKOKU_SOURCE_MALE_AVATAR")
+    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
     struct Fixtures: Decodable { struct Row: Decodable { let file: String, sex: Int, sha256: String }; let fixtures: [Row] }
     let folder = URL(fileURLWithPath: path)
     let fixtures = try JSONDecoder().decode(Fixtures.self, from: Data(contentsOf: folder.appendingPathComponent("fixtures.json")))

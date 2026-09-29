@@ -103,7 +103,10 @@ def convert_clip(raw: dict, identity: str, targets: dict[int, dict]) -> dict:
     start, stop = finite(muscle['m_StartTime']), finite(muscle['m_StopTime'])
     if start < 0 or stop <= start: raise ValueError("Invalid animation interval")
     if muscle['m_Mirror']: raise ValueError("Clip mirroring is not implemented")
-    if muscle['m_LoopBlend']: raise ValueError("Generic loop-pose correction is not implemented")
+    if muscle['m_LoopBlend']:
+        raise ValueError("Generic loop-pose correction measured but not matched (best max error 0.0295643)")
+    if any(muscle.get(key, False) for key in ('m_LoopBlendOrientation', 'm_LoopBlendPositionY', 'm_LoopBlendPositionXZ')):
+        raise ValueError("Loop-pose correction beyond cycle offset is not implemented")
     source = muscle['m_Clip']['data']
     stream, dense, constant = source['m_StreamedClip'], source['m_DenseClip'], source['m_ConstantClip']['data']
     curves = streamed_curves(stream['data'], stream['curveCount'], start)
@@ -127,6 +130,7 @@ def convert_clip(raw: dict, identity: str, targets: dict[int, dict]) -> dict:
     if offset != len(curves): raise ValueError("Generic binding dimensions differ from serialized scalar curves")
     return {'id': identity, 'name': raw['m_Name'], 'startTime': start, 'stopTime': stop,
             'sampleRate': finite(raw['m_SampleRate']), 'loop': muscle['m_LoopTime'],
+            'cycleOffset': finite(muscle.get('m_CycleOffset', 0)),
             'bindings': bindings, 'curves': curves,
             'unboundPathHashes': sorted(set(unbound)),
             'sourceFlags': {key: value for key, value in muscle.items() if isinstance(value, bool)}}
