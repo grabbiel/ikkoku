@@ -191,6 +191,7 @@ typedef struct {
     IKUInt        flags;          // MaterialFlags
     float         sourceAlphaA;   // source body-mask R control (1 = apply mask)
     float         sourceAlphaB;   // source body-mask G control (1 = apply mask)
+    float         irisRotation;   // _rotation: base-iris UV rotation in turns about (0.5,0.5), applied before irisST0
 } MaterialUniforms;
 
 typedef IK_ENUM(EnumBackingType, LightType) {

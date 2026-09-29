@@ -32,7 +32,7 @@ func sourceIrisExtraUVBuffersPreserveAuthoredValuesAndFallbackToUV0() throws {
     #expect(zero.texcoords1 === zero.texcoords && zero.texcoords2 === zero.texcoords)
     #expect(zero.texcoords.contents().load(as: Float2.self) == .zero)
     #expect(MemoryLayout<Float2>.stride == 8)
-    #expect(MemoryLayout<MaterialUniforms>.stride == 336)
+    #expect(MemoryLayout<MaterialUniforms>.stride == 352)
     #expect(MaterialUniforms.make(kind: MaterialKindEye).flags & MaterialFlagSourceIrisHighlights.rawValue == 0)
 }
 
@@ -98,7 +98,7 @@ func sourceIrisHighlightsUseOriginalUVChannelsAndRecoveredMetalComposition() thr
     func render(mesh data: MeshData = irisProbeMesh(), source: Bool = true, strength: Float = 1,
                 hasUpper: Bool = true, hasLower: Bool = true, baseAlpha: Float = 1,
                 st0: Float4 = Float4(1, 1, 0, 0), st1: Float4 = Float4(1, 1, 0, 0),
-                st2: Float4 = Float4(1, 1, 0, 0)) throws -> Float4 {
+                st2: Float4 = Float4(1, 1, 0, 0), rot: Float = 0) throws -> Float4 {
         let handle = try resources.register(mesh: data)
         defer { resources.unregister(mesh: handle) }
         let mesh = try #require(resources.mesh(handle))
@@ -114,6 +114,7 @@ func sourceIrisHighlightsUseOriginalUVChannelsAndRecoveredMetalComposition() thr
         // Identity _ST matches make()'s defaults; the offset/scale cases below
         // replay SetTextureOffset/SetTextureScale values.
         material.irisST0 = st0; material.irisST1 = st1; material.irisST2 = st2
+        material.irisRotation = rot
         let pass = MTLRenderPassDescriptor(); pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
         let command = try #require(queue.makeCommandBuffer())
@@ -180,4 +181,17 @@ func sourceIrisHighlightsUseOriginalUVChannelsAndRecoveredMetalComposition() thr
     // bit-for-bit: the transform path cannot change a (1,1,0,0) sampling.
     expect(try render(st0: Float4(1, 1, 0, 0), st1: Float4(1, 1, 0, 0), st2: Float4(1, 1, 0, 0)),
            Float4(0.40625, 0.34375, 0.65625, 0.75), "identity _ST is the composition")
+    // The eye-tilt _rotation: uv' = R(2*pi*rot)*(uv-0.5)+0.5 BEFORE _ST (asm
+    // L61-L70). Probe uv0 (0.125, 0.5) at half a turn lands exactly on (0.875,
+    // 0.5) — texel 3's center (1,0,0,1) — so the base's alpha keeps the output
+    // alpha at 1 while the 0.75-factor highlight mixes rgb toward (0.5,0.375,
+    // 0.75). The default rot 0 is the identity mapping all rows above assume.
+    expect(try render(rot: 0.5), Float4(0.625, 0.28125, 0.5625, 1), "_rotation 0.5 rotates the base UV")
+    // Rotation is applied before _ST (asm L69-70): rot 0.5 then offset 0.25
+    // reads 1.125, clamped onto texel 3's edge texel — the rot-0.5 composition
+    // again. The order-discriminating result: offsetting first would rotate
+    // 0.375 to 0.625, texel 2's center, giving (0.375,0.53125,0.5625,1)
+    // instead — so this expectation pins the rotation-before-_ST order.
+    expect(try render(st0: Float4(1, 1, 0.25, 0), rot: 0.5), Float4(0.625, 0.28125, 0.5625, 1),
+           "rotation precedes the _ST offset (offset-then-rotation would land on texel 2)")
 }
