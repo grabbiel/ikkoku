@@ -195,17 +195,28 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     #expect(throws: (any Error).self) { try original.editedData(.init(currentCamera: bad)) }
 }
 
-@Test func sourceSceneEditingRoundTripsRecoveredOriginalScenesAndIndependentFixturesWhenSupplied() throws {
-    var urls: [URL] = []
-    for key in ["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_STUDIO_ORIGINAL_SCENES"] {
-        guard let path = ProcessInfo.processInfo.environment[key] else { continue }
-        let root = URL(fileURLWithPath: path)
-        for case let url as URL in try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey])) where url.pathExtension.lowercased() == "png" {
-            // The fixtures directory also contains source/; avoid duplicate work.
-            if key == "IKKOKU_STUDIO_SCENE_FIXTURES" && (url.deletingLastPathComponent() != root || !["synthetic-current.png", "synthetic-legacy-card.png", "synthetic-both-modes.png"].contains(url.lastPathComponent)) { continue }
-            urls.append(url)
-        }
-    }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES"]),
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES"))
+func sourceSceneEditingRoundTripsIndependentSceneFixturesWhenSupplied() throws {
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_STUDIO_SCENE_FIXTURES"))
+    // The fixtures directory also contains source/; avoid duplicate work.
+    let urls = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
+        .compactMap { $0 as? URL }
+        .filter { $0.deletingLastPathComponent() == root
+            && ["synthetic-current.png", "synthetic-legacy-card.png", "synthetic-both-modes.png"].contains($0.lastPathComponent) }
+    try sceneEditingRoundTrips(urls)
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_ORIGINAL_SCENES"]),
+               "Requires IKKOKU_STUDIO_ORIGINAL_SCENES"))
+func sourceSceneEditingRoundTripsRecoveredOriginalScenesWhenSupplied() throws {
+    let root = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_STUDIO_ORIGINAL_SCENES"))
+    let urls = try #require(FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]))
+        .compactMap { $0 as? URL }.filter { $0.pathExtension.lowercased() == "png" }
+    try sceneEditingRoundTrips(urls)
+}
+
+private func sceneEditingRoundTrips(_ urls: [URL]) throws {
     var objectsChecked = 0, charactersChecked = 0
     for url in urls {
         let bytes = try Data(contentsOf: url), original = try KoikatsuSceneReader.decodeDocument(bytes)
@@ -247,5 +258,7 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]).write(to: directory.appendingPathComponent(url.lastPathComponent + ".roundtrip.json"))
         }
     }
-    if !urls.isEmpty { #expect(objectsChecked > 0 && charactersChecked > 0) }
+    // A supplied fixture set must actually be exercised, never skipped vacuously.
+    #expect(!urls.isEmpty)
+    #expect(objectsChecked > 0 && charactersChecked > 0)
 }
