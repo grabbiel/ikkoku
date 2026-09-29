@@ -9,9 +9,10 @@ sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
 clock files, the ST-T11 character-light capture/mapping files, the ST-A11
 scene character-light preview override files, the original-player probe
 robustness test, the ST-A06 camera-object capture files, the ST-A06
-source camera-object look-through files, the ST-A06 source scale rule files
-and the ST-T07 eye look reference and solver-port files, plus the ST-T07s
-eye look Studio preview runtime files; it does not
+source camera-object look-through files, the ST-A06 source scale rule files,
+the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
+Studio preview runtime files and the ST-T04 studio item shader contract files;
+it does not
 represent a new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
@@ -21,23 +22,21 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**704 files indexed; 704 assigned; 0 unassigned.**
+**705 files indexed; 705 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 288 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 288 |
 | [Studio / IK / animation](studio.md) | 156 |
-| [Studio / IK / animation](studio.md) | 156 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 289 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 106 |
+| Conversion / recovery / verification tool | 107 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
@@ -675,6 +674,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/export_prefab.py](../../Tools/reverse/export_prefab.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/OriginalCharacterProbe.cs](../../Tools/reverse/fixtures/OriginalCharacterProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalShaderProbe.cs](../../Tools/reverse/fixtures/OriginalShaderProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/item_shader_contract.py](../../Tools/reverse/item_shader_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_character_probe.py](../../Tools/reverse/original_character_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_shader_probe.py](../../Tools/reverse/original_shader_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_texture_mips.py](../../Tools/reverse/original_texture_mips.py) | Conversion / recovery / verification tool |

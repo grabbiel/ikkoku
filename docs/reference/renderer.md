@@ -162,6 +162,72 @@ outline. It explicitly identifies itself as invalid shader source and substitute
 unsupported-DXBC comments for program bodies. It must not be treated as recovered
 CG/HLSL ready for mechanical Metal translation.
 
+### Studio item shader evidence (added 2026-09-29, ST-T04)
+
+The basic-shape Studio props use two Shader Forge shaders:
+`Shader Forge/main_item_studio` (pathID 5291980238619603514, bundle SHA256
+`1464352c…`) and `Shader Forge/main_item_studio_alpha` (pathID
+8750429712876890764, SHA256 `c2efabe2…`). `Tools/reverse/item_shader_contract.py`
+reuses `clothed_material_contract.disassemble` to disassemble both FORWARD pixel
+variants of each shader (blob indices 8/9 and 4/5, keywords `DIRECTIONAL` and
+`DIRECTIONAL SHADOWS_SCREEN`, `_MainTex` at `t1/s0` and `t1/s1`) and writes the
+contract evidence. Both shader `m_Script` fields are empty, so no source-level
+parity is claimed.
+
+`main_item_studio` (the `cylinder00` family):
+
+- There is no `_Cutoff` binding. The program computes `sat(2·_MainTex.a)` and
+  `discard_nz` when it is below 0.5, so the alpha test is the constant
+  `_MainTex.a < 0.25`. Saved `_Cutoff`/`_Mode` have no bindings and are inert.
+- Surviving fragments output `o0.w = 2·sat(2a) − 1` into a `One/OneMinusSrcAlpha`
+  blend: coverage is exactly 1 only for `a >= 0.5`, so glTF MASK is exact only
+  when the texture has no texel in `[0.25, 0.5)`; the exporter refuses one.
+- The FORWARD pass is statically `Cull Off` (serialized 0, no property
+  override), so the converted material is `doubleSided: true`. Export contract:
+  MASK, `alphaCutoff: 0.25`, base-factor alpha 1.
+
+`main_item_studio_alpha` (the `cube01` family):
+
+- Output alpha is `_MainTex.a · _alpha` (`cb0[32].z`) into a
+  `SrcAlpha/OneMinusSrcAlpha` blend. The `discard_nz` guard at
+  `0.001/0.501 ≈ 0.002` is an epsilon guard, not a cutoff; saved
+  `_Cutoff`/`_Mode`/`_SrcBlend`/`_DstBlend` are inert (no bindings).
+- FORWARD is `Cull Back` (2): single-sided. Export contract: BLEND with
+  `baseColorFactor.a` carrying the saved `_alpha`.
+
+Both shaders build albedo as `_MainTex.rgb × lerp(lerp(lerp(1, _Color, mask.r),
+_Color2, mask.g), _Color3, mask.b)` from the `_ColorMask` texture. An unbound
+`_ColorMask` (shader default black) leaves the tint white; a texel saturating
+exactly one channel selects that `_ColorN` group exactly. The exporter refuses
+a `_ColorMask` that varies across the image or blends several channels, and any
+material with a bound `_PatternMask1..3` slot: the pattern gate is always
+sampled, and only an unbound slot (shader default white, gate 1) keeps the base
+color independent of the unmapped pattern uv/clamp/rotation transforms. The
+FORWARD output RGB is not plain albedo — an HSV remap scaled by `_ShadowColor`,
+`_DetailMask`/`_LineMask` detail, `_RampG`/`_AnotherRamp` toon ramps, a rim term,
+the multiply by `max(_LightColor0·0.6 + 0.4, _ambientshadowG.rgb)` and an added
+emission-like term all modulate it — so only the base color is exported and
+patterns, line/outline, shadow color, emission and light cancel are **not**
+covered. The OUTLINE pass (main shader only) and both SHADOWCASTER passes were
+not disassembled.
+
+Open question: both basic-shape materials (`m_koi_stu_kihon00_02`,
+`m_koi_stu_kihon01_02`) leave `_ColorMask` unbound, so by this chain their
+saved `_Color` does not tint them and the export is `_MainTex` × white. How
+Studio's color picker nonetheless recolors a cube (for example a mask or
+texture assigned at runtime) is not recovered; capture a colored cube on the
+original player before record colors are applied to converted props.
+
+Evidence in `.local/reverse/shaders/`: `item-studio-evidence.json` /
+`item-studio-alpha-evidence.json` (contracts and refusals), `-summary.json`
+(pass/variant/binding metadata), and the four preserved assemblies
+`item-studio-forward-8.asm` (`2db166f9…`), `item-studio-forward-9.asm`
+(`fe4821ee…`), `item-studio-alpha-forward-4.asm` (`fb1fc929…`),
+`item-studio-alpha-forward-5.asm` (`9c2011ca…`). The exporter mapping is
+`item_material_contract` in `Tools/reverse/export_prefab.py`, exercised on
+`cube01`/`cylinder00` in `.local/reverse/exports/` and cataloged in
+`.local/reverse/catalog/studio-items.json`.
+
 ## Production deformation and material contracts
 
 The toon vertex shader transforms tangents using the model's linear matrix rather
