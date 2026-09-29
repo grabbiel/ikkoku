@@ -116,6 +116,21 @@ how `rot` maps to its world direction, not rendered lighting appearance, the
 default `charaLight` values (the probe overwrote them) or map/gradient light
 behavior.
 
+`SourceStudioSceneLight.mainLight(from:)` applies the record to the native
+preview: `cameraRelative = false` (the measured rule is scene-static), color
+RGB, `intensity` and `castsShadow = shadow` are copied, and the rotation is set
+so the engine `MainLight.direction` (travel, `rotation * (0, 0, -1)`) equals the
+captured world forward once reflected to the engine basis (Unity's forward is
+`rotation * (0, 0, 1)`). The four rot pairs match the captured forwards to
+1e-4 (`SourceStudioSceneLightTests`). The Studio preview applies it as a
+runtime-only override while the document is that imported scene and
+`doc.mainLight` is still the untouched default (`StudioModel.effectiveMainLight`
+falls back to the user's edited light otherwise); original export requires the
+document light to stay default, so nothing writes the record into the document.
+Still missing: the map light is unread, no map is rendered, `shadow` selects
+the native shadow toggle rather than Unity's Soft-shader softness, and the
+override's rendered appearance has not been compared against the original.
+
 ## Native APIs and integration
 
 ```swift

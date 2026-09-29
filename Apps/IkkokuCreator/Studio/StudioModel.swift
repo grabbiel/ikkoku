@@ -113,6 +113,21 @@ final class StudioModel: ViewportInputHandler {
     /// import and dropped whenever a document replaces the current one.
     @ObservationIgnored private var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
     @ObservationIgnored private var lastSourceRouteDiagnostic: String?
+    /// The imported scene record's `charaLight` as a scene-static native key
+    /// light (PR #41's rot mapping). Runtime-only: original export requires
+    /// `doc.mainLight` to stay default, so the preview overrides it through
+    /// `effectiveMainLight` and nothing writes it into the document. Like the
+    /// route caches it carries the scene identity and is dropped wherever a
+    /// document replaces the current one.
+    @ObservationIgnored private var sourceSceneLight: (sceneSHA256: String, light: MainLight)?
+    /// The light preview frames render with: the scene's character light while
+    /// the document is that source scene and the native light is still the
+    /// untouched default, otherwise the user's edited document light.
+    private var effectiveMainLight: MainLight {
+        guard let cached = sourceSceneLight, cached.sceneSHA256 == doc.sourceSceneSHA256,
+              doc.mainLight == MainLight() else { return doc.mainLight }
+        return cached.light
+    }
     let sourceAudioBus = SourceStudioAudioBus()
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
@@ -392,8 +407,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -490,6 +505,15 @@ final class StudioModel: ViewportInputHandler {
         imported.sourceSceneFile = sceneURL.path; imported.sourceSceneSHA256 = hash
         imported.sourceVoiceCatalogFile = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_VOICE_CATALOG"]
         var diagnostics = ["Source scene preview uses converted card selections, shape settings, static ABMX, expressions and saved FK. Missing assets and unimplemented consumers remain listed below."]
+        var sceneLightOverride: MainLight?
+        do {
+            let characterLight = source.settings.characterLight
+            let light = try SourceStudioSceneLight.mainLight(from: characterLight)
+            sceneLightOverride = light
+            diagnostics.append("Scene character light applied: colour (\(String(format: "%.2f", characterLight.color.x)), \(String(format: "%.2f", characterLight.color.y)), \(String(format: "%.2f", characterLight.color.z))), intensity \(String(format: "%.2f", characterLight.intensity)), rot (\(String(format: "%.1f", characterLight.rotation.x)), \(String(format: "%.1f", characterLight.rotation.y))), shadows \(characterLight.shadow ? "on" : "off"); map light and map pending.")
+        } catch {
+            diagnostics.append("Scene character light not applied: \(error)")
+        }
         let makerLibrary = try EngineHost.locateMakerLibrary()
         let attachmentURL = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ATTACHMENT_CATALOG"].map { URL(fileURLWithPath: $0) }
             ?? boneCatalogURL.deletingLastPathComponent().appendingPathComponent("attachments.json")
@@ -580,7 +604,7 @@ final class StudioModel: ViewportInputHandler {
         sourceRouteCharacterPreviews = routeCharacterPreviews
         for object in imported.objects {
             if let preview = previews[object.id] ?? routeCharacterPreviews[object.id], imported.isVisible(object.id) {
-                let f = try preview.frame(camera: imported.camera, mainLight: imported.mainLight, effects: imported.effects,
+                let f = try preview.frame(camera: imported.camera, mainLight: sceneLightOverride ?? imported.mainLight, effects: imported.effects,
                     world: try sourceWorldMatrix(of: object.id, document: imported, previews: previews), objectID: 1)
                 bounds.expand(f.sceneBounds)
             }
@@ -588,7 +612,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -620,7 +644,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -920,7 +944,7 @@ final class StudioModel: ViewportInputHandler {
                             fresh.automaticBlink = sourceAutomaticBlink
                             sourceInstances[o.id] = fresh; preview = fresh
                         }
-                        let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
+                        let rendered = try preview.frame(camera: doc.camera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         if showGizmos, selection == o.id { gizmos += try sourceCharacterGizmos(o, preview: preview, world: world) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
@@ -1001,7 +1025,7 @@ final class StudioModel: ViewportInputHandler {
                 // so none are passed and original export rejects them.
                 if let preview = sourceRouteCharacterPreview(of: o.id, document: doc) {
                     do {
-                        let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
+                        let rendered = try preview.frame(camera: doc.camera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, animationElapsed: sourceAnimationTime)
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
@@ -1023,7 +1047,7 @@ final class StudioModel: ViewportInputHandler {
             } catch { status = "Source object guide: \(error)" }
         }
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
-        var f = RenderFrame(camera: doc.camera, mainLight: doc.mainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
+        var f = RenderFrame(camera: doc.camera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
         frame = f
         host.renderer.submit(f)

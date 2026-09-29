@@ -6,7 +6,8 @@ guide, ST-T02/A-T04 probe test additions, the ST-T11 first-slice route
 evaluator files, the ST-T11 second-slice route playback files, the ST-T11
 third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
-clock files and the ST-T11 character-light capture/mapping files; it does not
+clock files, the ST-T11 character-light capture/mapping files and the ST-A11
+scene character-light preview override files; it does not
 represent a new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
@@ -16,13 +17,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**685 files indexed; 685 assigned; 0 unassigned.**
+**687 files indexed; 687 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 138 |
+| [Studio / IK / animation](studio.md) | 140 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 287 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
@@ -34,8 +35,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 21 |
-| Runtime / shared shader declaration | 152 |
-| Test / validation | 129 |
+| Runtime / shared shader declaration | 153 |
+| Test / validation | 130 |
 
 ## App / gameplay / plugins
 
@@ -270,6 +271,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioRouteClock.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteClock.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRoutePlayback.swift](../../Packages/Engine/Sources/Studio/SourceStudioRoutePlayback.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift](../../Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
@@ -305,6 +307,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioRoutePlaybackTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRoutePlaybackTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteStepperTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteStepperTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
