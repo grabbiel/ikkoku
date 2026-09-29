@@ -56,9 +56,10 @@ private struct VariantExpressions: Decodable {
     let cases: [Case]
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_ASSEMBLIES"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_MAKER_ASSEMBLIES and a Metal device"))
 func sourceMakerAdditionalHeadsUseOwnCurvesMorphsAndCorrectedBodyWhenSupplied() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_MAKER_ASSEMBLIES"] else { return }
+    let path = try SourceFixtureSupport.require("IKKOKU_MAKER_ASSEMBLIES")
     let registryURL = URL(fileURLWithPath: path)
     let root = registryURL.deletingLastPathComponent().deletingLastPathComponent()
     let registry = try JSONDecoder().decode(VariantRegistry.self, from: Data(contentsOf: registryURL))

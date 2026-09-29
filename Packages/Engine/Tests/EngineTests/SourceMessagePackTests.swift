@@ -210,9 +210,10 @@ private enum SourceMPFixture {
     }
 }
 
-@Test(.enabled(if: ProcessInfo.processInfo.environment["IKKOKU_ABMX_BONE_DATA"] != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ABMX_BONE_DATA"]),
+               "Requires IKKOKU_ABMX_BONE_DATA"))
 func sourceMessagePackOptionalOriginalABMXPayloadIsAnArray() throws {
-    let path = try #require(ProcessInfo.processInfo.environment["IKKOKU_ABMX_BONE_DATA"])
+    let path = try SourceFixtureSupport.require("IKKOKU_ABMX_BONE_DATA")
     let value = try SourceMessagePack.decodeLZ4(Data(contentsOf: URL(fileURLWithPath: path)))
     let records = try #require(value.arrayValue)
     for record in records {
