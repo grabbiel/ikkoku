@@ -73,6 +73,7 @@ final class StudioModel: ViewportInputHandler {
     var sourcePluginsRunning = false
     var sourceAccessoryNamesEnabled = false
     var liveAnimation = true
+    var sourceAutomaticBlink = true { didSet { for preview in sourceInstances.values { preview.automaticBlink = sourceAutomaticBlink }; refresh() } }
     var isActiveMode = false
     // Timeline
     var timelinePlaying = false
@@ -114,6 +115,10 @@ final class StudioModel: ViewportInputHandler {
         guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
         animTime = CFAbsoluteTimeGetCurrent() - startTime
         sourceAnimationTime += 1 / 30
+        // Each card's saved eyesBlink flag decides whether its blink clock
+        // schedules blinks; this tick already rebuilds the frame every step, so a
+        // rate change needs no extra refresh condition here.
+        if sourceAutomaticBlink { for preview in sourceInstances.values { try? preview.updateBlink(elapsed: sourceAnimationTime) } }
         for preview in sourceInstances.values { try? preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: 1 / 30) }
         refresh()
     }
@@ -219,7 +224,9 @@ final class StudioModel: ViewportInputHandler {
 
     func pluginAttachmentFrame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
         if sourceInstances[parent.id] == nil, let reference = parent.sourceCharacter {
-            sourceInstances[parent.id] = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+            let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+            preview.automaticBlink = sourceAutomaticBlink
+            sourceInstances[parent.id] = preview
         }
         guard let point = child.sourceAttachmentPoint, let preview = sourceInstances[parent.id] else {
             throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
@@ -437,6 +444,7 @@ final class StudioModel: ViewportInputHandler {
                     handPatternsFile: handPatternsPath)
                 do {
                     let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                    preview.automaticBlink = sourceAutomaticBlink
                     object.kind = .character; object.name = "Source character \(record.sourceKey)"
                     object.sourceCharacter = reference; previews[object.id] = preview
                     diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
@@ -776,8 +784,9 @@ final class StudioModel: ViewportInputHandler {
                         let preview: SourceStudioCharacterPreview
                         if let cached = sourceInstances[o.id], cached.reference == reference { preview = cached }
                         else {
-                            preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
-                            sourceInstances[o.id] = preview
+                            let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                            fresh.automaticBlink = sourceAutomaticBlink
+                            sourceInstances[o.id] = fresh; preview = fresh
                         }
                         let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
