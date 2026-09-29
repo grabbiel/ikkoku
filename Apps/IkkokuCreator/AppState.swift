@@ -668,6 +668,13 @@ final class AppState {
         if displayed != expected {
             print("[ikkoku] ui report: inspector mismatch expected=\(expected) displayed=\(displayed)")
         }
+        let animationSelection: Any
+        if let state = studio?.selectedSourceAnimationState {
+            animationSelection = ["group": state.group, "category": state.category, "no": state.no,
+                "speed": state.speed, "forceLoop": state.forceLoop, "normalizedTime": state.normalizedTime]
+        } else {
+            animationSelection = NSNull()
+        }
         let report: [String: Any] = [
             "mode": mode.rawValue.lowercased(),
             "inspectorTab": studio?.inspectorTab.rawValue.lowercased() ?? "none",
@@ -677,6 +684,10 @@ final class AppState {
             "expectedInspectorView": expected,
             "sourceIKAvailable": studio?.sourceIKAvailable ?? false,
             "sourceAccessoryLabelCount": labelCount,
+            "sourceAnimationInspectorShown": studio?.sourceAnimationInspectorShown ?? false,
+            "sourceAnimationCatalogEntries": studio?.sourceAnimationCatalog?.entries.count ?? 0,
+            "sourceAnimationExecutableEntries": studio?.sourceAnimationCatalog?.entries.filter { $0.file != nil }.count ?? 0,
+            "sourceAnimationSelection": animationSelection,
         ]
         do {
             try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])

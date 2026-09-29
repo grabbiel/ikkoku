@@ -327,9 +327,12 @@ struct PoseInspector: View {
             VStack(alignment: .leading, spacing: 10) {
                 Picker("Mode", selection: $model.poseMode) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
                 if o.sourceCharacter != nil {
-                    SourcePoseInspector(model: model)
-                        .onAppear { model.displayedInspectorView = "SourcePoseInspector" }
-                        .onDisappear { if model.displayedInspectorView == "SourcePoseInspector" { model.displayedInspectorView = "none" } }
+                    VStack(alignment: .leading, spacing: 10) {
+                        SourcePoseInspector(model: model)
+                            .onAppear { model.displayedInspectorView = "SourcePoseInspector" }
+                            .onDisappear { if model.displayedInspectorView == "SourcePoseInspector" { model.displayedInspectorView = "none" } }
+                        SourceAnimationInspector(model: model)
+                    }
                 } else {
                     Group {
                         SectionBox(title: "Pose presets") {
@@ -418,6 +421,84 @@ struct SourcePoseInspector: View {
             }
         } else {
             Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Selection of an original animation from the converted catalog plus the
+/// convenience speed/loop controls. Rows without a converted file are listed
+/// but disabled with their diagnostic; `pattern` and the option parameters are
+/// not shown because normal catalog rows ignore them.
+struct SourceAnimationInspector: View {
+    @Bindable var model: StudioModel
+    var body: some View {
+        if let o = model.selectedObject, let state = model.selectedSourceAnimationState {
+            SectionBox(title: "Original animation") {
+                let rows = model.sourceAnimationCatalog?.entries ?? []
+                let groups = Array(Set(rows.map(\.group))).sorted()
+                let categories = Array(Set(rows.filter { $0.group == state.group }.map(\.category))).sorted()
+                let entries = rows.filter { $0.group == state.group && $0.category == state.category }.sorted { $0.no < $1.no }
+                if let error = model.sourceAnimationCatalogError {
+                    Text("Animation catalog could not be loaded: \(error)").font(.caption).foregroundStyle(.secondary)
+                } else if rows.isEmpty {
+                    Text("Animation catalog is not configured.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    if !rows.contains(where: { $0.group == state.group && $0.category == state.category && $0.no == state.no }) {
+                        Text("Saved animation \(state.group)/\(state.category)/\(state.no) is not in the converted catalog.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Picker("Animation group", selection: Binding(get: { state.group }, set: { group in
+                        guard let first = model.firstExecutableAnimation(group: group, category: nil) else {
+                            model.status = "No converted animation is available in group \(group)."
+                            return
+                        }
+                        do { try model.setSourceAnimation(o.id, group: group, category: first.category, no: first.no) }
+                        catch { model.status = "Source animation: \(error)" }
+                    })) {
+                        ForEach(groups, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    .accessibilityIdentifier("studio.source.animation.group")
+                    Picker("Animation category", selection: Binding(get: { state.category }, set: { category in
+                        guard let first = model.firstExecutableAnimation(group: state.group, category: category) else {
+                            model.status = "No converted animation is available in group \(state.group), category \(category)."
+                            return
+                        }
+                        do { try model.setSourceAnimation(o.id, group: state.group, category: first.category, no: first.no) }
+                        catch { model.status = "Source animation: \(error)" }
+                    })) {
+                        ForEach(categories, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    .accessibilityIdentifier("studio.source.animation.category")
+                    Picker("Animation", selection: Binding(get: { state.no }, set: { no in do { try model.setSourceAnimation(o.id, group: state.group, category: state.category, no: no) } catch { model.status = "Source animation: \(error)" } })) {
+                        ForEach(entries, id: \.no) { entry in
+                            if entry.file == nil {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text("\(entry.no): \(entry.state) (\(entry.controller))")
+                                    Text(entry.diagnostic ?? "Not converted").font(.caption).foregroundStyle(.secondary)
+                                }
+                                .tag(entry.no)
+                                .disabled(true)
+                            } else {
+                                Text("\(entry.no): \(entry.state) (\(entry.controller))").tag(entry.no)
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("studio.source.animation.entry")
+                    FloatRow(label: "Animation speed", value: Binding(get: { state.speed }, set: { speed in do { try model.setSourceAnimationSpeed(o.id, speed) } catch { model.status = "Source animation: \(error)" } }), range: 0...3)
+                        .accessibilityIdentifier("studio.source.animation.speed")
+                    Toggle("Force loop", isOn: Binding(get: { state.forceLoop }, set: { on in do { try model.setSourceAnimationForceLoop(o.id, on) } catch { model.status = "Source animation: \(error)" } }))
+                        .accessibilityIdentifier("studio.source.animation.forceLoop")
+                    Button("Restart") { do { try model.restartSourceAnimation(o.id); model.status = "Animation restarted" } catch { model.status = "Source animation restart: \(error)" } }
+                        .accessibilityIdentifier("studio.source.animation.restart")
+                    Text("Selecting an animation or pressing Restart starts this character at phase 0; other characters keep their phase.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .onAppear { model.sourceAnimationInspectorShown = true }
+            .onDisappear { model.sourceAnimationInspectorShown = false }
+        } else if let error = model.sourceAnimationCatalogError {
+            Text("Animation catalog could not be loaded: \(error)").font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text("The original character animation is not loaded.").font(.caption).foregroundStyle(.secondary)
         }
     }
 }
