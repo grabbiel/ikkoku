@@ -138,8 +138,10 @@ private enum PluginFixture {
     #expect(throws: (any Error).self) { try SourceIRProgram.decode(PluginFixture.data([PluginFixture.method("Update", [unknown])])) }
 }
 
-@Test func sourcePluginRoslynPackageCloneDestroyAndNativeSaveReload() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_PLUGIN_FIXTURE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_PLUGIN_FIXTURE"]),
+               "Requires IKKOKU_PLUGIN_FIXTURE"))
+func sourcePluginRoslynPackageCloneDestroyAndNativeSaveReload() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_PLUGIN_FIXTURE")
     let packageURL = URL(fileURLWithPath: path), package = try SourcePluginPackage.load(url: packageURL)
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-plugin-" + UUID().uuidString)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

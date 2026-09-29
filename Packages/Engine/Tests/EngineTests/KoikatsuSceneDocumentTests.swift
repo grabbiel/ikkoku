@@ -148,8 +148,10 @@ struct SceneDocumentBytes {
     }
 }
 
-@Test func KoikatsuSceneMatchesIndependentFullFixtureWhenSupplied() throws {
-    guard let directory = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENE_FIXTURES"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES"]),
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES"))
+func KoikatsuSceneMatchesIndependentFullFixtureWhenSupplied() throws {
+    let directory = try SourceFixtureSupport.require("IKKOKU_STUDIO_SCENE_FIXTURES")
     for name in ["current", "legacy-card", "both-modes"] {
         let url = URL(fileURLWithPath: directory).appendingPathComponent("synthetic-\(name)")
         let data = try Data(contentsOf: url.appendingPathExtension("png"))
@@ -168,8 +170,10 @@ struct SceneDocumentBytes {
     }
 }
 
-@Test func KoikatsuSceneReadsExplicitOriginalSceneDirectoryWhenSupplied() throws {
-    guard let directory = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ORIGINAL_SCENES"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_ORIGINAL_SCENES"]),
+               "Requires IKKOKU_STUDIO_ORIGINAL_SCENES"))
+func KoikatsuSceneReadsExplicitOriginalSceneDirectoryWhenSupplied() throws {
+    let directory = try SourceFixtureSupport.require("IKKOKU_STUDIO_ORIGINAL_SCENES")
     let base = URL(fileURLWithPath: directory)
     let files = try #require(FileManager.default.enumerator(at: base, includingPropertiesForKeys: [.isRegularFileKey]))
     var count = 0, characters = 0, kinds: [Int32: Int] = [:]

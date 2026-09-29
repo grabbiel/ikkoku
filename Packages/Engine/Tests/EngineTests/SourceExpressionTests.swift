@@ -156,15 +156,14 @@ private struct ExpressionReference: Decodable {
     let cases: [Case]
 }
 
-@Test(.enabled(if: ["IKKOKU_EXPRESSION_CONTRACT", "IKKOKU_EXPRESSION_REFERENCE", "IKKOKU_SOURCE_AVATAR"]
-    .allSatisfy { ProcessInfo.processInfo.environment[$0] != nil }))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_EXPRESSION_CONTRACT", "IKKOKU_EXPRESSION_REFERENCE", "IKKOKU_SOURCE_AVATAR"]),
+               "Requires IKKOKU_EXPRESSION_CONTRACT, IKKOKU_EXPRESSION_REFERENCE, IKKOKU_SOURCE_AVATAR"))
 func sourceExpressionMatchesIndependentLocalOracleForEveryImportedPart() throws {
-    let environment = ProcessInfo.processInfo.environment
     func data(_ key: String) throws -> Data {
-        try Data(contentsOf: URL(fileURLWithPath: #require(environment[key])))
+        try Data(contentsOf: URL(fileURLWithPath: try SourceFixtureSupport.require(key)))
     }
     let contract = try SourceExpressionContract.decode(data("IKKOKU_EXPRESSION_CONTRACT"))
-    let source = try SourceRig.loadModel(url: URL(fileURLWithPath: #require(environment["IKKOKU_SOURCE_AVATAR"])))
+    let source = try SourceRig.loadModel(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")))
     let reference = try JSONDecoder().decode(ExpressionReference.self, from: data("IKKOKU_EXPRESSION_REFERENCE"))
     #expect(reference.schemaVersion == 1 && reference.weightUnit == "percent")
     #expect(Set(reference.cases.map(\.id)) == ["defaults", "blinkClosed", "blinkHalf", "smile", "smileMouthOpen",
