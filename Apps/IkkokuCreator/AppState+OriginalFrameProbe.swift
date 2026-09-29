@@ -22,7 +22,18 @@ extension AppState {
             if FileManager.default.fileExists(atPath: translatedProgram.path) {
                 try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue), to: output.appendingPathComponent("native-main_opaque.png"))
                 if FileManager.default.fileExists(atPath: output.appendingPathComponent("shaders/toon_eye_lod0/program.json").path) && FileManager.default.fileExists(atPath: output.appendingPathComponent("mesh-0-uv3.bin").path) {
-                    try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, allFamilies: true), to: output.appendingPathComponent("native-translated.png"))
+                    let all = try probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, allFamilies: true)
+                    try ImageIO.writePNG(all, to: output.appendingPathComponent("native-translated.png"))
+                    if ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_FAMILIES"] == "1",
+                       let source = try? JSONSerialization.jsonObject(with: Data(contentsOf: input)) as? [String: Any],
+                       let meshes = source["meshes"] as? [[String: Any]] {
+                        let families = Set(meshes.flatMap { $0["materials"] as? [[String: Any]] ?? [] }.compactMap { ($0["shader"] as? String)?.components(separatedBy: "/").last }.filter { $0 != "shadowcast" })
+                        for family in families.sorted() {
+                            let program = output.appendingPathComponent("shaders/\(family)/program.json")
+                            guard FileManager.default.fileExists(atPath: program.path) else { throw OriginalFrameProbe.ProbeError.invalid("Missing translated shader \(family)") }
+                            try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: program, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, families: [family]), to: output.appendingPathComponent("native-translated-\(family).png"))
+                        }
+                    }
                 }
             }
             let benchmark = try host.renderer.benchmark(frame: probe.frame, width: probe.width, height: probe.height)

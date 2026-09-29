@@ -241,16 +241,46 @@ state and captured textures. It compiles translated programs per job. Production
 `Renderer` still selects authored native toon/eye/outline materials; there is no
 live source-program registry integration.
 
-The retained `.local/reverse/original-character-probe/frame-comparison.json`
-compares a frozen original character frame. These are recorded results, not new
-captures made during documentation revision:
+Comparing a frozen original character frame (controls in the commands below;
+re-run against a current-code capture on 2026-09-26, source frame
+SHA-256 `9aa4de394acbae5e9a7d336b5990aa67f9619931dfce3cac6d1e8711c8bcc750`):
 
 | Compared path | Silhouette IoU | Color error (0–255) | Result and scope |
 | --- | ---: | --- | --- |
 | Geometry diagnostic | 0.9998196 | Not a color gate | 18 differing silhouette pixels; depth p99 0 m, normals 0 bytes; passes frozen geometry |
 | Production native toon | See geometry diagnostic | Mean 31.2589; p99 239 | Fails source color parity |
 | Translated garments | 0.9995455 | Mean 0.1330; p99 2 | Passes selected garment color gate |
-| Translated full character | 0.9988685 | Mean 26.9362; p99 242 | Fails full-character silhouette and color gates |
+| Translated full character | 0.9988685 | Mean 0.2267; p99 5 | Fails full-character silhouette (112 differing pixels) and p99-color gates |
+
+The earlier documentation quoted mean 26.9362/p99 242 for the full
+character. That figure came from an older retained capture (native render dated
+2026-09-25 07:10) made with earlier code; current code renders skin, face and
+eyes correctly, and the remaining residual concentrates on thin hair/outline
+edges (attribution below).
+
+Per-family attribution — each family rendered alone, compared only where it
+is front-most in both renders (`IKKOKU_ORIGINAL_FRAME_FAMILIES=1`):
+
+| Family | Pixels | Mean | p99 | Result |
+| --- | ---: | ---: | ---: | --- |
+| main_opaque | 76708 | 0.133 | 2 | Passes color gate |
+| main_skin | 13515 | 0.202 | 1 | Passes color gate |
+| main_hair | 3624 | 1.032 | 23 | Fails p99 gate; thin hair edges |
+| main_hair_front | 6181 | 0.915 | 23 | Fails p99 gate; thin hair edges |
+| toon_eye_lod0 | 368 | 0.010 | 0 | Passes color gate |
+| toon_eyew_lod0 | 303 | 0.002 | 0 | Passes color gate |
+| toon_nose_lod0 / main_item | 0 | — | — | Never front-most in the frozen frame |
+
+A pixel counts as front-most only where the full translated render and the family-only render have identical RGB, so blended/translucent overlaps are excluded from per-family metrics.
+
+Reproduction: build with `xcodebuild -project Ikkoku.xcodeproj -scheme
+IkkokuCreator -configuration Debug -derivedDataPath .local/build
+-destination 'platform=macOS,arch=arm64' build`; run
+`IKKOKU_ORIGINAL_FRAME_PROBE=$PWD/.local/reverse/original-character-probe/frame.json
+IKKOKU_ORIGINAL_FRAME_FAMILIES=1
+.local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku`;
+compare with `Tools/reverse/compare_original_frame.py .local/reverse/original-character-probe`.
+These are frozen-evaluated-geometry diagnostics, not live-renderer parity.
 
 The silhouette gate is IoU ≥0.999; the color gate is mean ≤1 and p99 ≤4.
 The fixture disables shadows. Original
@@ -261,10 +291,13 @@ The authored-mip exporter exists, but its availability does not prove every
 comparison used authored source chains. Shader recipes, player probes and exact
 reproduction commands are in [material expansion](character/material-expansion.md).
 
-Next: close skin/face/hair color differences and sampling/color-space semantics,
-then integrate verified programs with production material/queue/pass dispatch.
-Compare independently loaded original/native scenes with matched time, camera,
-lights and effects after that integration. Track R1/R2 and CMT-04.
+Next: attribute the hair/outline edge residual to a concrete binding or
+state difference before any gate relaxation, then integrate verified programs
+with production material/queue/pass dispatch. Compare independently loaded
+original/native scenes with matched time, camera, lights and effects after
+that integration. Track R1/R2 and CMT-04; R1 remains open — per-family
+isolation exists, but the full-character silhouette and p99-color gates
+still fail and no cause has been confirmed for the hair-edge residual.
 
 ## Resource and measurement boundaries
 
