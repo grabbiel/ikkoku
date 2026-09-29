@@ -59,11 +59,15 @@ private func studioSpring() throws -> (RigDefinition,SourceDynamicsDocument.Comp
     #expect(absent.bindings.isEmpty && !absent.diagnostics.isEmpty)
 }
 
-@Test func sourceStudioDynamicsActualAnimationIKOrderingAndRollbackWhenSupplied() throws {
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_DYNAMICS_FIXTURE", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_MAKER_LIBRARY", "IKKOKU_STUDIO_ANIMATION_CATALOG", "IKKOKU_SOURCE_DYNAMICS"]), "Requires IKKOKU_STUDIO_DYNAMICS_FIXTURE, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_MAKER_LIBRARY, IKKOKU_STUDIO_ANIMATION_CATALOG, IKKOKU_SOURCE_DYNAMICS"))
+func sourceStudioDynamicsActualAnimationIKOrderingAndRollbackWhenSupplied() throws {
     let env = ProcessInfo.processInfo.environment
-    guard let input = env["IKKOKU_STUDIO_DYNAMICS_FIXTURE"],let avatar = env["IKKOKU_SOURCE_AVATAR"],
-          let catalog = env["IKKOKU_STUDIO_POSE_CONTRACT"],let maker = env["IKKOKU_MAKER_LIBRARY"],
-          let animations = env["IKKOKU_STUDIO_ANIMATION_CATALOG"],let contract = env["IKKOKU_SOURCE_DYNAMICS"] else {return}
+    let input = try SourceFixtureSupport.require("IKKOKU_STUDIO_DYNAMICS_FIXTURE")
+    let avatar = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let maker = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let animations = try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG")
+    let contract = try SourceFixtureSupport.require("IKKOKU_SOURCE_DYNAMICS")
     let url = URL(fileURLWithPath:input),data = try Data(contentsOf:url)
     let resources = ResourceStore(device:try #require(MTLCreateSystemDefaultDevice()))
     func preview() throws -> SourceStudioCharacterPreview {
@@ -107,11 +111,14 @@ private func studioSpring() throws -> (RigDefinition,SourceDynamicsDocument.Comp
     try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:url.deletingLastPathComponent().appendingPathComponent("native-ordering.json"))
 }
 
-@Test func sourceStudioDynamicsExpandedMakerHairIDsRetainSourceBindingsWhenSupplied() throws {
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_DYNAMICS_FIXTURE", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_MAKER_LIBRARY", "IKKOKU_STUDIO_MAKER_DYNAMICS"]), "Requires IKKOKU_STUDIO_DYNAMICS_FIXTURE, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT, IKKOKU_MAKER_LIBRARY, IKKOKU_STUDIO_MAKER_DYNAMICS"))
+func sourceStudioDynamicsExpandedMakerHairIDsRetainSourceBindingsWhenSupplied() throws {
     let env = ProcessInfo.processInfo.environment
-    guard let fixture = env["IKKOKU_STUDIO_DYNAMICS_FIXTURE"],let avatar = env["IKKOKU_SOURCE_AVATAR"],
-          let catalog = env["IKKOKU_STUDIO_POSE_CONTRACT"],let maker = env["IKKOKU_MAKER_LIBRARY"],
-          let contract = env["IKKOKU_STUDIO_MAKER_DYNAMICS"] else {return}
+    let fixture = try SourceFixtureSupport.require("IKKOKU_STUDIO_DYNAMICS_FIXTURE")
+    let avatar = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let catalog = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
+    let maker = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let contract = try SourceFixtureSupport.require("IKKOKU_STUDIO_MAKER_DYNAMICS")
     let folder = URL(fileURLWithPath:fixture).deletingLastPathComponent()
     let resources = ResourceStore(device:try #require(MTLCreateSystemDefaultDevice()))
     var report:[[String:Any]] = []
