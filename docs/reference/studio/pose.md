@@ -206,29 +206,33 @@ evidence sets with broader integration than the initial two-bone FK proof.
 
 ### Finger-pose source attribution (ST-T07)
 
-An instrumented re-run of `Tools/reverse/fixtures/OriginalCharacterProbe.cs`
-(2026-09-27, two identical captures under `.local/stt07b/probe{,-2}/`) records
-the R2 outlier bones and the saved hand-control state at three moments.
-The retained evidence calls the moment after `LoadAsync` completes
-`afterCharacterFirstLateUpdate`; the corrected probe labels it `afterLoadAsync`.
-Its rank-2 `shapeHandPtn` rows contain only their first key because the old
-serializer dropped column 1. Both captured first keys are `0`; the saved card's
-Status record confirms that both complete hand-pattern rows are `0`/`0`.
-`localEulerAngles` degrees:
+A frame-by-frame re-run of `Tools/reverse/fixtures/OriginalCharacterProbe.cs`
+(2026-09-27, one capture under `.local/stt07c/probe/`; the `--collect` step
+failed twice with `PrlJob_GetResult: Invalid argument`, the probe was stopped
+with `--stop`, and `status.json`, `fingers.json` and `frame.json` were then
+transferred with the same read-only commands the script would have used)
+records thirteen snapshots: `afterCreateFemale` (`Time.frameCount` 31),
+`afterLoadAsync` (also frame 31), `frame0`…`frame9` (frames 32…41), and
+`frameJsonCapture` (frame 41). Its rank-2 `shapeHandPtn` rows contain only
+their first key because the old serializer dropped column 1. Both captured
+first keys are `0`; the saved card's Status record confirms that both
+complete hand-pattern rows are `0`/`0`. `localEulerAngles` degrees:
 
 | Moment | `cf_j_middle01_L` | `cf_j_middle02_L` | `cf_j_thumb01_R` | `enableShapeHand` / `shapeHandPtn` / blend | `sibHand.updateMask` | `animBody` |
 | --- | --- | --- | --- | --- | ---: | --- |
 | Right after `CreateFemale` | not instantiated | not instantiated | not instantiated | `false`/`false`, `0`/`0`, `0`/`0` | `0` | absent |
 | After `LoadAsync` completes | `[357.0114, 359.7383, 5.006827]` | `[-3.12e-8, -0.0003, 359.9941]` | `[280, 89.99998, 235]` | same | `0` | `Animator`, no `runtimeAnimatorController` |
-| At `frame.json` capture | `[354.3423, 357.2212, 74.13597]` | `[-3.12e-8, -0.0003, 106.7445]` | `[294.2354, 63.91316, 282.4779]` | same | `0` | same |
+| First recorded wait frame (`frame0`, frame 32) — and all later wait frames through `frameJsonCapture` | `[354.3423, 357.2212, 74.13597]` | `[-3.12e-8, -0.0003, 106.7445]` | `[294.2354, 63.91316, 282.4779]` | same | `0` | same |
 
 The bones do not exist at the `CreateFemale` observation. At the first bone
 observation, just after `LoadAsync` completes, all three rotations equal
-`cf_anmShapeHand` sample-list index 0 and the prefab rest. Their rotations change
-during the 10 frames between `LoadAsync` completing and the `frame.json` capture;
-the final values equal sample-list index 1 exactly (for example,
-`cf_j_middle02_L` reaches 106.7445°). The 46 R2 outliers are finger joints with
-those sample-index-1 values, but the writer remains unattributed.
+`cf_anmShapeHand` sample-list index 0 and the prefab rest. One frame later
+(`frame0`, frame 32 — the first recorded frame of the wait window) all
+three equal sample-list index 1 exactly (for example, `cf_j_middle02_L`
+already reaches 106.7445°) and they stay unchanged through
+`frameJsonCapture`. The whole transition therefore occupies the single frame
+boundary 31→32. The 46 R2 outliers are finger joints with those
+sample-index-1 values.
 
 The saved card's hand patterns are disabled. All three decompiled `ChaControl`
 variants gate `UpdateAlwaysShapeHand` on `fileStatus.enableShapeHand` identically,
@@ -236,11 +240,31 @@ and that flag is `false` at every recorded moment. `ShapeHandInfo.updateMask` is
 `0`. The body prefab's `Animator` has no controller; the captured `animBody`
 `Animator` also has no `runtimeAnimatorController`.
 
-Next, record the three fingers on every frame of that 10-frame window together
-with `Time.frameCount`. List every `Behaviour` on the character hierarchy, not
-only `MonoBehaviour`, including every `Animator` and `Animation` component and
-their controller or clip names. Read `ShapeHandInfo`'s `dictSrc` rotation values
-at each moment to see whether they hold sample index 0 or index 1.
+`ShapeHandInfo`'s `dictSrc` rows for the three bones (source indices `6`, `7`
+and `27`) keep their sample-index-0 rotations in every snapshot from
+`afterLoadAsync` onward. `InitEnd` flips `false`→`true` when `LoadAsync`
+completes, but the source rows do not take the live bones' final rotations.
+
+The captured hierarchy has an enabled `Animator` on each hand bone,
+`cf_s_hand_L` and `cf_s_hand_R`, alongside `Studio.HandAnimeCtrl` components.
+Their runtime controllers are `cf_hand_L_00` and `cf_hand_R_00`, with avatars
+`cf_hand_L_00Avatar` and `cf_hand_R_00Avatar`. Both hand Animators are present
+after `LoadAsync` at frame 31; the fingers take their final values at frame 32.
+An Animator with a controller writes its bones on its first evaluation, which
+accounts for this one-frame delay without an `enabled` state change.
+
+Recovered CharaStudio source supports this attribution: `Studio.HandAnimeCtrl.Init(sex)`
+sets `ptn = 0`; `LoadAnime()` loads the controller for
+`Info.dicHandAnime[hand][ptn]` and calls `animator.Play(clip)`; `OnEnable` and
+`OnDisable` toggle the Animator. `Studio.OCIChar` sets
+`handAnimeCtrl[_type].ptn` for Studio hand-pattern edits, and
+`Studio.Preparation` owns the two controllers. Together with the frame trace
+and inactive `ShapeHandInfo` source rows, this strongly supports CharaStudio's
+default hand-animation pattern 0 as the source of the 46 R2 finger outliers,
+rather than the card hand-shape controller. The remaining confirmation is to
+convert the default state clips of `cf_hand_L_00` and `cf_hand_R_00` and compare
+their finger rotations with this capture. The native Studio/character pose path
+must apply hand pattern 0 and saved Studio hand patterns to match the source.
 
 ## Remaining Studio dependency inventory
 
