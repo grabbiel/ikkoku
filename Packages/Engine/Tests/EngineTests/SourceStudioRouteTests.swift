@@ -210,6 +210,40 @@ func sourceStudioRouteRecordBridge() throws {
     recordFails([routePoint([0, 0, 0], connection: 1, aidInitialized: false), routePoint([2, 0, 0])])
 }
 
+@Test("the record bridge composes curve aids through the point's local transform")
+func sourceStudioRouteRecordAidFrame() throws {
+    func curvePoint(_ position: SIMD3<Float>, rotationDegrees: SIMD3<Float>, aid: SIMD3<Float>,
+                    sourceKey: Int32) -> KoikatsuRoutePointRecord {
+        .init(bone: .init(sourceKey: 1,
+                          transform: .init(position: position, rotationDegrees: rotationDegrees, scale: .one)),
+              speed: 2, easeType: 21, connection: 1,
+              aid: .init(sourceKey: sourceKey,
+                         transform: .init(position: aid, rotationDegrees: .zero, scale: .one)),
+              aidInitialized: true, linked: false)
+    }
+    func maxDifference(_ actual: SIMD3<Double>?, _ expected: SIMD3<Double>) throws -> Double {
+        let aid = try #require(actual)
+        return max(max(abs(aid.x - expected.x), abs(aid.y - expected.y)), abs(aid.z - expected.z))
+    }
+    // Route IKKOKU-B points dicKey 8 and 12 as captured from the original:
+    // the serialized aid is Point-local under a point rotated -15° about Y,
+    // and the original's route-local aid is the point composed with that
+    // rotated local offset (verified against the captured playback).
+    let record = KoikatsuRouteRecord(
+        points: [curvePoint([0.8, 0.2, 0.6], rotationDegrees: [0, -15, 0],
+                            aid: [-0.2683783, 0.675, -0.3895974], sourceKey: 8),
+                 curvePoint([-0.4, 0.55, 0.3], rotationDegrees: [0, -15, 0],
+                            aid: [-0.3001803, -0.02500004, -0.5407326], sourceKey: 12),
+                 // An unrotated point keeps the plain point + aid sum.
+                 curvePoint([1, 2, 3], rotationDegrees: [0, 0, 0],
+                            aid: [0.5, -0.25, 2], sourceKey: 16)],
+        active: true, loop: true, visibleLine: true, orientation: 0, color: .one)
+    let route = try SourceStudioRoute(record: record)
+    #expect(try maxDifference(route.points[0].aid, [0.6416017, 0.875, 0.1542164]) < 1e-6)
+    #expect(try maxDifference(route.points[1].aid, [-0.55, 0.525, -0.2999999]) < 1e-6)
+    #expect(try maxDifference(route.points[2].aid, [1.5, 1.75, 5]) < 1e-12)
+}
+
 @Test("the PathLength double-padding quirk drives durations and endpoints")
 func sourceStudioRouteDurationQuirkAndEndpoints() throws {
     func point(_ position: SIMD3<Double>, speed: Double = 2) -> SourceStudioRoute.Point {

@@ -18,8 +18,9 @@ evaluator can be compared against it. Sources (all private, decompiled):
   ``GenerateMoveToPathTargets`` 1177 (speed → time = PathLength/speed),
   ``ApplyMoveToPathTargets`` 1691 (orient to path; ``Defaults`` lookahead
   0.05 — the rotation itself is a stateful ``LookUpdate`` 2418 LateUpdate
-  SmoothDamp pass this reference does not simulate, so only the
-  instantaneous aim is emitted), ``PathLength`` 2492,
+  SmoothDamp pass, which ``simulate_frames`` reproduces while the
+  continuous ``evaluate`` keeps only the instantaneous aim),
+  ``PathLength`` 2492,
   ``PathControlPointGenerator`` 3299 and
   ``Interp`` 3322 (Catmull-Rom), ``GetEasingFunction`` 3488,
   ``UpdatePercentage`` 3591, the 32 easing functions from 3726 and the
@@ -292,6 +293,119 @@ DEFAULT_EASE = "linear"
 DEFAULT_SPEED = 2.0
 # ``Defaults.lookAhead`` (StudioTween.cs ~98) as used by ApplyMoveToPathTargets.
 LOOK_AHEAD = 0.05
+# ``Defaults.updateTime`` — the LookUpdate smoothTime a route tween gets,
+# because route tweens pass "speed" (not "time") and carry no "looktime".
+DEFAULT_UPDATE_TIME = 0.05
+# LookUpdate smoothTime multipliers: "looktime" * 0.05, else "time" * 0.15 *
+# 0.05 — kept for callers that pass them; neither applies to route tweens
+# (the ST-T11h capture rejects the "time" branch: segmentDuration * 0.0075
+# leaves 85.1 deg of error, the 0.05 s default leaves 1.3e-4 deg).
+LOOK_TIME_SCALE = 0.05
+MOVE_TIME_SCALE = 0.15 * 0.05
+
+
+def look_update_smooth_time(looktime: Optional[float] = None,
+                            move_time: Optional[float] = None) -> float:
+    """The smoothTime ``LookUpdate`` resolves from the tween arguments:
+    ``looktime`` * 0.05 if present, else the move's ``time`` * 0.15 * 0.05,
+    else ``Defaults.updateTime``. Route tweens pass only "speed", so both
+    arguments stay ``None`` for them and the 0.05 s fallback applies —
+    confirmed against the ST-T11h capture."""
+    if looktime is not None:
+        return looktime * LOOK_TIME_SCALE
+    if move_time is not None:
+        return move_time * MOVE_TIME_SCALE
+    return DEFAULT_UPDATE_TIME
+
+
+def delta_angle(current: float, target: float) -> float:
+    """``Mathf.DeltaAngle``: the shortest signed turn from ``current`` to
+    ``target`` in degrees, wrapped into (-180, 180]."""
+    delta = (target - current) % 360.0
+    if delta > 180.0:
+        delta -= 360.0
+    return delta
+
+
+def smooth_damp_angle(current: float, target: float, smooth_time: float,
+                      delta_time: float, velocity: float = 0.0) -> tuple[float, float]:
+    """``Mathf.SmoothDampAngle`` returning ``(value, newVelocity)``.
+
+    ``LookUpdate`` allocates its velocity ref FRESH every frame, so callers
+    pass 0.0 and discard the returned velocity — the damp has no memory
+    across frames. A smoothTime of 0 or less teleports to the wrapped
+    target, matching ``SmoothDampAngle``'s early-out.
+    """
+    if smooth_time <= 0.0:
+        return target, 0.0
+    clamped_target = current + delta_angle(current, target)
+    omega = 2.0 / smooth_time
+    x = omega * delta_time
+    exp = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
+    change = current - clamped_target
+    temp = (velocity + omega * change) * delta_time
+    new_velocity = (velocity - omega * temp) * exp
+    output = clamped_target + (change + temp) * exp
+    # Overshoot guard: if the target was ahead and the output jumped past
+    # it, land on the target exactly.
+    if (clamped_target - current > 0.0) == (output > clamped_target):
+        output = clamped_target
+    return output, new_velocity
+
+
+def to_euler(quaternion: Sequence[float]) -> Vec:
+    """``Quaternion.eulerAngles`` of a ``(w, x, y, z)`` rotation, in degrees
+    as the Z-X-Y composition ``Quaternion.Euler`` would report: x via
+    ``asin`` (pitch stays in [-90, 90]), y and z via ``atan2`` in (-180, 180].
+    Round-trips a float32-quantised rotation to 5.1e-2 degrees quaternion
+    angle — that is the capture's serialization floor, not a model error."""
+    w, x, y, z = quaternion
+    pitch = max(-1.0, min(1.0, 2.0 * (w * x - y * z)))
+    return (
+        math.degrees(math.asin(pitch)),
+        math.degrees(math.atan2(2.0 * (x * z + w * y), 1.0 - 2.0 * (x * x + y * y))),
+        math.degrees(math.atan2(2.0 * (x * y + w * z), 1.0 - 2.0 * (x * x + z * z))),
+    )
+
+
+def _quaternion_multiply(left: Sequence[float], right: Sequence[float]) -> Vec:
+    """Hamilton product of two ``(w, x, y, z)`` quaternions."""
+    lw, lx, ly, lz = left
+    rw, rx, ry, rz = right
+    return (
+        lw * rw - lx * rx - ly * ry - lz * rz,
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+    )
+
+
+def from_euler(euler: Sequence[float]) -> tuple[float, float, float, float]:
+    """Inverse of ``to_euler``: ``(w, x, y, z)`` for ``Quaternion.Euler``
+    (applied Z-X-Y, i.e. ``Ry * Rx * Rz``)."""
+    cx, sx = math.cos(math.radians(euler[0]) / 2), math.sin(math.radians(euler[0]) / 2)
+    cy, sy = math.cos(math.radians(euler[1]) / 2), math.sin(math.radians(euler[1]) / 2)
+    cz, sz = math.cos(math.radians(euler[2]) / 2), math.sin(math.radians(euler[2]) / 2)
+    return _quaternion_multiply(
+        _quaternion_multiply((cy, 0.0, sy, 0.0), (cx, sx, 0.0, 0.0)), (cz, 0.0, 0.0, sz))
+
+
+def look_update(euler: Vec, aim_euler: Vec, smooth_time: float,
+                delta_time: float, axis: str) -> Vec:
+    """One ``LookUpdate`` step: per-axis ``SmoothDampAngle`` (fresh zero
+    velocity every frame) from the current Euler toward the instantaneous
+    aim, then for axis "y" re-keep the root's own x/z. The result is written
+    back through ``transform.eulerAngles`` — Unity stores a quaternion, so
+    reading the Euler back canonicalizes it into the ``to_euler`` range, and
+    that read-back (not the raw damped angles) is what the NEXT frame damps
+    from; the capture only matches when it is modelled."""
+    smoothed = tuple(
+        smooth_damp_angle(euler[i], aim_euler[i], smooth_time, delta_time)[0]
+        for i in range(3)
+    )
+    if axis == "y":
+        smoothed = (euler[0], smoothed[1], euler[2])
+    return to_euler(from_euler(smoothed))
 
 
 # ---------------------------------------------------------------------------
@@ -397,8 +511,9 @@ class Orientation:
     """Orient-to-path result: the sampled lookahead target plus the
     instantaneous aim rotation facing it (``None`` if degenerate). The
     original ``LookUpdate`` then SmoothDampAngle-rotates toward it each
-    frame and, for axis "y", re-keeps the root's own x/z Euler; that
-    stateful LateUpdate pass is not simulated here."""
+    frame and, for axis "y", re-keeps the root's own x/z Euler;
+    ``simulate_frames`` runs that stateful LateUpdate pass, while the
+    continuous ``evaluate`` keeps the instantaneous aim."""
 
     axis: str
     look_target: Vec
@@ -608,7 +723,251 @@ def evaluate(route: Route, elapsed_seconds: float) -> Evaluation:
 
 
 # ---------------------------------------------------------------------------
-# Synthetic routes plus sampled fixture emission.
+# Per-frame stepping (OCIRoute Play + StudioTween UpdateAsObservable).
+#
+# ``Play`` puts ``childRoot`` at point 0 and starts segment 0 (one
+# ``TweenStart`` ``apply()`` at percentage 0), queuing every later segment.
+# Then every frame while the tween runs, in Update:
+#
+# - ``percentage < 1``: ``TweenUpdate`` FIRST applies the position/aim at the
+#   CURRENT percentage, THEN advances ``runningTime += Time.deltaTime`` and
+#   recomputes ``percentage = runningTime / time`` — the written position
+#   lags the time by one frame;
+# - otherwise: ``TweenComplete`` applies percentage 1; a queued next segment
+#   (or, when looping, segment 0 again) restarts with ``percentage = 0`` and
+#   ``runningTime = 0`` — that frame's overshoot is dropped — and is applied
+#   at percentage 0 in the SAME frame; a non-looping route with nothing left
+#   stops: ``onComplete`` sets the route inactive and ``childRoot`` keeps the
+#   end position and its last aim rotation.
+
+@dataclass(frozen=True)
+class SteppedFrame:
+    """State ``childRoot`` holds after one stepped frame: applied position,
+    last aim (``None`` for a route without orientation), the active flag
+    ``onComplete`` flips off at the non-loop finish frame, and the
+    ``LookUpdate``-smoothed Euler in degrees. The Euler lags one frame
+    behind the position column: a row's rotation is the result of the
+    PREVIOUS frame's LateUpdate damping toward THAT frame's written aim,
+    which is what a probe reading ``childRoot`` in the Update phase
+    (before DOTween's LateUpdate) observes — see ``simulate_frames``."""
+
+    position: Vec
+    aim: Optional[Orientation]
+    active: bool
+    rotation: Vec
+
+
+def simulate_frames(points: Sequence[RoutePoint], loop: bool, orientation: str,
+                    frame_deltas: Sequence[float], record_after_update: bool = True,
+                    initial_rotation: Optional[Sequence[float]] = None,
+                    initial_delta: Optional[float] = None,
+                    smooth_time: Optional[Callable[[float], float]] = None) -> list[SteppedFrame]:
+    """Run the recovered per-frame tween rules over ``frame_deltas`` seconds.
+
+    Each entry is one ``Time.deltaTime``. ``record_after_update=True`` models
+    the capture observing the tween write of the SAME frame (the trace frame
+    holds what that frame's Update applied); ``False`` models the capture
+    running first, so each trace frame still holds the PREVIOUS frame's write
+    and the first frame holds ``Play``'s own percentage-0 application. The
+    probe ordering is unknown, so callers try both.
+
+    Rotation follows the ST-T11h capture finding: each row's Euler is ONE
+    ``LookUpdate`` step from the PREVIOUS row's Euler toward the aim the
+    previous row's tween write established, advanced with THIS row's
+    deltaTime (fresh zero velocity every step) — the probe sees
+    ``childRoot``'s position right after the tween's Update but its rotation
+    one ``LateUpdate`` behind, so the rotation column lags the position/aim
+    column by one row while the tween runs. The row a non-looping route
+    completes on is smoothed for the last time (its looktarget was written
+    while the tween was still running); every later row freezes at that
+    Euler. ``initial_rotation`` (quaternion ``(w, x, y, z)``; ``Play`` sets
+    childRoot to route point 0's world rotation) plus ``initial_delta`` (the
+    ``Play`` frame's ``Time.deltaTime``, which drives the first row's damping
+    toward ``Play``'s looktarget) seed the chain; ``initial_delta`` must be
+    passed when ``initial_rotation`` is given and the route is oriented.
+    ``smooth_time`` overrides ``Defaults.updateTime`` (0.05 s — route tweens
+    carry neither ``looktime`` nor ``time``; exposed only for scans): a
+    callable given the duration in seconds of the segment the tween was on
+    during the LateUpdate the row's rotation models. The capture pins the
+    constant 0.05 s and rejects any segment-duration-scaled variant. A route
+    without orientation keeps the initial rotation unchanged.
+    """
+    route = Route(points=tuple(points), loop=loop, orient=orientation)
+    segments = build_segments(route)
+    if not segments:
+        raise RouteNotPlayable("route cannot play: no segments were built")
+    for index, delta in enumerate(frame_deltas):
+        if not math.isfinite(delta) or delta < 0:
+            raise RouteNotPlayable(f"deltaTime {delta} at frame {index} is not finite and non-negative")
+
+    def apply(segment_index: int, percentage: float) -> tuple[Vec, Optional[Orientation]]:
+        segment = segments[segment_index]
+        ease = EASING[segment.ease_type]
+        position = interp(segment.control_points, min(max(ease(0, 1, percentage), 0.0), 1.0))
+        aim = None
+        if orientation != "none":
+            ahead = min(1.0, percentage + LOOK_AHEAD)
+            look_target = interp(segment.control_points, min(max(ease(0, 1, ahead), 0.0), 1.0))
+            rotation = look_rotation(position, look_target, orientation)
+            if rotation is not None:
+                # A degenerate aim direction leaves the previous rotation in
+                # place in the original, so only a valid aim replaces it.
+                aim = Orientation(axis=orientation, look_target=look_target, rotation=rotation)
+        return position, aim
+
+    # ``Play``: childRoot at point 0, segment 0 started, percentage 0. The
+    # ``TweenStart`` application at percentage 0 is write 0; a degenerate
+    # instantaneous aim keeps the previous rotation (never point 0's rotation
+    # once the aim has been established).
+    segment_index, running_time, percentage, finished = 0, 0.0, 0.0, False
+    position, aim = segments[0].path[0], None
+
+    def apply_and_hold(index: int, percentage: float) -> None:
+        nonlocal position, aim
+        new_position, new_aim = apply(index, percentage)
+        position = new_position
+        if new_aim is not None:
+            aim = new_aim
+
+    apply_and_hold(0, 0.0)
+    writes: list[tuple[Vec, Optional[Orientation], bool]] = [(position, aim, True)]
+
+    # ``LookUpdate`` state: childRoot's Euler (degrees, kept numerically —
+    # per-axis damping does not survive a quaternion round-trip) seeded from
+    # point 0's world rotation, and the Euler of the looktarget the previous
+    # write established. Row 0's rotation is the Play frame's own LateUpdate:
+    # one damp toward Play's looktarget with the Play frame's deltaTime
+    # (``initial_delta``); every later row damps with the PREVIOUS frame's
+    # deltaTime (the trace's deltaTime field is one frame old for its row).
+    def chain_smooth_time(segment_duration: float) -> float:
+        return DEFAULT_UPDATE_TIME if smooth_time is None else smooth_time(segment_duration)
+    euler_state = to_euler(initial_rotation) if initial_rotation is not None else (0.0, 0.0, 0.0)
+    if orientation != "none" and initial_rotation is not None and initial_delta is None:
+        raise RouteNotPlayable(
+            "initial_delta (the Play frame's deltaTime) must accompany initial_rotation")
+    euler_writes: list[Vec] = [euler_state]
+    previous_delta = initial_delta
+    for delta in frame_deltas:
+        running = not finished
+        previous_aim = aim  # the looktarget the previous write established
+        if finished:
+            pass  # tween stopped; childRoot keeps the end placement
+        elif percentage < 1.0:
+            apply_and_hold(segment_index, percentage)  # apply BEFORE advancing time
+            running_time += delta
+            percentage = running_time / segments[segment_index].duration
+        else:
+            apply_and_hold(segment_index, 1.0)  # TweenComplete end point
+            if segment_index + 1 < len(segments):
+                segment_index += 1  # Next: overshoot dropped, applied in the same frame
+                apply_and_hold(segment_index, 0.0)
+                running_time, percentage = 0.0, 0.0
+            elif loop:
+                segment_index = 0  # looping queue restarts the same way
+                apply_and_hold(0, 0.0)
+                running_time, percentage = 0.0, 0.0
+            else:
+                finished = True  # onComplete: route inactive, end placement kept
+        if running and orientation != "none" and previous_aim is not None \
+                and previous_delta is not None:
+            # One LateUpdate LookUpdate: damp the previous row's Euler toward
+            # the looktarget the PREVIOUS write established (the one-row aim
+            # lag the capture shows), advancing with that previous write's
+            # frame deltaTime — row 0's damp runs on the Play frame's delta,
+            # row k's on deltas[k], exactly as the capture reproduces.
+            euler_state = look_update(euler_state, to_euler(previous_aim.rotation),
+                                      chain_smooth_time(segments[segment_index].duration),
+                                      previous_delta, orientation)
+        previous_delta = delta
+        writes.append((position, aim, not finished))
+        euler_writes.append(euler_state)
+    # ``writes[0]`` is Play's own application; writes[k+1] is what frame k's
+    # Update left on childRoot. Selecting from the front models a capture
+    # that records before the tween's Update ran that frame. The Euler column
+    # is already lagged one row by the LookUpdate rule above, so BOTH
+    # selections pair each write with the rotation the capture saw beside it.
+    chosen = ((writes[1:], euler_writes[1:]) if record_after_update
+              else (writes[:-1], euler_writes[:-1]))
+    return [SteppedFrame(position=written_position, aim=written_aim, active=written_active,
+                         rotation=written_rotation)
+            for (written_position, written_aim, written_active), written_rotation
+            in zip(*chosen)]
+
+# Stepping fixture: irregular deltas chosen to cross every per-frame rule on
+# the routes below. ``stepping_routes()``'s no-loop route (segment durations
+# 3.0 s + 7.430112 s) sees a segment-boundary drop, a clamped overshoot frame,
+# completion and hold frames; the loop route (1.5 + 1.5 + 2.121320 s) sees a
+# boundary drop and the same-frame loop restart.
+def _stepping_scenarios() -> dict[str, tuple[Route, tuple[float, ...]]]:
+    """Routes for the per-frame stepping fixture with their irregular frame
+    deltas: a straight looping route in orientation y (segment durations
+    1.5 + 1.5 + 2.121320 s — the deltas cross a boundary drop and the
+    same-frame loop restart) and a line-curve-linked-curve-line route with no
+    loop in orientation xy (3.0 + 7.430112 s — a boundary drop, a clamped
+    overshoot frame, completion and hold frames)."""
+    return {
+        "stepping-line-loop": (Route(
+            points=(_line_point((0, 0, 0), speed=4), _line_point((2, 0, 0), speed=4),
+                    _line_point((2, 2, 0), speed=4)),
+            loop=True, orient="y"),
+            (0.25, 0.5, 0.3, 1.0, 0.1666, 0.05, 0.7, 1.5, 0.3333, 0.2, 1.2, 1.5, 0.4, 0.05)),
+        "stepping-curves-no-loop": (Route(
+            points=(_line_point((0, 0, 0)),
+                    _curve_point((2, 0, 0), (3, 1, 0), speed=1.5, ease="easeInQuad"),
+                    _curve_point((4, 0, 0), (5, 2, 0), link=True),
+                    _line_point((6, 0, 0))),
+            loop=False, orient="xy"),
+            (0.1, 0.05, 0.0166, 0.0333, 0.25, 0.1666, 0.3333, 0.5, 0.1666, 0.7, 0.8,
+             0.9, 1.5, 1.1, 2.0, 1.3, 2.6, 0.1666, 0.05, 0.25, 0.3333, 0.1, 0.5)),
+    }
+
+
+# The stepping fixture seeds ``Play``'s childRoot rotation with the identity
+# (quaternion ``(w, x, y, z)``) and treats the first frame delta as the Play
+# frame's own, so row 0 exercises the seeded LateUpdate damp the production
+# caller gets from point 0's world rotation.
+PLAY_ROTATION = (1.0, 0.0, 0.0, 0.0)
+
+
+def _stepping_sample(route: Route, deltas: tuple[float, ...]) -> dict[str, object]:
+    """One stepping fixture entry: the route definition, its frame deltas, the
+    ``Play`` rotation seed (and the Play frame delta that seeds the first
+    damp) and ``simulate_frames``' write-after-update frames (position, aim,
+    active and the ``LookUpdate``-smoothed Z-X-Y Euler in Unity degrees)."""
+    frames = simulate_frames(route.points, route.loop, route.orient, deltas,
+                             initial_rotation=PLAY_ROTATION, initial_delta=deltas[0])
+    return {
+        "points": [{"position": list(point.position),
+                    "aid": list(point.aid) if point.aid else None,
+                    "connection": point.connection, "link": point.link,
+                    "speed": point.speed, "easeType": point.ease_type}
+                   for point in route.points],
+        "loop": route.loop,
+        "orient": route.orient,
+        "deltas": list(deltas),
+        "playRotation": list(PLAY_ROTATION),
+        "playDeltaTime": deltas[0],
+        "frames": [{"position": list(frame.position),
+                    "active": frame.active,
+                    "rotation": list(frame.rotation),
+                    "aim": None if frame.aim is None else {
+                        "axis": frame.aim.axis,
+                        "lookTarget": list(frame.aim.look_target),
+                        "rotation": list(frame.aim.rotation) if frame.aim.rotation is not None else None}}
+                   for frame in frames],
+    }
+
+
+def stepping_fixture() -> dict[str, object]:
+    return {
+        "note": ("Synthetic authored routes with irregular frame deltas; expected "
+                 "per-frame writes come from simulate_frames in this file (float64, "
+                 "record-after-update order), not from an original CharaStudio run."),
+        "tolerance": 1e-5,
+        "routes": {name: _stepping_sample(route, deltas)
+                   for name, (route, deltas) in _stepping_scenarios().items()},
+    }
+
 
 def _line_point(position: Vec, speed: float = DEFAULT_SPEED, ease: str = DEFAULT_EASE) -> RoutePoint:
     return RoutePoint(position=position, aid=None, connection="line", link=False, speed=speed, ease_type=ease)
@@ -691,10 +1050,26 @@ def _sample(route: Route, elapsed: float) -> dict[str, object]:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--out", type=Path,
-                        default=REPO / ".local/reverse/studio-routes/route-reference.json",
-                        help="where to write the sampled fixture")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="where to write the sampled fixture (defaults: "
+                             ".local/reverse/studio-routes/route-reference.json for "
+                             "samples, Packages/Engine/Tests/EngineTests/Fixtures/"
+                             "route-stepping.json for stepping)")
+    parser.add_argument("--fixture", choices=("samples", "stepping"), default="samples",
+                        help="write the continuous-evaluator fixture, or the "
+                             "per-frame stepping fixture")
     arguments = parser.parse_args(argv)
+    if arguments.out is None:
+        arguments.out = (REPO / "Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json"
+                         if arguments.fixture == "stepping"
+                         else REPO / ".local/reverse/studio-routes/route-reference.json")
+
+    if arguments.fixture == "stepping":
+        stepping = stepping_fixture()
+        arguments.out.parent.mkdir(parents=True, exist_ok=True)
+        arguments.out.write_text(json.dumps(stepping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"wrote {arguments.out}")
+        return
 
     fixture: dict[str, object] = {
         "note": ("Synthetic authored routes; expected values come from the "

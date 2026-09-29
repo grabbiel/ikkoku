@@ -18,9 +18,9 @@ private func amount(_ position: SIMD3<Float>, rotation: SIMD3<Float> = .zero,
 
 private func routePoint(_ position: SIMD3<Float>, rotation: SIMD3<Float> = .zero, speed: Float = 2,
                         easeType: Int32 = 21, aid: SIMD3<Float>? = nil,
-                        linked: Bool = false) -> KoikatsuRoutePointRecord {
+                        linked: Bool = false, connection: Int32 = 0) -> KoikatsuRoutePointRecord {
     .init(bone: .init(sourceKey: 1, transform: amount(position, rotation: rotation)), speed: speed,
-          easeType: easeType, connection: 0, aid: .init(sourceKey: 0, transform: amount(aid ?? .zero)),
+          easeType: easeType, connection: connection, aid: .init(sourceKey: 0, transform: amount(aid ?? .zero)),
           aidInitialized: aid != nil, linked: linked)
 }
 
@@ -106,7 +106,7 @@ func orientToPathUsesAim() throws {
     }
 }
 
-@Test("a non-looping route holds its end position after finishing")
+@Test("a non-looping route holds its end position and last aim after finishing")
 func nonLoopHoldsEnd() throws {
     let record = routeRecord([routePoint([0, 0, 1]), routePoint([2, 0, 1])],
                              loop: false, orientation: 1)
@@ -114,14 +114,45 @@ func nonLoopHoldsEnd() throws {
     let (ended, endDiagnostics) = SourceStudioRoutePlayback.childRootWorld(
         route: record, routeWorld: matrix_identity_float4x4, pointLocals: locals, elapsed: 5)
     #expect(ended.translation == SIMD3<Float>(2, 0, -1))
-    // The lookahead clamps onto the finished position, so the instantaneous
-    // aim is degenerate and point 0's rotation (identity here) is kept.
-    #expect(endDiagnostics.contains { $0.contains("degenerate") })
-    #expect(columnwiseEqual(Transform.rotation(ended.rotationQuaternion), matrix_identity_float4x4))
+    // At percentage 1 the lookahead clamps onto the finished position and the
+    // instantaneous aim is degenerate, but `onComplete` only deactivates the
+    // route: `childRoot` keeps the last non-degenerate aim rotation, which the
+    // playback layer reproduces from the final segment at `1 - lookAhead`.
+    // Here that faces Unity +x — a 90-degree yaw, the same as mid-flight.
+    #expect(endDiagnostics.isEmpty)
+    let expectedYaw = Transform.rotation(UnityCoordinates.eulerDegrees(SIMD3<Float>(0, 90, 0)))
+    #expect(columnwiseEqual(Transform.rotation(ended.rotationQuaternion), expectedYaw))
     // 3.05 s is just past this route's 3 s (PathLength-quirk) total.
     let (justAfter, _) = SourceStudioRoutePlayback.childRootWorld(
         route: record, routeWorld: matrix_identity_float4x4, pointLocals: locals, elapsed: 3.05)
     #expect(columnwiseEqual(justAfter, ended, tolerance: 0.001))
+}
+
+@Test("isFinished reports the onComplete of a non-looping route")
+func isFinishedReportsOnComplete() throws {
+    let record = routeRecord([routePoint([0, 0, 1]), routePoint([2, 0, 1])],
+                             loop: false, orientation: 1)
+    let locals = SourceStudioRoutePlayback.pointLocals(from: record)
+    func finished(_ elapsed: Double) -> Bool {
+        SourceStudioRoutePlayback.isFinished(route: record, routeWorld: matrix_identity_float4x4,
+                                             pointLocals: locals, elapsed: elapsed)
+    }
+    #expect(!finished(0))
+    #expect(!finished(1.5))     // mid-flight on the 3 s (PathLength-quirk) segment
+    #expect(finished(3.05))     // onComplete has fired
+    #expect(finished(5))
+    #expect(!finished(-1))      // treated as 0, like childRootWorld
+    // A looping route never finishes, and an unplayable route reports no
+    // finish beyond what the record itself says.
+    let looping = routeRecord([routePoint([0, 0, 1]), routePoint([2, 0, 1])],
+                              loop: true, orientation: 1)
+    #expect(!SourceStudioRoutePlayback.isFinished(route: looping, routeWorld: matrix_identity_float4x4,
+                                                  pointLocals: SourceStudioRoutePlayback.pointLocals(from: looping),
+                                                  elapsed: 100))
+    let unplayable = routeRecord([routePoint([1, 0, 1]), routePoint([1, 0, 1])], loop: false)
+    #expect(!SourceStudioRoutePlayback.isFinished(route: unplayable, routeWorld: matrix_identity_float4x4,
+                                                  pointLocals: SourceStudioRoutePlayback.pointLocals(from: unplayable),
+                                                  elapsed: 10))
 }
 
 @Test("a looping route wraps elapsed time past one circuit")
@@ -214,6 +245,41 @@ func placementsKeepWorldScale() throws {
         pointLocals: SourceStudioRoutePlayback.pointLocals(from: unplayable), elapsed: 1)
     #expect(diagnostics.contains { $0.contains("no playable duration") })
     #expect(approximately(unplayablePin.scaleFactors, expectedScale))
+}
+
+@Test("the playback aid composes through the curve point's local transform")
+func playbackAidComposesThroughPointLocal() throws {
+    // Route IKKOKU-B point dicKey 8 as captured from the original: the aid
+    // transform is Point-local under a point rotated -15 degrees about Y, so
+    // the curve must bend through the composed route-local aid.
+    let record = routeRecord([
+        routePoint([0.8, 0.2, 0.6], rotation: SIMD3(0, -15, 0), aid: SIMD3(-0.2683783, 0.675, -0.3895974),
+                   connection: 1),
+        routePoint([2, 0.4, 0]),
+    ])
+    // The evaluator runs in Unity route-local space; the route-local aid
+    // verified against the original capture for this point is
+    // (0.6416017, 0.875, 0.1542164).
+    let expected = try SourceStudioRoute(points: [
+        .init(position: [0.8, 0.2, 0.6], aid: [0.6416017, 0.875, 0.1542164], connection: .curve),
+        .init(position: [2, 0.4, 0]),
+    ], loop: false).evaluate(at: 1).position
+    let expectedTranslation = UnityCoordinates.position(SIMD3<Float>(Float(expected.x), Float(expected.y), Float(expected.z)))
+    let (played, diagnostics) = SourceStudioRoutePlayback.childRootWorld(
+        route: record, routeWorld: matrix_identity_float4x4,
+        pointLocals: SourceStudioRoutePlayback.pointLocals(from: record), elapsed: 1)
+    #expect(diagnostics.isEmpty)
+    #expect(approximately(played.translation, expectedTranslation, tolerance: 0.00001))
+
+    // The pre-fix composition used the raw Point-local aid, which bends the
+    // curve far away: 1 s is inside this segment, so the expectation above
+    // must not coincide with the buggy placement.
+    let buggy = try SourceStudioRoute(points: [
+        .init(position: [0.8, 0.2, 0.6], aid: [-0.2683783, 0.675, -0.3895974], connection: .curve),
+        .init(position: [2, 0.4, 0]),
+    ], loop: false).evaluate(at: 1).position
+    let buggyTranslation = SIMD3<Float>(Float(buggy.x), Float(buggy.y), -Float(buggy.z))
+    #expect(simd_distance(played.translation, buggyTranslation) > 0.1)
 }
 
 @Test("snapshot sampling pins the fixture scene's inactive route to its first point")
