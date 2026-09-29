@@ -11,8 +11,11 @@ import Scene
 /// FORWARD and FIX never read the entry pose because the captured settings
 /// keep calcLerp at 1.0, so the slerp lands on fixAngle; ANIMATION writes
 /// the animated pose through after MaxRotateToAngle, whose geometric clamp
-/// this slice does not model. TARGET and AWAY use the geometric solver and
-/// are reported as unsupported here. Quaternions are Unity x,y,z,w with no
+/// this slice does not model. TARGET and AWAY run through `stepSolver`, which
+/// takes the geometric solver's angle as an input: GetAngleToTarget's
+/// geometry that produces it, AWAY's own nowAngle adjustment and the
+/// limit-break handling are not ported, so no live nowAngle source is wired
+/// up and the preview override stays unapplied for both. Quaternions are Unity x,y,z,w with no
 /// basis change applied; callers that want the engine basis pass each
 /// returned rotation through `UnityCoordinates.rotation` themselves, exactly
 /// once. The Python oracle is Tools/reverse/analysis/neck_look_reference.py.
@@ -66,10 +69,20 @@ public struct SourceStudioNeckLookCurve: Decodable, Sendable {
 }
 
 /// The settings JSON subset the look modes need: the neck states' lookType,
-/// changeTypeLeapTime, calcLerp, changeTypeLerpCurve and the bone names.
+/// aParam bending limits and leapSpeed, changeTypeLeapTime, calcLerp,
+/// changeTypeLerpCurve and the bone names.
 public struct SourceStudioNeckLookSettings: Decodable, Sendable {
     private struct LookType: Decodable { let name: String }
-    private struct TypeState: Decodable { let lookType: LookType }
+    /// The bending limits one aParam entry keeps; the same shape recurs in
+    /// the exported animator controller but is not decoded there.
+    public struct BendingLimits: Decodable, Sendable {
+        public let minBendingAngle, maxBendingAngle, upBendingAngle, downBendingAngle: Float
+    }
+    private struct TypeState: Decodable {
+        let lookType: LookType
+        let aParam: [BendingLimits]
+        let leapSpeed: Float
+    }
     private struct Bone: Decodable { let neckBone: String }
     private struct Neck: Decodable {
         let neckTypeStates: [TypeState]
@@ -82,6 +95,11 @@ public struct SourceStudioNeckLookSettings: Decodable, Sendable {
 
     /// One lookType per neck state, in saved pattern order.
     public let lookTypes: [SourceStudioNeckLookType]
+    /// One aParam (bending limits) pair per bone, per neck state, so a
+    /// `stepSolver` call can select its pattern like the original's ptnNo.
+    public let bendingLimits: [[BendingLimits]]
+    /// One leapSpeed per neck state (the captured prefab keeps 2.0 on all 7).
+    public let leapSpeeds: [Float]
     /// cf_j_neck and cf_j_head, in the order the calculator reads them.
     public let boneNames: [String]
     public let changeTypeLeapTime: Float
@@ -96,12 +114,24 @@ public struct SourceStudioNeckLookSettings: Decodable, Sendable {
         guard neck.calcLerp == 1, neck.changeTypeLeapTime.isFinite, neck.changeTypeLeapTime > 0 else {
             throw RigError.invalid("Neck look settings need calcLerp 1 and a positive changeTypeLeapTime.")
         }
+        guard neck.neckTypeStates.allSatisfy({ state in
+                state.aParam.count == 2
+                && state.aParam.allSatisfy { limits in
+                    [limits.minBendingAngle, limits.maxBendingAngle,
+                     limits.upBendingAngle, limits.downBendingAngle].allSatisfy(\.isFinite)
+                }
+                && state.leapSpeed.isFinite }),
+              neck.neckTypeStates.count > 1 else {
+            throw RigError.invalid("Every neck look state needs two finite bending limits and a finite leapSpeed.")
+        }
         lookTypes = try neck.neckTypeStates.map { state in
             guard let lookType = SourceStudioNeckLookType(rawValue: state.lookType.name) else {
                 throw RigError.invalid("Unknown neck look type '\(state.lookType.name)'.")
             }
             return lookType
         }
+        bendingLimits = neck.neckTypeStates.map(\.aParam)
+        leapSpeeds = neck.neckTypeStates.map(\.leapSpeed)
         boneNames = neck.aBones.map(\.neckBone)
         guard boneNames.count == 2 else {
             throw RigError.invalid("The neck calculator reads exactly two bones.")
@@ -123,6 +153,9 @@ public struct SourceStudioNeckLook: Sendable {
     public private(set) var changeTypeTimer: Float
     public private(set) var fixAngle: [simd_quatf]
     public private(set) var fixAngleBackup: [simd_quatf]
+    /// The calculator's carried angleH/angleV pair per bone (index 0 neck,
+    /// index 1 head) in degrees; only the TARGET/AWAY solver reads them.
+    public private(set) var angles: [(h: Float, v: Float)] = [(0, 0), (0, 0)]
     private let settings: SourceStudioNeckLookSettings
 
     public init(settings: SourceStudioNeckLookSettings, lookType: SourceStudioNeckLookType,
@@ -171,9 +204,11 @@ public struct SourceStudioNeckLook: Sendable {
 
     /// UpdateCall(ptnNo) followed by NeckUpdateCalc for one frame. A deltaTime
     /// of 0 skips NeckUpdateCalc entirely, so the animated pose passes
-    /// through untouched. TARGET and AWAY throw: the geometric solver is not
-    /// simulated. MaxRotateToAngle is out of scope; the animated pose must
-    /// already be within its limits.
+    /// through untouched. TARGET and AWAY are stepped by `stepSolver`, which
+    /// needs the solver angle this signature does not carry (and which
+    /// returns nil rotations at a zero deltaTime, since the original writes
+    /// nothing back then). MaxRotateToAngle is out of scope; the animated
+    /// pose must already be within its limits.
     public mutating func step(deltaTime: Float, lookType: SourceStudioNeckLookType,
                               animated: [simd_quatf]) throws -> [simd_quatf] {
         guard animated.count == 2, animated.allSatisfy({ $0.length > 0 }) else {
@@ -186,14 +221,14 @@ public struct SourceStudioNeckLook: Sendable {
         // its raise discards the mutated copy, so the caller's state must
         // stay untouched for a non-zero deltaTime.
         if deltaTime != 0, lookType == .target || lookType == .away {
-            throw RigError.invalid("TARGET and AWAY use the geometric solver and are not simulated.")
+            throw RigError.invalid("TARGET and AWAY step through stepSolver, which takes the solver angle.")
         }
         if self.lookType != lookType {  // UpdateCall type-change branch
             self.lookType = lookType
             changeTypeTimer = 0
             fixAngleBackup = fixAngle
-            // FORWARD also clears angleH/angleV here; only the TARGET/AWAY
-            // solver reads them and it is out of scope, so nothing to clear.
+            // FORWARD also clears angleH/angleV here; the TARGET/AWAY solver
+            // reads them and rebuilds them before use, so nothing to clear.
         }
         if deltaTime == 0 { return animated }  // NeckUpdateCalc early-out
         changeTypeTimer = min(max(changeTypeTimer + deltaTime, 0), settings.changeTypeLeapTime)
@@ -216,6 +251,92 @@ public struct SourceStudioNeckLook: Sendable {
             // calcLerp 1.0 (boundary-checked in the loader) makes
             // Slerp(animated, fixAngle, calcLerp) land on fixAngle itself.
             rotations.append(try Self.slerp(fixAngleBackup[bone], target, num))
+        }
+        return rotations
+    }
+
+    /// Quaternion.AngleAxis(angleH, Y) * Quaternion.AngleAxis(angleV, X), the
+    /// parent-frame rotation CalcNeckBone's `ref.up`/`ref.right` formula
+    /// reduces to in the captured rest setup (up = +Y, right = +X): the full
+    /// Hamilton product, whose x/z cross terms are real (the captured
+    /// fixAngle records them).
+    static func yxBasis(angleH: Float, angleV: Float) -> simd_quatf {
+        let halfH = angleH * .pi / 360, halfV = angleV * .pi / 360
+        let (sineH, cosH) = (sin(halfH), cos(halfH))
+        let (sineV, cosV) = (sin(halfV), cos(halfV))
+        return simd_quatf(ix: cosH * sineV, iy: sineH * cosV, iz: -sineH * sineV, r: cosH * cosV)
+    }
+
+    /// The TARGET / AWAY branch of one LateUpdate, mirroring the Python
+    /// reference's `neck_target_step`. `nowAngle` is the serialized
+    /// nowAngle pair [x, y] in degrees, produced by the geometric solver
+    /// GetAngleToTarget -- that geometry is NOT ported here, and neither is
+    /// AWAY's own nowAngle adjustment (the capture holds a constant y of
+    /// -60 deg while x drifts) nor the limit-break handling (hAngleLimit /
+    /// vAngleLimit / limitAway / limitBreakCorrectionValue); this step
+    /// consumes the angle as given. `pattern` selects the neck state whose
+    /// aParam bending limits and leapSpeed the original would read for its
+    /// ptnNo, exactly like `settings.lookTypes[pattern]`. UpdateCall on a
+    /// type change resets the transition timer and backs up fixAngle as in
+    /// `step`; the carried angleH/angleV pair is not cleared there (see the
+    /// type-change comment for why). deltaTime 0
+    /// performs no distribution and returns nil rotations: the original
+    /// writes nothing back then and the caller keeps whatever the Animator
+    /// left on the bones. The distribution runs over the bones LAST to
+    /// FIRST (head, then neck): each bone clamps the remaining angle into
+    /// its own limits (y into min/maxBendingAngle, x into
+    /// up/downBendingAngle) and subtracts what it took, so a demand beyond
+    /// the head's share spills over to the neck. Each bone then smooths its
+    /// carried pair toward its clamped share with Unity Lerp's clamped
+    /// factor deltaTime * leapSpeed, rebuilds fixAngle as `yxBasis`, and
+    /// leaves localRotation = Slerp(fixAngleBackup, fixAngle, num), the same
+    /// transition blend the other modes use.
+    public mutating func stepSolver(deltaTime: Float, lookType: SourceStudioNeckLookType,
+                                    pattern: Int, nowAngle: (x: Float, y: Float)) throws -> [simd_quatf?] {
+        guard lookType == .target || lookType == .away else {
+            throw RigError.invalid("stepSolver only drives TARGET and AWAY, not \(lookType.rawValue).")
+        }
+        guard settings.lookTypes.indices.contains(pattern) else {
+            throw RigError.invalid("Neck solver pattern \(pattern) is outside the prefab's \(settings.lookTypes.count) neck states.")
+        }
+        guard deltaTime.isFinite, deltaTime >= 0 else {
+            throw RigError.invalid("Neck look step needs a non-negative finite deltaTime.")
+        }
+        guard [nowAngle.x, nowAngle.y].allSatisfy(\.isFinite) else {
+            throw RigError.invalid("nowAngle needs two finite degrees.")
+        }
+        if self.lookType != lookType {  // UpdateCall type-change branch
+            self.lookType = lookType
+            changeTypeTimer = 0
+            fixAngleBackup = fixAngle
+            // angleH/angleV carry over untouched: the run1 TARGET -> AWAY
+            // switch matches recorded fixAngle to 1.3e-5 deg that way, and a
+            // switch from FORWARD/FIX finds them already cleared by the
+            // original's FORWARD branch (the fixture seeds the zero state).
+        }
+        // NeckUpdateCalc returns before writing anything: the two nil
+        // entries tell the caller the override did not run (as in the
+        // reference), even though UpdateCall already applied the type change.
+        if deltaTime == 0 { return [nil, nil] }
+        changeTypeTimer = min(max(changeTypeTimer + deltaTime, 0), settings.changeTypeLeapTime)
+        let num = try settings.changeTypeLerpCurve.evaluate(changeTypeTimer / settings.changeTypeLeapTime)
+        var horizontal: [Float] = [0, 0], vertical: [Float] = [0, 0]
+        var residual = nowAngle
+        for bone in [1, 0] {  // the distribution loop runs bone 1 (head) first
+            let limits = settings.bendingLimits[pattern][bone]
+            horizontal[bone] = min(max(residual.y, limits.minBendingAngle), limits.maxBendingAngle)
+            vertical[bone] = min(max(residual.x, limits.upBendingAngle), limits.downBendingAngle)
+            // Subtract with the same order the original accumulates in, so a
+            // demand beyond the head's share spills to the neck.
+            residual = (x: residual.x - vertical[bone], y: residual.y - horizontal[bone])
+        }
+        let factor = min(max(deltaTime * settings.leapSpeeds[pattern], 0), 1)
+        var rotations: [simd_quatf?] = []
+        for bone in 0..<2 {
+            angles[bone].h += (horizontal[bone] - angles[bone].h) * factor
+            angles[bone].v += (vertical[bone] - angles[bone].v) * factor
+            fixAngle[bone] = Self.yxBasis(angleH: angles[bone].h, angleV: angles[bone].v)
+            rotations.append(try Self.slerp(fixAngleBackup[bone], fixAngle[bone], num))
         }
         return rotations
     }

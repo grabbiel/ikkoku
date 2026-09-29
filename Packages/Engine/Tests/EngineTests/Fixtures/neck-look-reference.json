@@ -38,6 +38,169 @@
    "value": 1.0
   }
  ],
+ "neckTypeStates": [
+  {
+   "lookType": {
+    "name": "FORWARD",
+    "value": 3
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 0.0,
+     "maxBendingAngle": 0.0,
+     "minBendingAngle": 0.0,
+     "name": "",
+     "upBendingAngle": 0.0
+    },
+    {
+     "downBendingAngle": 0.0,
+     "maxBendingAngle": 0.0,
+     "minBendingAngle": 0.0,
+     "name": "",
+     "upBendingAngle": 0.0
+    }
+   ]
+  },
+  {
+   "lookType": {
+    "name": "TARGET",
+    "value": 1
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    },
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    }
+   ]
+  },
+  {
+   "lookType": {
+    "name": "AWAY",
+    "value": 2
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    },
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 20.0,
+     "minBendingAngle": -20.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    }
+   ]
+  },
+  {
+   "lookType": {
+    "name": "ANIMATION",
+    "value": 0
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    },
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    }
+   ]
+  },
+  {
+   "lookType": {
+    "name": "FIX",
+    "value": 4
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    },
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    }
+   ]
+  },
+  {
+   "lookType": {
+    "name": "TARGET",
+    "value": 1
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    },
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    }
+   ]
+  },
+  {
+   "lookType": {
+    "name": "AWAY",
+    "value": 2
+   },
+   "leapSpeed": 2.0,
+   "aParam": [
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    },
+    {
+     "downBendingAngle": 25.0,
+     "maxBendingAngle": 40.0,
+     "minBendingAngle": -40.0,
+     "name": "",
+     "upBendingAngle": -25.0
+    }
+   ]
+  }
+ ],
  "start": {
   "lookType": "AWAY",
   "timer": 0.0,
@@ -68,6 +231,14 @@
     0.013501,
     0.984661
    ]
+  ],
+  "angleH": [
+   0.0,
+   0.0
+  ],
+  "angleV": [
+   0.0,
+   0.0
   ]
  },
  "sequence": [
@@ -499,6 +670,387 @@
    "timer": 0.31859789
   }
  ],
+ "solverStart": {
+  "lookType": "FORWARD",
+  "fixAngle": [
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ],
+   [
+    0.0,
+    0.0,
+    0.0,
+    1.0
+   ]
+  ]
+ },
+ "solverSequence": [
+  {
+   "pattern": 1,
+   "lookType": "TARGET",
+   "deltaTime": 0.0166,
+   "nowAngle": [
+    5.0,
+    12.0
+   ],
+   "localRotations": [
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    [
+     5.570578663537421e-05,
+     0.00013369433307895085,
+     -1.9367285866410057e-07,
+     0.9999999895113265
+    ]
+   ],
+   "fixAngle": [
+    [
+     0.0,
+     0.0,
+     -0.0,
+     1.0
+    ],
+    [
+     0.0014486140174541876,
+     0.003476685218001612,
+     -5.036410664077773e-06,
+     0.999992907050824
+    ]
+   ],
+   "fixAngleBackup": [
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "timer": 0.0166,
+   "angles": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     0.3984,
+     0.166
+    ]
+   ]
+  },
+  {
+   "pattern": 1,
+   "lookType": "TARGET",
+   "deltaTime": 0.2,
+   "nowAngle": [
+    -8.0,
+    30.0
+   ],
+   "localRotations": [
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    [
+     -0.011210041636107206,
+     0.04441060316321413,
+     0.0012018707403256938,
+     0.9989497428799509
+    ]
+   ],
+   "fixAngle": [
+    [
+     0.0,
+     0.0,
+     -0.0,
+     1.0
+    ],
+    [
+     -0.02689863781875105,
+     0.10656380846542578,
+     0.0028839041636424707,
+     0.9939377752684595
+    ]
+   ],
+   "fixAngleBackup": [
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "timer": 0.21660000000000001,
+   "angles": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     12.239040000000001,
+     -3.1004000000000005
+    ]
+   ]
+  },
+  {
+   "pattern": 1,
+   "lookType": "TARGET",
+   "deltaTime": 0.0,
+   "nowAngle": [
+    0.0,
+    0.0
+   ],
+   "localRotations": [
+    null,
+    null
+   ],
+   "fixAngle": [
+    [
+     0.0,
+     0.0,
+     -0.0,
+     1.0
+    ],
+    [
+     -0.02689863781875105,
+     0.10656380846542578,
+     0.0028839041636424707,
+     0.9939377752684595
+    ]
+   ],
+   "fixAngleBackup": [
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ],
+    [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   ],
+   "timer": 0.21660000000000001,
+   "angles": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     12.239040000000001,
+     -3.1004000000000005
+    ]
+   ]
+  },
+  {
+   "pattern": 2,
+   "lookType": "AWAY",
+   "deltaTime": 0.0166,
+   "nowAngle": [
+    10.0,
+    -30.0
+   ],
+   "localRotations": [
+    [
+     0.0,
+     -0.00011141202232468958,
+     0.0,
+     0.9999999937936807
+    ],
+    [
+     -0.026754461185273172,
+     0.10620718218992589,
+     0.0028600445253367792,
+     0.9939799059353638
+    ]
+   ],
+   "fixAngle": [
+    [
+     0.0,
+     -0.0028972425050461876,
+     0.0,
+     0.999995802984126
+    ],
+    [
+     -0.023148103235224236,
+     0.09728476520060086,
+     0.002263308774073418,
+     0.9949847824011524
+    ]
+   ],
+   "fixAngleBackup": [
+    [
+     0.0,
+     0.0,
+     -0.0,
+     1.0
+    ],
+    [
+     -0.02689863781875105,
+     0.10656380846542578,
+     0.0028839041636424707,
+     0.9939377752684595
+    ]
+   ],
+   "timer": 0.0166,
+   "angles": [
+    [
+     -0.332,
+     0.0
+    ],
+    [
+     11.168703872000002,
+     -2.6654667200000004
+    ]
+   ]
+  },
+  {
+   "pattern": 2,
+   "lookType": "AWAY",
+   "deltaTime": 5.0,
+   "nowAngle": [
+    40.0,
+    -50.0
+   ],
+   "localRotations": [
+    [
+     0.12607862007251908,
+     -0.25660481229257065,
+     0.03378266443126182,
+     0.9576621969425486
+    ],
+    [
+     0.21315140986521286,
+     -0.16953202249987687,
+     0.0375843445352855,
+     0.9614638770465722
+    ]
+   ],
+   "fixAngle": [
+    [
+     0.12607862007251908,
+     -0.25660481229257065,
+     0.03378266443126182,
+     0.9576621969425486
+    ],
+    [
+     0.2131514098652129,
+     -0.16953202249987687,
+     0.0375843445352855,
+     0.9614638770465722
+    ]
+   ],
+   "fixAngleBackup": [
+    [
+     0.0,
+     0.0,
+     -0.0,
+     1.0
+    ],
+    [
+     -0.02689863781875105,
+     0.10656380846542578,
+     0.0028839041636424707,
+     0.9939377752684595
+    ]
+   ],
+   "timer": 1.0,
+   "angles": [
+    [
+     -30.0,
+     15.0
+    ],
+    [
+     -20.0,
+     25.0
+    ]
+   ]
+  },
+  {
+   "pattern": 2,
+   "lookType": "AWAY",
+   "deltaTime": 0.0166,
+   "nowAngle": [
+    -12.0,
+    6.0
+   ],
+   "localRotations": [
+    [
+     0.12219489324357552,
+     -0.24841117611275118,
+     0.03160629884220798,
+     0.9603964480988921
+    ],
+    [
+     0.20309630184828412,
+     -0.1626610685331027,
+     0.03423596205891517,
+     0.9649461994645714
+    ]
+   ],
+   "fixAngle": [
+    [
+     0.1221948932435755,
+     -0.24841117611275115,
+     0.031606298842207975,
+     0.960396448098892
+    ],
+    [
+     0.20309630184828412,
+     -0.1626610685331027,
+     0.03423596205891517,
+     0.9649461994645714
+    ]
+   ],
+   "fixAngleBackup": [
+    [
+     0.0,
+     0.0,
+     -0.0,
+     1.0
+    ],
+    [
+     -0.02689863781875105,
+     0.10656380846542578,
+     0.0028839041636424707,
+     0.9939377752684595
+    ]
+   ],
+   "timer": 1.0,
+   "angles": [
+    [
+     -29.004,
+     14.502
+    ],
+    [
+     -19.1368,
+     23.7716
+    ]
+   ]
+  }
+ ],
  "savedFix": {
   "start": {
    "lookType": "FIX",
@@ -530,6 +1082,14 @@
      0.0,
      0.9914448613738104
     ]
+   ],
+   "angleH": [
+    0.0,
+    0.0
+   ],
+   "angleV": [
+    0.0,
+    0.0
    ]
   },
   "lookType": "FIX",

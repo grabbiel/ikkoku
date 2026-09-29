@@ -3,9 +3,21 @@ import unittest
 
 from neck_look_reference import (DEFAULT_CALC_LERP, DEFAULT_CHANGE_TYPE_LEAP_TIME,
                                  DEFAULT_CHANGE_TYPE_LERP_CURVE, IDENTITY,
-                                 evaluate_curve, initial_state, neck_step, slerp)
+                                 evaluate_curve, initial_state, neck_step,
+                                 neck_target_step, slerp)
 
 KEYS = DEFAULT_CHANGE_TYPE_LERP_CURVE['keys']
+
+# The captured studio aParam pair per bone (neck, head), cf_j_neck order.
+TARGET_APARAM = [{'minBendingAngle': -40.0, 'maxBendingAngle': 40.0,
+                  'upBendingAngle': -25.0, 'downBendingAngle': 25.0},
+                 {'minBendingAngle': -40.0, 'maxBendingAngle': 40.0,
+                  'upBendingAngle': -25.0, 'downBendingAngle': 25.0}]
+# AWAY keeps the neck at +/-40 but narrows the head to +/-20 degrees.
+AWAY_APARAM = [{'minBendingAngle': -40.0, 'maxBendingAngle': 40.0,
+                'upBendingAngle': -25.0, 'downBendingAngle': 25.0},
+               {'minBendingAngle': -20.0, 'maxBendingAngle': 20.0,
+                'upBendingAngle': -25.0, 'downBendingAngle': 25.0}]
 
 
 def yaw(angle):
@@ -147,3 +159,91 @@ class NeckStepTests(LookReferenceTestCase):
             neck_step(self.start('FORWARD'), 'TARGET', 0.1, [IDENTITY, IDENTITY])
         with self.assertRaises(ValueError):
             neck_step(self.start('FORWARD'), 'FIX', 0.1, [IDENTITY])
+
+
+class NeckTargetStepTests(LookReferenceTestCase):
+    def test_zero_delta_time_writes_nothing(self):
+        state = initial_state('TARGET', [yaw(-30.0), yaw(10.0)])
+        state, rotations = neck_target_step(state, [0.0, 20.0], 0.0, TARGET_APARAM)
+        self.assertIsNone(rotations[0])  # NeckUpdateCalc returned without overriding
+        self.assertIsNone(rotations[1])
+        self.assertEqual(state['angleH'], [0.0, 0.0])  # no distribution either
+        self.assertEqual(state['timer'], 0.0)
+
+    def test_distribution_runs_head_first_and_spills_to_neck(self):
+        # AWAY demands 34 deg horizontally: the head (index 1) takes its
+        # +/-20 share first, the leftover 14 deg goes to the neck (index 0).
+        state = initial_state('AWAY', [IDENTITY, IDENTITY])
+        state, _ = neck_target_step(state, [0.0, 34.0], 10.0, AWAY_APARAM)  # factor 1
+        self.assertAlmostEqual(state['angleH'][1], 20.0, places=12)
+        self.assertAlmostEqual(state['angleH'][0], 14.0, places=12)
+        self.assertAlmostEqual(state['angleV'], [0.0, 0.0], delta=1e-12)
+
+    def test_vertical_share_clamps_per_bone(self):
+        state = initial_state('TARGET', [IDENTITY, IDENTITY])
+        # nowAngle[0] is the vertical share; +/-25 per bone, head first.
+        state, _ = neck_target_step(state, [-40.0, 0.0], 10.0, TARGET_APARAM)
+        self.assertAlmostEqual(state['angleV'][1], -25.0, places=12)
+        self.assertAlmostEqual(state['angleV'][0], -15.0, places=12)
+
+    def test_smoothing_factor_clamps(self):
+        state = initial_state('TARGET', [IDENTITY, IDENTITY])
+        # leapSpeed 2 with dt 0.25 moves half way (Unity Lerp semantics)...
+        state, _ = neck_target_step(state, [0.0, 40.0], 0.25, TARGET_APARAM)
+        self.assertAlmostEqual(state['angleH'][1], 20.0, places=12)
+        # ...dt 0 is handled by the no-op branch, and a big dt saturates.
+        state, _ = neck_target_step(state, [0.0, -40.0], 5.0, TARGET_APARAM)
+        self.assertAlmostEqual(state['angleH'][1], -40.0, places=12)
+
+    def test_steady_state_holds_and_fix_angle_is_yx_basis(self):
+        state = initial_state('TARGET', [IDENTITY, IDENTITY])
+        # 2000 steps of the 0.02 factor drive the smoothing to its float64
+        # fixed point (0.98^2000 ~ 3e-18), so the angles land on the demand.
+        for _ in range(2000):
+            state, _ = neck_target_step(state, [3.0, 7.0], 0.01, TARGET_APARAM)
+        # The head (bone 1) distributes first and stays inside its own
+        # +/-40 / +/-25 limits, so the neck only ever sees the leftover.
+        self.assertAlmostEqual(state['angleH'][1], 7.0, places=12)
+        self.assertAlmostEqual(state['angleV'][1], 3.0, places=12)
+        self.assertAlmostEqual(state['angleH'][0], 0.0, places=12)
+        self.assertAlmostEqual(state['angleV'][0], 0.0, places=12)
+
+        def pitch(angle):  # AngleAxis(angle, X)
+            half = math.radians(angle) / 2.0
+            return [math.sin(half), 0.0, 0.0, math.cos(half)]
+
+        def multiply(a, b):
+            ax, ay, az, aw = a
+            bx, by, bz, bw = b
+            return [aw * bx + ax * bw + ay * bz - az * by,
+                    aw * by + ay * bw + az * bx - ax * bz,
+                    aw * bz + az * bw + ax * by - ay * bx,
+                    aw * bw - ax * bx - ay * by - az * bz]
+
+        # angleH about Y composed with angleV about X, Unity Euler (v, h, 0).
+        expected = multiply(yaw(7.0), pitch(3.0))
+        self.assertQuaternionAlmostEqual(state['fixAngle'][1], norm(expected))
+        self.assertQuaternionAlmostEqual(state['fixAngle'][0], IDENTITY)
+
+    def test_type_change_backs_up_and_blends(self):
+        state = initial_state('FORWARD', [yaw(-30.0), yaw(10.0)])
+        state, rotations = neck_target_step(state, [0.0, 0.0], 0.5, TARGET_APARAM,
+                                            look_type='TARGET')
+        self.assertEqual(state['lookType'], 'TARGET')
+        self.assertAlmostEqual(state['timer'], 0.5, places=12)
+        num = evaluate_curve(KEYS, 0.5)
+        for bone, backup in enumerate([yaw(-30.0), yaw(10.0)]):
+            expected = slerp(backup, IDENTITY, num)  # demand 0 -> fixAngle identity
+            self.assertQuaternionAlmostEqual(rotations[bone], expected)
+
+    def test_inputs_rejected(self):
+        state = initial_state('TARGET', [IDENTITY, IDENTITY])
+        with self.assertRaisesRegex(ValueError, 'TARGET and AWAY'):
+            neck_target_step(state, [0.0, 0.0], 0.1, TARGET_APARAM, look_type='FIX')
+        with self.assertRaises(ValueError):
+            neck_target_step(state, [0.0, 0.0], 0.1, TARGET_APARAM[:1])
+        with self.assertRaises(ValueError):
+            neck_target_step(state, [float('nan'), 0.0], 0.1, TARGET_APARAM)
+        with self.assertRaises(ValueError):
+            neck_target_step(initial_state('TARGET', [IDENTITY]), [0.0, 0.0], 0.1,
+                             TARGET_APARAM, look_type='AWAY')
