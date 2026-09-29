@@ -98,12 +98,22 @@ class SourceAnimationAssetTests(unittest.TestCase):
         raw = self.clip(); raw['m_MuscleClip']['m_Clip']['data']['m_ConstantClip']['data'].pop()
         with self.assertRaises(ValueError): convert_clip(raw, 'clip', {})
 
-    def test_clip_rejects_events_mirroring_and_loop_pose_correction(self):
+    def test_cycle_offset_converts_but_loop_pose_correction_stays_rejected(self):
+        raw = self.clip(); raw['m_MuscleClip']['m_CycleOffset'] = 0.5
+        self.assertEqual(convert_clip(raw, 'cycle-offset', {})['cycleOffset'], 0.5)
         raw = self.clip(); raw['m_Events'] = [{'time': 0}]
         with self.assertRaises(ValueError): convert_clip(raw, 'clip', {})
-        for key in ['m_Mirror', 'm_LoopBlend']:
+        for key in ['m_Mirror', 'm_LoopBlend', 'm_LoopBlendOrientation', 'm_LoopBlendPositionY', 'm_LoopBlendPositionXZ']:
             raw = self.clip(); raw['m_MuscleClip'][key] = True
             with self.subTest(key=key), self.assertRaises(ValueError): convert_clip(raw, 'clip', {})
+
+    def test_measurement_evidence_remains_kept_for_the_excluded_row(self):
+        # 0/14/13 must stay excluded: every correction candidate was measured
+        # above tolerance (0.0296 component-wise; 0.0651/0.410 quaternion
+        # orderings; 0.220/0.407 pre-offset u) so nothing was adopted.
+        raw = self.clip(); raw['m_MuscleClip']['m_LoopBlend'] = True
+        with self.assertRaises(ValueError) as error: convert_clip(raw, 'm_Lewd', {})
+        self.assertIn('best max error 0.0295643', str(error.exception))
 
     @staticmethod
     def controller():

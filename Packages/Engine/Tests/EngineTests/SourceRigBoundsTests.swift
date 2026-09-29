@@ -41,8 +41,10 @@ import Assets
     #expect(throws: RigError.self) { try bounds.bounds(evaluation: rig.evaluate(rig.restPose), morphWeights: ["missing": []]) }
 }
 
-@Test func sourceRigLiveBoundsContainConvertedSourceAvatarAcrossPoseChanges() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_AVATAR"]),
+               "Requires IKKOKU_SOURCE_AVATAR"))
+func sourceRigLiveBoundsContainConvertedSourceAvatarAcrossPoseChanges() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
     let source = try SourceRig.loadModel(url: URL(fileURLWithPath: path)); var bounds = SourceRigBounds(source: source)
     for i in 0..<6 {
         var pose = source.rig.restPose
