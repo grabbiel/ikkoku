@@ -67,6 +67,39 @@ them claims whole-game parity; read each `tolerance`.
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup run, then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report; `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. |
+| `studio-scenarios.json` | Five `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 5/5 checks passed 2026-09-29 with `IKKOKU_SOURCE_SCENE`, `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props) supplied; every scenario report and exported scene hashed as an artifact. |
+
+## Studio scenario hook (T-T04)
+
+When the app starts with `IKKOKU_STUDIO_SCENARIO` set, `AppState` runs a
+headless scenario instead of the auto-capture path and exits itself
+(0 when every step passed, 1 otherwise) — `IKKOKU_AUTOCAPTURE` is not
+needed in that mode. The variable names a JSON file (`Tools/verification/
+scenarios/*.json`, resolved against the check's cwd, the repo root)
+holding `{"steps": [...]}`; `IKKOKU_STUDIO_SCENARIO_REPORT` is required
+and names the JSON report to write (`{"steps":[{"op","ok","detail"}],
+"passed","failed"}`). Objects are addressed by SOURCE KEY
+(`sourceObjectKey`), never by runtime UUIDs; numeric compares use a 1e-5
+tolerance. A failing `assert`/edit step is recorded and the run
+continues; a failing `export`/`reimport` stops it. Both write only under
+`.local/`. Ops: `select`, `setVisible`, `rename`, `toggleCamera`,
+`toggleRoute`, `setFace`, `setBody` `{key,index,value}`, `setColor`
+`{key,id,rgba[4]}`, `export`/`reimport` `{path}`, and `assert` with any
+of `name`, `visible`, `face`/`body` `{index,value}`, `color`
+`{id,rgba}`, `activeCamera` (key or null), `routePlaying`
+`{key,playing}`, `diagnosticContains`. The scenarios cover the
+automatable halves of the Studio checklist in
+`docs/component-audit/README.md`; each check's `tolerance` says exactly
+which checklist claims (live visuals, CharaStudio reload, unbound hair
+color writeback) stay unchecked.
+
+```sh
+# Build Debug first, then (needs the three private fixture paths in
+# .local/verification/environment.json):
+python3 Tools/verification/run.py \
+  --manifest Tools/verification/lanes/studio-scenarios.json \
+  --environment .local/verification/environment.json --strict
+```
 
 A declared `artifacts` entry is hashed only AFTER the run — an artifact
 the check never produced (or an oversized one) FAILS the check, e.g.

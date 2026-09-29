@@ -112,20 +112,34 @@ set:
       the prefab snapshot gives). No eye bone rotates and no original-pixel comparison
       exists.
 - [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
-      object is hidden; reloading in CharaStudio shows it hidden.
+      object is hidden; reloading in CharaStudio shows it hidden. (automated in part:
+      `Tools/verification/scenarios/visibility-folder.json` covers hide → export →
+      reimport in our app; the CharaStudio reload half is not automated; passed 2026-09-29)
 - [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,
       reload it: the new name shows; renaming a character (whose name lives in its card)
-      stays rejected at the inspector export.
+      stays rejected at the inspector export. (automated in part:
+      `Tools/verification/scenarios/rename-folder.json` covers the folder rename → export →
+      reimport; camera/route renames stay unexercised because the fixture scene contains
+      neither object type; the character-rename rejection is an Engine-suite unit test;
+      passed 2026-09-29)
 - [ ] ST-T03 active flags: switch the source camera / stop a playing route, export the
       original scene, reload: the new camera is active and the route stays stopped.
 - [ ] ST-T06 shape values: change a source character's face shape slider: the face
       updates; export and reload keep the new value. Body shape and Reset to card
       behave the same way, and a value edited back to the card's saved rate exports
-      byte-identical bytes (first slice, PR #64).
+      byte-identical bytes (first slice, PR #64). (automated in part:
+      `Tools/verification/scenarios/face-shape.json` covers a face and a body slot
+      edit → export → reimport read-back; the live visual update, Reset to card and
+      the back-to-saved-rate byte-identical case are not automated; passed 2026-09-29)
 - [ ] ST-T06 colors: change a source character's hair or skin color: the preview
       updates; export and reload keep it. Reset to card restores the saved colors,
       and a color edited back to the saved rgba exports byte-identical bytes
-      (second slice; no PR number yet).
+      (second slice; no PR number yet). (automated in part:
+      `Tools/verification/scenarios/color-edit.json` covers a skin color edit →
+      export → reimport read-back; the hair color is not automated because
+      `hair.parts.0.baseColor` binds no material on the imported assembly and export
+      skips its writeback; the preview update, Reset to card and the back-to-saved
+      byte-identical case are not automated; passed 2026-09-29)
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates
@@ -141,6 +155,10 @@ set:
       their saved colors (all 19 record the same `color[0]`, a 0.875 grey at alpha 1)
       (diagnostics report `Items rendered from the converted catalog: 19; unmapped keys:
       none.`); the placeholders stay exportable and export still succeeds (runtime only).
+      (automated in part: `Tools/verification/scenarios/item-props.json` asserts that
+      diagnostics line at import and again after an export → reimport of all 19
+      placeholders; the rendered transforms and saved colors — the visual half —
+      are not asserted; passed 2026-09-29)
 - [ ] CMT-04 and R1/R2: source draw-material overlays render in the live preview as in
       the matched captures (PRs #6–#13).
 - [ ] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with
