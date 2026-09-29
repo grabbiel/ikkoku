@@ -82,6 +82,35 @@ or hardens the implementation. Task IDs in the reports are stable references.
 identical reload frames; enabled tone gain muted/restored. See
 [recorded acceptance](../reference/mods/native-adapters.md#verified-release-acceptance).
 
+**Merged 2026-09-28 (PRs #3–#39):** first slices of orders 1–3 and a large part of
+order 4 (Studio source animation selection, hand patterns, blink, neck look-at,
+routes). Every slice records its own evidence in the linked reports. The merged
+`main` passes the Engine suite (458 tests), the app `xcodebuild` Debug build and the
+`Tools/reverse` and `Tools/reverse/analysis` unittests. That evidence is
+kernel-, capture- and build-level: **the merged wave has not been exercised
+interactively in the running app yet.** Before these features count as verified
+through the app, run this checklist against an original Studio scene (for
+example `koikatu_cs0002591.png`) with the converted-asset environment variables
+set:
+
+- [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
+      FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5).
+- [ ] ST-T10: the animation selection inspector changes the playing clip and speed, and
+      original export keeps the new catalog IDs (PRs #12, #16, #17).
+- [ ] ST-T07 hands and blink: saved hand patterns replay on both hands; cards with
+      `eyesBlink` blink automatically and the Studio toggle stops it (PRs #18–#23).
+- [ ] ST-T07 neck look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, FIX/FORWARD characters
+      hold their saved neck/head, TARGET/AWAY characters follow or avoid the Studio
+      camera as it orbits, and FK-neck characters are untouched (PRs #26–#38).
+- [ ] ST-T11 routes: route children and route characters move along their routes, and the
+      Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
+      only; export unchanged) (PRs #19–#39).
+- [ ] CMT-04 and R1/R2: source draw-material overlays render in the live preview as in
+      the matched captures (PRs #6–#13).
+- [ ] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with
+      settings, hand-pattern and look-pattern modes together (merged textually from three
+      branches).
+
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
 | 1 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. **Status 2026-09-25:** gate removed and prototype-only inspector/Timeline writes blocked for source characters; headless `IKKOKU_CAPTURE_UI_REPORT` records the rendered inspector (mutation-checked). Remaining: live mouse-driven guide edits, undo/redo, save/reload and original export through the UI. |
