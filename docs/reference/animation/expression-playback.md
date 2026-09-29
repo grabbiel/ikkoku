@@ -278,6 +278,80 @@ target-rate fields and Studio's eyes pattern 4 target guide are not
 exercised; neck pattern 5 and eyes patterns 4–7 stay outside the driver's
 accepted ranges. This is recorded ground truth, not a ported solver.
 
+**Geometry capture and the `GetAngleToTarget` formula (2026-09-28, geometry
+slice):** `RecordLook` now also records a per-frame `geometry` object — world
+position, rotation and lossyScale of the neck calculator's `transformAim`
+(`aim`), the bone's `boneCalcAngle` (`NeckRef`) and the last bone's
+`referenceCalc` (`HeadRef`), `cf_j_neck`, `cf_j_head`, `cf_j_spine03`, each
+`EyeLookCalc.eyeObjs[i].eyeTransform` (`EyeTargetL`/`EyeTargetR`) and the eye
+calculator's public `rootNode` plus private `trfCenter` — together with
+reflection-read private members: the neck calculator's `changeTypeTimer`,
+`backupPos` and `lookType`, the live state's `isLimitBreakBackup` for the
+frame's `ptnNo`, and per eye `origRotation`, `referenceLookDir`,
+`referenceUpDir` and `dirUp`. Without the tsv every output stays
+byte-identical. The 2026-09-28 capture `.local/stt07m/run1` (8 phases, 570
+frames, `status.error` null) re-runs phases 0–3 of the table above and adds
+phase 4 neck 1 eyes 1 at target `(0, 1.3, −1.5)` — directly behind the
+character — phase 5 neck 1 eyes 1 at `(3.0, 1.3, 0.2)` — far to one side —
+and phases 6/7 (FIX, ANIMATION) at `(−1.0, 1.2, 1.4)`:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07m/run1 --look-patterns .local/stt07m/look-patterns.tsv
+# after the player reports done:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07m/run1 --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/analysis/neck_target_angle.py \
+  .local/stt07m/run1 --settings .local/stt07h/studio-look-settings.json
+```
+
+`Tools/reverse/analysis/neck_target_angle.py` reconstructs the recovered
+`GetAngleToTarget` and its pre-check limit test as pure functions over that
+geometry (Unity-semantics `project`/`angle_degrees`/`angle_around_axis`/
+`from_to_rotation`/`angle_axis`/quaternion product; the formula's `x` is the
+pitch about `Cross(ref.up, q3·forward)` and `y` the yaw about `ref.up`, the
+roles the recorded `nowAngle` confirms), and `Tools/reverse/analysis/`
+`test_neck_target_angle.py` pins the helpers on synthetic vectors. The
+captured `nowAngle` is each frame's end-of-frame value and `LateUpdate` runs
+`UpdateCall` then `NeckUpdateCalc` in the same frame, so the formula's head
+input is that frame's own recorded head rotation; the previously assumed
+frame-k−1 head (the head rotation a LateUpdate earlier left on the bone) is
+decisively refuted by the capture. Maximum |predicted − recorded| degrees per
+phase (held = frames whose recorded `nowAngle` is byte-identical to their
+previous frame, the solver having not recomputed it):
+
+| phase | lookType | TARGET frames | held | x ° (k−1 head) | y ° (k−1 head) | x ° (k head) | y ° (k head) |
+|---|---|---|---|---|---|---|---|
+| 0 | TARGET | 90 | 84 | 0.893971 | 0.000000 | 0.081834 | 0.000000 |
+| 1 | TARGET | 90 | 0 | 0.381035 | 1.670771 | 0.003343 | 0.016529 |
+| 4 | TARGET | 60 | 59 | 0.000000 | 0.000000 | 0.000000 | 0.000000 |
+| 5 | TARGET | 60 | 0 | 0.020436 | 4.090108 | 0.000186 | 0.002820 |
+
+The frame-k head reproduces all 300 TARGET frames within 0.082°/0.017°,
+every changed frame except one within 0.0033°/0.0165° and steady frames to
+~5e-5° — the recorded ~7-significant-digit float serialization floor. The
+phase-0 x maximum is a single unexplained recorded step at frame 328
+(2.174659 → 2.092841, then held for the remaining 32 frames) that the
+end-of-frame geometry does not reproduce (it predicts 2.1747 on both sides of
+the step); what geometry the solver read on the frame it recomputed is not
+recoverable from this trace. Limit break was exercised and hit: the behind
+target of phase 4 breaks the limit test on all 60 frames (limit angles up to
+180°/178.7° against `hAngleLimit`/`vAngleLimit` 90 + correction 0 — the
+solver had set `isLimitBreakBackup` on the live state for the whole phase),
+and the recorded `nowAngle` is `[0, 0]` on every one of those frames, exactly
+the broken-limit zeroing the reconstruction applies; the far-side target of
+phase 5 stays inside the limits (worst yaw 85.89° against 90 + 10). The 90
+AWAY frames of phase 2 never break (worst limit angles 44.63°/20.96° against
+80 + 10 / 90 + 10); their raw formula output sits at ≈[−11.30, +44.62] while
+the recorded `nowAngle` is all-frame-held at x ≈ 11.30 and y exactly −60:
+recorded x is the raw x negated to ≤0.0037°, and −60 is again the
+`hAngleLimit` 80 − `limitAway` 10 adjustment documented below. AWAY's own
+`nowAngle` adjustment is reported, not modeled. `backupPos` equals the
+phase's recorded target position on all 570 frames; `changeTypeTimer` rises
+from ~0.017 to 1 during every phase — each phase enters through a type
+change — and sits at exactly 1 throughout the continuous TARGET phases 1 and
+5, which follow a phase of the same lookType.
+
 ### Neck look modes FORWARD / FIX / ANIMATION
 
 The next `ST-T07` slice ports the neck half of the runtime behavior against
@@ -468,18 +542,26 @@ against targets 1e-4° and 0.05°. Two local facts:
 
 Still missing, all visible in the capture:
 
-- `GetAngleToTarget`'s geometry (target transform → `nowAngle`).
+- `GetAngleToTarget`'s geometry (target transform → `nowAngle`) is recovered
+  and capture-verified in Python (`analysis/neck_target_angle.py`, see the
+  geometry slice under Original look capture) but not ported to Swift and not
+  wired as a live angle source.
 - **AWAY's own `nowAngle` adjustment**: the run1 AWAY phase holds `nowAngle`
   y at a constant −60 on all 90 frames (x drifts 11.299–11.360) while the
   neck turns; −60 is that state's `hAngleLimit` 80 minus `limitAway` 10, so
   the original offsets the demand by the limit margin. The replay feeds the
-  recorded `nowAngle` unchanged and matches downstream of that adjustment.
+  recorded `nowAngle` unchanged and matches downstream of that adjustment;
+  the geometry capture's 90 AWAY frames agree (recorded x is the reconstructed
+  raw x negated to ≤0.0037°; recorded y is exactly −60 against raw +44.62).
 - **Limit-break handling**: `hAngleLimit`/`vAngleLimit`, `limitAway`,
-  `limitBreakCorrectionValue` and the `isLimitBreakBackup` flag are
-  unmodeled; nothing in these 270 frames needed them.
+  `limitBreakCorrectionValue` and the `isLimitBreakBackup` flag are unmodeled
+  in Swift; nothing in these 270 frames needed them, and the geometry
+  capture's behind-target phase shows what they do (limit test breaks →
+  `nowAngle` `[0, 0]`, `isLimitBreakBackup` set on the live state).
 - No live `nowAngle` source is wired, so the preview override still reports
   TARGET/AWAY as "Neck gaze solver pending; animated pose kept." — the
-  solver step exists, the geometry feeding it does not.
+  solver step exists and the geometry behind `nowAngle` is verified in
+  Python, but nothing computes it natively yet.
 
 `SourceStudioNeckLook.stepSolver` ports the distribution, smoothing, basis
 and blend above; its settings loader decodes each type state's `aParam`
