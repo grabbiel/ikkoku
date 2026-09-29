@@ -105,7 +105,12 @@ set:
 - [ ] ST-T07 eye look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, select a source character
       with eyes pattern こっち; orbit the camera: the Eye look readout's H rates change
       sign across the face, raising the camera moves the V rate, and no eye bone moves
-      yet (iris rendering is the next slice).
+      yet.
+- [ ] ST-T07 iris rendering: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, orbit around a source
+      character with eyes pattern こっち: the irises follow the camera (their textures
+      shift with the look rates; eyes without the live pattern keep the resting offset
+      the prefab snapshot gives). No eye bone rotates and no original-pixel comparison
+      exists.
 - [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
       object is hidden; reloading in CharaStudio shows it hidden.
 - [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,

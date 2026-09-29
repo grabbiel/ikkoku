@@ -250,6 +250,17 @@ textures keep their explicit pigment/cutout behavior. A separate blended eye
 pipeline preserves the eye fragment path for transparent source eye materials.
 OPAQUE and accepted MASK fragments output full coverage alpha.
 
+Source iris materials carry three extra `MaterialUniforms` _ST vectors
+(`irisST0`/`irisST1`/`irisST2` for `_MainTex`/`_overtex1`/`_overtex2`, Unity
+layout scale-u/scale-v/offset-u/offset-v, defaulting to identity) that the
+toon fragment applies as `uv' = uv * st.xy + st.zw` to the base and both
+highlight samples, gated by `MaterialFlagSourceIrisHighlights` so every other
+material samples exactly as before. The imported iris textures serialize
+legacy `m_WrapMode` 1 (Clamp), so those three samples use the linear
+clamp-to-edge sampler rather than the repeat sampler the earlier tests
+assumed. Studio writes per-frame gaze-driven values into these uniforms; the
+shader change alone is identity for every existing material.
+
 ### Deformation safety
 
 The renderer uploads complete skin palettes to retained per-frame Metal buffers;
