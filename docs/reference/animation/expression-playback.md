@@ -200,7 +200,10 @@ and `angleH`/`angleV` plus the calculator `angleHRate`/`angleVRate`, into
 `look-trace.json`. Without the tsv every existing output stays
 byte-identical. `original_character_probe.py --look-patterns` uploads the tsv
 after the compile step and accepts neck 0–4, eyes 0–3 and 1–600 frames per
-row.
+row. A tsv the probe itself cannot parse (for example a camera coordinate
+Python's `float` accepts but .NET does not, such as `1_0`) ends the run
+before any capture with `status.json` error `Probe input rejected: …` and
+no `look-trace.json`.
 
 Two capture conditions are load-bearing. The fixture is created only after
 CharaStudio's own scene load finishes — look mode first waits up to 3600

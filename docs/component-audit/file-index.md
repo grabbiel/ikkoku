@@ -6,9 +6,9 @@ guide, ST-T02/A-T04 probe test additions, the ST-T11 first-slice route
 evaluator files, the ST-T11 second-slice route playback files, the ST-T11
 third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
-clock files, the ST-T11 character-light capture/mapping files and the ST-A11
-scene character-light preview override files; it does not
-represent a new code audit. It lists every present Git-visible
+clock files, the ST-T11 character-light capture/mapping files, the ST-A11
+scene character-light preview override files and the original-player probe
+robustness test; it does not represent a new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -17,14 +17,14 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**687 files indexed; 687 assigned; 0 unassigned.**
+**688 files indexed; 688 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
 | [Studio / IK / animation](studio.md) | 140 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 287 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 288 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
 | File role | Files |
@@ -36,7 +36,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 21 |
 | Runtime / shared shader declaration | 153 |
-| Test / validation | 130 |
+| Test / validation | 131 |
 
 ## App / gameplay / plugins
 
@@ -663,6 +663,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_compare_original_frame.py](../../Tools/reverse/test_compare_original_frame.py) | Test / validation |
 | [Tools/reverse/test_compare_original_pose.py](../../Tools/reverse/test_compare_original_pose.py) | Test / validation |
 | [Tools/reverse/test_export_prefab.py](../../Tools/reverse/test_export_prefab.py) | Test / validation |
+| [Tools/reverse/test_original_character_probe.py](../../Tools/reverse/test_original_character_probe.py) | Test / validation |
 | [Tools/reverse/test_original_shader_probe.py](../../Tools/reverse/test_original_shader_probe.py) | Test / validation |
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |
 | [Tools/reverse/test_rig_parity.py](../../Tools/reverse/test_rig_parity.py) | Test / validation |

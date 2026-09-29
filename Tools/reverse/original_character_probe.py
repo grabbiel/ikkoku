@@ -5,7 +5,7 @@ Outputs geometry, pose, camera, materials and source frame to private .local
 artifacts. Does not copy/read installed cards, saves or third-party plug-ins.
 """
 from __future__ import annotations
-import argparse, json, time, uuid, zipfile, io, re
+import argparse, json, sys, time, uuid, zipfile, io, re
 from pathlib import Path
 from original_shader_probe import write_small, user_powershell, fetch, stop_probe, dump, digest
 from vm_source import powershell, ps_quote
@@ -55,17 +55,40 @@ def look_patterns_bytes(path):
  if not rows:raise ValueError('look-patterns has no phase rows')
  return path.read_bytes()
 
-def start(vm,output,settings=None,hand_patterns=None,look_patterns=None):
+PLAYER_ROOT=r'C:\\Temp\\IkkokuShaderProbe-[0-9a-f]{32}'
+# Isolated player copy shared by every driver that records its root in run.json:
+# copied executable/loader/BepInEx core plus junctions to the original game data.
+PLAYER_SETUP=r'''$original='C:\Illusion\Koikatsu';New-Item -ItemType Directory "$root\BepInEx\plugins" -Force|Out-Null;New-Item -ItemType Directory "$root\BepInEx\config" -Force|Out-Null;foreach($name in @('CharaStudio.exe','winhttp.dll','doorstop_config.ini')){Copy-Item "$original\$name" "$root\$name"};Copy-Item "$original\BepInEx\core" "$root\BepInEx\core" -Recurse;foreach($name in @('abdata','CharaStudio_Data')){New-Item -ItemType Junction -Path "$root\$name" -Value "$original\$name"|Out-Null};[IO.File]::WriteAllText("$root\BepInEx\config\BepInEx.cfg","[Logging.Console]`nEnabled = false`n")'''
+# 'missing' when the root is gone, 'present' when it still holds a usable player;
+# a partly deleted root throws instead of being written into.
+PLAYER_STATE=r'''if(-not(Test-Path -LiteralPath $root)){'missing'}elseif((Test-Path -LiteralPath "$root\CharaStudio.exe") -and (Test-Path -LiteralPath "$root\BepInEx\core\BepInEx.dll") -and (Test-Path -LiteralPath "$root\CharaStudio_Data\Managed") -and (Test-Path -LiteralPath "$root\abdata")){'present'}else{throw "Private player root is incomplete: $root"}'''
+
+def player_script(root,body):return "$ErrorActionPreference='Stop';$root="+ps_quote(root)+';'+body
+
+def player_root(vm,output):
+ """Return the private player root recorded in output/run.json, or set up a new one.
+
+ A recorded root that no longer exists on the VM (for example after a cleanup)
+ is recreated with the same player-copy setup as a new root. No player can run
+ from a deleted root, because Windows locks a running executable, so the
+ recorded process is only stopped when the root is still present."""
  run_path=output/'run.json'
  if run_path.exists():
   run=json.loads(run_path.read_text());root=run['root']
-  if not re.fullmatch(r'C:\\Temp\\IkkokuShaderProbe-[0-9a-f]{32}',root):raise ValueError('Unknown private player directory')
-  if int(run['processID'])>0:stop_probe(vm,run)
+  if not re.fullmatch(PLAYER_ROOT,root):raise ValueError('Unknown private player root')
+  if retry(vm,player_script(root,PLAYER_STATE))=='missing':
+   retry(vm,player_script(root,PLAYER_SETUP))
+   print('Recreated missing private player root '+root,file=sys.stderr)
+  elif int(run['processID'])>0:stop_probe(vm,run)
  else:
   root=r'C:\Temp\IkkokuShaderProbe-'+uuid.uuid4().hex
-  retry(vm,"$ErrorActionPreference='Stop';$root="+ps_quote(root)+r''';$original='C:\Illusion\Koikatsu';New-Item -ItemType Directory "$root\BepInEx\plugins" -Force|Out-Null;New-Item -ItemType Directory "$root\BepInEx\config" -Force|Out-Null;foreach($name in @('CharaStudio.exe','winhttp.dll','doorstop_config.ini')){Copy-Item "$original\$name" "$root\$name"};Copy-Item "$original\BepInEx\core" "$root\BepInEx\core" -Recurse;foreach($name in @('abdata','CharaStudio_Data')){New-Item -ItemType Junction -Path "$root\$name" -Value "$original\$name"|Out-Null};[IO.File]::WriteAllText("$root\BepInEx\config\BepInEx.cfg","[Logging.Console]`nEnabled = false`n")''')
+  retry(vm,player_script(root,PLAYER_SETUP))
   # Save before compile so a failed build can reuse this private directory.
   dump(run_path,dict(vm=vm,root=root,processID=0,stopped=True))
+ return root
+
+def start(vm,output,settings=None,hand_patterns=None,look_patterns=None):
+ run_path=output/'run.json';root=player_root(vm,output)
  properties=[]
  for path in sorted((output/'shaders').glob('*/program.json')):
   program=json.loads(path.read_text())
@@ -108,10 +131,11 @@ def collect(vm,output):
  return dict(status=status,files=len(provenance),archiveBytes=len(data))
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path);p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path,help='optional "key<TAB>value" character-settings.tsv (makeup, blush, nip, underhair and iris-highlight IDs/colors); keys: docs/reference/character/material-expansion.md');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');a=p.parse_args()
+ # Checked before any output folder is touched: these inputs are uploaded only by the capture step.
+ if a.collect and (a.settings is not None or a.hand_patterns is not None or a.look_patterns is not None):raise ValueError('--settings/--hand-patterns/--look-patterns belong to the capture step, not --collect')
  if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must stay under .local')
  a.output.mkdir(parents=True,exist_ok=True)
  if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
- if a.collect and (a.hand_patterns is not None or a.look_patterns is not None):raise ValueError('--hand-patterns/--look-patterns belong to the capture step, not --collect')
  print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output,a.settings,a.hand_patterns,a.look_patterns),indent=2))
 if __name__=='__main__':main()

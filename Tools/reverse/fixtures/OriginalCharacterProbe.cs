@@ -35,9 +35,25 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
         Directory.CreateDirectory(folder);
-        TryLoadHandPatterns();
-        TryLoadLookPatterns();
+        // A malformed optional tsv ends the run through status.json instead of
+        // killing this coroutine silently. Without either file both loaders
+        // return at once, so the no-tsv frame sequence and outputs are unchanged.
+        string error = null;
+        try { TryLoadHandPatterns(); TryLoadLookPatterns(); }
+        catch(Exception e) {
+            // Drop any rows read before the bad one so Finish writes no partial look trace.
+            handPatterns=null; lookPhases.Clear(); lookTargetPositions.Clear();
+            error="Probe input rejected: "+e.Message;
+        }
         for (int i=0;i<30;i++) yield return null;
+        // CharaStudio ignored Application.Quit when Finish ran on the first frame
+        // (the player kept running on the VM), so a rejected input is reported
+        // after the usual 30-frame wait and the quit repeats until the player exits.
+        if(error != null) {
+            Finish(error);
+            for(int i=0;i<3600;i++) { yield return null; if(i%30==29) Application.Quit(); }
+            yield break;
+        }
         // ST-T07i: CharaStudio's main scene load destroys freshly created
         // objects, so look mode waits for the scene camera and then 60 more
         // settled frames before it builds the fixture; without the tsv this
@@ -47,7 +63,6 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             if(Camera.main==null) { Finish("Camera.main did not appear within 3600 frames; the look capture needs Studio's loaded scene"); yield break; }
             for(int i=0;i<60;i++) yield return null;
         }
-        string error = null;
         try { CreateFixture(); } catch(Exception e) { error=e.ToString(); }
         if(error != null) { Finish(error); yield break; }
         var load=character.LoadAsync(false,false);
@@ -519,8 +534,14 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 throw new Exception("look-patterns.tsv holds a pattern outside neck 0-4 / eyes 0-3 or a frame count outside 1-600");
             var parts=fields[3].Split(',');
             if(parts.Length!=3)throw new Exception("look-patterns.tsv camera position needs x,y,z");
+            // Same number styles as float.Parse(value, InvariantCulture), but a bad
+            // value names the tsv field instead of a bare FormatException.
+            var position=new float[3];
+            for(int axis=0;axis<3;axis++)
+                if(!Single.TryParse(parts[axis],NumberStyles.Float|NumberStyles.AllowThousands,CultureInfo.InvariantCulture,out position[axis]))
+                    throw new Exception("look-patterns.tsv camera position \""+fields[3]+"\" is not three invariant-culture numbers x,y,z");
             lookPhases.Add(new[]{neckPtn,eyesPtn,frames});
-            lookTargetPositions.Add(new Vector3(float.Parse(parts[0],CultureInfo.InvariantCulture),float.Parse(parts[1],CultureInfo.InvariantCulture),float.Parse(parts[2],CultureInfo.InvariantCulture)));
+            lookTargetPositions.Add(new Vector3(position[0],position[1],position[2]));
         }
         if(lookPhases.Count==0)throw new Exception("look-patterns.tsv has no phase rows");
     }
