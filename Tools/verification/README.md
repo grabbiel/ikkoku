@@ -42,7 +42,7 @@ Each manifest is `{"schemaVersion": 2, "checks": [...]}` and every check needs:
 | --- | --- |
 | `id` | Unique check name; used as the log file name. |
 | `argv` | Executed directly (no shell). A missing program fails the check. |
-| `fixtures` | `{"env": "IKKOKU_*", "kind": "file"\|"directory", "optional"?: bool}` — paths come **only** from the `--environment` JSON map (default `{}`), never from the shell. A MISSING **required** fixture skips the whole check (`FAILED` under `--strict`); a missing `optional` one is recorded in `missingFixtures` and the check runs anyway, so a suite runs with whatever fixtures exist. A supplied-but-unreadable path always FAILS. Directory fixtures are hashed as a bounded tree (≤4096 entries, ≤512 MiB). |
+| `fixtures` | `{"env": "IKKOKU_*", "kind": "file"\|"directory", "optional"?: bool, "from"?: "IKKOKU_*"}` — paths come **only** from the `--environment` JSON map (default `{}`), never from the shell. A MISSING **required** fixture skips the whole check (`FAILED` under `--strict`); a missing `optional` one is recorded in `missingFixtures` and the check runs anyway, so a suite runs with whatever fixtures exist. A supplied-but-unreadable path always FAILS. Directory fixtures are hashed as a bounded tree (≤4096 entries, ≤512 MiB). `from` selects the environment-file KEY whose value fills `env`, so one check can supply a different scene file under the same variable the program reads (the aliased value is what gets hashed into `suppliedFixtures`, recorded with its `from`); a missing alias skips/fails the check naming `env`. |
 | `env` | Fixed non-secret settings merged over the environment map. Only `IKKOKU_*` keys; `PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH` and `PYTHONPATH` are rejected. |
 | `minimumTests` / `maximumSkipped` | Bounds on the parsed results. `minimumTests` counts EXECUTED tests (passed + failed). PR #4 supplies named per-test fixture skips, which the lanes report; earlier `guard let env … else { return }` tests appeared as executed passes without their data. Read per-test names and skips before claiming source-data coverage. |
 | `referenceTier` | One of `synthetic`, `recovered-code-oracle`, `original-managed-dll`, `original-player-probe`, `app-smoke`; any other value rejects the manifest. A tier is declared metadata; the runner never infers it. |
@@ -67,7 +67,7 @@ them claims whole-game parity; read each `tolerance`.
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup run, then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report; `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. |
-| `studio-scenarios.json` | Five `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 5/5 checks passed 2026-09-29 with `IKKOKU_SOURCE_SCENE`, `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props) supplied; every scenario report and exported scene hashed as an artifact. |
+| `studio-scenarios.json` | Nine `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 9/9 checks passed 2026-09-29 with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props) supplied; every check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the five character scenarios from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x) and the route scenario from `IKKOKU_ROUTE_PROBE_SCENE` via the fixture `from` key; every scenario report and exported scene hashed as an artifact. |
 
 ## Studio scenario hook (T-T04)
 
@@ -93,8 +93,22 @@ automatable halves of the Studio checklist in
 which checklist claims (live visuals, CharaStudio reload, unbound hair
 color writeback) stay unchecked.
 
+No `studio-scenarios` check reads the environment file's own `IKKOKU_SOURCE_SCENE`
+(the `app-smoke` and `private-source` lanes use it for a different
+scene). Each check aliases it through the fixture `from` key instead.
+The five character scenarios (`visibility-folder`, `rename-folder`,
+`face-shape`, `color-edit`, `item-props`) take
+`IKKOKU_STUDIO_SCENARIO_SCENE`, which must be the scene whose object
+keys they address (`koikatu_cs0002591.png`: keys 0, 65 and 622). That
+scene has neither a camera nor a route-bearing object, so the four
+camera/route scenarios take a probe scene: `camera-load-winner`,
+`camera-deactivate` and `camera-rename` run against the two-active-camera
+scene-x (`IKKOKU_CAMERA_OBJECT_PROBE_SCENE`), `route-play-state` against
+the scene with two saved-active routes (`IKKOKU_ROUTE_PROBE_SCENE`).
+
 ```sh
-# Build Debug first, then (needs the three private fixture paths in
+# Build Debug first, then (needs the five private fixture paths — scenario
+# scene, avatar, item catalog, camera probe scene, route probe scene — in
 # .local/verification/environment.json):
 python3 Tools/verification/run.py \
   --manifest Tools/verification/lanes/studio-scenarios.json \

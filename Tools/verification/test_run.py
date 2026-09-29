@@ -241,6 +241,29 @@ class ManifestValidationTests(unittest.TestCase):
         with self.assertRaises(run.RunnerError):
             run.validate_manifest(bad)
 
+    def test_fixture_from_accepted(self):
+        good = self.good_manifest()
+        good["checks"][0]["fixtures"] = [
+            {"env": "IKKOKU_SOURCE_SCENE", "kind": "file",
+             "from": "IKKOKU_CAMERA_PROBE_SCENE"}]
+        checks = run.validate_manifest(good)
+        self.assertEqual(checks[0]["fixtures"][0]["from"],
+                         "IKKOKU_CAMERA_PROBE_SCENE")
+
+    def test_reject_fixture_from_wrong_prefix(self):
+        bad = self.good_manifest()
+        bad["checks"][0]["fixtures"] = [
+            {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "HOME"}]
+        with self.assertRaises(run.RunnerError):
+            run.validate_manifest(bad)
+
+    def test_reject_dangerous_fixture_from_name(self):
+        bad = self.good_manifest()
+        bad["checks"][0]["fixtures"] = [
+            {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "PYTHONPATH"}]
+        with self.assertRaises(run.RunnerError):
+            run.validate_manifest(bad)
+
 
 class EnvironmentValidationTests(unittest.TestCase):
     """Only IKKOKU_* names are accepted from an environment file."""
@@ -334,6 +357,27 @@ class CheckExecutionTests(unittest.TestCase):
                                     "IKKOKU_CAPTURE_UI_MODE": "studio"})
         self.assertEqual(record["env"], check["env"])
         self.assertEqual(record["suppliedFixtures"][0]["path"], fixture_path)
+
+    def test_fixture_from_fills_env_from_another_environment_key(self):
+        aliased = os.path.join(self.tmp, "scene-x.json")
+        with open(aliased, "w") as handle:
+            handle.write("{}")
+        record, observed = self.probe_environment(
+            self.check(fixtures=[{"env": "IKKOKU_SOURCE_SCENE", "kind": "file",
+                                  "from": "IKKOKU_CAMERA_PROBE_SCENE"}]),
+            {"IKKOKU_CAMERA_PROBE_SCENE": aliased,
+             "IKKOKU_SOURCE_SCENE": os.path.join(self.tmp, "direct.json")})
+        self.assertEqual(observed, {"IKKOKU_SOURCE_SCENE": aliased})
+        self.assertEqual(record["suppliedFixtures"][0]["path"], aliased)
+        self.assertEqual(record["suppliedFixtures"][0]["from"],
+                         "IKKOKU_CAMERA_PROBE_SCENE")
+
+    def test_missing_aliased_fixture_skips_naming_the_fixture(self):
+        record = self.run_check(
+            fixtures=[{"env": "IKKOKU_SOURCE_SCENE", "kind": "file",
+                       "from": "IKKOKU_CAMERA_PROBE_SCENE"}])
+        self.assertEqual(record["status"], "skipped")
+        self.assertIn("missing fixture: IKKOKU_SOURCE_SCENE", record["error"])
 
     def test_strict_flag_only_passed_in_strict_mode(self):
         check = self.check()
@@ -545,7 +589,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 5)
+        self.assertEqual(len(self.checks), 9)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]

@@ -5,7 +5,7 @@
       "id": "studio-scenario-visibility-folder",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
         {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
       ],
       "env": {
@@ -24,7 +24,7 @@
       "id": "studio-scenario-rename-folder",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
         {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
       ],
       "env": {
@@ -43,7 +43,7 @@
       "id": "studio-scenario-face-shape",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
         {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
       ],
       "env": {
@@ -62,7 +62,7 @@
       "id": "studio-scenario-color-edit",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
         {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
       ],
       "env": {
@@ -81,7 +81,7 @@
       "id": "studio-scenario-item-props",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
         {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
         {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
       ],
@@ -94,6 +94,82 @@
       "artifacts": [
         {"path": ".local/verification/reports/studio-scenario-item-props.json", "kind": "scenario-report"},
         {"path": ".local/verification/scenario-exports/item-props.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-camera-load-winner",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-load-winner.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-camera-load-winner.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "On scene-x (two active cameras, IKKOKU-A key 0 and IKKOKU-B key 2) the import must pick the last active camera in depth-first order (key 2) as the load winner; toggling camera 0 must make it active, and after export+reimport the written flags must make key 0 the winner again. This exercises our own load/export rule (ST-A06/ST-T03 active camera); reloading the exported scene in the original CharaStudio player is not covered.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-camera-load-winner.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/camera-load-winner.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-camera-deactivate",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-deactivate.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-camera-deactivate.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "On scene-x, toggling the active camera key 2 off must leave no active camera (orbit view); export writes every camera flag false and a reimport must still show no active camera. Deactivating key 0 (not the winner) is not scripted; the reload happens in our importer, not the original player.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-camera-deactivate.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/camera-deactivate.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-camera-rename",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-rename.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-camera-rename.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Renames camera object key 0 on scene-x, exports the original scene and reimports it: the new name reads back on the camera placeholder (the camera-object half of ST-T03 rename, which the folder-only rename-folder scenario could not reach). The active-camera flags stay untouched by the rename; the winner (key 2) is not re-asserted here.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-camera-rename.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/camera-rename.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-route-play-state",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-play-state.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-play-state.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "On the stt11c route scene (routes key 0 and key 3, both saved active) the inspector must report key 0 playing; toggling it must stop it, and after export+reimport key 0 must read back stopped (its flag written) while key 3 still reads back playing (its flag untouched). Only the play-state flag round trip is asserted; whether the character actually animates along the route is not observable headlessly.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-route-play-state.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/route-play-state.png", "kind": "exported-scene"}
       ],
       "timeout": 600
     }

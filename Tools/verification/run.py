@@ -12,7 +12,9 @@ Usage:
 Manifest (schemaVersion 2):
   {"schemaVersion": 2, "checks": [
      {"id": "name", "argv": ["cmd", ...],
-      "fixtures": [{"env": "IKKOKU_...", "kind": "file"|"directory"}],
+      "fixtures": [{"env": "IKKOKU_...", "kind": "file"|"directory",
+                   "from": "IKKOKU_..." (optional: value taken from that
+                   environment-file key instead of one named like "env")}],
       "env": {"IKKOKU_SETTING": "value"},
       "minimumTests": 3, "maximumSkipped": 0,
       "referenceTier": "synthetic"|"recovered-code-oracle"|
@@ -125,11 +127,16 @@ def fixture_record(spec, env_map):
 
     An optional fixture that is not supplied is recorded as missing but
     must not skip the check; supplied-but-bad paths are always failures.
+    A "from" names another environment-file key whose value fills this
+    fixture's env variable, so one scene file can be selected per check.
     """
     name, kind = spec["env"], spec["kind"]
-    value = env_map.get(name)
+    source = spec.get("from") or name
+    value = env_map.get(source)
     record = {"env": name, "kind": kind, "path": value, "sha256": None,
               "tree": None, "optional": bool(spec.get("optional"))}
+    if source != name:
+        record["from"] = source
     if value is None:
         return record, "missing"
     path = os.path.abspath(value)
@@ -192,6 +199,11 @@ def validate_manifest(data):
                 raise RunnerError("fixture env must start with IKKOKU_: %s" % spec["env"])
             if not isinstance(spec.get("optional", False), bool):
                 raise RunnerError("fixture optional must be a bool: %s" % check["id"])
+            source = spec.get("from")
+            if source is not None and (not isinstance(source, str)
+                                        or not source.startswith(ALLOWED_ENV_PREFIX)
+                                        or source in FORBIDDEN_ENV_NAMES):
+                raise RunnerError("fixture from must be an allowed IKKOKU_* key: %s" % check["id"])
         for bound in ("minimumTests", "maximumSkipped"):
             value = check.get(bound)
             if value is not None and (not isinstance(value, int) or isinstance(value, bool)
@@ -382,8 +394,9 @@ def run_check(check, env_map, strict, default_timeout, log_dir):
 
     env = {name: value for name, value in os.environ.items()
            if not name.startswith(ALLOWED_ENV_PREFIX)}
-    env.update({spec["env"]: env_map[spec["env"]]
-                for spec in check.get("fixtures", []) if spec["env"] in env_map})
+    env.update({spec["env"]: env_map[spec.get("from") or spec["env"]]
+                for spec in check.get("fixtures", [])
+                if (spec.get("from") or spec["env"]) in env_map})
     env.update(check.get("env", {}))
     if strict:
         env["IKKOKU_REQUIRE_SOURCE_FIXTURES"] = "1"

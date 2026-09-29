@@ -119,11 +119,16 @@ set:
       reload it: the new name shows; renaming a character (whose name lives in its card)
       stays rejected at the inspector export. (automated in part:
       `Tools/verification/scenarios/rename-folder.json` covers the folder rename → export →
-      reimport; camera/route renames stay unexercised because the fixture scene contains
-      neither object type; the character-rename rejection is an Engine-suite unit test;
-      passed 2026-09-29)
+      reimport and `Tools/verification/scenarios/camera-rename.json` the camera rename →
+      export → reimport on scene-x; route renames are not scripted; the
+      character-rename rejection is an Engine-suite unit test; passed 2026-09-29)
 - [ ] ST-T03 active flags: switch the source camera / stop a playing route, export the
       original scene, reload: the new camera is active and the route stays stopped.
+      (automated in part: `Tools/verification/scenarios/camera-load-winner.json` and
+      `camera-deactivate.json` cover camera switch/deactivation → export → reimport on
+      scene-x, and `Tools/verification/scenarios/route-play-state.json` covers stopping
+      one route while another keeps its saved state on the stt11c route scene; the
+      reload happens in our importer, not in CharaStudio; passed 2026-09-29)
 - [ ] ST-T06 shape values: change a source character's face shape slider: the face
       updates; export and reload keep the new value. Body shape and Reset to card
       behave the same way, and a value edited back to the card's saved rate exports
@@ -149,7 +154,13 @@ set:
       refused with an explanation while it is active, and Look through / Stop looking
       through on a camera placeholder switches between the camera object and the saved
       scene camera (runtime only; export rewrites every camera's `active` byte only after
-      a switch).
+      a switch). (automated in part: `Tools/verification/scenarios/camera-load-winner.json`
+      asserts the load winner is the last active camera in depth-first order on scene-x and
+      that a switch survives export → reimport via the written flags, and
+      `Tools/verification/scenarios/camera-deactivate.json` asserts deactivating the winner
+      leaves the orbit view through export → reimport; the diagnostics line, the
+      orbit/pan/zoom refusal messages and the Look through UI itself stay unautomated;
+      passed 2026-09-29)
 - [ ] ST-T04 source props: with `IKKOKU_STUDIO_ITEM_CATALOG` set, import
       koikatu_cs0002591: the 19 basic cubes render at their saved transforms and show
       their saved colors (all 19 record the same `color[0]`, a 0.875 grey at alpha 1)

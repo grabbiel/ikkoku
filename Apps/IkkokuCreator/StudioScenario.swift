@@ -66,7 +66,15 @@ struct StudioScenario: Decodable {
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
-            activeCamera = c.contains(.activeCamera) ? try c.decodeIfPresent(Int32.self, forKey: .activeCamera) : nil
+            // The explicit `if` is required: the equivalent ternary infers as
+            // `Int32?`, which assigns `.some(nil)` into the `Int32??` even for
+            // an absent key, and then every bare assert on a scene with an
+            // active camera fails its phantom "expected none" camera check.
+            if c.contains(.activeCamera) {
+                activeCamera = try c.decodeIfPresent(Int32.self, forKey: .activeCamera)
+            } else {
+                activeCamera = nil
+            }
         }
     }
 
