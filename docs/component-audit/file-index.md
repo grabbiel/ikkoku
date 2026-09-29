@@ -8,7 +8,9 @@ third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
 clock files, the ST-T11 character-light capture/mapping files, the ST-A11
 scene character-light preview override files, the original-player probe
-robustness test and the ST-A06 camera-object capture files; it does not represent a new code audit. It lists every present Git-visible
+robustness test, the ST-A06 camera-object capture files and the ST-A06
+source camera-object look-through files; it does not represent a new code
+audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -17,13 +19,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**694 files indexed; 694 assigned; 0 unassigned.**
+**696 files indexed; 696 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 146 |
+| [Studio / IK / animation](studio.md) | 148 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 288 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
@@ -35,8 +37,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 23 |
-| Runtime / shared shader declaration | 153 |
-| Test / validation | 133 |
+| Runtime / shared shader declaration | 154 |
+| Test / validation | 134 |
 
 ## App / gameplay / plugins
 
@@ -255,6 +257,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioAudioBus.swift](../../Packages/Engine/Sources/Studio/SourceStudioAudioBus.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioBlink.swift](../../Packages/Engine/Sources/Studio/SourceStudioBlink.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCamera.swift](../../Packages/Engine/Sources/Studio/SourceStudioCamera.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift](../../Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioGuide.swift](../../Packages/Engine/Sources/Studio/SourceStudioGuide.swift) | Runtime / shared shader declaration |
@@ -291,6 +294,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioAccessoryNamesTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioAccessoryNamesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioAnimationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioAnimationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioBlinkTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioBlinkTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift) | Test / validation |

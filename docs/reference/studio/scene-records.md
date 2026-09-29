@@ -131,6 +131,52 @@ Still missing: the map light is unread, no map is rendered, `shadow` selects
 the native shadow toggle rather than Unity's Soft-shader softness, and the
 override's rendered appearance has not been compared against the original.
 
+### Camera objects
+
+Kind 5 records are in-scene camera objects, distinct from the scene camera in
+the tail. The original load runs `ChangeCamera(camera, record.active)` for
+every camera record in load order, and each call with `true` deactivates the
+previously active camera first, so after a load the active camera object is
+the last record with `active == true` in the depth-first file-order walk
+(`SourceStudioCameraObjects.activeAtLoad` mirrors the importer's pre-order:
+roots in order, record before children, children in order, then a character's
+accessory children by ascending index key). While a camera object is active
+`ChangeCamera` disables the orbit controller, and the active `OCICamera`'s
+LateUpdate subscription copies the object's world position and world rotation
+onto the render camera every frame — scale is ignored and the field of view
+stays the scene camera's. Deactivating re-enables the orbit controller on the
+previously saved camera. All of this is confirmed on the original player in
+[Camera objects (original capture)](#camera-objects-original-capture).
+
+`SourceStudioCameraObjects.viewCamera(world:base:)` builds the native preview
+camera from an object's native world matrix: position is the translation, the
+orientation is the world rotation with any scale removed (normalized basis
+columns re-orthogonalized to a quaternion, rejected when non-finite or
+degenerate), and the `OrbitCamera` fields are set the way `nativeCamera()`
+sets them so `orientationOverride` survives its `didSet` ordering. The Studio
+preview applies it runtime-only, mirroring `SourceStudioSceneLight`: the
+placeholder object keeps kind `.folder`, `doc.camera` keeps the saved scene
+camera verbatim (original export compares it against the record, so it is
+never written), and the first import of a scene whose records carry an active
+flag starts the view through that camera, reported in the source compatibility
+diagnostics. Selecting a camera placeholder offers a Look through / Stop
+looking through toggle in its inspector, mirroring `ChangeCamera`'s toggle
+semantics.
+
+Known deviation: the preview resolves the object's world matrix through the
+native world walk, which composes every ancestor's authored scale. The capture
+shows that Studio never applies folder scale and never compounds scale (each
+object's world scale is its own `changeAmount.scale`, or 1 when it is not
+scalable), so a camera under a parent whose scale is not 1 is placed
+differently from the original until that walk follows the captured rule. The
+committed `Tools/reverse/fixtures/camera-object-reference.json` is not yet
+replayed by a Swift test. Also not verified: camera animation and
+route-driven camera motion (a camera parented to a moving route is followed
+through the ordinary world-matrix walk, but no original capture of that case
+exists), writing an in-app toggled `active` flag back on export (deactivating
+in-app keeps the record's saved flag intact, and export intentionally does not
+persist the runtime choice), and any in-app run of the preview.
+
 ## Native APIs and integration
 
 ```swift
