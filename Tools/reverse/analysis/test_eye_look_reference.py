@@ -1,12 +1,12 @@
 import math
 import unittest
 
-from eye_look_reference import (IDENTITY, _bend, add, angle_between_quaternions,
+from eye_look_reference import (IDENTITY, _bend, add, angle_between_quaternions, angle_rates,
                                 correct_eye_targets, cross, eye_bending, eye_update,
-                                inverse_lerp, inverse_quaternion, local_to_world,
-                                look_rotation, lerp, normalize_or_zero, ortho_normalize,
-                                resolve_target, scale, slerp_vector, sorasi_horizontal,
-                                world_to_local)
+                                initial_eye_state, inverse_lerp, inverse_quaternion,
+                                local_to_world, look_rotation, lerp, normalize_or_zero,
+                                ortho_normalize, resolve_target, scale, slerp_vector,
+                                sorasi_horizontal, world_to_local)
 from neck_target_angle import FORWARD, RIGHT, UP, angle_axis, rotate
 
 # The run1 studio settings the replay uses: pattern 1 (TARGET) bending numbers
@@ -548,6 +548,141 @@ class EyeUpdateTests(unittest.TestCase):
                                st=AWAY_STATE, settings=SETTINGS)
         self.assertAlmostEqual(predicted[0]['angleH'], 36.0, places=6)
         self.assertAlmostEqual(predicted[0]['num5'], 1.0, places=9)
+
+
+class AngleRatesTests(unittest.TestCase):
+    """The frame-end rates EyeLookCalc derives from the new angles (the
+    EyeLookMaterialControll iris-offset inputs)."""
+
+    def test_capture_check_values(self):
+        # run1 frame 5 (phase 0 TARGET): L angleH 0.04187133 -> angleHRate
+        # 0.2217584, eye 0 angleV 0.472471 -> angleVRate -0.0472471 (the
+        # 7-digit recordings; the full-precision angles reproduce them).
+        h_rates, v_rate = angle_rates(
+            [{'angleH': 0.04187133, 'angleV': 0.472471},
+             {'angleH': -0.04111683, 'angleV': 0.4725372}], TARGET_STATE)
+        self.assertAlmostEqual(h_rates[0], 0.2217584, places=6)
+        self.assertAlmostEqual(h_rates[1], -0.2217328, places=6)
+        self.assertAlmostEqual(v_rate, -0.0472471, places=9)
+
+    def test_rates_mirror_the_bending_ranges(self):
+        # With both eyes at 0 the L eye reads (minBending, maxBending) =
+        # (-36, 23) -> 36/59 -> rate 2*36/59 - 1 = 13/59, the R eye mirrors
+        # through (-maxBending, -minBending) = (-23, 36) -> 23/59 -> -13/59.
+        h_rates, _ = angle_rates([{'angleH': 0.0, 'angleV': 0.0},
+                                  {'angleH': 0.0, 'angleV': 0.0}], TARGET_STATE)
+        self.assertAlmostEqual(h_rates[0], 13.0 / 59.0, places=12)
+        self.assertAlmostEqual(h_rates[1], -13.0 / 59.0, places=12)
+        # Out-of-range angles clamp the InverseLerp: the rates saturate to +-1.
+        h_rates, _ = angle_rates([{'angleH': 100.0, 'angleV': 0.0},
+                                  {'angleH': -100.0, 'angleV': 0.0}], TARGET_STATE)
+        self.assertEqual(h_rates, [1.0, -1.0])
+
+    def test_eye_lr_selects_the_mirroring_and_the_vertical_is_entry_zero(self):
+        # The eyeLR entry overrides the index for the horizontal mirroring:
+        # eyeLR 1 mirrors even at index 0.  The single vertical rate is the
+        # calculator's angleV[0] — entry 0's -2.0, whatever its eyeLR — on the
+        # shipped down-above-up branch: InverseLerp(0, -30, -2) = 1/15.
+        h_rates, v_rate = angle_rates(
+            [{'angleH': 0.0, 'angleV': -2.0, 'eyeLR': 1},
+             {'angleH': 0.0, 'angleV': 5.0, 'eyeLR': 0}], TARGET_STATE)
+        self.assertAlmostEqual(h_rates[0], -13.0 / 59.0, places=15)
+        self.assertAlmostEqual(h_rates[1], 13.0 / 59.0, places=15)
+        self.assertAlmostEqual(v_rate, 1.0 / 15.0, places=12)
+
+    def test_equal_range_bounds_rate_to_zero(self):
+        # The rate InverseLerp reads 0 for an empty range (a == b), unlike
+        # Mathf.InverseLerp's 1: min == max bends both eyes' rates to
+        # Lerp(-1, 1, 0) = -1, and up == down == 0 pins the vertical rate to 0.
+        state = dict(TARGET_STATE, minBendingAngle=20.0, maxBendingAngle=20.0,
+                     upBendingAngle=0.0, downBendingAngle=0.0)
+        h_rates, v_rate = angle_rates([{'angleH': 7.0, 'angleV': 3.0},
+                                       {'angleH': -7.0, 'angleV': 3.0}], state)
+        self.assertEqual(h_rates, [-1.0, -1.0])
+        self.assertEqual(v_rate, 0.0)
+
+    def test_vertical_rate_uses_the_up_range_when_down_not_above_up(self):
+        # downBendingAngle <= upBendingAngle: +angleV divides by upBendingAngle
+        # (sign-flipped), -angleV by downBendingAngle.  The shipped -30/10 pair
+        # has 10 > -30 and takes the other branch (the check-value test above).
+        state = dict(TARGET_STATE, upBendingAngle=10.0, downBendingAngle=-30.0)
+        _, v_rate = angle_rates([{'angleH': 0.0, 'angleV': 5.0},
+                                 {'angleH': 0.0, 'angleV': 5.0}], state)
+        self.assertAlmostEqual(v_rate, -0.5, places=12)
+        _, v_rate = angle_rates([{'angleH': 0.0, 'angleV': -2.0},
+                                 {'angleH': 0.0, 'angleV': -2.0}], state)
+        self.assertAlmostEqual(v_rate, 2.0 / 30.0, places=12)
+
+    def test_vertical_rate_uses_the_down_range_when_down_above_up(self):
+        # The shipped branch: downBendingAngle 10 > upBendingAngle -30, so a
+        # positive angleV divides by downBendingAngle (sign-flipped) and a
+        # negative one by upBendingAngle; past the range the rate saturates.
+        _, v_rate = angle_rates([{'angleH': 0.0, 'angleV': 7.5},
+                                 {'angleH': 0.0, 'angleV': 7.5}], TARGET_STATE)
+        self.assertAlmostEqual(v_rate, -0.75, places=12)
+        _, v_rate = angle_rates([{'angleH': 0.0, 'angleV': -2.0},
+                                 {'angleH': 0.0, 'angleV': -2.0}], TARGET_STATE)
+        # -2 past the -30 end of the up range: InverseLerp(0, -30, -2) = 1/15.
+        self.assertAlmostEqual(v_rate, 1.0 / 15.0, places=12)
+        _, v_rate = angle_rates([{'angleH': 0.0, 'angleV': 12.0},
+                                 {'angleH': 0.0, 'angleV': 12.0}], TARGET_STATE)
+        self.assertAlmostEqual(v_rate, -1.0, places=12)
+
+    def test_eye_update_returns_rates_on_both_paths(self):
+        # dt == 0 recomputes the rates from the carried angles: h = 2*39/59-1 /
+        # 2*22/59-1, and entry 0's -2.0 vertical reads InverseLerp(0, -30, -2)
+        # = 1/15 on the shipped down-above-up branch.
+        state = {'eyes': [{'angleH': 3.0, 'angleV': -2.0, 'dirUp': [0.0, 1.0, 0.0]},
+                          {'angleH': -1.0, 'angleV': 0.5, 'dirUp': [0.0, 1.0, 0.0]}]}
+        predicted = eye_update(state=state, geometry=synthetic_geometry(eye_positions=[[-0.03, 1.5, 0.0],
+                                                                                        [0.03, 1.5, 0.0]]),
+                               target=[0.0, 1.5, 5.0], dt=0.0, st=TARGET_STATE, settings=SETTINGS)
+        self.assertAlmostEqual(predicted[0]['angleHRate'], 2.0 * 39.0 / 59.0 - 1.0, places=12)
+        self.assertAlmostEqual(predicted[1]['angleHRate'], 2.0 * 22.0 / 59.0 - 1.0, places=12)
+        self.assertAlmostEqual(predicted[0]['angleVRate'], 1.0 / 15.0, places=12)
+        self.assertEqual(predicted[1]['angleVRate'], predicted[0]['angleVRate'])
+        # A stepped frame carries the rates from its NEW angles, identical to
+        # a direct angle_rates call on the returned state.
+        predicted = eye_update(state=zero_state(),
+                               geometry=synthetic_geometry(eye_positions=[[-0.03, 1.5, 0.0],
+                                                                           [0.03, 1.5, 0.0]]),
+                               target=[-0.05, 1.5, 5.0], dt=0.5 / 38.0,
+                               st=TARGET_STATE, settings=SETTINGS)
+        expected_h, expected_v = angle_rates(predicted, TARGET_STATE)
+        for index, entry in enumerate(predicted):
+            self.assertAlmostEqual(entry['angleHRate'], expected_h[index], places=15)
+            self.assertEqual(entry['angleVRate'], expected_v)
+
+
+class InitialEyeStateTests(unittest.TestCase):
+    def test_identity_poses_take_the_normalized_head_vectors(self):
+        # q = inverse(identity) leaves the rootNode identity: the reference
+        # dirs are just the normalized head vectors, angles start at 0 with
+        # dirUp = referenceUpDir and origRotation is the eye's localRotation.
+        entry = initial_eye_state(eye_parent_rotation=IDENTITY, eye_local_rotation=[0.0, 0.0, 0.5, 0.5],
+                                  root_node_rotation=IDENTITY,
+                                  head_look_vector=[0.0, 0.0, 2.0], head_up_vector=[0.0, 3.0, 0.0])
+        self.assertEqual(entry['angleH'], 0.0)
+        self.assertEqual(entry['angleV'], 0.0)
+        self.assertEqual(entry['referenceLookDir'], [0.0, 0.0, 1.0])
+        self.assertEqual(entry['referenceUpDir'], [0.0, 1.0, 0.0])
+        self.assertEqual(entry['dirUp'], [0.0, 1.0, 0.0])
+        self.assertEqual(entry['origRotation'], [0.0, 0.0, 0.5, 0.5])
+
+    def test_rotated_root_and_eye_parent_compose_the_reference_frame(self):
+        # Hand case: the eye parent is rotated +90 about Z and the rootNode
+        # +90 about X, so q = -90 about Z and q * root maps +Z to X -> -Y ->
+        # -X and +Y to Z -> Z: referenceLookDir (-1, 0, 0), referenceUpDir
+        # (0, 0, 1).
+        entry = initial_eye_state(eye_parent_rotation=angle_axis(90.0, FORWARD),
+                                  eye_local_rotation=IDENTITY,
+                                  root_node_rotation=angle_axis(90.0, RIGHT),
+                                  head_look_vector=[0.0, 0.0, 1.0], head_up_vector=[0.0, 1.0, 0.0])
+        for component, want in zip(entry['referenceLookDir'], [-1.0, 0.0, 0.0]):
+            self.assertAlmostEqual(component, want, places=12)
+        for component, want in zip(entry['referenceUpDir'], [0.0, 0.0, 1.0]):
+            self.assertAlmostEqual(component, want, places=12)
+        self.assertEqual(entry['dirUp'], entry['referenceUpDir'])
 
 
 if __name__ == '__main__':

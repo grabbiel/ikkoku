@@ -213,6 +213,13 @@ public struct SourceStudioEyeLookSolver: Sendable {
     public var eyes: [SourceStudioEyeState]
     /// The frame's final sorasi num5; -1 unless the AWAY branch armed it.
     public private(set) var num5 = -1.0
+    /// The last frame's angleHRate pair (L, R) and single angleVRate, each
+    /// in [-1, 1] — the values EyeLookMaterialControll shifts the iris
+    /// textures by, recomputed by `step` from the frame's new angles (on the
+    /// zero-deltaTime frame from the carried ones).  Zero before the first
+    /// frame, the original's field default.
+    public private(set) var angleHRates: [Double] = [0, 0]
+    public private(set) var angleVRate = 0.0
 
     public init(settings: SourceStudioEyeLookSettings,
                 eyes: [SourceStudioEyeState] = [.init(), .init()]) throws {
@@ -226,17 +233,26 @@ public struct SourceStudioEyeLookSolver: Sendable {
 
     /// One frame of the recovered EyeUpdateCalc.  `pattern` selects the
     /// eyeTypeStates entry (the original's ptnNo) and `deltaTime == 0` leaves
-    /// everything unchanged and returns nil rotations, as the reference does.
-    /// Returns the predicted eye local rotations (Unity x,y,z,w); the world
-    /// rotation is the frame's parent rotation times these, which the caller
-    /// applies like the original's writeback.
+    /// the angles unchanged and returns nil rotations, as the reference does;
+    /// both paths end by recomputing `angleHRates` / `angleVRate` from the
+    /// frame's angles and the pattern's type state.  Returns the predicted eye
+    /// local rotations (Unity x,y,z,w); the world rotation is the frame's
+    /// parent rotation times these, which the caller applies like the
+    /// original's writeback.
     public mutating func step(deltaTime: Double, target: SIMD3<Double>,
                               geometry: SourceStudioEyeLookGeometry, pattern: Int) throws
         -> (left: simd_quatd?, right: simd_quatd?) {
         let deltaTime = try Self.checked(deltaTime, "eye deltaTime")
         let previous = try stateValues()
-        guard deltaTime != 0 else { return (left: nil, right: nil) }
         let state = try settings.state(for: pattern)
+        guard deltaTime != 0 else {
+            // The original's early return without stepping: the frame-end
+            // rates are still recomputed, from the carried angles.
+            let rates = try Self.angleRates(eyes: previous, state: state)
+            angleHRates = rates.horizontal
+            angleVRate = rates.vertical
+            return (left: nil, right: nil)
+        }
         guard state.lookType != .noLook else {
             throw RigError.invalid("NO_LOOK writes the fixAngle the look trace does not record.")
         }
@@ -269,7 +285,44 @@ public struct SourceStudioEyeLookSolver: Sendable {
             eyes[index] = SourceStudioEyeState(angleH: result.angleH, angleV: result.angleV,
                                                dirUp: result.dirUp)
         }
+        let rates = try Self.angleRates(eyes: eyes, state: state)
+        angleHRates = rates.horizontal
+        angleVRate = rates.vertical
         return (left: rotations[0], right: rotations[1])
+    }
+
+    /// The Init pass the original runs per eye before the first frame: with
+    /// q = inverse(eye parent world rotation), referenceLookDir /
+    /// referenceUpDir are q * root node rotation applied to the normalized
+    /// headLookVector / headUpVector; angleH / angleV start at 0, dirUp takes
+    /// the reference up and origRotation the eye's own local rotation.
+    /// `eyeLR` (0 = L, 1 = R) is the settings' eyeObjs discriminator and only
+    /// slots the outputs, which come back in eyeLR order whatever order the
+    /// eyeObjs were walked in.
+    public static func initialState(
+        rootNodeRotation: simd_quatd,
+        eyes: [(parentRotation: simd_quatd, localRotation: simd_quatd, eyeLR: Int)],
+        headLookVector: SIMD3<Double>, headUpVector: SIMD3<Double>) throws
+        -> (reference: [(lookDir: SIMD3<Double>, upDir: SIMD3<Double>, origRotation: simd_quatd)],
+            states: [SourceStudioEyeState]) {
+        guard eyes.count == 2, Set(eyes.map(\.eyeLR)) == [0, 1] else {
+            throw RigError.invalid("The eye Init needs one eye per eyeLR (0 and 1).")
+        }
+        let root = try checked(rootNodeRotation, "eye root node rotation")
+        var built: [(eyeLR: Int, lookDir: SIMD3<Double>, upDir: SIMD3<Double>,
+                     origRotation: simd_quatd)] = []
+        for eye in eyes {
+            let parentInverse = try inverseQuaternion(
+                checked(eye.parentRotation, "eye parent rotation"))
+            let base = try multiplyQuaternions(parentInverse, root)
+            let lookDir = try rotate(base, normalizeStrict(headLookVector, "headLookVector"))
+            let upDir = try rotate(base, normalizeStrict(headUpVector, "headUpVector"))
+            built.append((eye.eyeLR, lookDir, upDir,
+                          try checked(eye.localRotation, "eye local rotation")))
+        }
+        built.sort { $0.eyeLR < $1.eyeLR }
+        return (reference: built.map { ($0.lookDir, $0.upDir, $0.origRotation) },
+                states: built.map { SourceStudioEyeState(angleH: 0, angleV: 0, dirUp: $0.upDir) })
     }
 
     /// The state the solver validates before a frame: two finite entries.
@@ -510,6 +563,37 @@ public struct SourceStudioEyeLookSolver: Sendable {
         return (previousAngle, armed)
     }
 
+    /// The frame-end angle rates EyeLookCalc computes from the new per-eye
+    /// angles and the current pattern's type state (the values
+    /// EyeLookMaterialControll shifts the iris textures by).  The L eye reads
+    /// (minBending, maxBending) and the R eye mirrors to (-maxBending,
+    /// -minBending), each mapped through the rate InverseLerp onto [-1, 1];
+    /// the single vertical rate comes from eye 0's angleV: upBending and
+    /// downBending swap when down exceeds up (the shipped -30/10 pair takes
+    /// that branch), the readout is negated for a non-negative angle.
+    static func angleRates(eyes: [SourceStudioEyeState],
+                           state: SourceStudioEyeLookSettings.TypeState) throws
+        -> (horizontal: [Double], vertical: Double) {
+        guard eyes.count == 2 else {
+            throw RigError.invalid("The angle rates need a two-eye state list.")
+        }
+        var horizontal: [Double] = []
+        for (index, eye) in eyes.enumerated() {
+            let angleH = try checked(eye.angleH, "rate eye \(index) angleH")
+            let ratio = index == 1
+                ? try rateInverseLerp(-state.maxBendingAngle, -state.minBendingAngle, angleH)
+                : try rateInverseLerp(state.minBendingAngle, state.maxBendingAngle, angleH)
+            horizontal.append(try lerp(-1, 1, t: ratio))
+        }
+        let angleV = try checked(eyes[0].angleV, "rate eye 0 angleV")
+        let low = min(state.upBendingAngle, state.downBendingAngle)
+        let high = max(state.upBendingAngle, state.downBendingAngle)
+        let vertical = angleV >= 0
+            ? try -rateInverseLerp(0, high, angleV)
+            : try rateInverseLerp(0, low, angleV)
+        return (horizontal: horizontal, vertical: vertical)
+    }
+
     // MARK: - Unity semantics (the additions the Neck port lacks)
 
     static func checked(_ value: Double, _ what: String) throws -> Double {
@@ -552,6 +636,15 @@ public struct SourceStudioEyeLookSolver: Sendable {
         let a = try checked(a, "inverse-lerp a"), b = try checked(b, "inverse-lerp b")
         let value = try checked(value, "inverse-lerp value")
         if a == b { return 1 }
+        return try clamp((value - a) / (b - a), 0, 1)
+    }
+
+    /// The rate helper's InverseLerp: Mathf.InverseLerp's clamped 0...1
+    /// readout except an empty range (a == b) reads 0, not 1.
+    static func rateInverseLerp(_ a: Double, _ b: Double, _ value: Double) throws -> Double {
+        let a = try checked(a, "rate inverse-lerp a"), b = try checked(b, "rate inverse-lerp b")
+        let value = try checked(value, "rate inverse-lerp value")
+        if a == b { return 0 }
         return try clamp((value - a) / (b - a), 0, 1)
     }
 
