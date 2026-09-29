@@ -104,6 +104,14 @@ final class StudioModel: ViewportInputHandler {
     /// Routes whose rebuild exceeded the fast-forward budget, reported once
     /// while they stay on the continuous evaluator.
     @ObservationIgnored private var sourceRouteFallbackReported: Set<UUID> = []
+    /// Characters under a route are rendered but stay uneditable for original
+    /// export: their document entry keeps the unrendered placeholder baseline
+    /// (folder kind, fallback name, no character reference) that
+    /// `SourceSceneExportValidation` already refuses to serialize edits from,
+    /// and only the preview rides here, placed by the same `childRoot` walk.
+    /// Like the route cache it is gated by scene identity, filled by the
+    /// import and dropped whenever a document replaces the current one.
+    @ObservationIgnored private var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
     @ObservationIgnored private var lastSourceRouteDiagnostic: String?
     let sourceAudioBus = SourceStudioAudioBus()
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
@@ -115,6 +123,12 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored private var startTime = CFAbsoluteTimeGetCurrent()
     @ObservationIgnored private var animTime: Double = 0
     private(set) var sourceAnimationTime: Float = 0
+    /// Loaded from `IKKOKU_STUDIO_ANIMATION_CATALOG` at source-scene import; nil when unset.
+    private(set) var sourceAnimationCatalog: SourceStudioAnimationCatalog?
+    private(set) var sourceAnimationCatalogError: String?
+    /// Set by `SourceAnimationInspector`'s `onAppear`/`onDisappear` so the headless
+    /// UI report reflects the inspector that actually rendered.
+    var sourceAnimationInspectorShown = false
     @ObservationIgnored var sourcePluginSession: SourceStudioPluginSession?
     let sourceFocus = SourceApplicationFocusHost()
     @ObservationIgnored var sourceFocusObservers: [NSObjectProtocol] = []
@@ -122,6 +136,7 @@ final class StudioModel: ViewportInputHandler {
     var sourcePluginsRunning = false
     var sourceAccessoryNamesEnabled = false
     var liveAnimation = true
+    var sourceAutomaticBlink = true { didSet { for preview in sourceInstances.values { preview.automaticBlink = sourceAutomaticBlink }; refresh() } }
     var isActiveMode = false
     // Timeline
     var timelinePlaying = false
@@ -163,6 +178,27 @@ final class StudioModel: ViewportInputHandler {
         guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
         animTime = CFAbsoluteTimeGetCurrent() - startTime
         sourceAnimationTime += 1 / 30
+        // Each card's saved eyesBlink flag decides whether its blink clock
+        // schedules blinks; this tick already rebuilds the frame every step, so a
+        // rate change needs no extra refresh condition here.
+        if sourceAutomaticBlink { for preview in sourceInstances.values { try? preview.updateBlink(elapsed: sourceAnimationTime) } }
+        // The TARGET/AWAY gaze steps before setDynamicsStep so the pose the
+        // solver reads stays a pure sample (dynamicsStep still holds the
+        // previous tick's elapsed) and refresh integrates hair once. The
+        // camera enters rig model space through the object world matrix; the
+        // Z reflection commutes with its rigid part (UnityCoordinates.matrix).
+        for (id, preview) in sourceInstances where preview.hasLiveNeckLook {
+            guard let object = doc.object(id), object.kind == .character,
+                  object.sourceCharacter != nil, doc.isVisible(id) else { continue }
+            do {
+                let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
+                let camera = UnityCoordinates.position(world.inverse.transformPoint(doc.camera.position))
+                _ = try preview.updateNeckLook(deltaTime: 1 / 30, cameraModelPosition: camera,
+                    fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                    kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
+                    animationElapsed: sourceAnimationTime)
+            } catch { status = "Source neck gaze: \(error)" }
+        }
         for preview in sourceInstances.values { try? preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: 1 / 30) }
         stepSourceRouteClocks(delta: 1 / 30)
         refresh()
@@ -175,6 +211,67 @@ final class StudioModel: ViewportInputHandler {
         for preview in sourceInstances.values { preview.clearDynamicsStep(); preview.resetAnimationPlayback() }
         jumpSourceRouteClocks(to: seconds)
         refresh()
+    }
+
+    /// The selected source character's saved or edited animation selection, so the
+    /// inspector can show and change it. Nil for native or unconverted objects.
+    var selectedSourceAnimationState: SourceStudioAnimationState? {
+        guard let object = selectedObject, let preview = sourceInstances[object.id] else { return nil }
+        return object.sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+    }
+
+    /// Bakes every character's evaluated time before resetting the shared clock.
+    func rebaseSourceAnimationClock() throws {
+        var objects = doc.objects
+        for i in doc.objects.indices {
+            let object = doc.objects[i]
+            if let preview = sourceInstances[object.id], preview.hasSavedAnimation || object.sourceAnimation != nil {
+                objects[i].sourceAnimation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+            }
+        }
+        doc.objects = objects
+        sourceAnimationTime = 0
+        for preview in sourceInstances.values { preview.resetAnimationPlayback() }
+    }
+
+    private func editSourceAnimation(_ id: UUID, change: (inout SourceStudioAnimationState) -> Void) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else { throw RigError.invalid("Studio animation edit has no loaded source character.") }
+        var candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+        change(&candidate)
+        _ = try preview.editedPose(fkRotations: doc.objects[i].sourceFKRotations ?? [:], ikTargets: doc.objects[i].sourceIKOverrides ?? [:],
+            kinematics: doc.objects[i].sourceKinematics, animationState: candidate, animationElapsed: 0)
+        try rebaseSourceAnimationClock()
+        candidate = doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+        change(&candidate)
+        doc.objects[i].sourceAnimation = candidate
+        refresh()
+    }
+
+    /// New selections start at phase zero after other characters' phases are baked.
+    func setSourceAnimation(_ id: UUID, group: Int32, category: Int32, no: Int32) throws {
+        try editSourceAnimation(id) { state in
+            state.group = group; state.category = category; state.no = no; state.normalizedTime = 0
+        }
+    }
+
+    func setSourceAnimationSpeed(_ id: UUID, _ speed: Float) throws {
+        guard speed.isFinite, speed >= 0 else { throw RigError.invalid("Studio animation speed must be finite and non-negative.") }
+        try editSourceAnimation(id) { $0.speed = speed }
+    }
+
+    func setSourceAnimationForceLoop(_ id: UUID, _ on: Bool) throws {
+        try editSourceAnimation(id) { $0.forceLoop = on }
+    }
+
+    func restartSourceAnimation(_ id: UUID) throws {
+        try editSourceAnimation(id) { $0.normalizedTime = 0 }
+    }
+
+    func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
+        sourceAnimationCatalog?.entries
+            .filter { $0.group == group && (category == nil || $0.category == category) && $0.file != nil }
+            .min { $0.category < $1.category || ($0.category == $1.category && $0.no < $1.no) }
+            .map { (category: $0.category, no: $0.no) }
     }
 
     func advancePluginAnimation(by delta: Float) throws {
@@ -211,7 +308,9 @@ final class StudioModel: ViewportInputHandler {
 
     func pluginAttachmentFrame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
         if sourceInstances[parent.id] == nil, let reference = parent.sourceCharacter {
-            sourceInstances[parent.id] = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+            let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+            preview.automaticBlink = sourceAutomaticBlink
+            sourceInstances[parent.id] = preview
         }
         guard let point = child.sourceAttachmentPoint, let preview = sourceInstances[parent.id] else {
             throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
@@ -224,6 +323,9 @@ final class StudioModel: ViewportInputHandler {
 
     func addKeyframe() {
         guard let o = selectedObject, o.kind == .character || o.kind == .item || o.kind == .light else { return }
+        // Original characters keep their saved pose/animation; keyframes would only store
+        // prototype fields (pose delta, IK chains, gestures, preset, expression).
+        guard !selectedIsSourceCharacter else { status = "Original characters keep their saved poses; Timeline keys are not supported."; return }
         pushUndo(force: true)
         doc.timeline.insert(Keyframe(time: timelineTime, object: o))
         status = "Keyframe at \(String(format: "%.2f", timelineTime)) s"
@@ -250,6 +352,36 @@ final class StudioModel: ViewportInputHandler {
     var selectedObject: StudioObject? { selection.flatMap { doc.object($0) } }
     var selectedInstance: CharacterInstance? { selection.flatMap { instances[$0] } }
 
+    /// Whether the current selection is an original-game character. The inspectors
+    /// gate their prototype-only controls on this so the UI and the headless UI
+    /// report (`AppState.snapshotWindowIfRequested`) cannot drift apart.
+    var selectedIsSourceCharacter: Bool { selectedObject?.sourceCharacter != nil }
+
+    /// Set by the inspector branch that actually rendered (`onAppear` in `StudioView`);
+    /// the headless UI report writes this as `inspectorView` so it cannot lie about
+    /// the expected `inspectorViewName` computed from model state below.
+    var displayedInspectorView = "none"
+
+    /// Expected inspector view for the current tab/selection, computed from model state.
+    /// Keep these branches in sync with `StudioView`'s inspector switch.
+    var inspectorViewName: String {
+        switch inspectorTab {
+        case .object: return selectedObject == nil ? "none" : "ObjectInspector"
+        case .pose:
+            if selectedObject?.kind != .character { return "none" }
+            return selectedIsSourceCharacter ? "SourcePoseInspector" : "PoseInspector"
+        case .face:
+            if selectedIsSourceCharacter { return "FaceInspector.sourceUnsupported" }
+            guard let o = selectedObject, o.card != nil else { return "none" }
+            return "FaceInspector"
+        case .clothes:
+            if selectedIsSourceCharacter { return "ClothesInspector.sourceAccessoryLabels" }
+            guard let o = selectedObject, o.card != nil else { return "none" }
+            return "ClothesInspector"
+        case .scene: return "SceneInspector"
+        }
+    }
+
     // MARK: Object management
 
     private func pushUndo(force: Bool = false) {
@@ -260,8 +392,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -363,8 +495,22 @@ final class StudioModel: ViewportInputHandler {
             ?? boneCatalogURL.deletingLastPathComponent().appendingPathComponent("attachments.json")
         let attachmentPath = FileManager.default.fileExists(atPath: attachmentURL.path) ? attachmentURL.path : nil
         let animationPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_CATALOG"]
+        if let animationPath {
+            do {
+                sourceAnimationCatalog = try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: animationPath))
+                sourceAnimationCatalogError = nil
+            } catch {
+                sourceAnimationCatalog = nil
+                sourceAnimationCatalogError = String(describing: error)
+            }
+        } else {
+            sourceAnimationCatalog = nil
+            sourceAnimationCatalogError = nil
+        }
+        let handPatternsPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"]
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
+        var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
@@ -374,27 +520,43 @@ final class StudioModel: ViewportInputHandler {
             let rotation = UnityCoordinates.eulerDegrees(record.transform.rotationDegrees)
             object.transform.rotation = rotation.eulerXYZ.radiansToDegrees
             object.transform.rotationOverride = rotation.vector
-            if record.character != nil, !routeChild {
-                let selectedRig = record.character?.sex == 0
+            if let character = record.character {
+                let selectedRig = character.sex == 0
                     ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
                 let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
                     rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
                     makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath, animationCatalogFile: animationPath,
-                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"])
+                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
+                    handPatternsFile: handPatternsPath,
+                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
                 do {
                     let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
-                    object.kind = .character; object.name = "Source character \(record.sourceKey)"
-                    object.sourceCharacter = reference; previews[object.id] = preview
-                    diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
-                } catch { diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)") }
+                    preview.automaticBlink = sourceAutomaticBlink
+                    if routeChild {
+                        // The world walk moves this character with `childRoot`,
+                        // but its document entry stays the unrendered placeholder:
+                        // no character reference, folder kind, and the same
+                        // fallback-name rule as `SourceSceneExportValidation`
+                        // keep FK/IK, animation and expression edits unoffered
+                        // and original export rejecting them.
+                        if record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
+                        routeCharacterPreviews[object.id] = preview
+                        diagnostics.append("Character \(record.sourceKey) renders on its route; the placeholder entry keeps FK/IK, animation and expression edits unoffered and original export rejects them.")
+                        diagnostics += preview.diagnostics.map { "Route character \(record.sourceKey): \($0)" }
+                    } else {
+                        object.kind = .character; object.name = "Source character \(record.sourceKey)"
+                        object.sourceCharacter = reference; previews[object.id] = preview
+                        diagnostics += preview.diagnostics.map { "Character \(record.sourceKey): \($0)" }
+                    }
+                } catch {
+                    if routeChild, record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
+                    diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)")
+                }
             } else if record.kind != .folder {
                 object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
                 // A route's `childRoot` is resolved every frame, so a non-character
-                // route child inherits it like any other parent transform. A
-                // character under a route has no resolved animation yet and stays
-                // gated.
-                let gated = routeChild && record.character != nil
-                diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering\(gated ? "; route animation is unresolved" : "").")
+                // route child inherits it like any other parent transform.
+                diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering.")
             }
             object.sourcePreviewName = object.name; object.sourcePreviewKind = object.kind
             imported.objects.append(object)
@@ -412,8 +574,12 @@ final class StudioModel: ViewportInputHandler {
         }
         imported.sourcePreviewDiagnostics = diagnostics
         try imported.validateHierarchy()
+        // Published before the bounds walk so attachment matrices through a
+        // route character resolve; the accessor's scene-identity guard already
+        // matches `imported`, and the final assignment below is idempotent.
+        sourceRouteCharacterPreviews = routeCharacterPreviews
         for object in imported.objects {
-            if let preview = previews[object.id], imported.isVisible(object.id) {
+            if let preview = previews[object.id] ?? routeCharacterPreviews[object.id], imported.isVisible(object.id) {
                 let f = try preview.frame(camera: imported.camera, mainLight: imported.mainLight, effects: imported.effects,
                     world: try sourceWorldMatrix(of: object.id, document: imported, previews: previews), objectID: 1)
                 bounds.expand(f.sceneBounds)
@@ -422,10 +588,10 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
-        status = "Source preview · \(previews.count) converted characters · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
+        status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
     }
 
     func importKoikatsuLayout(sceneURL: URL, catalogURL: URL) throws {
@@ -454,7 +620,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -569,10 +735,12 @@ final class StudioModel: ViewportInputHandler {
     /// Deterministic integration input using original object/bone IDs. This
     /// exercises the same document fields and guide callbacks as the viewport.
     func applySourceCaptureEdits(_ data: Data) throws {
-        struct Edit: Decodable { let objectKey: Int32; let position: [Float]?; let fkRotations: [String: [Float]]?; let ikTargets: [String: SourceStudioIKEdit]?; let kinematics: SourceStudioKinematicState? }
+        struct AnimationEdit: Decodable { let group: Int32; let category: Int32; let no: Int32; let speed: Float?; let forceLoop: Bool? }
+        struct Edit: Decodable { let objectKey: Int32; let position: [Float]?; let fkRotations: [String: [Float]]?; let ikTargets: [String: SourceStudioIKEdit]?; let kinematics: SourceStudioKinematicState?; let animation: AnimationEdit? }
         let edits = try JSONDecoder().decode([Edit].self, from: data)
         guard edits.count <= 1000, Set(edits.map(\.objectKey)).count == edits.count else { throw RigError.invalid("Duplicate or oversized Studio capture edit set.") }
         var candidate = doc
+        var animations: [(object: UUID, edit: AnimationEdit)] = []
         for edit in edits {
             guard let i = candidate.objects.firstIndex(where: { $0.sourceObjectKey == edit.objectKey }) else { throw RigError.invalid("Studio capture object is missing.") }
             func vector(_ values: [Float]) throws -> Float3 {
@@ -602,8 +770,28 @@ final class StudioModel: ViewportInputHandler {
                 candidate.objects[i].sourceIKOverrides = changes
             }
             if let state = edit.kinematics { try state.validate(); candidate.objects[i].sourceKinematics = state }
+            if let animation = edit.animation {
+                guard let preview = sourceInstances[candidate.objects[i].id] else { throw RigError.invalid("Studio capture animation has no source character.") }
+                var state = candidate.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+                state.group = animation.group; state.category = animation.category; state.no = animation.no; state.normalizedTime = 0
+                if let speed = animation.speed {
+                    guard speed.isFinite, speed >= 0 else { throw RigError.invalid("Studio animation speed must be finite and non-negative.") }
+                    state.speed = speed
+                }
+                if let forceLoop = animation.forceLoop { state.forceLoop = forceLoop }
+                _ = try preview.editedPose(fkRotations: candidate.objects[i].sourceFKRotations ?? [:], ikTargets: candidate.objects[i].sourceIKOverrides ?? [:],
+                    kinematics: candidate.objects[i].sourceKinematics, animationState: state, animationElapsed: 0)
+                animations.append((object: candidate.objects[i].id, edit: animation))
+            }
         }
         doc = candidate
+        for animation in animations {
+            try editSourceAnimation(animation.object) { state in
+                state.group = animation.edit.group; state.category = animation.edit.category; state.no = animation.edit.no; state.normalizedTime = 0
+                if let speed = animation.edit.speed { state.speed = speed }
+                if let forceLoop = animation.edit.forceLoop { state.forceLoop = forceLoop }
+            }
+        }
     }
 
     func sourceBenchmarkMetadata() -> [String: Any] {
@@ -699,6 +887,12 @@ final class StudioModel: ViewportInputHandler {
         sourceRouteClocks = sourceRouteClocks.filter { sourceRoutes[$0.key] != nil }
         sourceRoutePlayState = sourceRoutePlayState.filter { sourceRoutes[$0.key] != nil }
         sourceRouteFallbackReported = sourceRouteFallbackReported.filter { sourceRoutes[$0] != nil }
+        // Route-character previews are likewise authored data with no document
+        // counterpart to edit; the prune only drops gone objects.
+        sourceRouteCharacterPreviews = sourceRouteCharacterPreviews.filter { id, preview in
+            doc.sourceSceneSHA256 == preview.reference.sceneSHA256
+                && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == preview.reference.objectKey })
+        }
         var items: [RenderItem] = []
         var skinSets: [UInt64: [float4x4]] = [:]
         var lights: [SceneLight] = []
@@ -722,8 +916,9 @@ final class StudioModel: ViewportInputHandler {
                         let preview: SourceStudioCharacterPreview
                         if let cached = sourceInstances[o.id], cached.reference == reference { preview = cached }
                         else {
-                            preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
-                            sourceInstances[o.id] = preview
+                            let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                            fresh.automaticBlink = sourceAutomaticBlink
+                            sourceInstances[o.id] = fresh; preview = fresh
                         }
                         let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
@@ -799,7 +994,19 @@ final class StudioModel: ViewportInputHandler {
                 lightGlyphs.append((p - Float3(0, 0.08, 0), p + Float3(0, 0.08, 0)))
                 lightGlyphs.append((p, p + (o.savedCamera?.forward ?? Float3(0, 0, -1)) * 0.3))
             case .folder:
-                break
+                // A character under a route keeps this placeholder entry (see
+                // the import); its preview rides `childRoot` through the world
+                // walk above. Only the saved record's animation is evaluated —
+                // the entry cannot carry animation, FK/IK or expression edits,
+                // so none are passed and original export rejects them.
+                if let preview = sourceRouteCharacterPreview(of: o.id, document: doc) {
+                    do {
+                        let rendered = try preview.frame(camera: doc.camera, mainLight: doc.mainLight, effects: doc.effects,
+                            world: world, objectID: objectID, animationElapsed: sourceAnimationTime)
+                        items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
+                        bounds.expand(rendered.sceneBounds)
+                    } catch { status = "Route character \(o.sourceObjectKey ?? 0): \(error)" }
+                }
             }
         }
         if !lightGlyphs.isEmpty && showGizmos {
@@ -829,8 +1036,13 @@ final class StudioModel: ViewportInputHandler {
         while let parentID = object.parent {
             guard visited.insert(parentID).inserted, let parent = document.object(parentID) else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
             if let point = object.sourceAttachmentPoint {
-                guard let preview = previews[parentID] else { throw RigError.invalid("Attachment parent has no converted character.") }
-                world = try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * world
+                if let preview = previews[parentID] {
+                    world = try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * world
+                } else if let preview = sourceRouteCharacterPreview(of: parentID, document: document) {
+                    // A route character's placeholder entry cannot carry edits,
+                    // so only the saved record's animation is resolved here.
+                    world = try preview.attachmentMatrix(pointID: point, animationElapsed: sourceAnimationTime) * world
+                } else { throw RigError.invalid("Attachment parent has no converted character.") }
             }
             if let route = sourceRouteRuntime(id: parentID, document: document) {
                 // `childRoot` replaces the route object as the parent frame
@@ -857,6 +1069,16 @@ final class StudioModel: ViewportInputHandler {
         guard let route = sourceRoutes[id], document.sourceSceneFile == route.sceneFile,
               document.sourceSceneSHA256 == route.sceneSHA256 else { return nil }
         return route
+    }
+
+    /// The import's route-character preview, but only while the document still
+    /// identifies the scene file its reference was built from — the same
+    /// guard as `sourceRouteRuntime`, so after undo/redo the placeholder stays
+    /// unrendered instead of a guess from edited document data.
+    private func sourceRouteCharacterPreview(of id: UUID, document: StudioDocument) -> SourceStudioCharacterPreview? {
+        guard let preview = sourceRouteCharacterPreviews[id], document.sourceSceneFile == preview.reference.sceneFile,
+              document.sourceSceneSHA256 == preview.reference.sceneSHA256 else { return nil }
+        return preview
     }
 
     /// Playback diagnostics are deterministic for a given route and clock, so
@@ -1028,8 +1250,12 @@ final class StudioModel: ViewportInputHandler {
         while let parentID = object.parent {
             guard visited.insert(parentID).inserted, let parent = doc.object(parentID) else { throw RigError.invalid("Invalid Studio guide hierarchy.") }
             if let point = object.sourceAttachmentPoint {
-                guard let preview = sourceInstances[parentID] else { throw RigError.invalid("Missing attachment guide parent.") }
-                rotation = try preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * rotation
+                if let preview = sourceInstances[parentID] {
+                    rotation = try preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * rotation
+                } else if let preview = sourceRouteCharacterPreview(of: parentID, document: doc) {
+                    // Same saved-animation-only resolution as `sourceWorldMatrix`.
+                    rotation = try preview.attachmentRotation(pointID: point, animationElapsed: sourceAnimationTime) * rotation
+                } else { throw RigError.invalid("Missing attachment guide parent.") }
             }
             if let route = sourceRouteRuntime(id: parentID, document: doc) {
                 // Same parent-frame replacement as `sourceWorldMatrix`; the
