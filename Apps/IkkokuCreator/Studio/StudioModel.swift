@@ -147,6 +147,12 @@ final class StudioModel: ViewportInputHandler {
     /// of the original's single `ChangeCamera` active slot. `nil` while the
     /// orbit controller owns the view.
     private(set) var activeSourceCamera: UUID?
+    /// The camera the file's saved flags select at load (the last active
+    /// record in load order, PR #45). Kept beside `activeSourceCamera` so
+    /// original export can tell "still the load winner — the file already
+    /// reloads to it" from "the user switched cameras — rewrite every flag".
+    /// Set at import and cleared wherever `activeSourceCamera` is.
+    private(set) var sourceCameraLoadActive: UUID?
     /// The active source camera's name while the guard holds, otherwise `nil`.
     var activeSourceCameraName: String? {
         activeSourceCamera.flatMap { sourceCameraEntry(of: $0)?.name }
@@ -456,8 +462,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -679,7 +685,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; activeSourceCamera = activeCameraAtLoad; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -711,7 +717,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -783,6 +789,24 @@ final class StudioModel: ViewportInputHandler {
                 let baseline = object.sourcePreviewName ?? (original.kind == .folder
                     ? original.name ?? "Source object \(key)" : "Unrendered source \(original.kind) \(key)")
                 if object.name != baseline { edits.names[key] = object.name }
+            }
+            if original.kind == .camera, activeSourceCamera != sourceCameraLoadActive {
+                // CharaStudio saves the CURRENT view: the looked-through
+                // camera true, every other camera false. Once the user
+                // switched cameras the losers' stale `true` flags must be
+                // cleared — on load the last active record wins, so a stale
+                // true would re-select the old camera. Without a switch the
+                // file already reloads to the same winner; write nothing.
+                let value = object.id == activeSourceCamera
+                if original.cameraActive != value { edits.cameraActive[key] = value }
+            }
+            if original.kind == .route, let saved = sourceRoutes[object.id]?.route.active {
+                // `active` is the play state at save time; loading a true
+                // record calls Play. The same fallback the UI accessor uses
+                // applies, so an undo-cleared cache reads back as the
+                // record's own flag and counts as unchanged.
+                let playing = sourceRoutePlayState[object.id]?.playing ?? saved
+                if playing != saved { edits.routeActive[key] = playing }
             }
             let originalRotation = UnityCoordinates.eulerDegrees(original.transform.rotationDegrees)
             let rotationChanged = object.transform.quaternion.vector != originalRotation.vector

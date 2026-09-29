@@ -95,13 +95,17 @@ extension KoikatsuBinaryReader {
             neckData: neck, eyesData: eyes, animationNormalizedTime: time,
             accessoryGroupStates: groupStates, accessoryStates: states)
     }
-    mutating func route() throws -> KoikatsuRouteRecord {
+    mutating func route(objectKey: Int32? = nil) throws -> KoikatsuRouteRecord {
         var points: [KoikatsuRoutePointRecord] = []
         for _ in 0..<(try count()) {
             points.append(KoikatsuRoutePointRecord(bone: try bone(), speed: try float(), easeType: try int32(),
                 connection: try int32(), aid: try bone(), aidInitialized: try bool(), linked: try bool()))
         }
-        return KoikatsuRouteRecord(points: points, active: try bool(), loop: try bool(), visibleLine: try bool(),
+        // `active` is read into a local first so its one-byte span can be
+        // recorded; the remaining fields still read in initializer order.
+        let activeStart = offset, active = try bool()
+        if let objectKey { editSpans.routeActive[objectKey] = activeStart..<offset }
+        return KoikatsuRouteRecord(points: points, active: active, loop: try bool(), visibleLine: try bool(),
                                   orientation: try int32(), color: try jsonVector(["r", "g", "b", "a"]))
     }
     mutating func camera(slot: Int? = nil) throws -> KoikatsuCameraRecord {

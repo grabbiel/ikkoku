@@ -165,10 +165,16 @@ semantics.
 
 Not verified: camera animation and route-driven camera motion (a camera
 parented to a moving route is followed through the ordinary world-matrix
-walk, but no original capture of that case exists), writing an in-app
-toggled `active` flag back on export (deactivating in-app keeps the
-record's saved flag intact, and export intentionally does not persist the
-runtime choice), and any in-app run of the preview.
+walk, but no original capture of that case exists), and any in-app run of
+the preview. An in-app toggled `active` flag is written back on export:
+once the user switches the looked-through camera away from the one the
+saved flags select at load, the export writes every camera record's own
+one-byte `active` destination (`SourceSceneEdits.cameraActive`) — the
+viewed camera true, every other camera false — the current-view shape
+CharaStudio's save writes. Losers must be cleared because load gives the
+last active camera in file order the active slot, so a stale `true` would
+win again on reload. Without a switch nothing is written: the file already
+reloads to the same winner.
 
 Hierarchy scale: the Studio preview walk for source objects (those with a
 source object key) follows the
@@ -601,10 +607,17 @@ and an editor Play press on an inactive route plays it by overriding that flag
 (`SourceStudioRoutePlayback.childRootWorld`'s `activeOverride`), including the
 point-0 `Play` placement at the press instant and the `Stop` pin when the user
 stops it. Undo, redo and a new scene clear the play state along with the route
-cache. **This is runtime-only by design:** the `active` flag a scene record
-serializes is the state the original's `sceneInfo.Save` captured, and
-`SourceSceneExportValidation` rejects changing it, so the export keeps the
-saved route state and the controls only move the preview. Engine tests cover
+cache. **The play state is runtime-only, not a document field:** the `active`
+flag a scene record serializes is the state the original's `sceneInfo.Save`
+captured, and the controls move the preview without touching the document, so
+`SourceSceneExportValidation` has nothing there to reject. Since the third
+ST-T03 slice the export writes the runtime play state back on export through
+the route record's own one-byte `active` destination
+(`SourceSceneEdits.routeActive`): every route whose current play state
+differs from the record's saved flag is patched, so a route stopped in the
+editor reloads stopped and one started there reloads playing (loading a true
+record calls `Play`). After undo/redo the gated cache is empty, the route
+reads back as its record's flag — unchanged — and nothing is written. Engine tests cover
 the press-time offset (a press at 3 s then 13 live ticks equals a fresh stepper
 stepped 13 times; a jump to 1/30 past the press sees one tween frame, not 91),
 the before-press instant, and replay-then-stop (`swift test --package-path

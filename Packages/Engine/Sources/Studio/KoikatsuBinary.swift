@@ -344,12 +344,14 @@ struct KoikatsuBinaryReader {
         var characterRecord: KoikatsuCharacterRecord?, routeRecord: KoikatsuRouteRecord?
         switch kind {
         case .folder: name = try nameString(objectKey: key)
-        case .camera: name = try nameString(objectKey: key); active = try bool()
+        case .camera:
+            name = try nameString(objectKey: key)
+            let activeStart = offset; active = try bool(); editSpans.cameraActive[key] = activeStart..<offset
         case .character: characterRecord = try character(depth: depth, objectKey: key)
         case .route:
             name = try nameString(objectKey: key)
             for _ in 0..<(try count()) { children.append(try object(depth: depth + 1, rootKey: nil)) }
-            routeRecord = try route()
+            routeRecord = try route(objectKey: key)
         case .item: itemRecord = try item(objectKey: key)
         case .light:
             lightRecord = KoikatsuLightRecord(no: try int32(), color: try vector4(), intensity: try float(),

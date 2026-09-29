@@ -323,6 +323,46 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     #expect(try result.editedData(.init(visibility: [20: true], names: [20: "Route"])) == bytes)
 }
 
+@Test func sourceSceneEditingCameraAndRouteActiveFlagsPatchOwnBytesAndReverseExactly() throws {
+    let bytes = SceneDocumentBytes.scene(cameraObject: true).data, original = try KoikatsuSceneReader.decodeDocument(bytes)
+    func changedOffsets(_ data: Data) -> [Int] { (0..<bytes.count).filter { data[$0] != bytes[$0] } }
+    // The camera record saves active = true, the route active = false; each
+    // single edit shifts exactly one byte and only its own record's flag.
+    #expect(original.snapshot.roots[2].cameraActive == true && original.snapshot.roots[1].route?.active == false)
+    let cameraOffsets = changedOffsets(try original.editedData(.init(cameraActive: [30: false])))
+    let routeOffsets = changedOffsets(try original.editedData(.init(routeActive: [20: true])))
+    #expect(cameraOffsets.count == 1 && routeOffsets.count == 1)
+    let edited = try original.editedData(.init(cameraActive: [30: false], routeActive: [20: true]))
+    #expect(edited.count == bytes.count && changedOffsets(edited) == (cameraOffsets + routeOffsets).sorted())
+    #expect(bytes[cameraOffsets[0]] == 1 && edited[cameraOffsets[0]] == 0)
+    #expect(bytes[routeOffsets[0]] == 0 && edited[routeOffsets[0]] == 1)
+    let result = try KoikatsuSceneReader.decodeDocument(edited)
+    let before = sceneObjects(original.snapshot.roots), after = sceneObjects(result.snapshot.roots)
+    #expect(Set(before.keys) == Set(after.keys))
+    #expect(after[30]?.cameraActive == false && after[20]?.route?.active == true)
+    for key in before.keys where key != 20 && key != 30 { #expect(after[key] == before[key]) }
+    #expect(result.settings == original.settings && result.trailingData == original.trailingData)
+    // Reversing restores every source byte; an edit to the stored flags is identity.
+    #expect(try result.editedData(.init(cameraActive: [30: true], routeActive: [20: false])) == bytes)
+    #expect(try original.editedData(.init(cameraActive: [30: true], routeActive: [20: false])) == bytes)
+    // The active byte exists only on its own record kind: folders, characters
+    // and (for the camera destination) routes have no such span; unknown keys
+    // have none either.
+    for key: Int32 in [10, 11, 20, 999] {
+        #expect(throws: (any Error).self) { try original.editedData(.init(cameraActive: [key: false])) }
+    }
+    for key: Int32 in [10, 11, 30, 999] {
+        #expect(throws: (any Error).self) { try original.editedData(.init(routeActive: [key: true])) }
+    }
+    // A visibility edit on the same route combines and reverses.
+    let combined = try original.editedData(.init(visibility: [20: false], cameraActive: [30: false], routeActive: [20: true]))
+    #expect(combined.count == bytes.count)
+    let combinedResult = try KoikatsuSceneReader.decodeDocument(combined)
+    let combinedAfter = sceneObjects(combinedResult.snapshot.roots)
+    #expect(combinedAfter[20]?.visible == false && combinedAfter[20]?.route?.active == true && combinedAfter[30]?.cameraActive == false)
+    #expect(try combinedResult.editedData(.init(visibility: [20: true], cameraActive: [30: true], routeActive: [20: false])) == bytes)
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES"]),
                "Requires IKKOKU_STUDIO_SCENE_FIXTURES"))
 func sourceSceneEditingRoundTripsIndependentSceneFixturesWhenSupplied() throws {

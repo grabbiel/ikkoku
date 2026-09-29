@@ -52,10 +52,14 @@ struct SceneDocumentBytes {
         for no: Int32 in [12, 13] { i(2); i(no); b(false) }
         i(1); s("sample.wav"); b(false); s("background.png"); s("frame.png"); s("【KStudio】")
     }
+    /// `cameraObject` appends a camera record (key 30, saved `active` = true)
+    /// as a third root for tests that exercise the camera `active` byte.
     static func scene(card: Data = OriginalCardFixture.card(), both: Bool = false,
-                      neck: Data = Data([0, 1, 255]), eyes: Data = Data([2, 3, 254])) -> (data: Data, objectEnd: Int, baseEnd: Int) {
+                      neck: Data = Data([0, 1, 255]), eyes: Data = Data([2, 3, 254]),
+                      cameraObject: Bool = false) -> (data: Data, objectEnd: Int, baseEnd: Int) {
         var value = Self(data: OriginalCardFixture.png)
-        value.s("1.0.4.2"); value.i(2); value.i(10); value.character(card, both: both, neck: neck, eyes: eyes); value.i(20); value.route()
+        value.s("1.0.4.2"); value.i(cameraObject ? 3 : 2); value.i(10); value.character(card, both: both, neck: neck, eyes: eyes); value.i(20); value.route()
+        if cameraObject { value.i(30); value.header(5, 30); value.s("Camera"); value.b(true) }
         let objectEnd = value.data.count; value.tail(); let baseEnd = value.data.count
         value.s("KKEx"); value.i(3)
         let payload = OriginalCardFixture.pack(OriginalCardFixture.map([("example.scene", .array([.integer(7), OriginalCardFixture.map([("opaque", .binary(Data([0, 255])))] )]))]))
