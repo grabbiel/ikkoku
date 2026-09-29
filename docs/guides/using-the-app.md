@@ -66,8 +66,10 @@ retain external file references, so referenced files must remain available.
 **File → Preview CharaStudio Scene…** parses supported source scenes, reconstructs
 selected character appearances, applies supported shape/static ABMX/expression/FK
 state and restores current/saved cameras. Original attachment and animation/IK
-kernels exist, but scene loading is incomplete: routes and their descendants and
-many original items, lights and scene effects remain unrendered or unapplied.
+kernels exist, but scene loading is incomplete: routes, their non-character
+descendants and many original items, lights and scene effects remain unrendered
+or unapplied. A character riding a route renders and moves with it but keeps an
+unrendered placeholder entry, so its edits are rejected on original export.
 
 With `IKKOKU_STUDIO_ANIMATION_CATALOG` configured, a selected source character
 also gets a Source Animation inspector under the Pose tab: pick a catalog entry

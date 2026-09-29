@@ -114,3 +114,40 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     document.objects[1].name = "Source object 10"
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(document, against: source.snapshot) }
 }
+
+@Test func sourceSceneExportValidationKeepsRenderedRouteCharactersUneditable() throws {
+    var bytes = SceneDocumentBytes(data: OriginalCardFixture.png)
+    bytes.s("1.0.4.2"); bytes.i(1); bytes.i(20)
+    bytes.header(4, 20); bytes.s("Route"); bytes.i(1); bytes.character(OriginalCardFixture.card(), both: false)
+    bytes.i(0); bytes.b(false); bytes.b(true); bytes.b(true); bytes.i(2); bytes.color(); bytes.tail()
+    let source = try KoikatsuSceneReader.decodeDocument(bytes.data)
+    // A rendered import keeps a route child character as the unrendered
+    // placeholder entry — its preview rides `childRoot` in Studio runtime state
+    // only — so the scene must still validate.
+    let document = exportValidationDocument(source, rendered: true)
+    guard let routeIndex = document.objects.firstIndex(where: { $0.sourceObjectKey == 10 }) else {
+        throw RigError.invalid("Route character is missing from the imported document.")
+    }
+    #expect(document.objects[routeIndex].kind == .folder && document.objects[routeIndex].sourceCharacter == nil)
+    try SourceSceneExportValidation.validate(document, against: source.snapshot)
+    // Editing what its preview renders must stay impossible: the placeholder
+    // accepts no character reference, kinematics or animation payload.
+    let record = try #require(source.snapshot.roots[0].children.first?.character)
+    let changes: [(String, (inout StudioObject) -> Void)] = [
+        ("character reference", { $0.sourceCharacter = .init(sceneFile: document.sourceSceneFile!, sceneSHA256: document.sourceSceneSHA256!,
+            rigFile: "/fixture/rig.json", boneCatalogFile: "/fixture/bones.json", objectKey: 10) }),
+        ("rendered type", { $0.kind = .character }),
+        ("FK", { $0.sourceFKRotations = [1: .zero] }),
+        ("IK", { $0.sourceIKOverrides = [1: .init(position: .zero)] }),
+        ("kinematics", { $0.sourceKinematics = .init(enableFK: true, enableIK: false, activeFK: Array(repeating: false, count: 7), activeIK: Array(repeating: false, count: 5)) }),
+        ("animation", { $0.sourceAnimation = .init(record: record) }),
+        ("voice", { $0.sourceVoice = .init(playlist: [], repeatMode: 0) }),
+        ("renamed to rendered name", { $0.name = "Source character 10" }),
+    ]
+    for (name, change) in changes {
+        var edited = document; change(&edited.objects[routeIndex])
+        #expect(throws: (any Error).self, Comment(rawValue: name)) {
+            try SourceSceneExportValidation.validate(edited, against: source.snapshot)
+        }
+    }
+}
