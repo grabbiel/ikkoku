@@ -8,11 +8,13 @@ import Scene
 import Studio
 import Renderer
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioEditedFKMatchesExportReloadPoseAndDeformedVerticesWhenSupplied() throws {
-    let env = ProcessInfo.processInfo.environment
-    guard let directory = env["IKKOKU_STUDIO_EXPANSION"], let library = env["IKKOKU_MAKER_LIBRARY"],
-          let female = env["IKKOKU_SOURCE_AVATAR"], let catalogPath = env["IKKOKU_STUDIO_POSE_CONTRACT"] else { return }
+    let directory = try SourceFixtureSupport.require("IKKOKU_STUDIO_EXPANSION")
+    let library = try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")
+    let female = try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR")
+    let catalogPath = try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT")
     let folder = URL(fileURLWithPath: directory), input = folder.appendingPathComponent("studio-female-head200-bone1.png")
     let data = try Data(contentsOf: input), scene = try KoikatsuSceneReader.decodeDocument(data)
     let original = try #require(scene.snapshot.roots.first { $0.sourceKey == 10 }?.character)
