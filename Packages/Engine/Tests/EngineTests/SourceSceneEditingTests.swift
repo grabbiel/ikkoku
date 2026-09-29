@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import Character
-import Studio
+@testable import Studio
 
 private func editedSceneTransform(_ n: Float = 1) -> KoikatsuChangeAmount {
     .init(position: SIMD3(n, 2*n, -3*n), rotationDegrees: SIMD3(11*n, -22*n, 33*n), scale: SIMD3(0.9, 1.1, -1))
@@ -242,6 +242,85 @@ private func sceneObjects(_ roots: [KoikatsuObjectRecord]) -> [Int32: KoikatsuOb
     #expect(after.transform == transform && !after.visible)
     #expect(data.count == bytes.count)
     #expect(try result.editedData(.init(transforms: [.init(.object(11), transform: before.transform)], visibility: [11: true])) == bytes)
+}
+
+@Test func sourceSceneEditingNamePatchesResizeRecordsAndReverseExactly() throws {
+    let bytes = SceneDocumentBytes.scene().data, original = try KoikatsuSceneReader.decodeDocument(bytes)
+    let before = sceneObjects(original.snapshot.roots)
+    let folderName = "フォルダ名 — renamed" // Longer and multi-byte: shifts every following record.
+    let delta = try KoikatsuBinaryReader.dotNetString(folderName).count - KoikatsuBinaryReader.dotNetString("Child").count
+        + KoikatsuBinaryReader.dotNetString("").count - KoikatsuBinaryReader.dotNetString("Route").count
+    let edited = try original.editedData(.init(names: [11: folderName, 20: ""]))
+    let result = try KoikatsuSceneReader.decodeDocument(edited)
+    #expect(edited.count == bytes.count + delta)
+    let after = sceneObjects(result.snapshot.roots)
+    #expect(after[11]?.name == folderName && after[20]?.name == "")
+    #expect(before[11]?.name == "Child" && before[20]?.name == "Route")
+    // Record 10 contains child 11, so compare its own fields explicitly.
+    for key in before.keys where key != 10 && key != 11 && key != 20 { #expect(after[key] == before[key]) }
+    let root = try #require(after[10]), originalRoot = try #require(before[10])
+    #expect(root.transform == originalRoot.transform && root.name == originalRoot.name)
+    #expect(root.character?.cardData == originalRoot.character?.cardData && root.character?.bones == originalRoot.character?.bones)
+    #expect(after[11]?.name == folderName && root.character?.accessoryChildren[7]?.first?.sourceKey == 11)
+    #expect(result.settings == original.settings && result.trailingData == original.trailingData)
+    // Reversing restores every source byte; an edit to the stored name is identity.
+    #expect(try result.editedData(.init(names: [11: "Child", 20: "Route"])) == bytes)
+    #expect(try original.editedData(.init(names: [11: "Child"])) == bytes)
+}
+
+@Test func sourceSceneEditingNameEditsRejectRecordsWithoutSerializedNames() throws {
+    let character = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    #expect(throws: (any Error).self) { try character.editedData(.init(names: [10: "renamed"])) } // Its name lives in the card.
+    #expect(throws: (any Error).self) { try character.editedData(.init(names: [999: "renamed"])) }
+    var bytes = SceneDocumentBytes(data: OriginalCardFixture.png)
+    bytes.s("1.0.4.2"); bytes.i(2); bytes.i(13)
+    bytes.header(1, 13) // Item: kind 1 carries no serialized name.
+    bytes.i(7); bytes.i(8); bytes.i(9); bytes.f(1.25)
+    for index in 0..<8 { bytes.s("{\"r\":\(index),\"g\":0.25,\"b\":0.5,\"a\":1}") }
+    for key: Int32 in [3, 4, 5] { bytes.i(key); bytes.s("p.png"); bytes.b(true); bytes.s(#"{"x":0.25,"y":0.5,"z":2,"w":3}"#); bytes.f(45) }
+    bytes.f(0.75); bytes.s(#"{"r":0.1,"g":0.2,"b":0.3,"a":1}"#); bytes.f(0.7)
+    bytes.s(#"{"r":0.4,"g":0.5,"b":0.6,"a":1}"#); bytes.f(2); bytes.f(0.25)
+    bytes.i(-1); bytes.s("panel.png"); bytes.b(true); bytes.s(#"{"x":0.25,"y":0.5,"z":2,"w":3}"#); bytes.f(45) // panel
+    bytes.b(true) // enableFK
+    bytes.i(1); bytes.s("bone"); bytes.i(77); bytes.transform()
+    bytes.b(false); bytes.f(0.375) // enableDynamicBone, normalized time
+    bytes.i(0) // children
+    bytes.i(12); bytes.header(5, 12); bytes.s("Camera A"); bytes.b(true)
+    bytes.tail()
+    let scene = try KoikatsuSceneReader.decodeDocument(bytes.data)
+    #expect(throws: (any Error).self) { try scene.editedData(.init(names: [13: "renamed"])) }
+    let renamed = try scene.editedData(.init(names: [12: "カメラ B"]))
+    let result = try KoikatsuSceneReader.decodeDocument(renamed)
+    #expect(result.snapshot.roots[1].name == "カメラ B" && result.snapshot.roots[0] == scene.snapshot.roots[0])
+    #expect(try result.editedData(.init(names: [12: "Camera A"])) == bytes.data)
+}
+
+@Test func sourceSceneDotNetStringEncodingUsesSevenBitUTF8ByteLengths() throws {
+    for (count, prefix): (Int, [UInt8]) in [(0, [0]), (1, [1]), (127, [127]), (128, [128, 1]), (16_383, [255, 127]), (16_384, [128, 128, 1])] {
+        let value = String(repeating: "x", count: count)
+        let encoded = try KoikatsuBinaryReader.dotNetString(value)
+        #expect(encoded.starts(with: prefix))
+        #expect(encoded.count == prefix.count + count)
+        var reader = try KoikatsuBinaryReader(encoded)
+        #expect(try reader.string() == value)
+    }
+    // The prefix counts UTF-8 bytes, not characters: 60 × 庭 = 180 bytes.
+    let multi = try KoikatsuBinaryReader.dotNetString(String(repeating: "庭", count: 60))
+    #expect(multi.first == 0xb4 && multi.count == 182) // 180 bytes need a two-byte prefix.
+    #expect(throws: (any Error).self) { try KoikatsuBinaryReader.dotNetString(String(repeating: "x", count: 1_048_577)) }
+}
+
+@Test func sourceSceneEditingNameAndVisibilityOnOneObjectCombineAndReverse() throws {
+    let bytes = SceneDocumentBytes.scene().data, original = try KoikatsuSceneReader.decodeDocument(bytes)
+    let before = sceneObjects(original.snapshot.roots)
+    let shrink = try KoikatsuBinaryReader.dotNetString("Route").count - KoikatsuBinaryReader.dotNetString("R").count
+    let data = try original.editedData(.init(visibility: [20: false], names: [20: "R"]))
+    #expect(data.count == bytes.count - shrink)
+    let result = try KoikatsuSceneReader.decodeDocument(data)
+    let after = sceneObjects(result.snapshot.roots)
+    #expect(after[20]?.name == "R" && after[20]?.visible == false)
+    for key in before.keys where key != 20 { #expect(after[key] == before[key]) }
+    #expect(try result.editedData(.init(visibility: [20: true], names: [20: "Route"])) == bytes)
 }
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES"]),

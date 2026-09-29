@@ -774,6 +774,12 @@ final class StudioModel: ViewportInputHandler {
                 throw RigError.invalid("Original-scene export does not yet support reparenting.")
             }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
+            // Only folder, camera and route records serialize a name; the
+            // validator already rejects renames for every other kind.
+            if object.name != object.sourcePreviewName,
+               original.kind == .folder || original.kind == .camera || original.kind == .route {
+                edits.names[key] = object.name
+            }
             let originalRotation = UnityCoordinates.eulerDegrees(original.transform.rotationDegrees)
             let rotationChanged = object.transform.quaternion.vector != originalRotation.vector
                 && object.transform.quaternion.vector != -originalRotation.vector
