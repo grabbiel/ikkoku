@@ -705,7 +705,8 @@ app/Engine builds and the runtime tests alone.
 
 The eyes have their own calculator, `EyeLookCalc.EyeUpdateCalc`, whose rules
 the look capture pinned down and `analysis/eye_look_reference.py` reproduces
-in Python (no Swift port in this slice). One frame, in execution order:
+in Python (the Swift port arrived with the following slice; see the port
+paragraph at the end of this section). One frame, in execution order:
 
 - `deltaTime == 0` returns the carried state untouched — no rotation, no
   `num5` (the reference returns `None` rotation fields).
@@ -814,7 +815,8 @@ adds nothing measurable. Two facts came out of the replay itself:
 Not ported or not verified, and kept out of the claims:
 
 - **NO_LOOK** (and the `fixAngle` it would write) is never exercised by the
-  capture; the reference raises a diagnostic error there.
+  capture; the reference and the Swift port both raise a diagnostic error
+  there.
 - **AWAY (phase 2)** misses at 1.43° horizontal / 0.22° vertical: the
   recorded per-eye internals are completely frozen for all 90 frames —
   identical `angleH` (0.9121025 / 0.8422239), `angleV` (−0.1336779 /
@@ -841,9 +843,43 @@ Not ported or not verified, and kept out of the claims:
   original actually applied in this phase (the record reads as a stale
   AWAY-rate blend toward a fixed angle pair); unresolved, reported by the
   comparator.
-- **No Swift port, and nothing wired**: this slice ends at the Python
-  reference, its 32 unit tests and the comparator; the Studio preview
-  still shows the animated pose for the eyes.
+- **Not wired into the preview**: the solver has its Swift engine and fixture
+  (port paragraph below) but no preview caller yet — the Studio preview
+  still shows the animated pose for the eyes. What remains is the gaze
+  wiring: feed the Studio camera position as the eye target each frame
+  (with the `trfCenter`/`rootNode` geometry of the character being
+  previewed), plus the two documented capture-rule misses above (AWAY
+  1.43°, CONTROL 40.4°) and the unexercised NO_LOOK `fixAngle` write.
+
+`Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift` ports the solver
+in Swift (`SourceStudioEyeLookSolver.step(deltaTime:target:geometry:pattern:)`
+returning the two Unity-basis `localRotation` quaternions, with the carried
+`angleH`/`angleV`/`dirUp` and the frame's `num5` on the solver; the decodable
+`SourceStudioEyeLookSettings` reads the `studio_look_settings.py` eyes JSON
+— `correct`, `centerEyeLength`, `sorasiRate` and the 12 numeric fields of
+each `eyeTypeStates` entry plus its lookType, which may arrive as a bare
+string or the capture's `{name, value}` record). Unity math missing from the neck port —
+`Mathf.Lerp`/`InverseLerp` clamping, `Vector3.Angle`-style helpers,
+`Project`, `Slerp`, `OrthoNormalize`, left-handed `LookRotation`, inverse
+quaternion, `TransformPoint`/`InverseTransformPoint` with `lossyScale` —
+lives as internal helpers there, reusing the neck port's
+`SourceStudioNeckTargetAngle` rotate/angleAxis. `deltaTime == 0` returns
+`nil` rotations and leaves the state untouched, mirroring the reference.
+`eye_look_reference.py --fixture` writes
+`Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json` — 25
+SYNTHETIC sequences (hand-picked numbers, no capture data; the reference
+replays its own written fixture byte-exactly, so regeneration is stable to
+the SHA) — with 59 frames covering TARGET/FORWARD/AWAY/CONTROL effective
+types, both limit switches and the nearDis push-out at 1.0/1.99/2.0, all
+four sorasi routes (keep / push-negative / push-positive / exactly-equal,
+plus armed-`num5` reads on both eyes), a zero-delta frame, tilted eye
+references, a moving root, non-uniform `lossyScale` and a target sitting on
+an eye pivot. `SourceStudioEyeLookTests` replays it to ≤1e-5° on angles and
+1e-6 on quaternion/direction components, pins the bend dead-band, the L/R
+mirror clamps and the four sorasi routes against hand-computed reference
+values, and checks non-finite inputs, out-of-range patterns, NO_LOOK,
+wrong eye counts, zero forward/up directions (`lookRotation`, `project` and
+the correct frame's "parallel to the up axis" error) throw.
 
 ## Reproducible verification
 
