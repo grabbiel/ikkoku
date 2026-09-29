@@ -236,17 +236,22 @@ the world-matrix walks replace a route parent's authored transform with
 `childRoot` (since the ninth slice placed by the per-frame stepper of the
 next section, falling back to the continuous evaluator off-frame or past the
 rebuild budget), and route descendants inherit it; the cache never becomes a
-document node, so original export validation is untouched, and route child
-characters stay gated as unrendered. After undo/redo the cache is empty and
-route children fall back to the route object's authored transform rather than a
-guess derived from edited document data. `ikkoku-inspect route-playback
+document node, so original export validation is untouched. A character under a
+route renders through a second scene-identity-gated runtime-only preview map
+placed by the same walk, while its document entry keeps the unrendered
+placeholder (folder kind, fallback name, no character reference), so its
+FK/IK, animation and expression edits are unoffered and original export keeps
+rejecting them. After undo/redo the caches are empty and route children fall
+back to the route object's authored transform rather than a guess derived from
+edited document data. `ikkoku-inspect route-playback
 <scene.png> <seconds>` samples every route of a decoded scene at one clock
 position. Since the tenth slice the Studio editor exposes the recovered
 `Play`/`Stop` presses as runtime controls (a selected route's Play/Stop button
 plus a Play-all/Replay-all/Stop-all menu; see the preview-wiring paragraph at
 the end of this section), and a route whose authored record is inactive can
 be played from the editor through that state. Still missing: route-point
-guide callbacks, edited route serialization and rendered route descendants.
+guide callbacks, edited route serialization, rendered non-character route
+descendants and editable route characters.
 
 An original capture now exists. `Tools/reverse/original_route_probe.py` runs
 `Tools/reverse/fixtures/OriginalRouteProbe.cs` inside the isolated VM player

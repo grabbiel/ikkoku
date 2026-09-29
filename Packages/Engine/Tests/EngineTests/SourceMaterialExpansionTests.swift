@@ -48,8 +48,9 @@ private enum MakeupFixture {
     }
 }
 
-@Test func sourceMaterialLayerIndependentShaderOracle() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_MATERIAL_LAYER_REFERENCE"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MATERIAL_LAYER_REFERENCE"]), "Requires IKKOKU_MATERIAL_LAYER_REFERENCE"))
+func sourceMaterialLayerIndependentShaderOracle() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_MATERIAL_LAYER_REFERENCE")
     struct Row: Decodable { let base, texture, color, uv, layout, layer, pattern, transformedUV: [Float]; let kind: String; let mask, red: Float }
     struct Oracle: Decodable { let schemaVersion: Int; let cases: [Row] }
     let oracle = try JSONDecoder().decode(Oracle.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
@@ -80,9 +81,9 @@ private enum MakeupFixture {
     #expect(throws: (any Error).self) { try bindings.contextualized(accessorySlot: 128) }
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MATERIAL_IMAGE_REFERENCE"]) && MTLCreateSystemDefaultDevice() != nil, "Requires IKKOKU_MATERIAL_IMAGE_REFERENCE and a Metal device"))
 func sourceMaterialExpandedTextureIndependentOracle() throws {
-    guard let path = ProcessInfo.processInfo.environment["IKKOKU_MATERIAL_IMAGE_REFERENCE"] else { return }
+    let path = try SourceFixtureSupport.require("IKKOKU_MATERIAL_IMAGE_REFERENCE")
     struct Recipe: Decodable { let part, file: String; let width, height: Int }
     struct Oracle: Decodable { let cardFile: String; let recipes: [Recipe] }
     let directory = URL(fileURLWithPath: path).deletingLastPathComponent(), base = directory.deletingLastPathComponent()

@@ -17,11 +17,36 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     string folder; ChaControl character;
     readonly List<object> textures = new List<object>();
     readonly Dictionary<int,string> textureFiles = new Dictionary<int,string>();
+    readonly List<object> fingerRecords = new List<object>();
+    // ST-T07f optional hand-pattern mode. Non-null only when hand-patterns.tsv
+    // (rows "L<TAB>k" and "R<TAB>k") sits in the plugin folder; every output
+    // stays as before when the file is absent.
+    Dictionary<string,int> handPatterns;
+    readonly List<object> handAnimeRecords = new List<object>();
+    // ST-T07i optional look-pattern mode. Non-null only when look-patterns.tsv
+    // (rows "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z") sits in the plugin
+    // folder; every existing output stays as before when the file is absent.
+    readonly List<int[]> lookPhases = new List<int[]>();
+    readonly List<Vector3> lookTargetPositions = new List<Vector3>();
+    readonly List<object> lookRecords = new List<object>();
+    string lookError;
+    Transform lookTarget; // dedicated target transform the look controllers follow; Studio owns Camera.main
     IEnumerator Start()
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
         Directory.CreateDirectory(folder);
+        TryLoadHandPatterns();
+        TryLoadLookPatterns();
         for (int i=0;i<30;i++) yield return null;
+        // ST-T07i: CharaStudio's main scene load destroys freshly created
+        // objects, so look mode waits for the scene camera and then 60 more
+        // settled frames before it builds the fixture; without the tsv this
+        // block never runs and every existing output stays byte-identical.
+        if(lookPhases.Count>0) {
+            for(int i=0;i<3600&&Camera.main==null;i++) yield return null;
+            if(Camera.main==null) { Finish("Camera.main did not appear within 3600 frames; the look capture needs Studio's loaded scene"); yield break; }
+            for(int i=0;i<60;i++) yield return null;
+        }
         string error = null;
         try { CreateFixture(); } catch(Exception e) { error=e.ToString(); }
         if(error != null) { Finish(error); yield break; }
@@ -33,12 +58,37 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             yield return step;
         }
         if(error != null) { Finish(error); yield break; }
-        for(int i=0;i<10;i++) yield return null;
+        // ST-T07f: recovered Studio behavior is HandAnimeCtrl.Init(sex) then
+        // ptn=k, where the ptn setter calls LoadAnime, which for patterns 1-21
+        // enables the hand Animator and Play()s the named clip. Play() writes
+        // bones on the next Animator update, so the moment-(b) snapshot below
+        // still holds the default-state pose and frame0 starts the pattern.
+        if(handPatterns!=null)ApplyHandPatterns();
+        // Moment (b): right after LoadAsync finishes, before the 10-frame wait.
+        RecordFingers("afterLoadAsync");
+        // ST-T07i: the look phases run before the 10-frame wait and the capture.
+        // The controllers' own LateUpdate runs after the Animator and after a
+        // plain "yield return null" resume, so each frame is recorded at
+        // WaitForEndOfFrame, once both LateUpdates have run.
+        if(lookPhases.Count>0) {
+            yield return RunLookPhases();
+            if(lookError!=null) { Finish(lookError); yield break; }
+        }
+        // ST-T07c: record every frame of the wait so the first frame whose
+        // rotations match sample-list index 1 can be pinned to a frame number.
+        for(int i=0;i<10;i++){yield return null;RecordFingers("frame"+i);if(handPatterns!=null)RecordHandAnime("frame"+i);}
         try { Capture(); } catch(Exception e) { error=e.ToString(); }
-        Finish(error);
+        Finish(error!=null?error:lookError); // a look failure must not be reported as a clean run
     }
     void Finish(string error) {
         File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"device",SystemInfo.graphicsDeviceName},{"graphicsAPI",SystemInfo.graphicsDeviceVersion},{"colorSpace",QualitySettings.activeColorSpace.ToString()}}));
+        // ST-T07i: written only in look mode (also when a phase failed, so the
+        // partial trace reaches --collect); absent otherwise.
+        if(lookPhases.Count>0) {
+            var phases=new List<object>();
+            for(int i=0;i<lookPhases.Count;i++)phases.Add(new Dictionary<string,object>{{"neckPattern",lookPhases[i][0]},{"eyesPattern",lookPhases[i][1]},{"frames",lookPhases[i][2]},{"targetPosition",V(lookTargetPositions[i])}});
+            File.WriteAllText(Path.Combine(folder,"look-trace.json"),J(new Dictionary<string,object>{{"error",lookError},{"frameCount",Time.frameCount},{"camera","Studio Camera.main"},{"target",lookTarget!=null?"probe IkkokuLookTarget":"none"},{"phases",phases},{"frames",lookRecords}}));
+        }
         Application.Quit();
     }
     void CreateFixture() {
@@ -63,7 +113,30 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                     color.baseColor=i==0 ? new Color(.12f,.28f,.50f,1) : new Color(.12f,.13f,.16f,1);
             }
         }
+        var settingsFile=Path.Combine(folder,"character-settings.tsv");
+        if(File.Exists(settingsFile)) foreach(string line in File.ReadAllLines(settingsFile)) {
+            var fields=line.Split('\t');
+            if(fields.Length!=2) throw new Exception("Unparsable character-settings line: "+line);
+            switch(fields[0]) {
+                case "lipId": file.custom.face.baseMakeup.lipId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "lipColor": file.custom.face.baseMakeup.lipColor=ParseColor(fields[1]);break;
+                case "eyeshadowId": file.custom.face.baseMakeup.eyeshadowId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "eyeshadowColor": file.custom.face.baseMakeup.eyeshadowColor=ParseColor(fields[1]);break;
+                case "hohoAkaRate": file.status.hohoAkaRate=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "nipId": body.nipId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "nipColor": body.nipColor=ParseColor(fields[1]);break;
+                case "underhairId": body.underhairId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "underhairColor": body.underhairColor=ParseColor(fields[1]);break;
+                case "hlUpId": face.hlUpId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "hlUpColor": face.hlUpColor=ParseColor(fields[1]);break;
+                case "hlDownId": face.hlDownId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "hlDownColor": face.hlDownColor=ParseColor(fields[1]);break;
+                default: throw new Exception("Unknown character-settings key: "+fields[0]);
+            }
+        }
         character=Manager.Character.Instance.CreateFemale(null,1,file,true);
+        // Moment (a): right after CreateFemale returns, before LoadAsync starts.
+        RecordFingers("afterCreateFemale");
         character.name="IkkokuControlledClothedFixture";
         file.status.visibleSon=false;file.status.visibleSonAlways=false;
     }
@@ -90,6 +163,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // ChaControl as well, so it must be disabled before native pose export.
         Manager.Character.Instance.enabled=false;
         foreach(var b in character.GetComponentsInChildren<Behaviour>(true)) b.enabled=false;
+        // Animator state info is read-only observation, so sampling it here,
+        // while the frozen pose is still the one frame.json will write, gives
+        // the playhead that produced the exported bone rotations.
+        if(handPatterns!=null)RecordHandAnime("frozenPose");
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) t.gameObject.layer=Layer;
         foreach(var light in FindObjectsOfType<Light>()) light.enabled=false;
         var lightObject=new GameObject("IkkokuProbeKey");var key=lightObject.AddComponent<Light>();
@@ -126,6 +203,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(!character.chaFile.SaveCharaFile(Path.Combine(folder,"fixture-card.png"),1)) throw new Exception("Generated card save failed");
         var meshes=new List<object>();int meshIndex=0;
         foreach(var renderer in visible) meshes.Add(ExportMesh(renderer,meshIndex++));
+        // Moment (c): after the 10-frame wait, immediately before collecting
+        // the bone transforms written to frame.json.
+        RecordFingers("frameJsonCapture");
+        if(handPatterns!=null)RecordHandAnime("frameJsonCapture");
         var bones=new List<object>();
         foreach(var t in character.GetComponentsInChildren<Transform>(true)) bones.Add(new Dictionary<string,object>{{"path",RelativePath(t)},{"position",V(t.localPosition)},{"rotation",V(t.localRotation)},{"scale",V(t.localScale)}});
         var globals=new Dictionary<string,object>();
@@ -137,6 +218,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var ramp=Shader.GetGlobalTexture("_RampG");if(ramp!=null) globals["_RampG"]=ExportTexture(ramp);
         var report=new Dictionary<string,object>{{"schemaVersion",1},{"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()},{"masterTextureLimit",QualitySettings.masterTextureLimit},{"lodBias",QualitySettings.lodBias},{"fixedDeltaTime",Time.fixedDeltaTime},{"maximumDeltaTime",Time.maximumDeltaTime},{"width",Width},{"height",Height},{"scope","Frozen original clothed character; source-evaluated geometry, source materials, dedicated camera/light; no Studio post-processing"},{"card","fixture-card.png"},{"color","original-color.png"},{"camera",new Dictionary<string,object>{{"position",V(camera.transform.position)},{"target",V(bounds.center)},{"rotation",V(camera.transform.rotation)},{"fov",camera.fieldOfView},{"near",camera.nearClipPlane},{"far",camera.farClipPlane},{"view",M(camera.worldToCameraMatrix)},{"projection",M(camera.projectionMatrix)}}},{"light",new Dictionary<string,object>{{"direction",V(key.transform.forward)},{"color",V(key.color)},{"intensity",key.intensity},{"ambient",V(RenderSettings.ambientLight)}}},{"bounds",new Dictionary<string,object>{{"min",V(bounds.min)},{"max",V(bounds.max)}}},{"background",V(camera.backgroundColor)},{"globals",globals},{"textures",textures},{"meshes",meshes},{"bones",bones},{"renderCPUMilliseconds",timer.Elapsed.TotalMilliseconds}};
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
+        File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
+        if(handPatterns!=null)File.WriteAllText(Path.Combine(folder,"hand-anime.json"),J(handAnimeRecords));
         // White-material silhouette is a geometry diagnostic; alpha cutouts are
         // deliberately excluded and therefore reported separately from color alpha.
         var whiteShader=Shader.Find("Unlit/Color");
@@ -236,6 +319,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         File.WriteAllBytes(Path.Combine(folder,file),readback.EncodeToPNG());Destroy(readback);RenderTexture.active=previous;
     }
     static void Write(BinaryWriter w,Vector3 v){w.Write(v.x);w.Write(v.y);w.Write(v.z);}static void Write(BinaryWriter w,Vector2 v){w.Write(v.x);w.Write(v.y);}
+    static Color ParseColor(string value) { var parts=value.Split(',');if(parts.Length!=4)throw new Exception("Invalid RGBA color: "+value);return new Color(float.Parse(parts[0],CultureInfo.InvariantCulture),float.Parse(parts[1],CultureInfo.InvariantCulture),float.Parse(parts[2],CultureInfo.InvariantCulture),float.Parse(parts[3],CultureInfo.InvariantCulture)); }
     static float[] V(Vector2 v){return new[]{v.x,v.y};}static float[] V(Vector3 v){return new[]{v.x,v.y,v.z};}static float[] V(Vector4 v){return new[]{v.x,v.y,v.z,v.w};}static float[] V(Quaternion v){return new[]{v.x,v.y,v.z,v.w};}static float[] V(Color v){return new[]{v.r,v.g,v.b,v.a};}
     static float[] M(Matrix4x4 m){var a=new float[16];for(int i=0;i<16;i++)a[i]=m[i];return a;}
     static string J(object value) {
@@ -244,5 +328,368 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var d=value as IDictionary;if(d!=null){var a=new List<string>();foreach(DictionaryEntry e in d)a.Add(J((string)e.Key)+":"+J(e.Value));return "{"+String.Join(",",a.ToArray())+"}";}
         var list=value as IEnumerable;if(list!=null){var a=new List<string>();foreach(var x in list)a.Add(J(x));return "["+String.Join(",",a.ToArray())+"]";}
         return Convert.ToString(value,CultureInfo.InvariantCulture);
+    }
+    // ST-T07b diagnostic recorder. It only observes: every existing output stays
+    // byte-identical and no game method is invoked here, so this records the
+    // decompiled behavior facts instead of re-deriving them.
+    object Member(object target,string name) {
+        // null result = member not found OR member present with a null value;
+        // every caller records that explicitly, never guesses.
+        if(target==null)return null;
+        var flags=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.DeclaredOnly|System.Reflection.BindingFlags.Instance;
+        for(var type=target.GetType();type!=null;type=type.BaseType) {
+            var property=type.GetProperty(name,flags);
+            if(property!=null){try{return property.GetValue(target,null);}catch(Exception){return "unreadable";}}
+            var field=type.GetField(name,flags);
+            if(field!=null){try{return field.GetValue(target);}catch(Exception){return "unreadable";}}
+        }
+        return null;
+    }
+    object Flatten(object value) { // 1-D array -> flat list; 2-D array -> row-major list of rows
+        if(value is Vector2)return V((Vector2)value);
+        if(value is Vector3)return V((Vector3)value);
+        if(value is Vector4)return V((Vector4)value);
+        if(value is Quaternion)return V((Quaternion)value);
+        if(value is Color)return V((Color)value);
+        var array=value as System.Array;
+        if(array==null)return value;
+        var list=new List<object>();
+        if(array.Rank==1)foreach(var item in array)list.Add(Flatten(item));
+        else if(array.Rank==2){
+            for(int i=0;i<array.GetLength(0);i++) {
+                var row=new List<object>();
+                for(int j=0;j<array.GetLength(1);j++)row.Add(Flatten(array.GetValue(i,j)));
+                list.Add(row);
+            }
+        }
+        else return "unexpected array rank "+array.Rank;
+        return list;
+    }
+    object FingerBoneSamples() {
+        var bones=new Dictionary<string,object>();
+        foreach(string name in new[]{"cf_j_middle01_L","cf_j_middle02_L","cf_j_thumb01_R"}) {
+            var samples=new List<object>();
+            foreach(var t in character.GetComponentsInChildren<Transform>(true))
+                if(t.name==name) samples.Add(new Dictionary<string,object>{{"path",RelativePath(t)},{"localRotation",V(t.localRotation)},{"localEulerAngles",V(t.localRotation.eulerAngles)}});
+            bones[name]=samples; // empty = not instantiated yet; more than one = same-named bones on several objects
+        }
+        return bones;
+    }
+    void RecordFingers(string moment) {
+        var bones=FingerBoneSamples();
+        var status=Member(character,"fileStatus");
+        var hand=Member(character,"sibHand");
+        var animator=Member(character,"animBody");
+        var controller=Member(animator,"runtimeAnimatorController");
+        var chain=new List<object>();
+        var handBone=FindBone("cf_j_hand_L");
+        if(handBone==null)chain.Add(new Dictionary<string,object>{{"path","cf_j_hand_L"},{"found",false}});
+        else {
+            var current=handBone;
+            for(;;) {
+                var behaviours=new List<object>();
+                foreach(var behaviour in current.gameObject.GetComponents<MonoBehaviour>()) behaviours.Add(behaviour.GetType().FullName);
+                chain.Add(new Dictionary<string,object>{{"path",RelativePath(current)},{"monoBehaviours",behaviours}});
+                if(current.name=="p_cf_body_bone" || current.parent==null || chain.Count>=64) break;
+                current=current.parent;
+            }
+        }
+        // ST-T07c: every Behaviour under the character root (not only MonoBehaviour)
+        // so the writer that curls the fingers can be attributed or excluded.
+        var flags=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.DeclaredOnly|System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.Static;
+        var rootBehaviours=new List<object>();
+        foreach(var behaviour in character.GetComponentsInChildren<Behaviour>(true)) {
+            var entry=new Dictionary<string,object>{{"type",behaviour.GetType().FullName},{"path",RelativePath(behaviour.transform)},{"enabled",Member(behaviour,"enabled")}};
+            if(behaviour.GetType().Name=="Animator") {
+                var boneController=Member(behaviour,"runtimeAnimatorController");
+                entry["runtimeAnimatorController"]=boneController==null?null:(object)new Dictionary<string,object>{{"name",Member(boneController,"name")}};
+                var avatar=Member(behaviour,"avatar");
+                entry["avatar"]=avatar==null?null:(object)new Dictionary<string,object>{{"name",Member(avatar,"name")}};
+                entry["isActiveAndEnabled"]=Member(behaviour,"isActiveAndEnabled");
+            } else if(behaviour.GetType().Name=="Animation") {
+                var clip=Member(behaviour,"clip");
+                entry["clip"]=clip==null?null:(object)new Dictionary<string,object>{{"name",Member(clip,"name")}};
+                entry["clips"]=Flatten(Member(behaviour,"clips")); // null = the member is not found; list of all clip names when it is
+                entry["isPlaying"]=Member(behaviour,"isPlaying");
+            }
+            rootBehaviours.Add(entry);
+        }
+        // ShapeHandInfo internals via reflection: whichever nested enum declares
+        // the bone names (ShapeBodyInfo calls it SrcName, ShapeHeadInfoFemale
+        // calls it SrcBoneName) maps them to plain dictSrc keys, so the recorded
+        // dictSrc/<index>/vctRot pair shows whether it holds index 0 or index 1.
+        var shapeRots=new Dictionary<string,object>();
+        Type srcEnum=null;
+        if(hand!=null) foreach(var nested in hand.GetType().GetNestedTypes(flags)) {
+            if(nested.GetField("cf_j_middle01_L",flags)!=null) { srcEnum=nested; break; }
+        }
+        var srcDict=hand==null?null:(Member(hand,"dictSrc") as IDictionary);
+        foreach(string boneName in new[]{"cf_j_middle01_L","cf_j_middle02_L","cf_j_thumb01_R"}) {
+            var srcField=srcEnum==null?null:srcEnum.GetField(boneName,flags);
+            var srcIndex=srcField==null?null:(object)Convert.ToInt32(srcField.GetValue(null)); // dictionary keys are plain ints
+            var boneInfo=srcIndex==null||srcDict==null?null:srcDict[srcIndex];
+            shapeRots[boneName]=new Dictionary<string,object>{{"sourceIndex",srcIndex},{"vctRot",Flatten(Member(boneInfo,"vctRot"))}};
+        }
+        var record=new Dictionary<string,object>{{"moment",moment},{"frame",Time.frameCount},{"bones",bones},
+            {"fileStatus",new Dictionary<string,object>{{"enableShapeHand",Flatten(Member(status,"enableShapeHand"))},{"shapeHandPtn",Flatten(Member(status,"shapeHandPtn"))},{"shapeHandBlendValue",Flatten(Member(status,"shapeHandBlendValue"))}}},
+            {"sibHand",hand==null?null:new Dictionary<string,object>{{"type",hand.GetType().Name},{"updateMask",Flatten(Member(hand,"updateMask"))}}},
+            {"animBody",new Dictionary<string,object>{{"exists",animator!=null},{"type",animator==null?null:(object)animator.GetType().Name},{"runtimeAnimatorController",controller==null?null:(object)new Dictionary<string,object>{{"name",Member(controller,"name")}}},{"enabled",Member(animator,"enabled")}}},
+            {"behaviours",rootBehaviours},
+            {"shapeHand",new Dictionary<string,object>{{"dictSrcRotations",shapeRots},{"InitEnd",hand==null?null:(object)Member(hand,"InitEnd")}}},
+            {"handBoneChain",chain}};
+        // The pattern IDs are recorded only in pattern mode, so a capture
+        // without hand-patterns.tsv keeps its previous bytes exactly.
+        if(handPatterns!=null)record["handPatterns"]=handPatterns;
+        fingerRecords.Add(record);
+    }
+    // ST-T07f optional hand-pattern mode. CharaStudio.dll is not referenced,
+    // so the Studio type is located by type name and its recovered members
+    // are invoked reflectively: Init(sex) then ptn=k, the same sequence
+    // AddObjectAssist and OCIChar.ChangeHandAnime run in Studio.
+    void TryLoadHandPatterns() {
+        var file=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"hand-patterns.tsv");
+        if(!File.Exists(file))return;
+        var patterns=new Dictionary<string,int>();
+        foreach(var line in File.ReadAllLines(file)) {
+            if(line.Length==0)continue;
+            var fields=line.Split('\t');
+            if(fields.Length!=2 || (fields[0]!="L"&&fields[0]!="R"))throw new Exception("hand-patterns.tsv rows need an L or R side and one pattern number");
+            int pattern;
+            if(!Int32.TryParse(fields[1],out pattern)||pattern<0||pattern>21||patterns.ContainsKey(fields[0]))
+                throw new Exception("hand-patterns.tsv repeats a side or holds a pattern outside the converted 0-21 range");
+            patterns[fields[0]]=pattern;
+        }
+        if(patterns.Count!=2)throw new Exception("hand-patterns.tsv needs one L and one R row");
+        handPatterns=patterns;
+    }
+    void ApplyHandPatterns() {
+        var flags=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.DeclaredOnly|System.Reflection.BindingFlags.Instance;
+        foreach(var component in character.GetComponentsInChildren<MonoBehaviour>(true)) {
+            if(component.GetType().FullName!="Studio.HandAnimeCtrl")continue;
+            var side=component.transform.name=="cf_s_hand_L"?"L":component.transform.name=="cf_s_hand_R"?"R":null;
+            if(side==null)continue; // a HandAnimeCtrl of another object; only the character's two are driven
+            int pattern;
+            if(!handPatterns.TryGetValue(side,out pattern))throw new Exception("hand-patterns.tsv has no row for "+component.transform.name);
+            System.Reflection.MethodInfo init=null;
+            System.Reflection.PropertyInfo property=null;
+            for(var type=component.GetType();type!=null&&(init==null||property==null);type=type.BaseType) {
+                if(init==null)init=type.GetMethod("Init",flags);
+                if(property==null)property=type.GetProperty("ptn",flags);
+            }
+            if(init==null||property==null)throw new Exception("Studio.HandAnimeCtrl is missing the recovered Init or ptn member");
+            try {
+                init.Invoke(component,new object[]{1}); // the fixture's sex; Studio passes ChaControl.parameter.sex
+                property.SetValue(component,pattern,null); // setter runs LoadAnime, which enables and Play()s patterns 1-21
+            } catch(Exception e) { throw new Exception("HandAnimeCtrl pattern "+pattern+" setup failed on "+component.transform.name+": "+e.Message,e); }
+        }
+    }
+    Animator FindHandAnimator(string side) {
+        foreach(var animator in character.GetComponentsInChildren<Animator>(true))
+            if(animator.name=="cf_s_hand_"+side)return animator;
+        return null;
+    }
+    void RecordHandAnime(string moment) {
+        var hands=new Dictionary<string,object>();
+        foreach(string side in new[]{"L","R"}) {
+            var animator=FindHandAnimator(side);
+            if(animator==null) { hands[side]=new Dictionary<string,object>{{"exists",false}}; continue; }
+            var state=animator.GetCurrentAnimatorStateInfo(0);
+            hands[side]=new Dictionary<string,object>{{"exists",true},{"isActiveAndEnabled",Member(animator,"isActiveAndEnabled")},
+                {"frameCount",Time.frameCount},{"deltaTime",Time.deltaTime},
+                {"normalizedTime",state.normalizedTime},{"length",state.length},{"shortNameHash",state.shortNameHash}};
+        }
+        handAnimeRecords.Add(new Dictionary<string,object>{{"moment",moment},{"bones",FingerBoneSamples()},{"hands",hands}});
+    }
+    // ST-T07i optional look-pattern mode. The fixture only calls the public
+    // ChaControl.ChangeLookNeck*/ChangeLookEyes* API; the controller internals
+    // (internal fixAngle/angleH/angleV, private lookType) sit outside this
+    // assembly, so the existing Member helper (public+nonpublic walk) reads
+    // them and Required fails the run when a recovered member is missing.
+    void TryLoadLookPatterns() {
+        var file=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"look-patterns.tsv");
+        if(!File.Exists(file))return;
+        foreach(var line in File.ReadAllLines(file)) {
+            if(line.Length==0)continue;
+            var fields=line.Split('\t');
+            if(fields.Length!=4)throw new Exception("look-patterns.tsv rows need neckPtn, eyesPtn, frames and x,y,z camera position");
+            int neckPtn,eyesPtn,frames;
+            if(!Int32.TryParse(fields[0],out neckPtn)||!Int32.TryParse(fields[1],out eyesPtn)||!Int32.TryParse(fields[2],out frames))
+                throw new Exception("look-patterns.tsv pattern and frame fields must be integers");
+            if(neckPtn<0||neckPtn>4||eyesPtn<0||eyesPtn>3||frames<1||frames>600)
+                throw new Exception("look-patterns.tsv holds a pattern outside neck 0-4 / eyes 0-3 or a frame count outside 1-600");
+            var parts=fields[3].Split(',');
+            if(parts.Length!=3)throw new Exception("look-patterns.tsv camera position needs x,y,z");
+            lookPhases.Add(new[]{neckPtn,eyesPtn,frames});
+            lookTargetPositions.Add(new Vector3(float.Parse(parts[0],CultureInfo.InvariantCulture),float.Parse(parts[1],CultureInfo.InvariantCulture),float.Parse(parts[2],CultureInfo.InvariantCulture)));
+        }
+        if(lookPhases.Count==0)throw new Exception("look-patterns.tsv has no phase rows");
+    }
+    IEnumerator RunLookPhases() {
+        // The VM compiles C# 5, which forbids a yield inside a try with a catch
+        // clause, so the setup and the per-frame recording catch in ordinary
+        // helper methods and this iterator only watches lookError. The scene
+        // camera already exists: Start() waited for it before CreateFixture().
+        if(lookTarget==null)lookTarget=new GameObject("IkkokuLookTarget").transform;
+        for(int phase=0;phase<lookPhases.Count&&lookError==null;phase++) {
+            StartLookPhase(phase);
+            if(lookError!=null)yield break;
+            for(int frame=0;frame<lookPhases[phase][2];frame++) {
+                // A coroutine resuming after "yield return null" runs before
+                // the controllers' own LateUpdate; end-of-frame is after it.
+                yield return new WaitForEndOfFrame();
+                if(lookError==null)RecordLookSafe(phase);
+            }
+        }
+    }
+    void StartLookPhase(int phase) {
+        try {
+            if(lookTarget==null)throw new Exception("the probe look target is missing");
+            var head=FindBone("cf_j_head");
+            if(head==null)throw new Exception("cf_j_head is missing before the look phases start");
+            lookTarget.position=lookTargetPositions[phase];
+            lookTarget.LookAt(head.position);
+            // The trfTarg parameter makes both controllers follow this
+            // transform instead of Camera.main, which Studio's own camera
+            // controller owns and repositions.
+            character.ChangeLookNeckTarget(0,lookTarget);
+            character.ChangeLookEyesTarget(0,lookTarget);
+            character.ChangeLookNeckPtn(lookPhases[phase][0]);
+            character.ChangeLookEyesPtn(lookPhases[phase][1]);
+        } catch(Exception e) { lookError=e.ToString(); }
+    }
+    void RecordLookSafe(int phase) {
+        try { RecordLook(phase); } catch(Exception e) { lookError=e.ToString(); }
+    }
+    object Required(object target,string name) {
+        var value=Member(target,name);
+        if(value==null)throw new Exception("the recovered look member "+name+" is missing");
+        return value;
+    }
+    static string ClassifyMember(object value) {
+        // Member() cannot distinguish "field absent" from "present but null",
+        // so the two look-layout diagnostics record the distinction here.
+        if(value==null)return "null";
+        if("unreadable".Equals(value))return "unreadable";
+        var transform=value as Transform;
+        if(transform!=null)return transform.name;
+        return "non-transform "+value.GetType().Name;
+    }
+    Transform RequiredTransform(object target,string name) {
+        var transform=Required(target,name) as Transform;
+        if(transform==null)throw new Exception("the recovered look member "+name+" is missing or not a Transform");
+        return transform;
+    }
+    Dictionary<string,object> Geometry(Transform transform) {
+        // End-of-frame world pose in the exact space the recovered
+        // GetAngleToTarget/limit-check formulas read.
+        return new Dictionary<string,object>{{"name",transform.name},{"position",V(transform.position)},
+            {"rotation",V(transform.rotation)},{"lossyScale",V(transform.lossyScale)}};
+    }
+    void RecordLook(int phase) {
+        var record=new Dictionary<string,object>{
+            {"phase",phase},{"frameCount",Time.frameCount},{"deltaTime",Time.deltaTime},
+            // Studio owns and may move Camera.main, so it is recorded only as
+            // information; the driven target position is the control input.
+            {"cameraPosition",Camera.main!=null?(object)V(Camera.main.transform.position):"gone"},
+            {"targetPosition",V(lookTarget.position)}};
+        var neckCtrl=Member(character,"neckLookCtrl");
+        var eyeCtrl=Member(character,"eyeLookCtrl");
+        if(neckCtrl==null||eyeCtrl==null)throw new Exception("the fixture character has no neckLookCtrl/eyeLookCtrl");
+        var neckScript=Required(neckCtrl,"neckLookScript");
+        var bones=Flatten(Required(neckScript,"aBones")) as List<object>;
+        // The two look bones are taken by name, aBones[0] driving cf_j_neck
+        // and aBones[1] cf_j_head, because that mapping held under the
+        // scene-load capture condition; each aBones[i].neckBone slot is still
+        // recorded as a diagnostic string per entry.
+        string[] lookBoneNames={"cf_j_neck","cf_j_head"};
+        var neckRecord=new List<object>();
+        for(int i=0;i<bones.Count;i++) {
+            var bone=bones[i];
+            var angles=new Dictionary<string,object>{
+                {"neckBone",ClassifyMember(Member(bone,"neckBone"))},
+                {"angleH",Required(bone,"angleH")},{"angleV",Required(bone,"angleV")},
+                {"fixAngle",V((Quaternion)Required(bone,"fixAngle"))}};
+            if(i<lookBoneNames.Length) {
+                var neckBone=FindBone(lookBoneNames[i]);
+                if(neckBone==null)throw new Exception("the fixture character has no "+lookBoneNames[i]+" transform");
+                angles["bone"]=neckBone.name;
+                angles["localRotation"]=V(neckBone.localRotation);
+                angles["worldRotation"]=V(neckBone.rotation);
+            }
+            neckRecord.Add(angles);
+        }
+        // neckLookScript IS the NeckLookCalcVer2 component (decompiled
+        // NeckLookControllerVer2.neckLookScript), so solver state reads directly.
+        var neckCalcRecord=new List<object>{new Dictionary<string,object>{
+            {"nowAngle",V((Vector2)Required(neckScript,"nowAngle"))},
+            {"calcLerp",Required(neckScript,"calcLerp")},
+            // lookType is a NECK_LOOK_TYPE_VER2 enum; the JSON helper's final
+            // fallback would write it unquoted, so the name is taken here.
+            {"lookType",Required(neckScript,"lookType").ToString()}}};
+        // StartLookPhase passed lookTarget as trfTarg before every phase, so
+        // each controller's target is the probe look target at every frame.
+        record["neck"]=new Dictionary<string,object>{{"ptnNo",Required(neckCtrl,"ptnNo")},{"target",V(((Transform)Required(neckCtrl,"target")).position)},{"bones",neckRecord},{"calculators",neckCalcRecord}};
+        var eyeScript=Required(eyeCtrl,"eyeLookScript");
+        var eyes=Flatten(Required(eyeScript,"eyeObjs")) as List<object>;
+        var eyeRecord=new List<object>();
+        var eyeGeometry=new List<object>();
+        for(int i=0;i<eyes.Count;i++) {
+            var eye=eyes[i];
+            var diagnosed=ClassifyMember(Member(eye,"eyeTransform"));
+            var eyeTransform=Member(eye,"eyeTransform") as Transform;
+            if(eyeTransform==null) {
+                // Same fallback as the neck bones: the cf_J_Eye_rz_* bones are
+                // the ones the look controller drives; eyeObjs[0] is the left.
+                string fallback=i==0?"cf_J_Eye_rz_L":"cf_J_Eye_rz_R";
+                eyeTransform=FindBone(fallback);
+                if(eyeTransform==null)throw new Exception("eyeObjs["+i+"] eyeTransform is "+diagnosed+" and no fallback bone "+fallback+" was found");
+            }
+            eyeRecord.Add(new Dictionary<string,object>{{"eye",eyeTransform.name},{"eyeTransform",diagnosed},{"localRotation",V(eyeTransform.localRotation)},{"angleH",Required(eye,"angleH")},{"angleV",Required(eye,"angleV")}});
+            // ST-T07m: the EyeObject internals EyeLookCalc keeps per eye; the
+            // eye reference dirs are only read by this recorder, never set.
+            eyeGeometry.Add(new Dictionary<string,object>{
+                {"eye",(object)eyeTransform.name},{"target",Geometry(eyeTransform)},
+                {"origRotation",V((Quaternion)Required(eye,"origRotation"))},
+                {"referenceLookDir",V((Vector3)Required(eye,"referenceLookDir"))},
+                {"referenceUpDir",V((Vector3)Required(eye,"referenceUpDir"))},
+                {"dirUp",V((Vector3)Required(eye,"dirUp"))}});
+        }
+        var eyeCalcRecord=new List<object>{new Dictionary<string,object>{
+            {"angleHRate",Flatten(Required(eyeScript,"angleHRate"))},
+            {"angleVRate",Flatten(Required(eyeScript,"angleVRate"))}}};
+        record["eyes"]=new Dictionary<string,object>{{"ptnNo",Required(eyeCtrl,"ptnNo")},{"target",V(((Transform)Required(eyeCtrl,"target")).position)},{"eyes",eyeRecord},{"calculators",eyeCalcRecord}};
+        // ST-T07m: world geometry of every transform the recovered
+        // GetAngleToTarget/limit-check formulas read (transformAim,
+        // boneCalcAngle, the last bone's neckBone and referenceCalc), the
+        // nearby neck/spine bones, the EyeLookCalc nodes and the solver
+        // members the limit check consults, so the formulas can be re-run
+        // offline against the recorded nowAngle.
+        var ptnNoValue=Convert.ToInt32(Required(neckCtrl,"ptnNo"));
+        var typeStates=Flatten(Required(neckScript,"neckTypeStates")) as List<object>;
+        if(typeStates==null||ptnNoValue<0||ptnNoValue>=typeStates.Count)throw new Exception("neckTypeStates has no entry for ptnNo "+ptnNoValue);
+        var lastBone=bones[bones.Count-1];
+        var geometryRecord=new Dictionary<string,object>{
+            {"aim",Geometry(RequiredTransform(neckScript,"transformAim"))},
+            {"neckRef",Geometry(RequiredTransform(neckScript,"boneCalcAngle"))},
+            {"headRef",Geometry(RequiredTransform(lastBone,"referenceCalc"))},
+            {"headBone",Geometry(RequiredTransform(lastBone,"neckBone"))},
+            {"changeTypeTimer",Required(neckScript,"changeTypeTimer")},
+            {"backupPos",V((Vector3)Required(neckScript,"backupPos"))},
+            {"isLimitBreakBackup",Required(typeStates[ptnNoValue],"isLimitBreakBackup")},
+            {"eyeCalc",new Dictionary<string,object>{
+                {"rootNode",Geometry(RequiredTransform(eyeScript,"rootNode"))},
+                {"trfCenter",Geometry(RequiredTransform(eyeScript,"trfCenter"))}}},
+            {"eyes",eyeGeometry}};
+        foreach(string lookBoneName in new[]{"cf_j_neck","cf_j_head","cf_j_spine03"}) {
+            var lookBone=FindBone(lookBoneName);
+            if(lookBone==null)throw new Exception("the fixture character has no "+lookBoneName+" transform");
+            geometryRecord[lookBoneName]=Geometry(lookBone);
+        }
+        record["geometry"]=geometryRecord;
+        lookRecords.Add(record);
+    }
+    Transform FindBone(string name) {
+        foreach(var t in character.GetComponentsInChildren<Transform>(true)) if(t.name==name) return t;
+        return null;
     }
 }
