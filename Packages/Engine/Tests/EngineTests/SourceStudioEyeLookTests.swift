@@ -88,8 +88,9 @@ private func eyeGeometry(_ value: Any?, _ context: String) throws -> SourceStudi
 }
 
 /// Replay every synthetic sequence frame by frame through the solver: the
-/// predicted eye local rotations, the carried per-eye state and the
-/// frame-local sorasi num5 must match the reference to 1e-5 deg / 1e-6.
+/// predicted eye local rotations, the carried per-eye state, the frame-local
+/// sorasi num5 and the frame-end angleHRate / angleVRate must match the
+/// reference to 1e-5 deg / 1e-6.
 @Test func studioEyeLookSequencesReplayReferenceFixture() throws {
     let fixture = try fixtureJSON()
     let settings = try SourceStudioEyeLookSettings(json: try settingsData(fixture))
@@ -138,8 +139,15 @@ private func eyeGeometry(_ value: Any?, _ context: String) throws -> SourceStudi
                 expectClose(carried.angleV, number(output["angleV"]), tolerance: 1e-5, "\(context) angleV")
                 expectClose(carried.dirUp, try vector3(output["dirUp"], "expected dirUp"),
                             tolerance: 1e-6, "\(context) dirUp")
+                // The frame-end rates (carried angles on a zero-deltaTime
+                // frame, the new ones otherwise) are part of the replay too.
+                expectClose(solver.angleHRates[index], number(output["angleHRate"]),
+                            tolerance: 1e-6, "\(context) angleHRate")
                 if pattern == 2 { awayRows += 1 }
             }
+            expectClose(solver.angleVRate,
+                        number((try #require(outputs[0] as? [String: Any]))["angleVRate"]),
+                        tolerance: 1e-6, "\(name) angleVRate")
             if deltaTime != 0 {
                 let rightRow = try #require(outputs[1] as? [String: Any])
                 expectClose(solver.num5, number(rightRow["num5"]), tolerance: 1e-6, "\(name) num5")
@@ -161,6 +169,11 @@ private func eyeGeometry(_ value: Any?, _ context: String) throws -> SourceStudi
     #expect(try SourceStudioEyeLookSolver.inverseLerp(0, 10, 50) == 1)
     #expect(try SourceStudioEyeLookSolver.inverseLerp(3, 3, 3) == 1)
     #expect(try SourceStudioEyeLookSolver.inverseLerp(3, 3, 7) == 1)
+    // The rates' InverseLerp: the same clamped 0...1 readout, but an empty
+    // range reads 0 and not 1.
+    #expect(try SourceStudioEyeLookSolver.rateInverseLerp(0, 10, 5) == 0.5)
+    #expect(try SourceStudioEyeLookSolver.rateInverseLerp(3, 3, 3) == 0)
+    #expect(try SourceStudioEyeLookSolver.rateInverseLerp(3, 3, 7) == 0)
     // Vector3.Project(a, n) = n * Dot(a, n) / Dot(n, n), unnormalized n.
     expectClose(try SourceStudioEyeLookSolver.project(SIMD3<Double>(3, 4, 0), onto: SIMD3<Double>(1, 0, 0)),
                 SIMD3<Double>(3, 0, 0), tolerance: 1e-12, "project x")
@@ -286,6 +299,93 @@ private func eyeGeometry(_ value: Any?, _ context: String) throws -> SourceStudi
                 tolerance: 1e-9, "FORWARD front point")
 }
 
+/// The frame-end angle rates and the Init formula: the capture's frame-5
+/// check values, the L/R bending-range mirroring with +-1 saturation, both
+/// vertical up/down range orders, and the rotated-root / rotated-parent Init
+/// case (root +90 deg about RIGHT, eye parent +90 deg about FORWARD).
+@Test func studioEyeLookAngleRatesAndInitialization() throws {
+    let settings = try SourceStudioEyeLookSettings(json: try settingsData(try fixtureJSON()))
+    let targetState = try settings.state(for: 1)
+    // Capture check value (phase 0 frame 5): L angleH 0.04187133 against
+    // (-36, 23) reads 0.2217584, the mirrored R eye -0.2217328, and the one
+    // vertical rate comes from eye 0's angleV 0.472471.
+    let check = try SourceStudioEyeLookSolver.angleRates(
+        eyes: [.init(angleH: 0.041871331748962402, angleV: 0.47247100830078125),
+               .init(angleH: -0.041116833686828613, angleV: 0.47253718376159668)],
+        state: targetState)
+    expectClose(check.horizontal[0], 0.2217584, tolerance: 1e-6, "check angleHRate L")
+    expectClose(check.horizontal[1], -0.2217328, tolerance: 1e-6, "check angleHRate R")
+    expectClose(check.vertical, -0.0472471, tolerance: 1e-9, "check angleVRate")
+    // At angleH 0 each eye sits inside its own bending range -- L at
+    // 36/59 of (-36, 23), R at 23/59 of (-23, 36) -- so the rates are
+    // exactly +-13/59, and out-of-range angles saturate to +-1.
+    let atZero = try SourceStudioEyeLookSolver.angleRates(eyes: [.init(), .init()], state: targetState)
+    expectClose(atZero.horizontal[0], 13.0 / 59.0, tolerance: 1e-12, "L horizontal rate at 0")
+    expectClose(atZero.horizontal[1], -13.0 / 59.0, tolerance: 1e-12, "R horizontal rate at 0")
+    let saturated = try SourceStudioEyeLookSolver.angleRates(
+        eyes: [.init(angleH: 100), .init(angleH: -100)], state: targetState)
+    expectClose(saturated.horizontal[0], 1, tolerance: 1e-12, "L rate saturates high")
+    expectClose(saturated.horizontal[1], -1, tolerance: 1e-12, "R rate saturates low")
+    // The shipped up/down pair (-30, 10) has down above up, so a positive
+    // angleV reads negated off the 10 range and a negative one off the
+    // -30 range; the vertical comes from eye 0's angleV alone.
+    let up = try SourceStudioEyeLookSolver.angleRates(
+        eyes: [.init(angleV: 7.5), .init(angleV: -20)], state: targetState)
+    expectClose(up.vertical, -0.75, tolerance: 1e-12, "vertical off the 10 range, negated")
+    let down = try SourceStudioEyeLookSolver.angleRates(
+        eyes: [.init(angleV: -2), .init(angleV: 7.5)], state: targetState)
+    expectClose(down.vertical, 2.0 / 30.0, tolerance: 1e-12, "vertical off the -30 range")
+    // A state whose up is above its down reads the same min/max ranges.
+    let swappedSettings = try SourceStudioEyeLookSettings(json: Data(
+        #"{"eyes":{"correct":1,"centerEyeLength":0.05,"sorasiRate":1,"eyeTypeStates":[{"lookType":"TARGET","thresholdAngleDifference":0,"bendingMultiplier":0.4,"maxAngleDifference":10,"upBendingAngle":10,"downBendingAngle":-30,"minBendingAngle":-36,"maxBendingAngle":23,"leapSpeed":38,"forntTagDis":50,"nearDis":2,"hAngleLimit":110,"vAngleLimit":80}]}}"#
+            .utf8))
+    let swapped = try SourceStudioEyeLookSolver.angleRates(
+        eyes: [.init(angleV: 5), .init()], state: try swappedSettings.state(for: 0))
+    expectClose(swapped.vertical, -0.5, tolerance: 1e-12, "swapped-range state vertical")
+    // Init: q = inverse(eye parent rotation), and q * rootNode.rotation
+    // applied to the NORMALIZED head vectors; with the root +90 deg about
+    // RIGHT and the parent +90 deg about FORWARD, head forward (0,0,1)
+    // lands on (-1, 0, 0) and head up (0,1,0) on (0, 0, 1).
+    let forward = SIMD3<Double>(0, 0, 1)
+    let rootRotation = try SourceStudioNeckTargetAngle.angleAxis(90, axis: SIMD3<Double>(1, 0, 0))
+    let parentRotation = try SourceStudioNeckTargetAngle.angleAxis(90, axis: forward)
+    let localL = simd_quatd(ix: 0, iy: sin(.pi / 8), iz: 0, r: cos(.pi / 8))
+    let localR = simd_quatd(ix: sin(.pi / 8), iy: 0, iz: 0, r: cos(.pi / 8))
+    let initialized = try SourceStudioEyeLookSolver.initialState(
+        rootNodeRotation: rootRotation,
+        eyes: [(parentRotation: parentRotation, localRotation: localL, eyeLR: 0),
+               (parentRotation: parentRotation, localRotation: localR, eyeLR: 1)],
+        headLookVector: SIMD3<Double>(0, 0, 2), headUpVector: SIMD3<Double>(0, 3, 0))
+    expectClose(initialized.reference[0].lookDir, SIMD3<Double>(-1, 0, 0),
+                tolerance: 1e-9, "Init lookDir")
+    expectClose(initialized.reference[0].upDir, SIMD3<Double>(0, 0, 1),
+                tolerance: 1e-9, "Init upDir")
+    expectClose(initialized.states[0].dirUp, initialized.reference[0].upDir,
+                tolerance: 0, "Init dirUp carries the reference up")
+    #expect(initialized.states.map(\.angleH) == [0, 0], "Init angles start flat")
+    #expect(initialized.states.map(\.angleV) == [0, 0], "Init angles start flat")
+    #expect(initialized.reference.map(\.origRotation) == [localL, localR],
+            "Init origRotation is the eye's own localRotation")
+    // An identity root and parent pass the normalized head frame through.
+    let identity = simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+    let plain = try SourceStudioEyeLookSolver.initialState(
+        rootNodeRotation: identity,
+        eyes: [(parentRotation: identity, localRotation: localL, eyeLR: 0),
+               (parentRotation: identity, localRotation: localR, eyeLR: 1)],
+        headLookVector: SIMD3<Double>(0, 0, 2), headUpVector: SIMD3<Double>(0, 3, 0))
+    expectClose(plain.reference[0].lookDir, forward, tolerance: 1e-12, "identity Init lookDir")
+    expectClose(plain.reference[1].upDir, SIMD3<Double>(0, 1, 0), tolerance: 1e-12, "identity Init upDir")
+    // The settings' eyeObjs order does not matter: outputs come back in
+    // eyeLR order.
+    let reordered = try SourceStudioEyeLookSolver.initialState(
+        rootNodeRotation: rootRotation,
+        eyes: [(parentRotation: parentRotation, localRotation: localR, eyeLR: 1),
+               (parentRotation: parentRotation, localRotation: localL, eyeLR: 0)],
+        headLookVector: forward, headUpVector: SIMD3<Double>(0, 1, 0))
+    #expect(reordered.states == initialized.states, "Init outputs follow eyeLR")
+    #expect(reordered.reference.map(\.origRotation) == [localL, localR], "Init outputs follow eyeLR")
+}
+
 /// Invalid inputs: non-finite values throw, zero-length directions throw
 /// where the original's normalize would divide by zero, and the solver
 /// refuses malformed state, patterns and geometry.
@@ -315,6 +415,37 @@ private func eyeGeometry(_ value: Any?, _ context: String) throws -> SourceStudi
     solver.eyes[0].angleV = .nan
     #expect(throws: (any Error).self) {
         _ = try solver.step(deltaTime: 0.1, target: .zero, geometry: geometry, pattern: 1)
+    }
+    // A NaN carried angle throws on the zero-deltaTime path too: the frame
+    // still recomputes its rates from the state.
+    #expect(throws: (any Error).self) {
+        _ = try solver.step(deltaTime: 0, target: .zero, geometry: geometry, pattern: 1)
+    }
+    // The rates need the two-eye state list...
+    #expect(throws: (any Error).self) {
+        _ = try SourceStudioEyeLookSolver.angleRates(eyes: [.init()],
+                                                     state: try settings.state(for: 1))
+    }
+    // ... and the Init wants exactly one eye per eyeLR and a head frame it
+    // can normalize.
+    let identityInit = simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+    let initEyes = [(parentRotation: identityInit, localRotation: identityInit, eyeLR: 0),
+                    (parentRotation: identityInit, localRotation: identityInit, eyeLR: 1)]
+    #expect(throws: (any Error).self) {
+        _ = try SourceStudioEyeLookSolver.initialState(rootNodeRotation: .init(),
+                                                       eyes: [initEyes[0]],
+                                                       headLookVector: SIMD3<Double>(0, 0, 1),
+                                                       headUpVector: SIMD3<Double>(0, 1, 0))
+    }
+    #expect(throws: (any Error).self) {
+        _ = try SourceStudioEyeLookSolver.initialState(
+            rootNodeRotation: .init(), eyes: [initEyes[1], initEyes[1]],
+            headLookVector: SIMD3<Double>(0, 0, 1), headUpVector: SIMD3<Double>(0, 1, 0))
+    }
+    #expect(throws: (any Error).self) {
+        _ = try SourceStudioEyeLookSolver.initialState(rootNodeRotation: .init(), eyes: initEyes,
+                                                       headLookVector: .zero,
+                                                       headUpVector: SIMD3<Double>(0, 1, 0))
     }
     #expect(throws: (any Error).self) {
         _ = try solver.step(deltaTime: 0.1, target: .zero, geometry: SourceStudioEyeLookGeometry(

@@ -14,8 +14,11 @@ recorded values and is reported as seed-only, not measured.
 
 Per frame the predicted angleH/angleV pair, the eye localRotation and dirUp
 are compared with the recorded ones and the maxima reported per phase and
-eye.  A phase whose angle error exceeds the target prints its first five
-frames' predicted vs recorded values so the suspected rule can be traced
+eye.  The predicted frame-end angle rates (the values
+EyeLookMaterialControll shifts the iris textures by) are compared with the
+frame's calculators[0].angleHRate / angleVRate pair and their maxima reported
+per phase too.  A phase whose angle error exceeds the target prints its first
+five frames' predicted vs recorded values so the suspected rule can be traced
 before any further tuning.
 """
 from __future__ import annotations
@@ -76,8 +79,14 @@ def load_inputs(trace_path: Path, settings_path: Path):
         geometry = frame.get('geometry') or {}
         if 'eyeCalc' not in geometry or len(geometry.get('eyes', [])) != 2:
             raise ValueError(f'frame {index} needs the ST-T07m eyeCalc geometry')
-        if len((frame.get('eyes') or {}).get('eyes', [])) != 2:
+        eyes_state = frame.get('eyes') or {}
+        if len(eyes_state.get('eyes', [])) != 2:
             raise ValueError(f'frame {index} needs recorded per-eye solver state')
+        if len(eyes_state.get('calculators', [])) != 1:
+            raise ValueError(f'frame {index} needs exactly one recorded calculator')
+        calculator = eyes_state['calculators'][0]
+        if len(calculator.get('angleHRate', [])) != 2 or not is_finite(calculator.get('angleVRate')):
+            raise ValueError(f'frame {index} needs a two-entry angleHRate and a finite angleVRate')
     return frames, phases, type_states, eyes
 
 
@@ -126,8 +135,12 @@ def replay(frames: list, phases: list, type_states: list, eyes: list):
     """Step the reference over every frame; returns (per-phase maxima, misses, frame 0)."""
     bounds = phase_bounds(frames, phases)
     errors: dict[int, list[dict]] = {phase: [{'angleH': 0.0, 'angleV': 0.0, 'rotation': 0.0,
-                                              'dirUp': 0.0, 'at': {}} for _ in EYE_NAMES]
+                                              'dirUp': 0.0, 'angleHRate': 0.0, 'at': {}}
+                                             for _ in EYE_NAMES]
                                      for phase in bounds}
+    # angleVRate is one frame-level value (from eye 0's angleV), so its max
+    # sits per phase rather than per eye.
+    v_rates: dict[int, dict] = {phase: {'angleVRate': 0.0, 'at': None} for phase in bounds}
     misses: list[tuple[int, list]] = []
     first_frame: list = []
     for index in range(len(frames)):
@@ -142,6 +155,7 @@ def replay(frames: list, phases: list, type_states: list, eyes: list):
         if index == 0:
             first_frame = [state, predicted, recorded]
             continue
+        calculator = frame['eyes']['calculators'][0]
         for eye_index in range(len(EYE_NAMES)):
             measurements = {
                 'angleH': abs(predicted[eye_index]['angleH'] - recorded[eye_index]['angleH']),
@@ -150,16 +164,21 @@ def replay(frames: list, phases: list, type_states: list, eyes: list):
                                                       recorded[eye_index]['localRotation']),
                 'dirUp': angle_between_vectors(predicted[eye_index]['dirUp'],
                                                frame['geometry']['eyes'][eye_index]['dirUp']),
+                'angleHRate': abs(predicted[eye_index]['angleHRate']
+                                  - calculator['angleHRate'][eye_index]),
             }
             entry = errors[frame['phase']][eye_index]
             for name, value in measurements.items():
                 if value > entry[name]:
                     entry[name] = value
                     entry['at'][name] = index
+        v_error = abs(predicted[0]['angleVRate'] - calculator['angleVRate'])
+        if v_error > v_rates[frame['phase']]['angleVRate']:
+            v_rates[frame['phase']] = {'angleVRate': v_error, 'at': index}
     for phase in sorted(bounds):
         if max(max(entry['angleH'], entry['angleV']) for entry in errors[phase]) > ANGLE_TARGET_DEGREES:
             misses.append(phase)
-    return bounds, errors, misses, first_frame
+    return bounds, errors, v_rates, misses, first_frame
 
 
 def angle_between_vectors(a: list[float], b: list[float]) -> float:
@@ -207,7 +226,7 @@ def main() -> int:
     parser.add_argument('--settings', required=True, type=Path)
     args = parser.parse_args()
     frames, phases, type_states, eyes = load_inputs(args.trace, args.settings)
-    bounds, errors, misses, first_frame = replay(frames, phases, type_states, eyes)
+    bounds, errors, v_rates, misses, first_frame = replay(frames, phases, type_states, eyes)
     for phase, (first, last) in sorted(bounds.items()):
         look_type = look_type_name(type_states[phases[phase]['eyesPattern']])
         for eye_index, name in enumerate(EYE_NAMES):
@@ -217,15 +236,25 @@ def main() -> int:
                   f'(frame {where.get("angleH")}), max |dV| {entry["angleV"]:.6f} deg '
                   f'(frame {where.get("angleV")}), max localRotation {entry["rotation"]:.6f} deg '
                   f'(frame {where.get("rotation")}), max dirUp {entry["dirUp"]:.6f} deg '
-                  f'(frame {where.get("dirUp")}) over {last - first} frames')
+                  f'(frame {where.get("dirUp")}), max |dAngleHRate| {entry["angleHRate"]:.6f} '
+                  f'(frame {where.get("angleHRate")}) over {last - first} frames')
+        v_entry = v_rates[phase]
+        print(f'phase {phase} {look_type} angleVRate: max |dVRate| {v_entry["angleVRate"]:.6f} '
+              f'(frame {v_entry["at"]}) over {last - first} frames')
     worst_angle = max(max(entry['angleH'], entry['angleV'])
                       for phase_errors in errors.values() for entry in phase_errors)
     worst_rotation = max(entry['rotation'] for phase_errors in errors.values() for entry in phase_errors)
     worst_dir_up = max(entry['dirUp'] for phase_errors in errors.values() for entry in phase_errors)
+    # The rates inherit the known AWAY/CONTROL angle misses (they are computed
+    # from the same angles), so they are reported, not gated here.
+    worst_h_rate = max(entry['angleHRate'] for phase_errors in errors.values() for entry in phase_errors)
+    worst_v_rate = max(entry['angleVRate'] for entry in v_rates.values())
     print(summarise(first_frame))
     print(f'worst angle error: {worst_angle:.6f} deg (target {ANGLE_TARGET_DEGREES})')
     print(f'worst localRotation error: {worst_rotation:.6f} deg (ceiling {ROTATION_CEILING_DEGREES})')
     print(f'worst dirUp error: {worst_dir_up:.6f} deg (ceiling {DIRUP_CEILING_DEGREES})')
+    print(f'worst angleHRate error: {worst_h_rate:.6f} (from the angles, reported not gated)')
+    print(f'worst angleVRate error: {worst_v_rate:.6f} (from the angles, reported not gated)')
     for phase in misses:
         report_miss(frames, phases, type_states, eyes, phase, *bounds[phase])
     if worst_angle > ANGLE_TARGET_DEGREES:
