@@ -65,6 +65,13 @@ def item_material_contract(shader_name, colors, floats, mask_pixels, main_pixels
     single factor while _PatternMask1..3 stay unbound (their shader default
     "white" forces each pattern gate to select _ColorN exactly — the caller
     refuses bound pattern slots).
+
+    itemColorSlot names the single fully selected _ColorMask channel
+    (0=_Color, 1=_Color2, 2=_Color3) so the app can substitute the item
+    record's saved color at render time; None for a black mask and for
+    fractional or multi-channel selections the app cannot attribute to one
+    record color. itemAlphaProperty names the record-driven material float
+    (_alpha) the alpha shader scales its output alpha with.
     """
     if shader_name not in ITEM_SHADERS:
         raise ValueError(f"No verified base-color mapping for shader {shader_name!r}")
@@ -81,6 +88,12 @@ def item_material_contract(shader_name, colors, floats, mask_pixels, main_pixels
     tint = list(factors.pop())
     if not any(all(abs(tint[i] - candidate[i]) < 1e-9 for i in range(3)) for candidate in [[1, 1, 1]] + groups):
         raise ValueError(f"_ColorMask blends several Studio item color groups ({tint}); only single-channel _Color/_Color2/_Color3 selection is verified")
+    # Only a single fully selected channel is attributable to one record
+    # color: black (or shader-default black) selects none, a partial weight
+    # or several channels shade between colors the app cannot reproduce.
+    mask_channels = {pixel[:3] for pixel in mask_pixels or [(0, 0, 0, 255)]}
+    selection = mask_channels.pop() if len(mask_channels) == 1 else None
+    item_color_slot = selection.index(255) if selection and sorted(selection) == [0, 0, 255] else None
     if shader_name == "Shader Forge/main_item_studio":
         # FORWARD: discard when saturate(2*_MainTex.a) < 0.5, i.e. _MainTex.a < 0.25.
         # Surviving fragments blend with coverage 2*saturate(2a)-1, which equals 1 only
@@ -90,12 +103,14 @@ def item_material_contract(shader_name, colors, floats, mask_pixels, main_pixels
             raise ValueError(f"_MainTex alpha {fractional} has fractional FORWARD coverage (2*sat(2a)-1) that glTF MASK cannot represent")
         return {"baseColorFactor": tint + [1], "alphaMode": "MASK", "alphaCutoff": 0.25,
                 "doubleSided": True,  # Serialized FORWARD pass: Cull Off (0), no property binding.
-                "shaderParity": "base-color-no-pattern-only"}
+                "shaderParity": "base-color-no-pattern-only",
+                "itemColorSlot": item_color_slot}
     # FORWARD blend SrcAlpha/OneMinusSrcAlpha with output alpha _MainTex.a * _alpha;
     # the ~0.002 discard guard only removes fragments BLEND already hides.
     return {"baseColorFactor": tint + [floats.get("_alpha", 1)], "alphaMode": "BLEND",
             "doubleSided": False,  # Serialized FORWARD pass: Cull Back (2), no property binding.
-            "shaderParity": "base-color-alpha-no-pattern-only"}
+            "shaderParity": "base-color-alpha-no-pattern-only",
+            "itemColorSlot": item_color_slot, "itemAlphaProperty": "_alpha"}
 
 
 def convert_triangles(triangles, count):
@@ -227,6 +242,10 @@ class Exporter:
                   "doubleSided": contract.get("doubleSided", False),
                   "extras": {"unityShader": shader_name, "unityPathID": str(identity[1]),
                              "shaderParity": contract.get("shaderParity", "base-color-cutout-normal-packing-only")}}
+        # ST-T04c: the renderer substitutes record colors/alpha through these.
+        for name in ("itemColorSlot", "itemAlphaProperty"):
+            if name in contract:
+                result["extras"][name] = contract[name]
         if "alphaCutoff" in contract:
             result["alphaCutoff"] = contract["alphaCutoff"]
         if main and main.m_Texture.path_id:
