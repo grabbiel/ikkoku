@@ -165,6 +165,9 @@ final class StudioModel: ViewportInputHandler {
 
     func addKeyframe() {
         guard let o = selectedObject, o.kind == .character || o.kind == .item || o.kind == .light else { return }
+        // Original characters keep their saved pose/animation; keyframes would only store
+        // prototype fields (pose delta, IK chains, gestures, preset, expression).
+        guard !selectedIsSourceCharacter else { status = "Original characters keep their saved poses; Timeline keys are not supported."; return }
         pushUndo(force: true)
         doc.timeline.insert(Keyframe(time: timelineTime, object: o))
         status = "Keyframe at \(String(format: "%.2f", timelineTime)) s"
@@ -190,6 +193,36 @@ final class StudioModel: ViewportInputHandler {
     var library: AssetLibrary { host.library }
     var selectedObject: StudioObject? { selection.flatMap { doc.object($0) } }
     var selectedInstance: CharacterInstance? { selection.flatMap { instances[$0] } }
+
+    /// Whether the current selection is an original-game character. The inspectors
+    /// gate their prototype-only controls on this so the UI and the headless UI
+    /// report (`AppState.snapshotWindowIfRequested`) cannot drift apart.
+    var selectedIsSourceCharacter: Bool { selectedObject?.sourceCharacter != nil }
+
+    /// Set by the inspector branch that actually rendered (`onAppear` in `StudioView`);
+    /// the headless UI report writes this as `inspectorView` so it cannot lie about
+    /// the expected `inspectorViewName` computed from model state below.
+    var displayedInspectorView = "none"
+
+    /// Expected inspector view for the current tab/selection, computed from model state.
+    /// Keep these branches in sync with `StudioView`'s inspector switch.
+    var inspectorViewName: String {
+        switch inspectorTab {
+        case .object: return selectedObject == nil ? "none" : "ObjectInspector"
+        case .pose:
+            if selectedObject?.kind != .character { return "none" }
+            return selectedIsSourceCharacter ? "SourcePoseInspector" : "PoseInspector"
+        case .face:
+            if selectedIsSourceCharacter { return "FaceInspector.sourceUnsupported" }
+            guard let o = selectedObject, o.card != nil else { return "none" }
+            return "FaceInspector"
+        case .clothes:
+            if selectedIsSourceCharacter { return "ClothesInspector.sourceAccessoryLabels" }
+            guard let o = selectedObject, o.card != nil else { return "none" }
+            return "ClothesInspector"
+        case .scene: return "SceneInspector"
+        }
+    }
 
     // MARK: Object management
 

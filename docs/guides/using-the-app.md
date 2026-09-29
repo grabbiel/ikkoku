@@ -69,11 +69,15 @@ state and restores current/saved cameras. Original attachment and animation/IK
 kernels exist, but scene loading is incomplete: routes and their descendants and
 many original items, lights and scene effects remain unrendered or unapplied.
 
-The current UI gates all source Pose/Face/Clothes inspectors, including implemented
-source guide controls and accessory labels. Full-body IK and guide editing can be
-exercised through engine/capture paths; do not expect those inspectors to be
-interactive yet. Some prototype controls also write fields unused by source
-characters. Follow ST-T01 in the [Studio audit](../component-audit/studio.md).
+With a source character selected, the Pose, Face and Clothes tabs are
+reachable: Pose shows source FK/IK guides (position/rotation editing), Face shows
+a "not supported yet" note, and Clothes lists mounted accessory labels. The
+inspector controls that could write prototype-only fields — card editing,
+clothing/accessory visibility, animation presets, gestures, expressions and
+timeline keyframes — are gated for source characters; viewport gizmos still use
+the existing source callbacks. Mouse-driven guide editing, undo/redo,
+save/reload and original-scene export still have to be regression-tested — see
+ST-T01 in the [Studio audit](../component-audit/studio.md).
 
 **File → Export Edited Original Scene…** writes supported edits to a new source
 scene while preserving untouched records, embedded cards, mod identities and
@@ -95,7 +99,7 @@ capabilities.
 
 Bounded translated plugins and two exact native adapters exist. Arbitrary managed
 DLLs do not execute in the app. The Mute adapter's headless startup crash is fixed
-and passed Release mount/save/reload and focus-gain acceptance. The source inspector gate
-hides accessory-name controls. See
+and passed Release mount/save/reload and focus-gain acceptance. The Source Clothes
+inspector now lists accessory labels; the previous gate hiding them is removed. See
 [plugin execution](../reference/mods/plugin-execution.md) for supported callbacks,
 installation paths and the remaining integration work.
