@@ -12,6 +12,19 @@ import Gameplay
 
 enum PoseMode: String, CaseIterable, Identifiable { case object = "Object", fk = "FK", ik = "IK"; var id: String { rawValue } }
 
+/// Runtime side entry for one imported route object, mirroring
+/// `SourceStudioCharacterReference`'s scene-identity fields so a stale entry
+/// can never apply to a replacement document. Carries the authored route
+/// record and its point locals; the world placement is recomputed per frame by
+/// `SourceStudioRoutePlayback.childRootWorld`, which never edits them.
+private struct SourceRouteRuntime {
+    let sceneFile: String
+    let sceneSHA256: String
+    let objectKey: Int32
+    let route: KoikatsuRouteRecord
+    let pointLocals: [float4x4]
+}
+
 enum FKGroup: String, CaseIterable, Identifiable {
     case body = "Body", hands = "Hands", face = "Head & bust", all = "All"
     var id: String { rawValue }
@@ -50,6 +63,16 @@ final class StudioModel: ViewportInputHandler {
     private(set) var redoStack: [StudioDocument] = []
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var sourceInstances: [UUID: SourceStudioCharacterPreview] = [:]
+    /// Imported route objects with their authored point transforms, so each
+    /// frame's world-matrix walks replace a route parent's authored transform
+    /// with `childRoot` — the node route children hang under
+    /// (`AddObjectRoute.cs` parenting, `OCIRoute.cs` `Play`/`Stop`) — resolved
+    /// at `sourceAnimationTime`. Runtime only: it never becomes a document
+    /// node, which keeps the imported tree 1:1 with the source records for
+    /// original export validation. Mirrors `sourceInstances`: filled by the
+    /// import, dropped whenever a document replaces the current one.
+    @ObservationIgnored private var sourceRoutes: [UUID: SourceRouteRuntime] = [:]
+    @ObservationIgnored private var lastSourceRouteDiagnostic: String?
     let sourceAudioBus = SourceStudioAudioBus()
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
@@ -325,8 +348,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); lastSourceRouteDiagnostic = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -442,6 +465,7 @@ final class StudioModel: ViewportInputHandler {
         }
         let handPatternsPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"]
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
+        var routes: [UUID: SourceRouteRuntime] = [:]
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
@@ -469,10 +493,20 @@ final class StudioModel: ViewportInputHandler {
                 } catch { diagnostics.append("Character \(record.sourceKey) retained without rendering: \(error)") }
             } else if record.kind != .folder {
                 object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
-                diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering\(routeChild ? "; route animation is unresolved" : "").")
+                // A route's `childRoot` is resolved every frame, so a non-character
+                // route child inherits it like any other parent transform. A
+                // character under a route has no resolved animation yet and stays
+                // gated.
+                let gated = routeChild && record.character != nil
+                diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering\(gated ? "; route animation is unresolved" : "").")
             }
             object.sourcePreviewName = object.name; object.sourcePreviewKind = object.kind
             imported.objects.append(object)
+            if record.kind == .route, let route = record.route {
+                routes[object.id] = SourceRouteRuntime(sceneFile: sceneURL.path, sceneSHA256: hash,
+                    objectKey: record.sourceKey, route: route,
+                    pointLocals: SourceStudioRoutePlayback.pointLocals(from: route))
+            }
             stack += record.children.reversed().map { ($0, object.id, routeChild || record.kind == .route, Optional<Int32>.none) }
             if let character = record.character {
                 for key in character.accessoryChildren.keys.sorted().reversed() {
@@ -492,7 +526,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; instances = [:]; doc = imported; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; lastSourceRouteDiagnostic = nil; instances = [:]; doc = imported; self.sceneURL = nil
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
     }
@@ -523,7 +557,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); lastSourceRouteDiagnostic = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -779,6 +813,14 @@ final class StudioModel: ViewportInputHandler {
     func refresh() {
         let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
         sourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
+        // Route runtimes are authored data: nothing edits them, so the prune
+        // only drops entries whose object is gone or whose scene identity no
+        // longer matches (a route object's own transform edits flow through
+        // the live walk below, not through the entry).
+        sourceRoutes = sourceRoutes.filter { id, runtime in
+            doc.sourceSceneSHA256 == runtime.sceneSHA256
+                && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == runtime.objectKey })
+        }
         var items: [RenderItem] = []
         var skinSets: [UInt64: [float4x4]] = [:]
         var lights: [SceneLight] = []
@@ -913,9 +955,43 @@ final class StudioModel: ViewportInputHandler {
                 guard let preview = previews[parentID] else { throw RigError.invalid("Attachment parent has no converted character.") }
                 world = try preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * world
             }
+            if let route = sourceRouteRuntime(id: parentID, document: document) {
+                // `childRoot` replaces the route object as the parent frame
+                // (`AddObjectRoute.cs` parents children under it, and the
+                // `OCIRoute.cs` placement already folds in the route object's
+                // world matrix). Because that placement is an absolute world
+                // matrix, the walk stops here; the route's ancestors are
+                // already applied inside it.
+                let (matrix, diagnostics) = SourceStudioRoutePlayback.childRootWorld(route: route.route,
+                    routeWorld: try sourceWorldMatrix(of: parentID, document: document, previews: previews),
+                    pointLocals: route.pointLocals, elapsed: Double(sourceAnimationTime))
+                reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey)
+                return matrix * world
+            }
             world = parent.transform.matrix * world; object = parent
         }
         return world
+    }
+
+    /// The import's authored route data, but only while the document still
+    /// identifies the scene file it was read from. After undo/redo the cache is
+    /// empty and route children fall back to the route object's authored
+    /// transform; nothing guesses a placement from edited document data.
+    private func sourceRouteRuntime(id: UUID, document: StudioDocument) -> SourceRouteRuntime? {
+        guard let route = sourceRoutes[id], document.sourceSceneFile == route.sceneFile,
+              document.sourceSceneSHA256 == route.sceneSHA256 else { return nil }
+        return route
+    }
+
+    /// Playback diagnostics are deterministic for a given route and clock, so
+    /// only their first appearance reaches `status` instead of repeating every
+    /// frame or per walked child.
+    private func reportSourceRouteDiagnostics(_ diagnostics: [String], routeKey: Int32) {
+        guard let first = diagnostics.first else { return }
+        let message = "Route \(routeKey) playback: \(first)"
+        guard message != lastSourceRouteDiagnostic else { return }
+        lastSourceRouteDiagnostic = message
+        status = message
     }
 
     private func sourceWorldRotation(of id: UUID) throws -> simd_quatf {
@@ -926,6 +1002,16 @@ final class StudioModel: ViewportInputHandler {
             if let point = object.sourceAttachmentPoint {
                 guard let preview = sourceInstances[parentID] else { throw RigError.invalid("Missing attachment guide parent.") }
                 rotation = try preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime) * rotation
+            }
+            if let route = sourceRouteRuntime(id: parentID, document: doc) {
+                // Same parent-frame replacement as `sourceWorldMatrix`; the
+                // recovered placement writes position and rotation only, so
+                // the extracted rotation is exact.
+                let (matrix, diagnostics) = SourceStudioRoutePlayback.childRootWorld(route: route.route,
+                    routeWorld: try sourceWorldMatrix(of: parentID, document: doc, previews: sourceInstances),
+                    pointLocals: route.pointLocals, elapsed: Double(sourceAnimationTime))
+                reportSourceRouteDiagnostics(diagnostics, routeKey: route.objectKey)
+                return (matrix.rotationQuaternion * rotation).normalized
             }
             rotation = parent.transform.quaternion * rotation; object = parent
         }

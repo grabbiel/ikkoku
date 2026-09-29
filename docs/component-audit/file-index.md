@@ -2,9 +2,10 @@
 
 Code-audit snapshot: 2026-09-25, base `2cfb859` plus the then-uncommitted work.
 The file inventory includes the documentation reorganization, contribution
-guide, ST-T02/A-T04 probe test additions and the ST-T11 first-slice route
-evaluator files; it does not represent a new code audit. It lists every
-present Git-visible tracked/untracked non-ignored repository file outside
+guide, ST-T02/A-T04 probe test additions, the ST-T11 first-slice route
+evaluator files and the ST-T11 second-slice route playback files; it does not
+represent a new code audit. It lists every present Git-visible
+tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
 source code. A report assignment means coverage responsibility, not that every
@@ -12,13 +13,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**666 files indexed; 666 assigned; 0 unassigned.**
+**668 files indexed; 668 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 119 |
+| [Studio / IK / animation](studio.md) | 121 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 287 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
@@ -30,8 +31,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 18 |
-| Runtime / shared shader declaration | 149 |
-| Test / validation | 123 |
+| Runtime / shared shader declaration | 150 |
+| Test / validation | 124 |
 
 ## App / gameplay / plugins
 
@@ -263,6 +264,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift](../../Packages/Engine/Sources/Studio/SourceStudioPluginWorld.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioPose.swift](../../Packages/Engine/Sources/Studio/SourceStudioPose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRoute.swift](../../Packages/Engine/Sources/Studio/SourceStudioRoute.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioRoutePlayback.swift](../../Packages/Engine/Sources/Studio/SourceStudioRoutePlayback.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
@@ -293,6 +295,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckTargetAngleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckTargetAngleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioPoseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRoundtripTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioRoutePlaybackTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRoutePlaybackTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
