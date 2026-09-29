@@ -31,7 +31,10 @@ public struct SourceStudioCharacterReference: Codable, Sendable, Equatable {
 
 public final class SourceStudioCharacterPreview {
     public let reference: SourceStudioCharacterReference
-    public let preview: SourceRigPreview
+    /// The assembled preview. setColorEdits swaps this instance exactly like the
+    /// Maker's replaceSourceAppearance: geometry, contract, expression contract
+    /// and body options stay identical and no pose input changes.
+    public private(set) var preview: SourceRigPreview
     public private(set) var pose: RigPose
     /// Import-time messages plus one-shot runtime notices (for example the FK
     /// neck conflict reported by editedPose); never grows per frame.
@@ -55,6 +58,21 @@ public final class SourceStudioCharacterPreview {
     /// baseline. Export writes back only edited arrays that differ from these.
     public let savedFaceValues: [Float]
     public let savedBodyValues: [Float]
+    /// The card's saved draft colors keyed by draft color ID — the import
+    /// baseline. Export writes back only edited colors that differ from these.
+    public let savedColors: [String: Float4]
+    /// The draft's supported colors (ID, label and saved rgba) in card order;
+    /// empty when the card's appearance records are unavailable.
+    public let draftColors: [SourceCardAppearance.Color]
+    /// The draft color IDs whose card colors actually bound on this assembly;
+    /// color editing is unsupported while this is empty.
+    public private(set) var appliedColorFields: Set<String>
+    /// The current edited card colors; nil keeps the card's saved colors.
+    /// setColorEdits rebuilds the preview appearance once per accepted edit.
+    public private(set) var sourceColorEdits: [String: Float4]?
+    /// The latest color rebuild's appearance diagnostics; replaced, never
+    /// accumulated, and nil while the card's saved colors are in effect.
+    public private(set) var colorEditDiagnostics: [String]?
     /// The current edited face/body slot rates; nil keeps the card's saved
     /// arrays. setShapeValues rebuilds the baseline once per accepted edit.
     public private(set) var sourceFaceValues: [Float]?
@@ -145,6 +163,14 @@ public final class SourceStudioCharacterPreview {
     private let shapeBoneModifiers: SourceBoneModifiers?
     private let shapeIKBindings: SourceStudioIK.Bindings?
     private let shapeDynamicsBindings: [SourceStudioDynamics.Binding]?
+    /// The import-time appearance inputs setColorEdits replays: a fresh draft
+    /// off the same card, the same assembly preparation and the same converted
+    /// appearance/bindings documents, so a rebuild matches the import exactly.
+    private let appearanceCard: SourceCharacterCard
+    private let appearancePrepared: SourceMakerLibrary.Prepared?
+    private let appearanceRigURL: URL
+    private let appearanceDirectory: URL
+    private let appearanceBindingsURL: URL
     public struct DynamicsCheckpoint {
         fileprivate let owner: ObjectIdentifier
         fileprivate let simulation: SourceStudioDynamics?
@@ -219,16 +245,22 @@ public final class SourceStudioCharacterPreview {
             if library != nil { throw error }
             draft = nil; messages.append("Card appearance records are incomplete; reference materials retained: \(error)")
         }
+        var appearanceAppliedFields: Set<String> = []
         let bindingsURL = rigURL.deletingPathExtension().appendingPathExtension("card-appearance.json")
         if let draft, FileManager.default.fileExists(atPath: bindingsURL.path) {
             var bindings = try SourceAppearanceBindings.load(url: bindingsURL)
             if let prepared { bindings = bindings.restricted(to: Set(prepared.source.parts.map { $0.mesh.name })) }
             let applied = try appearance.applying(draft, bindings: bindings, directory: directory, resources: resources)
-            appearance = applied.appearance; messages += applied.diagnostics
+            appearance = applied.appearance; messages += applied.diagnostics; appearanceAppliedFields.formUnion(applied.appliedFields)
         }
         if let draft, let applied = try prepared?.appearance(base: appearance, card: draft, resources: resources, modLibrary: nil) {
-            appearance = applied.appearance; messages += applied.diagnostics
+            appearance = applied.appearance; messages += applied.diagnostics; appearanceAppliedFields.formUnion(applied.appliedFields)
         }
+        appearanceCard = card
+        appearancePrepared = prepared
+        appearanceRigURL = rigURL
+        appearanceDirectory = directory
+        appearanceBindingsURL = bindingsURL
         if library == nil { messages.append("No converted Maker library selected; reference hair/clothes geometry retained.") }
         let expression = try SourceExpressionContract.decode(Self.read(directory.appendingPathComponent("source-expression-contract.json"), maximum: 32 * 1024 * 1024))
         var inputs = expression.defaults
@@ -254,6 +286,10 @@ public final class SourceStudioCharacterPreview {
         self.baseline = baseline
         savedFaceValues = settings.faceValues
         savedBodyValues = settings.bodyValues
+        savedColors = Dictionary(uniqueKeysWithValues: draft?.colors.map { ($0.id, $0.rgba) } ?? [])
+        draftColors = draft?.colors ?? []
+        // Only colors whose material actually changed count as editable here.
+        appliedColorFields = appearanceAppliedFields.intersection(Set(draftColors.map(\.id)))
         shapeBoneModifiers = settings.boneModifiers
         // ChangeSettingEyeTilt lerps face shape value 33 unclamped (Mathf.Lerp),
         // L from +0.02 toward -0.02 and R as its negation (SetEyeRot negates the
@@ -580,6 +616,61 @@ public final class SourceStudioCharacterPreview {
         animationPlayback.reset()
         hasSteppedNeckLook = false
         resetNeckLook(); resetEyeLook()
+    }
+
+    /// Validates edited card colors and rebuilds the preview appearance when
+    /// they replace the card's saved colors, mirroring the Maker's
+    /// replaceSourceAppearance: a fresh draft off the same card, every edited
+    /// color set on it, then the same two appearance passes the import ran.
+    /// Colors that never bound a material on this assembly (the ones the
+    /// Maker only shows after Apply) stay reference materials, so an edit of
+    /// one is reported and the draft keeps it for a later assembly. An empty
+    /// or nil dictionary restores the card's saved colors. Poses, dynamics and
+    /// the look runtimes read no colors, so unlike a shape edit nothing else
+    /// is rebuilt; only the rendered `preview` instance is swapped and the
+    /// next `frame` reflects it. Export diffs the document's colors against
+    /// `savedColors` for the embedded-card writeback.
+    public func setColorEdits(_ edits: [String: Float4]?) throws {
+        let edits = edits?.isEmpty == true ? nil : edits
+        guard edits != sourceColorEdits else { return }
+        guard !appliedColorFields.isEmpty else {
+            throw RigError.invalid("This assembly has no card appearance bindings, so color editing is unsupported.")
+        }
+        var draft = try SourceCardAppearance(card: appearanceCard, coordinate: coordinate)
+        let supported = Set(draft.colors.map(\.id))
+        for (id, rgba) in edits.map { $0.sorted { $0.key < $1.key } } ?? [] {
+            guard supported.contains(id) else { throw RigError.invalid("Unsupported color field \(id).") }
+            // setColor validates finiteness and the 0...1 range; rethrow with
+            // the field named so the inspector reports which color was rejected.
+            do { try draft.setColor(id, rgba: rgba) }
+            catch { throw RigError.invalid("Color \(id) must be finite and between 0 and 1.") }
+        }
+        var appearance = try SourcePreviewAppearance.load(url: appearanceRigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
+        var messages: [String] = []
+        var fields: Set<String> = []
+        if FileManager.default.fileExists(atPath: appearanceBindingsURL.path) {
+            var bindings = try SourceAppearanceBindings.load(url: appearanceBindingsURL)
+            if let appearancePrepared { bindings = bindings.restricted(to: Set(appearancePrepared.source.parts.map { $0.mesh.name })) }
+            let applied = try appearance.applying(draft, bindings: bindings, directory: appearanceDirectory, resources: resources)
+            appearance = applied.appearance; messages += applied.diagnostics; fields.formUnion(applied.appliedFields)
+        }
+        if let applied = try appearancePrepared?.appearance(base: appearance, card: draft, resources: resources, modLibrary: nil) {
+            appearance = applied.appearance; messages += applied.diagnostics; fields.formUnion(applied.appliedFields)
+        }
+        // The Maker's Apply gate keeps unbound colors as reference materials;
+        // here the edit is explicit, so an unbound color is reported instead.
+        let unbound = (edits?.keys.sorted() ?? []).filter { !fields.contains($0) && draft.color($0) != nil }
+        for id in unbound.sorted() {
+            messages.append("\(id) binds no material on this assembly; the edited color is retained for export but not rendered.")
+        }
+        // Every fallible stage ran; the swap itself cannot fail, so the old
+        // preview (unregistered in its deinit) survives a rejected edit.
+        preview = try SourceRigPreview(source: appearancePrepared?.source ?? preview.source, contract: preview.contract,
+            resources: resources, appearance: appearance, expressionContract: preview.expressionContract,
+            bodyOptions: preview.bodyOptions)
+        sourceColorEdits = edits
+        appliedColorFields = fields.intersection(supported)
+        colorEditDiagnostics = edits == nil ? nil : messages
     }
 
     public func editedPose(fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,

@@ -122,6 +122,10 @@ set:
       updates; export and reload keep the new value. Body shape and Reset to card
       behave the same way, and a value edited back to the card's saved rate exports
       byte-identical bytes (first slice, PR #64).
+- [ ] ST-T06 colors: change a source character's hair or skin color: the preview
+      updates; export and reload keep it. Reset to card restores the saved colors,
+      and a color edited back to the saved rgba exports byte-identical bytes
+      (second slice; no PR number yet).
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates

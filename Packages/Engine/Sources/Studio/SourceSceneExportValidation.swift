@@ -45,7 +45,7 @@ public enum SourceSceneExportValidation {
                 }
                 fallbackName = "Source character \(key)"
             } else {
-                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
+                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
                     throw RigError.invalid("Retained source placeholders cannot contain character references or FK edits.")
                 }
                 fallbackName = original.kind == .folder || (original.character != nil && !routeChild)

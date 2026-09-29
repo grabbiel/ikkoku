@@ -394,6 +394,29 @@ final class StudioModel: ViewportInputHandler {
         doc.objects[i].sourceBodyValues = body
     }
 
+    /// Live preview for color editing. Rebuilds the preview appearance first,
+    /// so a rejected color leaves both preview and document untouched.
+    func setSourceColorEdit(_ id: UUID, colorID: String, rgba: Float4) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Color editing needs a loaded source character.")
+        }
+        var edits = preview.sourceColorEdits ?? [:]
+        edits[colorID] = rgba
+        try preview.setColorEdits(edits.isEmpty ? nil : edits)
+        pushUndo()
+        doc.objects[i].sourceColorEdits = preview.sourceColorEdits
+    }
+
+    /// Remove every color edit so the card's saved colors render again.
+    func resetSourceColorEdits(_ id: UUID) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Color editing needs a loaded source character.")
+        }
+        try preview.setColorEdits(nil)
+        pushUndo()
+        doc.objects[i].sourceColorEdits = nil
+    }
+
     func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
         sourceAnimationCatalog?.entries
             .filter { $0.group == group && (category == nil || $0.category == category) && $0.file != nil }
@@ -437,6 +460,7 @@ final class StudioModel: ViewportInputHandler {
         if sourceInstances[parent.id] == nil, let reference = parent.sourceCharacter {
             let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
             preview.automaticBlink = sourceAutomaticBlink
+            if let edits = parent.sourceColorEdits { try? preview.setColorEdits(edits) }
             sourceInstances[parent.id] = preview
         }
         guard let point = child.sourceAttachmentPoint, let preview = sourceInstances[parent.id] else {
@@ -967,14 +991,24 @@ final class StudioModel: ViewportInputHandler {
                 }
                 edits.kinematics[key] = .init(enableFK: true, enableIK: false, activeFK: groups)
             }
-            if object.sourceFaceValues != nil || object.sourceBodyValues != nil {
-                // Export writes back only the arrays that actually differ from
-                // the embedded card's saved values; an array edited back to the
-                // saved rate produces no card edit and stays byte-identical.
-                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape edits require a loaded source character.") }
+            if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil {
+                // Export writes back only the arrays and colors that actually
+                // differ from the embedded card's saved values; a value edited
+                // back to the saved rate or color produces no card edit and
+                // stays byte-identical. Shape and color edits on one character
+                // merge into one Edits so neither overwrites the other.
+                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape or color edits require a loaded source character.") }
                 let face = object.sourceFaceValues != preview.savedFaceValues ? object.sourceFaceValues : nil
                 let body = object.sourceBodyValues != preview.savedBodyValues ? object.sourceBodyValues : nil
-                if face != nil || body != nil { edits.cards[key] = .init(faceValues: face, bodyValues: body) }
+                var colors: [SourceCharacterCard.ColorEdit] = []
+                for color in preview.draftColors.sorted(by: { $0.id < $1.id }) {
+                    guard let rgba = object.sourceColorEdits?[color.id], rgba != color.rgba,
+                          preview.appliedColorFields.contains(color.id) else { continue }
+                    // draftColors hold the card's saved rgba, so build the
+                    // edit from the document's edited value explicitly.
+                    colors.append(.init(record: color.record, path: color.path, rgba: [rgba.x, rgba.y, rgba.z, rgba.w]))
+                }
+                if face != nil || body != nil || !colors.isEmpty { edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors) }
             }
             if let character = original.character {
                 try SourceStudioIKEditing.appendEdits(objectKey: key, record: character, overrides: object.sourceIKOverrides ?? [:], state: object.sourceKinematics, to: &edits)
@@ -1189,6 +1223,11 @@ final class StudioModel: ViewportInputHandler {
                         else {
                             let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
                             fresh.automaticBlink = sourceAutomaticBlink
+                            // Document color edits (scene reload, undo/redo)
+                            // rebuild the new preview's appearance the way the
+                            // import applied them; a rejected edit keeps the
+                            // card's saved colors rendering.
+                            if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
                             sourceInstances[o.id] = fresh; preview = fresh
                         }
                         let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
