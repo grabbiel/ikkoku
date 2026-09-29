@@ -1,0 +1,9 @@
+{
+  "steps": [
+    {"op": "toggleCamera", "key": 2},
+    {"op": "assert", "activeCamera": null},
+    {"op": "export", "path": ".local/verification/scenario-exports/camera-deactivate.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/camera-deactivate.png"},
+    {"op": "assert", "activeCamera": null}
+  ]
+}

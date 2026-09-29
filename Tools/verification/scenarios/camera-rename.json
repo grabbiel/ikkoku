@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"op": "rename", "key": 0, "name": "IKKOKU-A renamed"},
+    {"op": "export", "path": ".local/verification/scenario-exports/camera-rename.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/camera-rename.png"},
+    {"op": "assert", "key": 0, "name": "IKKOKU-A renamed"}
+  ]
+}
