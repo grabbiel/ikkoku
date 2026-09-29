@@ -218,7 +218,12 @@ exactly `_Color` over the whole surface. Their saved `_Color` is white, which
 is the exported factor. `ItemComponent.UpdateColor` writes the scene record's
 `color[0]` into `_Color` for slot 0 (and pattern values only where the slot
 uses a pattern), so a converted basic shape takes the record's `color[0]` as
-its base color factor; applying it is a later slice. (The first write-up of
+its base color factor; the exported material now carries `itemColorSlot` in
+its `extras` — the fully selected `_ColorMask` channel (0 = `_Color`,
+1 = `_Color2`, 2 = `_Color3`, null when none is fully selected) — plus
+`itemAlphaProperty`: `_alpha` for the alpha shader, so the app can substitute
+the record's saved color and alpha through the exported factor at render time.
+(The first write-up of
 this slice called the mask unbound; the exporter had already read the bound
 mask's pixels, so the exported factor was unaffected.)
 

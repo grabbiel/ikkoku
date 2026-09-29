@@ -125,13 +125,45 @@ matrix, which follows the Studio scale rule (items keep their own saved scale).
 
 The import summary reports `Items rendered from the converted catalog: N;
 unmapped keys: …`. A headless run importing `koikatu_cs0002591.png` with the
-private catalog renders its 19 cube (0/0/1) props at their saved transforms with
-no unmapped keys, and original-scene export of that preview still succeeds.
+private catalog renders its 19 cube (0/0/1) props at their saved transforms and
+saved record colors (every one of the 19 records `color[0]` as the same
+0.875 grey at alpha 1) with no unmapped keys, and original-scene export of that
+preview still succeeds.
 
-Not applied yet: item colors, patterns, animation, FK and dynamics (the exported
-cube/cylinder carry only the verified base-color contract; their uniform
-red `_ColorMask` makes the record's `color[0]` the whole-surface tint through
-`_Color`, see the [renderer reference](../renderer.md)). An item's `childRoot` sub-transform,
-where its children attach, is not modeled — children attach to the item root.
-`ST-T04` continues to track item materials/patterns, animation, FK/dynamics and
-accessory attachment frames.
+Not applied yet: patterns, line, emission, light cancel, animation, FK and
+dynamics. An item's `childRoot` sub-transform, where its children attach, is
+not modeled — children attach to the item root. `ST-T04` continues to track
+item materials/patterns, animation, FK/dynamics and accessory attachment frames.
+
+## Record colors and alpha (added 2026-09-29, ST-T04 third slice)
+
+The exported basic-shape materials carry two new `extras` entries,
+`itemColorSlot` and `itemAlphaProperty` (see the
+[renderer reference](../renderer.md)): the fully selected `_ColorMask` channel
+(0 = `_Color`, 1 = `_Color2`, 2 = `_Color3`, null when no channel is fully
+selected) and, for the alpha shader only, `_alpha`. `SourceStudioItemColor.tint`
+maps those extras and the item record to a tint — `record.colors[slot]` and
+`record.alpha` — and the frame builder applies them to the imported part.
+
+The record color REPLACES the exported base factor (the serialized `_Color`)
+and the record alpha REPLACES the exported base alpha (the serialized `_alpha`),
+as `UpdateColor` overwrites both material properties at runtime. The color takes
+the same `RGB.linear` conversion as any native color: CharaStudio is a
+gamma-space project, so the saved Unity `Color` components are already in the
+space the serialized `_Color` factor was exported in. `Toon.metal` scales the
+base alpha by the sampled texture alpha exactly as the source
+`_MainTex.a · _alpha` contract does. (The basic shapes serialize white and
+alpha 1, so replacing and multiplying agree for them; replacing is the recovered
+behavior for any other value.) The record's colors and alpha ride along in `sourceItemAssets`,
+so the frame builder never re-reads the scene file.
+
+A part whose material exports no color slot — a partial or multi-channel
+`_ColorMask` selection, where no single record color can be the tint — keeps
+its exported material untouched rather than guessing. In `koikatu_cs0002591.png`
+that path is provably harmless: both exported basic shapes mask pure red, so
+the exported factor is white and only the record color changes pixels. A
+headless A/B of the same scene with and without those extras (captures are
+otherwise bit-identical run to run) changes 103517 sampled pixels: 102917
+inside the cube footprint (pixels a cube-free capture also changes) and 600
+edge pixels within 6 px of it, none isolated, with the tinted/plain ratio
+sitting on 0.88 — the sRGB round trip of the saved 0.875 grey.

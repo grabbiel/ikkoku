@@ -34,14 +34,20 @@ class ConversionTests(unittest.TestCase):
                                         {"_Cutoff": 0.5, "_Mode": 3}, None, None)
         self.assertEqual(result["baseColorFactor"], [1, 1, 1, 1])
         self.assertEqual((result["alphaMode"], result["alphaCutoff"], result["doubleSided"]), ("MASK", 0.25, True))
+        self.assertIsNone(result["itemColorSlot"])  # black mask: _Color is unused, no record slot
 
     def test_item_studio_color_mask_channel_selects_its_color_group(self):
         colors = {"_Color": [0.25, 0.5, 0.625, 1], "_Color2": [0, 1, 0, 1], "_Color3": [1, 0, 1, 1]}
         # Full red channel must select _Color exactly, ignoring _Color2/_Color3.
         red = item_material_contract("Shader Forge/main_item_studio", colors, {}, {(255, 0, 0, 255)}, None)
         self.assertEqual(red["baseColorFactor"], [0.25, 0.5, 0.625, 1])
+        self.assertEqual(red["itemColorSlot"], 0)  # _Color -> record colors[0]
+        green = item_material_contract("Shader Forge/main_item_studio", colors, {}, {(0, 255, 0, 255)}, None)
+        self.assertEqual(green["baseColorFactor"], [0, 1, 0, 1])
+        self.assertEqual(green["itemColorSlot"], 1)  # _Color2 -> record colors[1]
         blue = item_material_contract("Shader Forge/main_item_studio", colors, {}, {(0, 0, 255, 255)}, None)
         self.assertEqual(blue["baseColorFactor"], [1, 0, 1, 1])
+        self.assertEqual(blue["itemColorSlot"], 2)  # _Color3 -> record colors[2]
 
     def test_item_studio_refuses_ambiguous_color_masks(self):
         colors = {"_Color": [1, 0, 0, 1], "_Color2": [0, 1, 0, 1], "_Color3": [0, 0, 1, 1]}
@@ -49,6 +55,23 @@ class ConversionTests(unittest.TestCase):
             item_material_contract("Shader Forge/main_item_studio", colors, {}, {(255, 0, 0, 255), (0, 255, 0, 255)}, None)
         with self.assertRaisesRegex(ValueError, "blends"):  # half r + half g cannot name one group
             item_material_contract("Shader Forge/main_item_studio", colors, {}, {(128, 128, 0, 255)}, None)
+
+    def test_item_color_slot_requires_a_fully_selected_channel(self):
+        colors = {"_Color": [0.2, 0.4, 0.6, 1], "_Color2": [0, 1, 0, 1], "_Color3": [0, 0, 1, 1]}
+        # A partial weight cannot name one channel even when the tint is white.
+        partial = item_material_contract("Shader Forge/main_item_studio", {}, {}, {(128, 0, 0, 255)}, None)
+        self.assertEqual(partial["baseColorFactor"], [1, 1, 1, 1])
+        self.assertIsNone(partial["itemColorSlot"])
+        # A fully selected channel names its slot even when the serialized color is white.
+        plain = item_material_contract("Shader Forge/main_item_studio", {}, {}, {(255, 0, 0, 255)}, None)
+        self.assertEqual(plain["baseColorFactor"], [1, 1, 1, 1])
+        self.assertEqual(plain["itemColorSlot"], 0)
+        # Alpha shader: slot and the record-driven _alpha property are both reported.
+        alpha = item_material_contract("Shader Forge/main_item_studio_alpha", colors, {"_alpha": 0.5},
+                                       {(0, 255, 0, 255)}, None)
+        self.assertEqual(alpha["itemColorSlot"], 1)
+        self.assertEqual(alpha["itemAlphaProperty"], "_alpha")
+        self.assertNotIn("itemAlphaProperty", item_material_contract("Shader Forge/main_item_studio", {}, {}, None, None))
 
     def test_item_studio_mask_refuses_fractional_forward_coverage(self):
         # 64 <= _MainTex.a byte < 128 survives the constant discard but blends with 2*sat(2a)-1 < 1.

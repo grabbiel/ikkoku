@@ -9,6 +9,7 @@ import Studio
 import Assets
 import CryptoKit
 import Gameplay
+import ShaderTypes
 
 enum PoseMode: String, CaseIterable, Identifiable { case object = "Object", fk = "FK", ik = "IK"; var id: String { rawValue } }
 
@@ -140,8 +141,10 @@ final class StudioModel: ViewportInputHandler {
     /// placeholder stays a `.folder` with no `assetFile`/`itemID`, so original
     /// export is unaffected and only the preview draws the asset's parts.
     /// Carries the scene identity and is dropped wherever a document replaces
-    /// the current one.
-    @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String)] = [:]
+    /// the current one. The saved record colors and alpha ride along so the
+    /// frame builder can tint the parts without re-reading the scene file.
+    @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
+        colors: [SIMD4<Float>], alpha: Float)] = [:]
     /// The entry for a still-valid placeholder: the same scene-identity guard
     /// as the route caches, so a stale id after undo or object deletion reads
     /// as absent everywhere.
@@ -640,7 +643,7 @@ final class StudioModel: ViewportInputHandler {
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
         var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
-        var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String)] = [:]
+        var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String, colors: [SIMD4<Float>], alpha: Float)] = [:]
         var loadedItemAssets: [String: LoadedAsset] = [:]
         var unmappedItemKeys: [String: Int] = [:]
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
@@ -704,7 +707,8 @@ final class StudioModel: ViewportInputHandler {
                         loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url)
                     }
                     object.name = "\(asset.name) (source item \(record.sourceKey))"
-                    itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path)
+                    itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
+                        colors: item.colors, alpha: item.alpha)
                 } catch {
                     object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
                     if error is KoikatsuLayoutError { unmappedItemKeys[itemKey, default: 0] += 1 }
@@ -747,7 +751,7 @@ final class StudioModel: ViewportInputHandler {
             }
             let unmappedText = unmapped.isEmpty ? "none" : unmapped.joined(separator: ", ")
             diagnostics.append("Items rendered from the converted catalog: \(itemAssets.count); unmapped keys: \(unmappedText).")
-            diagnostics.append("Item colors, patterns, animation, FK and dynamics are not applied.")
+            diagnostics.append("Saved record colors and alpha are applied for basic shapes whose exported material carries a recorded color slot; patterns, line, emission, light cancel, animation, FK and dynamics are not applied.")
         }
         imported.sourcePreviewDiagnostics = diagnostics
         try imported.validateHierarchy()
@@ -1204,12 +1208,28 @@ final class StudioModel: ViewportInputHandler {
                 // converted asset (import-time `IKKOKU_STUDIO_ITEM_CATALOG`)
                 // draws its parts like `case .item`, at this entry's world
                 // matrix — the saved scale rule — with the same objectID so
-                // picking selects the placeholder. Saved record colours,
-                // patterns, animation, FK and dynamics are not applied.
+                // picking selects the placeholder. The exported material's
+                // `itemColorSlot`/`itemAlphaProperty` extras replace the
+                // serialized `_Color`/`_alpha` with the record's saved color
+                // and alpha, as `UpdateColor` does at runtime; patterns,
+                // animation, FK and dynamics are not applied.
                 if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
                    let a = library.asset(entry.path) {
                     for part in a.parts {
-                        let mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
+                        let tint = SourceStudioItemColor.tint(colors: entry.colors, alpha: entry.alpha,
+                            extras: part.material.extras)
+                        var mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
+                        if let tint {
+                            // The exported factor is the serialized `_Color`
+                            // (and, for BLEND, `_alpha`); UpdateColor replaces
+                            // both, so the record values replace the factor
+                            // rather than multiplying it. Toon.metal outputs
+                            // `baseColor.w × tex.a`, the `_MainTex.a · _alpha`
+                            // contract.
+                            let c = tint.color.linear
+                            mat.uniforms.baseColor.x = c.x; mat.uniforms.baseColor.y = c.y; mat.uniforms.baseColor.z = c.z
+                            if let alpha = tint.alpha { mat.uniforms.baseColor.w = alpha }
+                        }
                         let model = world * part.worldMatrix
                         var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
                         ri.order = 35
