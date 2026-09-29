@@ -177,9 +177,103 @@ loads the `p_cf_body_bone` prefab. Neck lookType values are 0 ANIMATION,
 
 `ikkoku-inspect look-data <scene.png> [studio-look-settings.json]` reports all
 of the above per character, including the effective pattern's state name.
-Not done here: no gaze solver, no `AnimationCurve` evaluation and no look
-capture into the preview; that remains part of the wider `ST-T07` controller
-integration.
+Not done here: no gaze solver and no `AnimationCurve` evaluation. The capture
+below records what the original controllers produce at runtime; replaying it
+in the preview remains part of the wider `ST-T07` controller integration.
+
+### Original look capture
+
+`Tools/reverse/fixtures/OriginalCharacterProbe.cs` gained an optional look
+mode. With a `look-patterns.tsv` in the plugin folder — one row per phase as
+`neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z` — it calls
+`ChangeLookNeckPtn`/`ChangeLookEyesPtn` and records at each frame's
+`WaitForEndOfFrame` the phase index, `Time.frameCount`, `deltaTime`, the
+camera position (information only), the target position, per neck bone
+(`cf_j_neck`, `cf_j_head`) the internal `angleH`/`angleV`/`fixAngle` plus the
+bone's local/world rotation and the calculator `nowAngle`/`calcLerp`/
+`lookType`, and per eye the resolved transform name with its local rotation
+and `angleH`/`angleV` plus the calculator `angleHRate`/`angleVRate`, into
+`look-trace.json`. Without the tsv every existing output stays
+byte-identical. `original_character_probe.py --look-patterns` uploads the tsv
+after the compile step and accepts neck 0–4, eyes 0–3 and 1–600 frames per
+row.
+
+Two capture conditions are load-bearing. The fixture is created only after
+CharaStudio's own scene load finishes — look mode first waits up to 3600
+frames for `Camera.main` to appear, then 60 settled frames — because that
+scene load destroys every non-persistent object, and a fixture created
+earlier is gone before look mode runs. Each phase then moves one dedicated
+probe GameObject `IkkokuLookTarget` through
+`ChangeLookNeckTarget(0, trf)`/`ChangeLookEyesTarget(0, trf)`; `Camera.main`
+is never moved, because Studio's camera controller owns it and overwrites
+its transform. In this build the resolved eye transforms are runtime objects
+named `EyeTargetL`/`EyeTargetR` under `cf_J_Eye_tx_L/R`, not the
+`cf_J_Eye_rz_L/R` bones.
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07i/run1 --look-patterns .local/stt07i/look-patterns.tsv
+# after the player reports done:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_character_probe.py \
+  --output .local/stt07i/run1 --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/summarize_look_trace.py \
+  .local/stt07i/run1
+```
+
+`Tools/reverse/summarize_look_trace.py` reports per phase and track the
+first frame whose onward per-frame rotation change stays below 0.01°
+(`never` = still moving in the last recorded frame), the largest
+single-frame step, the angle between the first and last recorded rotation,
+and each neck bone's angular deviation from its own `fixAngle`. The
+2026-09-28 capture under `.local/stt07i/run1` ran six phases over 450
+frames — phases 0–1 neck 1 eyes 1 (こっち/TARGET) at targets `(0, 1.4, 1.5)`
+and `(1.2, 1.8, 1.2)`, phase 2 neck 2 eyes 3 (あっち/そらす, both AWAY),
+phase 3 neck 0 eyes 0 (正面/FORWARD), phase 4 neck 4 eyes 2 (固定？/制御,
+FIX/CONTROL) and phase 5 neck 3 eyes 1 (アニメ依存/こっち):
+
+| phase | neck/eyes ptn | track | settle frame | max step ° | settled angle ° | fixAngle dev ° |
+|---|---|---|---|---|---|---|
+| 0 | 1 / 1 | cf_j_neck | 0 | 0.000 | 0.000 | 0.000 |
+| 0 | 1 / 1 | cf_j_head | 30 | 0.907 | 2.089 | 0.000 |
+| 0 | 1 / 1 | EyeTargetL | 20 | 0.174 | 0.664 | — |
+| 0 | 1 / 1 | EyeTargetR | 20 | 0.174 | 0.664 | — |
+| 1 | 1 / 1 | cf_j_neck | 86 | 0.178 | 4.228 | 0.000 |
+| 1 | 1 / 1 | cf_j_head | never | 1.617 | 38.708 | 0.000 |
+| 1 | 1 / 1 | EyeTargetL | never | 4.937 | 14.115 | — |
+| 1 | 1 / 1 | EyeTargetR | never | 6.628 | 21.807 | — |
+| 2 | 2 / 3 | cf_j_neck | never | 1.329 | 42.074 | 0.000 |
+| 2 | 2 / 3 | cf_j_head | never | 1.861 | 58.620 | 0.000 |
+| 2 | 2 / 3 | EyeTargetL | 0 | 0.000 | 0.000 | — |
+| 2 | 2 / 3 | EyeTargetR | 0 | 0.000 | 0.000 | — |
+| 3 | 0 / 0 | cf_j_neck | 58 | 1.569 | 36.480 | 0.000 |
+| 3 | 0 / 0 | cf_j_head | 58 | 0.833 | 19.340 | 0.000 |
+| 3 | 0 / 0 | EyeTargetL | 10 | 0.894 | 2.569 | — |
+| 3 | 0 / 0 | EyeTargetR | 10 | 0.900 | 2.581 | — |
+| 4 | 4 / 2 | cf_j_neck | 0 | 0.000 | 0.000 | 0.000 |
+| 4 | 4 / 2 | cf_j_head | 0 | 0.000 | 0.000 | 0.000 |
+| 4 | 4 / 2 | EyeTargetL | never | 0.468 | 8.575 | — |
+| 4 | 4 / 2 | EyeTargetR | never | 0.468 | 8.587 | — |
+| 5 | 3 / 1 | cf_j_neck | 0 | 0.000 | 0.000 | 0.000 |
+| 5 | 3 / 1 | cf_j_head | 0 | 0.000 | 0.000 | 0.000 |
+| 5 | 3 / 1 | EyeTargetL | 33 | 1.354 | 2.995 | — |
+| 5 | 3 / 1 | EyeTargetR | 28 | 1.210 | 2.668 | — |
+
+Notable readings: the near-center `TARGET` phase settles the head by frame
+30 and both eyes by frame 20, while tracking the off-center target never
+quite stops; `FIX` keeps computing `nowAngle` `[11.36, -60]` while both
+neck bones hold identity rotation and `fixAngle` never changes (deviation
+0.000 on every frame); eyes `AWAY` freezes `angleH`/`angleV` at their
+carried-over values instead of animating away; eyes `CONTROL` never settles,
+drifting about 8.6° over its 60 recorded frames (biggest single-frame step
+0.468°); and neck `ANIMATION` moves no neck bone at all — its pose comes
+from the body animation, which this trace does not record independently.
+
+Limits: the capture runs on a plain `ChaControl` fixture created through
+`Manager.Character.CreateFemale`, not an `OCIChar` under Studio management;
+only direct transform targets are driven, so the card `eyesTargetType` and
+target-rate fields and Studio's eyes pattern 4 target guide are not
+exercised; neck pattern 5 and eyes patterns 4–7 stay outside the driver's
+accepted ranges. This is recorded ground truth, not a ported solver.
 
 ## Reproducible verification
 
