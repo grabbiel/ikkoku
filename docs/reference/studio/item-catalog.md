@@ -97,11 +97,41 @@ that key before selecting a native converted asset. A native asset identifier
 must not be guessed from a display name or numeric suffix.
 
 The separate `KoikatsuLayoutImporter` resolves explicit catalog mappings to local
-glTF/GLB props. The mixed original-scene preview still imports source items as
-unrendered named nodes; the chair lookup and the two converted basic-shape
-props do not establish arbitrary item restoration. `ST-T04` tracks integrating
-exact-key converted props into that preview importer with item
-materials/patterns, animation, FK/dynamics and accessory attachment frames —
-the exported cube/cylinder carry only the verified base-color contract, not
-saved item colors or patterns. Test a mixed character/item hierarchy and retain
-unresolved source keys explicitly.
+glTF/GLB props (its key and path rules are the `KoikatsuAssetResolver`). The
+chair lookup and the two converted basic-shape props do not establish arbitrary
+item restoration. Test a mixed character/item hierarchy and retain unresolved
+source keys explicitly.
+
+## Preview item rendering (added 2026-09-29, ST-T04 second slice)
+
+`StudioModel.importSourceScenePreview` now draws source item props in the mixed
+preview when `IKKOKU_STUDIO_ITEM_CATALOG` names a `KoikatsuAssetCatalog` version
+1 file. The catalog is resolved once with `KoikatsuAssetResolver` (the same key
+and path rules as `KoikatsuLayoutImporter`); a catalog error becomes one
+diagnostic and the import continues with unrendered placeholders. For each
+`.item` record the key is resolved and `library.importStaticAsset(url:)` runs at
+import time, so a load failure is a per-item diagnostic and an unresolved or
+unloadable key stays an unrendered named node.
+
+This is **runtime-only**, exactly like source cameras: the placeholder entry
+stays kind `.folder` with no `assetFile`/`itemID` and its saved
+`sourcePreviewName`/`sourceRecordKind`, so `SourceSceneExportValidation` keeps
+passing and original export is unaffected. The resolved asset path is held in a
+`sourceItemAssets` map carrying the scene SHA-256, cleared wherever
+`sourceCameras` is cleared. In the frame builder a guarded `.folder` placeholder
+emits the asset's parts like a native `.item` (same `order`, bounds and
+`objectID` so picking selects the placeholder) at the placeholder's world
+matrix, which follows the Studio scale rule (items keep their own saved scale).
+
+The import summary reports `Items rendered from the converted catalog: N;
+unmapped keys: …`. A headless run importing `koikatu_cs0002591.png` with the
+private catalog renders its 19 cube (0/0/1) props at their saved transforms with
+no unmapped keys, and original-scene export of that preview still succeeds.
+
+Not applied yet: item colors, patterns, animation, FK and dynamics (the exported
+cube/cylinder carry only the verified base-color contract, and the
+basic-shape materials carry the open color-mask question in the
+[renderer reference](../renderer.md)). An item's `childRoot` sub-transform,
+where its children attach, is not modeled — children attach to the item root.
+`ST-T04` continues to track item materials/patterns, animation, FK/dynamics and
+accessory attachment frames.

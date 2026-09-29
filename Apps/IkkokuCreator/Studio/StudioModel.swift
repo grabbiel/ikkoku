@@ -135,6 +135,13 @@ final class StudioModel: ViewportInputHandler {
     /// looks through the camera object. Carries the scene identity and is
     /// dropped wherever a document replaces the current one.
     @ObservationIgnored private var sourceCameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
+    /// Item placeholders whose CharaStudio key resolved to a converted asset
+    /// (`IKKOKU_STUDIO_ITEM_CATALOG`). Runtime-only like `sourceCameras`: the
+    /// placeholder stays a `.folder` with no `assetFile`/`itemID`, so original
+    /// export is unaffected and only the preview draws the asset's parts.
+    /// Carries the scene identity and is dropped wherever a document replaces
+    /// the current one.
+    @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String)] = [:]
     /// The entry for a still-valid placeholder: the same scene-identity guard
     /// as the route caches, so a stale id after undo or object deletion reads
     /// as absent everywhere.
@@ -492,8 +499,8 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); sourceItemAssets.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); sourceItemAssets.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -617,10 +624,25 @@ final class StudioModel: ViewportInputHandler {
             sourceAnimationCatalogError = nil
         }
         let handPatternsPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"]
+        // The converted item catalog is opt-in; a broken catalog is one
+        // diagnostic and every item record stays an unrendered placeholder.
+        var itemResolver: KoikatsuAssetResolver?
+        if let itemCatalogPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ITEM_CATALOG"] {
+            let itemCatalogURL = URL(fileURLWithPath: itemCatalogPath)
+            do {
+                let itemCatalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(contentsOf: itemCatalogURL))
+                itemResolver = try KoikatsuAssetResolver(catalog: itemCatalog, directory: itemCatalogURL.deletingLastPathComponent())
+            } catch {
+                diagnostics.append("Item catalog \(itemCatalogPath) not loaded: \(error)")
+            }
+        }
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
         var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
+        var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String)] = [:]
+        var loadedItemAssets: [String: LoadedAsset] = [:]
+        var unmappedItemKeys: [String: Int] = [:]
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
             object.parent = parent; object.visible = record.visible; object.sourceObjectKey = record.sourceKey
@@ -671,6 +693,23 @@ final class StudioModel: ViewportInputHandler {
                 object.name = record.name ?? "Source camera \(record.sourceKey)"
                 cameras[object.id] = (sceneSHA256: hash, objectKey: record.sourceKey, name: object.name)
                 diagnostics.append("Camera \(record.sourceKey) (\"\(object.name)\") available for look-through.")
+            } else if record.kind == .item, let item = record.item, let resolver = itemResolver {
+                // The placeholder stays a `.folder` with no `assetFile`/`itemID`
+                // (original export requires it); the frame builder draws the
+                // converted parts from the runtime-only `sourceItemAssets` map.
+                let itemKey = KoikatsuAssetResolver.key(group: item.group, category: item.category, no: item.no)
+                do {
+                    let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
+                    if loadedItemAssets[asset.url.path] == nil {
+                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url)
+                    }
+                    object.name = "\(asset.name) (source item \(record.sourceKey))"
+                    itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path)
+                } catch {
+                    object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
+                    if error is KoikatsuLayoutError { unmappedItemKeys[itemKey, default: 0] += 1 }
+                    diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering: \(error)")
+                }
             } else if record.kind != .folder {
                 object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
                 // A route's `childRoot` is resolved every frame, so a non-character
@@ -699,6 +738,17 @@ final class StudioModel: ViewportInputHandler {
             activeCameraAtLoad = cameraID
             diagnostics.append("Camera \(key) (\"\(cameras[cameraID]!.name)\") active at load (saved active flag).")
         }
+        if itemResolver != nil {
+            var unmapped: [String] = []
+            for key in unmappedItemKeys.keys.sorted(by: { a, b in
+                a.split(separator: "/").map { Int($0) ?? 0 }.lexicographicallyPrecedes(b.split(separator: "/").map { Int($0) ?? 0 })
+            }) {
+                unmapped.append("\(key) ×\(unmappedItemKeys[key]!)")
+            }
+            let unmappedText = unmapped.isEmpty ? "none" : unmapped.joined(separator: ", ")
+            diagnostics.append("Items rendered from the converted catalog: \(itemAssets.count); unmapped keys: \(unmappedText).")
+            diagnostics.append("Item colors, patterns, animation, FK and dynamics are not applied.")
+        }
         imported.sourcePreviewDiagnostics = diagnostics
         try imported.validateHierarchy()
         // Published before the bounds walk so attachment matrices through a
@@ -715,7 +765,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -747,7 +797,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); sourceItemAssets.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }
@@ -1150,6 +1200,23 @@ final class StudioModel: ViewportInputHandler {
                 lightGlyphs.append((p - Float3(0, 0.08, 0), p + Float3(0, 0.08, 0)))
                 lightGlyphs.append((p, p + (o.savedCamera?.forward ?? Float3(0, 0, -1)) * 0.3))
             case .folder:
+                // A placeholder whose CharaStudio item key resolved to a
+                // converted asset (import-time `IKKOKU_STUDIO_ITEM_CATALOG`)
+                // draws its parts like `case .item`, at this entry's world
+                // matrix — the saved scale rule — with the same objectID so
+                // picking selects the placeholder. Saved record colours,
+                // patterns, animation, FK and dynamics are not applied.
+                if let entry = sourceItemAssets[o.id], entry.sceneSHA256 == doc.sourceSceneSHA256,
+                   let a = library.asset(entry.path) {
+                    for part in a.parts {
+                        let mat = MaterialBuilder.itemMaterial(for: part, asset: a, tint: nil, emissive: 0)
+                        let model = world * part.worldMatrix
+                        var ri = RenderItem(mesh: part.mesh, material: mat, model: model, objectID: objectID)
+                        ri.order = 35
+                        items.append(ri)
+                        bounds.expand(part.bounds.transformed(by: model))
+                    }
+                }
                 // A character under a route keeps this placeholder entry (see
                 // the import); its preview rides `childRoot` through the world
                 // walk above. Only the saved record's animation is evaluated —
