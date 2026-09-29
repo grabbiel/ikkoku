@@ -58,3 +58,41 @@ private var layoutCatalog: KoikatsuAssetCatalog {
     let camera = KoikatsuSceneSnapshot(version: "1.0.4.2", roots: [layoutRecord(kind: .camera)], objectSectionEndOffset: 0)
     #expect(throws: KoikatsuLayoutError.self) { try KoikatsuLayoutImporter.convert(camera, catalog: layoutCatalog, catalogDirectory: directory) }
 }
+
+@Test func KoikatsuAssetResolverResolvesAbsoluteAndRelativePaths() throws {
+    let catalog = KoikatsuAssetCatalog(version: 1, items: [
+        .init(group: 2, category: 13, no: 73, name: "Chair", file: "chair/chair.gltf"),
+        .init(group: 0, category: 0, no: 1, name: "Cube", file: "/converted/cube.glb"),
+    ])
+    let resolver = try KoikatsuAssetResolver(catalog: catalog, directory: URL(fileURLWithPath: "/local"))
+    let relative = try resolver.resolve(group: 2, category: 13, no: 73)
+    #expect(relative.name == "Chair")
+    #expect(relative.url == URL(fileURLWithPath: "/local/chair/chair.gltf"))
+    let absolute = try resolver.resolve(group: 0, category: 0, no: 1)
+    #expect(absolute.name == "Cube")
+    #expect(absolute.url == URL(fileURLWithPath: "/converted/cube.glb"))
+}
+
+@Test func KoikatsuAssetResolverRejectsInvalidReferencesAndDuplicates() throws {
+    let directory = URL(fileURLWithPath: "/local")
+    func resolver(_ file: String) throws -> KoikatsuAssetResolver {
+        try KoikatsuAssetResolver(catalog: KoikatsuAssetCatalog(version: 1, items: [
+            .init(group: 2, category: 13, no: 73, name: "Chair", file: file)]), directory: directory)
+    }
+    #expect(throws: KoikatsuLayoutError.self) { try resolver("https://example.invalid/chair.glb").resolve(group: 2, category: 13, no: 73) }
+    #expect(throws: KoikatsuLayoutError.self) { try resolver("chair/chair.fbx").resolve(group: 2, category: 13, no: 73) }
+    #expect(throws: KoikatsuLayoutError.self) { try resolver("").resolve(group: 2, category: 13, no: 73) }
+    var missingError: KoikatsuLayoutError?
+    do { try resolver("chair/chair.gltf").resolve(group: 0, category: 1, no: 11) }
+    catch let error as KoikatsuLayoutError { missingError = error }
+    #expect(missingError?.description.contains("0/1/11") == true)
+    #expect(throws: KoikatsuLayoutError.self) { try resolver("chair/chair.gltf").resolve(group: 9, category: 9, no: 9) }
+    #expect(throws: KoikatsuLayoutError.self) {
+        try KoikatsuAssetResolver(catalog: KoikatsuAssetCatalog(version: 1, items: [
+            .init(group: 2, category: 13, no: 73, name: "Chair", file: "a.gltf"),
+            .init(group: 2, category: 13, no: 73, name: "Chair again", file: "b.glb")]), directory: directory)
+    }
+    #expect(throws: KoikatsuLayoutError.self) {
+        try KoikatsuAssetResolver(catalog: KoikatsuAssetCatalog(version: 2, items: []), directory: directory)
+    }
+}

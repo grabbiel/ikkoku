@@ -123,6 +123,10 @@ set:
       through on a camera placeholder switches between the camera object and the saved
       scene camera (runtime only; export rewrites every camera's `active` byte only after
       a switch).
+- [ ] ST-T04 source props: with `IKKOKU_STUDIO_ITEM_CATALOG` set, import
+      koikatu_cs0002591: the 19 basic cubes render at their saved transforms
+      (diagnostics report `Items rendered from the converted catalog: 19; unmapped keys:
+      none.`); the placeholders stay exportable and export still succeeds (runtime only).
 - [ ] CMT-04 and R1/R2: source draw-material overlays render in the live preview as in
       the matched captures (PRs #6–#13).
 - [ ] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with
