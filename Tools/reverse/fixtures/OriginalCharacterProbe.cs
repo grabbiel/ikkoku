@@ -80,6 +80,27 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                     color.baseColor=i==0 ? new Color(.12f,.28f,.50f,1) : new Color(.12f,.13f,.16f,1);
             }
         }
+        var settingsFile=Path.Combine(folder,"character-settings.tsv");
+        if(File.Exists(settingsFile)) foreach(string line in File.ReadAllLines(settingsFile)) {
+            var fields=line.Split('\t');
+            if(fields.Length!=2) throw new Exception("Unparsable character-settings line: "+line);
+            switch(fields[0]) {
+                case "lipId": file.custom.face.baseMakeup.lipId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "lipColor": file.custom.face.baseMakeup.lipColor=ParseColor(fields[1]);break;
+                case "eyeshadowId": file.custom.face.baseMakeup.eyeshadowId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "eyeshadowColor": file.custom.face.baseMakeup.eyeshadowColor=ParseColor(fields[1]);break;
+                case "hohoAkaRate": file.status.hohoAkaRate=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "nipId": body.nipId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "nipColor": body.nipColor=ParseColor(fields[1]);break;
+                case "underhairId": body.underhairId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "underhairColor": body.underhairColor=ParseColor(fields[1]);break;
+                case "hlUpId": face.hlUpId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "hlUpColor": face.hlUpColor=ParseColor(fields[1]);break;
+                case "hlDownId": face.hlDownId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "hlDownColor": face.hlDownColor=ParseColor(fields[1]);break;
+                default: throw new Exception("Unknown character-settings key: "+fields[0]);
+            }
+        }
         character=Manager.Character.Instance.CreateFemale(null,1,file,true);
         // Moment (a): right after CreateFemale returns, before LoadAsync starts.
         RecordFingers("afterCreateFemale");
@@ -265,6 +286,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         File.WriteAllBytes(Path.Combine(folder,file),readback.EncodeToPNG());Destroy(readback);RenderTexture.active=previous;
     }
     static void Write(BinaryWriter w,Vector3 v){w.Write(v.x);w.Write(v.y);w.Write(v.z);}static void Write(BinaryWriter w,Vector2 v){w.Write(v.x);w.Write(v.y);}
+    static Color ParseColor(string value) { var parts=value.Split(',');if(parts.Length!=4)throw new Exception("Invalid RGBA color: "+value);return new Color(float.Parse(parts[0],CultureInfo.InvariantCulture),float.Parse(parts[1],CultureInfo.InvariantCulture),float.Parse(parts[2],CultureInfo.InvariantCulture),float.Parse(parts[3],CultureInfo.InvariantCulture)); }
     static float[] V(Vector2 v){return new[]{v.x,v.y};}static float[] V(Vector3 v){return new[]{v.x,v.y,v.z};}static float[] V(Vector4 v){return new[]{v.x,v.y,v.z,v.w};}static float[] V(Quaternion v){return new[]{v.x,v.y,v.z,v.w};}static float[] V(Color v){return new[]{v.r,v.g,v.b,v.a};}
     static float[] M(Matrix4x4 m){var a=new float[16];for(int i=0;i<16;i++)a[i]=m[i];return a;}
     static string J(object value) {

@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "build-debug-app",
+      "argv": ["xcodebuild", "-project", "Ikkoku.xcodeproj", "-scheme", "IkkokuCreator", "-configuration", "Debug", "-derivedDataPath", ".local/build", "-destination", "platform=macOS,arch=arm64", "build"],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Compilation and resource bundling only; signing, notarization and clean-user installation are separate tasks (T-T02).",
+      "artifacts": [
+        {"path": ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku", "kind": "built-executable"}
+      ],
+      "timeout": 900
+    },
+    {
+      "id": "startup-mute-capture",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_PLUGIN_PROFILE", "kind": "file"},
+        {"env": "IKKOKU_NATIVE_PLUGIN_MANIFEST", "kind": "file"},
+        {"env": "IKKOKU_MUTE_BACKGROUND_CONFIG", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_SOURCE_PLUGIN_STEPS": "30",
+        "IKKOKU_SOURCE_PLUGIN_DELTA": "0.0333333333",
+        "IKKOKU_APPLICATION_FOCUS": "0,1",
+        "IKKOKU_NATIVE_PLUGIN_REPORT": ".local/verification/captures/mute-gain.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Headless startup must exit before NSApplication finishes launching and still deliver the deferred focus sample; a nonzero exit or a missing report fails this check.",
+      "timeout": 300
+    },
+    {
+      "id": "studio-inspector-capture",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_CAPTURE_UI": ".local/verification/captures/studio-pose.png",
+        "IKKOKU_CAPTURE_UI_MODE": "studio",
+        "IKKOKU_CAPTURE_UI_STUDIO_TAB": "pose",
+        "IKKOKU_CAPTURE_UI_REPORT": ".local/verification/captures/studio-pose.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Runs the Debug app so the Studio source-pose inspector writes the report at IKKOKU_CAPTURE_UI_REPORT, which must then validate (see studio-inspector-validate). The app hooks that read these settings land in PR #5 (branch qwen/st-t01-source-inspectors), not in this branch — expect this check to fail here until that change merges.",
+      "artifacts": [
+        {"path": ".local/verification/captures/studio-pose.json", "kind": "capture-report"}
+      ],
+      "timeout": 300
+    },
+    {
+      "id": "studio-inspector-validate",
+      "argv": ["python3", "Tools/verification/checks/studio_inspector_report.py", ".local/verification/captures/studio-pose.json"],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Validates the report produced by studio-inspector-capture; until the PR #5 app hooks exist, nothing writes that JSON, so this check fails on the absent report — exactly as intended.",
+      "timeout": 120
+    }
+  ]
+}

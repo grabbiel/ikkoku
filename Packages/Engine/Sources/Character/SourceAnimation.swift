@@ -61,6 +61,7 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
             public var dimension: Int { attribute == 2 ? 4 : 3 }
         }
         public let id: String, name: String, startTime: Float, stopTime: Float, sampleRate: Float, loop: Bool
+        public let cycleOffset: Float?
         public let bindings: [Binding], curves: [Curve], unboundPathHashes: [UInt32]
         public var duration: Float { stopTime - startTime }
 
@@ -159,7 +160,7 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
         let indices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) })
         for motion in motions {
             let clip = try clip(id: motion.clipID)
-            var phase = normalizedTime + motion.cycleOffset
+            var phase = normalizedTime + motion.cycleOffset + (clip.cycleOffset ?? 0)
             phase = clip.loop ? phase - floor(phase) : min(max(phase, 0), 1)
             poses.append(try applying(clipID: clip.id, time: clip.startTime + phase * clip.duration,
                 to: rig, baseline: baseline, allowingUnbound: allowingUnbound))
@@ -258,6 +259,7 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
         for clip in clips {
             guard !clip.id.isEmpty, !clip.name.isEmpty, clip.startTime.isFinite, clip.stopTime.isFinite,
                   clip.startTime >= 0, clip.stopTime > clip.startTime, clip.sampleRate.isFinite, clip.sampleRate > 0,
+                  clip.cycleOffset?.isFinite ?? true,
                   !clip.curves.isEmpty, clip.curves.count <= 100000, clip.bindings.count <= 100000 else {
                 throw RigError.invalid("Invalid source animation interval or dimensions.")
             }
