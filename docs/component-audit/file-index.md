@@ -11,13 +11,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**642 files indexed; 642 assigned; 0 unassigned.**
+**645 files indexed; 645 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 112 |
-| [Studio / IK / animation](studio.md) | 112 |
+| [Studio / IK / animation](studio.md) | 115 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 285 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 72 |
 
@@ -25,12 +25,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 88 |
+| Conversion / recovery / verification tool | 90 |
 | Documentation / historical evidence | 52 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 17 |
 | Runtime / shared shader declaration | 145 |
-| Test / validation | 114 |
+| Test / validation | 115 |
 
 ## App / gameplay / plugins
 
@@ -291,6 +291,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_reference.py](../../Tools/reverse/analysis/dynamics_reference.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/eye_look_reference.py](../../Tools/reverse/analysis/eye_look_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/neck_look_reference.py](../../Tools/reverse/analysis/neck_look_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/neck_target_angle.py](../../Tools/reverse/analysis/neck_target_angle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/original_animation_reference.py](../../Tools/reverse/analysis/original_animation_reference.py) | Conversion / recovery / verification tool |
@@ -302,11 +303,13 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/studio_scene_contract.py](../../Tools/reverse/analysis/studio_scene_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_animation_playback_contract.py](../../Tools/reverse/analysis/test_animation_playback_contract.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_reference.py](../../Tools/reverse/analysis/test_dynamics_reference.py) | Test / validation |
+| [Tools/reverse/analysis/test_eye_look_reference.py](../../Tools/reverse/analysis/test_eye_look_reference.py) | Test / validation |
 | [Tools/reverse/analysis/test_neck_look_reference.py](../../Tools/reverse/analysis/test_neck_look_reference.py) | Test / validation |
 | [Tools/reverse/analysis/test_neck_target_angle.py](../../Tools/reverse/analysis/test_neck_target_angle.py) | Test / validation |
 | [Tools/reverse/analysis/trigonometric_ik_contract.py](../../Tools/reverse/analysis/trigonometric_ik_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/animation_assets.py](../../Tools/reverse/animation_assets.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_dynamics_probe.py](../../Tools/reverse/compare_dynamics_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_eye_look.py](../../Tools/reverse/compare_eye_look.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_hand_patterns.py](../../Tools/reverse/compare_hand_patterns.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_neck_look.py](../../Tools/reverse/compare_neck_look.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/dynamics_contract.py](../../Tools/reverse/dynamics_contract.py) | Conversion / recovery / verification tool |

@@ -619,6 +619,150 @@ What the port does not yet have is preview wiring: no caller feeds it a
 live camera target, the frame's own head rotation and the bones' current
 `angleH`, so TARGET/AWAY still render the animated pose.
 
+### Eye look solver
+
+The eyes have their own calculator, `EyeLookCalc.EyeUpdateCalc`, whose rules
+the look capture pinned down and `analysis/eye_look_reference.py` reproduces
+in Python (no Swift port in this slice). One frame, in execution order:
+
+- `deltaTime == 0` returns the carried state untouched — no rotation, no
+  `num5` (the reference returns `None` rotation fields).
+- The target resolution runs once per frame for both eyes: non-TARGET types
+  first push a closer-than-`nearDis` target out to `normalize(v) · nearDis`;
+  the horizontal check `Angle((v.x, root.forward.y, v.z), forward)` and the
+  vertical check `Angle((root.forward.x, v.y, v.z), forward)` against
+  `hAngleLimit`/`vAngleLimit` (both strict `>`) switch the frame to FORWARD,
+  whose aim is the point `forntTagDis` ahead of the `frontCorrect` node (the
+  rootNode child at local position 0, local euler (5,0,0) — 5° pitched
+  down).
+- With `correct == 1` and a TARGET/FORWARD frame, the aim goes through the
+  `trfCenter` eye-target frame: `InverseTransformPoint(target)` with z
+  clamped to ≥0.5, then a frame at the center facing the clamped point
+  (`LookRotation` of the normalized direction, up rebuilt as
+  `Cross(Cross(up, n), n)`) places the per-eye targets at
+  `±centerEyeLength` (0.05) along its x — left eye −, right eye +. The
+  offsets therefore ride the frame's tilt, and the two eyes read unequal
+  azimuths to a dead-ahead target.
+- Per eye the direction `normalize(aim − eyePos)` into the parent's frame
+  gives `angleH` = signed angle of `referenceLookDir` to it about
+  `referenceUpDir`, and `angleV` = the angle between the direction and its
+  own projection with `referenceUpDir` dropped, measured about
+  `Cross(referenceUpDir, direction)` — a target below the reference plane
+  reads positive, so "up" on this axis is upBendingAngle (−30 captured) and
+  "down" is downBendingAngle (10).
+- Bending per axis: dead-band past `thresholdAngleDifference`, then
+  `max(|excess| · |bendingMultiplier|, |angle| − maxAngleDifference) ·
+  sign(angle) · sign(multiplier)` (captured 0.4 and 10: the branches cross
+  at |angle| = 16.667, so `h = 15 → 6`, `h = 40 → 30`); clamps then
+  `minBendingAngle..maxBendingAngle` (−36..23) on the left eye's horizontal
+  and its mirror −`maxBendingAngle`..−`minBendingAngle` (−23..36) on the
+  right — asymmetric ranges, which the capture's opposite-sign eye pairs
+  confirm — while both eyes share `upBendingAngle..downBendingAngle`.
+- AWAY replaces the horizontal through the sorasi branch: with `num5` at
+  its frame-local −1, the previous and measured angles' coordinates
+  `a = Lerp(−1, 1, InverseLerp(−maxBending, −minBending, angle))` are
+  compared; within `sorasiRate` (1.0) of each other f is remapped from a
+  coordinate pushed `sorasiRate` off the measured one (so a demand close to
+  the current angle overshoots to ±1 coordinate past it), farther apart f
+  keeps the previous angle; either way `num5` arms to the clamped
+  coordinate and then determines f alone through
+  `Lerp(−maxBending, −minBending, num5)` — a sticky saturated end that only
+  the frame-local reset releases. The left eye arms, the right eye reads.
+  AWAY also negates the bent vertical angle.
+- Smoothing `angleH += (f − angleH) · clamp01(dt · leapSpeed)` per axis;
+  the look direction is `AngleAxis(angleH, referenceUpDir) ·
+  AngleAxis(angleV, Cross(referenceUpDir, referenceLookDir))` applied to
+  `referenceLookDir`; `OrthoNormalize` against `referenceUpDir` yields the
+  tangent that `Vector3.Slerp(dirUp, tangent, dt · 5)` eases the carried
+  `dirUp` toward, and a second `OrthoNormalize(look, dirUp)` yields the
+  normal. The writeback is
+  `local = LookRotation(normal, dirUp) · inv(LookRotation(referenceLookDir,
+  referenceUpDir)) · origRotation`, world = parent · local.
+
+`compare_eye_look.py` replays all eight phases of the run1 look capture
+(570 frames, phases 0-based, patterns [1,1,3,0,1,1,2,1]) one frame at a
+time from the recorded state of the frame before (angleH/angleV from its
+`eyes.eyes[i]`, dirUp from its `geometry.eyes[i].dirUp`) with the replayed
+frame's own geometry, target and deltaTime; frame 0 starts warm and is
+reported seed-only (0.247°). Maxima per phase and eye (degrees, frames of
+the maximum):
+
+| phase | lookType | eye | \|ΔangleH\| | \|ΔangleV\| | localRotation | dirUp |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | TARGET | L | 0.000472 (2) | 0.000208 (56) | 0.000473 (2) | 0.000208 (56) |
+| 0 | TARGET | R | 0.000188 (1) | 0.000180 (51) | 0.000218 (51) | 0.000180 (51) |
+| 1 | TARGET | L | 0.000021 (175) | 0.000208 (175) | 0.000210 (175) | 0.000208 (175) |
+| 1 | TARGET | R | 0.000020 (94) | 0.000203 (178) | 0.000205 (178) | 0.000203 (178) |
+| 2 | AWAY | L | 1.427047 (189) | 0.217204 (203) | 1.429340 (189) | 0.217164 (203) |
+| 2 | AWAY | R | 1.422877 (189) | 0.224451 (203) | 1.425252 (189) | 0.224406 (203) |
+| 3 | FORWARD | L | 0.000017 (328) | 0.000008 (288) | 0.000017 (328) | 0.000008 (288) |
+| 3 | FORWARD | R | 0.000150 (328) | 0.000009 (310) | 0.000150 (328) | 0.000009 (310) |
+| 4 | TARGET | L | 0.001063 (367) | 0.000003 (341) | 0.001062 (367) | 0.000011 (330) |
+| 4 | TARGET | R | 0.001059 (367) | 0.000003 (341) | 0.001059 (367) | 0.000011 (330) |
+| 5 | TARGET | L | 0.000013 (442) | 0.000184 (442) | 0.000185 (442) | 0.000184 (442) |
+| 5 | TARGET | R | 0.000024 (421) | 0.000104 (449) | 0.000104 (449) | 0.000103 (449) |
+| 6 | CONTROL | L | 40.360349 (450) | 3.158244 (450) | 40.473714 (450) | 3.265856 (450) |
+| 6 | CONTROL | R | 27.987746 (450) | 2.998246 (450) | 28.141165 (450) | 3.060185 (450) |
+| 7 | TARGET | L | 0.000006 (516) | 0.000014 (541) | 0.000126 (527) | 0.000126 (527) |
+| 7 | TARGET | R | 0.000005 (515) | 0.000020 (541) | 0.000082 (526) | 0.000081 (526) |
+
+Five of the eight phases (all TARGET ones except phase 4, and FORWARD)
+match at ≤4.7e-4° against a 1e-3° angle target, and the rotation error
+tracks the angle error to <1e-6 wherever the angles match — the writeback
+adds nothing measurable. Two facts came out of the replay itself:
+
+- The replay is sensitive to the recorded state chain: replaying from a
+  frame's own recorded state (instead of the frame before) pins the state
+  inputs but hides upstream errors; the frame-before chain is what makes
+  the horizontal offset in phase 0 — the R eye a sustained +1.8e-4° from
+  its very first frame, the L eye alternating +2.8e-4° with −4.7e-4°
+  across its opening frames, both settling to +1…3e-4° — a live-model
+  difference, not noise.
+- Phase 4 sits a hair over target (0.001063°): the predicted `|angleH|`
+  exceeds the recorded one by ≈7e-4° at the phase start (7.7e-4° at frame
+  330, both eyes, the sign following each eye's own angle sign) and the
+  gap widens as the angle settles — by frame 367 both eyes record exactly
+  0.000000 where the prediction still holds ±0.001063, so the recorded
+  angle reaches zero a touch earlier than this chain does. The bend-chain
+  multiplier 0.4 (float32 0.40000000596…) against the |angle| − 10 branch
+  near the capture's operating azimuth is the suspected rule line; per the
+  slice's stop-tuning rule the comparator reports it as a miss with its
+  first frames instead of the offset being absorbed.
+
+Not ported or not verified, and kept out of the claims:
+
+- **NO_LOOK** (and the `fixAngle` it would write) is never exercised by the
+  capture; the reference raises a diagnostic error there.
+- **AWAY (phase 2)** misses at 1.43° horizontal / 0.22° vertical: the
+  recorded per-eye internals are completely frozen for all 90 frames —
+  identical `angleH` (0.9121025 / 0.8422239), `angleV` (−0.1336779 /
+  −0.1425089), `localRotation` and `dirUp` on every frame despite
+  `deltaTime` varying 0.0040–0.0314 s and the head yawing 97.5° (frame
+  269's `eyeCalc.rootNode` vs frame 180's) — while the predicted chain
+  moves every frame. Tuning stopped
+  per the rule; the suspected rule lines are AWAY's writeback or
+  the capture's recording of the eye internals in this phase, not the
+  sorasi branch (its armed `num5` 0.8921611 reproduces frame-for-frame
+  under this geometry).
+- **CONTROL (phase 6)** misses at 40.4°: both recorded channels follow a
+  slow exponential toward a fixed hold instead of the front point — every
+  frame-to-frame step of the whole phase is reproduced by blending toward
+  angleH = 0.0000 / angleV = +2.0356 at rate 2.5 (the implied horizontal
+  target is 0.0000 with worst |implied target| 0.00003° over all 60 frame
+  pairs and both eyes; the implied vertical is constant to 1e-4;
+  `deltaTime` 0.0042–0.0314 s), and 2.5 is AWAY's captured leapSpeed, not
+  CONTROL's own 42.5. The prediction instead aims at the front point at
+  42.5: the horizontal swings negative (−33.891 / −21.531 at frame 450)
+  where the record decays +6.469 → +0.532, and the vertical front-point
+  elevation oscillates +1.78…+3.70 where the record creeps +0.374 →
+  +1.899. Suspected rule lines: whose leapSpeed and which hold target the
+  original actually applied in this phase (the record reads as a stale
+  AWAY-rate blend toward a fixed angle pair); unresolved, reported by the
+  comparator.
+- **No Swift port, and nothing wired**: this slice ends at the Python
+  reference, its 32 unit tests and the comparator; the Studio preview
+  still shows the animated pose for the eyes.
+
 ## Reproducible verification
 
 ```sh
