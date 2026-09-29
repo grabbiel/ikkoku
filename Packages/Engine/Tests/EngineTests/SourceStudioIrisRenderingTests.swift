@@ -199,11 +199,11 @@ private func defaults(
     // SourceRig stores (u, 1 - v) over upright textures, so a Unity sample
     // at v_u * sy + oy must land on native 1 - that: v_n * sy + (1 - sy - oy).
     let st = SourceStudioIrisRendering.nativeST(scale: SIMD2(2, 3), offset: SIMD2(0.25, 0.1))
-    #expect(st == Float4(2, 3, 0.25, 1 - 3 - 0.1))
+    #expect(st == SIMD4<Float>(2, 3, 0.25, 1 - 3 - 0.1))
     for v in [0.0, 0.3, 1.0] {
         let unity = v * 3 + 0.1                      // Unity V sample of Unity v
         let native = (1 - v) * 3 + Double(st.w)      // native V sample of native 1 - v
         #expect(abs(native - (1 - unity)) < 1e-6)
     }
-    #expect(SourceStudioIrisRendering.nativeST(scale: SIMD2(1, 1), offset: .zero) == Float4(1, 1, 0, 0))
+    #expect(SourceStudioIrisRendering.nativeST(scale: SIMD2(1, 1), offset: .zero) == SIMD4<Float>(1, 1, 0, 0))
 }
