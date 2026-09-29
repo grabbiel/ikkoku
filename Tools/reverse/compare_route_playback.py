@@ -48,6 +48,63 @@ def vector(row, field):
     return list(value)
 
 
+def segment_timing(times, frames, meta, native):
+    """Where the original childRoot comes nearest each route point, per loop cycle,
+    against the native segment boundaries from ikkoku-inspect's segmentDurations.
+
+    The capture records each point object's world position and the childRoot world
+    position in Unity space, so nearest approach is a direct distance. For looping
+    routes the native boundaries repeat every period (the sum of the segment
+    durations), so per-cycle arrival drift becomes visible.
+    """
+    entries = {entry['sourceKey']: entry for entry in native(times[0])['segmentDurations'] or []}
+    table = {}
+    for name, expected in meta.items():
+        entry = entries.get(expected['dicKey'])
+        points = expected['points']
+        if entry is None or not all(isinstance(point, dict) and 'worldPosition' in point for point in points):
+            continue  # fake fixtures without captured point transforms or durations report no timing
+        durations, start_indices = entry['durations'], entry['startIndices']
+        if len(durations) != len(start_indices) or start_indices != sorted(set(start_indices)) \
+                or start_indices[0] != 0 or sum(durations) <= 0:
+            raise ValueError(f'Native segment boundaries are not usable for {name}')
+        period = sum(durations)
+        bounds = [0.0]
+        for duration in durations:
+            bounds.append(bounds[-1]+duration)
+        segment_at = {start: index for index, start in enumerate(start_indices)}
+        cycles = int(times[-1]//period)+1 if expected['loop'] else 1
+        rows = []
+        for index, point in enumerate(points):
+            boundary = segment_at.get(index)
+            arrivals = []
+            for cycle in range(cycles):
+                low, high = (cycle*period, (cycle+1)*period) if expected['loop'] else (0.0, math.inf)
+                best_distance = best_frame = None
+                for frame_index, seconds in enumerate(times):
+                    if not low <= seconds < high:
+                        continue
+                    distance = math.dist(frames[frame_index][name]['position'], point['worldPosition'])
+                    if best_distance is None or distance < best_distance:
+                        best_distance, best_frame = distance, frame_index
+                # Only report a true pass-through: the childRoot's world path goes
+                # through every route point, so anything farther apart than one
+                # frame's travel is a window edge (capture too short for this
+                # cycle), not an arrival.
+                if best_frame is None or not best_distance <= 2*abs(times[1]-times[0]):
+                    continue
+                # Only a segment start has an exact native boundary time; a
+                # linked curve chain passes through its interior points mid
+                # segment, so their lag against a boundary is not measurable.
+                target = bounds[boundary]+cycle*period if boundary is not None else None
+                arrivals.append(dict(cycle=cycle, nativeArrivalSeconds=target, originalNearestFrame=best_frame,
+                                     originalNearestSeconds=times[best_frame], distanceMetres=best_distance,
+                                     signedLagSeconds=times[best_frame]-target if target is not None else None))
+            rows.append(dict(pointDicKey=point.get('dicKey'), segmentIndex=boundary, arrivals=arrivals))
+        table[name] = dict(segmentDurations=durations, periodSeconds=period, points=rows)
+    return table
+
+
 def compare(probe, evaluate):
     meta = {route['expectedName']: route for route in probe['routes']}
     if len(meta) != len(probe['routes']):
@@ -63,7 +120,8 @@ def compare(probe, evaluate):
 
     def native(seconds):
         if seconds not in reports:
-            by_name = {route['name']: route for route in evaluate(seconds)['routes']}
+            payload = evaluate(seconds)
+            by_name = {route['name']: route for route in payload['routes']}
             if set(by_name) != set(meta):
                 raise ValueError(f'Native route names differ at t={seconds}')
             for name, route in by_name.items():
@@ -71,7 +129,7 @@ def compare(probe, evaluate):
                 if route['sourceKey'] != expected['dicKey'] or route['loop'] != expected['loop'] \
                         or route['orientation'] != expected['orientation'] or route['pointCount'] != len(expected['points']):
                     raise ValueError(f'Native/original route identity differs at t={seconds}')
-            reports[seconds] = by_name
+            reports[seconds] = dict(routes=by_name, segmentDurations=payload.get('segmentDurations'))
         return reports[seconds]
 
     diagnostics = {}
@@ -79,7 +137,7 @@ def compare(probe, evaluate):
     for seconds, frame in zip(times, probe['trace']):
         row = {}
         for name in meta:
-            recorded, route = frame[keys[name]], native(seconds)[name]
+            recorded, route = frame[keys[name]], native(seconds)['routes'][name]
             for message in route['diagnostics']:
                 diagnostics[message] = diagnostics.get(message, 0) + 1
             rotation = vector(recorded, 'rotation')
@@ -99,7 +157,7 @@ def compare(probe, evaluate):
                 shifted = index + offset
                 if not 0 <= shifted < len(times):
                     continue
-                sampled = native(times[shifted])[name]
+                sampled = native(times[shifted])['routes'][name]
                 error = math.dist(cell['position'], vector(sampled, 'childRootWorldPosition'))
                 rotation = angle_degrees(cell['rotation'], unity_from_euler_zxy(vector(sampled, 'childRootWorldRotationEulerZXY')))
                 position_error = max(position_error, error)
@@ -116,6 +174,7 @@ def compare(probe, evaluate):
         offsets.append(dict(offset=offset, routes=table,
                             maximumPositionErrorMetres=max(row['maximumPositionErrorMetres'] for row in table.values())))
     best = min(offsets, key=lambda entry: (entry['maximumPositionErrorMetres'], offsets.index(entry)))
+    timing = segment_timing(times, frames, meta, native)
     routes = {}
     for name, expected in meta.items():
         inactive = [index for index, row in enumerate(frames) if not row[name]['active']]
@@ -128,9 +187,12 @@ def compare(probe, evaluate):
                      atOffset0=offsets[OFFSETS.index(0)]['routes'][name])
         chosen = best['routes'][name]
         entry['atBestOffset'] = dict(offset=best['offset'], **chosen)
+        entry['maximumPositionErrorMetresByOffset'] = {
+            str(entry['offset']): round(entry['routes'][name]['maximumPositionErrorMetres'], 9) for entry in offsets}
         routes[name] = entry
     return dict(schemaVersion=1, frames=len(frames), evaluatedTimes=len(reports), routes=routes,
-                bestConstantFrameOffset=best['offset'], offsetScan=offsets, nativeDiagnostics=diagnostics,
+                bestConstantFrameOffset=best['offset'], offsetScan=offsets, segmentTiming=timing,
+                nativeDiagnostics=diagnostics,
                 scope='Native ikkoku-inspect route-playback versus original per-frame childRoot world placement; '
                       'rotation compared as quaternions reconstructed from the emitted Z-X-Y Euler angles; '
                       'original LookUpdate smoothing is not simulated by the native evaluator')

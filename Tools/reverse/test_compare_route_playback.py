@@ -20,7 +20,7 @@ def probe_trace():
     return dict(schemaVersion=1, routes=routes, trace=trace)
 
 
-def native(delay=0.0, source_key=None):
+def native(delay=0.0, source_key=None, segment_durations=None):
     def evaluate(seconds):
         angle = 36*(seconds+delay)
         return dict(routes=[
@@ -29,7 +29,7 @@ def native(delay=0.0, source_key=None):
                  childRootWorldPosition=[seconds+delay, 0, 0], childRootWorldRotationEulerZXY=[0, 0, 0]),
             dict(name='IKKOKU-B', sourceKey=3, loop=False, orientation=1, pointCount=4, diagnostics=['kept'], active=True,
                  childRootWorldPosition=[-(seconds+delay), 0, 0], childRootWorldRotationEulerZXY=[angle, 0, 0]),
-        ])
+        ], segmentDurations=segment_durations)
     return evaluate
 
 
@@ -64,6 +64,54 @@ class RoutePlaybackComparisonTests(unittest.TestCase):
         self.assertLess(rotated_error, 1e-4)
         skewed = compare(probe_trace(), native(delay=DT/36*90))  # 36 degrees/second * delay = 45 degrees of skew
         self.assertGreater(skewed['routes']['IKKOKU-B']['atOffset0']['maximumRotationErrorDegrees'], 40)
+
+    def test_per_offset_table_and_empty_segment_timing(self):
+        result = compare(probe_trace(), native(delay=DT))
+        self.assertEqual(result['bestConstantFrameOffset'], -1)
+        for entry in result['routes'].values():
+            by_offset = entry['maximumPositionErrorMetresByOffset']
+            self.assertEqual(set(by_offset), {'-2', '-1', '0', '1', '2'})
+            self.assertAlmostEqual(by_offset['0'], DT)
+            self.assertEqual(by_offset[str(result['bestConstantFrameOffset'])],
+                             entry['atBestOffset']['maximumPositionErrorMetres'])
+        # The fake fixture emits no captured point transforms, so no timing table.
+        self.assertEqual(result['segmentTiming'], {})
+
+    def test_segment_timing_arrivals_against_native_boundaries(self):
+        timed = probe_trace()
+        # Route A's childRoot path runs along +x one unit/second. Point 3 sits
+        # far enough ahead that the 2.5 s capture never passes it.
+        positions = ([0, 0, 0], [1, 0, 0], [2.5, 0, 0], [6, 0, 0])
+        timed['routes'][0]['points'] = [dict(dicKey=k, worldPosition=position)
+                                        for k, position in enumerate(positions)]
+        durations = [dict(sourceKey=0, startIndices=[0, 2], durations=[2.0, 2.0])]
+        result = compare(timed, native(segment_durations=durations))
+        self.assertEqual(list(result['segmentTiming']), ['IKKOKU-A'])  # B: no durations entry
+        table = result['segmentTiming']['IKKOKU-A']
+        self.assertEqual(table['segmentDurations'], [2.0, 2.0])
+        self.assertEqual(table['periodSeconds'], 4.0)
+        rows = table['points']
+        self.assertEqual(rows[0]['arrivals'][0]['signedLagSeconds'], 0.0)
+        # Point 1 is a linked chain interior: nearest approach is known but no
+        # exact native boundary exists, so its lag is not measurable.
+        self.assertIsNone(rows[1]['segmentIndex'])
+        self.assertEqual(rows[1]['arrivals'][0]['originalNearestSeconds'], 1.0)
+        self.assertIsNone(rows[1]['arrivals'][0]['signedLagSeconds'])
+        # The original passes point 2 at 2.5 s while the native segment boundary
+        # is at 2.0 s: the drift shows up as a signed lag.
+        self.assertEqual(rows[2]['segmentIndex'], 1)
+        self.assertEqual(rows[2]['arrivals'][0]['nativeArrivalSeconds'], 2.0)
+        self.assertEqual(rows[2]['arrivals'][0]['signedLagSeconds'], 0.5)
+        # Point 3 is never reached inside the 2.5 s capture window.
+        self.assertEqual(rows[3]['arrivals'], [])
+
+    def test_unusable_segment_boundaries_raise(self):
+        timed = probe_trace()
+        timed['routes'][0]['points'] = [dict(dicKey=k, worldPosition=[k, 0, 0]) for k in range(4)]
+        for durations in ([dict(sourceKey=0, startIndices=[2, 0], durations=[2.0, 2.0])],
+                          [dict(sourceKey=0, startIndices=[1], durations=[2.0])]):
+            with self.assertRaises(ValueError):
+                compare(timed, native(segment_durations=durations))
 
     def test_identity_and_finite_violations_raise(self):
         with self.assertRaises(ValueError):

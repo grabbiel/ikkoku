@@ -18,9 +18,9 @@ private func amount(_ position: SIMD3<Float>, rotation: SIMD3<Float> = .zero,
 
 private func routePoint(_ position: SIMD3<Float>, rotation: SIMD3<Float> = .zero, speed: Float = 2,
                         easeType: Int32 = 21, aid: SIMD3<Float>? = nil,
-                        linked: Bool = false) -> KoikatsuRoutePointRecord {
+                        linked: Bool = false, connection: Int32 = 0) -> KoikatsuRoutePointRecord {
     .init(bone: .init(sourceKey: 1, transform: amount(position, rotation: rotation)), speed: speed,
-          easeType: easeType, connection: 0, aid: .init(sourceKey: 0, transform: amount(aid ?? .zero)),
+          easeType: easeType, connection: connection, aid: .init(sourceKey: 0, transform: amount(aid ?? .zero)),
           aidInitialized: aid != nil, linked: linked)
 }
 
@@ -214,6 +214,41 @@ func placementsKeepWorldScale() throws {
         pointLocals: SourceStudioRoutePlayback.pointLocals(from: unplayable), elapsed: 1)
     #expect(diagnostics.contains { $0.contains("no playable duration") })
     #expect(approximately(unplayablePin.scaleFactors, expectedScale))
+}
+
+@Test("the playback aid composes through the curve point's local transform")
+func playbackAidComposesThroughPointLocal() throws {
+    // Route IKKOKU-B point dicKey 8 as captured from the original: the aid
+    // transform is Point-local under a point rotated -15 degrees about Y, so
+    // the curve must bend through the composed route-local aid.
+    let record = routeRecord([
+        routePoint([0.8, 0.2, 0.6], rotation: SIMD3(0, -15, 0), aid: SIMD3(-0.2683783, 0.675, -0.3895974),
+                   connection: 1),
+        routePoint([2, 0.4, 0]),
+    ])
+    // The evaluator runs in Unity route-local space; the route-local aid
+    // verified against the original capture for this point is
+    // (0.6416017, 0.875, 0.1542164).
+    let expected = try SourceStudioRoute(points: [
+        .init(position: [0.8, 0.2, 0.6], aid: [0.6416017, 0.875, 0.1542164], connection: .curve),
+        .init(position: [2, 0.4, 0]),
+    ], loop: false).evaluate(at: 1).position
+    let expectedTranslation = UnityCoordinates.position(SIMD3<Float>(Float(expected.x), Float(expected.y), Float(expected.z)))
+    let (played, diagnostics) = SourceStudioRoutePlayback.childRootWorld(
+        route: record, routeWorld: matrix_identity_float4x4,
+        pointLocals: SourceStudioRoutePlayback.pointLocals(from: record), elapsed: 1)
+    #expect(diagnostics.isEmpty)
+    #expect(approximately(played.translation, expectedTranslation, tolerance: 0.00001))
+
+    // The pre-fix composition used the raw Point-local aid, which bends the
+    // curve far away: 1 s is inside this segment, so the expectation above
+    // must not coincide with the buggy placement.
+    let buggy = try SourceStudioRoute(points: [
+        .init(position: [0.8, 0.2, 0.6], aid: [-0.2683783, 0.675, -0.3895974], connection: .curve),
+        .init(position: [2, 0.4, 0]),
+    ], loop: false).evaluate(at: 1).position
+    let buggyTranslation = SIMD3<Float>(Float(buggy.x), Float(buggy.y), -Float(buggy.z))
+    #expect(simd_distance(played.translation, buggyTranslation) > 0.1)
 }
 
 @Test("snapshot sampling pins the fixture scene's inactive route to its first point")

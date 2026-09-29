@@ -96,8 +96,10 @@ public enum SourceStudioRoutePlayback {
                     throw RigError.invalid("Route point \(index) has unknown ease type \(point.easeType).")
                 }
                 let position = unityWorldPosition(routeWorld * locals[index])
+                // The aid transform is Point-local (its localPosition under the
+                // route point), so it composes through the point's local matrix.
                 let aid = point.aidInitialized
-                    ? unityWorldPosition(routeWorld * localMatrix(point.aid.transform)) : nil
+                    ? unityWorldPosition(routeWorld * locals[index] * localMatrix(point.aid.transform)) : nil
                 points.append(.init(position: position, aid: aid, connection: connection,
                                     linked: point.linked, speed: Double(point.speed), easeType: easeType))
             }
