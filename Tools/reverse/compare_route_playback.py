@@ -198,13 +198,85 @@ def compare(probe, evaluate):
                       'original LookUpdate smoothing is not simulated by the native evaluator')
 
 
+def compare_stepped(probe, steps, continuous=None):
+    """Per-frame stepping comparison: feed the capture's own ``deltaTime``
+    sequence through ``ikkoku-inspect route-steps`` and report the same
+    position/rotation maxima as :func:`compare`, but with no frame-offset
+    search — the stepper reproduces the tween's per-frame rules instead of
+    being sampled in continuous time.
+
+    Row 0's ``deltaTime`` is the ``Play`` frame's and the original tween never
+    consumed it, so the CLI runs over ``deltas[1:]`` and capture row ``k``
+    (``0 <= k <= N-2``) is compared with stepped frame ``k``: the capture
+    snapshots at the start of the frame after that frame's tween update read
+    the write of the previous frame, whose time accumulated through row
+    ``k``'s predecessor. The last row's post-update state was never recorded.
+    """
+    meta = {route['expectedName']: route for route in probe['routes']}
+    if len(meta) != len(probe['routes']):
+        raise ValueError('Duplicate original route names')
+    deltas = [frame['deltaTime'] for frame in probe['trace']]
+    if not deltas or not all(math.isfinite(delta) and delta >= 0 for delta in deltas):
+        raise ValueError('Trace deltaTimes must be finite and non-negative')
+    keys = {name: 'a' if name.endswith('-A') else 'b' for name in meta}
+    payload = steps(deltas[1:])
+    by_name = {route['name']: route for route in payload['routes']}
+    if set(by_name) != set(meta):
+        raise ValueError('Native stepped route names differ')
+    routes = {}
+    for name, expected in meta.items():
+        stepped = by_name[name]
+        if stepped['sourceKey'] != expected['dicKey'] or stepped['loop'] != expected['loop'] \
+                or stepped['orientation'] != expected['orientation'] or stepped['pointCount'] != len(expected['points']):
+            raise ValueError(f'Native stepped route identity differs for {name}')
+        frames = stepped['frames']
+        if len(frames) != len(deltas)-1:
+            raise ValueError(f'Stepped frame count differs for {name}')
+        position_error = rotation_error = 0.0
+        worst_frame = active_mismatch = 0
+        for index, cell in enumerate(frames):
+            if not all(math.isfinite(component) for component in cell['childRootWorldPosition']):
+                raise ValueError('Nonfinite stepped position')
+            recorded = probe['trace'][index][keys[name]]
+            error = math.dist(recorded['position'], cell['childRootWorldPosition'])
+            rotation = angle_degrees(vector(recorded, 'rotation'),
+                                     unity_from_euler_zxy(cell['childRootWorldRotationEulerZXY']))
+            if error > position_error:
+                position_error, worst_frame = error, index
+            rotation_error = max(rotation_error, rotation)
+            if cell['active'] != recorded['active']:
+                active_mismatch += 1
+        entry = dict(sourceKey=expected['dicKey'], name=name, orientation=expected['orientation'],
+                     loop=expected['loop'], pointCount=len(expected['points']),
+                     framesCompared=len(frames),
+                     maximumPositionErrorMetres=position_error, worstFrame=worst_frame,
+                     maximumRotationErrorDegrees=rotation_error, framesActiveMismatch=active_mismatch,
+                     diagnostics=stepped['diagnostics'])
+        if continuous is not None:
+            entry['maximumPositionErrorMetresContinuous'] = \
+                continuous['routes'][name]['atOffset0']['maximumPositionErrorMetres']
+            entry['maximumRotationErrorDegreesContinuous'] = \
+                continuous['routes'][name]['atOffset0']['maximumRotationErrorDegrees']
+        routes[name] = entry
+    return dict(schemaVersion=1, frames=len(deltas), framesCompared=len(deltas)-1, routes=routes,
+                scope='Native ikkoku-inspect route-steps (per-frame tween rules over the capture deltaTimes, '
+                      'write-after-update order) versus original per-frame childRoot world placement; '
+                      'rotation compared as quaternions reconstructed from the emitted Z-X-Y Euler angles; '
+                      'original LookUpdate rotation smoothing is not simulated by the stepper')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe', type=Path, default=REPO/'.local/stt11c/probe')
     parser.add_argument('--cli', type=Path, default=REPO/'Packages/Engine/.build/debug/ikkoku-inspect')
     parser.add_argument('--output', type=Path, default=REPO/'.local/stt11c/route-playback-comparison.json')
+    parser.add_argument('--mode', choices=('continuous', 'stepped', 'both'), default='both')
+    parser.add_argument('--stepped-output', type=Path,
+                        default=REPO/'.local/stt11c/route-playback-stepped-comparison.json')
     arguments = parser.parse_args()
     if not arguments.output.resolve().is_relative_to((REPO/'.local').resolve()):
+        raise ValueError('Original-derived reports stay in .local')
+    if not arguments.stepped_output.resolve().is_relative_to((REPO/'.local').resolve()):
         raise ValueError('Original-derived reports stay in .local')
     trace_path = arguments.probe/'route-trace.json'
     scene_path = arguments.probe/'route-scene.png'
@@ -216,12 +288,35 @@ def main():
             raise RuntimeError(result.stderr.strip() or result.stdout.strip())
         return json.loads(result.stdout)
 
-    result = compare(json.loads(trace_path.read_text()), evaluate)
-    result['evidence'] = [dict(path=str(path.resolve()), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
-                          for path in [trace_path, scene_path, Path(__file__)]]
-    arguments.output.parent.mkdir(parents=True, exist_ok=True)
-    arguments.output.write_text(json.dumps(result, indent=2)+'\n')
-    print(json.dumps({key: value for key, value in result.items() if key not in ('offsetScan', 'evidence')}, indent=2))
+    def step(deltas):
+        deltas_path = arguments.stepped_output.parent/'route-steps-deltas.json'
+        if not deltas_path.resolve().is_relative_to((REPO/'.local').resolve()):
+            raise ValueError('Original-derived reports stay in .local')
+        deltas_path.parent.mkdir(parents=True, exist_ok=True)
+        deltas_path.write_text(json.dumps(list(deltas))+'\n')
+        result = subprocess.run([str(arguments.cli), 'route-steps', str(scene_path), str(deltas_path)],
+                                capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+        return json.loads(result.stdout)
+
+    trace = json.loads(trace_path.read_text())
+    evidence = [dict(path=str(path.resolve()), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+                for path in [trace_path, scene_path, Path(__file__)]]
+    continuous = None
+    if arguments.mode in ('continuous', 'both'):
+        continuous = compare(trace, evaluate)
+        continuous['evidence'] = evidence
+        arguments.output.parent.mkdir(parents=True, exist_ok=True)
+        arguments.output.write_text(json.dumps(continuous, indent=2)+'\n')
+        print(json.dumps({key: value for key, value in continuous.items()
+                          if key not in ('offsetScan', 'evidence')}, indent=2))
+    if arguments.mode in ('stepped', 'both'):
+        stepped = compare_stepped(trace, step, continuous=continuous)
+        stepped['evidence'] = evidence
+        arguments.stepped_output.parent.mkdir(parents=True, exist_ok=True)
+        arguments.stepped_output.write_text(json.dumps(stepped, indent=2)+'\n')
+        print(json.dumps(stepped, indent=2))
 
 
 if __name__ == '__main__':

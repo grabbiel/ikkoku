@@ -608,7 +608,173 @@ def evaluate(route: Route, elapsed_seconds: float) -> Evaluation:
 
 
 # ---------------------------------------------------------------------------
-# Synthetic routes plus sampled fixture emission.
+# Per-frame stepping (OCIRoute Play + StudioTween UpdateAsObservable).
+#
+# ``Play`` puts ``childRoot`` at point 0 and starts segment 0 (one
+# ``TweenStart`` ``apply()`` at percentage 0), queuing every later segment.
+# Then every frame while the tween runs, in Update:
+#
+# - ``percentage < 1``: ``TweenUpdate`` FIRST applies the position/aim at the
+#   CURRENT percentage, THEN advances ``runningTime += Time.deltaTime`` and
+#   recomputes ``percentage = runningTime / time`` — the written position
+#   lags the time by one frame;
+# - otherwise: ``TweenComplete`` applies percentage 1; a queued next segment
+#   (or, when looping, segment 0 again) restarts with ``percentage = 0`` and
+#   ``runningTime = 0`` — that frame's overshoot is dropped — and is applied
+#   at percentage 0 in the SAME frame; a non-looping route with nothing left
+#   stops: ``onComplete`` sets the route inactive and ``childRoot`` keeps the
+#   end position and its last aim rotation.
+
+@dataclass(frozen=True)
+class SteppedFrame:
+    """State ``childRoot`` holds after one stepped frame: applied position,
+    last aim (``None`` for a route without orientation) and the active flag
+    ``onComplete`` flips off at the non-loop finish frame."""
+
+    position: Vec
+    aim: Optional[Orientation]
+    active: bool
+
+
+def simulate_frames(points: Sequence[RoutePoint], loop: bool, orientation: str,
+                    frame_deltas: Sequence[float], record_after_update: bool = True) -> list[SteppedFrame]:
+    """Run the recovered per-frame tween rules over ``frame_deltas`` seconds.
+
+    Each entry is one ``Time.deltaTime``. ``record_after_update=True`` models
+    the capture observing the tween write of the SAME frame (the trace frame
+    holds what that frame's Update applied); ``False`` models the capture
+    running first, so each trace frame still holds the PREVIOUS frame's write
+    and the first frame holds ``Play``'s own percentage-0 application. The
+    probe ordering is unknown, so callers try both.
+    """
+    route = Route(points=tuple(points), loop=loop, orient=orientation)
+    segments = build_segments(route)
+    if not segments:
+        raise RouteNotPlayable("route cannot play: no segments were built")
+    for index, delta in enumerate(frame_deltas):
+        if not math.isfinite(delta) or delta < 0:
+            raise RouteNotPlayable(f"deltaTime {delta} at frame {index} is not finite and non-negative")
+
+    def apply(segment_index: int, percentage: float) -> tuple[Vec, Optional[Orientation]]:
+        segment = segments[segment_index]
+        ease = EASING[segment.ease_type]
+        position = interp(segment.control_points, min(max(ease(0, 1, percentage), 0.0), 1.0))
+        aim = None
+        if orientation != "none":
+            ahead = min(1.0, percentage + LOOK_AHEAD)
+            look_target = interp(segment.control_points, min(max(ease(0, 1, ahead), 0.0), 1.0))
+            rotation = look_rotation(position, look_target, orientation)
+            if rotation is not None:
+                # A degenerate aim direction leaves the previous rotation in
+                # place in the original, so only a valid aim replaces it.
+                aim = Orientation(axis=orientation, look_target=look_target, rotation=rotation)
+        return position, aim
+
+    # ``Play``: childRoot at point 0, segment 0 started, percentage 0. The
+    # ``TweenStart`` application at percentage 0 is write 0; a degenerate
+    # instantaneous aim keeps the previous rotation (never point 0's rotation
+    # once the aim has been established).
+    segment_index, running_time, percentage, finished = 0, 0.0, 0.0, False
+    position, aim = segments[0].path[0], None
+
+    def apply_and_hold(index: int, percentage: float) -> None:
+        nonlocal position, aim
+        new_position, new_aim = apply(index, percentage)
+        position = new_position
+        if new_aim is not None:
+            aim = new_aim
+
+    apply_and_hold(0, 0.0)
+    writes: list[tuple[Vec, Optional[Orientation], bool]] = [(position, aim, True)]
+    for delta in frame_deltas:
+        if finished:
+            pass  # tween stopped; childRoot keeps the end placement
+        elif percentage < 1.0:
+            apply_and_hold(segment_index, percentage)  # apply BEFORE advancing time
+            running_time += delta
+            percentage = running_time / segments[segment_index].duration
+        else:
+            apply_and_hold(segment_index, 1.0)  # TweenComplete end point
+            if segment_index + 1 < len(segments):
+                segment_index += 1  # Next: overshoot dropped, applied in the same frame
+                apply_and_hold(segment_index, 0.0)
+                running_time, percentage = 0.0, 0.0
+            elif loop:
+                segment_index = 0  # looping queue restarts the same way
+                apply_and_hold(0, 0.0)
+                running_time, percentage = 0.0, 0.0
+            else:
+                finished = True  # onComplete: route inactive, end placement kept
+        writes.append((position, aim, not finished))
+    # ``writes[0]`` is Play's own application; writes[k+1] is what frame k's
+    # Update left on childRoot. Selecting from the front models a capture
+    # that records before the tween's Update ran that frame.
+    chosen = writes[1:] if record_after_update else writes[:-1]
+    return [SteppedFrame(position=written_position, aim=written_aim, active=written_active)
+            for written_position, written_aim, written_active in chosen]
+
+# Stepping fixture: irregular deltas chosen to cross every per-frame rule on
+# the routes below. ``stepping_routes()``'s no-loop route (segment durations
+# 3.0 s + 7.430112 s) sees a segment-boundary drop, a clamped overshoot frame,
+# completion and hold frames; the loop route (1.5 + 1.5 + 2.121320 s) sees a
+# boundary drop and the same-frame loop restart.
+def _stepping_scenarios() -> dict[str, tuple[Route, tuple[float, ...]]]:
+    """Routes for the per-frame stepping fixture with their irregular frame
+    deltas: a straight looping route in orientation y (segment durations
+    1.5 + 1.5 + 2.121320 s — the deltas cross a boundary drop and the
+    same-frame loop restart) and a line-curve-linked-curve-line route with no
+    loop in orientation xy (3.0 + 7.430112 s — a boundary drop, a clamped
+    overshoot frame, completion and hold frames)."""
+    return {
+        "stepping-line-loop": (Route(
+            points=(_line_point((0, 0, 0), speed=4), _line_point((2, 0, 0), speed=4),
+                    _line_point((2, 2, 0), speed=4)),
+            loop=True, orient="y"),
+            (0.25, 0.5, 0.3, 1.0, 0.1666, 0.05, 0.7, 1.5, 0.3333, 0.2, 1.2, 1.5, 0.4, 0.05)),
+        "stepping-curves-no-loop": (Route(
+            points=(_line_point((0, 0, 0)),
+                    _curve_point((2, 0, 0), (3, 1, 0), speed=1.5, ease="easeInQuad"),
+                    _curve_point((4, 0, 0), (5, 2, 0), link=True),
+                    _line_point((6, 0, 0))),
+            loop=False, orient="xy"),
+            (0.1, 0.05, 0.0166, 0.0333, 0.25, 0.1666, 0.3333, 0.5, 0.1666, 0.7, 0.8,
+             0.9, 1.5, 1.1, 2.0, 1.3, 2.6, 0.1666, 0.05, 0.25, 0.3333, 0.1, 0.5)),
+    }
+
+
+def _stepping_sample(route: Route, deltas: tuple[float, ...]) -> dict[str, object]:
+    """One stepping fixture entry: the route definition, its frame deltas and
+    ``simulate_frames``' write-after-update frames."""
+    frames = simulate_frames(route.points, route.loop, route.orient, deltas)
+    return {
+        "points": [{"position": list(point.position),
+                    "aid": list(point.aid) if point.aid else None,
+                    "connection": point.connection, "link": point.link,
+                    "speed": point.speed, "easeType": point.ease_type}
+                   for point in route.points],
+        "loop": route.loop,
+        "orient": route.orient,
+        "deltas": list(deltas),
+        "frames": [{"position": list(frame.position),
+                    "active": frame.active,
+                    "aim": None if frame.aim is None else {
+                        "axis": frame.aim.axis,
+                        "lookTarget": list(frame.aim.look_target),
+                        "rotation": list(frame.aim.rotation) if frame.aim.rotation is not None else None}}
+                   for frame in frames],
+    }
+
+
+def stepping_fixture() -> dict[str, object]:
+    return {
+        "note": ("Synthetic authored routes with irregular frame deltas; expected "
+                 "per-frame writes come from simulate_frames in this file (float64, "
+                 "record-after-update order), not from an original CharaStudio run."),
+        "tolerance": 1e-5,
+        "routes": {name: _stepping_sample(route, deltas)
+                   for name, (route, deltas) in _stepping_scenarios().items()},
+    }
+
 
 def _line_point(position: Vec, speed: float = DEFAULT_SPEED, ease: str = DEFAULT_EASE) -> RoutePoint:
     return RoutePoint(position=position, aid=None, connection="line", link=False, speed=speed, ease_type=ease)
@@ -691,10 +857,26 @@ def _sample(route: Route, elapsed: float) -> dict[str, object]:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--out", type=Path,
-                        default=REPO / ".local/reverse/studio-routes/route-reference.json",
-                        help="where to write the sampled fixture")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="where to write the sampled fixture (defaults: "
+                             ".local/reverse/studio-routes/route-reference.json for "
+                             "samples, Packages/Engine/Tests/EngineTests/Fixtures/"
+                             "route-stepping.json for stepping)")
+    parser.add_argument("--fixture", choices=("samples", "stepping"), default="samples",
+                        help="write the continuous-evaluator fixture, or the "
+                             "per-frame stepping fixture")
     arguments = parser.parse_args(argv)
+    if arguments.out is None:
+        arguments.out = (REPO / "Packages/Engine/Tests/EngineTests/Fixtures/route-stepping.json"
+                         if arguments.fixture == "stepping"
+                         else REPO / ".local/reverse/studio-routes/route-reference.json")
+
+    if arguments.fixture == "stepping":
+        stepping = stepping_fixture()
+        arguments.out.parent.mkdir(parents=True, exist_ok=True)
+        arguments.out.write_text(json.dumps(stepping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"wrote {arguments.out}")
+        return
 
     fixture: dict[str, object] = {
         "note": ("Synthetic authored routes; expected values come from the "

@@ -1,7 +1,7 @@
 import copy
 import math
 import unittest
-from compare_route_playback import compare, unity_from_euler_zxy
+from compare_route_playback import compare, compare_stepped, unity_from_euler_zxy
 
 DT = 0.5
 SIN45 = math.sin(math.radians(45))
@@ -14,7 +14,7 @@ def probe_trace():
     for index in range(6):
         seconds = index*DT
         half = math.radians(18*seconds)  # matches native()'s 36 degrees/second Z-X-Y Euler X angle
-        trace.append(dict(cumulativeTime=seconds,
+        trace.append(dict(cumulativeTime=seconds, deltaTime=DT,
                           a=dict(position=[seconds, 0, 0], rotation=[0, 0, 0, 1], active=True),
                           b=dict(position=[-seconds, 0, 0], rotation=[math.sin(half), 0, 0, math.cos(half)], active=index < 4)))
     return dict(schemaVersion=1, routes=routes, trace=trace)
@@ -31,6 +31,34 @@ def native(delay=0.0, source_key=None, segment_durations=None):
                  childRootWorldPosition=[-(seconds+delay), 0, 0], childRootWorldRotationEulerZXY=[angle, 0, 0]),
         ], segmentDurations=segment_durations)
     return evaluate
+
+
+def stepped(delay=0.0, source_key=None, active_override=None, frame_count=None,
+            position_override=None):
+    """Stub of `ikkoku-inspect route-steps`: frame `k` reproduces capture row
+    `k` (the CLI is fed ``deltas[1:]``), optionally skewed."""
+    def step(deltas):
+        trace = probe_trace()['trace']
+        count = len(deltas) if frame_count is None else frame_count
+        routes = []
+        for name, key, orientation, loop in (('IKKOKU-A', 'a', 0, True), ('IKKOKU-B', 'b', 1, False)):
+            frames = []
+            for index in range(count):
+                row = trace[min(index, len(trace)-1)][key]
+                position = [row['position'][0]+delay, 0, 0]
+                if position_override is not None:
+                    position = position_override
+                active = row['active'] if active_override is None else active_override
+                euler = [0, 0, 0] if key == 'a' else [36*index*DT, 0, 0]
+                frames.append(dict(deltaTime=deltas[index] if index < len(deltas) else DT,
+                                   active=active, rotationFromAim=key == 'b',
+                                   childRootWorldPosition=position,
+                                   childRootWorldRotationEulerZXY=euler))
+            routes.append(dict(name=name, sourceKey=3 if key == 'b' else (0 if source_key is None else source_key),
+                               loop=loop, orientation=orientation, pointCount=4, diagnostics=[],
+                               frames=frames))
+        return dict(routes=routes)
+    return step
 
 
 class RoutePlaybackComparisonTests(unittest.TestCase):
@@ -132,6 +160,47 @@ class RoutePlaybackComparisonTests(unittest.TestCase):
         changed['trace'][1]['cumulativeTime'] = math.inf
         with self.assertRaises(ValueError):
             compare(changed, native())
+
+
+class SteppedComparisonTests(unittest.TestCase):
+    def test_exact_parity_reports_zero_error_and_no_active_mismatch(self):
+        result = compare_stepped(probe_trace(), stepped())
+        self.assertEqual(result['framesCompared'], 5)  # row 0's deltaTime is Play's, never consumed
+        for entry in result['routes'].values():
+            self.assertEqual(entry['framesCompared'], 5)
+            self.assertEqual(entry['maximumPositionErrorMetres'], 0)
+            # The Z-X-Y Euler decode is float-sensitive; see the note in the
+            # continuous parity test above.
+            self.assertLess(entry['maximumRotationErrorDegrees'], 1e-4)
+            self.assertEqual(entry['framesActiveMismatch'], 0)
+            self.assertNotIn('maximumPositionErrorMetresContinuous', entry)  # no continuous run asked for
+
+    def test_position_skew_and_active_mismatch_are_measured(self):
+        result = compare_stepped(probe_trace(), stepped(delay=DT, active_override=False))
+        for name, entry in result['routes'].items():
+            self.assertAlmostEqual(entry['maximumPositionErrorMetres'], DT)
+            self.assertEqual(entry['framesActiveMismatch'], 4 if name == 'IKKOKU-B' else 5)
+
+    def test_continuous_maxima_are_carried_alongside_stepped_ones(self):
+        continuous = compare(probe_trace(), native())
+        result = compare_stepped(probe_trace(), stepped(), continuous=continuous)
+        for name, entry in result['routes'].items():
+            self.assertEqual(entry['maximumPositionErrorMetresContinuous'],
+                             continuous['routes'][name]['atOffset0']['maximumPositionErrorMetres'])
+            self.assertEqual(entry['maximumRotationErrorDegreesContinuous'],
+                             continuous['routes'][name]['atOffset0']['maximumRotationErrorDegrees'])
+
+    def test_identity_frame_count_and_finite_violations_raise(self):
+        with self.assertRaises(ValueError):  # wrong sourceKey
+            compare_stepped(probe_trace(), stepped(source_key=7))
+        with self.assertRaises(ValueError):  # CLI emitted the wrong frame count
+            compare_stepped(probe_trace(), stepped(frame_count=4))
+        with self.assertRaises(ValueError):  # nonfinite stepped position
+            compare_stepped(probe_trace(), stepped(position_override=[math.nan, 0, 0]))
+        negative = probe_trace()
+        negative['trace'][2]['deltaTime'] = -0.1
+        with self.assertRaises(ValueError):  # invalid trace deltaTime
+            compare_stepped(negative, stepped())
 
 
 if __name__ == '__main__':
