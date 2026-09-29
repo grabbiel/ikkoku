@@ -25,7 +25,10 @@ here.  The vector helpers are the ST-T07n `neck_target_angle` ones.
 """
 from __future__ import annotations
 
+import json
 import math
+import random
+from pathlib import Path
 
 from neck_target_angle import (FORWARD, RIGHT, UP, angle_around_axis,
                                angle_degrees, angle_axis, cross, dot, length,
@@ -443,3 +446,257 @@ def eye_update(*, state: dict, geometry: dict, target: list[float], dt: float,
                         'localRotation': local_rotation,
                         'rotation': multiply_quaternions(parent, local_rotation)})
     return results
+
+
+# ---------------------------------------------------------------------------
+# Synthetic fixture for the Swift engine tests.  Everything below is SYNTHETIC
+# (hand-picked numbers, no original-game capture data) and deterministic: the
+# only randomness is a fixed-seed rng that just jitters a few hand-picked
+# targets by +-0.01.  Run this module with --fixture to write the file.
+# ---------------------------------------------------------------------------
+
+FIXTURE_EYE_TYPES = ('NO_LOOK', 'TARGET', 'AWAY', 'FORWARD', 'CONTROL')
+FIXTURE_BENDING_KEYS = ('thresholdAngleDifference', 'bendingMultiplier', 'maxAngleDifference',
+                        'upBendingAngle', 'downBendingAngle', 'minBendingAngle', 'maxBendingAngle',
+                        'leapSpeed', 'forntTagDis', 'nearDis', 'hAngleLimit', 'vAngleLimit')
+FIXTURE_SETTINGS = {'correct': 1, 'centerEyeLength': 0.05000000074505806, 'sorasiRate': 1.0}
+FIXTURE_DELTAS = (0.0166, 0.0166, 0.033, 0.0166)
+
+
+def fixture_type_states() -> list[dict]:
+    """One synthetic type state per look type, in ptnNo order.  FORWARD keeps
+    its lookType as a {name, value} record so the fixture exercises the union
+    decode; the bending numbers are hand-picked, not the shipped prefab's."""
+    base = dict(thresholdAngleDifference=0.0, bendingMultiplier=0.4000000059604645,
+                maxAngleDifference=10.0, upBendingAngle=-30.0, downBendingAngle=10.0,
+                minBendingAngle=-36.0, maxBendingAngle=23.0, leapSpeed=38.0,
+                forntTagDis=50.0, nearDis=2.0, hAngleLimit=110.0, vAngleLimit=80.0)
+    return [dict(base, lookType='NO_LOOK'),
+            dict(base, lookType='TARGET'),
+            dict(base, lookType='AWAY', leapSpeed=2.5),
+            dict(base, lookType={'name': 'FORWARD', 'value': 3}, leapSpeed=6.0, forntTagDis=2.5),
+            dict(base, lookType='CONTROL', leapSpeed=1.5, minBendingAngle=-25.0, maxBendingAngle=30.0)]
+
+
+def _node(position, rotation=None, lossy_scale=(1.0, 1.0, 1.0)) -> dict:
+    return {'position': [float(component) for component in position],
+            'rotation': list(rotation) if rotation is not None else list(IDENTITY),
+            'lossyScale': [float(component) for component in lossy_scale]}
+
+
+def _eye(position, orig=None, look=(0.0, 0.0, 1.0), up=(0.0, 1.0, 0.0)) -> dict:
+    return {'worldPosition': [float(component) for component in position],
+            'origRotation': list(orig) if orig is not None else list(IDENTITY),
+            'referenceLookDir': [float(component) for component in look],
+            'referenceUpDir': [float(component) for component in up]}
+
+
+def fixture_geometry(root_yaw: float = 20.0, root_position=(0.0, 1.5, 0.0),
+                     center_position=(0.0, 1.5, 0.2), center_scale=(0.868, 0.868, 0.868),
+                     eye_look=(0.0, 0.0, 1.0), eye_up=(0.0, 1.0, 0.0)) -> dict:
+    """The synthetic end-of-frame geometry: a yawed root, a scaled trfCenter
+    and two eyes whose R origRotation is a small yaw (so the predicted local
+    rotation is not a pure function of the angles)."""
+    return {'rootNode': _node(root_position, angle_axis(root_yaw, UP)),
+            'trfCenter': _node(center_position, None, center_scale),
+            'eyes': [_eye((-0.032, 1.6, 0.05), None, eye_look, eye_up),
+                     _eye((0.032, 1.6, 0.05), angle_axis(8.0, UP), eye_look, eye_up)]}
+
+
+def fixture_target(azimuth: float, elevation: float = 0.0, distance: float = 4.0,
+                   root_yaw: float = 20.0, root_position=(0.0, 1.5, 0.0)) -> list[float]:
+    """A synthetic aim point: root position plus azimuth/elevation from the
+    root's forward axis at `distance`."""
+    direction = rotate(angle_axis(azimuth, UP), rotate(angle_axis(elevation, RIGHT), FORWARD))
+    return add(list(root_position), scale(direction, distance))
+
+
+def fixture_start(angle_h: float = 0.0, angle_v: float = 0.0) -> dict:
+    return {'eyes': [{'angleH': angle_h, 'angleV': angle_v, 'dirUp': [0.0, 1.0, 0.0]}
+                     for _ in range(2)]}
+
+
+def _call_geometry(geometry: dict) -> dict:
+    """The flat fixture shape as the geometry `eye_update` consumes: the eye
+    world position enters the reference under the probe's `target.position`
+    key, so wrap it for the call while the fixture keeps one flat field."""
+    return {'eyeCalc': {'rootNode': geometry['rootNode'], 'trfCenter': geometry['trfCenter']},
+            'eyes': [dict(eye, target={'position': eye['worldPosition'],
+                                       'rotation': list(IDENTITY), 'lossyScale': [1.0, 1.0, 1.0]})
+                     for eye in geometry['eyes']]}
+
+
+def run_fixture_sequence(name: str, pattern: int, schedule: list,
+                         geometry: dict | None = None, start: dict | None = None) -> dict:
+    """Walk `schedule` ([(target, deltaTime [, geometry])] entries) through
+    eye_update, carrying the per-eye state from frame to frame exactly like a
+    run, and return the self-contained sequence record (flat geometry + the
+    reference outputs per eye and frame)."""
+    states = fixture_type_states()
+    state = start or fixture_start()
+    sequence = {'name': name, 'pattern': pattern, 'start': state, 'frames': []}
+    for step in schedule:
+        target, dt = step[0], step[1]
+        frame_geometry = step[2] if len(step) > 2 else (geometry or fixture_geometry())
+        results = eye_update(state=state, geometry=_call_geometry(frame_geometry),
+                             target=target, dt=dt, st=states[pattern], settings=FIXTURE_SETTINGS)
+        state = {'eyes': [{'angleH': entry['angleH'], 'angleV': entry['angleV'],
+                           'dirUp': entry['dirUp']} for entry in results]}
+        sequence['frames'].append({
+            'pattern': pattern, 'deltaTime': dt, 'target': list(target),
+            'geometry': frame_geometry,
+            'effectiveLookType': resolve_target(target=target, root=frame_geometry['rootNode'],
+                                                state=states[pattern],
+                                                look_type=FIXTURE_EYE_TYPES[pattern])[0],
+            'outputs': [{key: entry.get(key) for key in
+                         ('angleH', 'angleV', 'dirUp', 'localRotation', 'num5')}
+                        for entry in results]})
+    return sequence
+
+
+def _jitter(rng, point: list[float]) -> list[float]:
+    return [component + rng.uniform(-0.01, 0.01) for component in point]
+
+
+def fixture_sequences() -> list[dict]:
+    """The >= 20 synthetic multi-frame sequences: TARGET steering with the
+    L/R bending-clamp mirroring and vertical clamps, FORWARD (its own type and
+    every limit-switch route), the nearDis push-out on AWAY / FORWARD /
+    CONTROL, all four sorasi routes on AWAY, a zero-dt frame, tilted eye
+    references, a moving root and a non-uniform trfCenter lossyScale.  The
+    targets carry a fixed-seed +-0.01 nudge (seed 20260928, drawn in source
+    order) so the replay checks real numbers instead of values that happen to
+    round; the exact-zero probes (nearDis distances, the on-pivot target) stay
+    unplausible on purpose."""
+    rng = random.Random(20260928)
+
+    def aim(azimuth=0.0, elevation=0.0, distance=4.0, root_yaw=20.0,
+            root_position=(0.0, 1.5, 0.0), exact=False):
+        point = fixture_target(azimuth, elevation, distance, root_yaw, root_position)
+        return point if exact else _jitter(rng, point)
+
+    away_start_right = fixture_start(angle_h=30.0)
+    away_start_left = fixture_start(angle_h=-18.0)
+    away_start_positive = fixture_start(angle_h=10.0)
+    away_start_equal = fixture_start(angle_h=23.0)
+    return [
+        run_fixture_sequence('target-front', 1,
+                             [(aim(), dt) for dt in FIXTURE_DELTAS]),
+        run_fixture_sequence('target-left-mirror', 1,
+                             [(aim(azimuth), 0.2) for azimuth in (70.0, 75.0, 60.0)]),
+        run_fixture_sequence('target-right-mirror', 1,
+                             [(aim(azimuth), 0.2) for azimuth in (-70.0, -75.0, -60.0)]),
+        run_fixture_sequence('target-elevation-clamp', 1,
+                             [(aim(10.0, elevation), 0.3) for elevation in (40.0, -40.0)]),
+        run_fixture_sequence('target-blend-saturate', 1,
+                             [(aim(25.0), 0.5), (aim(-25.0), 1.0)]),
+        # Limit switches: the state's own lookType exceeds hAngleLimit (h),
+        # vAngleLimit (v) or both, and the target resolution falls over to the
+        # FORWARD front point while the state's numbers still drive the chain.
+        run_fixture_sequence('forward-hlimit-switch', 1,
+                             [(aim(130.0), 0.05), (aim(125.0), 0.2)]),
+        run_fixture_sequence('forward-vlimit-switch', 1,
+                             [(aim(0.0, 85.0, exact=True), 0.05), (aim(0.0, 82.0, exact=True), 0.2)]),
+        run_fixture_sequence('forward-both-limits', 1,
+                             [(aim(120.0, 82.0, exact=True), 0.05),
+                              (aim(-120.0, 82.0, exact=True), 0.2)]),
+        run_fixture_sequence('forward-direct', 3,
+                             [(aim(20.0), dt) for dt in (0.0166, 0.0166, 0.16)]),
+        # nearDis push-out: only non-TARGET types, along normalize_or_zero;
+        # the distances 1.0 / 1.99 / 2.0 probe below, just below and at the
+        # threshold, so they stay exact.
+        run_fixture_sequence('neardis-forward-push', 3,
+                             [(aim(exact=True, distance=distance), 0.0166 if index < 2 else 0.05)
+                              for index, distance in enumerate((1.0, 1.99, 2.0))]),
+        run_fixture_sequence('neardis-away-zero-offset', 2,
+                             [([0.0, 1.5, 0.0], 0.0166), (aim(exact=True, distance=0.5), 0.0166)]),
+        run_fixture_sequence('neardis-control-push', 4,
+                             [(aim(10.0, 5.0, 1.2, exact=True), 0.0166),
+                              (aim(-10.0, -5.0, 1.2, exact=True), 0.05)]),
+        # The four sorasi routes on the L eye (the R eye of every AWAY frame
+        # then reads the armed num5 through the (-maxBending, -minBending)
+        # remap): keep-previous, push-away on a negative difference, push-away
+        # on a positive one, and the exactly-equal-coords push (carried 23 deg
+        # against a +55 deg target whose bent angle clamps to exactly +23, so
+        # both sorasi coordinates are identical and the reference adds
+        # sorasiRate).
+        run_fixture_sequence('away-keep-previous', 2,
+                             [(aim(-80.0), 0.4), (aim(-70.0), 0.0166)],
+                             start=away_start_right),
+        run_fixture_sequence('away-push-negative', 2,
+                             [(aim(), 0.0166), (aim(5.0), 0.2)],
+                             start=away_start_left),
+        run_fixture_sequence('away-push-positive', 2,
+                             [(aim(), 0.0166), (aim(-5.0), 0.2)],
+                             start=away_start_positive),
+        run_fixture_sequence('away-equal-coords', 2,
+                             [(aim(55.0), 0.0166), (aim(-45.0), 0.0166)],
+                             start=away_start_equal),
+        run_fixture_sequence('away-elevated', 2,
+                             [(aim(15.0, 20.0), 0.2), (aim(-15.0, -20.0), 0.2)],
+                             start=away_start_left),
+        run_fixture_sequence('away-switches-to-forward', 2,
+                             [(aim(130.0, exact=True), 0.0166), (aim(-130.0, exact=True), 0.2)]),
+        run_fixture_sequence('control-front', 4,
+                             [(aim(azimuth), 0.5) for azimuth in (20.0, -20.0)]),
+        run_fixture_sequence('control-hold', 4,
+                             [(aim(15.0), 0.0166), (aim(-15.0), 0.0166), (aim(15.0), 0.0166)]),
+        # deltaTime 0 leaves state and rotations untouched (the solver returns
+        # the previous state and null rotations there).
+        run_fixture_sequence('zero-dt-frame', 1,
+                             [(aim(30.0), 0.0166), ([0.0, 1.5, 0.0], 0.0),
+                              (aim(30.0), 0.0166)]),
+        # Non-default eye references, a root that moves and yaws between
+        # frames, and a non-uniform trfCenter lossyScale the correct frame has
+        # to scale in and out of.
+        run_fixture_sequence('tilted-eye-references', 1,
+                             [(aim(azimuth), 0.2) for azimuth in (25.0, -25.0)],
+                             geometry=fixture_geometry(eye_look=[0.18, 0.12, 0.9755],
+                                                       eye_up=[-0.11, 0.9888, -0.09])),
+        run_fixture_sequence('moving-root', 1,
+                             [(aim(10.0, root_yaw=yaw, root_position=(0.0, 1.5, float(step))), 0.05,
+                               fixture_geometry(root_yaw=yaw, root_position=(0.0, 1.5, float(step))))
+                              for step, yaw in enumerate((20.0, -25.0, 40.0))]),
+        run_fixture_sequence('lossy-center-scale', 1,
+                             [(aim(elevation=18.0), 0.1), (aim(elevation=-18.0), 0.1)],
+                             geometry=fixture_geometry(center_scale=(1.0, 0.8, 1.2))),
+        # A target sitting exactly on the L eye pivot: normalize_or_zero keeps
+        # the zero direction and every L-eye angle reads 0, like the original.
+        run_fixture_sequence('target-on-eye-pivot', 1,
+                             [([-0.032, 1.6, 0.05], 0.05), ([-0.032, 1.6, 0.05], 0.05)]),
+    ]
+
+
+def write_fixture(path, seed: int = 20260928) -> int:
+    """Write the deterministic SYNTHETIC eye-look fixture and return the
+    sequence count.  `seed` is accepted for symmetry with the other fixture
+    writers; the sequence builder draws its jitter from its own fixed seed, so
+    the file is reproducible from a plain call."""
+    del seed
+    document = {
+        'kind': 'ikkoku-eye-look-reference-fixture',
+        'schemaVersion': 1,
+        'source': ('SYNTHETIC inputs built by Tools/reverse/analysis/eye_look_reference.py '
+                   'and outputs computed by its pure EyeLookCalc reference - not original-game data'),
+        'settings': {'eyes': {**FIXTURE_SETTINGS, 'eyeTypeStates': fixture_type_states()}},
+        'sequences': fixture_sequences(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(document, indent=1, sort_keys=True) + '\n')
+    return len(document['sequences'])
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Write or verify the synthetic Swift eye-look fixture.')
+    parser.add_argument('--fixture', type=Path, default=None,
+                        help='write the synthetic Swift fixture here')
+    args = parser.parse_args()
+    if args.fixture:
+        print(f'fixture sequences: {write_fixture(args.fixture)}')
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

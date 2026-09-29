@@ -6,7 +6,8 @@ guide, ST-T02/A-T04 probe test additions, the ST-T11 first-slice route
 evaluator files, the ST-T11 second-slice route playback files, the ST-T11
 third-slice original route capture/comparison files, the ST-T11
 sixth-slice per-frame route stepping files, the ST-T11 ninth-slice route
-clock files and the ST-T11 character-light capture/mapping files; it does not
+clock files, the ST-T11 character-light capture/mapping files and the ST-T07
+eye look reference and solver-port files; it does not
 represent a new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
@@ -16,13 +17,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**685 files indexed; 685 assigned; 0 unassigned.**
+**688 files indexed; 688 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 138 |
+| [Studio / IK / animation](studio.md) | 141 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 287 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
 
@@ -33,9 +34,9 @@ may be discussed in more than one report; one primary owner is listed here.
 | Conversion / recovery / verification tool | 104 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 21 |
-| Runtime / shared shader declaration | 152 |
-| Test / validation | 129 |
+| Reference host / controlled fixture | 22 |
+| Runtime / shared shader declaration | 153 |
+| Test / validation | 130 |
 
 ## App / gameplay / plugins
 
@@ -256,6 +257,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioCamera.swift](../../Packages/Engine/Sources/Studio/SourceStudioCamera.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioGuide.swift](../../Packages/Engine/Sources/Studio/SourceStudioGuide.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIK.swift](../../Packages/Engine/Sources/Studio/SourceStudioIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift](../../Packages/Engine/Sources/Studio/SourceStudioIKEditing.swift) | Runtime / shared shader declaration |
@@ -273,6 +275,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-look-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json](../../Packages/Engine/Tests/EngineTests/Fixtures/neck-target-angle.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/route-reference.json) | Reference host / controlled fixture |
@@ -291,6 +294,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioBlinkTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioBlinkTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
