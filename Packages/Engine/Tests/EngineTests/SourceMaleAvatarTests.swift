@@ -6,12 +6,14 @@ import Scene
 import Character
 import Renderer
 
-private func maleAvatarURL() -> URL? {
-    ProcessInfo.processInfo.environment["IKKOKU_SOURCE_MALE_AVATAR"].map { URL(fileURLWithPath: $0) }
+private func maleAvatarURL() throws -> URL {
+    URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SOURCE_MALE_AVATAR"))
 }
 
-@Test func sourceMaleOriginalAssemblyAndPresetRemainDistinctWhenSupplied() throws {
-    guard let url = maleAvatarURL() else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_MALE_AVATAR"]),
+               "Requires IKKOKU_SOURCE_MALE_AVATAR"))
+func sourceMaleOriginalAssemblyAndPresetRemainDistinctWhenSupplied() throws {
+    let url = try maleAvatarURL()
     let source = try SourceRig.loadModel(url: url)
     let folder = url.deletingLastPathComponent()
     let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
@@ -36,9 +38,10 @@ private func maleAvatarURL() -> URL? {
     }
 }
 
-@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SOURCE_MALE_AVATAR"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_SOURCE_MALE_AVATAR and a Metal device"))
 func sourceMaleOriginalPresetBuildsClothedMetalFrameWhenSupplied() throws {
-    guard let url = maleAvatarURL() else { return }
+    let url = try maleAvatarURL()
     let source = try SourceRig.loadModel(url: url), folder = url.deletingLastPathComponent()
     let contract = try SourceShapeContract.decode(Data(contentsOf: folder.appendingPathComponent("character-shape-contract.json")))
     let body = try #require(contract.domain("body")), face = try #require(contract.domain("face"))
