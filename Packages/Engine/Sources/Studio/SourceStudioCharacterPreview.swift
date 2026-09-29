@@ -701,9 +701,11 @@ public final class SourceStudioCharacterPreview {
             geometry: SourceStudioEyeLookGeometry(rootNode: root, trfCenter: center,
                 eyes: [
                     .init(worldPosition: parentPositions[0], origRotation: identityQ,
-                          referenceLookDir: reference[0].lookDir, referenceUpDir: reference[0].upDir),
+                          referenceLookDir: reference[0].lookDir, referenceUpDir: reference[0].upDir,
+                          parentRotation: parentRotations[0]),
                     .init(worldPosition: parentPositions[1], origRotation: identityQ,
-                          referenceLookDir: reference[1].lookDir, referenceUpDir: reference[1].upDir),
+                          referenceLookDir: reference[1].lookDir, referenceUpDir: reference[1].upDir,
+                          parentRotation: parentRotations[1]),
                 ]),
             pattern: live.pattern)
         return runtime.angleHRates != ratesBefore.0 || runtime.angleVRate != ratesBefore.1
