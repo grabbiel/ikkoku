@@ -310,33 +310,69 @@ simulator's after-update record order gives a worst error of 1.06e-06 m on
 0.0225/0.0496 m, which confirms the write-after-update order).
 `ikkoku-inspect route-steps <scene.png> <deltas.json>` exposes the stepper and
 `Tools/reverse/compare_route_playback.py --mode {continuous,stepped,both}`
-(default `both`) runs it over the capture:
+(default `both`) runs it over the capture. Over the live-authoring capture
+(`.local/stt11c/probe`) the stepped maxima are:
 
 | route | stepped max pos (m) | worst frame | stepped max rot (°) | active mismatches |
 |---|---|---|---|---|
 | `IKKOKU-A` | 0.00000101 | 211 | 0.0 | 0 |
 | `IKKOKU-B` | 0.160000 | 198 | 155.74 | 1 (native frame 233, original 234) |
 
-`IKKOKU-A` steps in lockstep. `IKKOKU-B`'s 0.16 m residual is an input
-artifact, not a stepping or evaluator error: the point/aid *rotations* the
-original `sceneInfo.Save` writes are the authored change amounts (all zeros
-for this scene's route points and aids), while the capture ran the curve
-points at `(0, -0.1305262, 0, 0.9914449)` — a -15° Y compensation of the
-route object's +15° Y — so the aid worlds the native evaluator composes from
-the record differ from the ones the original actually used, the chain comes
-out 3.1679 m instead of 3.2473 m, and segment 1 lasts 2.3259 s instead of
-2.3452 s. That 0.0193 s shortfall is also the single active-frame mismatch.
-Substituting only the captured aid world positions — record point positions
-otherwise, the same 239 deltas — drops the worst error to 1.25e-06 m with no
-mismatch and completion on exactly the captured frame 234
-(`.local/stt11c/route-stepping-aid-attribution.json`), so the per-frame rules,
-durations and interpolation are exact for the transforms the original walked;
-the CLI stays record-driven and reports what the serialized scene evaluates
-to. The rotation column is the unsimulated `LookUpdate` smoothing: the 155.7°
-peak decays over the six frames after the curve segment starts (frames
-92–97), and the five held frames after deactivation sit 14.2° off the
-instantaneous held aim because the original's smoothing froze where it was
-when the tween stopped. `ikkoku-inspect` exposes stepping as a diagnostic;
+`IKKOKU-A` steps in lockstep. `IKKOKU-B`'s 0.16 m residual there is an input
+artifact, not a stepping or evaluator error: `AddObjectRoute.AddPoint` parents
+each new point with `SetParent(route)`, keeping its world position and
+rotation, so when the route object carries +15° Y the live curve points end up
+with a compensating −15° local rotation — `(0, -0.1305262, 0, 0.9914449)` —
+while the saved `changeAmount.rot` stays at its authored `(0, 0, 0)`. The
+record therefore reloads differently from the live authoring run: the aid
+worlds the native evaluator composes from the record differ from the ones the
+original actually used, the chain comes out 3.1679 m instead of 3.2473 m, and
+segment 1 lasts 2.3259 s instead of 2.3452 s. That 0.0193 s shortfall is also
+the single active-frame mismatch. Substituting only the captured aid world
+positions — record point positions otherwise, the same 239 deltas — drops the
+worst error to 1.25e-06 m with no mismatch and completion on exactly the
+captured frame 234 (`.local/stt11c/route-stepping-aid-attribution.json`), so
+the per-frame rules, durations and interpolation are exact for the transforms
+the original walked.
+
+The reload capture removes that input difference at the source.
+`Tools/reverse/original_route_probe.py --load-scene <png>` uploads the record
+beside the compiled plugin, and the probe's load mode skips authoring and calls
+`Studio.Studio.Instance.LoadScene` — whose route load path calls `OCIRoute.Play`
+itself — then runs the same 240-frame trace (`"mode": "load"` in the trace)
+without re-saving, so the record under comparison is the uploaded file
+byte-for-byte and `--collect` fetches that file itself:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_route_probe.py \
+  --output .local/stt11g/probe --load-scene .local/stt11c/probe/route-scene.png
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_route_probe.py \
+  --output .local/stt11g/probe --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_route_playback.py \
+  --probe .local/stt11g/probe --mode both
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_route_stepping.py \
+  --probe .local/stt11g/probe
+```
+
+The loaded points' live local rotations are `(0, 0, 0, 1)` on both routes —
+the record stored no authored rotation, so there is nothing to compensate —
+and stepping the same exact deltas over the same scene record gives:
+
+| route | stepped max pos (m) | worst frame | stepped max rot (°) | active mismatches |
+|---|---|---|---|---|
+| `IKKOKU-A` | 0.00000073 | 238 | 0.0 | 0 |
+| `IKKOKU-B` | 0.00000098 | 220 | 155.74 | 0 |
+
+Both routes now close the loop against the record to under a micrometre with
+no active-frame disagreement (`.local/stt11g/route-playback-stepped-comparison.json`,
+`.local/stt11g/route-stepping-comparison.json`): the native stepper is exact on
+the transforms the serialized scene actually carries, and the earlier route-B
+residual was the authoring-time `SetParent` compensation the record never
+contained. The rotation column is the unsimulated `LookUpdate` smoothing: the
+155.7° peak at the curve segment start (frame 90) decays below 5° by frame 146,
+and the held frames after the 3.91 s deactivation sit 1.4° off the
+instantaneous held aim because the original's smoothing froze where it was when
+the tween stopped. `ikkoku-inspect` exposes stepping as a diagnostic;
 the Studio preview and player are not wired to the stepper in this slice, and
 edited route serialization remains open.
 

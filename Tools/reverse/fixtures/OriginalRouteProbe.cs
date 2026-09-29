@@ -1,4 +1,5 @@
-// Authored two-route capture: serialized scene record plus per-frame childRoot world placement. No characters or media.
+// Two-route capture: serialized scene record plus per-frame childRoot world placement. No characters or media.
+// With a route-scene.png sitting beside the compiled plugin it reloads that record through Studio.LoadScene instead of authoring.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -11,7 +12,7 @@ using Studio;
 using UnityEngine;
 [BepInPlugin("org.ikkoku.validation.routeprobe", "Ikkoku route probe", "1.0.0")]
 public sealed class OriginalRouteProbe:BaseUnityPlugin {
-    const int Frames=240; string folder; OCIRoute a,b;
+    const int Frames=240; string folder,mode; OCIRoute a,b;
     IEnumerator Start() {
         folder=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"route");Directory.CreateDirectory(folder);
         string error=null;
@@ -21,14 +22,31 @@ public sealed class OriginalRouteProbe:BaseUnityPlugin {
             if(ready)break;
             yield return null;
         }
-        try{Build();}catch(Exception e){error=e.ToString();}
+        // A scene record uploaded beside the compiled plugin (driver --load-scene) switches to reload capture.
+        string uploaded=Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),"route-scene.png");
+        try{if(File.Exists(uploaded)){mode="load";Load(uploaded);}else{mode="author";Build();}}catch(Exception e){error=e.ToString();}
         if(error==null) {
-            var step=Capture();
+            var step=Capture(mode=="load"?uploaded:Path.Combine(folder,"route-scene.png"));
             for(;;){bool more=false;object current=null;try{more=step.MoveNext();if(more)current=step.Current;}catch(Exception e){error=e.ToString();}if(error!=null||!more)break;yield return current;}
         }
         if(error==null) { try{Remove();}catch(Exception e){error=e.ToString();} }
-        File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"scope","Two authored routes: scene record saved while playing, and per-frame childRoot world placement; no characters, media or LookUpdate smoothing model"}}));
+        File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"mode",mode},
+            {"scope",mode=="load"?"Two routes reloaded from the uploaded scene record: the load path auto-plays them and per-frame childRoot world placement is traced without re-saving the record; no characters, media or LookUpdate smoothing model"
+                                :"Two authored routes: scene record saved while playing, and per-frame childRoot world placement; no characters, media or LookUpdate smoothing model"}}));
         Application.Quit();
+    }
+    void Load(string scenePath) {
+        var studio=Singleton<Studio.Studio>.Instance;
+        if(studio.sceneInfo==null)throw new Exception("Studio sceneInfo is not ready after startup wait");
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("Route probe expects an empty scene to load into, found "+studio.dicObjectCtrl.Count+" objects");
+        studio.cameraCtrl.enabled=false;
+        if(!studio.LoadScene(scenePath))throw new Exception("Studio.LoadScene returned false for "+scenePath);
+        // Loading an active route calls OCIRoute.Play() inside AddObjectRoute's load path, so both routes are already playing.
+        foreach(var entry in studio.dicObjectCtrl) {
+            var route=entry.Value as OCIRoute;if(route==null)continue;
+            if(route.routeInfo.name=="IKKOKU-A")a=route;else if(route.routeInfo.name=="IKKOKU-B")b=route;
+        }
+        if(a==null||b==null)throw new Exception("Loaded scene is missing route(s): "+(a==null?"IKKOKU-A ":"")+(b==null?"IKKOKU-B":""));
     }
     void Build() {
         var studio=Singleton<Studio.Studio>.Instance;
@@ -55,12 +73,16 @@ public sealed class OriginalRouteProbe:BaseUnityPlugin {
         a.routeInfo.loop=true;b.routeInfo.loop=false;
         b.routeInfo.orient=OIRouteInfo.Orient.XY;
     }
-    IEnumerator Capture() {
+    IEnumerator Capture(string scenePath) { // scenePath is the record being compared against: freshly saved in author mode, the uploaded record in load mode.
         var studio=Singleton<Studio.Studio>.Instance;
-        bool playA=a.Play();bool playB=b.Play();
-        foreach(var entry in studio.dicObjectCtrl)entry.Value.OnSavePreprocessing();
-        studio.sceneInfo.cameraSaveData=studio.cameraCtrl.Export();
-        if(!studio.sceneInfo.Save(Path.Combine(folder,"route-scene.png")))throw new Exception("SceneInfo.Save returned false"); // Routes stay active=true so the record describes a playing scene.
+        bool playA,playB;
+        if(mode=="load") { playA=a.routeInfo.active;playB=b.routeInfo.active; } // LoadScene already played the active routes; re-saving would re-serialize the live compensations the reload is supposed to measure.
+        else {
+            playA=a.Play();playB=b.Play();
+            foreach(var entry in studio.dicObjectCtrl)entry.Value.OnSavePreprocessing();
+            studio.sceneInfo.cameraSaveData=studio.cameraCtrl.Export();
+            if(!studio.sceneInfo.Save(scenePath))throw new Exception("SceneInfo.Save returned false"); // Routes stay active=true so the record describes a playing scene.
+        }
         var routes=new List<object>{RouteEvidence(a,"IKKOKU-A",playA),RouteEvidence(b,"IKKOKU-B",playB)};
         var trace=new List<object>();
         float cumulative=0f;
@@ -72,11 +94,11 @@ public sealed class OriginalRouteProbe:BaseUnityPlugin {
             trace.Add(K("frameCount",Time.frameCount,"timeScale",Time.timeScale,"deltaTime",dt,"cumulativeTime",cumulative,
                 "a",Snap(a),"b",Snap(b)));
         }
-        File.WriteAllText(Path.Combine(folder,"route-trace.json"),J(new Dictionary<string,object>{{"schemaVersion",1},{"playFrameCount",playFrame},{"frameCount",240},{"routes",routes},{"trace",trace}}));
+        File.WriteAllText(Path.Combine(folder,"route-trace.json"),J(new Dictionary<string,object>{{"schemaVersion",1},{"mode",mode},{"playFrameCount",playFrame},{"frameCount",240},{"routes",routes},{"trace",trace}}));
     }
     void Remove() { // Leave no scene objects behind; the trace and scene record are already on disk.
         Singleton<Studio.Studio>.Instance.enabled=false;
-        a.Stop();b.Stop();a.OnDelete();b.OnDelete();
+        if(a!=null){a.Stop();a.OnDelete();}if(b!=null){b.Stop();b.OnDelete();} // Load mode can fail before either route was found.
     }
     static void SetPos(OCIRoutePoint point,Vector3 local) { var ca=point.routePointInfo.changeAmount;ca.pos=local;ca.OnChange(); }
     static Dictionary<string,object> Snap(OCIRoute route) {
