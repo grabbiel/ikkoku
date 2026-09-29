@@ -211,6 +211,13 @@ patterns, line/outline, shadow color, emission and light cancel are **not**
 covered. The OUTLINE pass (main shader only) and both SHADOWCASTER passes were
 not disassembled.
 
+Open question: both basic-shape materials (`m_koi_stu_kihon00_02`,
+`m_koi_stu_kihon01_02`) leave `_ColorMask` unbound, so by this chain their
+saved `_Color` does not tint them and the export is `_MainTex` × white. How
+Studio's color picker nonetheless recolors a cube (for example a mask or
+texture assigned at runtime) is not recovered; capture a colored cube on the
+original player before record colors are applied to converted props.
+
 Evidence in `.local/reverse/shaders/`: `item-studio-evidence.json` /
 `item-studio-alpha-evidence.json` (contracts and refusals), `-summary.json`
 (pass/variant/binding metadata), and the four preserved assemblies
