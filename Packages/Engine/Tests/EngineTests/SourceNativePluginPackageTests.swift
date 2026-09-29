@@ -3,8 +3,9 @@ import Testing
 import Gameplay
 import Studio
 
-@Test func sourceNativePluginPackagesRecognizeOnlyVerifiedOriginalAssembliesAndPersistReferences() throws {
-    guard let root = ProcessInfo.processInfo.environment["IKKOKU_NATIVE_PLUGIN_PACKAGES"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_NATIVE_PLUGIN_PACKAGES"]), "Requires IKKOKU_NATIVE_PLUGIN_PACKAGES"))
+func sourceNativePluginPackagesRecognizeOnlyVerifiedOriginalAssembliesAndPersistReferences() throws {
+    let root = try SourceFixtureSupport.require("IKKOKU_NATIVE_PLUGIN_PACKAGES")
     for (name, guid, adapter) in [("mute-original-v1", "BepInEx.MuteInBackground", SourceNativePluginPackage.muteAdapter),
                                 ("accessory-names-original-v1", "KK_StudioAccessoryNames", SourceNativePluginPackage.accessoryAdapter)] {
         let url = URL(fileURLWithPath: root).appendingPathComponent(name + "/manifest.json")
@@ -23,8 +24,9 @@ import Studio
     }
 }
 
-@Test func sourceNativePluginPackageRejectsChangedVersionAssemblyConfigAndSavedManifest() throws {
-    guard let root = ProcessInfo.processInfo.environment["IKKOKU_NATIVE_PLUGIN_PACKAGES"] else { return }
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_NATIVE_PLUGIN_PACKAGES"]), "Requires IKKOKU_NATIVE_PLUGIN_PACKAGES"))
+func sourceNativePluginPackageRejectsChangedVersionAssemblyConfigAndSavedManifest() throws {
+    let root = try SourceFixtureSupport.require("IKKOKU_NATIVE_PLUGIN_PACKAGES")
     let from = URL(fileURLWithPath: root).appendingPathComponent("mute-original-v1")
     let to = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-native-adapter-" + UUID().uuidString)
     try FileManager.default.copyItem(at: from, to: to)
