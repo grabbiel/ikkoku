@@ -170,7 +170,8 @@ toggled `active` flag back on export (deactivating in-app keeps the
 record's saved flag intact, and export intentionally does not persist the
 runtime choice), and any in-app run of the preview.
 
-Hierarchy scale: the Studio preview walk for source objects follows the
+Hierarchy scale: the Studio preview walk for source objects (those with a
+source object key) follows the
 captured `GuideObject.LateUpdate` rule (`SourceStudioWorldTransform.world`):
 every guide rescales its own transform so its world scale is its own
 `changeAmount.scale` when it is scalable and `(1, 1, 1)` when it is not, so
@@ -192,7 +193,9 @@ rotation of the captured camera pose with the FOV identical; and all three
 `loadCases` resolve `activeAtLoad` to the captured camera. The old walk
 that multiplied full TRS matrices would miss the camera nested under the
 scale-2 folder by 1.12 m, and a test pins that the fixture discriminates
-the rule.
+the rule. Native objects keep the full-TRS composition of
+`StudioDocument.worldMatrix(of:)`, which native parenting and gizmo edits
+also use, so a native scene renders where it is edited.
 
 ## Native APIs and integration
 

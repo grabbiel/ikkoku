@@ -1142,7 +1142,8 @@ final class StudioModel: ViewportInputHandler {
     /// scalable and `(1, 1, 1)` otherwise, so scale never compounds down the
     /// chain and a folder's authored scale is never applied, while position
     /// and rotation still compose through the parent's actual world frame.
-    /// Native documents keep the full-TRS `StudioDocument.worldMatrix(of:)`.
+    /// Native objects keep full-TRS composition, so a native scene renders
+    /// exactly as `StudioDocument.worldMatrix(of:)` places it.
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
                                    visited: Set<UUID>) throws -> float4x4 {
@@ -1178,6 +1179,10 @@ final class StudioModel: ViewportInputHandler {
                 }
             }
         }
+        // Native objects (no source key) keep the native full-TRS composition
+        // of `StudioDocument.worldMatrix(of:)`, which setParent and native
+        // gizmo edits also use; only source records follow the Studio rule.
+        guard object.sourceObjectKey != nil else { return parentFrame * object.transform.matrix }
         // Documents saved before `sourceRecordKind` was recorded carry no
         // record kind; their import made every non-character placeholder a
         // `.folder`, so those fall back to the non-scalable rule (an item's
