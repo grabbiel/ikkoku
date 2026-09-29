@@ -463,6 +463,13 @@ struct SourcePoseInspector: View {
                 Toggle("Automatic blinking", isOn: $model.sourceAutomaticBlink)
                 Text("Each character follows its saved card blink flag; this applies the Maker-style idle clock on top. Needs the idle animation button.").font(.caption).foregroundStyle(.secondary)
             }
+            if let eyeLook = model.selectedSourceEyeLookReadout {
+                SectionBox(title: "Eye look") {
+                    Text(eyeLook).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("studio.source.eyelook.readout")
+                    Text("Rates follow the viewport camera; the iris shift itself comes in the next slice.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         } else {
             Text("The original character pose is not loaded.").font(.caption).foregroundStyle(.secondary)
         }

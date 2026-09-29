@@ -102,6 +102,10 @@ set:
 - [ ] ST-T07 neck look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, FIX/FORWARD characters
       hold their saved neck/head, TARGET/AWAY characters follow or avoid the Studio
       camera as it orbits, and FK-neck characters are untouched (PRs #26–#38).
+- [ ] ST-T07 eye look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, select a source character
+      with eyes pattern こっち; orbit the camera: the Eye look readout's H rates change
+      sign across the face, raising the camera moves the V rate, and no eye bone moves
+      yet (iris rendering is the next slice).
 - [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
       object is hidden; reloading in CharaStudio shows it hidden.
 - [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,

@@ -269,6 +269,21 @@ final class StudioModel: ViewportInputHandler {
                     animationElapsed: sourceAnimationTime)
             } catch { status = "Source neck gaze: \(error)" }
         }
+        // The eye calculator steps on its own over the same camera mapping;
+        // this slice only reads its iris-shift rates back for the inspector,
+        // so a failing frame never disturbs the neck or the pose.
+        for (id, preview) in sourceInstances where preview.hasLiveEyeLook {
+            guard let object = doc.object(id), object.kind == .character,
+                  object.sourceCharacter != nil, doc.isVisible(id) else { continue }
+            do {
+                let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
+                let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
+                _ = try preview.updateEyeLook(deltaTime: 1 / 30, cameraModelPosition: camera,
+                    fkRotations: object.sourceFKRotations ?? [:], ikTargets: object.sourceIKOverrides ?? [:],
+                    kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
+                    animationElapsed: sourceAnimationTime)
+            } catch { status = "Source eye gaze: \(error)" }
+        }
         for preview in sourceInstances.values { try? preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: 1 / 30) }
         stepSourceRouteClocks(delta: 1 / 30)
         refresh()
@@ -288,6 +303,21 @@ final class StudioModel: ViewportInputHandler {
     var selectedSourceAnimationState: SourceStudioAnimationState? {
         guard let object = selectedObject, let preview = sourceInstances[object.id] else { return nil }
         return object.sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+    }
+
+    /// Inspector readout for the selected source character's eye gaze: the live
+    /// look type with this frame's iris-shift rates (this slice drives no iris
+    /// yet), or why the animated eyes were kept instead. Nil when the object has
+    /// no resolved eye look at all.
+    var selectedSourceEyeLookReadout: String? {
+        guard let object = selectedObject, let preview = sourceInstances[object.id],
+              object.kind == .character, object.sourceCharacter != nil else { return nil }
+        if let rates = preview.eyeLookRates, rates.horizontal.count == 2 {
+            func shift(_ value: Double) -> String { String(format: "%+.2f", value) }
+            return "Eye look: \(rates.lookType.rawValue) · H L/R \(shift(rates.horizontal[0]))/\(shift(rates.horizontal[1])) · V \(shift(rates.vertical))"
+        }
+        if let reason = preview.eyeLookKeptReason { return "Eye look: animated (\(reason))" }
+        return nil
     }
 
     /// Bakes every character's evaluated time before resetting the shared clock.
