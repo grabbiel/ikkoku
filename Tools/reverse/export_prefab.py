@@ -50,6 +50,54 @@ def studio_material_contract(color, floats):
     return {"baseColorFactor": list(color[:3]) + [1], "alphaMode": "MASK", "alphaCutoff": floats.get("_Cutoff", 0.5)}
 
 
+# Studio item shaders (ST-T04): evidence in .local/reverse/shaders/item-studio*-evidence.json.
+ITEM_SHADERS = ["Shader Forge/main_item_studio", "Shader Forge/main_item_studio_alpha"]
+
+
+def item_material_contract(shader_name, colors, floats, mask_pixels, main_pixels):
+    """Verified base-color/alpha mapping for the two Studio item shaders.
+
+    mask_pixels and main_pixels are _ColorMask/_MainTex RGBA bytes (0..255), or
+    None when the slot is unbound and the shader's own default texture applies
+    ("black" mask, "white" main). Both FORWARD pixel variants of each shader
+    execute the same chain: albedo = _MainTex.rgb * lerp(lerp(lerp(1, _Color,
+    mask.r), _Color2, mask.g), _Color3, mask.b), and that is only an honest
+    single factor while _PatternMask1..3 stay unbound (their shader default
+    "white" forces each pattern gate to select _ColorN exactly — the caller
+    refuses bound pattern slots).
+    """
+    if shader_name not in ITEM_SHADERS:
+        raise ValueError(f"No verified base-color mapping for shader {shader_name!r}")
+    groups = [[colors.get(name, [1, 1, 1, 1])[index] for index in range(3)] for name in ("_Color", "_Color2", "_Color3")]
+    factors = set()
+    for pixel in mask_pixels or [(0, 0, 0, 255)]:
+        tint = [1.0, 1.0, 1.0]
+        for channel, group in zip(pixel[:3], groups):
+            weight = channel / 255
+            tint = [value + (target - value) * weight for value, target in zip(tint, group)]
+        factors.add(tuple(tint))
+    if len(factors) != 1:
+        raise ValueError("_ColorMask varies across the texture; the Studio item base color would vary per fragment")
+    tint = list(factors.pop())
+    if not any(all(abs(tint[i] - candidate[i]) < 1e-9 for i in range(3)) for candidate in [[1, 1, 1]] + groups):
+        raise ValueError(f"_ColorMask blends several Studio item color groups ({tint}); only single-channel _Color/_Color2/_Color3 selection is verified")
+    if shader_name == "Shader Forge/main_item_studio":
+        # FORWARD: discard when saturate(2*_MainTex.a) < 0.5, i.e. _MainTex.a < 0.25.
+        # Surviving fragments blend with coverage 2*saturate(2a)-1, which equals 1 only
+        # for a >= 0.5, so glTF MASK is exact only without fractional-coverage texels.
+        fractional = sorted({pixel[3] for pixel in main_pixels or [(255, 255, 255, 255)] if 64 <= pixel[3] < 128})
+        if fractional:
+            raise ValueError(f"_MainTex alpha {fractional} has fractional FORWARD coverage (2*sat(2a)-1) that glTF MASK cannot represent")
+        return {"baseColorFactor": tint + [1], "alphaMode": "MASK", "alphaCutoff": 0.25,
+                "doubleSided": True,  # Serialized FORWARD pass: Cull Off (0), no property binding.
+                "shaderParity": "base-color-no-pattern-only"}
+    # FORWARD blend SrcAlpha/OneMinusSrcAlpha with output alpha _MainTex.a * _alpha;
+    # the ~0.002 discard guard only removes fragments BLEND already hides.
+    return {"baseColorFactor": tint + [floats.get("_alpha", 1)], "alphaMode": "BLEND",
+            "doubleSided": False,  # Serialized FORWARD pass: Cull Back (2), no property binding.
+            "shaderParity": "base-color-alpha-no-pattern-only"}
+
+
 def convert_triangles(triangles, count):
     result = []
     for triangle in triangles:
@@ -61,6 +109,14 @@ def convert_triangles(triangles, count):
 
 def safe_name(value):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip(".") or "asset"
+
+
+def texture_pixels(pointer):
+    # Unique RGBA bytes, for contract checks that must prove a property is
+    # constant across the image (_ColorMask selection, _MainTex coverage).
+    image = pointer.read().image.convert("RGBA")
+    data = image.get_flattened_data() if hasattr(image, "get_flattened_data") else image.getdata()
+    return {tuple(pixel[:4]) for pixel in data}
 
 
 def key(pointer):
@@ -143,15 +199,36 @@ class Exporter:
         shader = material.m_Shader.read()
         shader_name = shader.m_Name or getattr(getattr(shader, "m_ParsedForm", None), "m_Name", "")
         color = colors.get("_Color")
-        contract = studio_material_contract([color.r, color.g, color.b, color.a] if color else [1, 1, 1, 1], floats)
-        result = {"name": material.m_Name, "pbrMetallicRoughness": {"baseColorFactor": contract["baseColorFactor"], "metallicFactor": 0, "roughnessFactor": 1},
-                  "alphaMode": contract["alphaMode"], "alphaCutoff": contract["alphaCutoff"],
-                  "doubleSided": False,  # Serialized FORWARD pass: Cull Back (2), no property binding.
-                  "extras": {"unityShader": shader_name, "unityPathID": str(identity[1]), "shaderParity": "base-color-cutout-normal-packing-only"}}
-        # Unknown shader families need an explicit mapping, not guessed transparency.
-        if shader_name != "Shader Forge/main_StandardMDK_studio":
-            raise ValueError(f"No verified base-color mapping for shader {shader_name!r}")
         main = textures.get("_MainTex")
+        if shader_name in ITEM_SHADERS:
+            # Their FORWARD albedo honors the _PatternMaskN chain; only unbound
+            # slots (shader default "white" -> gate selects _ColorN exactly) keep
+            # the base color independent of the unmapped pattern uv transforms.
+            for name in ("_PatternMask1", "_PatternMask2", "_PatternMask3"):
+                slot = textures.get(name)
+                if slot is not None and slot.m_Texture.path_id:
+                    raise ValueError(f"Active pattern slot {name} on {material.m_Name}: pattern uv/clamp/rotation mapping is not implemented")
+            mask = textures.get("_ColorMask")
+            if mask is not None and mask.m_Texture.path_id:
+                if xyz2(mask.m_Scale) != [1, 1] or xyz2(mask.m_Offset) != [0, 0]:
+                    raise ValueError("Nonidentity _ColorMask scale/offset requires a UV transform mapping")
+            color_lists = {name: [value.r, value.g, value.b, value.a] for name, value in colors.items()}
+            contract = item_material_contract(shader_name, color_lists, floats,
+                                              texture_pixels(mask.m_Texture) if mask is not None and mask.m_Texture.path_id else None,
+                                              texture_pixels(main.m_Texture) if main is not None and main.m_Texture.path_id else None)
+        elif shader_name == "Shader Forge/main_StandardMDK_studio":
+            contract = studio_material_contract([color.r, color.g, color.b, color.a] if color else [1, 1, 1, 1], floats)
+        else:
+            # Unknown shader families need an explicit mapping, not guessed transparency.
+            raise ValueError(f"No verified base-color mapping for shader {shader_name!r}")
+        result = {"name": material.m_Name, "pbrMetallicRoughness": {"baseColorFactor": contract["baseColorFactor"], "metallicFactor": 0, "roughnessFactor": 1},
+                  "alphaMode": contract["alphaMode"],
+                  # Serialized FORWARD pass culling, overridden per contract only for the item shaders.
+                  "doubleSided": contract.get("doubleSided", False),
+                  "extras": {"unityShader": shader_name, "unityPathID": str(identity[1]),
+                             "shaderParity": contract.get("shaderParity", "base-color-cutout-normal-packing-only")}}
+        if "alphaCutoff" in contract:
+            result["alphaCutoff"] = contract["alphaCutoff"]
         if main and main.m_Texture.path_id:
             if xyz2(main.m_Scale) != [1, 1] or xyz2(main.m_Offset) != [0, 0]:
                 raise ValueError("Nonidentity base-texture scale/offset requires a UV transform mapping")

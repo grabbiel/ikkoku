@@ -39,6 +39,25 @@ Local evidence is retained under the ignored `.local/reverse/catalog/` directory
 - `chair-row.json`: the one matching raw row and its column header.
 - `chair.json`: lookup by exact prefab, with source hash and interpreted fields.
 - `chair-by-key.json`: reverse lookup by the serialized scene key.
+- `key-0-0-1.json` / `key-0-1-11.json`: the same reverse lookup for the two
+  basic-shape props (see below).
+- `studio-items.json`: a local `KoikatsuAssetCatalog` version 1 mapping the
+  chair, cube and cylinder exact keys to their converted glTF files.
+
+Two basic-shape keys were looked up the same way (same base info bundle, 964
+rows examined): **(0, 0, 1)** is `p_koi_stu_cube01_02` `キューブ(通常）`
+(ExcelData `ItemList_00_00_00`, path ID 6475314763989511810, row 2) and
+**(0, 1, 11)** is `p_koi_stu_cylinder00_02` `シリンダー(キャラ）`
+(`ItemList_00_00_01`, path ID 1452425205573710344, row 5). Both mark the item
+scalable, without animation, one color slot and one pattern slot, no emission
+and no glass, manifest `studio00`, bundle `studio/00.unity3d`. Both were
+converted with `Tools/reverse/export_prefab.py` under the verified Studio item
+shader contract (see [renderer reference](../renderer.md#studio-item-shader-evidence-added-2026-09-29-st-t04))
+to `.local/reverse/exports/cube01/` and `.local/reverse/exports/cylinder00/`,
+each with `catalog.json`, `provenance.json` and a `test_export_prefab.py
+--export` byte-level conversion audit. `studio-items.json` is the
+`KoikatsuAssetCatalog` file (version 1, absolute `.gltf` paths, no `://`) that
+`KoikatsuLayoutImporter` rules accept for these three keys.
 
 `Studio.Info.cs` SHA-256:
 `fa734011b0443c049a97d2f527e6fc52b8799ecf40829cb1fc2a35c9f1bc95a8`.
@@ -79,7 +98,10 @@ must not be guessed from a display name or numeric suffix.
 
 The separate `KoikatsuLayoutImporter` resolves explicit catalog mappings to local
 glTF/GLB props. The mixed original-scene preview still imports source items as
-unrendered named nodes; this chair lookup does not establish arbitrary item
-restoration. `ST-T04` tracks integrating exact-key converted props with item
-materials/patterns, animation, FK/dynamics and accessory attachment frames. Test a
-mixed character/item hierarchy and retain unresolved source keys explicitly.
+unrendered named nodes; the chair lookup and the two converted basic-shape
+props do not establish arbitrary item restoration. `ST-T04` tracks integrating
+exact-key converted props into that preview importer with item
+materials/patterns, animation, FK/dynamics and accessory attachment frames —
+the exported cube/cylinder carry only the verified base-color contract, not
+saved item colors or patterns. Test a mixed character/item hierarchy and retain
+unresolved source keys explicitly.
