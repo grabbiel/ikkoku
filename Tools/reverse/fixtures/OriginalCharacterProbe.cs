@@ -30,6 +30,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     readonly List<Vector3> lookTargetPositions = new List<Vector3>();
     readonly List<object> lookRecords = new List<object>();
     string lookError;
+    // ST-T07x: the card-driven EyeLookMaterialControll inputs the load-time
+    // ChangeSettingEye*/ChangeSettingEyeTilt calls read, recorded once into
+    // the look trace header; like every other look field it stays unwritten
+    // when no look-patterns.tsv is present.
+    Dictionary<string,object> irisCard;
     Transform lookTarget; // dedicated target transform the look controllers follow; Studio owns Camera.main
     IEnumerator Start()
     {
@@ -86,6 +91,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // plain "yield return null" resume, so each frame is recorded at
         // WaitForEndOfFrame, once both LateUpdates have run.
         if(lookPhases.Count>0) {
+            // ST-T07x: the card values the load-time ChangeSettingEye* and
+            // ChangeSettingEyeTilt calls read, recorded once after LoadAsync
+            // (which applied them) and before the phases start.
+            RecordIrisCard();
+            if(lookError!=null) { Finish(lookError); yield break; }
             yield return RunLookPhases();
             if(lookError!=null) { Finish(lookError); yield break; }
         }
@@ -102,7 +112,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(lookPhases.Count>0) {
             var phases=new List<object>();
             for(int i=0;i<lookPhases.Count;i++)phases.Add(new Dictionary<string,object>{{"neckPattern",lookPhases[i][0]},{"eyesPattern",lookPhases[i][1]},{"frames",lookPhases[i][2]},{"targetPosition",V(lookTargetPositions[i])}});
-            File.WriteAllText(Path.Combine(folder,"look-trace.json"),J(new Dictionary<string,object>{{"error",lookError},{"frameCount",Time.frameCount},{"camera","Studio Camera.main"},{"target",lookTarget!=null?"probe IkkokuLookTarget":"none"},{"phases",phases},{"frames",lookRecords}}));
+            File.WriteAllText(Path.Combine(folder,"look-trace.json"),J(new Dictionary<string,object>{{"error",lookError},{"frameCount",Time.frameCount},{"camera","Studio Camera.main"},{"target",lookTarget!=null?"probe IkkokuLookTarget":"none"},{"irisCard",irisCard},{"phases",phases},{"frames",lookRecords}}));
         }
         Application.Quit();
     }
@@ -581,6 +591,23 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     void RecordLookSafe(int phase) {
         try { RecordLook(phase); } catch(Exception e) { lookError=e.ToString(); }
     }
+    void RecordIrisCard() {
+        // The values ChangeSettingEye* Lerps its offset/scale/highlight edits
+        // from and ChangeSettingEyeTilt reads for shape 33; the identity says
+        // whether those methods apply at all (they return early on sex 0 with
+        // exType 1). fileFace is a public ChaInfo property, sex/exType too.
+        try {
+            var face=Required(character,"fileFace");
+            var shape=Flatten(Required(face,"shapeValueFace")) as List<object>;
+            if(shape==null||shape.Count<=33)throw new Exception("fileFace.shapeValueFace has no entry 33");
+            irisCard=new Dictionary<string,object>{
+                {"pupilX",Required(face,"pupilX")},{"pupilY",Required(face,"pupilY")},
+                {"pupilWidth",Required(face,"pupilWidth")},{"pupilHeight",Required(face,"pupilHeight")},
+                {"hlUpY",Required(face,"hlUpY")},{"hlDownY",Required(face,"hlDownY")},
+                {"shapeValueFace33",shape[33]},
+                {"sex",Required(character,"sex")},{"exType",Required(character,"exType")}};
+        } catch(Exception e) { lookError=e.ToString(); }
+    }
     object Required(object target,string name) {
         var value=Member(target,name);
         if(value==null)throw new Exception("the recovered look member "+name+" is missing");
@@ -679,6 +706,35 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             {"angleHRate",Flatten(Required(eyeScript,"angleHRate"))},
             {"angleVRate",Flatten(Required(eyeScript,"angleVRate"))}}};
         record["eyes"]=new Dictionary<string,object>{{"ptnNo",Required(eyeCtrl,"ptnNo")},{"target",V(((Transform)Required(eyeCtrl,"target")).position)},{"eyes",eyeRecord},{"calculators",eyeCalcRecord}};
+        // ST-T07x: what EyeLookMaterialControll.Update left on the eye
+        // materials at end of frame — the material's three texture transforms
+        // and _rotation, plus the private offset/scale/hl inputs Update reads.
+        // eyeLookMatCtrl is a private ChaControl field assigned from
+        // objEyeL/objEyeR after LoadAsync; _material is private too, and
+        // ReSetupMaterial only ever fills it from GetComponent<Renderer>(),
+        // so that is the equivalent fallback here.
+        var matCtrls=Flatten(Required(character,"eyeLookMatCtrl")) as List<object>;
+        if(matCtrls==null||matCtrls.Count!=2)throw new Exception("eyeLookMatCtrl is missing or does not hold two controllers");
+        var irisRecord=new List<object>();
+        for(int i=0;i<2;i++) {
+            var ctrl=matCtrls[i];
+            var component=ctrl as Component;
+            if(component==null)throw new Exception("eyeLookMatCtrl["+i+"] is "+ClassifyMember(ctrl));
+            var material=Member(ctrl,"_material") as Material;
+            if(material==null) {
+                var renderer=component.GetComponent<Renderer>();
+                if(renderer==null)throw new Exception("eyeLookMatCtrl["+i+"] has no _material and no Renderer");
+                material=renderer.material;
+            }
+            var texRecord=new Dictionary<string,object>();
+            foreach(string texName in new[]{"_MainTex","_overtex1","_overtex2"})texRecord[texName]=new Dictionary<string,object>{{"offset",V(material.GetTextureOffset(texName))},{"scale",V(material.GetTextureScale(texName))}};
+            irisRecord.Add(new Dictionary<string,object>{
+                {"gameObject",(object)component.gameObject.name},{"materialName",material.name},
+                {"offset",Flatten(Required(ctrl,"offset"))},{"scale",Flatten(Required(ctrl,"scale"))},
+                {"hlUpOffsetY",Required(ctrl,"hlUpOffsetY")},{"hlDownOffsetY",Required(ctrl,"hlDownOffsetY")},
+                {"rotation",material.GetFloat("_rotation")},{"textures",texRecord}});
+        }
+        record["iris"]=irisRecord;
         // ST-T07m: world geometry of every transform the recovered
         // GetAngleToTarget/limit-check formulas read (transformAim,
         // boneCalcAngle, the last bone's neckBone and referenceCalc), the
