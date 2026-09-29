@@ -775,10 +775,14 @@ final class StudioModel: ViewportInputHandler {
             }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
             // Only folder, camera and route records serialize a name; the
-            // validator already rejects renames for every other kind.
-            if object.name != object.sourcePreviewName,
-               original.kind == .folder || original.kind == .camera || original.kind == .route {
-                edits.names[key] = object.name
+            // validator already rejects renames for every other kind. The
+            // baseline is the validator's: documents saved before
+            // sourcePreviewName existed fall back to the import's placeholder
+            // label, which must never be written over the record's name.
+            if original.kind == .folder || original.kind == .camera || original.kind == .route {
+                let baseline = object.sourcePreviewName ?? (original.kind == .folder
+                    ? original.name ?? "Source object \(key)" : "Unrendered source \(original.kind) \(key)")
+                if object.name != baseline { edits.names[key] = object.name }
             }
             let originalRotation = UnityCoordinates.eulerDegrees(original.transform.rotationDegrees)
             let rotationChanged = object.transform.quaternion.vector != originalRotation.vector
