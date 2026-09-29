@@ -113,8 +113,8 @@ uploads the file as `character-settings.tsv` into the probe's `character`
 output folder, so it is collected with the capture, and
 `OriginalCharacterProbe.cs` applies it to the freshly generated fixture before
 `CreateFemale`. Each line is `key<TAB>value` with exactly one tab (no blank or
-comment lines); IDs are integers, colors are `r,g,b,a` floats, both parsed
-with the invariant culture. Keys are optional and an omitted key keeps the
+comment lines); IDs are integers, colors are `r,g,b,a` floats, single-value
+keys are floats, all parsed with the invariant culture. Keys are optional and an omitted key keeps the
 fixture default; a repeated key's last line wins. The driver does not
 pre-check this file: an unknown key or unparsable line ends the run with the
 error in `status.json`. `--settings` belongs to the capture step and is
@@ -129,6 +129,10 @@ rejected together with `--collect`. The accepted keys:
 | `underhairId` / `underhairColor` | `custom.body.underhairId` / `.underhairColor` | Underhair overlay catalog ID (`mt_underhair`) and RGBA |
 | `hlUpId` / `hlUpColor` | `custom.face.hlUpId` / `.hlUpColor` | Upper iris highlight catalog ID (`mt_eye_hi_up`) and RGBA |
 | `hlDownId` / `hlDownColor` | `custom.face.hlDownId` / `.hlDownColor` | Lower iris highlight catalog ID (`mt_eye_hi_down`) and RGBA |
+| `pupilX` / `pupilY` | `custom.face.pupilX` / `.pupilY` | Pupil offset (float) the `ChangeSettingEye*` setters lerp into the iris texture offset |
+| `pupilWidth` / `pupilHeight` | `custom.face.pupilWidth` / `.pupilHeight` | Pupil size (float) the `ChangeSettingEye*` setters lerp into the iris texture scale |
+| `hlUpY` / `hlDownY` | `custom.face.hlUpY` / `.hlDownY` | Iris highlight vertical offset (float) the `ChangeSettingEye*` setters lerp into the highlight offsets |
+| `faceShape33` | `custom.face.shapeValueFace[33]` | Eye tilt shape value (float) `ChangeSettingEyeTilt` turns into the iris `_rotation` |
 
 **Limits of this comparison.** Texture identity is the texture name for the
 chosen ID in the original `list/characustom/00.unity3d` list-bundle row (tables
