@@ -566,6 +566,7 @@ class CheckExecutionTests(unittest.TestCase):
 
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
+                "undo", "redo", "newScene",
                 "setFace", "setBody", "setColor", "export", "reimport", "assert"}
 
 
@@ -589,7 +590,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 9)
+        self.assertEqual(len(self.checks), 12)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -642,6 +643,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "assert":
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
+                                            "sourceRuntime",
                                             "diagnosticContains") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if any(k in step for k in ("name", "visible", "face", "body", "color")):

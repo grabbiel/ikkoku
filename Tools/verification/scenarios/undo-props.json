@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {"op": "assert", "sourceRuntime": {"items": 19, "sceneLight": true}},
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "undo"},
+    {"op": "assert", "key": 622, "visible": true, "sourceRuntime": {"items": 19, "sceneLight": true}},
+    {"op": "redo"},
+    {"op": "assert", "key": 622, "visible": false, "sourceRuntime": {"items": 19, "sceneLight": true}},
+    {"op": "export", "path": ".local/verification/scenario-exports/undo-props.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/undo-props.png"},
+    {"op": "assert", "key": 622, "visible": false, "diagnosticContains": "Items rendered from the converted catalog: 19; unmapped keys: none."}
+  ]
+}

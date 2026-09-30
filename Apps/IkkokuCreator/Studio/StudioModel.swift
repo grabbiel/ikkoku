@@ -70,8 +70,10 @@ final class StudioModel: ViewportInputHandler {
     /// (`AddObjectRoute.cs` parenting, `OCIRoute.cs` `Play`/`Stop`) — resolved
     /// at `sourceAnimationTime`. Runtime only: it never becomes a document
     /// node, which keeps the imported tree 1:1 with the source records for
-    /// original export validation. Mirrors `sourceInstances`: filled by the
-    /// import, dropped whenever a document replaces the current one.
+    /// original export validation. Filled by an import, which replaces it
+    /// wholesale; every read is scene-identity gated, so it survives
+    /// undo/redo (see `undo()`). New Scene's empty document is pruned away
+    /// by `refresh()` and only an import reseeds routes.
     @ObservationIgnored private var sourceRoutes: [UUID: SourceRouteRuntime] = [:]
     /// Per-route stepper clock bookkeeping mirroring the hair-dynamics
     /// "step on tick, clear on jump" pattern: live ticks advance the stepper
@@ -110,16 +112,18 @@ final class StudioModel: ViewportInputHandler {
     /// (folder kind, fallback name, no character reference) that
     /// `SourceSceneExportValidation` already refuses to serialize edits from,
     /// and only the preview rides here, placed by the same `childRoot` walk.
-    /// Like the route cache it is gated by scene identity, filled by the
-    /// import and dropped whenever a document replaces the current one.
+    /// Like the route cache it is gated by scene identity, filled by an
+    /// import (which replaces it wholesale) and, like the route cache,
+    /// survives undo/redo through that gate (see `undo()`); New Scene's
+    /// `refresh()` prunes it and only import reseeds.
     @ObservationIgnored private var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
     @ObservationIgnored private var lastSourceRouteDiagnostic: String?
     /// The imported scene record's `charaLight` as a scene-static native key
     /// light (PR #41's rot mapping). Runtime-only: original export requires
     /// `doc.mainLight` to stay default, so the preview overrides it through
     /// `effectiveMainLight` and nothing writes it into the document. Like the
-    /// route caches it carries the scene identity and is dropped wherever a
-    /// document replaces the current one.
+    /// route caches it carries the scene identity, which gates every read,
+    /// so it survives undo/redo and New Scene (see `undo()`).
     @ObservationIgnored private var sourceSceneLight: (sceneSHA256: String, light: MainLight)?
     /// The light preview frames render with: the scene's character light while
     /// the document is that source scene and the native light is still the
@@ -133,16 +137,17 @@ final class StudioModel: ViewportInputHandler {
     /// placeholder entry's id. Runtime-only like `sourceSceneLight`: the
     /// placeholder stays a `.folder` and `doc.camera` keeps the saved scene
     /// camera verbatim, so original export is unaffected and only the preview
-    /// looks through the camera object. Carries the scene identity and is
-    /// dropped wherever a document replaces the current one.
+    /// looks through the camera object. Carries the scene identity, which
+    /// gates every read, so it survives undo/redo and New Scene (see `undo()`).
     @ObservationIgnored private var sourceCameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
     /// Item placeholders whose CharaStudio key resolved to a converted asset
     /// (`IKKOKU_STUDIO_ITEM_CATALOG`). Runtime-only like `sourceCameras`: the
     /// placeholder stays a `.folder` with no `assetFile`/`itemID`, so original
     /// export is unaffected and only the preview draws the asset's parts.
-    /// Carries the scene identity and is dropped wherever a document replaces
-    /// the current one. The saved record colors and alpha ride along so the
-    /// frame builder can tint the parts without re-reading the scene file.
+    /// Carries the scene identity, which gates every read, so it survives
+    /// undo/redo and New Scene (see `undo()`). The saved record colors and
+    /// alpha ride along so the frame builder can tint the parts without
+    /// re-reading the scene file.
     @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
         colors: [SIMD4<Float>], alpha: Float)] = [:]
     /// The entry for a still-valid placeholder: the same scene-identity guard
@@ -161,11 +166,24 @@ final class StudioModel: ViewportInputHandler {
     /// record in load order, PR #45). Kept beside `activeSourceCamera` so
     /// original export can tell "still the load winner — the file already
     /// reloads to it" from "the user switched cameras — rewrite every flag".
-    /// Set at import and cleared wherever `activeSourceCamera` is.
+    /// Set at import; unlike `activeSourceCamera` it survives undo/redo and
+    /// New Scene, because it describes the loaded file, not the live view.
     private(set) var sourceCameraLoadActive: UUID?
     /// The active source camera's name while the guard holds, otherwise `nil`.
     var activeSourceCameraName: String? {
         activeSourceCamera.flatMap { sourceCameraEntry(of: $0)?.name }
+    }
+    /// Read-only census of the source runtime caches for the scenario lane:
+    /// for each cache, the entries whose scene identity matches the document
+    /// and whose object is still in it — exactly the entries the render path
+    /// can see right now. `sceneLight` is whether the scene character light
+    /// override applies to this document.
+    func sourceRuntimeCounts() -> (cameras: Int, items: Int, routes: Int, sceneLight: Bool) {
+        let cameras = sourceCameras.filter { $0.value.sceneSHA256 == doc.sourceSceneSHA256 && doc.object($0.key) != nil }.count
+        let items = sourceItemAssets.filter { $0.value.sceneSHA256 == doc.sourceSceneSHA256 && doc.object($0.key) != nil }.count
+        let routes = sourceRoutes.filter { $0.value.sceneSHA256 == doc.sourceSceneSHA256 && doc.object($0.key) != nil }.count
+        let lightApplies = sourceSceneLight != nil && sourceSceneLight?.sceneSHA256 == doc.sourceSceneSHA256
+        return (cameras, items, routes, lightApplies)
     }
     /// The preview camera: looks through the active camera object (its world
     /// position and rotation copied every `LateUpdate`, scale ignored and the
@@ -545,8 +563,28 @@ final class StudioModel: ViewportInputHandler {
         lastUndoPush = Date()
     }
 
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); sourceItemAssets.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); sourceItemAssets.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    /// Closes the edit-coalescing window, so the next edit takes its own undo
+    /// snapshot. The scenario runner calls it before every step: each step
+    /// stands for a separate user gesture, however fast the steps run.
+    func endUndoCoalescing() { lastUndoPush = .distantPast }
+
+    /// Undo/redo keeps the SHA-gated source runtime caches (route runtimes,
+    /// play state, clocks, route character previews, scene light, camera
+    /// objects and item assets): the snapshots of one import share object
+    /// UUIDs, and every read site plus `refresh()`'s prune is gated by
+    /// `sceneSHA256 == doc.sourceSceneSHA256` and object presence, so the
+    /// restored document keeps its props, camera look-through, routes and
+    /// scene light instead of waiting for a reimport.
+    /// `activeSourceCamera` survives only while the restored document still
+    /// contains that object; `sourceCameraLoadActive` is the import's load
+    /// winner and survives untouched. `sourceInstances` still goes: it holds
+    /// per-document color and animation edits, and `refresh()` rebuilds the
+    /// previews from the restored document the same way it does for any
+    /// document-level edit. Limitation: an import REPLACES the caches, so
+    /// undoing past an import of a different scene still loses the earlier
+    /// scene's runtime until it is imported again.
+    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; if let id = activeSourceCamera, d.object(id) == nil { activeSourceCamera = nil }; doc = d; do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
+    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; if let id = activeSourceCamera, d.object(id) == nil { activeSourceCamera = nil }; doc = d; do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -877,7 +915,16 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
-        sourceAnimationTime = 0; sourceInstances.removeAll(); sourceRoutes.removeAll(); sourceRoutePlayState.removeAll(); sourceRouteClocks.removeAll(); sourceRouteFallbackReported.removeAll(); sourceRouteCharacterPreviews.removeAll(); lastSourceRouteDiagnostic = nil; sourceSceneLight = nil; sourceCameras.removeAll(); sourceItemAssets.removeAll(); activeSourceCamera = nil; sourceCameraLoadActive = nil; instances.removeAll()
+        // The SHA-gated camera/item/light caches survive a New Scene as they
+        // survive undo/redo: the empty document matches none of them (its
+        // scene identity is nil), so nothing renders, and undoing the New
+        // Scene brings the imported scene's props, camera cache entries and
+        // light back (`activeSourceCamera` itself was cleared above). Routes
+        // are the exception `refresh()`'s prune always was: the empty
+        // document drops the route runtimes, play state, clocks and route
+        // character previews, and only an import reseeds them, so undoing a
+        // New Scene restores route objects without their runtime.
+        sourceAnimationTime = 0; sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; activeSourceCamera = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         doc = empty; selection = nil; sceneURL = nil
     }

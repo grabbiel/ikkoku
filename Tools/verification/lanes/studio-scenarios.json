@@ -172,6 +172,64 @@
         {"path": ".local/verification/scenario-exports/route-play-state.png", "kind": "exported-scene"}
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-undo-camera",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-camera.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-camera.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "On scene-x the two camera objects and the scene light must be live at load; renaming the folder placeholder (key 1) and undoing must keep the look-through winner (key 2), both camera entries and the scene light (before ST-T15 the undo emptied all of them), and redoing must re-apply the name. Toggling to camera key 0, exporting and reimporting must read back key 0 active: the export only rewrites the active flags because the load-winner record survived the undo. ST-T15/ST-T01 camera half.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-undo-camera.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/undo-camera.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-undo-props",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
+        {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-props.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-props.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "The props scene's 19 converted item assets and the scene light must be live at load; hiding folder key 622 and undoing must restore it visible with all 19 item entries and the scene light still cached (before ST-T15 the undo emptied them), and redoing must hide it again. Export+reimport re-asserts the hidden folder and the 19-item diagnostic. ST-T15/ST-T01 props half; the rendered assets themselves are only censused, not pixel-checked.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-undo-props.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/undo-props.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-undo-route",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-route.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-undo-route.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "On the stt11c route scene, stopping route key 0 and renaming key 3 then undoing must keep both route runtimes live (2 entries; before ST-T15 the undo dropped them), roll the key 3 name back, and keep the runtime play state: key 0 stays stopped because play state is runtime-only and never part of an undo snapshot. Export+reimport then reads key 0 back stopped (its flag written by the export) and key 3 playing. ST-T15/ST-T01 route half; whether the character animates along the route is not observable headlessly.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-undo-route.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/undo-route.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
     }
   ]
 }
