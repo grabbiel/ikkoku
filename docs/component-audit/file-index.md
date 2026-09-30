@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**749 files indexed; 749 assigned; 0 unassigned.**
+**751 files indexed; 751 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 171 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 111 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 113 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 137 |
+| Conversion / recovery / verification tool | 139 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
@@ -755,11 +755,13 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/animation-select.json](../../Tools/verification/scenarios/animation-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/fk-edit.json](../../Tools/verification/scenarios/fk-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-color-roundtrip.json](../../Tools/verification/scenarios/maker-color-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-outfit-colors.json](../../Tools/verification/scenarios/maker-outfit-colors.json) | Conversion / recovery / verification tool |

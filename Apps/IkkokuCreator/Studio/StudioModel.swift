@@ -1903,6 +1903,26 @@ final class StudioModel: ViewportInputHandler {
         guard let object = selectedObject, let preview = sourceInstances[object.id], let target = selectedSourceIK else { return nil }
         return try? sourceIKValue(object, target: target, preview: preview)
     }
+    /// Writes one source FK bone rotation (Unity Euler degrees) the way a guide
+    /// drag does: the character switches to FK (IK off) and the FK part group
+    /// that owns the bone turns on. The bone guide drag and the scenario
+    /// runner's `setFK` both call this, so the lane exercises the app's path.
+    func setSourceFKRotation(_ id: UUID, boneID: Int, degrees: Float3, pushHistory: Bool = true) {
+        guard let i = doc.index(of: id) else { return }
+        if pushHistory { pushUndo(force: true) }
+        var edits = doc.objects[i].sourceFKRotations ?? [:]
+        edits[boneID] = degrees
+        doc.objects[i].sourceFKRotations = edits
+        if let preview = sourceInstances[id] {
+            var state = doc.objects[i].sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
+            state.enableFK = true; state.enableIK = false
+            if let target = preview.controller.targets.first(where: { $0.bone.id == boneID }) {
+                for (j, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { state.activeFK[j] = true }
+            }
+            doc.objects[i].sourceKinematics = state
+        }
+    }
+
     func setSourceIKValue(_ target: Int32, edit: SourceStudioIKEdit, pushHistory: Bool = true) {
         guard let id = selection, let i = doc.index(of: id), var state = selectedSourceIKState else { return }
         do {
@@ -2075,19 +2095,10 @@ final class StudioModel: ViewportInputHandler {
                 setSourceIKValue(target, edit: edit, pushHistory: false)
             } catch { status = "Source IK guide: \(error)" }
         case .sourceBone(let gd, let boneID, let startWorld, let parentWorld):
-            guard let id = selection, let i = doc.index(of: id), let rotation = gd.rotation(for: r) else { return }
+            guard let id = selection, let rotation = gd.rotation(for: r) else { return }
             let local = (parentWorld.inverse * rotation * startWorld).normalized
-            var edits = doc.objects[i].sourceFKRotations ?? [:]
-            edits[boneID] = UnityCoordinates.sourceEulerDegrees(local)
-            doc.objects[i].sourceFKRotations = edits
-            if let preview = sourceInstances[id] {
-                var state = doc.objects[i].sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
-                state.enableFK = true; state.enableIK = false
-                if let target = preview.controller.targets.first(where: { $0.bone.id == boneID }) {
-                    for (j, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { state.activeFK[j] = true }
-                }
-                doc.objects[i].sourceKinematics = state
-            }
+            // The drag's mouseDown already pushed the undo snapshot.
+            setSourceFKRotation(id, boneID: boneID, degrees: UnityCoordinates.sourceEulerDegrees(local), pushHistory: false)
         case .orbit:
             guard !reportSourceCameraInputBlocked() else { return }
             doc.camera.orbit(dx: delta.x * 0.005, dy: delta.y * 0.005)
