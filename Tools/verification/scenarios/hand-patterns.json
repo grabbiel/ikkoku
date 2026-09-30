@@ -1,0 +1,83 @@
+{
+  "steps": [
+    {
+      "op": "assert",
+      "handPattern": {
+        "key": 10,
+        "left": 5,
+        "right": 6
+      }
+    },
+    {
+      "op": "assert",
+      "diagnosticContains": "Saved Studio hand patterns replay converted looping clips"
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 1,
+      "name": "head0"
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 43,
+      "name": "middle-L-parent-0"
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 44,
+      "name": "middle-L-child-0"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.0667
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 44,
+        "from": "middle-L-child-0"
+      }
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 43,
+        "from": "middle-L-parent-0",
+        "within": 1e-05
+      }
+    },
+    {
+      "op": "assert",
+      "handPattern": {
+        "key": 10,
+        "left": 5,
+        "right": 6
+      }
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/hand-patterns.png"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/hand-patterns.png"
+    },
+    {
+      "op": "assert",
+      "handPattern": {
+        "key": 10,
+        "left": 5,
+        "right": 6
+      }
+    },
+    {
+      "op": "assert",
+      "diagnosticContains": "Saved Studio hand patterns replay converted looping clips"
+    }
+  ]
+}

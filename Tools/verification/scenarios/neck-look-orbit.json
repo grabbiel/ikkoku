@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {"op": "advance", "seconds": 0.4},
+    {"op": "captureBone", "key": 65, "bone": 1, "name": "fix-head-rest"},
+    {"op": "captureBone", "key": 65, "bone": 2, "name": "fix-neck-rest"},
+    {"op": "assert", "diagnosticContains": "FIX holds the saved neck rotation"},
+    {"op": "orbit", "dx": 1.6, "dy": 0.4},
+    {"op": "advance", "seconds": 0.4},
+    {"op": "assert", "fk": {"key": 65, "bone": 1, "from": "fix-head-rest", "within": 0.00001}},
+    {"op": "assert", "fk": {"key": 65, "bone": 2, "from": "fix-neck-rest", "within": 0.00001}},
+    {"op": "orbit", "dx": -3.2, "dy": -0.4},
+    {"op": "advance", "seconds": 0.4},
+    {"op": "assert", "fk": {"key": 65, "bone": 1, "from": "fix-head-rest", "within": 0.00001}},
+    {"op": "export", "path": ".local/verification/scenario-exports/neck-look-orbit.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/neck-look-orbit.png"},
+    {"op": "advance", "seconds": 0.4},
+    {"op": "assert", "fk": {"key": 65, "bone": 1, "from": "fix-head-rest", "within": 0.00001}}
+  ]
+}

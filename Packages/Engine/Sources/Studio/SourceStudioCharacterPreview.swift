@@ -1023,6 +1023,17 @@ public final class SourceStudioCharacterPreview {
         try blink.update(elapsed: elapsed, randomInteger: randomInteger, randomFloat: randomFloat)
     }
 
+    /// True once this card's blink control rendered an openness below fully
+    /// open since the last `resetBlinkObservation()`. A card whose saved
+    /// `eyesBlink` flag is off renders the fixed sentinel instead and can
+    /// never set it. The Studio scenario's `blink {key, happening}` asserts
+    /// this; the clock itself stays private.
+    public var didBlink: Bool { blink.observedBlink }
+
+    /// Starts a new blink observation window; the scenario's `advance` op
+    /// calls this before driving the app's own live step.
+    public func resetBlinkObservation() { blink.resetObservation() }
+
     public var hasSavedAnimation: Bool {
         animationCache["\(record.animation.group)/\(record.animation.category)/\(record.animation.no)"] != nil
     }

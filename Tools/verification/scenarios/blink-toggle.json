@@ -1,0 +1,15 @@
+{
+  "steps": [
+    {"op": "advance", "seconds": 7},
+    {"op": "assert", "blink": {"key": 10, "happening": true}},
+    {"op": "setAutomaticBlink", "on": false},
+    {"op": "advance", "seconds": 7},
+    {"op": "assert", "blink": {"key": 10, "happening": false}},
+    {"op": "setAutomaticBlink", "on": true},
+    {"op": "advance", "seconds": 7},
+    {"op": "assert", "blink": {"key": 10, "happening": true}},
+    {"op": "export", "path": ".local/verification/scenario-exports/blink-toggle.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/blink-toggle.png"},
+    {"op": "assert", "handPattern": {"key": 10, "left": 5, "right": 6}}
+  ]
+}
