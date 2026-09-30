@@ -67,7 +67,7 @@ them claims whole-game parity; read each `tolerance`.
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup run, then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report; `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. |
-| `studio-scenarios.json` | Nineteen `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 19/19 checks passed 2026-09-30 with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x) and the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE`; the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
+| `studio-scenarios.json` | Twenty-one `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 21/21 checks passed 2026-09-30 with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x) and the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE`; the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
 | `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 
 ## Studio scenario hook (T-T04)
@@ -85,12 +85,26 @@ tolerance. A failing `assert`/edit step is recorded and the run
 continues; a failing `export`/`reimport` stops it. Both write only under
 `.local/`. Ops: `select`, `setVisible`, `rename`, `toggleCamera`,
 `toggleRoute`, `undo`, `redo`, `newScene`, `setFace`, `setBody`
-`{key,index,value}`, `setColor` `{key,id,rgba[4]}`, `export`/`reimport`
+`{key,index,value}`, `setColor` `{key,id,rgba[4]}`, `setAnimation`
+`{key,group,category,no}` (a clip must exist in the
+`IKKOKU_STUDIO_ANIMATION_CATALOG` or the op fails before mutating),
+`setAnimationSpeed` `{key,speed}`, `setForceLoop` `{key,on}`,
+`setFKEnabled` `{key,on}`, `setFK` `{key,bone,rotation[3]}` (degrees, the
+inspector's guide drag: also turns FK on, like the drag), `captureBone`
+`{key,bone,name}` (memorizes that guide bone's position in the character's
+rig frame under a label for a later `fk`/`from` compare), `export`/`reimport`
 `{path}`, `saveDocument`/`loadDocument` `{path}` (native save/load of a
 Studio document card) and `assert` with any of `name`, `visible`,
 `face`/`body`
 `{index,value}`, `color` `{id,rgba}`, `activeCamera` (key or null),
-`routePlaying` `{key,playing}`, `sourceRuntime`
+`routePlaying` `{key,playing}`, `animation`
+`{key,group?,category?,no?,speed?,forceLoop?}` (the live animation state the
+preview plays for that character — the document's saved-clip override or the
+scene record's own — an absent sub-key is not asserted), `fk`
+`{key,bone,rotation?,from?,within?}` (`rotation` checks the document's FK edit
+in degrees; `from` names a `captureBone` label and asserts the bone MOVED
+further than the tolerance from it, or stayed within `within` of it),
+`sourceRuntime`
 `{cameras,items,routes,sceneLight,rehydrations}` (each sub-key optional;
 `rehydrations` is how many times the scene file was re-read; the others count the
 live entries of the SHA-gated source runtime caches — a step's
@@ -115,10 +129,14 @@ color writeback) stay unchecked.
 No `studio-scenarios` check reads the environment file's own `IKKOKU_SOURCE_SCENE`
 (the `app-smoke` and `private-source` lanes use it for a different
 scene). Each check aliases it through the fixture `from` key instead.
-The seven character scenarios (`visibility-folder`, `rename-folder`,
-`face-shape`, `color-edit`, `item-props`, `undo-props`, `undo-no-catalog`) take
+The nine character scenarios (`visibility-folder`, `rename-folder`,
+`face-shape`, `color-edit`, `item-props`, `undo-props`, `undo-no-catalog`,
+`animation-select`, `fk-edit`) take
 `IKKOKU_STUDIO_SCENARIO_SCENE`, which must be the scene whose object
-keys they address (`koikatu_cs0002591.png`: keys 0, 65 and 622). That
+keys they address (`koikatu_cs0002591.png`: keys 0, 65 and 622);
+`animation-select` and `fk-edit` additionally require
+`IKKOKU_STUDIO_ANIMATION_CATALOG` (set at import, it lets
+`setAnimation` validate and resolve the selected clip). That
 scene has neither a camera nor a route-bearing object, so the six
 camera/route scenarios take a probe scene: `camera-load-winner`,
 `camera-deactivate`, `camera-rename` and `undo-camera` run against the
@@ -138,9 +156,9 @@ produce the asserted cache entries (that is exactly the ST-T01 defect the
 pair pins).
 
 ```sh
-# Build Debug first, then (needs the five private fixture paths — scenario
-# scene, avatar, item catalog, camera probe scene, route probe scene — in
-# .local/verification/environment.json):
+# Build Debug first, then (needs the six private fixture paths — scenario
+# scene, avatar, item catalog, animation catalog, camera probe scene, route
+# probe scene — in .local/verification/environment.json):
 python3 Tools/verification/run.py \
   --manifest Tools/verification/lanes/studio-scenarios.json \
   --environment .local/verification/environment.json --strict

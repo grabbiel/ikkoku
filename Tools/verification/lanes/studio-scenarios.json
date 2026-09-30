@@ -78,6 +78,46 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-animation-select",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
+        {"env": "IKKOKU_STUDIO_ANIMATION_CATALOG", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/animation-select.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-animation-select.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Selects catalog clip [0,2,0] on character key 0 (saved clip [0,4,0]) with speed 1.5 and forceLoop on: the live animation state the preview plays matches the group/category/no exactly, speed within 1e-5, loop equal; after the original-scene export and reimport the new catalog IDs, speed and loop read back unchanged, and control character key 65 still reports its saved clip [0,0,2]. The clip actually plays on screen is not asserted (no pixel check).",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-animation-select.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/animation-select.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-fk-edit",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
+        {"env": "IKKOKU_STUDIO_ANIMATION_CATALOG", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/fk-edit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-fk-edit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Rotates FK bone 19 of character key 65 to [0,35,0] degrees (which also turns FK on): the document holds the exact degrees within 1e-5 and the left-hand guide (bone 21) sits further than 1e-5 from its pre-edit position. After export and reimport the guide lands within 0.02 of its post-edit position: export writes the degrees into the character's bone record, so after reimport the pose is asserted by bone position, not by the document's edit overlay (import never repopulates that overlay). IK mode and IK target edits stay unchecked.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-fk-edit.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/fk-edit.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-item-props",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [
