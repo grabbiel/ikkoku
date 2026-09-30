@@ -4,13 +4,51 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using BepInEx;
 using UnityEngine;
 [BepInPlugin("org.ikkoku.validation.dynamicsprobe", "Ikkoku dynamics probe", "1.0.0")]
 public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
+    // One frame's complete pre-integration state for one component. The
+    // companion driver restores exactly these values after its recorded
+    // dry-run pass so the official motion stays bit-identical.
+    internal sealed class FrameState {
+        public float time,objectScale;
+        public Vector3 objectMove,objectPrevPosition;
+        public List<Vector3> positions=new List<Vector3>(),prevPositions=new List<Vector3>();
+        public List<Vector3> localPositions=new List<Vector3>();
+        public List<Quaternion> localRotations=new List<Quaternion>();
+    }
+    internal FrameState Snapshot(DynamicBone dynamics) {
+        var state=new FrameState {
+            time=(float)Read2(dynamics,"m_Time"),objectScale=(float)Read2(dynamics,"m_ObjectScale"),
+            objectMove=(Vector3)Read2(dynamics,"m_ObjectMove"),
+            objectPrevPosition=(Vector3)Read2(dynamics,"m_ObjectPrevPosition")};
+        foreach(var particle in Read2(dynamics,"m_Particles") as IList) {
+            state.positions.Add((Vector3)Read2(particle,"m_Position"));
+            state.prevPositions.Add((Vector3)Read2(particle,"m_PrevPosition"));
+            var transform=(Transform)Read2(particle,"m_Transform");
+            if(transform==null)throw new Exception("Virtual hair end particle in manual step snapshot");
+            state.localPositions.Add(transform.localPosition);
+            state.localRotations.Add(transform.localRotation);
+        }
+        return state;
+    }
+    // The driver restores the official frame-end values itself (not the
+    // snapshot), so the official integration's output survives the dry run.
     string folder; ChaControl character; DynamicBone[] hairDynamics;
     List<DynamicBoneCollider> snapshotColliders; List<bool> snapshotEnabled;
+    // The driver may only act while the motion frame loop is between its two
+    // WaitForEndOfFrame waits and only on the frames listed below; every other
+    // LateUpdate it does nothing and the official integration is untouched.
+    internal bool recordingFrames; internal int manualFrame=-1;
+    internal DynamicBone[] hairSteps { get { return hairDynamics; } }
+    // Motion frames that additionally record one full dry-run integration of
+    // the frame; the other 87 frames stay free of any driven pass.
+    internal static readonly List<int> ManualStepFrames=new List<int>{10,11,12};
+    ManualStepDriver manualDriver;
+    internal readonly Dictionary<DynamicBone,FrameState> manualSnapshots=new Dictionary<DynamicBone,FrameState>();
     void SnapshotColliders() {
         snapshotColliders=new List<DynamicBoneCollider>();snapshotEnabled=new List<bool>();
         foreach(var collider in character.GetComponentsInChildren<DynamicBoneCollider>(true))
@@ -96,13 +134,25 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
                 {"objectMove",V((Vector3)Read(dynamics,"m_ObjectMove"))},{"objectScale",(float)Read(dynamics,"m_ObjectScale")},
                 {"objectPrevPosition",V((Vector3)Read(dynamics,"m_ObjectPrevPosition"))},
                 {"updateRate",dynamics.m_UpdateRate},{"gravity",V(dynamics.m_Gravity)},{"force",V(dynamics.m_Force)},
-                {"particles",particleRows}});
+                {"particles",particleRows},{"runtime",RuntimeRows(dynamics)}});
         }
+        manualDriver=character.gameObject.AddComponent<ManualStepDriver>();manualDriver.probe=this;
         var framesJson=new List<object>();
         var delta=float.NaN;
         for(int frame=0;frame<MotionFrames;frame++) {
             character.transform.position=MotionPosition(frame,start.x,start.z,MotionYaw(frame));
             character.transform.rotation=startRotation*Quaternion.Euler(0,MotionYaw(frame),0);
+            // The official LateUpdate keeps running on every motion frame; on
+            // manual frames the companion driver additionally runs one
+            // fully recorded dry-run integration after it and restores.
+            var manual=ManualStepFrames.Contains(frame);
+            recordingFrames=true;manualFrame=manual?frame:-1;
+            // Snapshot the complete pre-frame integration state for the driver:
+            // nothing between here and the frame's Update/LateUpdate touches
+            // these fields, so the dry-run starts from exactly what the
+            // official integration saw.
+            manualSnapshots.Clear();
+            if(manual)foreach(var dynamics in hairDynamics)manualSnapshots[dynamics]=Snapshot(dynamics);
             yield return new WaitForEndOfFrame();
             delta=Time.deltaTime;
             var componentRows=new List<object>();
@@ -123,6 +173,12 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
                     {"objectPrevPosition",V((Vector3)Read(dynamics,"m_ObjectPrevPosition"))},
                     {"updateRate",dynamics.m_UpdateRate},{"gravity",V(dynamics.m_Gravity)},{"force",V(dynamics.m_Force)},
                     {"particles",particles},{"colliders",colliderRows}});
+                var row=(Dictionary<string,object>)componentRows[componentRows.Count-1];
+                // Integration-affecting runtime particle parameters, recorded on
+                // three frames: 0 (trajectory still at the seed rest pose),
+                // 1 (one step in) and 45 (well into the motion).
+                if(frame==0||frame==1||frame==45)row["runtime"]=RuntimeRows(dynamics);
+                if(manualFrame==frame)row["manualSteps"]=manualDriver.Finish(dynamics);
             }
             var colliderFrames=new List<object>();
             foreach(var collider in colliders)colliderFrames.Add(new Dictionary<string,object>{{"name",collider.name},{"position",V(collider.transform.position)},{"rotation",Q(collider.transform.rotation)},
@@ -131,10 +187,14 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
             framesJson.Add(new Dictionary<string,object>{{"deltaTime",delta},{"character",V(character.transform.position)},
                 {"avatar",new Dictionary<string,object>{{"position",V(avatarRoot.position)},{"rotation",Q(avatarRoot.rotation)}}},
                 {"components",componentRows},{"colliders",colliderFrames}});
+            recordingFrames=false;manualFrame=-1;
         }
+        // Belt and braces: after the last frame the driver must never fire
+        // again, even if the loop is ever extended past the recorded range.
+        recordingFrames=false;manualFrame=-1;
         if(!float.IsNaN(delta)&&Math.Abs(delta-1f/60f)>1e-6f)throw new Exception("Recorded frame step drifted from the fixed capture step");
         File.WriteAllText(Path.Combine(folder,"motion.json"),J(new Dictionary<string,object>{{"schemaVersion",1},
-            {"scope","Original Unity hair particle motion under a scripted root path; the original DynamicBone integrates on top of it and the float32 replay replays the same seeded state; positions compared, rotations recorded as context only; every frame also records the integrator-internal state (per-component m_ObjectMove/m_ObjectPrevPosition/m_ObjectScale/m_Time/m_Weight/m_UpdateRate/m_Gravity/m_Force, per-particle m_Position/m_PrevPosition, per-collider lossyScale/m_Radius/m_Height/m_Center/m_Direction/m_Bound)"},
+            {"scope","Original Unity hair particle motion under a scripted root path; the original DynamicBone integrates on top of it and the float32 replay replays the same seeded state; positions compared, rotations recorded as context only; every frame also records the integrator-internal state (per-component m_ObjectMove/m_ObjectPrevPosition/m_ObjectScale/m_Time/m_Weight/m_UpdateRate/m_Gravity/m_Force, per-particle m_Position/m_PrevPosition, per-collider lossyScale/m_Radius/m_Height/m_Center/m_Direction/m_Bound); the seed and frames 0/1/45 additionally record the runtime integration parameters (per-component m_Weight, per-particle m_Damping/m_Elasticity/m_Stiffness/m_Inert/m_Radius); frames 10-12 additionally carry manualSteps, one driver-recorded dry-run integration of that frame in which a companion LateUpdate (execution order after DynamicBone) re-invokes the private InitTransforms, UpdateDynamicBones accumulator prologue, per-step UpdateParticles1/UpdateParticles2 and ApplyParticlesToTransforms in the official order and records, per step: the prologue m_ObjectScale/m_ObjectMove/m_ObjectPrevPosition and the post-accumulator m_Time and step count, per particle the post-UpdateParticles1 m_Position, each parent transform world rotation, 16-float world matrix and world position plus each child localPosition and the transform rest length right before UpdateParticles2, the post-UpdateParticles2 m_Position, and each particle transform world position and each parent transform world rotation after ApplyParticlesToTransforms; the driver restores every value it moved afterwards, so the official frame state stays exactly as the untouched integration left it"},
             {"components",states},
             {"hairIDs",new[]{0,2}},
             {"frameCount",MotionFrames},{"fixedRateHz",60},{"startPosition",V(start)},{"startRotation",Q(startRotation)},
@@ -227,7 +287,41 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
         File.WriteAllText(Path.Combine(folder,"dynamics.json"),J(new Dictionary<string,object>{{"schemaVersion",1},{"hairIDs",new[]{0,2}},{"components",components}}));
     }
     static object Read(object instance,string name){var field=instance.GetType().GetField(name,System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic);if(field==null)throw new Exception("Missing field "+name);return field.GetValue(instance);}
-    static float[] V(Vector3 v){return new[]{v.x,v.y,v.z};}static float[] Q(Quaternion q){return new[]{q.x,q.y,q.z,q.w};}
+    internal static float[] V(Vector3 v){return new[]{v.x,v.y,v.z};}internal static float[] Q(Quaternion q){return new[]{q.x,q.y,q.z,q.w};}
+    // Column-major world matrix, translation in the last four floats.
+    internal static float[] M(Matrix4x4 m){return new[]{m.m00,m.m10,m.m20,m.m30,m.m01,m.m11,m.m21,m.m31,m.m02,m.m12,m.m22,m.m32,m.m03,m.m13,m.m23,m.m33};}
+    // Runtime integration parameters, read live (SetupParticles applied the
+    // distribution curves and Clamp01; the contract only knows the curves).
+    static List<object> RuntimeRows(DynamicBone dynamics) {
+        var rows=new List<object>();
+        rows.Add(new Dictionary<string,object>{{"component",true},{"weight",(float)Read(dynamics,"m_Weight")}});
+        foreach(var particle in Read(dynamics,"m_Particles") as IList) {
+            var transform=(Transform)Read(particle,"m_Transform");
+            rows.Add(new Dictionary<string,object>{{"name",transform==null?null:transform.name},{"parent",Read(particle,"m_ParentIndex")},
+                {"damping",Read(particle,"m_Damping")},{"elasticity",Read(particle,"m_Elasticity")},{"stiffness",Read(particle,"m_Stiffness")},
+                {"inert",Read(particle,"m_Inert")},{"radius",Read(particle,"m_Radius")}});}
+        return rows;
+    }
+    // DeclaredOnly walk: Particle fields live on DynamicBone+Particle itself,
+    // private DynamicBone methods live on DynamicBone itself.
+    internal static object Read2(object instance,string name) {
+        for(var type=instance.GetType();type!=null;type=type.BaseType) {
+            var field=type.GetField(name,BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.DeclaredOnly);
+            if(field!=null)return field.GetValue(instance);}
+        throw new Exception("Missing field "+name);
+    }
+    internal static void Write2(object instance,string name,object value) {
+        for(var type=instance.GetType();type!=null;type=type.BaseType) {
+            var field=type.GetField(name,BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.DeclaredOnly);
+            if(field!=null){field.SetValue(instance,value);return;}}
+        throw new Exception("Missing field "+name);
+    }
+    internal static void Call2(object instance,string name) {
+        for(var type=instance.GetType();type!=null;type=type.BaseType) {
+            var method=type.GetMethod(name,BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.DeclaredOnly);
+            if(method!=null){method.Invoke(instance,null);return;}}
+        throw new Exception("Missing method "+name);
+    }
     static string J(object value) {
         if(value==null)return "null";var s=value as string;if(s!=null){var b=new StringBuilder("\"");foreach(char c in s){if(c=='\\'||c=='\"')b.Append('\\').Append(c);else if(c<32)b.Append("\\u").Append(((int)c).ToString("x4"));else b.Append(c);}return b.Append('"').ToString();}
         if(value is bool)return (bool)value?"true":"false";
@@ -235,5 +329,137 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
         var d=value as IDictionary;if(d!=null){var a=new List<string>();foreach(DictionaryEntry e in d)a.Add(J((string)e.Key)+":"+J(e.Value));return "{"+String.Join(",",a.ToArray())+"}";}
         var list=value as IEnumerable;if(list!=null){var a=new List<string>();foreach(var x in list)a.Add(J(x));return "["+String.Join(",",a.ToArray())+"]";}
         return Convert.ToString(value,CultureInfo.InvariantCulture);
+    }
+}
+[DefaultExecutionOrder(100)]
+// LateUpdate runs after every DynamicBone LateUpdate (execution order 100 > 0,
+// and the driver must run after because DynamicBone has no order attribute).
+// On the manual frames it re-runs one full official-equivalent integration of
+// the frame after the official one: the integrator is rolled back to the
+// pre-frame snapshot the probe took, then InitTransforms (official Update),
+// the UpdateDynamicBones accumulator prologue, per accumulator step
+// UpdateParticles1 -> UpdateParticles2 -> m_ObjectMove zero, and
+// ApplyParticlesToTransforms are invoked by reflection in that exact order,
+// recording each intermediate. The driver never touches m_Enabled: OnEnable
+// would reset every particle onto its transform. Afterwards it writes back
+// the official frame-end values (m_Time/m_ObjectMove/m_ObjectScale/
+// m_ObjectPrevPosition, per-particle m_Position/m_PrevPosition, per-particle
+// transform localPosition/localRotation, restored parents before children),
+// so the official state and the following frames stay bit-identical.
+public sealed class ManualStepDriver:MonoBehaviour {
+    public OriginalDynamicsProbe probe;
+    readonly Dictionary<DynamicBone,List<object>> rows=new Dictionary<DynamicBone,List<object>>();
+    public List<object> Finish(DynamicBone dynamics) {
+        List<object> found;
+        if(!rows.TryGetValue(dynamics,out found))throw new Exception("Manual step pass did not run for "+dynamics.name);
+        rows.Remove(dynamics);
+        return found;
+    }
+    void LateUpdate() {
+        if(probe==null||!probe.recordingFrames||probe.manualFrame<0)return;
+        foreach(var dynamics in probe.hairSteps)Run(dynamics);
+    }
+    void Run(DynamicBone dynamics) {
+        var frame=probe.manualSnapshots[dynamics];
+        var particles=OriginalDynamicsProbe.Read2(dynamics,"m_Particles") as IList;
+        if(particles==null)throw new Exception("Missing DynamicBone particle list in manual step");
+        // Official frame-end values: this driver runs after the official
+        // LateUpdate, so the live fields are exactly what the frame produced.
+        var officialTime=(float)OriginalDynamicsProbe.Read2(dynamics,"m_Time");
+        var officialScale=(float)OriginalDynamicsProbe.Read2(dynamics,"m_ObjectScale");
+        var officialMove=(Vector3)OriginalDynamicsProbe.Read2(dynamics,"m_ObjectMove");
+        var officialPrev=(Vector3)OriginalDynamicsProbe.Read2(dynamics,"m_ObjectPrevPosition");
+        var officialPositions=new List<Vector3>();var officialPrevPositions=new List<Vector3>();
+        var officialLocalPositions=new List<Vector3>();var officialLocalRotations=new List<Quaternion>();
+        foreach(var particle in particles) {
+            officialPositions.Add((Vector3)OriginalDynamicsProbe.Read2(particle,"m_Position"));
+            officialPrevPositions.Add((Vector3)OriginalDynamicsProbe.Read2(particle,"m_PrevPosition"));
+            var transform=(Transform)OriginalDynamicsProbe.Read2(particle,"m_Transform");
+            if(transform==null)throw new Exception("Virtual hair end particle in manual step");
+            officialLocalPositions.Add(transform.localPosition);
+            officialLocalRotations.Add(transform.localRotation);
+        }
+        // Roll the integrator back to the frame-start state the probe saved.
+        OriginalDynamicsProbe.Write2(dynamics,"m_Time",frame.time);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectScale",frame.objectScale);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectMove",frame.objectMove);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectPrevPosition",frame.objectPrevPosition);
+        for(int i=0;i<particles.Count;i++) {
+            OriginalDynamicsProbe.Write2(particles[i],"m_Position",frame.positions[i]);
+            OriginalDynamicsProbe.Write2(particles[i],"m_PrevPosition",frame.prevPositions[i]);
+            var transform=(Transform)OriginalDynamicsProbe.Read2(particles[i],"m_Transform");
+            transform.localPosition=frame.localPositions[i];
+            transform.localRotation=frame.localRotations[i];
+        }
+        var stepRows=new List<object>();
+        OriginalDynamicsProbe.Call2(dynamics,"InitTransforms");
+        // UpdateDynamicBones prologue, statement-by-statement in source order.
+        var owner=dynamics.transform;
+        var prologueScale=Mathf.Abs(owner.lossyScale.x);
+        var prologuePrev=(Vector3)OriginalDynamicsProbe.Read2(dynamics,"m_ObjectPrevPosition");
+        var prologueMove=owner.position-prologuePrev;
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectScale",prologueScale);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectMove",prologueMove);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectPrevPosition",owner.position);
+        int steps=1;var time=frame.time;
+        var updateRate=(float)OriginalDynamicsProbe.Read2(dynamics,"m_UpdateRate");
+        if(updateRate>0f) {
+            var interval=1f/updateRate;
+            time+=Time.deltaTime;steps=0;
+            while(time>=interval) {
+                time-=interval;
+                if(++steps>=3){time=0f;break;}
+            }
+        }
+        OriginalDynamicsProbe.Write2(dynamics,"m_Time",time);
+        var preamble=new Dictionary<string,object>{{"objectScale",prologueScale},{"objectMove",OriginalDynamicsProbe.V(prologueMove)},
+            {"objectPrevPosition",OriginalDynamicsProbe.V(prologuePrev)},{"timeAfter",time},{"steps",steps}};
+        if(steps>0) {
+            for(int step=0;step<steps;step++) {
+                OriginalDynamicsProbe.Call2(dynamics,"UpdateParticles1");
+                var afterP1=new List<object>();
+                foreach(var particle in particles) {
+                    var transform=(Transform)OriginalDynamicsProbe.Read2(particle,"m_Transform");
+                    afterP1.Add(new Dictionary<string,object>{{"name",transform.name},{"position",OriginalDynamicsProbe.V((Vector3)OriginalDynamicsProbe.Read2(particle,"m_Position"))}});}
+                var beforeP2=new List<object>();
+                for(int i=1;i<particles.Count;i++) {
+                    var particle=particles[i];
+                    var parent=(Transform)OriginalDynamicsProbe.Read2(particles[(int)OriginalDynamicsProbe.Read2(particle,"m_ParentIndex")],"m_Transform");
+                    var transform=(Transform)OriginalDynamicsProbe.Read2(particle,"m_Transform");
+                    beforeP2.Add(new Dictionary<string,object>{{"name",transform.name},{"parentName",parent.name},
+                        {"parentPosition",OriginalDynamicsProbe.V(parent.position)},{"parentRotation",OriginalDynamicsProbe.Q(parent.rotation)},
+                        {"parentMatrix",OriginalDynamicsProbe.M(parent.localToWorldMatrix)},{"localPosition",OriginalDynamicsProbe.V(transform.localPosition)},
+                        {"restLength",(parent.position-transform.position).magnitude}});}
+                OriginalDynamicsProbe.Call2(dynamics,"UpdateParticles2");
+                var afterP2=new List<object>();
+                foreach(var particle in particles) {
+                    var transform=(Transform)OriginalDynamicsProbe.Read2(particle,"m_Transform");
+                    afterP2.Add(new Dictionary<string,object>{{"name",transform.name},{"position",OriginalDynamicsProbe.V((Vector3)OriginalDynamicsProbe.Read2(particle,"m_Position"))}});}
+                OriginalDynamicsProbe.Write2(dynamics,"m_ObjectMove",Vector3.zero);
+                stepRows.Add(new Dictionary<string,object>{{"preamble",step==0?preamble:(object)new Dictionary<string,object>{{"steps",steps},{"note","m_ObjectMove zeroed after the previous step"}}},
+                    {"afterParticles1",afterP1},{"beforeParticles2",beforeP2},{"afterParticles2",afterP2}});
+            }
+        }
+        else OriginalDynamicsProbe.Call2(dynamics,"SkipUpdateParticles");
+        OriginalDynamicsProbe.Call2(dynamics,"ApplyParticlesToTransforms");
+        var afterApply=new List<object>();
+        foreach(var particle in particles) {
+            var transform=(Transform)OriginalDynamicsProbe.Read2(particle,"m_Transform");
+            afterApply.Add(new Dictionary<string,object>{{"name",transform.name},{"position",OriginalDynamicsProbe.V(transform.position)},{"rotation",OriginalDynamicsProbe.Q(transform.rotation)}});}
+        if(stepRows.Count>0)((Dictionary<string,object>)stepRows[stepRows.Count-1])["afterApply"]=afterApply;
+        else if(steps==0)stepRows.Add(new Dictionary<string,object>{{"preamble",preamble},{"skip",true},{"afterApply",afterApply}});
+        // Hand the official frame-end values back untouched.
+        OriginalDynamicsProbe.Write2(dynamics,"m_Time",officialTime);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectScale",officialScale);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectMove",officialMove);
+        OriginalDynamicsProbe.Write2(dynamics,"m_ObjectPrevPosition",officialPrev);
+        for(int i=0;i<particles.Count;i++) {
+            OriginalDynamicsProbe.Write2(particles[i],"m_Position",officialPositions[i]);
+            OriginalDynamicsProbe.Write2(particles[i],"m_PrevPosition",officialPrevPositions[i]);
+            var transform=(Transform)OriginalDynamicsProbe.Read2(particles[i],"m_Transform");
+            transform.localPosition=officialLocalPositions[i];
+            transform.localRotation=officialLocalRotations[i];
+        }
+        rows[dynamics]=stepRows;
     }
 }
