@@ -68,6 +68,7 @@ them claims whole-game parity; read each `tolerance`.
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup run, then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report; `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. |
 | `studio-scenarios.json` | Nineteen `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 19/19 checks passed 2026-09-30 with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x) and the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE`; the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
+| `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 
 ## Studio scenario hook (T-T04)
 
@@ -150,6 +151,57 @@ the check never produced (or an oversized one) FAILS the check, e.g.
 `studio-inspector-capture` while the PR #5 hooks are absent, or
 `build-debug-app` if the build itself fails.
 
+## Maker scenario hook (T-T04)
+
+When the app starts with `IKKOKU_MAKER_SCENARIO` set, `AppState` runs it
+immediately after the `IKKOKU_SOURCE_CARD` Maker import: a headless Maker
+scenario instead of the auto-capture path, exiting itself (0 when every
+step passed, 1 otherwise) — `IKKOKU_AUTOCAPTURE` is not needed in that
+mode and `IKKOKU_MAKER_SCENARIO_REPORT` is required and names the JSON
+report to write (`{"steps":[{"op","ok","detail"}],"passed","failed"}`).
+The variable names a JSON file (`Tools/verification/scenarios/maker-*.json`,
+resolved against the check's cwd, the repo root) holding `{"steps": [...]}`.
+Shape slots are plain indices into `sourceFaceValues`/`sourceBodyValues`;
+numeric compares use a 1e-5 tolerance and color components 1/255 (the card
+stores colors as bytes). A failing `assert`/edit step is recorded and the
+run continues; a failing `export`/`reimport` stops it. Both write only
+under `.local/`. Ops: `customization` `{on}` (the export precondition),
+`selectCoordinate` `{index}`, `setFace`/`setBody` `{index,value}`,
+`setColor` `{id,rgba[4]}` (draft edit plus `applySourceAppearance`),
+`resetShapes`, `export`/`reimport` `{path}`, and `assert` with any of
+`coordinate` (a draft view state; after a reimport it is the importer's
+default outfit, not a round-tripped value),
+`face`/`body` `{index,value}`, `color` `{id,rgba}`, `colorApplied` (a color
+id in `sourceAppearanceAppliedFields`), `diagnosticContains`. The scenario
+asserts only what `exportSourceCard` actually writes — face values, body
+values and the saved color edits — never the selected outfit, which is a
+view choice the export does not store. Color edits are saved per outfit
+(keyed by record and path): `maker-outfit-colors` edits the same clothes
+color id in outfits 0 and 1, checks that each outfit shows only its own
+edit, and reads both back after export and reimport. The scenarios cover the
+automatable halves of the Maker checklist in
+`docs/component-audit/README.md`; each check's `tolerance` says exactly
+which checklist claims (rendered visuals, UI controls, plug-in data) stay
+unchecked.
+
+The environment file has no plain `IKKOKU_SOURCE_CARD` key (the existing
+`IKKOKU_SOURCE_CARD_FIXTURE`/`_ORACLE` keys belong to the `maker` lane),
+so each check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key
+from `IKKOKU_MAKER_SCENARIO_CARD`. That must be a card with coordinates and
+bound colors: `synthetic-appearance-card.png` imports with seven
+coordinates and applied fields including `body.skinMainColor` and
+`clothes.parts.0.colorInfo.0.baseColor`; `cards/synthetic-current.png`
+imports with zero coordinates and no applied fields and cannot drive
+these scenarios.
+
+```sh
+# Build Debug first, then (needs the two private fixture paths — the
+# scenario card and the avatar rig — in .local/verification/environment.json):
+python3 Tools/verification/run.py \
+  --manifest Tools/verification/lanes/maker-scenarios.json \
+  --environment .local/verification/environment.json --strict
+```
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request to `main`, every push to
@@ -165,9 +217,9 @@ runners (the app's deployment target is macOS 26, so it needs Xcode 26):
   (`CODE_SIGNING_ALLOWED=NO`), because the runner has no development-team
   identity. It checks that the app compiles and links, and nothing more.
 
-The `private-source`, `maker`, `app-smoke` and `studio-scenarios` lanes stay
-local: they need the original installation, `.local/` fixtures or the
-Parallels VM. A green CI run therefore says nothing about source-data parity or
+The `private-source`, `maker`, `app-smoke`, `studio-scenarios` and
+`maker-scenarios` lanes stay local: they need the original installation,
+`.local/` fixtures or the Parallels VM. A green CI run therefore says nothing about source-data parity or
 app behavior; record the local lane results in the pull request as before. The
 workflow does not gate merges (no required status check).
 
