@@ -27,7 +27,10 @@ def passing_trace():
             obj(2,5,name='IKKOKU-B',cameraActive=False)],viewCameraKey=0,viewCameraName='IKKOKU-A'),
         'route-stop':case('route-stop',[
             obj(0,4,name='IKKOKU-A',routePlaying=False),
-            obj(3,4,name='IKKOKU-B',routePlaying=True)])})
+            obj(3,4,name='IKKOKU-B',routePlaying=True)]),
+        'route-rename':case('route-rename',[
+            obj(0,4,name='IKKOKU-A',routePlaying=True),
+            obj(3,4,name='IKKOKU-R3',routePlaying=True)])})
 
 
 def snapshot(report,label):
@@ -38,7 +41,7 @@ class CompareTests(unittest.TestCase):
     def test_a_record_where_every_edit_survives_the_reload_passes(self):
         report=compare(passing_trace(),{'hide-rename':'h1','camera-switch':'h2','route-stop':'h3'})
         self.assertTrue(report['passed'])
-        for label,count in (('hide-rename',5),('camera-switch',3),('route-stop',2)):
+        for label,count in (('hide-rename',5),('camera-switch',3),('route-stop',2),('route-rename',2)):
             case=snapshot(report,label)
             self.assertTrue(case['passed'],label)
             self.assertEqual(len(case['claims']),count)
@@ -91,6 +94,18 @@ class CompareTests(unittest.TestCase):
         trace['cases']['route-stop']['afterLoad']['objects'][1]['routePlaying']=False
         report=compare(trace)
         self.assertIn('route-stop/route-key3-playing',[c['claim'] for c in snapshot(report,'route-stop')['claims'] if c['passed'] is False])
+
+    def test_the_renamed_route_must_read_back_and_the_other_keep_its_saved_name(self):
+        trace=passing_trace()
+        trace['cases']['route-rename']['afterLoad']['objects'][1]['name']='IKKOKU-B'  # the rename was not read back
+        report=compare(trace)
+        self.assertFalse(report['passed'])
+        self.assertIn('route-rename/route-key3-name',[c['claim'] for c in snapshot(report,'route-rename')['claims'] if c['passed'] is False])
+        trace=passing_trace()
+        trace['cases']['route-rename']['afterLoad']['objects'][0]['name']='IKKOKU-R3'  # the untouched route shows the other name
+        report=compare(trace)
+        self.assertIn('route-rename/route-key0-keeps-saved-name',[c['claim'] for c in snapshot(report,'route-rename')['claims'] if c['passed'] is False])
+        self.assertTrue(snapshot(report,'route-stop')['passed'])
 
     def test_a_missing_object_reports_the_diagnostic_instead_of_raising(self):
         trace=passing_trace()
