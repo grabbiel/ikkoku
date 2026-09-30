@@ -567,7 +567,9 @@ class CheckExecutionTests(unittest.TestCase):
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
-                "setFace", "setBody", "setColor", "export", "reimport", "assert"}
+                "setFace", "setBody", "setColor", "setAnimation", "setAnimationSpeed",
+                "setForceLoop", "setFKEnabled", "setFK", "captureBone",
+                "export", "reimport", "assert"}
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "resetShapes", "export", "reimport", "assert"}
@@ -594,7 +596,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 19)
+        self.assertEqual(len(self.checks), 21)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -655,13 +657,27 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     rgba = step["rgba"]
                     self.assertEqual(len(rgba), 4)
                     self.assertTrue(all(0 <= c <= 1 for c in rgba))
+                if op == "setAnimation":
+                    for slot in ("group", "category", "no"):
+                        self.assertIsInstance(step[slot], int)
+                if op == "setAnimationSpeed":
+                    self.assertIsInstance(step["speed"], float)
+                if op == "setForceLoop":
+                    self.assertIsInstance(step["on"], bool)
+                if op in ("setFK", "captureBone"):
+                    self.assertIsInstance(step["bone"], int)
+                if op == "setFK":
+                    self.assertEqual(len(step["rotation"]), 3)
+                if op == "captureBone":
+                    self.assertTrue(step["name"],
+                                    "a captured bone needs a label to compare against: %s" % path)
                 if op in ("export", "reimport", "saveDocument", "loadDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
                 if op == "assert":
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
-                                            "sourceRuntime",
+                                            "sourceRuntime", "animation", "fk",
                                             "diagnosticContains") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if any(k in step for k in ("name", "visible", "face", "body", "color")):

@@ -94,9 +94,15 @@ example `koikatu_cs0002591.png`) with the converted-asset environment variables
 set:
 
 - [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
-      FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5).
+      FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
+      (automated in part: `scenarios/fk-edit.json` — an FK bone rotation on character
+      key 65 holds its exact degrees and moves the left-hand guide, and the pose
+      survives export → reimport; passed 2026-09-30).
 - [ ] ST-T10: the animation selection inspector changes the playing clip and speed, and
-      original export keeps the new catalog IDs (PRs #12, #16, #17).
+      original export keeps the new catalog IDs (PRs #12, #16, #17)
+      (automated in part: `scenarios/animation-select.json` — selecting catalog clip
+      [0,2,0] at speed 1.5 with forceLoop on reads back live and after export →
+      reimport; passed 2026-09-30).
 - [ ] ST-T07 hands and blink: saved hand patterns replay on both hands; cards with
       `eyesBlink` blink automatically and the Studio toggle stops it (PRs #18–#23).
 - [ ] ST-T07 neck look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, FIX/FORWARD characters

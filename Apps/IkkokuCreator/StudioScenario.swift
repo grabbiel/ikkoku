@@ -1,6 +1,7 @@
 import Foundation
 import CoreMath
 import Scene
+import Character
 import Studio
 
 /// JSON-driven Studio scenario: a scripted sequence of checklist moves over the
@@ -13,7 +14,9 @@ struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
-        /// `"setFace"`, `"setBody"`, `"setColor"`, `"export"`, `"reimport"`, `"assert"`.
+        /// `"setFace"`, `"setBody"`, `"setColor"`, `"setAnimation"`,
+        /// `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`, `"setFK"`,
+        /// `"captureBone"`, `"export"`, `"reimport"`, `"assert"`.
         let op: String
         let key: Int32?
         let visible: Bool?
@@ -43,10 +46,55 @@ struct StudioScenario: Decodable {
         let sourceRuntime: SourceRuntimeValue?
         /// assert only: a substring one import diagnostic must contain.
         let diagnosticContains: String?
+        /// setAnimation: the clip to select, mirroring the inspector's clip
+        /// popup (`StudioModel.setSourceAnimation`, phase resets to zero).
+        let group: Int32?
+        let category: Int32?
+        let no: Int32?
+        /// setAnimationSpeed: the inspector speed rate (finite and >= 0).
+        let speed: Float?
+        /// setForceLoop / setFKEnabled: the flag to set.
+        let on: Bool?
+        /// setFK / captureBone: the pose-contract catalog bone id whose world
+        /// guide the edit or the capture addresses.
+        let bone: Int32?
+        /// setFK: the replacement local rotation in euler degrees (3 values),
+        /// the number the inspector's FK readout shows.
+        let rotation: [Float]?
+        /// assert only: the live animation state the preview plays for the
+        /// named character (the inspector readback); every field is optional
+        /// and only the keys present in the JSON are compared — like the
+        /// `activeCamera` fix, an absent key must stay "not asserted".
+        let animation: AnimationValue?
+        /// assert only: the FK edit on one guide bone, optionally plus its
+        /// world displacement from a `captureBone` position.
+        let fk: FKValue?
 
         struct SlotValue: Decodable { let index: Int; let value: Float }
         struct ColorValue: Decodable { let id: String; let rgba: [Float] }
         struct RoutePlayingValue: Decodable { let key: Int32; let playing: Bool }
+        struct AnimationValue: Decodable {
+            let key: Int32
+            let group: Int32?
+            let category: Int32?
+            let no: Int32?
+            let speed: Float?
+            let forceLoop: Bool?
+        }
+        struct FKValue: Decodable {
+            let key: Int32
+            let bone: Int32
+            /// the degrees the document must hold for the bone, if declared.
+            let rotation: [Float]?
+            /// a `captureBone` label to measure this bone's live world
+            /// position against: by default the bone must have visibly moved
+            /// (a displacement beyond the numeric tolerance); `within` flips
+            /// the check to "the position was reproduced within that bound",
+            /// which is how an export/reimport leg proves the edited pose —
+            /// not just the edited number — survived the round trip.
+            let from: String?
+            let within: Float?
+        }
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
             let items: Int?
@@ -58,7 +106,8 @@ struct StudioScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
-                 activeCamera, routePlaying, sourceRuntime, diagnosticContains
+                 activeCamera, routePlaying, sourceRuntime, diagnosticContains,
+                 group, category, no, speed, on, bone, rotation, animation, fk
         }
 
         init(from decoder: Decoder) throws {
@@ -81,6 +130,18 @@ struct StudioScenario: Decodable {
             // optional, so a present object only asserts the keys it names.
             sourceRuntime = try c.decodeIfPresent(SourceRuntimeValue.self, forKey: .sourceRuntime)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
+            // Same rule as `activeCamera`/`sourceRuntime`: absent keys stay
+            // `nil` ("not asserted"); a present `animation`/`fk` object only
+            // asserts the fields it names.
+            group = try c.decodeIfPresent(Int32.self, forKey: .group)
+            category = try c.decodeIfPresent(Int32.self, forKey: .category)
+            no = try c.decodeIfPresent(Int32.self, forKey: .no)
+            speed = try c.decodeIfPresent(Float.self, forKey: .speed)
+            on = try c.decodeIfPresent(Bool.self, forKey: .on)
+            bone = try c.decodeIfPresent(Int32.self, forKey: .bone)
+            rotation = try c.decodeIfPresent([Float].self, forKey: .rotation)
+            animation = try c.decodeIfPresent(AnimationValue.self, forKey: .animation)
+            fk = try c.decodeIfPresent(FKValue.self, forKey: .fk)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
@@ -189,6 +250,95 @@ struct StudioScenario: Decodable {
             }
             return nil
         }
+        /// Positions recorded by `captureBone` steps, keyed by step name.
+        var capturedBonePositions: [String: Float3] = [:]
+        /// The state the inspector shows for a source character: the document
+        /// edit when present, the card-saved state otherwise — the same rule
+        /// as `StudioModel.selectedSourceAnimationState`, but by source key so
+        /// the check does not depend on the current selection.
+        func animationState(of id: UUID) -> SourceStudioAnimationState? {
+            guard let i = studio.doc.index(of: id), let preview = studio.sourceShapePreview(for: id) else { return nil }
+            return studio.doc.objects[i].sourceAnimation ?? SourceStudioAnimationState(record: preview.record)
+        }
+        func assertAnimation(_ step: Step, id: UUID) -> String? {
+            guard let expected = step.animation else { return nil }
+            guard let state = animationState(of: id) else {
+                return "assert animation: object \(step.key!) has no animation state (no edit, no rendered character preview)"
+            }
+            if let value = expected.group, state.group != value {
+                return "assert animation: group is \(state.group), expected \(value)"
+            }
+            if let value = expected.category, state.category != value {
+                return "assert animation: category is \(state.category), expected \(value)"
+            }
+            if let value = expected.no, state.no != value {
+                return "assert animation: no is \(state.no), expected \(value)"
+            }
+            if let value = expected.speed, !floatEqual(state.speed, value) {
+                return "assert animation: speed is \(state.speed), expected \(value)"
+            }
+            if let value = expected.forceLoop, state.forceLoop != value {
+                return "assert animation: forceLoop is \(state.forceLoop), expected \(value)"
+            }
+            return nil
+        }
+        /// The live position of one FK guide bone in the character's rig frame,
+        /// evaluated exactly like `StudioModel.sourceCharacterGizmos` before it
+        /// applies the object's own world matrix (that composition lives in
+        /// `StudioModel`'s private source-world walk and stays there). A
+        /// capture→edit→compare of this position shows the guide actually
+        /// moved — the object frame is a static similarity through the edit.
+        func boneWorld(of id: UUID, bone boneID: Int32) throws -> Float3 {
+            guard let i = studio.doc.index(of: id), let preview = studio.sourceShapePreview(for: id) else {
+                throw RigError.invalid("Bone capture needs a loaded source character.")
+            }
+            guard let target = preview.controller.targets.first(where: { $0.bone.id == Int(boneID) && $0.hasGuide }) else {
+                throw RigError.invalid("Bone \(boneID) has no original guide on this character.")
+            }
+            let object = studio.doc.objects[i]
+            let rig = preview.preview.source.rig
+            let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: studio.sourceAnimationTime)
+            let evaluated = try rig.evaluate(pose)
+            return evaluated.worldMatrices[target.node].translation
+        }
+        /// FK edits are exported as the document's own degree values, so the
+        /// live check compares the numbers the scenario wrote; the world
+        /// displacement against a `captureBone` baseline is what shows the
+        /// pose (not only the number) actually applies and survives export.
+        func assertFK(_ step: Step, id: UUID) -> String? {
+            guard let edit = step.fk else { return nil }
+            guard let i = studio.doc.index(of: id) else { return "assert fk: object \(step.key!) is not in the document" }
+            if let expected = edit.rotation {
+                guard expected.count == 3, expected.allSatisfy({ $0.isFinite }) else {
+                    return "assert fk: rotation must be three finite degrees"
+                }
+                guard let held = studio.doc.objects[i].sourceFKRotations?[Int(edit.bone)] else {
+                    return "assert fk: object \(edit.key) holds no FK rotation for bone \(edit.bone)"
+                }
+                guard floatEqual(held.x, expected[0]), floatEqual(held.y, expected[1]), floatEqual(held.z, expected[2]) else {
+                    return "assert fk: bone \(edit.bone) is (\(held.x), \(held.y), \(held.z)) degrees, expected \(expected)"
+                }
+            }
+            guard let label = edit.from else { return nil }
+            guard let base = capturedBonePositions[label] else {
+                return "assert fk: no captureBone position recorded under \"\(label)\""
+            }
+            let now: Float3
+            do { now = try boneWorld(of: id, bone: edit.bone) }
+            catch { return "assert fk: bone \(edit.bone) world position unavailable: \(error)" }
+            let dx = now.x - base.x, dy = now.y - base.y, dz = now.z - base.z
+            let moved = (dx * dx + dy * dy + dz * dz).squareRoot()
+            if let bound = edit.within {
+                guard moved <= bound else {
+                    return "assert fk: bone \(edit.bone) sits \(moved) from its captured position, expected the pose reproduced within \(bound)"
+                }
+            } else {
+                guard moved > tolerance else {
+                    return "assert fk: bone \(edit.bone) moved only \(moved) from its captured position — the guide did not move"
+                }
+            }
+            return nil
+        }
 
         scenarioLoop: for step in scenario.steps {
             // Steps run microseconds apart, inside the editor's 0.4 s
@@ -289,6 +439,83 @@ struct StudioScenario: Decodable {
                     try studio.setSourceColorEdit(id, colorID: colorID, rgba: Float4(rgba))
                     record(step, true, "source key \(step.key!) color \"\(colorID)\"=\(rgba)")
                 } catch { record(step, false, "setColor: \(error)") }
+            case "setAnimation":
+                guard let id = object(step) else { record(step, false, "setAnimation: no object with source key \(step.key ?? -1)"); continue }
+                guard let group = step.group, let category = step.category, let no = step.no else {
+                    record(step, false, "setAnimation: group/category/no are required"); continue
+                }
+                do {
+                    // A clip outside the loaded animation catalog throws here
+                    // before the document changes — selecting a real entry of
+                    // the catalog the lane fixture provides is the scenario's job.
+                    try studio.setSourceAnimation(id, group: group, category: category, no: no)
+                    record(step, true, "source key \(step.key!) animation [\(group), \(category), \(no)]")
+                } catch { record(step, false, "setAnimation: \(error)") }
+            case "setAnimationSpeed":
+                guard let id = object(step) else { record(step, false, "setAnimationSpeed: no object with source key \(step.key ?? -1)"); continue }
+                guard let speed = step.speed, speed.isFinite else {
+                    record(step, false, "setAnimationSpeed: speed missing or not finite"); continue
+                }
+                do {
+                    try studio.setSourceAnimationSpeed(id, speed)
+                    record(step, true, "source key \(step.key!) animation speed \(speed)")
+                } catch { record(step, false, "setAnimationSpeed: \(error)") }
+            case "setForceLoop":
+                guard let id = object(step) else { record(step, false, "setForceLoop: no object with source key \(step.key ?? -1)"); continue }
+                guard let on = step.on else { record(step, false, "setForceLoop: on is required"); continue }
+                do {
+                    try studio.setSourceAnimationForceLoop(id, on)
+                    record(step, true, "source key \(step.key!) forceLoop \(on)")
+                } catch { record(step, false, "setForceLoop: \(error)") }
+            case "setFKEnabled":
+                guard let id = object(step) else { record(step, false, "setFKEnabled: no object with source key \(step.key ?? -1)"); continue }
+                guard let on = step.on else { record(step, false, "setFKEnabled: on is required"); continue }
+                guard studio.sourceShapePreview(for: id) != nil else {
+                    record(step, false, "setFKEnabled: object \(step.key!) is not a rendered source character"); continue
+                }
+                // The inspector toggle acts on the current selection with no
+                // id parameter; selecting first mirrors the UI path exactly.
+                studio.selection = id
+                studio.setSourceFKEnabled(on)
+                let enabled = studio.selectedSourceIKState?.enableFK
+                if enabled == on {
+                    record(step, true, "source key \(step.key!) enableFK \(on)")
+                } else {
+                    record(step, false, "setFKEnabled: enableFK reads \(String(describing: enabled)), expected \(on)")
+                }
+            case "setFK":
+                guard let id = object(step) else { record(step, false, "setFK: no object with source key \(step.key ?? -1)"); continue }
+                guard let boneID = step.bone, let rotation = step.rotation, rotation.count == 3,
+                      rotation.allSatisfy({ $0.isFinite }) else {
+                    record(step, false, "setFK: bone and rotation [3 finite degrees] are required"); continue
+                }
+                guard let i = studio.doc.index(of: id), let preview = studio.sourceShapePreview(for: id),
+                      let target = preview.controller.targets.first(where: { $0.bone.id == Int(boneID) && $0.hasGuide }) else {
+                    record(step, false, "setFK: bone \(step.bone.map(String.init) ?? "<missing>") has no original guide on source key \(step.key ?? -1)")
+                    continue
+                }
+                // Write through the same `setSourceFKRotation` the bone guide
+                // drag calls, then evaluate the resulting pose exactly as the
+                // frame builder will; a pose that does not resolve is undone.
+                studio.setSourceFKRotation(id, boneID: Int(boneID), degrees: Float3(rotation[0], rotation[1], rotation[2]))
+                let edited = studio.doc.objects[i]
+                do {
+                    _ = try preview.editedPose(fkRotations: edited.sourceFKRotations ?? [:], faceValues: edited.sourceFaceValues,
+                        bodyValues: edited.sourceBodyValues, ikTargets: edited.sourceIKOverrides ?? [:],
+                        kinematics: edited.sourceKinematics ?? SourceStudioKinematicState(record: preview.record),
+                        animationState: edited.sourceAnimation, animationElapsed: studio.sourceAnimationTime)
+                    record(step, true, "source key \(step.key!) FK bone \(boneID)=\(rotation) degrees, enableFK \(edited.sourceKinematics?.enableFK == true)")
+                } catch { studio.undo(); record(step, false, "setFK: \(error)") }
+            case "captureBone":
+                guard let id = object(step) else { record(step, false, "captureBone: no object with source key \(step.key ?? -1)"); continue }
+                guard let boneID = step.bone, let label = step.name, !label.isEmpty else {
+                    record(step, false, "captureBone: bone and name (the capture label) are required"); continue
+                }
+                do {
+                    let position = try boneWorld(of: id, bone: boneID)
+                    capturedBonePositions[label] = position
+                    record(step, true, "captured bone \(boneID) at (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
+                } catch { record(step, false, "captureBone: \(error)") }
             case "export":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
@@ -391,6 +618,22 @@ struct StudioScenario: Decodable {
                     }
                     if let expected = runtime.rehydrations, studio.sourceRehydrationCount != expected {
                         problems.append("assert sourceRuntime: \(studio.sourceRehydrationCount) scene-file rehydrations, expected \(expected)")
+                    }
+                }
+                // The animation and FK checks resolve their own character by
+                // the source key inside the check value, like `routePlaying`.
+                if let animation = step.animation {
+                    if let animationID = studio.doc.objects.first(where: { $0.sourceObjectKey == animation.key })?.id {
+                        if let problem = assertAnimation(step, id: animationID) { problems.append(problem) }
+                    } else {
+                        problems.append("assert animation: no object with source key \(animation.key)")
+                    }
+                }
+                if let edit = step.fk {
+                    if let fkID = studio.doc.objects.first(where: { $0.sourceObjectKey == edit.key })?.id {
+                        if let problem = assertFK(step, id: fkID) { problems.append(problem) }
+                    } else {
+                        problems.append("assert fk: no object with source key \(edit.key)")
                     }
                 }
                 if let needle = step.diagnosticContains {

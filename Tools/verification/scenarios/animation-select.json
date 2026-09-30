@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"op": "setAnimation", "key": 0, "group": 0, "category": 2, "no": 0},
+    {"op": "setAnimationSpeed", "key": 0, "speed": 1.5},
+    {"op": "setForceLoop", "key": 0, "on": true},
+    {"op": "assert", "key": 0, "animation": {"key": 0, "group": 0, "category": 2, "no": 0, "speed": 1.5, "forceLoop": true}},
+    {"op": "export", "path": ".local/verification/scenario-exports/animation-select.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/animation-select.png"},
+    {"op": "assert", "key": 0, "animation": {"key": 0, "group": 0, "category": 2, "no": 0, "speed": 1.5, "forceLoop": true}},
+    {"op": "assert", "key": 65, "animation": {"key": 65, "group": 0, "category": 0, "no": 2}}
+  ]
+}
