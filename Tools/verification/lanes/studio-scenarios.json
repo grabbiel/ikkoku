@@ -3,10 +3,19 @@
   "checks": [
     {
       "id": "studio-scenario-visibility-folder",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/visibility-folder.json",
@@ -15,17 +24,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "Hides source object key 622 (folder), exports the original scene and reimports it: the folder reads back hidden and the character inside it stays visible. The CharaStudio side of ST-T03 visibility (reloading the exported scene in the original player) is not covered here.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-visibility-folder.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/visibility-folder.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-visibility-folder.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/visibility-folder.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-rename-folder",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/rename-folder.json",
@@ -34,17 +58,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "Renames source object key 622 (folder), exports the original scene and reimports it: the new name reads back. Camera and route renames are not exercised because the fixture scene contains neither object type; the character-name rejection half of ST-T03 rename is a StudioModel export guard covered by the Engine suite.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-rename-folder.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/rename-folder.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-rename-folder.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/rename-folder.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-face-shape",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/face-shape.json",
@@ -53,17 +92,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "Edits face slot 20 on character key 0 and body slot 0 on character key 65, exports the original scene and reimports it: both rates read back within 1e-5. The inspector's live visual update and Reset to card are not covered (no headless pixel or reset assertion).",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-face-shape.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/face-shape.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-face-shape.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/face-shape.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-color-edit",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/color-edit.json",
@@ -72,18 +126,36 @@
       "referenceTier": "app-smoke",
       "tolerance": "Edits the body.skinMainColor card color on character key 0, exports the original scene and reimports it: the edited rgba reads back on every component within 1e-5. The hair color edit is NOT part of this scenario: hair.parts.0.baseColor is a draft color on this card but binds no material on the imported assembly, so export skips the writeback; the live preview update and Reset to card stay unchecked.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-color-edit.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/color-edit.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-color-edit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/color-edit.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-animation-select",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
-        {"env": "IKKOKU_STUDIO_ANIMATION_CATALOG", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/animation-select.json",
@@ -92,18 +164,36 @@
       "referenceTier": "app-smoke",
       "tolerance": "Selects catalog clip [0,2,0] on character key 0 (saved clip [0,4,0]) with speed 1.5 and forceLoop on: the live animation state the preview plays matches the group/category/no exactly, speed within 1e-5, loop equal; after the original-scene export and reimport the new catalog IDs, speed and loop read back unchanged, and control character key 65 still reports its saved clip [0,0,2]. The clip actually plays on screen is not asserted (no pixel check).",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-animation-select.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/animation-select.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-animation-select.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/animation-select.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-fk-edit",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
-        {"env": "IKKOKU_STUDIO_ANIMATION_CATALOG", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/fk-edit.json",
@@ -112,18 +202,36 @@
       "referenceTier": "app-smoke",
       "tolerance": "Rotates FK bone 19 of character key 65 to [0,35,0] degrees (which also turns FK on): the document holds the exact degrees within 1e-5 and the left-hand guide (bone 21) sits further than 1e-5 from its pre-edit position. After export and reimport the guide lands within 0.02 of its post-edit position: export writes the degrees into the character's bone record, so after reimport the pose is asserted by bone position, not by the document's edit overlay (import never repopulates that overlay). IK mode and IK target edits stay unchecked.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-fk-edit.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/fk-edit.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-fk-edit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/fk-edit.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-item-props",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
-        {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/item-props.json",
@@ -132,17 +240,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "With IKKOKU_STUDIO_ITEM_CATALOG set, the import diagnostics must report `Items rendered from the converted catalog: 19; unmapped keys: none.`, and an export of all 19 placeholder items plus a reimport must still report that line. The rendered transforms and saved colors of the props (the visual half of ST-T04) are not asserted.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-item-props.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/item-props.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-item-props.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/item-props.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-camera-load-winner",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-load-winner.json",
@@ -151,17 +274,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "On scene-x (two active cameras, IKKOKU-A key 0 and IKKOKU-B key 2) the import must pick the last active camera in depth-first order (key 2) as the load winner; toggling camera 0 must make it active, and after export+reimport the written flags must make key 0 the winner again. This exercises our own load/export rule (ST-A06/ST-T03 active camera); reloading the exported scene in the original CharaStudio player is not covered.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-camera-load-winner.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/camera-load-winner.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-camera-load-winner.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/camera-load-winner.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-camera-deactivate",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-deactivate.json",
@@ -170,17 +308,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "On scene-x, toggling the active camera key 2 off must leave no active camera (orbit view); export writes every camera flag false and a reimport must still show no active camera. Deactivating key 0 (not the winner) is not scripted; the reload happens in our importer, not the original player.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-camera-deactivate.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/camera-deactivate.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-camera-deactivate.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/camera-deactivate.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-camera-rename",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/camera-rename.json",
@@ -189,17 +342,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "Renames camera object key 0 on scene-x, exports the original scene and reimports it: the new name reads back on the camera placeholder (the camera-object half of ST-T03 rename, which the folder-only rename-folder scenario could not reach). The active-camera flags stay untouched by the rename; the winner (key 2) is not re-asserted here.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-camera-rename.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/camera-rename.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-camera-rename.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/camera-rename.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-route-play-state",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-play-state.json",
@@ -208,17 +376,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "On the stt11c route scene (routes key 0 and key 3, both saved active) the inspector must report key 0 playing; toggling it must stop it, and after export+reimport key 0 must read back stopped (its flag written) while key 3 still reads back playing (its flag untouched). Only the play-state flag round trip is asserted; whether the character actually animates along the route is not observable headlessly.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-route-play-state.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/route-play-state.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-route-play-state.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/route-play-state.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-undo-camera",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-camera.json",
@@ -227,18 +410,36 @@
       "referenceTier": "app-smoke",
       "tolerance": "On scene-x the two camera objects and the scene light must be live at load; renaming the folder placeholder (key 1) and undoing must keep the look-through winner (key 2), both camera entries and the scene light (before ST-T15 the undo emptied all of them), and redoing must re-apply the name. Toggling to camera key 0, exporting and reimporting must read back key 0 active: the export only rewrites the active flags because the load-winner record survived the undo. ST-T15/ST-T01 camera half.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-undo-camera.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/undo-camera.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-camera.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-camera.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-undo-props",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
-        {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-props.json",
@@ -247,17 +448,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "The props scene's 19 converted item assets and the scene light must be live at load; hiding folder key 622 and undoing must restore it visible with all 19 item entries and the scene light still cached (before ST-T15 the undo emptied them), and redoing must hide it again. Export+reimport re-asserts the hidden folder and the 19-item diagnostic. ST-T15/ST-T01 props half; the rendered assets themselves are only censused, not pixel-checked.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-undo-props.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/undo-props.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-props.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-props.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-undo-no-catalog",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-no-catalog.json",
@@ -266,17 +482,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "The props scene imported WITHOUT IKKOKU_STUDIO_ITEM_CATALOG: no item resolves to a converted asset, so no item has a runtime cache entry, legitimately. Hiding folder key 622, undoing and redoing must never re-read the scene file (rehydrations stays 0): rehydration keys off the import's coverage, not off missing entries, so such scenes keep their live camera and route state across undo. Export+reimport re-asserts the hidden folder (a reimport is an import, so still no rehydration). Rendering is not checked.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-undo-no-catalog.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/undo-no-catalog.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-no-catalog.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-no-catalog.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-undo-route",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/undo-route.json",
@@ -285,18 +516,36 @@
       "referenceTier": "app-smoke",
       "tolerance": "On the stt11c route scene, stopping route key 0 and renaming key 3 then undoing must keep both route runtimes live (2 entries; before ST-T15 the undo dropped them), roll the key 3 name back, and keep the runtime play state: key 0 stays stopped because play state is runtime-only and never part of an undo snapshot. Export+reimport then reads key 0 back stopped (its flag written by the export) and key 3 playing. ST-T15/ST-T01 route half; whether the character animates along the route is not observable headlessly.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-undo-route.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/undo-route.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-undo-route.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/undo-route.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-reload-save-props",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_STUDIO_SCENARIO_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
-        {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-props.json",
@@ -305,17 +554,31 @@
       "referenceTier": "app-smoke",
       "tolerance": "Saves the imported props scene natively (StudioModel.saveScene, a Studio document card under .local/) after hiding folder key 622; the 19 converted item entries and the scene light must still be live after the save (saving must not disturb the runtime), and the hidden folder must read back hidden. The reload half is the next, ordered check. ST-T01.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-reload-save-props.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/reload-save-props.png", "kind": "saved-document"}
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-props.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-props.png",
+          "kind": "saved-document"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-reload-load-props",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
-        {"env": "IKKOKU_STUDIO_ITEM_CATALOG", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ITEM_CATALOG",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-props.json",
@@ -324,16 +587,28 @@
       "referenceTier": "app-smoke",
       "tolerance": "Loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE (the import never runs; the scenario's first step is loadDocument): folder key 622 must read back hidden and the 19 converted item entries and the scene light must be rehydrated from the original scene file the card names. Before ST-T01 a native load restored none of them. ST-T01.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-reload-load-props.json", "kind": "scenario-report"}
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-props.json",
+          "kind": "scenario-report"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-reload-save-camera",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-camera.json",
@@ -342,16 +617,27 @@
       "referenceTier": "app-smoke",
       "tolerance": "Saves scene-x natively with the load-winner camera (key 2) live: both camera cache entries and the scene light must survive the save untouched. The reload half is the next, ordered check. ST-T01.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-reload-save-camera.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/reload-save-camera.png", "kind": "saved-document"}
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-camera.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-camera.png",
+          "kind": "saved-document"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-reload-load-camera",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-camera.json",
@@ -360,16 +646,28 @@
       "referenceTier": "app-smoke",
       "tolerance": "Loads the saved scene-x card in a fresh process with no import: both camera entries and the scene light must be rehydrated and the look-through camera must be key 2, the FILE's load winner — the live camera choice a user had before the save is runtime state the document never carried and deliberately does not come back. ST-T01.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-reload-load-camera.json", "kind": "scenario-report"}
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-camera.json",
+          "kind": "scenario-report"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-reload-save-route",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-route.json",
@@ -378,16 +676,27 @@
       "referenceTier": "app-smoke",
       "tolerance": "Stops route key 0 on the stt11c route scene, then saves the document natively: both route entries and the scene light must survive, and the live play state must still report key 0 stopped (the save must not rewrite play state through the caches). The reload half is the next, ordered check. ST-T01.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-reload-save-route.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/reload-save-route.png", "kind": "saved-document"}
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-route.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-route.png",
+          "kind": "saved-document"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-reload-load-route",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-route.json",
@@ -396,7 +705,192 @@
       "referenceTier": "app-smoke",
       "tolerance": "Loads the saved route card in a fresh process with no import: both route runtimes and the scene light must be rehydrated and key 0 must report playing again, because play state restarts from the SAVED flag (true; the live stop before the save was runtime-only, exactly as after an undo keeps it). Whether the character animates along the route is not observable headlessly. ST-T01.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-reload-load-route.json", "kind": "scenario-report"}
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-route.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-eye-look-orbit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/eye-look-orbit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-eye-look-orbit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Character 65's TARGET eye look is live against the lane scene's camera; dragging the view left and right flips both iris-shift angle rates between the saturated (+1, +1) and (-1, -1) sides, raising and lowering it moves the vertical rate past +/-0.5, and the head and neck bone positions stay exactly still (no eye bones exist, so the eyes never move the skeleton). The state survives export and reimport. Iris texture pixels (EyeLookMaterialControll) stay unautomated.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-eye-look-orbit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/eye-look-orbit.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-neck-look-orbit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/neck-look-orbit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-neck-look-orbit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Character 65's neck carries the FIX override (\"FIX holds the saved neck rotation.\"): orbiting the camera across the scene never moves its head or neck bone. No TARGET/AWAY neck character exists in any scene under the fixture root, so the animated-neck half of ST-T07 neck look stays unautomated.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-neck-look-orbit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/neck-look-orbit.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-blink-toggle",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/blink-toggle.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-blink-toggle.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Automatic blinking renders a closing within 7 s of the live clock, turning the Studio toggle off holds the eyes open for the next 7 s, turning it back on blinks again, and the card's saved hand-pattern pair reads back after export and reimport.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-blink-toggle.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/blink-toggle.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hand-patterns",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_HAND_PATTERNS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hand-patterns.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hand-patterns.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "The converted hand-pattern library replays the card's saved [5, 6] pair: after 0.0667 s the left middle-finger bone has moved off its frame-0 position (clip frame 2 of the looping grip_normal) while its parent keeps its own recorded position, and the pair and the replay diagnostic survive export and reimport.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hand-patterns.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hand-patterns.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-hand-patterns-kept",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hand-patterns-kept.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hand-patterns-kept.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Without a converted pattern library the saved [5, 6] pair is reported (\"the pattern is never guessed\") and both captured hand bones hold their incoming pose across a live 0.0667 s step; the pair survives export and reimport.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-hand-patterns-kept.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/hand-patterns-kept.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     }

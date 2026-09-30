@@ -13,6 +13,11 @@ struct SourceStudioBlink {
     let eyesBlink: Bool
     private var playback = SourceBlinkPlayback()
     private var elapsed: Float?
+    /// Sticky within one observation window: set once the control rendered a
+    /// openness below fully open. A fixed-flag (non-blinking) card never
+    /// renders closed, so the flag stays false for it by construction. The
+    /// Studio scenario resets it per window (`resetBlinkObservation`).
+    private(set) var observedBlink = false
 
     init(eyesBlink: Bool) {
         self.eyesBlink = eyesBlink
@@ -36,8 +41,14 @@ struct SourceStudioBlink {
         elapsed = newElapsed
         let previous = playback.expressionBlinkRate
         try playback.update(time: newElapsed, randomInteger: randomInteger, randomFloat: randomFloat)
+        if playback.snapshot.fixedFlags == 0, playback.snapshot.openness < 1 { observedBlink = true }
         return playback.expressionBlinkRate != previous
     }
+
+    /// Starts a new observation window without disturbing the control's own
+    /// schedule; the Studio scenario's `advance` op calls it before walking
+    /// the live step so a following `blink` assert reads only this window.
+    mutating func resetObservation() { observedBlink = false }
 
     /// ChaFileStatus.eyesBlink as the Studio card loader reads it. A missing
     /// field is the card default true; a non-bool value is reported and keeps

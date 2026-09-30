@@ -105,18 +105,41 @@ set:
       reimport; passed 2026-09-30).
 - [ ] ST-T07 hands and blink: saved hand patterns replay on both hands; cards with
       `eyesBlink` blink automatically and the Studio toggle stops it (PRs #18–#23).
+      (automated in part: `scenarios/blink-toggle.json` — a live 7 s advance renders a
+      blink closing, `setAutomaticBlink` off holds the eyes open for the next 7 s and
+      back on blinks again; `scenarios/hand-patterns.json` — the saved [5, 6] pair
+      replays converted looping clips and a finger bone moves off its frame-0 position
+      within the loop, `scenarios/hand-patterns-kept.json` — without a library the pair
+      is reported and never guessed; both round-trip export → reimport; the drawn
+      blink timing itself is random per window, so the assert is "a closing rendered
+      in 7 s", not a schedule; passed 2026-09-30).
 - [ ] ST-T07 neck look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, FIX/FORWARD characters
       hold their saved neck/head, TARGET/AWAY characters follow or avoid the Studio
       camera as it orbits, and FK-neck characters are untouched (PRs #26–#38).
+      (automated in part: `scenarios/neck-look-orbit.json` — character 65's FIX override
+      ("FIX holds the saved neck rotation.") holds head and neck bone positions exactly
+      still across orbiting the camera to both sides, and the state survives export →
+      reimport; no TARGET/AWAY-neck character exists in any scene under the fixture
+      root, so the follow/avoid half and the FK-untouched half stay unautomated;
+      passed 2026-09-30).
 - [ ] ST-T07 eye look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, select a source character
       with eyes pattern こっち; orbit the camera: the Eye look readout's H rates change
       sign across the face, raising the camera moves the V rate, and no eye bone moves
       yet.
+      (automated in part: `scenarios/eye-look-orbit.json` — character 65's TARGET solver
+      reads (+1, +1) one side of the face and (-1, -1) the other (the rate lines are
+      saturated at ±1), raising/lowering the camera moves the V rate past ±0.5, and the
+      head and neck bone positions stay exactly still (this contract has no eye bones,
+      so "no eye bone moves" is proven as "no skeleton bone moves"); passed 2026-09-30).
 - [ ] ST-T07 iris rendering: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, orbit around a source
       character with eyes pattern こっち: the irises follow the camera (their textures
       shift with the look rates; eyes without the live pattern keep the resting offset
       the prefab snapshot gives). No eye bone rotates and no original-pixel comparison
       exists.
+      (automated in part: `scenarios/eye-look-orbit.json` asserts the look rates the
+      iris textures are shifted by — they flip sign across the face and the V rate
+      moves — but no rendered iris pixel is compared; the pixel half stays
+      unautomated; passed 2026-09-30).
 - [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
       object is hidden; reloading in CharaStudio shows it hidden. (automated in part:
       `Tools/verification/scenarios/visibility-folder.json` covers hide → export →

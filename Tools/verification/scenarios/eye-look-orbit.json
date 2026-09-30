@@ -1,0 +1,163 @@
+{
+  "steps": [
+    {
+      "op": "advance",
+      "seconds": 0.4
+    },
+    {
+      "op": "captureBone",
+      "key": 65,
+      "bone": 1,
+      "name": "head-rest"
+    },
+    {
+      "op": "captureBone",
+      "key": 65,
+      "bone": 2,
+      "name": "neck-rest"
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "lookType": "TARGET"
+      }
+    },
+    {
+      "op": "orbit",
+      "dx": 0,
+      "dy": 0.45
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "verticalAbove": 0.5
+      }
+    },
+    {
+      "op": "orbit",
+      "dx": 0,
+      "dy": -0.6
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "verticalBelow": -0.5
+      }
+    },
+    {
+      "op": "orbit",
+      "dx": 0,
+      "dy": 0.15
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2
+    },
+    {
+      "op": "orbit",
+      "dx": 0.5,
+      "dy": 0
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "horizontalSign": 1
+      }
+    },
+    {
+      "op": "orbit",
+      "dx": 4.5,
+      "dy": 0
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "horizontalSign": -1
+      }
+    },
+    {
+      "op": "orbit",
+      "dx": 2,
+      "dy": 0
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2,
+      "dx": 1.5
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "horizontalSign": 1
+      }
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 65,
+        "bone": 1,
+        "from": "head-rest",
+        "within": 1e-05
+      }
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 65,
+        "bone": 2,
+        "from": "neck-rest",
+        "within": 1e-05
+      }
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/eye-look-orbit.png"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/eye-look-orbit.png"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.2
+    },
+    {
+      "op": "assert",
+      "eyeLook": {
+        "key": 65,
+        "lookType": "TARGET"
+      }
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 65,
+        "bone": 1,
+        "from": "head-rest",
+        "within": 1e-05
+      }
+    }
+  ]
+}

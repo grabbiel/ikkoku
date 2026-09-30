@@ -1,0 +1,15 @@
+{
+  "steps": [
+    {"op": "assert", "handPattern": {"key": 10, "left": 5, "right": 6}},
+    {"op": "assert", "diagnosticContains": "have no converted pattern library, so both hands keep the incoming pose; the pattern is never guessed"},
+    {"op": "captureBone", "key": 10, "bone": 1, "name": "head0"},
+    {"op": "captureBone", "key": 10, "bone": 43, "name": "middle-L-0"},
+    {"op": "advance", "seconds": 0.0667},
+    {"op": "assert", "fk": {"key": 10, "bone": 1, "from": "head0", "within": 0.00001}},
+    {"op": "assert", "fk": {"key": 10, "bone": 43, "from": "middle-L-0", "within": 0.00001}},
+    {"op": "export", "path": ".local/verification/scenario-exports/hand-patterns-kept.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/hand-patterns-kept.png"},
+    {"op": "assert", "handPattern": {"key": 10, "left": 5, "right": 6}},
+    {"op": "assert", "diagnosticContains": "the pattern is never guessed"}
+  ]
+}
