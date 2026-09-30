@@ -1,0 +1,7 @@
+{
+  "steps": [
+    {"op": "assert", "activeCamera": 2, "sourceRuntime": {"cameras": 2, "sceneLight": true}},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-camera.png"},
+    {"op": "assert", "activeCamera": 2, "sourceRuntime": {"cameras": 2, "sceneLight": true}}
+  ]
+}

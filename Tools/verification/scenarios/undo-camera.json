@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {"op": "assert", "activeCamera": 2, "sourceRuntime": {"cameras": 2, "sceneLight": true}},
+    {"op": "rename", "key": 1, "name": "Undo camera rename"},
+    {"op": "undo"},
+    {"op": "assert", "key": 1, "name": "IKKOKU-F", "activeCamera": 2, "sourceRuntime": {"cameras": 2, "sceneLight": true, "rehydrations": 0}},
+    {"op": "redo"},
+    {"op": "assert", "key": 1, "name": "Undo camera rename", "activeCamera": 2, "sourceRuntime": {"cameras": 2, "sceneLight": true, "rehydrations": 0}},
+    {"op": "toggleCamera", "key": 0},
+    {"op": "export", "path": ".local/verification/scenario-exports/undo-camera.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/undo-camera.png"},
+    {"op": "assert", "activeCamera": 0}
+  ]
+}

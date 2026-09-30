@@ -291,6 +291,41 @@ cleanup. Later animation/full-body tests add separate source pose roundtrips.
 Headless verification uses `IKKOKU_SOURCE_SCENE` with an independently generated
 synthetic source-format fixture; no original scene thumbnails are rendered.
 
+### Source runtime rehydration
+
+A native Studio document card carries the document only: objects, transforms,
+visibility, the source references (scene path, SHA-256, `sourceObjectKey`,
+`sourceCharacter`) and the saved camera/route flags. It carries none of the
+SHA-gated runtime caches that preview import builds — item assets, route
+runtimes with their clocks and play state, camera objects, the scene light and
+route character previews — so a `saveScene` → `loadScene` round trip in a new
+process would restore the tree with every source object present but unrendered
+until reimport. `StudioModel.rehydrateSourceRuntime()` rebuilds those caches
+from the still-available original file. It runs after `loadScene` and after
+`undo`/`redo`, and does work only when `doc.sourceSceneSHA256` is set, the
+referenced scene file still exists with exactly that hash, and the caches
+were built for a different scene (or none) or do not cover some source
+object of the current document. Coverage — the scene hash and source object
+ids of the last import or rehydration (`sourceRuntimeCoverage`) — decides,
+not missing cache entries: a covered object may legitimately have none (an
+item key the catalog cannot resolve, every item when no catalog is supplied,
+a scene without a character light), and keying off entries would re-read the
+file on every undo and reset the live camera and route play state each time
+(the `undo-no-catalog` scenario pins this). `refresh()`'s route prune (New
+Scene's empty document, a deleted route) uncovers the pruned objects, so
+undoing back to them rehydrates. It maps
+scene records onto the document's UUIDs by `sourceObjectKey` — save/load keeps
+the `UUID` identity of every object — reuses the rig and bone-catalog paths
+saved on the first character reference, falling back to the same Maker locate
+calls an import makes, and resolves items through `IKKOKU_STUDIO_ITEM_CATALOG`
+as import does (without it items stay named, unrendered entries). The success
+path never modifies the document: a save → load → save of an unchanged scene
+file is byte-identical. Documented restart rules: `activeSourceCamera` becomes
+the file's load-winner camera (the live look-through choice is not preserved by
+the card), and route play state restarts from each route's saved `active` flag.
+A missing or changed scene file installs empty caches and appends a single
+`sourcePreviewDiagnostics` entry naming the cause; rehydration never throws.
+
 ## Routes
 
 `SourceStudioRoute` is the first route runtime piece. `SourceStudioRoute(record:)`
@@ -333,9 +368,13 @@ route renders through a second scene-identity-gated runtime-only preview map
 placed by the same walk, while its document entry keeps the unrendered
 placeholder (folder kind, fallback name, no character reference), so its
 FK/IK, animation and expression edits are unoffered and original export keeps
-rejecting them. After undo/redo the caches are empty and route children fall
-back to the route object's authored transform rather than a guess derived from
-edited document data. `ikkoku-inspect route-playback
+rejecting them. Since ST-T15 undo/redo keeps both caches (every read is gated
+by scene identity, and the snapshots of one import share object UUIDs), so
+route children keep their runtime placement across an undo; they fall back to
+the route object's authored transform only when the cache really has no entry
+for the route — nothing was imported yet, or the document came from an import
+of a different scene (an import replaces the caches, so undoing past it loses
+the earlier scene's runtime until it is imported again). `ikkoku-inspect route-playback
 <scene.png> <seconds>` samples every route of a decoded scene at one clock
 position. Since the tenth slice the Studio editor exposes the recovered
 `Play`/`Stop` presses as runtime controls (a selected route's Play/Stop button
@@ -611,8 +650,16 @@ active route behaves as before (its tween runs from the start of the preview),
 and an editor Play press on an inactive route plays it by overriding that flag
 (`SourceStudioRoutePlayback.childRootWorld`'s `activeOverride`), including the
 point-0 `Play` placement at the press instant and the `Stop` pin when the user
-stops it. Undo, redo and a new scene clear the play state along with the route
-cache. **The play state is runtime-only, not a document field:** the `active`
+stops it. Since ST-T15 undo and redo keep the play state along with the route
+cache, so an undo across a document edit finds the routes and their play state
+still there (the `undo-route` scenario pins this). A new scene keeps the
+caches too, but its empty document still runs `refresh()`'s prune against
+surviving routes — which it always did — and that drops the route runtimes,
+play state, clocks and route-character previews there; only an import reseeds
+them, so undoing a New Scene restores the scene light and the camera/item
+cache entries but not the route runtime (the final `undo-route` steps pin that
+asymmetry; whether playback resumes seamlessly from a stale `start` across New
+Scene's clock reset is not scenario-covered). **The play state is runtime-only, not a document field:** the `active`
 flag a scene record serializes is the state the original's `sceneInfo.Save`
 captured, and the controls move the preview without touching the document, so
 `SourceSceneExportValidation` has nothing there to reject. Since the third
@@ -621,8 +668,10 @@ the route record's own one-byte `active` destination
 (`SourceSceneEdits.routeActive`): every route whose current play state
 differs from the record's saved flag is patched, so a route stopped in the
 editor reloads stopped and one started there reloads playing (loading a true
-record calls `Play`). After undo/redo the gated cache is empty, the route
-reads back as its record's flag — unchanged — and nothing is written. Engine tests cover
+record calls `Play`). Before ST-T15 an undo/redo emptied the gated cache, so
+the route read back as its record's flag — unchanged — and nothing was written;
+since ST-T15 the play state survives the undo and the export writes it like
+any other runtime toggle (the `undo-route` scenario pins both halves). Engine tests cover
 the press-time offset (a press at 3 s then 13 live ticks equals a fresh stepper
 stepped 13 times; a jump to 1/30 past the press sees one tween frame, not 91),
 the before-press instant, and replay-then-stop (`swift test --package-path

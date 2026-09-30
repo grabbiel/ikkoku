@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "maker-scenario-shape-roundtrip",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_CARD", "kind": "file", "from": "IKKOKU_MAKER_SCENARIO_CARD"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-shape-roundtrip.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-shape-roundtrip.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "With the Maker customization flag on, edits face slot 20 and body slot 0 on the imported 7-coordinate card, exports the edited card and reimports it: both rates read back within 1e-5. The exported card's fresh thumbnails are written but not pixel-compared, the Maker shape sliders (the UI half of T-T04) are not driven, and opaque plug-in/Extended Save payloads are preserved by the exporter, not asserted here.",
+      "artifacts": [
+        {"path": ".local/verification/reports/maker-scenario-shape-roundtrip.json", "kind": "scenario-report"},
+        {"path": ".local/verification/maker-scenario-exports/maker-shape-roundtrip.png", "kind": "exported-card"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "maker-scenario-color-roundtrip",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_CARD", "kind": "file", "from": "IKKOKU_MAKER_SCENARIO_CARD"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-color-roundtrip.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-color-roundtrip.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Edits the saved shirt color clothes.parts.0.colorInfo.0.baseColor through the appearance draft (setColor + applySourceAppearance), exports the edited card and reimports it: the rgba reads back on every component within 1/255 (the card stores colors as bytes) and the id stays an applied appearance field. Only that one bound color is scripted; the rendered look of the edit (no pixel comparison), the color picker UI and the unbound hair color fields are not covered.",
+      "artifacts": [
+        {"path": ".local/verification/reports/maker-scenario-color-roundtrip.json", "kind": "scenario-report"},
+        {"path": ".local/verification/maker-scenario-exports/maker-color-roundtrip.png", "kind": "exported-card"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "maker-scenario-outfit-colors",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_CARD", "kind": "file", "from": "IKKOKU_MAKER_SCENARIO_CARD"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-outfit-colors.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-outfit-colors.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "On the 7-coordinate card, edits the per-outfit clothes color clothes.parts.0.colorInfo.0.baseColor in outfit 0, switches to outfit 1 (which must still show its own saved color 0.16/0.36/0.65/1.0, not the outfit-0 edit), edits the same id there, and switches back: outfit 0 must show its own edit again within 1/255. Export writes every saved color edit keyed by record and path; after a reimport outfit 0 and outfit 1 each read back their own edit. The selected outfit is NOT exported (a view choice exportSourceCard does not store), so the reimport's starting outfit is the importer's default, not a round-tripped value. Rendering and UI controls are not covered.",
+      "artifacts": [
+        {"path": ".local/verification/reports/maker-scenario-outfit-colors.json", "kind": "scenario-report"},
+        {"path": ".local/verification/maker-scenario-exports/maker-outfit-colors.png", "kind": "exported-card"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "maker-scenario-reset-shapes",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_CARD", "kind": "file", "from": "IKKOKU_MAKER_SCENARIO_CARD"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-reset-shapes.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-reset-shapes.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Edits face slot 0 and body slot 0 off their values, presses reset and exports+reimports: both slots must read the recovered shape contract default 0.5 after the reset and after the reimport within 1e-5. Only these two slots of the 52 face / 44 body values are asserted (a female card; the male body slot 0 = 0.6 contract rule is Engine-suite covered), the reset button itself is not clicked, and nothing is pixel-compared.",
+      "artifacts": [
+        {"path": ".local/verification/reports/maker-scenario-reset-shapes.json", "kind": "scenario-report"},
+        {"path": ".local/verification/maker-scenario-exports/maker-reset-shapes.png", "kind": "exported-card"}
+      ],
+      "timeout": 600
+    }
+  ]
+}

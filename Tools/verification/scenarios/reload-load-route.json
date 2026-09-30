@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-route.png"},
+    {"op": "assert", "routePlaying": {"key": 0, "playing": true}, "sourceRuntime": {"routes": 2, "sceneLight": true, "rehydrations": 1}}
+  ]
+}
