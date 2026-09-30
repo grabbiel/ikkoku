@@ -229,8 +229,151 @@ def replay_recorded(scenario, seed, frames, tolerance):
         withinTolerance=maximum <= tolerance)
 
 
-def compare(capture, document, tolerance=1e-4):
-    """Compare recorded original particle motion with the oracle replay."""
+def one_step_inputs(scenario, row):
+    """Per-frame hierarchy the integrator actually sees at LateUpdate of the frame.
+
+    InitTransforms restores every particle transform to its bind local every
+    Update while m_Weight > 0, and the capture's rest-offset scale check shows
+    the live world rest offset equals bind local x objectScale, so the chain
+    below the root keeps the raw bind locals and the recorded root world is
+    pinned with objectScale as its uniform scale: bone lengths, parent
+    localToWorldMatrix bases and the root world position then match what
+    UpdateParticles2 reads from the live transforms. The owner node carries the
+    recorded owner world position with the recorded objectScale as its scale
+    (movement, gravity/force and particle-radius scale are exactly the recorded
+    values; the previous owner position comes from the seeded frame's recorded
+    m_ObjectPrevPosition). Colliders are not restored by InitTransforms, so
+    every collider node carries its recorded world position, rotation and
+    lossy scale. A Unity lossy scale [lx, ly, lz] becomes [lx, ly, -lz]
+    under the oracle z-mirror conjugation, which keeps the collider radius
+    factor |lossyScale.z| exact and mirrors the center offset with the same
+    involution as positions.
+    """
+    nodes = copy.deepcopy(scenario['nodes'])
+    indices = {n['sourceID']: i for i, n in enumerate(nodes)}
+    definition = scenario['definition']
+    scale = float(F(row['objectScale']))
+    root = indices[definition['particles'][0]['nodeID']]
+    nodes[root].update(parent=None, translation=frame(row['root']['position']),
+                       rotation=orientation(row['root']['rotation']), scale=[scale, scale, scale])
+    owner = indices[definition['ownerID']]
+    nodes[owner].update(parent=None, translation=frame(row['owner']), rotation=[0., 0., 0., 1.],
+                        scale=[scale, scale, scale])
+    world = {c['name']: c for c in row['worldColliders']}
+    for entry, recorded in zip(definition['colliders'], row['colliders']):
+        if recorded['name'] not in world:
+            raise ValueError(f"One-step frame has no recorded collider world row for {recorded['name']}")
+        lossy = world[recorded['name']]['lossyScale']
+        nodes[indices[entry['nodeID']]].update(parent=None, translation=frame(recorded['position']),
+            rotation=orientation(recorded['rotation']),
+            scale=[float(F(lossy[0])), float(F(lossy[1])), float(F(-lossy[2]))])
+    return nodes, indices
+
+
+def replay_one_step(scenario, seed, frames, tolerance):
+    """Isolation model: one integration step from the recorded internal state.
+
+    The capture records DynamicBone's integrator-internal state
+    (m_Position/m_PrevPosition per particle, m_ObjectMove/m_ObjectScale/
+    m_Time/m_Weight/m_ObjectPrevPosition per component, per-collider
+    lossyScale/m_Radius/m_Height/m_Center/m_Direction/m_Bound). Every frame
+    starts from a freshly seeded solver holding frame k-1's recorded state
+    and predicts frame k's internal m_Position, so an error is a one-step
+    defect in the inputs or the method, not accumulated drift. Frame 0 seeds
+    from the OnEnable reset state and is the direct test of the seed
+    hypothesis: the previous-position and time deltas below report whether
+    the original ran any LateUpdate step between the recorded seed and frame
+    0. The frame-0 previous rows are reported against the seed because
+    UpdateParticles1 rewrites m_PrevPosition for root and children alike
+    before any constraint term is applied.
+    """
+    definition = scenario['definition']
+    maximum, worst_frame, worst_particle = 0.0, None, None
+    first_exceeded = None
+    step_counts, frame_errors = set(), []
+    for index, row in enumerate(frames):
+        state = seed if index == 0 else frames[index - 1]
+        seed_rows = state['particles']
+        if index > 0 and any('internalPosition' not in p for p in seed_rows):
+            raise ValueError('One-step replay needs the capture internal particle state')
+        current = ParticleReference(scenario['nodes'], definition)
+        # The OnEnable seed row names the fields position/previousPosition;
+        # recorded frames name them internalPosition/internalPrevPosition.
+        current.positions = np.array([frame(p['internalPosition'] if 'internalPosition' in p else p['position'])
+                                      for p in seed_rows], dtype=np.float32)
+        current.previous = np.array([frame(p['internalPrevPosition'] if 'internalPrevPosition' in p else p['previousPosition'])
+                                     for p in seed_rows], dtype=np.float32)
+        current.owner_position = np.array(frame(state['objectPrevPosition']), dtype=np.float32)
+        current.time = F(state['time'])
+        current.weight = F(row['weight'])
+        nodes, _ = one_step_inputs(scenario, row)
+        if index == 0:
+            # The one-step model trusts the capture's own internal state, so the
+            # only remaining oracle inputs are the serialized parameters: every
+            # one that the capture also records must match the contract before
+            # any error can be attributed to the integrator itself.
+            world = {c['name']: c for c in row['worldColliders']}
+            mismatch = [name for name, contract_value, recorded_value in (
+                ('gravity', [float(F(g)) for g in definition['gravity']], frame(row['gravity'])),
+                ('force', [float(F(g)) for g in definition['force']], frame(row['force'])),
+                ('updateRate', float(definition['updateRate']), float(row['updateRate']))) if contract_value != recorded_value]
+            # The collider lossy scale is not validated here: it is a runtime
+            # transform value with no serialized contract counterpart, so it
+            # enters the model as an input the capture's own internal state
+            # pins, and the synthetic exactness test covers the mirror.
+            for entry, recorded in zip(definition['colliders'], row['colliders']):
+                check = world[recorded['name']]
+                mismatch += [name for name, contract_value, recorded_value in (
+                    ('radius', float(F(entry['radius'])), float(F(check['radius']))),
+                    ('height', float(F(entry['height'])), float(F(check['height']))),
+                    ('direction', int(entry['direction']), int(check['direction'])),
+                    ('bound', int(entry['bound']), int(check['bound'])),
+                    # Contract centers are already in oracle space (the rig
+                    # conversion mirrored z), so only the recorded Unity-space
+                    # m_Center needs the frame conversion here.
+                    ('center', [float(F(c)) for c in entry['center']], frame(check['center'])),
+                    ('enabled', entry['enabled'], True)) if contract_value != recorded_value]
+            if mismatch:
+                raise ValueError(f"One-step frame 0 parameters differ from the oracle contract for {definition['rootName']}: {', '.join(sorted(set(mismatch)))}")
+        advanced = current.advance(nodes, float(F(row['deltaTime'])))
+        step_counts.add(advanced['lastStepCount'])
+        error = 0.0
+        for i, (particle, predicted) in enumerate(zip(row['particles'], advanced['positions'])):
+            deviation = distance(frame(particle['internalPosition']), predicted)
+            error = max(error, deviation)
+            if deviation > maximum:
+                maximum, worst_frame, worst_particle = deviation, float(index), particle['name']
+            if first_exceeded is None and deviation > tolerance:
+                first_exceeded = dict(frame=float(index), particle=particle['name'], error=deviation)
+        frame_errors.append(error)
+    seed_frame = frames[0]
+    seed_check = dict(
+        rootPreviousDelta=distance(frame(seed['particles'][0]['previousPosition']),
+                                   frame(seed_frame['particles'][0]['internalPrevPosition'])),
+        childPreviousDelta=max(distance(frame(s['previousPosition']), frame(f['internalPrevPosition']))
+                               for s, f in zip(seed['particles'][1:], seed_frame['particles'][1:])),
+        timeDelta=float(F(seed_frame['time']) - F(seed['time'])),
+        ownerPrevDelta=distance(frame(seed['objectPrevPosition']), frame(seed_frame['objectPrevPosition'])))
+    return dict(model='one-step', rootName=definition['rootName'], ownerName=definition['ownerName'],
+        particles=len(definition['particles']), colliders=len(definition['colliders']),
+        tolerance=float(tolerance), maxOneStepError=maximum,
+        worstFrame=worst_frame, worstParticle=worst_particle, firstExceeded=first_exceeded,
+        frameErrors=frame_errors,
+        stepCounts=dict(min=min(step_counts), max=max(step_counts)),
+        seedCheck=seed_check,
+        withinTolerance=maximum <= tolerance)
+
+
+def compare(capture, document, tolerance=1e-4, mode='full'):
+    """Compare recorded original particle motion with the oracle replay.
+
+    mode='full' runs the accumulated recorded-input parity gate plus the
+    bind-hierarchy rigidity diagnostic; mode='one-step' runs only the isolation
+    model, which seeds every frame from the capture's own integrator state so a
+    failure names a one-step defect instead of accumulated drift.
+    """
+    if mode not in ('full', 'one-step'):
+        raise ValueError(f'Unknown compare mode {mode}')
     if capture.get('schemaVersion') != 1:
         raise ValueError('Unsupported motion capture schema')
     frames = capture['frames']
@@ -255,16 +398,25 @@ def compare(capture, document, tolerance=1e-4):
         scenario = scenarios[key]
         for frame_row in frames:
             identity_matches(scenario['definition'], seed, frame_row['components'][index], index)
+        if mode == 'one-step':
+            results.append(replay_one_step(scenario, seed,
+                [dict(deltaTime=f['deltaTime'], worldColliders=f['colliders'], **f['components'][index]) for f in frames],
+                tolerance))
+            continue
         bind_frames = [dict(deltaTime=f['deltaTime'], avatar=f['avatar'], components=[f['components'][index]])
                        for f in frames]
         results.append(replay_component(scenario, seed, bind_frames, tolerance))
         results.append(replay_recorded(scenario, seed,
             [dict(deltaTime=f['deltaTime'], **f['components'][index]) for f in frames], tolerance))
-    gate = [row for row in results if row['model'] == 'recorded inputs']
-    worst = max(gate, key=lambda row: row['maxParticleError'])
-    return dict(schemaVersion=1, tolerance=tolerance, frameCount=len(frames),
-        scope='Recorded original DynamicBone particle positions compared with the independent float32 replay seeded from the same reset state: the parity gate replays only recorded world inputs (root, owner, colliders, deltaTime) with bind locals scaled by objectScale; the bind-hierarchy-under-recorded-avatar model is kept as a rigidity diagnostic; particle world positions compared, applied rotations recorded as context only',
-        components=results, maxParticleError=worst['maxParticleError'],
+    model = 'one-step' if mode == 'one-step' else 'recorded inputs'
+    metric = 'maxOneStepError' if mode == 'one-step' else 'maxParticleError'
+    gate = [row for row in results if row['model'] == model]
+    worst = max(gate, key=lambda row: row[metric])
+    full_scope = ('Recorded original DynamicBone particle positions compared with the independent float32 replay seeded from the same reset state: the parity gate replays only recorded world inputs (root, owner, colliders, deltaTime) with bind locals scaled by objectScale; the bind-hierarchy-under-recorded-avatar model is kept as a rigidity diagnostic; particle world positions compared, applied rotations recorded as context only')
+    one_step_scope = ('Recorded original DynamicBone integrator state (m_Position/m_PrevPosition per particle, m_ObjectMove/m_ObjectScale/m_Time/m_ObjectPrevPosition/m_Weight per component, collider lossyScale and serialized collider parameters) drives a one-step oracle prediction per frame: each frame starts from the previous frame\'s recorded internal state and predicts the recorded internal m_Position, so a reported error is a one-step input or method defect rather than accumulated drift; the root is pinned to the recorded root world with the recorded objectScale, particle chains keep raw bind locals, colliders use their recorded world transform and lossy scale')
+    return dict(schemaVersion=1, tolerance=tolerance, frameCount=len(frames), mode=mode,
+        scope=one_step_scope if mode == 'one-step' else full_scope,
+        components=results, maxParticleError=worst[metric],
         worstComponent=worst['rootName'], worstFrame=worst['worstFrame'],
         passed=all(row['withinTolerance'] for row in gate))
 
@@ -368,21 +520,29 @@ def synthetic_capture(frames=12):
     The scripted frames mirror the original motion probe (locked 1/60 step,
     swaying plus yawing root). Values are serialized in Unity space through
     the same involutive conversion the replay applies, so an exact replay of
-    this file must report zero error.
+    this file must report zero error. Each row also carries the integrator
+    internal state the one-step model reads (per-particle m_Position/
+    m_PrevPosition as internalPosition/internalPrevPosition, per-component
+    m_ObjectPrevPosition/m_Time/m_Weight/m_ObjectScale/m_UpdateRate/m_Gravity/
+    m_Force, per-collider lossyScale and serialized parameters), so a one-step
+    replay seeded from the recorded internal state must also report zero error.
     """
     nodes, definition = synthetic_rig()
     solver = ParticleReference(nodes, definition)
     avatar = solver.indices['avatar:root']
     owner_node = solver.indices['owner']
     collider_node = solver.indices['collider']
+    capsule = definition['colliders'][0]
     paths = [([float(F(np.sin(i * .11) * .34)), 0, float(F(np.sin(i * .165) * .55))],
               axis_rotation(2, float(F(np.sin(i * .14) * .5 + np.sin(i * .43) * .07)))) for i in range(frames)]
     seed_particles = [dict(name=p['nodeID'], position=frame(np.asarray(solver.positions[i], dtype=np.float32)),
                            previousPosition=frame(np.asarray(solver.previous[i], dtype=np.float32)))
                       for i, p in enumerate(definition['particles'])]
-    seed = [dict(rootName=definition['rootName'],
-        owner=frame(np.asarray(solver.owner_position, dtype=np.float32)),
+    seed_owner = frame(np.asarray(solver.owner_position, dtype=np.float32))
+    seed = [dict(rootName=definition['rootName'], owner=seed_owner,
         weight=float(solver.weight), time=float(solver.time), objectMove=[0, 0, 0], objectScale=1.0,
+        objectPrevPosition=seed_owner, updateRate=definition['updateRate'],
+        gravity=frame(definition['gravity']), force=frame(definition['force']),
         particles=seed_particles)]
     recorded = []
     for index in range(frames):
@@ -391,20 +551,44 @@ def synthetic_capture(frames=12):
         current = copy.deepcopy(nodes)
         current[avatar]['translation'] = list(paths[index][0])
         current[avatar]['rotation'] = list(paths[index][1])
+        # No owner_position override is needed: advance stores the owner world of
+        # the frame it just integrated, which is exactly the m_ObjectPrevPosition
+        # the original integrator recorded at that LateUpdate and that the next
+        # frame's movement measures against (the seed row holds the initial one).
         advanced = solver.advance(current, float(F(1 / 60)))
         worlds, rotations = hierarchy(current)
+        positions = np.asarray(advanced['positions'], dtype=np.float32)
+        previous = np.asarray(advanced['previousPositions'], dtype=np.float32)
+        owner_position = frame(worlds[owner_node][:3, 3])
         # Root and collider world rotations are serialized through the same
         # involutive conversion the replay applies, so a recorded-input replay
         # reconstructs the exact inputs the original integrator saw.
         recorded.append(dict(deltaTime=float(F(1 / 60)),
             character=frame(paths[index][0]),
             avatar=dict(position=frame(paths[index][0]), rotation=orientation(paths[index][1])),
+            # The synthetic collider node is unit-scaled in oracle space, so its
+            # Unity-space lossy scale is the z-mirror of [1, 1, 1]; the one-step
+            # replay mirrors it back to the exact oracle scale.
+            colliders=[dict(name='collider', position=frame(worlds[collider_node][:3, 3]),
+                            rotation=matrix_orientation(rotations[collider_node]),
+                            lossyScale=[1.0, 1.0, -1.0], radius=float(F(capsule['radius'])),
+                            height=float(F(capsule['height'])), center=frame(capsule['center']),
+                            direction=int(capsule['direction']), bound=int(capsule['bound']))],
             components=[dict(ownerName=definition['ownerName'], rootName=definition['rootName'],
-                owner=frame(worlds[owner_node][:3, 3]),
+                owner=owner_position,
                 root=dict(position=frame(worlds[solver.node_indices[0]][:3, 3]),
                           rotation=matrix_orientation(rotations[solver.node_indices[0]])),
-                particles=[dict(name=p['nodeID'], position=frame(predicted), rotation=[0, 0, 0, 1])
-                           for p, predicted in zip(definition['particles'], advanced['positions'])],
+                weight=float(solver.weight), time=advanced['remainder'], objectMove=[0, 0, 0],
+                objectScale=1.0,
+                # UpdateDynamicBones sets m_ObjectPrevPosition to the owner
+                # position of the frame that is being recorded, which is the
+                # position frame k+1's movement measures against.
+                objectPrevPosition=owner_position,
+                updateRate=definition['updateRate'],
+                gravity=frame(definition['gravity']), force=frame(definition['force']),
+                particles=[dict(name=p['nodeID'], position=frame(predicted), rotation=[0, 0, 0, 1],
+                                internalPosition=frame(positions[i]), internalPrevPosition=frame(previous[i]))
+                           for i, (p, predicted) in enumerate(zip(definition['particles'], advanced['positions']))],
                 colliders=[dict(name='collider', position=frame(worlds[collider_node][:3, 3]),
                                 rotation=matrix_orientation(rotations[collider_node]))])]))
     return dict(schemaVersion=1, scope='synthetic motion capture generated by the float32 oracle for replay tests',

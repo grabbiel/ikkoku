@@ -18,7 +18,7 @@ from dynamics_reference import original_document
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--capture',type=Path,required=True);p.add_argument('--rigs',type=Path,default=REPO/'.local/reverse/rigs');p.add_argument('--contract',type=Path,help='Maker-dynamics contract for the hair the fixture actually assembles (requires the matching --maker-library asset rigs); without it the canonical source-avatar document is used');p.add_argument('--maker-library',type=Path,help='Verified Maker library root containing assets/<category>-<id>/rig.json');p.add_argument('--output',type=Path,required=True);p.add_argument('--tolerance',type=float,default=1e-4)
+    p.add_argument('--capture',type=Path,required=True);p.add_argument('--rigs',type=Path,default=REPO/'.local/reverse/rigs');p.add_argument('--contract',type=Path,help='Maker-dynamics contract for the hair the fixture actually assembles (requires the matching --maker-library asset rigs); without it the canonical source-avatar document is used');p.add_argument('--maker-library',type=Path,help='Verified Maker library root containing assets/<category>-<id>/rig.json');p.add_argument('--output',type=Path,required=True);p.add_argument('--tolerance',type=float,default=1e-4);p.add_argument('--mode',choices=('full','one-step'),default='full',help='full runs the accumulated recorded-input parity gate; one-step seeds every frame from the capture internal state and predicts one integration step')
     a=p.parse_args()
     if not a.output.resolve().is_relative_to((REPO/'.local').resolve()): raise ValueError('Original-derived reports stay in .local')
     capture=json.loads(a.capture.read_text())
@@ -27,7 +27,7 @@ def main():
         document=original_scene_document(a.rigs,json.loads(a.contract.read_text()),capture['hairIDs'],a.maker_library)
     else:
         document=original_document(a.rigs)
-    result=compare(capture,document,a.tolerance)
+    result=compare(capture,document,a.tolerance,a.mode)
     result['hierarchyRigs']=document.get('hierarchyRigs')
     inputs=[a.capture,a.rigs/'source-dynamics.json',Path(__file__)]+([a.contract,a.maker_library/'library.json'] if a.contract else [])+[Path(path) for path in document.get('hierarchyRigs',[])]
     result['evidence']=[dict(path=str(path.resolve()),sha256=hashlib.sha256(path.read_bytes()).hexdigest()) for path in inputs]

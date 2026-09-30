@@ -242,6 +242,47 @@ recorded capture are only 1–4 cm, so the residual is a model/input gap in the
 first-step integration, not chaotic drift. This is reported, per the capture
 protocol, and no Swift solver was changed on its account.
 
+The **one-step model** (`compare_dynamics_motion.py --mode one-step`, capture
+evidence `.local/reverse/original-dynamics-probe-stt08b/motion.json`) isolates
+that first step: the probe now also records DynamicBone's integrator-internal
+state — per-particle `m_Position`/`m_PrevPosition`
+(`internalPosition`/`internalPrevPosition`), per-component
+`m_ObjectPrevPosition`/`m_Time`/`m_Weight`/`m_ObjectScale` and per-collider
+`lossyScale` plus serialized `m_Radius`/`m_Height`/`m_Center`/`m_Direction`/
+`m_Bound` — and every frame is predicted from frame k−1's own recorded state
+with a freshly seeded solver, so an error cannot be accumulated drift. Frame-0
+serialized parameters are validated against the contract before any error is
+reported. The gate still fails at frame 0 (per-component one-step maxima
+0.12691/0.12579/0.14196/0.04991/0.04014/0.06197/0.03811 m, worst frames
+59/82/22/57/80/60/43), but the seed check pins where the divergence is *not*:
+`rootPreviousDelta` and `timeDelta` are exactly 0 with step counts 1/1, so the
+recorded `OnEnable` seed is the state the original actually integrated from —
+hypothesis (a), a wrong seed, is refuted (`childPreviousDelta` 329.01 and
+`ownerPrevDelta` 470.02 m reflect the external CharaStudio relocation between
+the seed read and frame 0, not integrator history). The stage-by-stage
+reconstruction names the first differing term as the `UpdateParticles2`
+elasticity restore: at frames 1/2/59 of `cf_J_hairBR_00` the original recorded
+`m_Position` of the second particle sits at the oracle-predicted `desired`
+position within 1.7e-5–1.2e-4 m, while the oracle — using the serialized
+per-particle `m_Elasticity` 0.1735 — leaves it on the stiffness limit sphere
+0.016–0.025 m short. Re-running the replay with elasticity forced to 1 drops
+the per-particle medians on `cf_J_hairBR_00` from
+0.0296/0.0548/0.0799/0.1047 to 6e-5/0.0123/0.0292/0.0479 m and the component
+maxima to 0.0167–0.0627 m, and elasticity 1 with stiffness 0 is bit-identical
+to elasticity 1, so the original's stiffness phase is inactive on these
+particles. The oracle itself reproduces the recorded single-step identities it
+can see, so hypothesis (c), an oracle defect, is refuted; what remains is
+hypothesis (b) in parameter semantics: the serialized per-particle
+`m_Elasticity` is not the effective restore coefficient of the original's
+integration (effective ≈ 1.0 at the first child), not a wrong collider scale,
+owner-inertia `m_ObjectMove` or accumulator. Remaining chain error after the
+fix at particle 1 persists at particles 2–4 (medians 0.012–0.048 m), so their
+restore/history chain still differs and is the open part of `ST-T08`. The
+frame-0 owner jump itself is unrecoverable from this capture:
+`ownerPrevDelta` 470.02 m shows the seed-to-frame-0 owner gap, so `m_ObjectMove`
+at frame 0 is not reconstructible and the frame-0 second-particle error is not
+fully attributable.
+
 Caveats and non-coverage: an external CharaStudio scene script relocates the
 character root every frame (the recorded root path follows the scripted
 sinusoid in x to the jitter but not in y/z), so the comparison is valid only
@@ -250,8 +291,9 @@ script — feed the oracle's owner-inertia channel; the seeded `objectMove` was
 zero at reset. Whether any collider was actually contacted is unrecorded (the
 oracle models the collision branches but the capture writes no contact
 events), applied particle rotations are context only
-(`ApplyParticlesToTransforms` is not ported), and per-collider lossy scales
-are assumed equal to `objectScale`.
+(`ApplyParticlesToTransforms` is not ported), and in the stt08a full-model runs
+per-collider lossy scales are assumed equal to `objectScale` (the stt08b
+capture records them per collider).
 
 ```sh
 .local/reverse/unitypy-venv/bin/python Tools/reverse/original_dynamics_probe.py --motion
@@ -262,6 +304,12 @@ are assumed equal to `objectScale`.
   --contract .local/reverse/studio-dynamics/maker-dynamics.json \
   --maker-library .local/reverse/maker-library \
   --output .local/reverse/dynamics-motion/stt08a-compare.json
+# Isolation model, needs the stt08b capture with the internal integrator state:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_dynamics_motion.py \
+  --capture .local/reverse/original-dynamics-probe-stt08b/motion.json \
+  --contract .local/reverse/studio-dynamics/maker-dynamics.json \
+  --maker-library .local/reverse/maker-library \
+  --output .local/stt08b/one-step-report.json --mode one-step --tolerance 1e-5
 ```
 
 Next tasks (`ST-T08`) are to capture actual-player particle trajectories and
