@@ -277,8 +277,15 @@ final class StudioModel: ViewportInputHandler {
             return
         }
         guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
+        advanceLiveFrame()
+    }
+
+    /// One live step of the source animation: blink clocks, TARGET/AWAY neck
+    /// gaze, eye gaze, dynamics and route clocks, then a refresh. The scenario
+    /// runner drives the same method so its lane exercises the app's own step.
+    func advanceLiveFrame(deltaTime: Float = 1 / 30) {
         animTime = CFAbsoluteTimeGetCurrent() - startTime
-        sourceAnimationTime += 1 / 30
+        sourceAnimationTime += deltaTime
         // Each card's saved eyesBlink flag decides whether its blink clock
         // schedules blinks; this tick already rebuilds the frame every step, so a
         // rate change needs no extra refresh condition here.
@@ -294,7 +301,7 @@ final class StudioModel: ViewportInputHandler {
             do {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
                 let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
-                _ = try preview.updateNeckLook(deltaTime: 1 / 30, cameraModelPosition: camera,
+                _ = try preview.updateNeckLook(deltaTime: deltaTime, cameraModelPosition: camera,
                     fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
                     kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
                     animationElapsed: sourceAnimationTime)
@@ -309,14 +316,14 @@ final class StudioModel: ViewportInputHandler {
             do {
                 let world = try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
                 let camera = UnityCoordinates.position(world.inverse.transformPoint(viewCamera.position))
-                _ = try preview.updateEyeLook(deltaTime: 1 / 30, cameraModelPosition: camera,
+                _ = try preview.updateEyeLook(deltaTime: deltaTime, cameraModelPosition: camera,
                     fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
                     kinematics: object.sourceKinematics, animationState: object.sourceAnimation,
                     animationElapsed: sourceAnimationTime)
             } catch { status = "Source eye gaze: \(error)" }
         }
-        for preview in sourceInstances.values { try? preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: 1 / 30) }
-        stepSourceRouteClocks(delta: 1 / 30)
+        for preview in sourceInstances.values { try? preview.setDynamicsStep(elapsed: sourceAnimationTime, deltaTime: deltaTime) }
+        stepSourceRouteClocks(delta: deltaTime)
         refresh()
     }
 
@@ -401,6 +408,12 @@ final class StudioModel: ViewportInputHandler {
     /// Live preview for shape editing; route-character placeholder entries
     /// have no editable preview and keep showing the saved-only inspector.
     func sourceShapePreview(for id: UUID) -> SourceStudioCharacterPreview? { sourceInstances[id] }
+
+    /// Every rendered character preview, in unspecified order: the same set
+    /// the live tick's blink loop walks, so the scenario's `advance` op resets
+    /// each card's blink observation window the way its own step would see
+    /// it. Edit paths keep addressing one preview through `sourceShapePreview`.
+    var renderedSourceCharacterPreviews: [SourceStudioCharacterPreview] { Array(sourceInstances.values) }
 
     /// Shape edit entry point. Rebuilds the preview baseline first, so a
     /// rejected array leaves both the preview and the document untouched;

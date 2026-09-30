@@ -569,6 +569,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
                 "setFace", "setBody", "setColor", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "captureBone",
+                "advance", "orbit", "setAutomaticBlink",
                 "export", "reimport", "assert"}
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
@@ -596,7 +597,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 24)
+        self.assertEqual(len(self.checks), 29)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -678,6 +679,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
                                             "sourceRuntime", "animation", "fk",
+                                            "eyeLook", "blink", "handPattern",
                                             "diagnosticContains") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if any(k in step for k in ("name", "visible", "face", "body", "color")):

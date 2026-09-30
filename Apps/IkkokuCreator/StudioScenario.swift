@@ -16,7 +16,8 @@ struct StudioScenario: Decodable {
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"setAnimation"`,
         /// `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`, `"setFK"`,
-        /// `"captureBone"`, `"export"`, `"reimport"`, `"assert"`.
+        /// `"captureBone"`, `"advance"`, `"orbit"`, `"setAutomaticBlink"`,
+        /// `"export"`, `"reimport"`, `"assert"`.
         let op: String
         let key: Int32?
         let visible: Bool?
@@ -69,6 +70,50 @@ struct StudioScenario: Decodable {
         /// assert only: the FK edit on one guide bone, optionally plus its
         /// world displacement from a `captureBone` position.
         let fk: FKValue?
+        /// advance: how many seconds of live animation to run. The op walks
+        /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
+        /// scenario exercises the app's live tick, not a re-implementation.
+        let seconds: Float?
+        /// orbit: the mouse-drag deltas handed to `doc.camera.orbit(dx:dy:)`
+        /// (yaw -= dx, pitch += dy, radians).
+        let dx: Float?
+        let dy: Float?
+        /// assert only: the eye-gaze readout of a live-pattern character;
+        /// every field is optional and only the keys present in the JSON are
+        /// compared — like the `activeCamera` fix, an absent key stays
+        /// "not asserted".
+        let eyeLook: EyeLookValue?
+        /// assert only: whether this card's blink control rendered a closing
+        /// since the last `advance` reset (`happening`).
+        let blink: BlinkValue?
+        /// assert only: the saved hand-pattern numbers the character's record
+        /// carries for the left and right hand (0 is "no pattern").
+        let handPattern: HandPatternValue?
+
+        struct EyeLookValue: Decodable {
+            let key: Int32
+            /// the look type the effective eyes pattern resolves to.
+            let lookType: String?
+            /// -1 or 1: the sign both horizontal iris-shift rates (L, R) must
+            /// share, so orbiting to the other side of the face can assert the
+            /// sign flipped.
+            let horizontalSign: Int?
+            /// the vertical rate must be strictly above / below this bound.
+            let verticalAbove: Double?
+            let verticalBelow: Double?
+        }
+        struct BlinkValue: Decodable {
+            let key: Int32
+            /// what `didBlink` must read for this card since the last
+            /// `advance` reset: true proves a rendered blink, false (with a
+            /// prior `advance`) proves the clock stayed open.
+            let happening: Bool
+        }
+        struct HandPatternValue: Decodable {
+            let key: Int32
+            let left: Int32?
+            let right: Int32?
+        }
 
         struct SlotValue: Decodable { let index: Int; let value: Float }
         struct ColorValue: Decodable { let id: String; let rgba: [Float] }
@@ -107,7 +152,8 @@ struct StudioScenario: Decodable {
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains,
-                 group, category, no, speed, on, bone, rotation, animation, fk
+                 group, category, no, speed, on, bone, rotation, animation, fk,
+                 seconds, dx, dy, eyeLook, blink, handPattern
         }
 
         init(from decoder: Decoder) throws {
@@ -142,6 +188,15 @@ struct StudioScenario: Decodable {
             rotation = try c.decodeIfPresent([Float].self, forKey: .rotation)
             animation = try c.decodeIfPresent(AnimationValue.self, forKey: .animation)
             fk = try c.decodeIfPresent(FKValue.self, forKey: .fk)
+            seconds = try c.decodeIfPresent(Float.self, forKey: .seconds)
+            dx = try c.decodeIfPresent(Float.self, forKey: .dx)
+            dy = try c.decodeIfPresent(Float.self, forKey: .dy)
+            // Same rule as `activeCamera`/`sourceRuntime`: an absent key stays
+            // `nil` ("not asserted"); a present check object only asserts the
+            // fields it names.
+            eyeLook = try c.decodeIfPresent(EyeLookValue.self, forKey: .eyeLook)
+            blink = try c.decodeIfPresent(BlinkValue.self, forKey: .blink)
+            handPattern = try c.decodeIfPresent(HandPatternValue.self, forKey: .handPattern)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
@@ -292,8 +347,12 @@ struct StudioScenario: Decodable {
             guard let i = studio.doc.index(of: id), let preview = studio.sourceShapePreview(for: id) else {
                 throw RigError.invalid("Bone capture needs a loaded source character.")
             }
-            guard let target = preview.controller.targets.first(where: { $0.bone.id == Int(boneID) && $0.hasGuide }) else {
-                throw RigError.invalid("Bone \(boneID) has no original guide on this character.")
+            // Any catalog bone resolves, guide or not: the FK ops keep
+            // requiring a guide at their own step, but the eye bones have no
+            // guide (the iris shift is a texture offset) and are exactly the
+            // bones a camera orbit must NOT move.
+            guard let target = preview.controller.targets.first(where: { $0.bone.id == Int(boneID) }) else {
+                throw RigError.invalid("Bone \(boneID) is not in this character's pose contract.")
             }
             let object = studio.doc.objects[i]
             let rig = preview.preview.source.rig
@@ -338,6 +397,83 @@ struct StudioScenario: Decodable {
                 }
             }
             return nil
+        }
+
+        /// The rendered preview of the character a key-carrying assert names:
+        /// the same live engine object the inspector's readouts use, so the
+        /// eye look, blink and hand-pattern asserts read the app's own state.
+        func characterPreview(_ key: Int32) -> SourceStudioCharacterPreview? {
+            guard let id = studio.doc.objects.first(where: { $0.sourceObjectKey == key })?.id else { return nil }
+            return studio.sourceShapePreview(for: id)
+        }
+        /// The eye-gaze readout: the live look type, the two horizontal iris
+        /// shift rates (L, R) and the single vertical rate the calculator
+        /// reported on its last stepped frame. Absent keys are not asserted.
+        func assertEyeLook(_ step: Step) -> String? {
+            guard let check = step.eyeLook else { return nil }
+            guard let preview = characterPreview(check.key) else {
+                return "assert eyeLook: source key \(check.key) is not a rendered character"
+            }
+            guard let rates = preview.eyeLookRates else {
+                return "assert eyeLook: character \(check.key) has no live eye look\(preview.eyeLookKeptReason.map { " (\($0))" } ?? "")"
+            }
+            if let expected = check.lookType, rates.lookType.rawValue != expected {
+                return "assert eyeLook: look type is \(rates.lookType.rawValue), expected \(expected)"
+            }
+            if let sign = check.horizontalSign {
+                guard sign == -1 || sign == 1 else { return "assert eyeLook: horizontalSign must be -1 or 1" }
+                guard rates.horizontal.count == 2, rates.horizontal.allSatisfy({ $0.isFinite }) else {
+                    return "assert eyeLook: horizontal rates read \(rates.horizontal)"
+                }
+                guard rates.horizontal.allSatisfy({ $0 * Double(sign) > 0 }) else {
+                    return "assert eyeLook: horizontal rates (\(rates.horizontal[0]), \(rates.horizontal[1])) do not share the \(sign > 0 ? "positive" : "negative") side"
+                }
+            }
+            if let bound = check.verticalAbove, !(rates.vertical > bound) {
+                return "assert eyeLook: vertical rate \(rates.vertical) is not above \(bound)"
+            }
+            if let bound = check.verticalBelow, !(rates.vertical < bound) {
+                return "assert eyeLook: vertical rate \(rates.vertical) is not below \(bound)"
+            }
+            return nil
+        }
+        /// Whether this card's recovered blink control rendered a closing
+        /// since the last `advance` reset. A card with `eyesBlink` off renders
+        /// the fixed sentinel and cannot set it at all, which is what the
+        /// "the Studio toggle stops it" leg asserts against.
+        func assertBlink(_ step: Step) -> String? {
+            guard let check = step.blink else { return nil }
+            guard let preview = characterPreview(check.key) else {
+                return "assert blink: source key \(check.key) is not a rendered character"
+            }
+            guard preview.didBlink == check.happening else {
+                return "assert blink: character \(check.key) \(preview.didBlink ? "rendered a blink closing" : "stayed open") since the last advance, expected happening=\(check.happening)"
+            }
+            return nil
+        }
+        /// The hand-pattern numbers the character's record carries for each
+        /// hand (the saved `handPatterns` pair the loader replays), asserted
+        /// only for the hands the JSON names.
+        func assertHandPattern(_ step: Step) -> String? {
+            guard let check = step.handPattern else { return nil }
+            guard let preview = characterPreview(check.key) else {
+                return "assert handPattern: source key \(check.key) is not a rendered character"
+            }
+            let saved = preview.record.handPatterns
+            var problems: [String] = []
+            for (hand, expected) in [("left", check.left), ("right", check.right)] {
+                if let expected {
+                    let index = hand == "left" ? 0 : 1
+                    guard saved.indices.contains(index) else {
+                        problems.append("\(hand) pattern: the record carries only \(saved)")
+                        continue
+                    }
+                    if saved[index] != expected {
+                        problems.append("\(hand) saved pattern is \(saved[index]), expected \(expected)")
+                    }
+                }
+            }
+            return problems.isEmpty ? nil : "assert handPattern: character \(check.key) " + problems.joined(separator: "; ")
         }
 
         scenarioLoop: for step in scenario.steps {
@@ -516,6 +652,45 @@ struct StudioScenario: Decodable {
                     capturedBonePositions[label] = position
                     record(step, true, "captured bone \(boneID) at (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureBone: \(error)") }
+            case "advance":
+                guard let seconds = step.seconds, seconds.isFinite, seconds > 0, seconds <= 3600 else {
+                    record(step, false, "advance: seconds must be a finite duration in (0, 3600]"); continue
+                }
+                // A new blink observation window: a following
+                // `blink {happening: true}` then proves a closing rendered
+                // during exactly this scripted run, and `happening: false`
+                // (after a prior advance) proves the clock stayed open.
+                for preview in studio.renderedSourceCharacterPreviews { preview.resetBlinkObservation() }
+                // The app's own live step, walked at its own 1/30 s cadence;
+                // with `setAutomaticBlink` off the same call skips the blink
+                // clocks, exactly like the timer tick.
+                var remaining = seconds
+                var frames = 0
+                while remaining > 0 {
+                    let delta = min(1 / 30, remaining)
+                    studio.advanceLiveFrame(deltaTime: delta)
+                    remaining -= delta
+                    frames += 1
+                }
+                record(step, true, "advanced \(frames) live frames (\(seconds)s); animation clock \(studio.sourceAnimationTime)")
+            case "orbit":
+                guard let dx = step.dx, let dy = step.dy, dx.isFinite, dy.isFinite else {
+                    record(step, false, "orbit: dx and dy (radian drag deltas) are required"); continue
+                }
+                // The view's drag gesture is refused while a source camera
+                // object is looked through; the scenario mirrors that refusal
+                // instead of silently orbiting a camera nobody sees through.
+                guard studio.activeSourceCamera == nil else {
+                    record(step, false, "orbit: camera \"\(studio.activeSourceCameraName ?? "?")\" is looked through; the drag is refused"); continue
+                }
+                studio.doc.camera.orbit(dx: dx, dy: dy)
+                record(step, true, "orbit dx=\(dx) dy=\(dy): yaw \(studio.doc.camera.yaw), pitch \(studio.doc.camera.pitch)")
+            case "setAutomaticBlink":
+                guard let on = step.on else { record(step, false, "setAutomaticBlink: on is required"); continue }
+                // The Studio toggle's own property; its didSet forwards to
+                // every rendered character's preview.
+                studio.sourceAutomaticBlink = on
+                record(step, true, "source automatic blink \(on)")
             case "export":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
@@ -636,6 +811,12 @@ struct StudioScenario: Decodable {
                         problems.append("assert fk: no object with source key \(edit.key)")
                     }
                 }
+                // The eye look, blink and hand-pattern checks resolve their
+                // own character by the source key inside the check value,
+                // like `animation`/`fk`.
+                if let problem = assertEyeLook(step) { problems.append(problem) }
+                if let problem = assertBlink(step) { problems.append(problem) }
+                if let problem = assertHandPattern(step) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
                     let diagnostics = studio.doc.sourcePreviewDiagnostics ?? []
                     if !diagnostics.contains(where: { $0.contains(needle) }) {
