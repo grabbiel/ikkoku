@@ -283,6 +283,84 @@ frame-0 owner jump itself is unrecoverable from this capture:
 at frame 0 is not reconstructible and the frame-0 second-particle error is not
 fully attributable.
 
+The **manual-step intermediates** (capture evidence
+`.local/reverse/original-dynamics-probe-stt08c/motion.json`) settle which stage
+the one-step residual belongs to. The fixture gained a manual-step sub-mode for
+frames 10/11/12: it rolls the frame back to its frame-start snapshot, re-runs
+the private chain by reflection in exactly the source order —
+`InitTransforms`, the `UpdateDynamicBones` prologue (recomputing
+`m_ObjectScale = |lossyScale.x|` 0.8683459, `m_ObjectMove` and
+`m_ObjectPrevPosition`), the same accumulator loop (one step per frame),
+`UpdateParticles1` → record every `m_Position` → record each bone's live
+`localToWorldMatrix` (whose column 3 `UpdateParticles2` overwrites with the
+parent particle's current `m_Position`) plus each child's `localPosition` and
+live bone length → `UpdateParticles2` → record every `m_Position` →
+`ApplyParticlesToTransforms` — then writes the official frame-end
+`m_Position`/`m_PrevPosition` back, so the dry run leaves the integrator state
+untouched. The capture also records each particle's RUNTIME
+`m_Damping`/`m_Elasticity`/`m_Stiffness`/`m_Inert`/`m_Radius` plus `m_Weight` at
+the seed and again at frames 0/1/45, and per manual frame every collider's
+world position/rotation/lossyScale plus serialized radius/height/center/
+direction/bound.
+
+`Tools/reverse/analysis/dynamics_manual_steps.py` re-predicts
+`UpdateParticles2` from exactly those recorded inputs — elasticity pull toward
+`desired`, the double-rounded stiffness limit, every collider at particle
+radius `m_Radius · m_ObjectScale` through the oracle's `collide()`, and the
+final bone-length projection, applying each particle's result as the next
+particle's parent position (the chain-wise write-back `UpdateParticles2`
+itself performs) — entirely in the capture's own space, no mirroring. Of the
+four candidate explanations for the one-step residual: hypothesis 1, runtime
+elasticity differing from the Maker contract, is **refuted** — the maximum
+relative delta per key against the contract is elasticity 1.60e-06, stiffness
+1.50e-06, radius 1.15e-06, damping and inert exactly 0 (the 14 rows over the
+1e-6 flag differ only in the fixture's 7-significant-digit serialization, and
+the values repeat identically at frames 0/1/45). Hypothesis 2, a runtime
+`m_Stiffness` of 1 zeroing the limit radius, is **refuted** — the maximum
+runtime stiffness is 0.10000000149. Hypothesis 3, parent rotations differing
+from the rest rotations the oracle assumes, is **not a defect**: the
+`localToWorldMatrix` 3×3 blocks read inside each frame (26 rows over the 7
+components; 33 particle positions are recorded per step) are identical (spread
+exactly 0.0) and match the recorded
+avatar rotation times `m_ObjectScale` entrywise to at most 2.09e-07, so
+`UpdateParticles2` reads the root's live world matrix, which is what the
+recorded-input model feeds it. Hypothesis 4, collider pushes, is
+**confirmed**: with the recorded collider rows the re-prediction matches the
+recorded post-`UpdateParticles2` positions to at most 8.56e-04 m — the float32
+ulp at these ~500 m capture coordinates is 3.05e-05–1.2e-04 m, so the residual
+sits in the round-trip band (all 7 components × 3 frames at a 1e-3 gate) — and
+the recorded post-`UpdateParticles2` positions equal the official frame-end
+`m_Position` exactly (maxOfficialDelta 0.0 everywhere), proving both that the
+dry run was non-destructive and that the intermediate is the real integrator
+output. Ablating the collider rows drops the prediction to 2.5e-03…3.49e-02 m
+errors — exactly the scale the one-step gate blames on the formula. The pushes
+are real and load-bearing: the head collider pushes each back-hair root
+particle off its post-`UpdateParticles1` position by ~1.1 cm on all three
+frames, and in `cf_J_hairF_00` the push fires on `cf_J_hairF_01` only *after*
+the elasticity pull (5.3 mm, invisible to the post-`UpdateParticles1` overlap
+diagnostic) where the bone-length projection amplifies it along the chain to
+1.2 cm at particle 2 and 3.5 cm at particle 3; the residual at those frames
+comes back to 3.8e-05/6.4e-05 m once the recorded collider rows are applied.
+At these frames the recorded positions therefore follow from the serialized
+runtime elasticity plus the collider interaction with no forcing, so the
+previous section's "effective restore coefficient ≈ 1" reading does not
+reproduce where intermediates exist, and the python oracle's
+`UpdateParticles2` formula is **not** wrong: given its recorded inputs the
+oracle reproduces the original's step, so the one-step gate's remaining
+0.038–0.142 m failure lives in stages upstream of `UpdateParticles2` (the
+`UpdateParticles1` result and the owner-motion/accumulator inputs that produce
+it), not in the step's arithmetic. Rerunning `--mode one-step` on the stt08c
+capture gives maxima 0.12691113/0.12578946/0.14196220/0.04991316/
+0.04014261/0.06196827/0.03810673 m on
+`cf_J_hairBR_00/BL_00/B_00/FR_02_00/FL_02_00/F_00/FR_00` (worst `cf_J_hairB_00`
+frame 22) — identical to the stt08b numbers, as expected: with maxOfficialDelta
+0.0 the fixture edit leaves every recorded trajectory bit-identical. Seven
+synthetic `dynamics_manual_steps` tests (oracle-generated intermediates only)
+pin the matrix plumbing, the chain-wise write-back (shifting one post-
+`UpdateParticles1` root position by 2 cm moves every descendant's prediction
+by more than 1 mm) and the collider ablation, and a capture without manual-step
+rows is refused.
+
 Caveats and non-coverage: an external CharaStudio scene script relocates the
 character root every frame (the recorded root path follows the scripted
 sinusoid in x to the jitter but not in y/z), so the comparison is valid only
@@ -290,7 +368,9 @@ through the recorded transforms, and the recorded owner positions — not the
 script — feed the oracle's owner-inertia channel; the seeded `objectMove` was
 zero at reset. Whether any collider was actually contacted is unrecorded (the
 oracle models the collision branches but the capture writes no contact
-events), applied particle rotations are context only
+events; the stt08c manual frames 10–12 show from the residuals that pushes did
+fire on the recorded particles, but only for those frames), applied particle
+rotations are context only
 (`ApplyParticlesToTransforms` is not ported), and in the stt08a full-model runs
 per-collider lossy scales are assumed equal to `objectScale` (the stt08b
 capture records them per collider).
@@ -310,6 +390,19 @@ capture records them per collider).
   --contract .local/reverse/studio-dynamics/maker-dynamics.json \
   --maker-library .local/reverse/maker-library \
   --output .local/stt08b/one-step-report.json --mode one-step --tolerance 1e-5
+# Manual-step intermediates, stt08c capture: rerun the one-step gate, then
+# re-predict UpdateParticles2 from the recorded intermediates:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_dynamics_motion.py \
+  --capture .local/reverse/original-dynamics-probe-stt08c/motion.json \
+  --contract .local/reverse/studio-dynamics/maker-dynamics.json \
+  --maker-library .local/reverse/maker-library \
+  --output .local/stt08c/one-step-report.json --mode one-step --tolerance 1e-5
+.local/reverse/unitypy-venv/bin/python -c 'import json,sys; \
+  sys.path[:0]=["Tools/reverse/analysis","Tools/reverse"]; \
+  from dynamics_manual_steps import manual_step_report; \
+  json.dump(manual_step_report(json.load(open(".local/reverse/original-dynamics-probe-stt08c/motion.json")), \
+  json.load(open(".local/reverse/studio-dynamics/maker-dynamics.json")),1e-3), \
+  open(".local/stt08c/manual-step-report.json","w"),indent=1)'
 ```
 
 Next tasks (`ST-T08`) are to capture actual-player particle trajectories and

@@ -38,3 +38,23 @@ The app exports supported existing transforms, per-object visibility, folder/cam
 The export validator rejects added/deleted/duplicated objects, reparenting, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
 Implement missing field/topology writers and source-key remapping under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
+
+## CharaStudio reload acceptance
+
+Reviewed 2026-09-30. This closes the "reload in the original CharaStudio" half of the ST-T03 edit destinations: our app's own exported scene records are loaded into the real CharaStudio player, and the state the player shows is recorded and compared claim by claim.
+
+Three scenario checks in the `studio-scenarios` lane (`studio-scenario-charastudio-hide-rename`, `-camera-switch`, `-route-stop`; the subset ran `--strict` passed=3 failed=0 on 2026-09-30) each edit a probe-authored scene, export it under `.local/verification/scenario-exports/` and reimport it with our importer's asserts:
+
+- `Tools/verification/scenarios/charastudio-hide-rename.json` — on scene-x: hide folder key 1, rename camera key 0 to `IKKOKU-A2` and folder key 1 to `IKKOKU-F2`.
+- `Tools/verification/scenarios/charastudio-camera-switch.json` — on scene-x the load winner is camera key 2; toggling camera key 0 active must make key 0 the view camera.
+- `Tools/verification/scenarios/charastudio-route-stop.json` — on the stt11c route scene (routes key 0 and key 3 both saved playing): stopping route key 0 must leave key 3 playing.
+
+`Tools/reverse/original_scene_reload_probe.py` uploads exactly those exported PNGs beside `Tools/reverse/fixtures/OriginalSceneReloadProbe.cs` in the isolated VM player (one run, 2026-09-30, Unity 5.6.2f1), and the plug-in loads each into an emptied scene (`InitScene(false)`, `dicObjectCtrl` empty, then `Studio.LoadScene`) and records, immediately after the load and four frames later, every object's name, `objectInfo.visible`/`treeNodeObject.visible` and their `treeState`, each camera's `cameraInfo.active`, which camera `studio.ociCamera` uses and each `OCIRoute.isPlay`. `Tools/reverse/compare_scene_reload.py` reads the loaded bytes back from the capture and evaluates the claims; report `.local/stt03e/scene-reload-comparison.json` (capture also copied to `/Users/rumpology/code/repo/ikkoku/.local/stt03e/`; the probe's own `reload-*.png` hashes equal the exported files' SHA-256). All three cases passed — our reimport side (scenario asserts) and the CharaStudio side:
+
+- hide-rename: folder key 1 shows `objectInfoVisible=false` and `treeNodeVisible=false` under the names `IKKOKU-A2`/`IKKOKU-F2`.
+- camera-switch: the view camera is key 0 (`IKKOKU-A`, `cameraInfo.active=true`); key 2 reads back `active=false`.
+- route-stop: route key 0 reads back `isPlay=false` and route key 3 `isPlay=true`.
+
+Recorded observation (reported, not asserted): the hidden folder's child camera key 2 keeps its **own** visible flags at load (`objectInfo.visible=true`, `treeNodeObject.visible=true` — the exported record saved them true and CharaStudio did not rewrite them), so the load-time parent-hidden propagation the decompiled tree code performs is not observable on a camera child's flags. Our writer serializes only each object's own flag, which matches what the player keeps. In both camera cases `studio.cameraCtrl.enabled` was false while an active camera object drove the view (the view winner was key 2, the saved load winner, in hide-rename, where no camera flags were edited).
+
+Limits: single-run captures with the default player; the settled snapshot equals the after-load snapshot in all three cases (no later flip was observed within four frames); route playing is read from the `active` flag, not from motion; the visibility cascade of the original was exercised for a camera child only, not a character part, and renames were captured for camera and folder kinds only (route renames were not in this capture).

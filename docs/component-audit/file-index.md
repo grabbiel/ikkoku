@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**751 files indexed; 751 assigned; 0 unassigned.**
+**761 files indexed; 761 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 115 |
-| [Studio / IK / animation](studio.md) | 171 |
+| [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 113 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 116 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 139 |
+| Conversion / recovery / verification tool | 145 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 25 |
+| Reference host / controlled fixture | 26 |
 | Runtime / shared shader declaration | 163 |
-| Test / validation | 144 |
+| Test / validation | 147 |
 
 ## App / gameplay / plugins
 
@@ -338,6 +338,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/chara_light_mapping.py](../../Tools/reverse/analysis/chara_light_mapping.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/dynamics_manual_steps.py](../../Tools/reverse/analysis/dynamics_manual_steps.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_motion_replay.py](../../Tools/reverse/analysis/dynamics_motion_replay.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_reference.py](../../Tools/reverse/analysis/dynamics_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/eye_look_reference.py](../../Tools/reverse/analysis/eye_look_reference.py) | Conversion / recovery / verification tool |
@@ -354,6 +355,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/studio_scene_contract.py](../../Tools/reverse/analysis/studio_scene_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_animation_playback_contract.py](../../Tools/reverse/analysis/test_animation_playback_contract.py) | Test / validation |
 | [Tools/reverse/analysis/test_chara_light_mapping.py](../../Tools/reverse/analysis/test_chara_light_mapping.py) | Test / validation |
+| [Tools/reverse/analysis/test_dynamics_manual_steps.py](../../Tools/reverse/analysis/test_dynamics_manual_steps.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_motion_replay.py](../../Tools/reverse/analysis/test_dynamics_motion_replay.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_reference.py](../../Tools/reverse/analysis/test_dynamics_reference.py) | Test / validation |
 | [Tools/reverse/analysis/test_eye_look_reference.py](../../Tools/reverse/analysis/test_eye_look_reference.py) | Test / validation |
@@ -372,6 +374,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/compare_neck_look.py](../../Tools/reverse/compare_neck_look.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_route_playback.py](../../Tools/reverse/compare_route_playback.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_route_stepping.py](../../Tools/reverse/compare_route_stepping.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_scene_reload.py](../../Tools/reverse/compare_scene_reload.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/dynamics_contract.py](../../Tools/reverse/dynamics_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/FinalIKOracle/Program.cs](../../Tools/reverse/fixtures/FinalIKOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs](../../Tools/reverse/fixtures/FinalIKOracle/RecoverySurface.cs) | Reference host / controlled fixture |
@@ -381,6 +384,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/fixtures/OriginalDynamicsProbe.cs](../../Tools/reverse/fixtures/OriginalDynamicsProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLightProbe.cs](../../Tools/reverse/fixtures/OriginalLightProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalRouteProbe.cs](../../Tools/reverse/fixtures/OriginalRouteProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalSceneReloadProbe.cs](../../Tools/reverse/fixtures/OriginalSceneReloadProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/camera-object-reference.json](../../Tools/reverse/fixtures/camera-object-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/dynamics-reference.json](../../Tools/reverse/fixtures/dynamics-reference.json) | Reference host / controlled fixture |
 | [Tools/reverse/original_animation_probe.py](../../Tools/reverse/original_animation_probe.py) | Conversion / recovery / verification tool |
@@ -388,6 +392,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/original_dynamics_probe.py](../../Tools/reverse/original_dynamics_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_light_probe.py](../../Tools/reverse/original_light_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_route_probe.py](../../Tools/reverse/original_route_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_scene_reload_probe.py](../../Tools/reverse/original_scene_reload_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_animation.py](../../Tools/reverse/studio_animation.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_attachments.py](../../Tools/reverse/studio_attachments.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/studio_dynamics_fixture.py](../../Tools/reverse/studio_dynamics_fixture.py) | Conversion / recovery / verification tool |
@@ -401,9 +406,11 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_compare_dynamics_probe.py](../../Tools/reverse/test_compare_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_compare_hand_patterns.py](../../Tools/reverse/test_compare_hand_patterns.py) | Test / validation |
 | [Tools/reverse/test_compare_route_playback.py](../../Tools/reverse/test_compare_route_playback.py) | Test / validation |
+| [Tools/reverse/test_compare_scene_reload.py](../../Tools/reverse/test_compare_scene_reload.py) | Test / validation |
 | [Tools/reverse/test_dynamics_contract.py](../../Tools/reverse/test_dynamics_contract.py) | Test / validation |
 | [Tools/reverse/test_original_camera_object_probe.py](../../Tools/reverse/test_original_camera_object_probe.py) | Test / validation |
 | [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
+| [Tools/reverse/test_original_scene_reload_probe.py](../../Tools/reverse/test_original_scene_reload_probe.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_hand_animation.py](../../Tools/reverse/test_studio_hand_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_look_settings.py](../../Tools/reverse/test_studio_look_settings.py) | Test / validation |
@@ -760,6 +767,9 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/charastudio-camera-switch.json](../../Tools/verification/scenarios/charastudio-camera-switch.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/charastudio-hide-rename.json](../../Tools/verification/scenarios/charastudio-hide-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/charastudio-route-stop.json](../../Tools/verification/scenarios/charastudio-route-stop.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/eye-look-orbit.json](../../Tools/verification/scenarios/eye-look-orbit.json] | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
