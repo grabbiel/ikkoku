@@ -93,7 +93,10 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
                     {"position",V((Vector3)Read(particle,"m_Position"))},{"previousPosition",V((Vector3)Read(particle,"m_PrevPosition"))}});}
             states.Add(new Dictionary<string,object>{{"rootName",dynamics.m_Root.name},{"owner",V(dynamics.transform.position)},
                 {"weight",(float)Read(dynamics,"m_Weight")},{"time",(float)Read(dynamics,"m_Time")},
-                {"objectMove",V((Vector3)Read(dynamics,"m_ObjectMove"))},{"objectScale",(float)Read(dynamics,"m_ObjectScale")},{"particles",particleRows}});
+                {"objectMove",V((Vector3)Read(dynamics,"m_ObjectMove"))},{"objectScale",(float)Read(dynamics,"m_ObjectScale")},
+                {"objectPrevPosition",V((Vector3)Read(dynamics,"m_ObjectPrevPosition"))},
+                {"updateRate",dynamics.m_UpdateRate},{"gravity",V(dynamics.m_Gravity)},{"force",V(dynamics.m_Force)},
+                {"particles",particleRows}});
         }
         var framesJson=new List<object>();
         var delta=float.NaN;
@@ -108,24 +111,30 @@ public sealed class OriginalDynamicsProbe:BaseUnityPlugin {
                 foreach(var particle in Read(dynamics,"m_Particles") as IList) {
                     var transform=(Transform)Read(particle,"m_Transform");
                     if(transform==null)throw new Exception("Virtual hair end particle in motion capture");
-                    particles.Add(new Dictionary<string,object>{{"name",transform.name},{"position",V(transform.position)},{"rotation",Q(transform.rotation)}});
-                }
+                    particles.Add(new Dictionary<string,object>{{"name",transform.name},{"position",V(transform.position)},{"rotation",Q(transform.rotation)},
+                        {"internalPosition",V((Vector3)Read(particle,"m_Position"))},{"internalPrevPosition",V((Vector3)Read(particle,"m_PrevPosition"))}});}
                 var colliderRows=new List<object>();
                 foreach(var collider in dynamics.m_Colliders)colliderRows.Add(new Dictionary<string,object>{{"name",collider.name},{"position",V(collider.transform.position)},{"rotation",Q(collider.transform.rotation)}});
                 componentRows.Add(new Dictionary<string,object>{
                     {"ownerName",dynamics.transform.name},{"rootName",dynamics.m_Root.name},{"owner",V(dynamics.transform.position)},
                     {"root",new Dictionary<string,object>{{"position",V(dynamics.m_Root.position)},{"rotation",Q(dynamics.m_Root.rotation)}}},
+                    {"weight",(float)Read(dynamics,"m_Weight")},{"time",(float)Read(dynamics,"m_Time")},
+                    {"objectMove",V((Vector3)Read(dynamics,"m_ObjectMove"))},{"objectScale",(float)Read(dynamics,"m_ObjectScale")},
+                    {"objectPrevPosition",V((Vector3)Read(dynamics,"m_ObjectPrevPosition"))},
+                    {"updateRate",dynamics.m_UpdateRate},{"gravity",V(dynamics.m_Gravity)},{"force",V(dynamics.m_Force)},
                     {"particles",particles},{"colliders",colliderRows}});
             }
             var colliderFrames=new List<object>();
-            foreach(var collider in colliders)colliderFrames.Add(new Dictionary<string,object>{{"name",collider.name},{"position",V(collider.transform.position)},{"rotation",Q(collider.transform.rotation)}});
+            foreach(var collider in colliders)colliderFrames.Add(new Dictionary<string,object>{{"name",collider.name},{"position",V(collider.transform.position)},{"rotation",Q(collider.transform.rotation)},
+                {"lossyScale",V(collider.transform.lossyScale)},{"radius",(float)Read(collider,"m_Radius")},{"height",(float)Read(collider,"m_Height")},{"center",V((Vector3)Read(collider,"m_Center"))},
+                {"direction",(int)Read(collider,"m_Direction")},{"bound",(int)Read(collider,"m_Bound")}});
             framesJson.Add(new Dictionary<string,object>{{"deltaTime",delta},{"character",V(character.transform.position)},
                 {"avatar",new Dictionary<string,object>{{"position",V(avatarRoot.position)},{"rotation",Q(avatarRoot.rotation)}}},
                 {"components",componentRows},{"colliders",colliderFrames}});
         }
         if(!float.IsNaN(delta)&&Math.Abs(delta-1f/60f)>1e-6f)throw new Exception("Recorded frame step drifted from the fixed capture step");
         File.WriteAllText(Path.Combine(folder,"motion.json"),J(new Dictionary<string,object>{{"schemaVersion",1},
-            {"scope","Original Unity hair particle motion under a scripted root path; the original DynamicBone integrates on top of it and the float32 replay replays the same seeded state; positions compared, rotations recorded as context only"},
+            {"scope","Original Unity hair particle motion under a scripted root path; the original DynamicBone integrates on top of it and the float32 replay replays the same seeded state; positions compared, rotations recorded as context only; every frame also records the integrator-internal state (per-component m_ObjectMove/m_ObjectPrevPosition/m_ObjectScale/m_Time/m_Weight/m_UpdateRate/m_Gravity/m_Force, per-particle m_Position/m_PrevPosition, per-collider lossyScale/m_Radius/m_Height/m_Center/m_Direction/m_Bound)"},
             {"components",states},
             {"hairIDs",new[]{0,2}},
             {"frameCount",MotionFrames},{"fixedRateHz",60},{"startPosition",V(start)},{"startRotation",Q(startRotation)},

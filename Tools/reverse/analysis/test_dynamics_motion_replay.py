@@ -118,6 +118,70 @@ class DynamicsMotionReplayTests(unittest.TestCase):
         self.assertFalse(result['passed'])
         self.assertGreater(result['maxParticleError'], 1e-4)
 
+    def test_one_step_replay_of_the_recorded_internal_state_is_exact(self):
+        capture = synthetic_capture(frames=6)
+        result = compare(capture, synthetic_document(), 1e-5, 'one-step')
+        self.assertTrue(result['passed'])
+        row = self.rows(result)['one-step']
+        # Every one-step input is the integrator's own recorded state; only the
+        # float32 rotation round-trip of the pinned root and collider frames
+        # remains, far below the gate.
+        self.assertLess(row['maxOneStepError'], 1e-6)
+        self.assertEqual(row['firstExceeded'], None)
+        self.assertEqual(row['stepCounts'], dict(min=1, max=1))
+        self.assertEqual(row['seedCheck'], dict(rootPreviousDelta=0.0, childPreviousDelta=0.0,
+                                                timeDelta=0.0, ownerPrevDelta=0.0))
+
+    def test_one_step_frame_zero_input_error_fails_despite_intact_seed(self):
+        capture = copy.deepcopy(self.capture)
+        capture['frames'][0]['components'][0]['root']['position'][0] += .01
+        result = compare(capture, self.document, 1e-5, 'one-step')
+        row = self.rows(result)['one-step']
+        self.assertFalse(result['passed'])
+        self.assertEqual(row['firstExceeded']['frame'], 0)
+        self.assertEqual(row['firstExceeded']['particle'], 'root')
+        self.assertAlmostEqual(row['firstExceeded']['error'], .01, delta=1e-5)
+        # The recorded seed still matches frame 0's internal state, so a frame-0
+        # input defect is invisible in the seed check; this is exactly how the
+        # original capture failed at frame 0 with zero seed deltas.
+        self.assertEqual(row['seedCheck'], dict(rootPreviousDelta=0.0, childPreviousDelta=0.0,
+                                                timeDelta=0.0, ownerPrevDelta=0.0))
+
+    def test_one_step_wrong_seed_shows_as_frame_zero_second_particle(self):
+        capture = copy.deepcopy(self.capture)
+        capture['components'][0]['particles'][1]['previousPosition'][0] += .01
+        row = self.rows(compare(capture, self.document, 1e-5, 'one-step'))['one-step']
+        # A wrong m_PrevPosition diverges on the child's velocity term while the
+        # root reset hides it on particle 0; one-step seeding self-heals the
+        # following frames, so only frame 0 carries the error.
+        self.assertEqual(row['firstExceeded']['frame'], 0)
+        self.assertEqual(row['firstExceeded']['particle'], 'middle')
+        self.assertGreater(row['firstExceeded']['error'], .01)
+        self.assertAlmostEqual(row['seedCheck']['childPreviousDelta'], .01, delta=1e-6)
+        self.assertEqual(row['seedCheck']['rootPreviousDelta'], 0.0)
+        self.assertEqual(row['seedCheck']['timeDelta'], 0.0)
+        self.assertGreater(row['frameErrors'][0], .01)
+        self.assertLess(max(row['frameErrors'][1:]), 1e-6)
+
+    def test_one_step_frame_zero_parameter_mismatch_is_refused(self):
+        # Before an error can be attributed to the integrator, every serialized
+        # parameter the capture also records must match the contract at frame 0.
+        mutations = (
+            ('radius', lambda c: c['frames'][0]['colliders'][0].update(radius=.3)),
+            ('height', lambda c: c['frames'][0]['colliders'][0].update(height=.8)),
+            ('center', lambda c: c['frames'][0]['colliders'][0].update(center=[.04, -.06, -.2])),
+            ('direction', lambda c: c['frames'][0]['colliders'][0].update(direction=1)),
+            ('bound', lambda c: c['frames'][0]['colliders'][0].update(bound=1)),
+            ('gravity', lambda c: c['frames'][0]['components'][0].update(gravity=[0., -.5, -.012])),
+            ('force', lambda c: c['frames'][0]['components'][0].update(force=[0., 0., 0.])),
+            ('updateRate', lambda c: c['frames'][0]['components'][0].update(updateRate=30)))
+        for name, mutate in mutations:
+            with self.subTest(parameter=name):
+                capture = copy.deepcopy(self.capture)
+                mutate(capture)
+                with self.assertRaisesRegex(ValueError, name):
+                    compare(capture, self.document, 1e-5, 'one-step')
+
     def test_distance_matches_float32_norm(self):
         self.assertEqual(distance([0, 0, 0], [.001, 0, 0]), float(np.float32(.001)))
 
