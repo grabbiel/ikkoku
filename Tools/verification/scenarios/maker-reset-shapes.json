@@ -1,0 +1,14 @@
+{
+  "steps": [
+    {"op": "customization", "on": true},
+    {"op": "setFace", "index": 0, "value": 0.9},
+    {"op": "setBody", "index": 0, "value": 0.1},
+    {"op": "resetShapes"},
+    {"op": "assert", "face": {"index": 0, "value": 0.5}},
+    {"op": "assert", "body": {"index": 0, "value": 0.5}},
+    {"op": "export", "path": ".local/verification/maker-scenario-exports/maker-reset-shapes.png"},
+    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-reset-shapes.png"},
+    {"op": "assert", "face": {"index": 0, "value": 0.5}},
+    {"op": "assert", "body": {"index": 0, "value": 0.5}}
+  ]
+}

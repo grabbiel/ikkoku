@@ -76,6 +76,26 @@ final class AppState {
                     self.errorMessage = "Could not import source card settings: \(error)"
                 }
             }
+            // The Maker scenario hook is its own headless mode (the mirror of
+            // IKKOKU_STUDIO_SCENARIO below): it runs the JSON checklist
+            // scenario over the imported source card, writes the report to
+            // the required IKKOKU_MAKER_SCENARIO_REPORT and exits (0 when
+            // every step passed, 1 otherwise) even when IKKOKU_AUTOCAPTURE is
+            // unset — no capture is requested.
+            if let scenarioPath = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SCENARIO"] {
+                do {
+                    guard let maker, let reportPath = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SCENARIO_REPORT"] else {
+                        throw RigError.invalid("IKKOKU_MAKER_SCENARIO needs the Maker and IKKOKU_MAKER_SCENARIO_REPORT.")
+                    }
+                    let scenario = try JSONDecoder().decode(MakerScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
+                    let report = MakerScenario.run(scenario, maker: maker)
+                    let reportURL = URL(fileURLWithPath: reportPath)
+                    try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try report.json().write(to: reportURL)
+                    print("[ikkoku] maker scenario: \(report.passed) passed, \(report.failed) failed")
+                    exit(report.failed == 0 ? 0 : 1)
+                } catch { print("[ikkoku] maker scenario failed: \(error)"); exit(1) }
+            }
             if let errorMessage, ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil {
                 print("[ikkoku] requested capture input failed: \(errorMessage)")
                 exit(1)
