@@ -1,0 +1,70 @@
+# Public CI: runs only what needs no private data.
+#
+# The public verification lane (Tools/verification/lanes/public.json) runs
+# WITHOUT --strict, so fixture-gated tests report named skips instead of
+# failing. The private-source, maker, app-smoke and studio-scenarios lanes need
+# the original installation, the Parallels VM or .local/ fixtures and stay local;
+# see Tools/verification/README.md "Continuous integration".
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  public-lane:
+    name: Public lane (Engine swift test + Python suites)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          swift --version
+          python3 --version
+      # A cold Engine build can exceed the lane's 600 s check timeout on a
+      # hosted runner, so build the tests first; the lane's `swift test`
+      # then reuses the build.
+      - name: Build Engine tests
+        run: swift build --build-tests --package-path Packages/Engine
+      - name: Public verification lane (skip-tolerant)
+        run: >-
+          python3 Tools/verification/run.py
+          --manifest Tools/verification/lanes/public.json
+          --report .local/verification/reports/ci-public.json
+      - name: Upload lane report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-lane-report
+          path: .local/verification/reports/
+          if-no-files-found: ignore
+
+  app-build:
+    name: IkkokuCreator Debug build
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: xcodebuild -version
+      # Signing is disabled: the hosted runner has no development team
+      # identity, and the build only checks that the app compiles and links.
+      - name: Build IkkokuCreator (Debug, unsigned)
+        run: >-
+          xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator
+          -configuration Debug -derivedDataPath .local/build
+          -destination 'platform=macOS,arch=arm64'
+          CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
+          build
