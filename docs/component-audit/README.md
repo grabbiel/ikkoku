@@ -112,20 +112,39 @@ set:
       the prefab snapshot gives). No eye bone rotates and no original-pixel comparison
       exists.
 - [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
-      object is hidden; reloading in CharaStudio shows it hidden.
+      object is hidden; reloading in CharaStudio shows it hidden. (automated in part:
+      `Tools/verification/scenarios/visibility-folder.json` covers hide → export →
+      reimport in our app; the CharaStudio reload half is not automated; passed 2026-09-29)
 - [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,
       reload it: the new name shows; renaming a character (whose name lives in its card)
-      stays rejected at the inspector export.
+      stays rejected at the inspector export. (automated in part:
+      `Tools/verification/scenarios/rename-folder.json` covers the folder rename → export →
+      reimport and `Tools/verification/scenarios/camera-rename.json` the camera rename →
+      export → reimport on scene-x; route renames are not scripted; the
+      character-rename rejection is an Engine-suite unit test; passed 2026-09-29)
 - [ ] ST-T03 active flags: switch the source camera / stop a playing route, export the
       original scene, reload: the new camera is active and the route stays stopped.
+      (automated in part: `Tools/verification/scenarios/camera-load-winner.json` and
+      `camera-deactivate.json` cover camera switch/deactivation → export → reimport on
+      scene-x, and `Tools/verification/scenarios/route-play-state.json` covers stopping
+      one route while another keeps its saved state on the stt11c route scene; the
+      reload happens in our importer, not in CharaStudio; passed 2026-09-29)
 - [ ] ST-T06 shape values: change a source character's face shape slider: the face
       updates; export and reload keep the new value. Body shape and Reset to card
       behave the same way, and a value edited back to the card's saved rate exports
-      byte-identical bytes (first slice, PR #64).
+      byte-identical bytes (first slice, PR #64). (automated in part:
+      `Tools/verification/scenarios/face-shape.json` covers a face and a body slot
+      edit → export → reimport read-back; the live visual update, Reset to card and
+      the back-to-saved-rate byte-identical case are not automated; passed 2026-09-29)
 - [ ] ST-T06 colors: change a source character's hair or skin color: the preview
       updates; export and reload keep it. Reset to card restores the saved colors,
       and a color edited back to the saved rgba exports byte-identical bytes
-      (second slice; no PR number yet).
+      (second slice; no PR number yet). (automated in part:
+      `Tools/verification/scenarios/color-edit.json` covers a skin color edit →
+      export → reimport read-back; the hair color is not automated because
+      `hair.parts.0.baseColor` binds no material on the imported assembly and export
+      skips its writeback; the preview update, Reset to card and the back-to-saved
+      byte-identical case are not automated; passed 2026-09-29)
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates
@@ -135,12 +154,22 @@ set:
       refused with an explanation while it is active, and Look through / Stop looking
       through on a camera placeholder switches between the camera object and the saved
       scene camera (runtime only; export rewrites every camera's `active` byte only after
-      a switch).
+      a switch). (automated in part: `Tools/verification/scenarios/camera-load-winner.json`
+      asserts the load winner is the last active camera in depth-first order on scene-x and
+      that a switch survives export → reimport via the written flags, and
+      `Tools/verification/scenarios/camera-deactivate.json` asserts deactivating the winner
+      leaves the orbit view through export → reimport; the diagnostics line, the
+      orbit/pan/zoom refusal messages and the Look through UI itself stay unautomated;
+      passed 2026-09-29)
 - [ ] ST-T04 source props: with `IKKOKU_STUDIO_ITEM_CATALOG` set, import
       koikatu_cs0002591: the 19 basic cubes render at their saved transforms and show
       their saved colors (all 19 record the same `color[0]`, a 0.875 grey at alpha 1)
       (diagnostics report `Items rendered from the converted catalog: 19; unmapped keys:
       none.`); the placeholders stay exportable and export still succeeds (runtime only).
+      (automated in part: `Tools/verification/scenarios/item-props.json` asserts that
+      diagnostics line at import and again after an export → reimport of all 19
+      placeholders; the rendered transforms and saved colors — the visual half —
+      are not asserted; passed 2026-09-29)
 - [ ] CMT-04 and R1/R2: source draw-material overlays render in the live preview as in
       the matched captures (PRs #6–#13).
 - [ ] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with
@@ -150,7 +179,7 @@ set:
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
 | 1 | **ST-T01** | Remove the stale source-character inspector gate, connect the implemented source pose/label controls, and prevent prototype controls from writing unused fields on source characters. Verify through the actual app. **Status 2026-09-25:** gate removed and prototype-only inspector/Timeline writes blocked for source characters; headless `IKKOKU_CAPTURE_UI_REPORT` records the rendered inspector (mutation-checked). Remaining: live mouse-driven guide edits, undo/redo, save/reload and original export through the UI. |
-| 2 | **T-T04, E-T03, CMT-11** | Make source-fixture execution explicit and reproducible. Preserve original/native input hashes, distinguish skips from executed checks, and add app workflows alongside kernel tests. **Status 2026-09-26:** named per-test fixture skips and strict mode (PR #4); stdlib verification runner with public/private-source/maker/app-smoke lanes, per-test counts, evidence manifests and isolated check environments. Remaining: CI wiring, Maker UI/session scenarios, original-player/managed-DLL tier checks. |
+| 2 | **T-T04, E-T03, CMT-11** | Make source-fixture execution explicit and reproducible. Preserve original/native input hashes, distinguish skips from executed checks, and add app workflows alongside kernel tests. **Status 2026-09-26:** named per-test fixture skips and strict mode (PR #4); stdlib verification runner with public/private-source/maker/app-smoke lanes, per-test counts, evidence manifests and isolated check environments. **2026-09-29:** `.github/workflows/ci.yml` runs the public lane (skip-tolerant) and an unsigned Debug app build on pull requests and pushes to `main`; the private lanes stay local. Remaining: Maker UI/session scenarios, original-player/managed-DLL tier checks. |
 | 3 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
 | 4 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
 | 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |

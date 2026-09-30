@@ -241,6 +241,29 @@ class ManifestValidationTests(unittest.TestCase):
         with self.assertRaises(run.RunnerError):
             run.validate_manifest(bad)
 
+    def test_fixture_from_accepted(self):
+        good = self.good_manifest()
+        good["checks"][0]["fixtures"] = [
+            {"env": "IKKOKU_SOURCE_SCENE", "kind": "file",
+             "from": "IKKOKU_CAMERA_PROBE_SCENE"}]
+        checks = run.validate_manifest(good)
+        self.assertEqual(checks[0]["fixtures"][0]["from"],
+                         "IKKOKU_CAMERA_PROBE_SCENE")
+
+    def test_reject_fixture_from_wrong_prefix(self):
+        bad = self.good_manifest()
+        bad["checks"][0]["fixtures"] = [
+            {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "HOME"}]
+        with self.assertRaises(run.RunnerError):
+            run.validate_manifest(bad)
+
+    def test_reject_dangerous_fixture_from_name(self):
+        bad = self.good_manifest()
+        bad["checks"][0]["fixtures"] = [
+            {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "PYTHONPATH"}]
+        with self.assertRaises(run.RunnerError):
+            run.validate_manifest(bad)
+
 
 class EnvironmentValidationTests(unittest.TestCase):
     """Only IKKOKU_* names are accepted from an environment file."""
@@ -334,6 +357,27 @@ class CheckExecutionTests(unittest.TestCase):
                                     "IKKOKU_CAPTURE_UI_MODE": "studio"})
         self.assertEqual(record["env"], check["env"])
         self.assertEqual(record["suppliedFixtures"][0]["path"], fixture_path)
+
+    def test_fixture_from_fills_env_from_another_environment_key(self):
+        aliased = os.path.join(self.tmp, "scene-x.json")
+        with open(aliased, "w") as handle:
+            handle.write("{}")
+        record, observed = self.probe_environment(
+            self.check(fixtures=[{"env": "IKKOKU_SOURCE_SCENE", "kind": "file",
+                                  "from": "IKKOKU_CAMERA_PROBE_SCENE"}]),
+            {"IKKOKU_CAMERA_PROBE_SCENE": aliased,
+             "IKKOKU_SOURCE_SCENE": os.path.join(self.tmp, "direct.json")})
+        self.assertEqual(observed, {"IKKOKU_SOURCE_SCENE": aliased})
+        self.assertEqual(record["suppliedFixtures"][0]["path"], aliased)
+        self.assertEqual(record["suppliedFixtures"][0]["from"],
+                         "IKKOKU_CAMERA_PROBE_SCENE")
+
+    def test_missing_aliased_fixture_skips_naming_the_fixture(self):
+        record = self.run_check(
+            fixtures=[{"env": "IKKOKU_SOURCE_SCENE", "kind": "file",
+                       "from": "IKKOKU_CAMERA_PROBE_SCENE"}])
+        self.assertEqual(record["status"], "skipped")
+        self.assertIn("missing fixture: IKKOKU_SOURCE_SCENE", record["error"])
 
     def test_strict_flag_only_passed_in_strict_mode(self):
         check = self.check()
@@ -519,6 +563,107 @@ class CheckExecutionTests(unittest.TestCase):
     def test_report_outside_local_dir_rejected(self):
         with self.assertRaises(run.RunnerError):
             run.resolve_report_path(os.path.join(self.tmp, "report.json"))
+
+
+SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
+                "setFace", "setBody", "setColor", "export", "reimport", "assert"}
+
+
+class StudioScenarioLaneTests(unittest.TestCase):
+    """The shipped studio-scenarios lane and its scenario files are well-formed.
+
+    Only the manifest/scenario shape is checked here: the app run itself is
+    the evidence, this test keeps the lane from shipping a scenario the hook
+    cannot decode or an export path that escapes `.local/`.
+    """
+
+    LANE = os.path.join(_HERE, "lanes", "studio-scenarios.json")
+    SCENARIO_DIR = os.path.join(_HERE, "scenarios")
+
+    def setUp(self):
+        with open(self.LANE, encoding="utf-8") as handle:
+            self.checks = run.validate_manifest(json.load(handle))
+
+    def scenario_files(self):
+        return sorted(name for name in os.listdir(self.SCENARIO_DIR)
+                      if name.endswith(".json"))
+
+    def test_lane_validates_and_covers_every_scenario(self):
+        self.assertEqual(len(self.checks), 9)
+        referenced = set()
+        for check in self.checks:
+            scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
+            referenced.add(os.path.join(run.REPO_ROOT, scenario))
+            self.assertTrue(os.path.isfile(os.path.join(run.REPO_ROOT, scenario)),
+                            "lane names a missing scenario: %s" % scenario)
+        self.assertEqual(sorted(os.path.basename(p) for p in referenced),
+                         self.scenario_files(),
+                         "a scenario file is not run by the lane, or the lane "
+                         "names a scenario that is not in Tools/verification/scenarios")
+
+    def test_scenario_reports_are_artifacts(self):
+        for check in self.checks:
+            report = check["env"]["IKKOKU_STUDIO_SCENARIO_REPORT"]
+            self.assertTrue(report.startswith(".local/verification/"),
+                            "report must stay under .local/verification: %s" % report)
+            self.assertIn(report, [a["path"] for a in check.get("artifacts", [])],
+                          "the scenario report must be a hashed artifact: %s" % check["id"])
+
+    def test_each_check_declares_import_fixtures(self):
+        for check in self.checks:
+            fixtures = {f["env"] for f in check.get("fixtures", [])}
+            self.assertIn("IKKOKU_SOURCE_SCENE", fixtures)
+            self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
+
+    def test_step_shape(self):
+        for check in self.checks:
+            path = os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"])
+            with open(path, encoding="utf-8") as handle:
+                steps = json.load(handle)["steps"]
+            self.assertTrue(steps)
+            for step in steps:
+                op = step["op"]
+                self.assertIn(op, SCENARIO_OPS, "unknown op in %s" % path)
+                if op in ("setVisible",):
+                    self.assertIsInstance(step["visible"], bool)
+                if op == "rename":
+                    self.assertTrue(step["name"])
+                if op in ("setFace", "setBody"):
+                    self.assertIsInstance(step["index"], int)
+                    self.assertIsInstance(step["value"], float)
+                if op == "setColor":
+                    self.assertIsInstance(step["id"], str)
+                    rgba = step["rgba"]
+                    self.assertEqual(len(rgba), 4)
+                    self.assertTrue(all(0 <= c <= 1 for c in rgba))
+                if op in ("export", "reimport"):
+                    self.assertTrue(step["path"].startswith(".local/"),
+                                    "scene writes must stay under .local/: %s" % step["path"])
+                if op == "assert":
+                    declared = [k for k in ("name", "visible", "face", "body", "color",
+                                            "activeCamera", "routePlaying",
+                                            "diagnosticContains") if k in step]
+                    self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    if any(k in step for k in ("name", "visible", "face", "body", "color")):
+                        self.assertIsInstance(step.get("key"), int,
+                                              "object asserts need a source key")
+                    if "color" in step:
+                        self.assertEqual(len(step["color"]["rgba"]), 4)
+                    for slot in ("face", "body"):
+                        if slot in step:
+                            self.assertIsInstance(step[slot]["index"], int)
+
+    def test_every_scenario_round_trips_through_export_and_reimport(self):
+        for check in self.checks:
+            path = os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_STUDIO_SCENARIO"])
+            with open(path, encoding="utf-8") as handle:
+                steps = json.load(handle)["steps"]
+            ops = [step["op"] for step in steps]
+            self.assertIn("export", ops, "export is the point of the checklist: %s" % path)
+            self.assertIn("reimport", ops)
+            self.assertGreater(ops.index("reimport"), ops.index("export"))
+            self.assertEqual(ops[-1], "assert",
+                             "the last step must verify the reloaded state: %s" % path)
 
 
 if __name__ == "__main__":

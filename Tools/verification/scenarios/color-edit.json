@@ -1,0 +1,9 @@
+{
+  "steps": [
+    {"op": "setColor", "key": 0, "id": "body.skinMainColor", "rgba": [0.5, 0.25, 0.125, 1]},
+    {"op": "assert", "key": 0, "color": {"id": "body.skinMainColor", "rgba": [0.5, 0.25, 0.125, 1]}},
+    {"op": "export", "path": ".local/verification/scenario-exports/color-edit.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/color-edit.png"},
+    {"op": "assert", "key": 0, "color": {"id": "body.skinMainColor", "rgba": [0.5, 0.25, 0.125, 1]}}
+  ]
+}

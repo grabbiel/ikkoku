@@ -23,25 +23,25 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**720 files indexed; 720 assigned; 0 unassigned.**
+**732 files indexed; 732 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 169 |
+| [Studio / IK / animation](studio.md) | 170 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 85 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 96 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
-| Build / repository configuration | 5 |
-| Conversion / recovery / verification tool | 112 |
+| Build / repository configuration | 6 |
+| Conversion / recovery / verification tool | 122 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
-| Runtime / shared shader declaration | 160 |
+| Runtime / shared shader declaration | 161 |
 | Test / validation | 144 |
 
 ## App / gameplay / plugins
@@ -244,6 +244,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/StudioScenario.swift](../../Apps/IkkokuCreator/StudioScenario.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/IK.swift](../../Packages/Engine/Sources/Scene/IK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/SourceTrigonometricIK.swift](../../Packages/Engine/Sources/Scene/SourceTrigonometricIK.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Gizmo.swift](../../Packages/Engine/Sources/Studio/Gizmo.swift) | Runtime / shared shader declaration |
@@ -713,6 +714,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 
 | File | Role |
 | --- | --- |
+| [.github/workflows/ci.yml](../../.github/workflows/ci.yml) | Build / repository configuration |
 | [.gitignore](../../.gitignore) | Build / repository configuration |
 | [CONTRIBUTING.md](../../CONTRIBUTING.md) | Documentation / historical evidence |
 | [Ikkoku.xcodeproj/project.pbxproj](../../Ikkoku.xcodeproj/project.pbxproj) | Build / repository configuration |
@@ -748,7 +750,17 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/maker.json](../../Tools/verification/lanes/maker.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/private-source.json](../../Tools/verification/lanes/private-source.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
+| [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/camera-rename.json](../../Tools/verification/scenarios/camera-rename.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/route-play-state.json](../../Tools/verification/scenarios/route-play-state.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |
 | [docs/README.md](../../docs/README.md) | Documentation / historical evidence |
 | [docs/architecture.md](../../docs/architecture.md) | Documentation / historical evidence |

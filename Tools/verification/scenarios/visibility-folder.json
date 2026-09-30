@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "assert", "key": 622, "visible": true},
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "assert", "key": 622, "visible": false},
+    {"op": "export", "path": ".local/verification/scenario-exports/visibility-folder.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/visibility-folder.png"},
+    {"op": "assert", "key": 622, "visible": false},
+    {"op": "assert", "key": 0, "visible": true}
+  ]
+}

@@ -84,6 +84,25 @@ final class AppState {
                 do { try AppState.configureStudioExecution(studio) }
                 catch { self.errorMessage = "Studio execution: \(error)"; if ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil { print("[ikkoku] \(error)"); exit(1) } }
             }
+            // The scenario hook is its own headless mode: it runs the JSON
+            // checklist scenario over the imported source scene, writes the
+            // report to the required IKKOKU_STUDIO_SCENARIO_REPORT and exits
+            // (0 when every step passed, 1 otherwise) even when
+            // IKKOKU_AUTOCAPTURE is unset — no capture is requested.
+            if let scenarioPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENARIO"] {
+                do {
+                    guard let studio, let reportPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENARIO_REPORT"] else {
+                        throw RigError.invalid("IKKOKU_STUDIO_SCENARIO needs the Studio and IKKOKU_STUDIO_SCENARIO_REPORT.")
+                    }
+                    let scenario = try JSONDecoder().decode(StudioScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
+                    let report = StudioScenario.run(scenario, studio: studio)
+                    let reportURL = URL(fileURLWithPath: reportPath)
+                    try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try report.json().write(to: reportURL)
+                    print("[ikkoku] studio scenario: \(report.passed) passed, \(report.failed) failed")
+                    exit(report.failed == 0 ? 0 : 1)
+                } catch { print("[ikkoku] studio scenario failed: \(error)"); exit(1) }
+            }
             AppState.sharedStudio = studio
             AppState.uiCaptureState = self
             AppState.runAutoCapture(host: host, maker: maker)

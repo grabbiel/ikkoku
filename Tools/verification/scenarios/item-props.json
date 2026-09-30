@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"op": "assert", "diagnosticContains": "Items rendered from the converted catalog: 19; unmapped keys: none."},
+    {"op": "export", "path": ".local/verification/scenario-exports/item-props.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/item-props.png"},
+    {"op": "assert", "diagnosticContains": "Items rendered from the converted catalog: 19; unmapped keys: none."}
+  ]
+}
