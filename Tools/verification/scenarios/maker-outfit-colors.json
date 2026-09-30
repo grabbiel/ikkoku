@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {"op": "customization", "on": true},
+    {"op": "selectCoordinate", "index": 0},
+    {"op": "setColor", "id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.6, 0.2, 1.0]},
+    {"op": "assert", "coordinate": 0, "colorApplied": "clothes.parts.0.colorInfo.0.baseColor", "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.6, 0.2, 1.0]}},
+    {"op": "selectCoordinate", "index": 1},
+    {"op": "assert", "coordinate": 1, "colorApplied": "clothes.parts.0.colorInfo.0.baseColor"},
+    {"op": "assert", "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.16, 0.36, 0.65, 1.0]}},
+    {"op": "setColor", "id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.2, 0.7, 1.0]},
+    {"op": "selectCoordinate", "index": 0},
+    {"op": "assert", "coordinate": 0, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.6, 0.2, 1.0]}},
+    {"op": "export", "path": ".local/verification/maker-scenario-exports/maker-outfit-colors.png"},
+    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-outfit-colors.png"},
+    {"op": "assert", "coordinate": 0, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.6, 0.2, 1.0]}},
+    {"op": "selectCoordinate", "index": 1},
+    {"op": "assert", "coordinate": 1, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.2, 0.7, 1.0]}}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "customization", "on": true},
+    {"op": "setColor", "id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.6, 0.2, 1.0]},
+    {"op": "assert", "colorApplied": "clothes.parts.0.colorInfo.0.baseColor"},
+    {"op": "export", "path": ".local/verification/maker-scenario-exports/maker-color-roundtrip.png"},
+    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-color-roundtrip.png"},
+    {"op": "assert", "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.2, 0.6, 0.2, 1.0]}},
+    {"op": "assert", "colorApplied": "clothes.parts.0.colorInfo.0.baseColor"}
+  ]
+}

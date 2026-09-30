@@ -23,25 +23,25 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**735 files indexed; 735 assigned; 0 unassigned.**
+**741 files indexed; 741 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
-| [Character / Maker / mods](character-and-mods.md) | 114 |
+| [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 170 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 99 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 104 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 125 |
+| Conversion / recovery / verification tool | 130 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
-| Runtime / shared shader declaration | 161 |
+| Runtime / shared shader declaration | 162 |
 | Test / validation | 144 |
 
 ## App / gameplay / plugins
@@ -123,6 +123,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Apps/IkkokuCreator/Maker/MakerPanels.swift](../../Apps/IkkokuCreator/Maker/MakerPanels.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Maker/MakerView.swift](../../Apps/IkkokuCreator/Maker/MakerView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Maker/SourceRigPanel.swift](../../Apps/IkkokuCreator/Maker/SourceRigPanel.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/MakerScenario.swift](../../Apps/IkkokuCreator/MakerScenario.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ModLibraryView.swift](../../Apps/IkkokuCreator/ModLibraryView.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/JSONValue.swift](../../Packages/Engine/Sources/Assets/JSONValue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/SourceMessagePack.swift](../../Packages/Engine/Sources/Assets/SourceMessagePack.swift) | Runtime / shared shader declaration |
@@ -748,6 +749,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/environment.example.json](../../Tools/verification/environment.example.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/app-smoke.json](../../Tools/verification/lanes/app-smoke.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/maker.json](../../Tools/verification/lanes/maker.json) | Conversion / recovery / verification tool |
+| [Tools/verification/lanes/maker-scenarios.json](../../Tools/verification/lanes/maker-scenarios.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/private-source.json](../../Tools/verification/lanes/private-source.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
@@ -758,6 +760,10 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-color-roundtrip.json](../../Tools/verification/scenarios/maker-color-roundtrip.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-outfit-colors.json](../../Tools/verification/scenarios/maker-outfit-colors.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-reset-shapes.json](../../Tools/verification/scenarios/maker-reset-shapes.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-shape-roundtrip.json](../../Tools/verification/scenarios/maker-shape-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-play-state.json](../../Tools/verification/scenarios/route-play-state.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |

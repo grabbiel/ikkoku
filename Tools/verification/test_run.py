@@ -569,6 +569,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene",
                 "setFace", "setBody", "setColor", "export", "reimport", "assert"}
 
+MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
+                      "setColor", "resetShapes", "export", "reimport", "assert"}
+
 
 class StudioScenarioLaneTests(unittest.TestCase):
     """The shipped studio-scenarios lane and its scenario files are well-formed.
@@ -586,8 +589,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
             self.checks = run.validate_manifest(json.load(handle))
 
     def scenario_files(self):
+        # maker-*.json belongs to the maker-scenarios lane, not this one.
         return sorted(name for name in os.listdir(self.SCENARIO_DIR)
-                      if name.endswith(".json"))
+                      if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
         self.assertEqual(len(self.checks), 12)
@@ -666,6 +670,103 @@ class StudioScenarioLaneTests(unittest.TestCase):
             self.assertGreater(ops.index("reimport"), ops.index("export"))
             self.assertEqual(ops[-1], "assert",
                              "the last step must verify the reloaded state: %s" % path)
+
+
+class MakerScenarioLaneTests(unittest.TestCase):
+    """The shipped maker-scenarios lane and its scenario files are well-formed.
+
+    Same contract as the studio lane: only the manifest/scenario shape is
+    checked here; the app run is the evidence. This keeps the lane from
+    shipping a scenario the Maker hook cannot decode or a card write that
+    escapes `.local/`.
+    """
+
+    LANE = os.path.join(_HERE, "lanes", "maker-scenarios.json")
+    SCENARIO_DIR = os.path.join(_HERE, "scenarios")
+
+    def setUp(self):
+        with open(self.LANE, encoding="utf-8") as handle:
+            self.checks = run.validate_manifest(json.load(handle))
+
+    def scenario_files(self):
+        return sorted(name for name in os.listdir(self.SCENARIO_DIR)
+                      if name.endswith(".json") and name.startswith("maker-"))
+
+    def test_lane_validates_and_covers_every_maker_scenario(self):
+        self.assertEqual(len(self.checks), 4)
+        referenced = set()
+        for check in self.checks:
+            scenario = check["env"]["IKKOKU_MAKER_SCENARIO"]
+            referenced.add(os.path.basename(scenario))
+            self.assertTrue(os.path.isfile(os.path.join(run.REPO_ROOT, scenario)),
+                            "lane names a missing scenario: %s" % scenario)
+        self.assertEqual(sorted(referenced), self.scenario_files(),
+                         "a maker-*.json scenario is not run by the lane, or "
+                         "the lane names a scenario that is not in "
+                         "Tools/verification/scenarios")
+
+    def test_scenario_reports_are_artifacts(self):
+        for check in self.checks:
+            report = check["env"]["IKKOKU_MAKER_SCENARIO_REPORT"]
+            self.assertTrue(report.startswith(".local/verification/"),
+                            "report must stay under .local/verification: %s" % report)
+            self.assertIn(report, [a["path"] for a in check.get("artifacts", [])],
+                          "the scenario report must be a hashed artifact: %s" % check["id"])
+
+    def test_each_check_declares_import_fixtures(self):
+        for check in self.checks:
+            fixtures = {f["env"] for f in check.get("fixtures", [])}
+            self.assertIn("IKKOKU_SOURCE_CARD", fixtures)
+            self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
+
+    def test_step_shape(self):
+        for check in self.checks:
+            path = os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_MAKER_SCENARIO"])
+            with open(path, encoding="utf-8") as handle:
+                steps = json.load(handle)["steps"]
+            self.assertTrue(steps)
+            for step in steps:
+                op = step["op"]
+                self.assertIn(op, MAKER_SCENARIO_OPS, "unknown op in %s" % path)
+                if op == "customization":
+                    self.assertIsInstance(step["on"], bool)
+                if op == "selectCoordinate":
+                    self.assertIsInstance(step["index"], int)
+                if op in ("setFace", "setBody"):
+                    self.assertIsInstance(step["index"], int)
+                    self.assertIsInstance(step["value"], float)
+                if op == "setColor":
+                    self.assertIsInstance(step["id"], str)
+                    rgba = step["rgba"]
+                    self.assertEqual(len(rgba), 4)
+                    self.assertTrue(all(0 <= c <= 1 for c in rgba))
+                if op in ("export", "reimport"):
+                    self.assertTrue(step["path"].startswith(".local/"),
+                                    "card writes must stay under .local/: %s" % step["path"])
+                if op == "assert":
+                    declared = [k for k in ("coordinate", "face", "body", "color",
+                                            "colorApplied",
+                                            "diagnosticContains") if k in step]
+                    self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    if "coordinate" in step:
+                        self.assertIsInstance(step["coordinate"], int)
+                    if "color" in step:
+                        self.assertEqual(len(step["color"]["rgba"]), 4)
+                    for slot in ("face", "body"):
+                        if slot in step:
+                            self.assertIsInstance(step[slot]["index"], int)
+
+    def test_every_scenario_round_trips_through_export_and_reimport(self):
+        for check in self.checks:
+            path = os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_MAKER_SCENARIO"])
+            with open(path, encoding="utf-8") as handle:
+                steps = json.load(handle)["steps"]
+            ops = [step["op"] for step in steps]
+            self.assertIn("export", ops, "export is the point of the checklist: %s" % path)
+            self.assertIn("reimport", ops)
+            self.assertGreater(ops.index("reimport"), ops.index("export"))
+            self.assertEqual(ops[-1], "assert",
+                             "the last step must verify the reloaded card: %s" % path)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "customization", "on": true},
+    {"op": "setFace", "index": 20, "value": 0.78},
+    {"op": "setBody", "index": 0, "value": 0.31},
+    {"op": "export", "path": ".local/verification/maker-scenario-exports/maker-shape-roundtrip.png"},
+    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-shape-roundtrip.png"},
+    {"op": "assert", "face": {"index": 20, "value": 0.78}},
+    {"op": "assert", "body": {"index": 0, "value": 0.31}}
+  ]
+}
