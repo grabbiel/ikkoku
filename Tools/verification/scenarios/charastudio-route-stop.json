@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "assert", "routePlaying": {"key": 0, "playing": true}},
+    {"op": "toggleRoute", "key": 0},
+    {"op": "assert", "routePlaying": {"key": 0, "playing": false}},
+    {"op": "export", "path": ".local/verification/scenario-exports/charastudio-route-stop.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/charastudio-route-stop.png"},
+    {"op": "assert", "routePlaying": {"key": 0, "playing": false}},
+    {"op": "assert", "routePlaying": {"key": 3, "playing": true}}
+  ]
+}

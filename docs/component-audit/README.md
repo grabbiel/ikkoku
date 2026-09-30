@@ -117,24 +117,51 @@ set:
       shift with the look rates; eyes without the live pattern keep the resting offset
       the prefab snapshot gives). No eye bone rotates and no original-pixel comparison
       exists.
-- [ ] ST-T03 visibility: hide a source object, export the original scene, reload it: the
-      object is hidden; reloading in CharaStudio shows it hidden. (automated in part:
+- [x] ST-T03 visibility: hide a source object, export the original scene, reload it: the
+      object is hidden; reloading in CharaStudio shows it hidden. (automated headlessly: the edits go
+      through the Studio scenario runner's `StudioModel` calls, not the mouse-driven inspector;
       `Tools/verification/scenarios/visibility-folder.json` covers hide → export →
-      reimport in our app; the CharaStudio reload half is not automated; passed 2026-09-29)
+      reimport in our app (passed 2026-09-29); CharaStudio reload checked 2026-09-30:
+      `scenarios/charastudio-hide-rename.json` exports the hidden folder and
+      `Tools/reverse/original_scene_reload_probe.py` loads that exact PNG into the
+      original player, where folder key 1 reads back `objectInfo.visible=false` and
+      `treeNodeObject.visible=false` (`Tools/reverse/compare_scene_reload.py` passed;
+      the hidden folder's camera child keeps its own saved `visible=true` flags, which
+      matches our own-flag-only writer; recorded in
+      [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance);
+      on the synthetic scene-x, not `koikatu_cs0002591.png`; passed 2026-09-30)
 - [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,
       reload it: the new name shows; renaming a character (whose name lives in its card)
       stays rejected at the inspector export. (automated in part:
       `Tools/verification/scenarios/rename-folder.json` covers the folder rename → export →
       reimport and `Tools/verification/scenarios/camera-rename.json` the camera rename →
       export → reimport on scene-x; route renames are not scripted; the
-      character-rename rejection is an Engine-suite unit test; passed 2026-09-29)
-- [ ] ST-T03 active flags: switch the source camera / stop a playing route, export the
+      character-rename rejection is an Engine-suite unit test; passed 2026-09-29.
+      CharaStudio reload checked 2026-09-30 for the folder and camera kinds: the same
+      exported `charastudio-hide-rename.png` reads back camera key 0 as `IKKOKU-A2`
+      and folder key 1 as `IKKOKU-F2` in the original player
+      (`Tools/reverse/compare_scene_reload.py` passed;
+      [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance)).
+      The route-rename claim is still unscripted and was not in that capture, so this
+      item stays open; passed 2026-09-29)
+- [x] ST-T03 active flags: switch the source camera / stop a playing route, export the
       original scene, reload: the new camera is active and the route stays stopped.
-      (automated in part: `Tools/verification/scenarios/camera-load-winner.json` and
+      (automated headlessly: the edits go through the Studio scenario runner's
+      `StudioModel` calls, not the mouse-driven inspector;
+      `Tools/verification/scenarios/camera-load-winner.json` and
       `camera-deactivate.json` cover camera switch/deactivation → export → reimport on
       scene-x, and `Tools/verification/scenarios/route-play-state.json` covers stopping
-      one route while another keeps its saved state on the stt11c route scene; the
-      reload happens in our importer, not in CharaStudio; passed 2026-09-29)
+      one route while another keeps its saved state on the stt11c route scene (passed
+      2026-09-29); CharaStudio reload checked 2026-09-30:
+      `scenarios/charastudio-camera-switch.json` and `charastudio-route-stop.json`
+      export the edited scenes and `Tools/reverse/original_scene_reload_probe.py` loads
+      those exact PNGs into the original player, where after the camera switch
+      `studio.ociCamera` is camera key 0 (`cameraInfo.active=true`, key 2 reads back
+      false — the same winner our importer picks) and after stopping route key 0 it
+      reads back `isPlay=false` while route key 3 keeps `isPlay=true`
+      (`Tools/reverse/compare_scene_reload.py` passed;
+      [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance);
+      playing is read from the `active` flag, not from motion; passed 2026-09-30)
 - [ ] ST-T06 shape values: change a source character's face shape slider: the face
       updates; export and reload keep the new value. Body shape and Reset to card
       behave the same way, and a value edited back to the card's saved rate exports

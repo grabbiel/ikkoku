@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {"op": "assert", "key": 1, "visible": true},
+    {"op": "setVisible", "key": 1, "visible": false},
+    {"op": "rename", "key": 0, "name": "IKKOKU-A2"},
+    {"op": "rename", "key": 1, "name": "IKKOKU-F2"},
+    {"op": "export", "path": ".local/verification/scenario-exports/charastudio-hide-rename.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/charastudio-hide-rename.png"},
+    {"op": "assert", "key": 1, "visible": false},
+    {"op": "assert", "key": 1, "name": "IKKOKU-F2"},
+    {"op": "assert", "key": 0, "name": "IKKOKU-A2"}
+  ]
+}

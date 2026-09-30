@@ -214,6 +214,63 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-charastudio-hide-rename",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-hide-rename.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-charastudio-hide-rename.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on scene-x hide folder key 1, rename camera key 0 to IKKOKU-A2 and folder key 1 to IKKOKU-F2, export the original scene and reimport it; the hidden flag and both names must read back in our importer. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py; see docs/reference/studio/scene-editing.md for the recorded CharaStudio result.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-charastudio-hide-rename.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/charastudio-hide-rename.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-charastudio-camera-switch",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-camera-switch.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-charastudio-camera-switch.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on scene-x the load winner is key 2; toggling camera key 0 active must make it the view camera, and after export+reimport our importer must still pick key 0. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records which camera the player's view uses; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-charastudio-camera-switch.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/charastudio-camera-switch.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-charastudio-route-stop",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-route-stop.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-charastudio-route-stop.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on the stt11c route scene stop route key 0 (exported with key 3 still active), export and reimport; our importer must read key 0 stopped and key 3 playing. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records whether each route plays there; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-charastudio-route-stop.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/charastudio-route-stop.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-undo-camera",
       "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
       "fixtures": [

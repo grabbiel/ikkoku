@@ -1,0 +1,10 @@
+{
+  "steps": [
+    {"op": "assert", "activeCamera": 2},
+    {"op": "toggleCamera", "key": 0},
+    {"op": "assert", "activeCamera": 0},
+    {"op": "export", "path": ".local/verification/scenario-exports/charastudio-camera-switch.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/charastudio-camera-switch.png"},
+    {"op": "assert", "activeCamera": 0}
+  ]
+}
