@@ -1,0 +1,13 @@
+{
+  "steps": [
+    {"op": "assert", "sourceRuntime": {"items": 0, "sceneLight": true, "rehydrations": 0}},
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "undo"},
+    {"op": "assert", "key": 622, "visible": true, "sourceRuntime": {"sceneLight": true, "rehydrations": 0}},
+    {"op": "redo"},
+    {"op": "assert", "key": 622, "visible": false, "sourceRuntime": {"sceneLight": true, "rehydrations": 0}},
+    {"op": "export", "path": ".local/verification/scenario-exports/undo-no-catalog.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/undo-no-catalog.png"},
+    {"op": "assert", "key": 622, "visible": false, "sourceRuntime": {"rehydrations": 0}}
+  ]
+}

@@ -4,7 +4,7 @@
     {"op": "toggleRoute", "key": 0},
     {"op": "rename", "key": 3, "name": "Undo route rename"},
     {"op": "undo"},
-    {"op": "assert", "key": 3, "name": "Unrendered source route 3", "routePlaying": {"key": 0, "playing": false}, "sourceRuntime": {"routes": 2, "sceneLight": true}},
+    {"op": "assert", "key": 3, "name": "Unrendered source route 3", "routePlaying": {"key": 0, "playing": false}, "sourceRuntime": {"routes": 2, "sceneLight": true, "rehydrations": 0}},
     {"op": "export", "path": ".local/verification/scenario-exports/undo-route.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/undo-route.png"},
     {"op": "assert", "routePlaying": {"key": 0, "playing": false}},
@@ -12,6 +12,6 @@
     {"op": "newScene"},
     {"op": "assert", "sourceRuntime": {"cameras": 0, "items": 0, "routes": 0, "sceneLight": false}},
     {"op": "undo"},
-    {"op": "assert", "key": 3, "name": "Unrendered source route 3", "sourceRuntime": {"sceneLight": true, "routes": 0}, "routePlaying": {"key": 3, "playing": false}}
+    {"op": "assert", "key": 3, "name": "Unrendered source route 3", "sourceRuntime": {"sceneLight": true, "routes": 2, "rehydrations": 1}, "routePlaying": {"key": 3, "playing": true}}
   ]
 }

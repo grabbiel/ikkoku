@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"op": "assert", "sourceRuntime": {"items": 19, "sceneLight": true}},
+    {"op": "setVisible", "key": 622, "visible": false},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-props.png"},
+    {"op": "assert", "key": 622, "visible": false, "sourceRuntime": {"items": 19, "sceneLight": true}}
+  ]
+}

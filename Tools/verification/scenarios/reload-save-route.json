@@ -1,0 +1,8 @@
+{
+  "steps": [
+    {"op": "assert", "sourceRuntime": {"routes": 2, "sceneLight": true}},
+    {"op": "toggleRoute", "key": 0},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-route.png"},
+    {"op": "assert", "routePlaying": {"key": 0, "playing": false}, "sourceRuntime": {"routes": 2, "sceneLight": true}}
+  ]
+}

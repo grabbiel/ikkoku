@@ -566,7 +566,7 @@ class CheckExecutionTests(unittest.TestCase):
 
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
-                "undo", "redo", "newScene",
+                "undo", "redo", "newScene", "saveDocument", "loadDocument",
                 "setFace", "setBody", "setColor", "export", "reimport", "assert"}
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
@@ -594,7 +594,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 12)
+        self.assertEqual(len(self.checks), 19)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -616,8 +616,22 @@ class StudioScenarioLaneTests(unittest.TestCase):
 
     def test_each_check_declares_import_fixtures(self):
         for check in self.checks:
+            with open(os.path.join(run.REPO_ROOT,
+                                   check["env"]["IKKOKU_STUDIO_SCENARIO"]),
+                      encoding="utf-8") as handle:
+                steps = json.load(handle)["steps"]
             fixtures = {f["env"] for f in check.get("fixtures", [])}
-            self.assertIn("IKKOKU_SOURCE_SCENE", fixtures)
+            # A scenario whose first step is loadDocument runs in a process
+            # that must never import (that is the point of the reload-load
+            # half of a save/load pair): giving it IKKOKU_SOURCE_SCENE would
+            # import the scene at startup and assert the import, not the
+            # load. Every other scenario starts from an import.
+            if steps[0]["op"] == "loadDocument":
+                self.assertNotIn("IKKOKU_SOURCE_SCENE", fixtures,
+                                 "a load-first scenario must start on an empty "
+                                 "document, without an import fixture: %s" % check["id"])
+            else:
+                self.assertIn("IKKOKU_SOURCE_SCENE", fixtures)
             self.assertIn("IKKOKU_SOURCE_AVATAR", fixtures)
 
     def test_step_shape(self):
@@ -641,7 +655,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     rgba = step["rgba"]
                     self.assertEqual(len(rgba), 4)
                     self.assertTrue(all(0 <= c <= 1 for c in rgba))
-                if op in ("export", "reimport"):
+                if op in ("export", "reimport", "saveDocument", "loadDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
                 if op == "assert":
@@ -665,9 +679,37 @@ class StudioScenarioLaneTests(unittest.TestCase):
             with open(path, encoding="utf-8") as handle:
                 steps = json.load(handle)["steps"]
             ops = [step["op"] for step in steps]
-            self.assertIn("export", ops, "export is the point of the checklist: %s" % path)
-            self.assertIn("reimport", ops)
-            self.assertGreater(ops.index("reimport"), ops.index("export"))
+            # Every checklist must round-trip its state through a file and
+            # verify it again: the original-format pair (export → reimport)
+            # for all ST-T03/T04/T15 scenarios, or the native document-card
+            # pair (saveDocument → loadDocument) for the ST-T01 reload
+            # scenarios, whose load side is a SEPARATE load-first check.
+            if "saveDocument" in ops or "loadDocument" in ops:
+                self.assertNotIn("export", ops,
+                                 "a save/load scenario must not mix in the "
+                                 "original-format round trip: %s" % path)
+                if "loadDocument" in ops:
+                    self.assertEqual(ops[0], "loadDocument",
+                                     "a load scenario must start on an empty "
+                                     "document: %s" % path)
+                if "saveDocument" in ops:
+                    # The companion check must exist and be the lane's NEXT
+                    # check after this one (lane order is the run order).
+                    saved = check["id"]
+                    self.assertTrue(saved.startswith("studio-scenario-reload-save-")
+                                    and saved.endswith(("props", "camera", "route")),
+                                    "save scenarios are the reload pairs: %s" % saved)
+                    index = [c["id"] for c in self.checks].index(saved)
+                    partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]
+                    with open(os.path.join(run.REPO_ROOT, partner), encoding="utf-8") as handle:
+                        partner_ops = [s["op"] for s in json.load(handle)["steps"]]
+                    self.assertIn("loadDocument", partner_ops,
+                                  "the check after %s must load what it saved: %s"
+                                  % (saved, partner))
+            else:
+                self.assertIn("export", ops, "export is the point of the checklist: %s" % path)
+                self.assertIn("reimport", ops)
+                self.assertGreater(ops.index("reimport"), ops.index("export"))
             self.assertEqual(ops[-1], "assert",
                              "the last step must verify the reloaded state: %s" % path)
 
