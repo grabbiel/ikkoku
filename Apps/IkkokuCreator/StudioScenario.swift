@@ -12,7 +12,7 @@ import Studio
 struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
-        /// `"undo"`, `"redo"`,
+        /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"export"`, `"reimport"`, `"assert"`.
         let op: String
         let key: Int32?
@@ -52,6 +52,8 @@ struct StudioScenario: Decodable {
             let items: Int?
             let routes: Int?
             let sceneLight: Bool?
+            /// Scene-file re-reads by `rehydrateSourceRuntime()` so far.
+            let rehydrations: Int?
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -117,8 +119,9 @@ struct StudioScenario: Decodable {
     static let tolerance: Float = 1e-5
 
     /// Runs the steps against the imported scene. A failing step records its
-    /// detail and the run continues; a failed `export`/`reimport` stops it,
-    /// because every later step depends on the file they were to write.
+    /// detail and the run continues; a failed `export`/`reimport` or
+    /// `saveDocument`/`loadDocument` stops it, because every later step
+    /// depends on the file they were to write or to read back.
     static func run(_ scenario: StudioScenario, studio: StudioModel) -> Report {
         var results: [Report.StepResult] = []
         @discardableResult
@@ -227,6 +230,34 @@ struct StudioScenario: Decodable {
             case "newScene":
                 studio.newScene()
                 record(step, true, studio.status)
+            case "saveDocument":
+                // Native save (StudioModel.saveScene), not an original-scene
+                // export: the file is a Studio document card. Unlike `export`
+                // it overwrites its own earlier artifact on a lane rerun.
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "saveDocument: path must stay under .local/: \(step.path ?? "<missing>")")
+                    break scenarioLoop
+                }
+                do {
+                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try studio.saveScene(to: url)
+                    record(step, true, "saved document to \(path)")
+                } catch {
+                    record(step, false, "saveDocument failed, stopping: \(error)")
+                    break scenarioLoop
+                }
+            case "loadDocument":
+                guard let path = step.path, let url = insideLocal(path) else {
+                    record(step, false, "loadDocument: path must stay under .local/: \(step.path ?? "<missing>")")
+                    break scenarioLoop
+                }
+                do {
+                    try studio.loadScene(from: url)
+                    record(step, true, "loaded document from \(path): \(studio.doc.objects.count) objects")
+                } catch {
+                    record(step, false, "loadDocument failed, stopping: \(error)")
+                    break scenarioLoop
+                }
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let id = object(step) else { record(step, false, "\(step.op): no object with source key \(step.key ?? -1)"); continue }
@@ -357,6 +388,9 @@ struct StudioScenario: Decodable {
                     }
                     if let expected = runtime.sceneLight, counts.sceneLight != expected {
                         problems.append("assert sourceRuntime: scene light applies=\(counts.sceneLight), expected \(expected)")
+                    }
+                    if let expected = runtime.rehydrations, studio.sourceRehydrationCount != expected {
+                        problems.append("assert sourceRuntime: \(studio.sourceRehydrationCount) scene-file rehydrations, expected \(expected)")
                     }
                 }
                 if let needle = step.diagnosticContains {

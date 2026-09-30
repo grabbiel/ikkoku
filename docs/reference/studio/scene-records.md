@@ -291,6 +291,41 @@ cleanup. Later animation/full-body tests add separate source pose roundtrips.
 Headless verification uses `IKKOKU_SOURCE_SCENE` with an independently generated
 synthetic source-format fixture; no original scene thumbnails are rendered.
 
+### Source runtime rehydration
+
+A native Studio document card carries the document only: objects, transforms,
+visibility, the source references (scene path, SHA-256, `sourceObjectKey`,
+`sourceCharacter`) and the saved camera/route flags. It carries none of the
+SHA-gated runtime caches that preview import builds — item assets, route
+runtimes with their clocks and play state, camera objects, the scene light and
+route character previews — so a `saveScene` → `loadScene` round trip in a new
+process would restore the tree with every source object present but unrendered
+until reimport. `StudioModel.rehydrateSourceRuntime()` rebuilds those caches
+from the still-available original file. It runs after `loadScene` and after
+`undo`/`redo`, and does work only when `doc.sourceSceneSHA256` is set, the
+referenced scene file still exists with exactly that hash, and the caches
+were built for a different scene (or none) or do not cover some source
+object of the current document. Coverage — the scene hash and source object
+ids of the last import or rehydration (`sourceRuntimeCoverage`) — decides,
+not missing cache entries: a covered object may legitimately have none (an
+item key the catalog cannot resolve, every item when no catalog is supplied,
+a scene without a character light), and keying off entries would re-read the
+file on every undo and reset the live camera and route play state each time
+(the `undo-no-catalog` scenario pins this). `refresh()`'s route prune (New
+Scene's empty document, a deleted route) uncovers the pruned objects, so
+undoing back to them rehydrates. It maps
+scene records onto the document's UUIDs by `sourceObjectKey` — save/load keeps
+the `UUID` identity of every object — reuses the rig and bone-catalog paths
+saved on the first character reference, falling back to the same Maker locate
+calls an import makes, and resolves items through `IKKOKU_STUDIO_ITEM_CATALOG`
+as import does (without it items stay named, unrendered entries). The success
+path never modifies the document: a save → load → save of an unchanged scene
+file is byte-identical. Documented restart rules: `activeSourceCamera` becomes
+the file's load-winner camera (the live look-through choice is not preserved by
+the card), and route play state restarts from each route's saved `active` flag.
+A missing or changed scene file installs empty caches and appends a single
+`sourcePreviewDiagnostics` entry naming the cause; rehydration never throws.
+
 ## Routes
 
 `SourceStudioRoute` is the first route runtime piece. `SourceStudioRoute(record:)`

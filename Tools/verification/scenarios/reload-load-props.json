@@ -1,0 +1,6 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-props.png"},
+    {"op": "assert", "key": 622, "visible": false, "sourceRuntime": {"items": 19, "sceneLight": true, "rehydrations": 1}}
+  ]
+}
