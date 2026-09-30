@@ -12,7 +12,8 @@ robustness test, the ST-A06 camera-object capture files, the ST-A06
 source camera-object look-through files, the ST-A06 source scale rule files,
 the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
-studio item shader contract and record color files; it does not represent a
+studio item shader contract and record color files and the ST-T08 first-slice
+original motion capture/replay files; it does not represent a
 new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
@@ -22,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**728 files indexed; 728 assigned; 0 unassigned.**
+**732 files indexed; 732 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 114 |
-| [Studio / IK / animation](studio.md) | 166 |
+| [Studio / IK / animation](studio.md) | 170 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 96 |
 
@@ -36,12 +37,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 120 |
+| Conversion / recovery / verification tool | 122 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 25 |
 | Runtime / shared shader declaration | 161 |
-| Test / validation | 142 |
+| Test / validation | 144 |
 
 ## App / gameplay / plugins
 
@@ -335,6 +336,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/chara_light_mapping.py](../../Tools/reverse/analysis/chara_light_mapping.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/dynamics_motion_replay.py](../../Tools/reverse/analysis/dynamics_motion_replay.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_reference.py](../../Tools/reverse/analysis/dynamics_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/eye_look_reference.py](../../Tools/reverse/analysis/eye_look_reference.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/iris_reference.py](../../Tools/reverse/analysis/iris_reference.py) | Conversion / recovery / verification tool |
@@ -350,6 +352,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/studio_scene_contract.py](../../Tools/reverse/analysis/studio_scene_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_animation_playback_contract.py](../../Tools/reverse/analysis/test_animation_playback_contract.py) | Test / validation |
 | [Tools/reverse/analysis/test_chara_light_mapping.py](../../Tools/reverse/analysis/test_chara_light_mapping.py) | Test / validation |
+| [Tools/reverse/analysis/test_dynamics_motion_replay.py](../../Tools/reverse/analysis/test_dynamics_motion_replay.py) | Test / validation |
 | [Tools/reverse/analysis/test_dynamics_reference.py](../../Tools/reverse/analysis/test_dynamics_reference.py) | Test / validation |
 | [Tools/reverse/analysis/test_eye_look_reference.py](../../Tools/reverse/analysis/test_eye_look_reference.py) | Test / validation |
 | [Tools/reverse/analysis/test_iris_reference.py](../../Tools/reverse/analysis/test_iris_reference.py) | Test / validation |
@@ -359,6 +362,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/analysis/trigonometric_ik_contract.py](../../Tools/reverse/analysis/trigonometric_ik_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/animation_assets.py](../../Tools/reverse/animation_assets.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_camera_objects.py](../../Tools/reverse/compare_camera_objects.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_dynamics_motion.py](../../Tools/reverse/compare_dynamics_motion.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_dynamics_probe.py](../../Tools/reverse/compare_dynamics_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_eye_look.py](../../Tools/reverse/compare_eye_look.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_hand_patterns.py](../../Tools/reverse/compare_hand_patterns.py) | Conversion / recovery / verification tool |
@@ -397,6 +401,7 @@ Feature assessment: [studio.md](studio.md).
 | [Tools/reverse/test_compare_route_playback.py](../../Tools/reverse/test_compare_route_playback.py) | Test / validation |
 | [Tools/reverse/test_dynamics_contract.py](../../Tools/reverse/test_dynamics_contract.py) | Test / validation |
 | [Tools/reverse/test_original_camera_object_probe.py](../../Tools/reverse/test_original_camera_object_probe.py) | Test / validation |
+| [Tools/reverse/test_original_dynamics_probe.py](../../Tools/reverse/test_original_dynamics_probe.py) | Test / validation |
 | [Tools/reverse/test_studio_animation.py](../../Tools/reverse/test_studio_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_hand_animation.py](../../Tools/reverse/test_studio_hand_animation.py) | Test / validation |
 | [Tools/reverse/test_studio_look_settings.py](../../Tools/reverse/test_studio_look_settings.py) | Test / validation |

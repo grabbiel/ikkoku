@@ -191,6 +191,79 @@ trajectories remain checked against the independent recovered float32 oracle.
   --output .local/reverse/studio-dynamics/original-setup-parity.json
 ```
 
+## Original motion capture
+
+The same private probe gained a motion mode (`--motion`): it uploads a fixed
+request (90 frames at the locked 60 Hz step, which the fixture rechecks),
+re-enables only the seven hair components and their 24 colliders, and drives a
+deterministic scripted root path — `x + 0.34·sin(0.11i)`, `z + 0.55·sin(0.165i)`
+and yaw `32·sin(0.14i) + 4·sin(0.43i)` degrees plus a sub-millimetre LCG jitter
+— while the original `DynamicBone.LateUpdate` integrates the real particles on
+top of it. Every frame after `WaitForEndOfFrame` records `deltaTime` (locked at
+0.01666667 s on all 90 frames), the character and avatar world transforms, each
+component root and owner world transform, every particle world position and
+applied rotation, and every collider world transform. Before the first step it
+also records the `OnEnable` reset state: each particle's `m_Position`/
+`m_PrevPosition`, the weight, accumulator time, object move and object scale
+(0.8683459 on this fixture).
+
+`Tools/reverse/compare_dynamics_motion.py` replays the capture (evidence
+`.local/reverse/original-dynamics-probe-stt08a/motion.json`, copy in
+`/Users/rumpology/code-repo/ikkoku/.local/stt08a/`) through the float32 oracle
+under two models at a 1e-4 m gate.
+
+The **bind-hierarchy diagnostic** rebuilds the rig bind chain under the
+recorded avatar world transform, the input model the earlier synthetic
+scenarios use. The capture refutes it as a parity model: the predicted
+component root deviates from the recorded root by 0.129–0.143 m (worst
+0.14307 m, `cf_J_hairF_00` frame 18), the owner by a constant 0.12603 m and
+every collider by 0.11468 m; the offset is frame-constant in the character
+frame, so the live assembled scene reposes or re-scales bones the rig mirror
+does not carry. The diagnostic keeps reporting those deviations per component;
+they are model evidence, not parity claims.
+
+The **recorded-input model** is the parity gate: the integrator receives only
+recorded transforms — the root's world transform, the owner world position,
+each collider's recorded world transform (with the seed `objectScale` as its
+lossy scale, because the capture records no per-collider scale — a documented
+assumption) — and bind-local translations below the root scaled uniformly by
+`objectScale`, mirroring `InitTransforms`. The recorded rest offset of
+particle 1 from the root divides by the scaled bind local to
+0.9999852–1.0000030, so that uniform scale assumption holds to float32 noise.
+Fixed-rate accumulation ran once per frame (step counts all 1) with the seeded
+accumulator remainder. The gate **fails**: per-component maxima are 0.12694
+(`cf_J_hairBR_00` frame 59 tip), 0.12580 (`cf_J_hairBL_00` frame 82), 0.14199
+(`cf_J_hairB_00` frame 22), 0.04993 (`cf_J_hairFR_02_00` frame 58), 0.04017
+(`cf_J_hairFL_02_00` frame 80), 0.07107 (`cf_J_hairF_00` frame 13) and 0.05402
+(`cf_J_hairFR_00` frame 43) metres. Every component first exceeds the gate on
+frame 0 at its second particle (0.00746–0.03089 m), so the divergence begins
+in the very first integrated step; per-frame particle sway amplitudes in the
+recorded capture are only 1–4 cm, so the residual is a model/input gap in the
+first-step integration, not chaotic drift. This is reported, per the capture
+protocol, and no Swift solver was changed on its account.
+
+Caveats and non-coverage: an external CharaStudio scene script relocates the
+character root every frame (the recorded root path follows the scripted
+sinusoid in x to the jitter but not in y/z), so the comparison is valid only
+through the recorded transforms, and the recorded owner positions — not the
+script — feed the oracle's owner-inertia channel; the seeded `objectMove` was
+zero at reset. Whether any collider was actually contacted is unrecorded (the
+oracle models the collision branches but the capture writes no contact
+events), applied particle rotations are context only
+(`ApplyParticlesToTransforms` is not ported), and per-collider lossy scales
+are assumed equal to `objectScale`.
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_dynamics_probe.py --motion
+# After the private player exits:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_dynamics_probe.py --collect
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_dynamics_motion.py \
+  --capture .local/reverse/original-dynamics-probe-stt08a/motion.json \
+  --contract .local/reverse/studio-dynamics/maker-dynamics.json \
+  --maker-library .local/reverse/maker-library \
+  --output .local/reverse/dynamics-motion/stt08a-compare.json
+```
+
 Next tasks (`ST-T08`) are to capture actual-player particle trajectories and
 rendered/bone results for the same controlled tick history, then add world-object
 motion inertia and additional topologies/variants. Extend Maker rebinding to
