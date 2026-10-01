@@ -37,6 +37,36 @@ class StartTests(unittest.TestCase):
         self.assertEqual(run,recorded);self.assertEqual(recorded['processID'],4321);self.assertEqual(recorded['root'],ROOT_A)
         self.assertEqual(recorded['sceneSHA256'],expected_hashes)
 
+class AuthorStartTests(unittest.TestCase):
+    def test_author_run_uploads_card_and_records_then_launches(self):
+        events=[]
+        with tempfile.TemporaryDirectory() as tmp,\
+             patch('original_scene_reload_probe.player_root',return_value=ROOT_A),\
+             patch('original_scene_reload_probe.write_small',side_effect=lambda vm,path,data:events.append(('upload',path,data))),\
+             patch('original_scene_reload_probe.retry',side_effect=lambda vm,script,user=False:events.append(('launch' if user else 'compile',script)) or ('4321' if user else '')):
+            card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
+            inputs={}
+            for label in probe.FK_LABELS:
+                path=Path(tmp)/(label+'.png');path.write_bytes(b'png-'+label.encode());inputs[label]=path
+            run=probe.start('vm',Path(tmp),scenes=inputs,card=card)
+        self.assertEqual([e[0] for e in events],['upload','compile','upload','upload','upload','launch'])
+        self.assertEqual(events[2][1],ROOT_A+r'\BepInEx\plugins\author-card.png') # the author-mode trigger
+        self.assertEqual([e[1] for e in events[3:5]],
+                         [ROOT_A+r'\BepInEx\plugins\reload-'+label+'.png' for label in probe.FK_LABELS])
+        self.assertEqual(run['authorCard'],hashlib.sha256(b'card').hexdigest())
+        self.assertEqual(set(run['sceneSHA256']),set(probe.FK_LABELS))
+
+    def test_author_run_without_records_uploads_only_the_card(self):
+        events=[]
+        with tempfile.TemporaryDirectory() as tmp,\
+             patch('original_scene_reload_probe.player_root',return_value=ROOT_A),\
+             patch('original_scene_reload_probe.write_small',side_effect=lambda vm,path,data:events.append(('upload',path,data))),\
+             patch('original_scene_reload_probe.retry',side_effect=lambda vm,script,user=False:events.append(('launch' if user else 'compile',script)) or ('4321' if user else '')):
+            card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
+            run=probe.start('vm',Path(tmp),scenes={},card=card)
+        self.assertEqual([e[0] for e in events],['upload','compile','upload','launch'])
+        self.assertEqual(run['sceneSHA256'],{})
+
 class CollectTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.output=Path(self.tmp.name)
@@ -65,6 +95,25 @@ class CollectTests(unittest.TestCase):
         listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
         self.assertEqual(listed,{'status.json','reload-trace.json','reload-camera-switch.png','reload-hide-rename.png','reload-route-stop.png','reload-route-rename.png','unity.log','run.json'})
         self.assertEqual(result['files'],8)
+
+    def test_author_run_fetches_the_scene_the_probe_authored_from_its_folder(self):
+        (self.output/'run.json').write_text(json.dumps(dict(vm='vm',root=ROOT_A,processID=77,stopped=False,
+            authorCard='c',sceneSHA256={label:'h' for label in probe.FK_LABELS})))
+        paths=[]
+        files={'status.json':json.dumps(dict(error=None)).encode(),'reload-trace.json':b'{}',
+               'scene-char.png':b'scene','reload-charastudio-fk-edit.png':b'e',
+               'reload-charastudio-fk-source.png':b's','unity.log':b'log'}
+        def fetch(vm,path,limit=None):
+            name=path.rsplit('\\',1)[1];paths.append(path)
+            if name not in files:raise RuntimeError('missing '+name)
+            return files[name]
+        with patch('original_scene_reload_probe.fetch',side_effect=fetch),patch('original_scene_reload_probe.stop_probe'):
+            result=probe.collect('vm',self.output)
+        self.assertIn([p for p in paths if p.endswith('scene-char.png')][0],
+                      [ROOT_A+r'\BepInEx\plugins\reload\scene-char.png']) # authored into the probe's folder
+        listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
+        self.assertIn('scene-char.png',listed);self.assertEqual(result['files'],len(listed))
+        self.assertEqual((self.output/'scene-char.png').read_bytes(),b'scene')
 
     def test_failed_probe_status_is_saved_before_raising(self):
         def fetch(vm,path,limit=None):
@@ -103,11 +152,34 @@ class ArgumentTests(unittest.TestCase):
             start,collect=self.run_main(argv)
             start.assert_called_once();self.assertEqual(set(start.call_args.args[3]),set(probe.LABELS))
 
+    def test_author_run_requires_the_card_and_both_fk_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError,'author-character requires an existing'):
+                self.run_main(['--author-character',str(Path(tmp)/'absent.png')])
+            card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
+            inputs={}
+            for label in probe.FK_LABELS:
+                path=Path(tmp)/(label+'.png');path.write_bytes(b'png-'+label.encode());inputs[label]=path
+            start,collect=self.run_main(['--author-character',str(card)])    # a plain author run needs no records
+            self.assertEqual(start.call_args.args[3],{})
+            for label in probe.LABELS: # with a card the run uploads only what was given, but an FK pair is all-or-nothing
+                path=Path(tmp)/('plain-'+label+'.png');path.write_bytes(b'png');path.rename(path)
+                start,collect=self.run_main(['--author-character',str(card),'--'+label,str(path)])
+                self.assertEqual(set(start.call_args.args[3]),{label})
+            with self.assertRaisesRegex(ValueError,'needs both --charastudio-fk-edit and --charastudio-fk-source'):
+                self.run_main(['--charastudio-fk-edit',str(inputs['charastudio-fk-edit'])])
+            start,collect=self.run_main(['--charastudio-fk-edit',str(inputs['charastudio-fk-edit']),
+                                         '--charastudio-fk-source',str(inputs['charastudio-fk-source'])])
+            self.assertEqual(set(start.call_args.args[3]),set(probe.FK_LABELS)) # a reload-only FK run uploads both records
+            self.assertIsNone(start.call_args.args[4])
+
     def test_collect_is_a_capture_step_without_scene_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             inputs=scenes(tmp)
             with self.assertRaisesRegex(ValueError,'collect does not take scene'):
                 self.run_main(['--collect','--hide-rename',str(inputs['hide-rename'])])
+            with self.assertRaisesRegex(ValueError,'collect does not take scene'):
+                self.run_main(['--collect','--author-character',str(inputs['hide-rename'])])
             start,collect=self.run_main(['--collect'])
             collect.assert_called_once()
 

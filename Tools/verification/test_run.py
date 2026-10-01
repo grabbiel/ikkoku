@@ -598,7 +598,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 31)
+        self.assertEqual(len(self.checks), 32)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]

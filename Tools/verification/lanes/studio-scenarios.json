@@ -427,10 +427,19 @@
     },
     {
       "id": "studio-scenario-charastudio-hide-rename",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-hide-rename.json",
@@ -439,17 +448,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on scene-x hide folder key 1, rename camera key 0 to IKKOKU-A2 and folder key 1 to IKKOKU-F2, export the original scene and reimport it; the hidden flag and both names must read back in our importer. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py; see docs/reference/studio/scene-editing.md for the recorded CharaStudio result.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-charastudio-hide-rename.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/charastudio-hide-rename.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-charastudio-hide-rename.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/charastudio-hide-rename.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-charastudio-camera-switch",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CAMERA_OBJECT_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-camera-switch.json",
@@ -458,17 +482,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on scene-x the load winner is key 2; toggling camera key 0 active must make it the view camera, and after export+reimport our importer must still pick key 0. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records which camera the player's view uses; see docs/reference/studio/scene-editing.md.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-charastudio-camera-switch.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/charastudio-camera-switch.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-charastudio-camera-switch.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/charastudio-camera-switch.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-charastudio-route-stop",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-route-stop.json",
@@ -477,17 +516,32 @@
       "referenceTier": "app-smoke",
       "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on the stt11c route scene stop route key 0 (exported with key 3 still active), export and reimport; our importer must read key 0 stopped and key 3 playing. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records whether each route plays there; see docs/reference/studio/scene-editing.md.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-charastudio-route-stop.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/charastudio-route-stop.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-charastudio-route-stop.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/charastudio-route-stop.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
     {
       "id": "studio-scenario-charastudio-route-rename",
-      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
       "fixtures": [
-        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
-        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-route-rename.json",
@@ -496,8 +550,48 @@
       "referenceTier": "app-smoke",
       "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on the stt11c route scene rename route key 3 to IKKOKU-R3 (export validation must accept the route name edit, and the play states must be untouched by it), export and reimport; the route stays playing in our importer, which reads the record name back as IKKOKU-R3 (since ST-T03g routes import under their saved names). The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records the route name it reads back; see docs/reference/studio/scene-editing.md.",
       "artifacts": [
-        {"path": ".local/verification/reports/studio-scenario-charastudio-route-rename.json", "kind": "scenario-report"},
-        {"path": ".local/verification/scenario-exports/charastudio-route-rename.png", "kind": "exported-scene"}
+        {
+          "path": ".local/verification/reports/studio-scenario-charastudio-route-rename.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/charastudio-route-rename.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-charastudio-fk-edit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_CHARASTUDIO_FK_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-fk-edit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-charastudio-fk-edit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T01 acceptance edit on the CharaStudio-authored scene scene-char.png (one female in the default pose, FK disabled; produced by Tools/reverse/original_scene_reload_probe.py --author-character from a synthetic fixture card): turn FK on and rotate bone 19 to [0,35,0] degrees, assert the exact degrees and the moved left-hand guide (bone 21), export and reimport; after reimport the guide reproduces its post-edit position within 0.02 (the scene's saved FK lives on the reimported preview, like studio-scenario-fk-edit; the degrees read back in the file itself are asserted by the reload probe), and the same export's saved bone-19 rotation is asserted against [0,35,0] by the original player. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records enableFK, the active FK groups, the bone's saved rotation and the hand world position it reads back; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-charastudio-fk-edit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/charastudio-fk-edit.png",
+          "kind": "exported-scene"
+        }
       ],
       "timeout": 600
     },
@@ -758,7 +852,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-camera.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Loads the saved scene-x card in a fresh process with no import: both camera entries and the scene light must be rehydrated and the look-through camera must be key 2, the FILE's load winner — the live camera choice a user had before the save is runtime state the document never carried and deliberately does not come back. ST-T01.",
+      "tolerance": "Loads the saved scene-x card in a fresh process with no import: both camera entries and the scene light must be rehydrated and the look-through camera must be key 2, the FILE's load winner \u2014 the live camera choice a user had before the save is runtime state the document never carried and deliberately does not come back. ST-T01.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-reload-load-camera.json",
