@@ -268,7 +268,10 @@ not arbitrary installed appearance/plugin compatibility.
 Source object transforms retain their exact quaternion with consistent editable
 Euler fields. Exact accessory-point mappings read the final character pose.
 Unsupported variants, source props/lights/object cameras, routes and **all route
-descendants** remain named, unrendered tree entries. The current viewport camera
+descendants** remain unrendered tree entries; a route is named by its saved
+record name (only a route record without a name falls back to the
+`Unrendered source route <key>` placeholder), so a route rename made in our app
+reads back after reimport. The current viewport camera
 and ten slots are applied; maps, scene lighting/effects and scene sound are parsed
 only. The separate prop/folder catalog importer is not yet unified with this path.
 
