@@ -256,7 +256,8 @@ python3 Tools/verification/run.py \
 
 `.github/workflows/ci.yml` runs on every pull request to `main`, every push to
 `main` and on manual dispatch. It runs two jobs on GitHub-hosted `macos-26`
-runners (the app's deployment target is macOS 26, so it needs Xcode 26):
+runners (the app's deployment target is macOS 26, so it needs Xcode 26) and one
+on `ubuntu-latest`:
 
 - `public-lane` builds the Engine tests (`swift build --build-tests`, so the
   lane's 600 s `swift test` timeout does not include a cold build), then runs
@@ -266,6 +267,12 @@ runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 - `app-build` builds `IkkokuCreator` Debug with code signing disabled
   (`CODE_SIGNING_ALLOWED=NO`), because the runner has no development-team
   identity. It checks that the app compiles and links, and nothing more.
+- `reverse-tools` (Linux, Python 3.12) installs only the pinned
+  `Tools/reverse/requirements.txt` and runs the `Tools/reverse` and
+  `Tools/reverse/analysis` unittest suites. Without `.local/` they skip or
+  early-return their fixture-gated cases, exactly as on a fresh checkout (a
+  clean requirements-only venv gave 342 tests with 7 skipped, plus the analysis
+  suite, on 2026-10-01).
 
 The `private-source`, `maker`, `app-smoke`, `studio-scenarios` and
 `maker-scenarios` lanes stay local: they need the original installation,
