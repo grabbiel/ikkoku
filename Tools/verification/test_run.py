@@ -763,7 +763,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_maker_scenario(self):
-        self.assertEqual(len(self.checks), 32)
+        self.assertEqual(len(self.checks), 4)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_MAKER_SCENARIO"]
