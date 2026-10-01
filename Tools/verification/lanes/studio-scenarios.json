@@ -456,7 +456,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-charastudio-route-rename.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on the stt11c route scene rename route key 3 to IKKOKU-R3 (export validation must accept the route name edit, and the play states must be untouched by it), export and reimport; the route stays playing in our importer, which shows the unrendered-route placeholder name rather than the record name. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records the route name it reads back; see docs/reference/studio/scene-editing.md.",
+      "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on the stt11c route scene rename route key 3 to IKKOKU-R3 (export validation must accept the route name edit, and the play states must be untouched by it), export and reimport; the route stays playing in our importer, which reads the record name back as IKKOKU-R3 (since ST-T03g routes import under their saved names). The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records the route name it reads back; see docs/reference/studio/scene-editing.md.",
       "artifacts": [
         {"path": ".local/verification/reports/studio-scenario-charastudio-route-rename.json", "kind": "scenario-report"},
         {"path": ".local/verification/scenario-exports/charastudio-route-rename.png", "kind": "exported-scene"}

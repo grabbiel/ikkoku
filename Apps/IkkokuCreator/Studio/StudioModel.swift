@@ -850,9 +850,15 @@ final class StudioModel: ViewportInputHandler {
                     diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering: \(error)")
                 }
             } else if record.kind != .folder {
-                object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
-                // A route's `childRoot` is resolved every frame, so a non-character
-                // route child inherits it like any other parent transform.
+                // A route keeps its saved CharaStudio name: the export
+                // serializes route renames, so a reimport must read the name
+                // back; only a route record without a name falls back to the
+                // placeholder. Every other unresolved kind keeps it, and the
+                // route itself stays unrendered. A route's `childRoot` is
+                // resolved every frame, so a non-character route child
+                // inherits it like any other parent transform.
+                let placeholder = "Unrendered source \(record.kind) \(record.sourceKey)"
+                object.name = record.kind == .route ? record.name ?? placeholder : placeholder
                 diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering.")
             }
             object.sourcePreviewName = object.name; object.sourcePreviewKind = object.kind
@@ -1017,7 +1023,13 @@ final class StudioModel: ViewportInputHandler {
             // sourcePreviewName existed fall back to the import's placeholder
             // label, which must never be written over the record's name.
             if original.kind == .folder || original.kind == .camera || original.kind == .route {
-                let baseline = object.sourcePreviewName ?? (original.kind == .folder
+                // Routes baseline like folders: their record name is what a
+                // current import shows, so an untouched route writes nothing
+                // and a rename writes exactly the new name. An old document
+                // still carrying the placeholder as its sourcePreviewName
+                // keeps that preview, which the ?? prefers, so it too writes
+                // no spurious edit.
+                let baseline = object.sourcePreviewName ?? ((original.kind == .folder || original.kind == .route)
                     ? original.name ?? "Source object \(key)" : "Unrendered source \(original.kind) \(key)")
                 if object.name != baseline { edits.names[key] = object.name }
             }
