@@ -98,6 +98,12 @@ set:
       (automated in part: `scenarios/fk-edit.json` — an FK bone rotation on character
       key 65 holds its exact degrees and moves the left-hand guide, and the pose
       survives export → reimport; passed 2026-09-30).
+      `scenarios/charastudio-fk-edit.json` — the same FK edit reloaded in the
+      original CharaStudio player: an export of the edit loaded beside the
+      unedited source scene shows the saved bone rotation `[0,35,0]` and the
+      hand 0.288 m from its unedited position; passed `--strict` 2026-10-01
+      (capture `.local/stt01c/`; that player copy needs the probe's
+      empty-voice-table repair to load any character scene).
 - [ ] ST-T10: the animation selection inspector changes the playing clip and speed, and
       original export keeps the new catalog IDs (PRs #12, #16, #17)
       (automated in part: `scenarios/animation-select.json` — selecting catalog clip

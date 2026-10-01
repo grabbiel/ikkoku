@@ -1,0 +1,63 @@
+{
+  "steps": [
+    {
+      "op": "captureBone",
+      "key": 0,
+      "bone": 21,
+      "name": "handL-before"
+    },
+    {
+      "op": "setFK",
+      "key": 0,
+      "bone": 19,
+      "rotation": [
+        0,
+        35,
+        0
+      ]
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 0,
+        "bone": 19,
+        "rotation": [
+          0,
+          35,
+          0
+        ]
+      }
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 0,
+        "bone": 21,
+        "from": "handL-before"
+      }
+    },
+    {
+      "op": "captureBone",
+      "key": 0,
+      "bone": 21,
+      "name": "handL-after"
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/charastudio-fk-edit.png"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/charastudio-fk-edit.png"
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 0,
+        "bone": 21,
+        "from": "handL-after",
+        "within": 0.02
+      }
+    }
+  ]
+}

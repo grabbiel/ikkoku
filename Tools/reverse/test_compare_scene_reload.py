@@ -1,5 +1,5 @@
 """Synthetic CharaStudio reload records exercise the acceptance comparison; no VM data is read."""
-import unittest
+import math, unittest
 from compare_scene_reload import compare
 
 
@@ -35,6 +35,114 @@ def passing_trace():
 
 def snapshot(report,label):
     return report['cases'][label]
+
+
+def fk_char(enable_fk,saved_rot,hand,groups=None):
+    return dict(dicKey=0,enableFK=enable_fk,enableIK=False,
+                activeFK=groups or [False,True,False,True,False,False,False],
+                bones=[dict(boneID=19,found=True,group=8,savedRotation=saved_rot,
+                            worldPosition=[0.1,1.3,-0.2],worldRotation=[0.0,0.3,0.0,0.95]),
+                       dict(boneID=21,found=True,group=64,savedRotation=[0.0,0.0,0.0],
+                            worldPosition=hand,worldRotation=[0.0,0.0,0.0,1.0])])
+
+
+def fk_case(label,character,hand=None):
+    """One ST-T01 trace case: a single character object whose "character" record is the probe's FK snapshot."""
+    snapshot=dict(objectCount=1,viewCameraKey=None,viewCameraName=None,cameraCtrlEnabled=True,
+                  objects=[obj(0,0,name='IKKOKU-F',character=character)])
+    return dict(label=label,scene='reload-'+label+'.png',afterLoad=snapshot,settled=snapshot)
+
+
+def passing_fk_trace():
+    edited=fk_char(True,[0.0,35.0,0.0],[0.32,1.18,-0.05])   # the FK edit turned the arm away from the default pose
+    source=fk_char(False,[0.0,0.0,0.0],[0.18,1.20,-0.05])   # the unedited load of the CharaStudio-authored scene
+    return dict(schemaVersion=1,framesPerPhase=4,cases={
+        'charastudio-fk-edit':fk_case('charastudio-fk-edit',edited),
+        'charastudio-fk-source':fk_case('charastudio-fk-source',source)})
+
+
+class FkEditCompareTests(unittest.TestCase):
+    def test_a_record_where_the_fk_edit_survives_the_reload_passes(self):
+        report=compare(passing_fk_trace(),{'charastudio-fk-edit':'e1','charastudio-fk-source':'s1'})
+        self.assertTrue(report['passed'])
+        for label,count,recorded in (('charastudio-fk-edit',5,2),('charastudio-fk-source',4,3)):
+            case=snapshot(report,label)
+            self.assertTrue(case['passed'],label)
+            self.assertEqual(len(case['claims']),count)
+            self.assertEqual(len([c for c in case['claims'] if c['passed'] is None]),recorded)
+        self.assertEqual(snapshot(report,'charastudio-fk-edit')['sceneSHA256'],'e1')
+        # the moved-hand claim carries the distance and both hands as evidence
+        moved=[c for c in snapshot(report,'charastudio-fk-edit')['claims']
+               if c['claim']=='charastudio-fk-edit/hand21-moved-relative-to-charastudio-fk-source'][0]
+        self.assertTrue(moved['passed'])
+        self.assertAlmostEqual(moved['actual']['distance'],math.sqrt(0.02),places=9)
+
+    def test_fk_disabled_on_load_fails_only_the_edit_case(self):
+        trace=passing_fk_trace()
+        trace['cases']['charastudio-fk-edit']['afterLoad']['objects'][0]['character']['enableFK']=False
+        report=compare(trace)
+        self.assertFalse(report['passed'])
+        self.assertIn('charastudio-fk-edit/fk-enabled',
+                      [c['claim'] for c in snapshot(report,'charastudio-fk-edit')['claims'] if c['passed'] is False])
+        self.assertTrue(snapshot(report,'charastudio-fk-source')['passed'])
+
+    def test_a_saved_rotation_outside_one_thousandth_of_a_degree_fails(self):
+        for rot in ([0.0,35.002,0.0],[0.0,0.0,0.0],None):  # drifted, never written, not recorded at all
+            trace=passing_fk_trace()
+            trace['cases']['charastudio-fk-edit']['afterLoad']['objects'][0]['character']['bones'][0]['savedRotation']=rot
+            report=compare(trace)
+            claim=[c for c in snapshot(report,'charastudio-fk-edit')['claims']
+                   if c['claim']=='charastudio-fk-edit/bone19-saved-rotation'][0]
+            self.assertIs(claim['passed'],False,rot)
+        # one thousandth of a degree is still within the acceptance
+        trace=passing_fk_trace()
+        trace['cases']['charastudio-fk-edit']['afterLoad']['objects'][0]['character']['bones'][0]['savedRotation']=[0.0,35.001,0.0]
+        self.assertTrue(compare(trace)['passed'])
+
+    def test_a_hand_the_edit_did_not_move_fails(self):
+        trace=passing_fk_trace()
+        hand=trace['cases']['charastudio-fk-source']['afterLoad']['objects'][0]['character']['bones'][1]['worldPosition']
+        trace['cases']['charastudio-fk-edit']['afterLoad']['objects'][0]['character']['bones'][1]['worldPosition']=list(hand)
+        report=compare(trace)
+        self.assertIn('charastudio-fk-edit/hand21-moved-relative-to-charastudio-fk-source',
+                      [c['claim'] for c in snapshot(report,'charastudio-fk-edit')['claims'] if c['passed'] is False])
+
+    def test_a_missing_or_empty_baseline_fails_the_moved_claim_with_evidence_not_a_crash(self):
+        for baseline in (None,[None,None,None]):
+            trace=passing_fk_trace()
+            if baseline is None:del trace['cases']['charastudio-fk-source']
+            else:trace['cases']['charastudio-fk-source']['afterLoad']['objects'][0]['character']['bones'][1]['worldPosition']=baseline
+            report=compare(trace)
+            claim=[c for c in snapshot(report,'charastudio-fk-edit')['claims']
+                   if c['claim'].endswith('hand21-moved-relative-to-charastudio-fk-source')][0]
+            self.assertIs(claim['passed'],False)
+            self.assertIn('editedHand',claim['actual'])
+
+    def test_the_unedited_load_reports_its_fk_state_without_asserting_it(self):
+        for trace in (passing_fk_trace(),):
+            report=compare(trace)
+            recorded=[c['claim'] for c in snapshot(report,'charastudio-fk-source')['claims'] if c['passed'] is None]
+            self.assertEqual(recorded,['charastudio-fk-source/active-fk-groups',
+                                       'charastudio-fk-source/bone19-saved-rotation',
+                                       'charastudio-fk-source/hand21-world-position'])
+            self.assertTrue(snapshot(report,'charastudio-fk-source')['passed'])
+
+    def test_a_scene_that_is_not_one_character_reports_the_diagnostic(self):
+        trace=passing_fk_trace()
+        trace['cases']['charastudio-fk-edit']['afterLoad']['objects'][0].pop('character')
+        report=compare(trace)
+        self.assertFalse(report['passed'])
+        claim=snapshot(report,'charastudio-fk-edit')['claims'][0]
+        self.assertEqual(claim['claim'],'charastudio-fk-edit/one-character-with-fk-state')
+        self.assertIs(claim['passed'],False)
+        self.assertTrue(snapshot(report,'charastudio-fk-source')['passed'])
+
+    def test_a_world_rotation_recorded_after_the_frames_is_kept_as_evidence(self):
+        report=compare(passing_fk_trace())
+        claim=[c for c in snapshot(report,'charastudio-fk-edit')['claims']
+               if c['claim']=='charastudio-fk-edit/bone19-world-rotation-after-frames'][0]
+        self.assertIsNone(claim['passed'])
+        self.assertEqual(claim['actual'],[0.0,0.3,0.0,0.95])
 
 
 class CompareTests(unittest.TestCase):
