@@ -155,18 +155,30 @@ set:
       on the synthetic scene-x, not `koikatu_cs0002591.png`; passed 2026-09-30)
 - [ ] ST-T03 rename: rename a source folder, camera or route, export the original scene,
       reload it: the new name shows; renaming a character (whose name lives in its card)
-      stays rejected at the inspector export. (automated in part:
+      stays rejected at the inspector export. (automated headlessly: the edits go
+      through the Studio scenario runner's `StudioModel` calls, not the mouse-driven inspector;
       `Tools/verification/scenarios/rename-folder.json` covers the folder rename → export →
       reimport and `Tools/verification/scenarios/camera-rename.json` the camera rename →
-      export → reimport on scene-x; route renames are not scripted; the
+      export → reimport on scene-x; `Tools/verification/scenarios/charastudio-route-rename.json`
+      covers the route rename → export → reimport on the stt11c route scene — after the
+      reimport our importer keeps the route playing and shows its by-design unrendered-route
+      placeholder `Unrendered source route 3` instead of the record name, so the rename
+      itself is proven by the exported bytes and the original player's readback below; the
       character-rename rejection is an Engine-suite unit test; passed 2026-09-29.
       CharaStudio reload checked 2026-09-30 for the folder and camera kinds: the same
       exported `charastudio-hide-rename.png` reads back camera key 0 as `IKKOKU-A2`
       and folder key 1 as `IKKOKU-F2` in the original player
       (`Tools/reverse/compare_scene_reload.py` passed;
-      [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance)).
-      The route-rename claim is still unscripted and was not in that capture, so this
-      item stays open; passed 2026-09-29)
+      [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance)),
+      and 2026-09-30 for the route kind: the exported `charastudio-route-rename.png`
+      reads back route key 3 as `IKKOKU-R3` while route key 0 keeps its saved `IKKOKU-A`
+      (second one-run capture; `Tools/reverse/compare_scene_reload.py` passed all four
+      cases; our reimport side of the same scenario passed `--strict` in the
+      `studio-scenarios` lane; passed 2026-09-30). Still open: reloaded in OUR app a
+      route never shows its record name — the importer names every non-folder,
+      non-camera, unresolved object `Unrendered source <kind> <key>`
+      (`StudioModel.swift` import), so "the new name shows" fails for routes on our
+      side even though the export carries it.
 - [x] ST-T03 active flags: switch the source camera / stop a playing route, export the
       original scene, reload: the new camera is active and the route stays stopped.
       (automated headlessly: the edits go through the Studio scenario runner's

@@ -16,7 +16,7 @@ from pathlib import Path
 from dynamics_contract import REPO
 
 KINDS={0:'character',1:'item',2:'light',3:'folder',4:'route',5:'camera'}
-LABELS=('hide-rename','camera-switch','route-stop')
+LABELS=('hide-rename','camera-switch','route-stop','route-rename')
 
 
 def _objects(snapshot):
@@ -29,7 +29,8 @@ def _claims(label,snapshot):
     The expectation is the state the scenario's edits must have written into the record, as
     the original player reads them back; None means "report what the player shows"."""
     objects=_objects(snapshot)
-    required={'hide-rename':{0:5,1:3,2:5},'camera-switch':{0:5,2:5},'route-stop':{0:4,3:4}}[label]
+    required={'hide-rename':{0:5,1:3,2:5},'camera-switch':{0:5,2:5},
+              'route-stop':{0:4,3:4},'route-rename':{0:4,3:4}}[label]
     missing=sorted(key for key,kind in required.items() if key not in objects or objects[key]['kind']!=kind)
     if missing:
         return [(label+'/scene-objects','exactly the objects the scenario edited, with their recorded kinds',
@@ -53,6 +54,12 @@ def _claims(label,snapshot):
             ('camera-switch/view-camera-is-key0',0,snapshot['viewCameraKey']),
             ('camera-switch/camera-key0-active',True,camera['cameraActive']),
             ('camera-switch/camera-key2-inactive',False,other['cameraActive'])]
+    if label=='route-rename':
+        return [
+            # The renamed route and the untouched one: the renamed name must
+            # read back, the other must keep the name saved in the scene.
+            ('route-rename/route-key3-name','IKKOKU-R3',objects[3]['name']),
+            ('route-rename/route-key0-keeps-saved-name','IKKOKU-A',objects[0]['name'])]
     return [
         ('route-stop/route-key0-not-playing',False,objects[0]['routePlaying']),
         ('route-stop/route-key3-playing',True,objects[3]['routePlaying'])]

@@ -445,6 +445,25 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-charastudio-route-rename",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_SCENE", "kind": "file", "from": "IKKOKU_ROUTE_PROBE_SCENE"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/charastudio-route-rename.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-charastudio-route-rename.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T03 acceptance export for the CharaStudio reload probe: on the stt11c route scene rename route key 3 to IKKOKU-R3 (export validation must accept the route name edit, and the play states must be untouched by it), export and reimport; the route stays playing in our importer, which shows the unrendered-route placeholder name rather than the record name. The same PNG is loaded in the original CharaStudio by Tools/reverse/original_scene_reload_probe.py, which records the route name it reads back; see docs/reference/studio/scene-editing.md.",
+      "artifacts": [
+        {"path": ".local/verification/reports/studio-scenario-charastudio-route-rename.json", "kind": "scenario-report"},
+        {"path": ".local/verification/scenario-exports/charastudio-route-rename.png", "kind": "exported-scene"}
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-undo-camera",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

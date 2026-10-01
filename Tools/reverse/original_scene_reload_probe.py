@@ -14,7 +14,7 @@ from original_character_probe import retry, player_root
 from original_shader_probe import write_small, stop_probe, fetch, dump, digest
 from vm_source import powershell, ps_quote
 ROOT=Path(__file__).resolve().parents[2]
-LABELS=('hide-rename','camera-switch','route-stop')
+LABELS=('hide-rename','camera-switch','route-stop','route-rename')
 SOURCE=Path(__file__).with_name('fixtures')/'OriginalSceneReloadProbe.cs'
 
 
