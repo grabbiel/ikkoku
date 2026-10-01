@@ -5,7 +5,7 @@
     {"op": "assert", "key": 3, "name": "IKKOKU-R3"},
     {"op": "export", "path": ".local/verification/scenario-exports/charastudio-route-rename.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/charastudio-route-rename.png"},
-    {"op": "assert", "key": 3, "name": "Unrendered source route 3"},
+    {"op": "assert", "key": 3, "name": "IKKOKU-R3"},
     {"op": "assert", "routePlaying": {"key": 3, "playing": true}}
   ]
 }
