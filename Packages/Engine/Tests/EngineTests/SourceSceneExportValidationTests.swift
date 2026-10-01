@@ -16,7 +16,11 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
                 object.sourceCharacter = .init(sceneFile: document.sourceSceneFile!, sceneSHA256: document.sourceSceneSHA256!,
                     rigFile: "/fixture/rig.json", boneCatalogFile: "/fixture/bones.json", objectKey: record.sourceKey)
             }
-        } else if record.kind != .folder { object.name = "Unrendered source \(record.kind) \(record.sourceKey)" }
+        } else if record.kind != .folder {
+            // Mirrors the app import: a route keeps its saved record name.
+            let placeholder = "Unrendered source \(record.kind) \(record.sourceKey)"
+            object.name = record.kind == .route ? record.name ?? placeholder : placeholder
+        }
         if baselines { object.sourcePreviewName = object.name; object.sourcePreviewKind = object.kind }
         document.objects.append(object)
         for child in record.children { append(child, parent: object.id, routeChild: routeChild || record.kind == .route) }
@@ -122,6 +126,28 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     var renamed = baseline
     renamed.objects[characterIndex].name += " renamed"
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(renamed, against: source.snapshot) }
+}
+
+@Test func sourceSceneExportValidationBaselinesRoutesOnRecordNameAndKeepsLegacyPreviewsSafe() throws {
+    let source = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    let baseline = exportValidationDocument(source)
+    guard let routeIndex = baseline.objects.firstIndex(where: { $0.sourceObjectKey == 20 }) else {
+        throw RigError.invalid("Route record is missing from the imported document.")
+    }
+    // A current import shows the route's saved name, so an untouched route
+    // matches the folder-style record-name baseline without a name edit.
+    #expect(baseline.objects[routeIndex].name == "Route")
+    #expect(baseline.objects[routeIndex].sourcePreviewName == "Route")
+    try SourceSceneExportValidation.validate(baseline, against: source.snapshot)
+    // An old import saved the placeholder as the name AND as sourcePreviewName.
+    // The preview wins over the record-name fallback, so the document stays
+    // valid and the app's export diff (name != preview) writes no spurious edit.
+    var legacy = baseline
+    legacy.objects[routeIndex].name = "Unrendered source route 20"
+    legacy.objects[routeIndex].sourcePreviewName = "Unrendered source route 20"
+    try SourceSceneExportValidation.validate(legacy, against: source.snapshot)
+    #expect(legacy.objects[routeIndex].name.utf8.elementsEqual(
+        (legacy.objects[routeIndex].sourcePreviewName ?? "Route").utf8))
 }
 
 @Test func sourceSceneExportValidationHandlesLegacyUnrenderedRouteCharacters() throws {

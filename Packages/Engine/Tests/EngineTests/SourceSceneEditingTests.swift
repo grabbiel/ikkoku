@@ -352,6 +352,22 @@ private func eyebrowColor(_ card: SourceCharacterCard) throws -> [Float] {
     #expect(try original.editedData(.init(names: [11: "Child"])) == bytes)
 }
 
+@Test func sourceSceneEditingRouteNameEditsWriteNothingUnchangedAndExactlyTheNewName() throws {
+    let bytes = SceneDocumentBytes.scene().data, original = try KoikatsuSceneReader.decodeDocument(bytes)
+    let before = sceneObjects(original.snapshot.roots)
+    let routeName = try #require(before[20]?.name) // "Route"
+    // The export baselines a route on its record name (like a folder): an
+    // untouched route's diff is empty, so writing the stored name back is a
+    // byte-identical no-op and no name edit exists to write.
+    #expect(try original.editedData(.init(names: [20: routeName])) == bytes)
+    #expect(try original.editedData(.init()) == original.preservedData)
+    // A rename writes exactly the new name; reversing restores the source bytes.
+    let renamed = try original.editedData(.init(names: [20: "IKKOKU-R3"]))
+    let result = try KoikatsuSceneReader.decodeDocument(renamed)
+    #expect(try #require(sceneObjects(result.snapshot.roots)[20]?.name) == "IKKOKU-R3")
+    #expect(try result.editedData(.init(names: [20: routeName])) == bytes)
+}
+
 @Test func sourceSceneEditingNameEditsRejectRecordsWithoutSerializedNames() throws {
     let character = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
     #expect(throws: (any Error).self) { try character.editedData(.init(names: [10: "renamed"])) } // Its name lives in the card.

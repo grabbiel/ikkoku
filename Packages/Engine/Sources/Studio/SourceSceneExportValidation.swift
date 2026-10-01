@@ -48,7 +48,9 @@ public enum SourceSceneExportValidation {
                 guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
                     throw RigError.invalid("Retained source placeholders cannot contain character references or FK edits.")
                 }
-                fallbackName = original.kind == .folder || (original.character != nil && !routeChild)
+                // Routes like folders: their saved name is the baseline the
+                // importer shows, so a rename is measured against the record.
+                fallbackName = original.kind == .folder || original.kind == .route || (original.character != nil && !routeChild)
                     ? original.name ?? "Source object \(key)" : "Unrendered source \(original.kind) \(key)"
             }
             guard object.name.utf8.elementsEqual((object.sourcePreviewName ?? fallbackName).utf8)

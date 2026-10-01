@@ -27,13 +27,13 @@ class StartTests(unittest.TestCase):
             expected_stop=inputs['route-stop'].read_bytes()
             expected_hashes={label:hashlib.sha256(p.read_bytes()).hexdigest() for label,p in inputs.items()} # inputs live inside the temp dir
         root.assert_called_once_with('vm',Path(tmp))
-        self.assertEqual([e[0] for e in events],['upload','compile','upload','upload','upload','launch'])
+        self.assertEqual([e[0] for e in events],['upload','compile','upload','upload','upload','upload','launch'])
         self.assertEqual(events[0][1],ROOT_A+r'\SceneReloadProbe.cs')
-        self.assertEqual([e[1] for e in events[2:5]],
+        self.assertEqual([e[1] for e in events[2:6]],
                          [ROOT_A+r'\BepInEx\plugins\reload-'+label+'.png' for label in probe.LABELS])
         self.assertEqual(events[4][2],expected_stop)
         self.assertIn(r'IkkokuSceneReloadProbe.dll',events[1][1]);self.assertIn(r'plugins\reload',events[1][1]);self.assertIn('Compile failed',events[1][1])
-        self.assertIn(r"$root\CharaStudio.exe",events[5][1])
+        self.assertIn(r"$root\CharaStudio.exe",events[6][1])
         self.assertEqual(run,recorded);self.assertEqual(recorded['processID'],4321);self.assertEqual(recorded['root'],ROOT_A)
         self.assertEqual(recorded['sceneSHA256'],expected_hashes)
 
@@ -52,7 +52,8 @@ class CollectTests(unittest.TestCase):
 
     def test_finished_probe_is_stopped_then_every_result_is_fetched_and_listed(self):
         files={'status.json':json.dumps(dict(error=None)).encode(),'reload-trace.json':b'{}',
-               'reload-camera-switch.png':b'c','reload-hide-rename.png':b'h','reload-route-stop.png':b'r','unity.log':b'log'}
+               'reload-camera-switch.png':b'c','reload-hide-rename.png':b'h','reload-route-stop.png':b'r',
+               'reload-route-rename.png':b'n','unity.log':b'log'}
         def fetch(vm,path,limit=None):
             name=path.rsplit('\\',1)[1]
             if name not in files:raise RuntimeError('missing '+name)
@@ -62,8 +63,8 @@ class CollectTests(unittest.TestCase):
         stop.assert_called_once();self.assertEqual(stop.call_args.args[1]['processID'],77)
         self.assertTrue(json.loads((self.output/'run.json').read_text())['stopped'])
         listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
-        self.assertEqual(listed,{'status.json','reload-trace.json','reload-camera-switch.png','reload-hide-rename.png','reload-route-stop.png','unity.log','run.json'})
-        self.assertEqual(result['files'],7)
+        self.assertEqual(listed,{'status.json','reload-trace.json','reload-camera-switch.png','reload-hide-rename.png','reload-route-stop.png','reload-route-rename.png','unity.log','run.json'})
+        self.assertEqual(result['files'],8)
 
     def test_failed_probe_status_is_saved_before_raising(self):
         def fetch(vm,path,limit=None):
@@ -84,7 +85,7 @@ class ArgumentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError,'remain in .local'):self.run_main(['--output',tmp])
 
-    def test_all_three_scene_records_are_required_to_start(self):
+    def test_every_scene_record_is_required_to_start(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError,'--hide-rename requires an existing exported scene record'):
                 self.run_main([])
@@ -96,6 +97,9 @@ class ArgumentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'--route-stop requires an existing exported scene record'):
                 self.run_main(argv)
             argv+=['--route-stop',str(inputs['route-stop'])]
+            with self.assertRaisesRegex(ValueError,'--route-rename requires an existing exported scene record'):
+                self.run_main(argv)
+            argv+=['--route-rename',str(inputs['route-rename'])]
             start,collect=self.run_main(argv)
             start.assert_called_once();self.assertEqual(set(start.call_args.args[3]),set(probe.LABELS))
 
