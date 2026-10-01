@@ -322,9 +322,9 @@ from the rest rotations the oracle assumes, is **not a defect**: the
 `localToWorldMatrix` 3×3 blocks read inside each frame (26 rows over the 7
 components; 33 particle positions are recorded per step) are identical (spread
 exactly 0.0) and match the recorded
-avatar rotation times `m_ObjectScale` entrywise to at most 2.09e-07, so
-`UpdateParticles2` reads the root's live world matrix, which is what the
-recorded-input model feeds it. Hypothesis 4, collider pushes, is
+avatar rotation times `m_ObjectScale` entrywise to at most 2.09e-07 — the live
+root basis; `ST-T08D` below showed the replay itself was feeding a different
+rotation. Hypothesis 4, collider pushes, is
 **confirmed**: with the recorded collider rows the re-prediction matches the
 recorded post-`UpdateParticles2` positions to at most 8.56e-04 m — the float32
 ulp at these ~500 m capture coordinates is 3.05e-05–1.2e-04 m, so the residual
@@ -360,6 +360,47 @@ pin the matrix plumbing, the chain-wise write-back (shifting one post-
 `UpdateParticles1` root position by 2 cm moves every descendant's prediction
 by more than 1 mm) and the collider ablation, and a capture without manual-step
 rows is refused.
+
+`ST-T08D` found the differing replay-side input. Diffing the one-step model's
+reconstructed `UpdateParticles2` inputs against the recorded manual-step inputs
+for frames 10–12 first cleared `UpdateParticles1`: replicating it from the
+seeded internal state gives the recorded `afterParticles1` positions within
+1.38e-3 m on every component (particle 0 exact; the move the model derives from
+the two recorded owner positions differs from the recorded
+`UpdateDynamicBones` prologue `m_ObjectMove` by ~1e-4 m in Z, and velocity and
+move quantize through float32 at different points than the original's
+registers). The named defect was the **root node's live basis rotation** in
+`one_step_inputs`: it pinned the recorded end-of-frame `root.rotation`, but
+`ApplyParticlesToTransforms` rotates parent transforms in place and never
+writes particle 0's own position, so that recording is the *applied* pose —
+41–85 degrees away from the live basis — while `UpdateParticles2` reads the
+live `localToWorldMatrix`, which is `InitTransforms`' restored bind locals
+(ancestor bind local rotations are all identity) under the animated ancestor
+chain: the recorded avatar rotation times `m_ObjectScale`, matching the manual
+`parentMatrix` rows to 2.09e-07 entrywise. The Python fix feeds the frame's
+`avatar` rotation as the root basis (and `compare` now passes the avatar row
+into the one-step frames); the recorded root *position* pin stays, it is the
+live origin. After the fix the `--mode one-step --tolerance 1e-5` gate on both
+the stt08b and stt08c captures (bit-identical trajectories) drops per component
+from 0.12691/0.12579/0.14196/0.04991/0.04014/0.06197/0.03811 m to
+0.014026/0.014058/0.009238/0.006891/0.004669/0.030650/0.031381 m on
+`cf_J_hairBR_00/BL_00/B_00/FR_02_00/FL_02_00/F_00/FR_00` (worst overall
+0.141962 → 0.031381 m, `cf_J_hairFR_00` frame 89). The gate still fails at
+1e-5, and no wrong input is known to remain: re-running the full
+`UpdateParticles2` chain on replay-reconstructed inputs (bind locals, rest
+lengths, radii, stiffness/elasticity, collider world matrices with the
+`[lx, ly, -lz]` lossy-scale mirror) against the *recorded* post-`UpdateParticles1`
+positions reproduces the recorded post-`UpdateParticles2` positions to ≤8.6e-4 m
+on all seven components × frames 10–12. The remaining residual is consistent
+with the replay's ≤1.38e-3 m `UpdateParticles1` difference being amplified along
+the chain (on `cf_J_hairF_00` frame 10, 3.7e-4 m at particle 1 becomes 2.9e-2 m
+at particle 3 through the elasticity pull, bone projection and collider pushes,
+which switch on and off at contact). That attribution is an inference, not a
+per-frame measurement: neither float32 operation order nor near-threshold
+collider contacts are individually ruled in or out. Two synthetic regression tests pin the input:
+overwriting every recorded root rotation with an unrelated 60-degree roll
+leaves the one-step frame errors bit-identical, while a 45-degree yaw of one
+frame's avatar rotation moves that frame's children past the gate.
 
 Caveats and non-coverage: an external CharaStudio scene script relocates the
 character root every frame (the recorded root path follows the scripted

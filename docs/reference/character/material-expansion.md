@@ -134,6 +134,10 @@ rejected together with `--collect`. The accepted keys:
 | `hlUpY` / `hlDownY` | `custom.face.hlUpY` / `.hlDownY` | Iris highlight vertical offset (float) the `ChangeSettingEye*` setters lerp into the highlight offsets |
 | `faceShape33` | `custom.face.shapeValueFace[33]` | Eye tilt shape value (float) `ChangeSettingEyeTilt` turns into the iris `_rotation` |
 
+**Combined-mode run.** On 2026-09-30 `--settings`, `--hand-patterns` and
+`--look-patterns` were supplied together to one capture
+(`.local/vm-merged-probe`, driver root `C:\Temp\IkkokuShaderProbe-d1e6773e…`), so the merged fixture compiled once on the VM and ran all three optional modes at once. They did not interfere: `status.json` reported `error: null`; the `irisCard` header in `look-trace.json` repeats the settings tsv verbatim (the same nine values as the settings+look-only capture `.local/stt07y/run1`); `compare_iris.py` replayed the same six phases over 450 frames with a worst iris texture-transform difference of 0.000000444 against the 1e-6 tolerance (the settings+look capture `.local/stt07y/run1` measured 0.000000492); and `compare_hand_patterns.py` passed with its frame.json bone maxima identical to the hands-only capture `.local/stt07f/r5-9` down to the last digit (7.64e-6° left `cf_j_thumb01_L`, 6.83e-6° right `cf_j_index01_R`), while the sampled-snapshot maximum moved to 1.07e-5° only because the look phases shift the recorded playhead phase (tolerance 0.01°).
+
 **Limits of this comparison.** Texture identity is the texture name for the
 chosen ID in the original `list/characustom/00.unity3d` list-bundle row (tables
 `mt_lip_00`, `mt_eyeshadow_00`, `mt_nip_00`, `mt_underhair_00`,

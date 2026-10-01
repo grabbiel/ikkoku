@@ -254,9 +254,18 @@ set:
       are not asserted; passed 2026-09-29)
 - [ ] CMT-04 and R1/R2: source draw-material overlays render in the live preview as in
       the matched captures (PRs #6–#13).
-- [ ] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with
+- [x] VM: compile the merged `Tools/reverse/fixtures/OriginalCharacterProbe.cs` once with
       settings, hand-pattern and look-pattern modes together (merged textually from three
-      branches).
+      branches). (compiled and run in one capture 2026-09-30 — `.local/stt07y` settings,
+      hands `L5`/`R9` and the `.local/stt07i` look patterns; every mode wrote its output
+      with `status.json` error `null` and matched its single-mode reference: the
+      `irisCard` header repeats the settings tsv verbatim, `compare_iris.py` replayed all
+      450 look frames with a worst iris texture-transform difference of 0.000000444
+      (tolerance 0.000001, same six phases as `.local/stt07y/run1`), and
+      `compare_hand_patterns.py` passed at 0.000011° (tolerance 0.01°) with the same
+      15+15 frame.json bone maxima as `.local/stt07f/r5-9` down to the last digit;
+      `.local/vm-merged-probe`, see
+      [material-expansion](../reference/character/material-expansion.md))
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
