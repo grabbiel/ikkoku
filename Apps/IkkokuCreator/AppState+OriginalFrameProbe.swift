@@ -33,6 +33,40 @@ extension AppState {
                             guard FileManager.default.fileExists(atPath: program.path) else { throw OriginalFrameProbe.ProbeError.invalid("Missing translated shader \(family)") }
                             try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: program, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, families: [family]), to: output.appendingPathComponent("native-translated-\(family).png"))
                         }
+                        // Silhouette attribution slice: render explicit family subsets
+                        // (comma-separated names, semicolon-separated sets) side by side
+                        // to find which pair reproduces the hair-crown residual. Written
+                        // as native-pair-* so the family-only comparison glob is untouched.
+                        if let setsSpec = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_FAMILY_SETS"] {
+                            for spec in setsSpec.split(separator: ";") {
+                                let members = Set(spec.split(separator: ",").map(String.init))
+                                guard !members.isEmpty, families.isSuperset(of: members) else { throw OriginalFrameProbe.ProbeError.invalid("Unknown family set \(spec)") }
+                                let render = try probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, families: members)
+                                try ImageIO.writePNG(render, to: output.appendingPathComponent("native-pair-\(spec).png"))
+                            }
+                        }
+                        // Opt-in 24-bit depth emulation (see captureTranslatedShader):
+                        // re-render the full-character view, the per-family views and
+                        // the family-set views with fragment depth quantized to the
+                        // 24-bit depth grid of the original capture's D3D11 device.
+                        // Written as native-translated24*/native-pair24-* so the gated
+                        // comparison globs (native-translated.png, native-translated-*.png)
+                        // are untouched.
+                        if ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_DEPTH24"] == "1" {
+                            try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, allFamilies: true, depth24Quantized: true), to: output.appendingPathComponent("native-translated24.png"))
+                            for family in families.sorted() {
+                                let program = output.appendingPathComponent("shaders/\(family)/program.json")
+                                try ImageIO.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: program, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, families: [family], depth24Quantized: true), to: output.appendingPathComponent("native-translated24-\(family).png"))
+                            }
+                            if let setsSpec = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_FAMILY_SETS"] {
+                                for spec in setsSpec.split(separator: ";") {
+                                    let members = Set(spec.split(separator: ",").map(String.init))
+                                    guard !members.isEmpty, families.isSuperset(of: members) else { throw OriginalFrameProbe.ProbeError.invalid("Unknown family set \(spec)") }
+                                    let render = try probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, families: members, depth24Quantized: true)
+                                    try ImageIO.writePNG(render, to: output.appendingPathComponent("native-pair24-\(spec).png"))
+                                }
+                            }
+                        }
                         if let traceSpec = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS"] {
                             var pixels: [(x: Int, y: Int)] = []
                             for spec in traceSpec.split(separator: ";") {
