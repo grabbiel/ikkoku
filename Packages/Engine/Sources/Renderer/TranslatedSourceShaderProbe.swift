@@ -46,7 +46,7 @@ public struct DrawTraceSample: Codable, Sendable {
 /// fixture inputs. Unknown constant bindings/pass states fail instead of silently
 /// substituting the native toon shader. Derived MSL stays in private local assets.
 public extension OriginalFrameProbe {
-    func captureTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, queue: any MTLCommandQueue, allFamilies: Bool = false, families: Set<String>? = nil) throws -> CGImage {
+    func captureTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, queue: any MTLCommandQueue, allFamilies: Bool = false, families: Set<String>? = nil, depth24Quantized: Bool = false) throws -> CGImage {
         let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height, mipmapped: false); colorDescriptor.usage = .renderTarget; colorDescriptor.storageMode = .shared
         let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float_stencil8, width: width, height: height, mipmapped: false); depthDescriptor.usage = .renderTarget; depthDescriptor.storageMode = .private
         guard let color = resources.device.makeTexture(descriptor: colorDescriptor), let depth = resources.device.makeTexture(descriptor: depthDescriptor), let command = queue.makeCommandBuffer() else { throw ProbeError.gpu("Source shader targets") }
@@ -57,7 +57,7 @@ public extension OriginalFrameProbe {
             jobs = try translatedDrawOrder(frameURL: frameURL, programURL: programURL, families: families)
                 .flatMap { draw in draw.passes.map { ($0.program, Optional(draw.item)) } }
         }
-        for (index, job) in jobs.enumerated() { try encodeTranslatedShader(frameURL: frameURL, programURL: job.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selectedItem: job.item, sourceBackground: allFamilies) }
+        for (index, job) in jobs.enumerated() { try encodeTranslatedShader(frameURL: frameURL, programURL: job.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selectedItem: job.item, sourceBackground: allFamilies, depth24Quantized: depth24Quantized) }
         command.commit(); command.waitUntilCompleted()
         if let error = command.error { throw ProbeError.gpu(error.localizedDescription) }
         var bytes = [UInt8](repeating: 0, count: width * height * 4); bytes.withUnsafeMutableBytes { color.getBytes($0.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
@@ -138,7 +138,7 @@ public extension OriginalFrameProbe {
         return draws.sorted { $0.queue == $1.queue ? $0.item < $1.item : $0.queue < $1.queue }
     }
 
-    private func encodeTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, color: any MTLTexture, depth: any MTLTexture, command: any MTLCommandBuffer, clear: Bool, selectedItem: Int?, sourceBackground: Bool) throws {
+    private func encodeTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, color: any MTLTexture, depth: any MTLTexture, command: any MTLCommandBuffer, clear: Bool, selectedItem: Int?, sourceBackground: Bool, depth24Quantized: Bool = false) throws {
         typealias Row = [String: Any]
         func object(_ url: URL) throws -> Row { guard let row = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? Row else { throw ProbeError.invalid("Shader descriptor") }; return row }
         func integer(_ value: Any?) throws -> Int { guard let n = value as? NSNumber else { throw ProbeError.invalid("Missing integer shader binding") }; return n.intValue }
@@ -155,7 +155,14 @@ public extension OriginalFrameProbe {
         let options = MTLCompileOptions(); options.fastMathEnabled = false
         let sourceData = try Data(contentsOf: programURL.deletingLastPathComponent().appendingPathComponent("source.metal"))
         guard program["sourceMSLSHA256"] as? String == SHA256.hash(data: sourceData).map({ String(format: "%02x", $0) }).joined(), let sourceCode = String(data: sourceData, encoding: .utf8) else { throw ProbeError.invalid("Translated shader identity changed") }
-        let library = try resources.device.makeLibrary(source: sourceCode, options: options)
+        // The original capture ran under a Direct3D 11 player whose depth buffer
+        // was 24-bit; Apple GPUs expose no depth24+stencil format
+        // (isDepth24Stencil8PixelFormatSupported is false on Apple silicon), so
+        // the opt-in emulation re-emits the rasterized depth quantized to
+        // 24-bit fixed point from the fragment. The wrapper is appended after
+        // the source-shape check, so the translated program identity is still
+        // verified byte-for-byte before anything is transformed.
+        let library = try resources.device.makeLibrary(source: depth24Quantized ? try depth24EmulatingSource(sourceCode) : sourceCode, options: options)
         let descriptor = MTLRenderPipelineDescriptor(); descriptor.vertexFunction = library.makeFunction(name: "source_vertex"); descriptor.fragmentFunction = library.makeFunction(name: "source_fragment")
         descriptor.colorAttachments[0].pixelFormat = .rgba8Unorm_srgb; descriptor.depthAttachmentPixelFormat = .depth32Float_stencil8; descriptor.stencilAttachmentPixelFormat = .depth32Float_stencil8
         func stateValue(_ key: String, in row: Row? = nil) throws -> Int { guard let v = (row ?? state)[key] as? Row else { throw ProbeError.invalid("Pass state \(key)") }; return try integer(v["val"]) }
@@ -325,5 +332,78 @@ public extension OriginalFrameProbe {
         encoder.endEncoding(); endedEncoding = true
         withExtendedLifetime((retainedBuffers, retainedTextures, retainedSamplers)) {}
 
+    }
+
+    /// Parameter text between an entry point's opening parenthesis and the
+    /// matching close, because attribute spellings such as `[[buffer(8)]]`
+    /// contain nested parentheses.
+    private func translatedFragmentParameters(_ source: String, from open: String.Index) -> String? {
+        var depth = 0, index = open
+        while index < source.endIndex {
+            switch source[index] {
+            case "(": depth += 1
+            case ")": if depth == 0 { return String(source[open..<index]) }; depth -= 1
+            default: break
+            }
+            index = source.index(after: index)
+        }
+        return nil
+    }
+
+    /// Rewrite a verified translated program so its fragment output also emits
+    /// depth snapped to a 24-bit fixed-point grid, emulating the 24-bit depth
+    /// buffer of the Direct3D 11 device that produced the original capture.
+    /// MSL forbids calling an entry point that takes a `[[stage_in]]`
+    /// parameter, so the rewrite is in place: the fragment input struct gains
+    /// the vertex output's `[[position]]` (MSL links stage-in members by
+    /// attribute), the entry point returns a color+depth struct, and its
+    /// single `return` becomes the quantization — clamp to [0,1], scale by
+    /// 2^24−1, round half up to the integer grid. `[[depth(any)]]` under the
+    /// probe pipeline's `.greaterEqual` keeps the GreaterEqual tie-pass rule
+    /// the captured passes used. The translated body's color output and
+    /// `discard_fragment()` paths are untouched. This models depth
+    /// *precision* only — not the original driver's sample positions.
+    private func depth24EmulatingSource(_ source: String) throws -> String {
+        guard let signature = source.range(of: "fragment float4 source_fragment("),
+              let inputStruct = source.range(of: "struct SourceFragmentInput {"),
+              let inputEnd = source.range(of: "};", range: inputStruct.upperBound..<source.endIndex),
+              let parameters = translatedFragmentParameters(source, from: signature.upperBound),
+              let bodyStart = source.range(of: "{", range: source.index(signature.upperBound, offsetBy: parameters.count)..<source.endIndex) else { throw ProbeError.invalid("Translated fragment shape") }
+        var depth = 0, bodyEnd = bodyStart.lowerBound
+        while bodyEnd < source.endIndex {
+            switch source[bodyEnd] {
+            case "{": depth += 1
+            case "}": depth -= 1; if depth == 0 { break }
+            default: break
+            }
+            if depth == 0 { break }
+            bodyEnd = source.index(after: bodyEnd)
+        }
+        guard depth == 0, bodyEnd < source.endIndex else { throw ProbeError.invalid("Translated fragment body") }
+        let body = bodyStart.upperBound..<bodyEnd
+        guard source.range(of: "return ", range: body) == source.range(of: "return ", options: .backwards, range: body),
+              let returnEnd = source.range(of: ";", range: source.range(of: "return ", range: body)!.upperBound..<body.upperBound) else { throw ProbeError.invalid("Translated fragment return shape") }
+        let colorExpression = String(source[source.range(of: "return ", range: body)!.upperBound..<returnEnd.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !colorExpression.isEmpty, !colorExpression.contains(";") else { throw ProbeError.invalid("Translated fragment return expression") }
+        let stageIn = parameters.split(separator: ",").first { $0.contains("[[stage_in]]") }
+        guard let positionInput = stageIn?.split(separator: " ").dropLast().last.map(String.init), !positionInput.isEmpty else { throw ProbeError.invalid("Translated fragment position") }
+        let returnRange = source.range(of: "return ", range: body)!.lowerBound..<returnEnd.upperBound
+        let replacements: [(Range<String.Index>, String)] = [
+            (signature, "fragment IkkokuDepth24Output source_fragment("),
+            (inputStruct, "struct SourceFragmentInput { float4 ikkoku_position [[position]];"),
+            (inputEnd, "};\nstruct IkkokuDepth24Output { float4 ikkoku_color [[color(0)]]; float ikkoku_depth [[depth(any)]]; };"),
+            (returnRange, """
+            { IkkokuDepth24Output ikkoku_out;
+                          ikkoku_out.ikkoku_color = \(colorExpression);
+                          float ikkoku_z = clamp(\(positionInput).ikkoku_position.z, 0.0f, 1.0f);
+                          float ikkoku_scaled = ikkoku_z * 16777215.0f;
+                          float ikkoku_base = floor(ikkoku_scaled);
+                          ikkoku_out.ikkoku_depth = (ikkoku_scaled - ikkoku_base >= 0.5f ? ikkoku_base + 1.0f : ikkoku_base) / 16777215.0f;
+                          return ikkoku_out; }
+            """),
+        ]
+        var result = source
+        for (range, replacement) in replacements.sorted { $0.0.lowerBound > $1.0.lowerBound } { result.replaceSubrange(range, with: replacement) }
+        return result
     }
 }
