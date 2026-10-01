@@ -568,7 +568,8 @@ class CheckExecutionTests(unittest.TestCase):
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
                 "setFace", "setBody", "setColor", "setAnimation", "setAnimationSpeed",
-                "setForceLoop", "setFKEnabled", "setFK", "captureBone",
+                "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
+                "dragGizmo", "captureBone",
                 "advance", "orbit", "setAutomaticBlink",
                 "export", "reimport", "assert"}
 
@@ -597,7 +598,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 30)
+        self.assertEqual(len(self.checks), 31)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -669,6 +670,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIsInstance(step["bone"], int)
                 if op == "setFK":
                     self.assertEqual(len(step["rotation"]), 3)
+                if op == "setPoseMode":
+                    self.assertIn(step["mode"], ("object", "fk", "ik"))
+                if op == "selectBone":
+                    self.assertIsInstance(step["bone"], int)
+                if op == "dragGizmo":
+                    self.assertIsInstance(step["bone"], int)
+                    self.assertIn(step["axis"], ("x", "y", "z"))
+                    self.assertEqual(len(step["pixels"]), 2)
+                    self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
                 if op == "captureBone":
                     self.assertTrue(step["name"],
                                     "a captured bone needs a label to compare against: %s" % path)

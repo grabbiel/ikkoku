@@ -214,6 +214,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-fk-mouse-drag",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/fk-mouse-drag.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-fk-mouse-drag.json"
+    },
+    "referenceTier": "app-smoke",
+    "tolerance": "Drives the REAL mouse handlers (mouseDown / eight mouseDragged / mouseUp, left button, no modifiers) over the GPU pick pass: the scenario projects bone 19's guide origin with the view camera, scans ±120 px for a pixel whose pick id is the z rotate ring (the z ring is the one open to this scene's view camera; y and x project nearly edge-on there), grabs it and drags 60,40 px. The drag must hold a non-zero FK rotation on bone 19 (the angle comes out of the ring geometry, so it is asserted non-zero, not equal to a number) and move the left-hand guide (bone 21) further than 1e-5 from its pre-drag position. Exactly one undo snapshot is pushed (by mouseDown), so one undo restores the hand within 1e-4; after redo, export and reimport the guide lands within 0.02 of its post-drag position. The drag degree readback and picked pixel id are recorded in the step detail.",
+    "artifacts": [
+      {
+        "path": ".local/verification/reports/studio-scenario-fk-mouse-drag.json",
+        "kind": "scenario-report"
+      },
+      {
+        "path": ".local/verification/scenario-exports/fk-mouse-drag.png",
+        "kind": "exported-scene"
+      }
+    ],
+    "timeout": 600
+  },
+    {
       "id": "studio-scenario-item-props",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
