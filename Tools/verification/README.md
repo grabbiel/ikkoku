@@ -90,7 +90,16 @@ continues; a failing `export`/`reimport` stops it. Both write only under
 `IKKOKU_STUDIO_ANIMATION_CATALOG` or the op fails before mutating),
 `setAnimationSpeed` `{key,speed}`, `setForceLoop` `{key,on}`,
 `setFKEnabled` `{key,on}`, `setFK` `{key,bone,rotation[3]}` (degrees, the
-inspector's guide drag: also turns FK on, like the drag), `captureBone`
+inspector's guide drag: also turns FK on, like the drag), `setPoseMode`
+`{mode:"object"|"fk"|"ik"}` (the inspector's mode picker), `selectBone`
+`{key,bone}` (selects the object and that guide bone, the same two setters
+the UI list and inspector use), `dragGizmo` `{key,bone,axis:"x"|"y"|"z",
+pixels:[dx,dy]}` (drives the REAL input handlers: projects the bone's world
+origin with the view camera, scans ±120 px for a pixel whose GPU pick id is
+that rotate ring, and calls `mouseDown` / eight `mouseDragged` / `mouseUp`
+there — a ring turned edge-on to the camera projects to a sub-pixel sliver
+nothing picks, and then the failure names the rings the camera does see),
+`captureBone`
 `{key,bone,name}` (memorizes that guide bone's position in the character's
 rig frame under a label for a later `fk`/`from` compare),
 `advance` `{seconds}` (walks the app's own live step at its 1/30 s cadence —
@@ -108,9 +117,12 @@ Studio document card) and `assert` with any of `name`, `visible`,
 `{key,group?,category?,no?,speed?,forceLoop?}` (the live animation state the
 preview plays for that character — the document's saved-clip override or the
 scene record's own — an absent sub-key is not asserted), `fk`
-`{key,bone,rotation?,from?,within?}` (`rotation` checks the document's FK edit
-in degrees; `from` names a `captureBone` label and asserts the bone MOVED
-further than the tolerance from it, or stayed within `within` of it), `eyeLook`
+`{key,bone,rotation?,from?,within?,nonZero?}` (`rotation` checks the
+document's FK edit in degrees; `from` names a `captureBone` label and asserts
+the bone MOVED further than the tolerance from it, or stayed within `within`
+of it; `nonZero` asserts the held rotation has a component past the
+tolerance — a drag's angle comes out of the ring geometry and cannot be
+matched to a number), `eyeLook`
 `{key,lookType?,horizontalSign?,verticalAbove?,verticalBelow?}` (the live gaze
 solver's last-frame iris-shift rates: `lookType` names the pattern's type,
 `horizontalSign` asserts both eyes' rates are non-zero and share that sign — a
@@ -148,14 +160,15 @@ color writeback) stay unchecked.
 No `studio-scenarios` check reads the environment file's own `IKKOKU_SOURCE_SCENE`
 (the `app-smoke` and `private-source` lanes use it for a different
 scene). Each check aliases it through the fixture `from` key instead.
-The nine character scenarios (`visibility-folder`, `rename-folder`,
+The ten character scenarios (`visibility-folder`, `rename-folder`,
 `face-shape`, `color-edit`, `item-props`, `undo-props`, `undo-no-catalog`,
-`animation-select`, `fk-edit`) take
+`animation-select`, `fk-edit`, `fk-mouse-drag`) take
 `IKKOKU_STUDIO_SCENARIO_SCENE`, which must be the scene whose object
 keys they address (`koikatu_cs0002591.png`: keys 0, 65 and 622);
-`animation-select` and `fk-edit` additionally require
+`animation-select`, `fk-edit` and `fk-mouse-drag` additionally require
 `IKKOKU_STUDIO_ANIMATION_CATALOG` (set at import, it lets
-`setAnimation` validate and resolve the selected clip). That
+`setAnimation` validate and resolve the selected clip; `fk-mouse-drag`
+needs it only to import the same scene state `fk-edit` edits). That
 scene has neither a camera nor a route-bearing object, so the six
 camera/route scenarios take a probe scene: `camera-load-winner`,
 `camera-deactivate`, `camera-rename` and `undo-camera` run against the

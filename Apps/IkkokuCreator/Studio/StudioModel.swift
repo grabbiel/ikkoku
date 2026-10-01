@@ -2016,7 +2016,31 @@ final class StudioModel: ViewportInputHandler {
         host.renderer.pick(frame: frame, pixel: p, size: (Int(viewportSize.x), Int(viewportSize.y)))
     }
 
+    /// The GPU pick id of the last built frame at a viewport pixel (origin
+    /// top-left), exposed for the scenario runner's `dragGizmo` op, which has
+    /// to locate a gizmo-axis pixel before it can drive the real mouse
+    /// handlers; nothing but the scenario reads this.
+    func pickID(at p: SIMD2<Float>) -> UInt32 { pick(p) }
+
     private func ray(_ p: SIMD2<Float>) -> Ray { viewCamera.ray(atPixel: p, viewport: viewportSize) }
+
+    /// The viewport pixel (origin top-left) of a guide bone of the selected
+    /// source character, projected with the view camera using the same world
+    /// matrix `sourceCharacterGizmos` centers the rotate rings on, so the
+    /// scenario's `dragGizmo` op can scan around the ring it is about to
+    /// click. Takes a controller `bone.id`; nil when nothing resolves.
+    func sourceGuidePixel(of boneID: Int) -> SIMD2<Float>? {
+        guard let sel = selectedObject, let preview = sourceInstances[sel.id],
+              let target = preview.controller.targets.first(where: { $0.bone.id == boneID && $0.hasGuide })
+        else { return nil }
+        do {
+            let rig = preview.preview.source.rig
+            let pose = try preview.editedPose(fkRotations: sel.sourceFKRotations ?? [:], faceValues: sel.sourceFaceValues, bodyValues: sel.sourceBodyValues, ikTargets: sel.sourceIKOverrides ?? [:], kinematics: sel.sourceKinematics, animationState: sel.sourceAnimation, animationElapsed: sourceAnimationTime)
+            let evaluated = try rig.evaluate(pose)
+            let root = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
+            return viewCamera.project((root * evaluated.worldMatrices[target.node]).translation, viewport: viewportSize)
+        } catch { return nil }
+    }
 
     func mouseDown(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) {
         if button != 0 || modifiers.contains(.option) { drag = modifiers.contains(.shift) || button == 2 ? .pan : .orbit; return }
