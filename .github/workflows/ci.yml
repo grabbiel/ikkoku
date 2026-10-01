@@ -68,3 +68,28 @@ jobs:
           -destination 'platform=macOS,arch=arm64'
           CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
           build
+
+  reverse-tools:
+    name: Reverse tools (Python suites, pinned requirements)
+    # macOS arm64 like the machines that generate the checked-in float32
+    # fixtures: numpy float32 results differ in the last bits on x86 Linux,
+    # and test_checked_in_fixture_matches_generator compares exactly.
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: Tools/reverse/requirements.txt
+      # The private fixtures (.local) are absent here: the suites skip or
+      # early-return those cases by name, as they do on a fresh checkout.
+      - name: Install pinned requirements
+        run: python -m pip install -r Tools/reverse/requirements.txt
+      - name: Tools/reverse unittests
+        working-directory: Tools/reverse
+        run: python -m unittest discover -p 'test_*.py'
+      - name: Tools/reverse/analysis unittests
+        working-directory: Tools/reverse/analysis
+        run: python -m unittest discover -p 'test_*.py'

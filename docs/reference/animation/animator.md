@@ -59,15 +59,21 @@ object-reference curves, clip events, legacy/compressed rotation representations
 mirroring and every other pose blend. The last Studio row `m_Lewd_00_01`
 stays excluded: `convert_clip` records cycle offsets (0.5 there) as
 `cycleOffset` but rejects any `m_LoopBlend` clip with
-`Generic loop-pose correction measured but not matched (best max error 0.0295643)`.
-Seven candidate rules were measured against that row's six-phase private probe —
+`Generic loop-pose correction measured but not matched (best max error 0.0023087)`.
+Candidate rules measured against that row's six-phase private probe include
 component-wise `value(u) + delta·u` 0.0295643, quaternion-channel
 `slerp(identity, q(0)·inverse(q(1)), u)·q(u)` 0.0651397 and its
 right-multiplied pairing 0.4099749, both with pre-cycle-offset `u` 0.2202807
-and 0.4067154, cycle-offset-only sampling 0.2801431, and — retested
-2026-09-27 — the component-wise correction with the corrected quaternion
-renormalized before use 0.0295643, with pre-cycle-offset `u` 0.2005066 —
-all above the 0.0001 tolerance, so nothing was adopted and the runtime
+and 0.4067154, cycle-offset-only sampling 0.2801431, the component-wise
+correction with the corrected quaternion renormalized before use 0.0295643
+with pre-cycle-offset `u` 0.2005066 (retested 2026-09-27), and — remeasured
+2026-10-01 with per-bone attribution — a position-additive plus
+right-multiplied endpoint rotation power `q_raw(u)·inverse(q(1))·q(0)^u`
+0.0023087 (the best), that power alone with raw positions 0.0443834, its
+left-multiplied or reversed-endpoint variants 0.0651397/0.449663/0.409975/0.351119,
+a per-curve own-span correction 0.0295646 and a serialized-delta power
+1.536763; a loop-pose frame-pair mean delta is identically zero. All sit
+above the 0.0001 tolerance, so nothing was adopted and the runtime
 keeps only cycle-offset support.
 
 Bindings retain their original 32-bit path hash and scalar-curve offset. CRC32 of

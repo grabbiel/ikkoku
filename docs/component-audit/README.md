@@ -105,7 +105,7 @@ exercise much of the checklist below **headlessly**, through `StudioModel` /
 `maker-scenarios.json` (4 checks); run them with
 `python3 Tools/verification/run.py --manifest <lane> --environment
 .local/verification/environment.json --strict`. GitHub Actions (PR #70) runs only
-the public lane and an unsigned Debug build. Scenario-lane evidence is not
+the public lane, an unsigned Debug build and the `Tools/reverse` Python suites. Scenario-lane evidence is not
 interactive UI acceptance: items stay unticked unless every claim they make has
 passed, and ticked items say how they were checked. The ST-T03 items are ticked
 because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
