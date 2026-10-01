@@ -97,7 +97,11 @@ set:
       FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
       (automated in part: `scenarios/fk-edit.json` — an FK bone rotation on character
       key 65 holds its exact degrees and moves the left-hand guide, and the pose
-      survives export → reimport; passed 2026-09-30).
+      survives export → reimport; passed 2026-09-30; also `scenarios/fk-mouse-drag.json`
+      — mouse-driven FK guide drag automated through the real input handlers and GPU
+      pick (headless; no physical mouse or window): the z rotate ring is grabbed and
+      dragged 60,40 px, holds a non-zero FK rotation, moves the hand, pushes exactly
+      one undo snapshot and survives export → reimport; passed 2026-09-30).
 - [ ] ST-T10: the animation selection inspector changes the playing clip and speed, and
       original export keeps the new catalog IDs (PRs #12, #16, #17)
       (automated in part: `scenarios/animation-select.json` — selecting catalog clip

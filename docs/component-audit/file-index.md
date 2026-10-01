@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**767 files indexed; 767 assigned; 0 unassigned.**
+**768 files indexed; 768 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 122 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 123 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 151 |
+| Conversion / recovery / verification tool | 152 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
@@ -775,6 +775,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/eye-look-orbit.json](../../Tools/verification/scenarios/eye-look-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/fk-edit.json](../../Tools/verification/scenarios/fk-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/fk-mouse-drag.json](../../Tools/verification/scenarios/fk-mouse-drag.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
