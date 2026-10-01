@@ -109,11 +109,12 @@ class SourceAnimationAssetTests(unittest.TestCase):
 
     def test_measurement_evidence_remains_kept_for_the_excluded_row(self):
         # 0/14/13 must stay excluded: every correction candidate was measured
-        # above tolerance (0.0296 component-wise; 0.0651/0.410 quaternion
-        # orderings; 0.220/0.407 pre-offset u) so nothing was adopted.
+        # above tolerance (best 0.0023 for the per-bone right-local rotation
+        # power; 0.0296 component-wise; 0.0651/0.410 left-local orderings) so
+        # nothing was adopted.
         raw = self.clip(); raw['m_MuscleClip']['m_LoopBlend'] = True
         with self.assertRaises(ValueError) as error: convert_clip(raw, 'm_Lewd', {})
-        self.assertIn('best max error 0.0295643', str(error.exception))
+        self.assertIn('best max error 0.0023087', str(error.exception))
 
     @staticmethod
     def controller():

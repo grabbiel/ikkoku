@@ -104,7 +104,7 @@ def convert_clip(raw: dict, identity: str, targets: dict[int, dict]) -> dict:
     if start < 0 or stop <= start: raise ValueError("Invalid animation interval")
     if muscle['m_Mirror']: raise ValueError("Clip mirroring is not implemented")
     if muscle['m_LoopBlend']:
-        raise ValueError("Generic loop-pose correction measured but not matched (best max error 0.0295643)")
+        raise ValueError("Generic loop-pose correction measured but not matched (best max error 0.0023087)")
     if any(muscle.get(key, False) for key in ('m_LoopBlendOrientation', 'm_LoopBlendPositionY', 'm_LoopBlendPositionXZ')):
         raise ValueError("Loop-pose correction beyond cycle offset is not implemented")
     source = muscle['m_Clip']['data']
