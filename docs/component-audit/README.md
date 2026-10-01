@@ -91,7 +91,25 @@ kernel-, capture- and build-level: **the merged wave has not been exercised
 interactively in the running app yet.** Before these features count as verified
 through the app, run this checklist against an original Studio scene (for
 example `koikatu_cs0002591.png`) with the converted-asset environment variables
-set:
+set.
+
+**Merged 2026-09-28 – 2026-10-01 (PRs #40–#84):** source camera objects and the
+Studio scale rule; eye look and iris texture transforms (verified against the
+original to 5e-7); source props from the converted item catalog with record
+colors; card shape and color edits; original-scene export of visibility, names,
+camera/route active flags and card edits; undo/redo and native save/reload that
+keep a source scene's props, cameras, routes and light. Two app-level lanes now
+exercise much of the checklist below **headlessly**, through `StudioModel` /
+`MakerModel` calls and, for the FK guide, the real mouse handlers and GPU pick:
+`Tools/verification/lanes/studio-scenarios.json` (31 checks) and
+`maker-scenarios.json` (4 checks); run them with
+`python3 Tools/verification/run.py --manifest <lane> --environment
+.local/verification/environment.json --strict`. GitHub Actions (PR #70) runs only
+the public lane and an unsigned Debug build. Scenario-lane evidence is not
+interactive UI acceptance: items stay unticked unless every claim they make has
+passed, and ticked items say how they were checked. The ST-T03 items are ticked
+because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
+#80, #81).
 
 - [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
       FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
