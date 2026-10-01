@@ -132,6 +132,36 @@ class DynamicsMotionReplayTests(unittest.TestCase):
         self.assertEqual(row['seedCheck'], dict(rootPreviousDelta=0.0, childPreviousDelta=0.0,
                                                 timeDelta=0.0, ownerPrevDelta=0.0))
 
+    def test_one_step_ignores_the_applied_root_pose_and_reads_the_avatar_basis(self):
+        # ApplyParticlesToTransforms rotates parent transforms in place, so the
+        # recorded end-of-frame root rotation is the applied pose, not the live
+        # basis UpdateParticles2 reads (the original capture showed it 41-85
+        # degrees away). Overwriting every recorded root rotation with an
+        # unrelated 60-degree roll must leave the one-step prediction untouched,
+        # while a 45-degree yaw of the recorded avatar rotation, which is the
+        # live basis InitTransforms restores under, must move the children.
+        base = self.rows(compare(self.capture, self.document, 1e-5, 'one-step'))['one-step']
+        s = np.float32(np.sin(np.radians(30)))
+        applied = [float(s), 0., 0., float(np.cos(np.radians(30)))]
+        capture = copy.deepcopy(self.capture)
+        for frame_row in capture['frames']:
+            frame_row['components'][0]['root']['rotation'] = list(applied)
+        row = self.rows(compare(capture, self.document, 1e-5, 'one-step'))['one-step']
+        self.assertEqual(row['frameErrors'], base['frameErrors'])
+
+        capture = copy.deepcopy(self.capture)
+        s = float(np.sin(np.radians(22.5)))
+        yaw = orientation([-s, 0., 0., float(np.cos(np.radians(22.5)))])
+        x1, y1, z1, w1 = yaw
+        x2, y2, z2, w2 = capture['frames'][3]['avatar']['rotation']
+        capture['frames'][3]['avatar']['rotation'] = [w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+            w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+            w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2]
+        row = self.rows(compare(capture, self.document, 1e-5, 'one-step'))['one-step']
+        self.assertEqual(row['firstExceeded']['frame'], 3)
+        self.assertEqual(row['firstExceeded']['particle'], 'middle')
+        self.assertGreater(row['firstExceeded']['error'], .01)
+
     def test_one_step_frame_zero_input_error_fails_despite_intact_seed(self):
         capture = copy.deepcopy(self.capture)
         capture['frames'][0]['components'][0]['root']['position'][0] += .01

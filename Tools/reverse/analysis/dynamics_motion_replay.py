@@ -235,10 +235,21 @@ def one_step_inputs(scenario, row):
     InitTransforms restores every particle transform to its bind local every
     Update while m_Weight > 0, and the capture's rest-offset scale check shows
     the live world rest offset equals bind local x objectScale, so the chain
-    below the root keeps the raw bind locals and the recorded root world is
-    pinned with objectScale as its uniform scale: bone lengths, parent
-    localToWorldMatrix bases and the root world position then match what
-    UpdateParticles2 reads from the live transforms. The owner node carries the
+    below the root keeps the raw bind locals. The root node's translation is
+    pinned to the recorded root world position (ApplyParticlesToTransforms
+    never writes a particle transform's own position for particle 0, so the
+    end-of-frame recording is the live origin UpdateParticles2 measures bone
+    lengths against), but its rotation input is the recorded AVATAR world
+    rotation, not the recorded root rotation: the root transform is also a
+    particle transform and Apply rotates parent transforms in place, so the
+    end-of-frame root.rotation is the applied pose, carrying FromToRotation
+    factors 41-85 degrees away from the live basis. InitTransforms restored
+    every ancestor bind local rotation to identity, so the live root basis at
+    UpdateParticles2 time is the animated avatar basis scaled uniformly by
+    objectScale; the probe's recorded live parentMatrix confirms this to
+    2.1e-7 entrywise for every component at the manual-step frames. Bone
+    lengths, parent localToWorldMatrix bases and the root world position then
+    match what UpdateParticles2 reads from the live transforms. The owner node carries the
     recorded owner world position with the recorded objectScale as its scale
     (movement, gravity/force and particle-radius scale are exactly the recorded
     values; the previous owner position comes from the seeded frame's recorded
@@ -254,8 +265,10 @@ def one_step_inputs(scenario, row):
     definition = scenario['definition']
     scale = float(F(row['objectScale']))
     root = indices[definition['particles'][0]['nodeID']]
+    # Live animated-ancestor basis (see docstring); row['root']['rotation'] is
+    # the end-of-frame applied pose and would feed Apply's own output back in.
     nodes[root].update(parent=None, translation=frame(row['root']['position']),
-                       rotation=orientation(row['root']['rotation']), scale=[scale, scale, scale])
+                       rotation=orientation(row['avatar']['rotation']), scale=[scale, scale, scale])
     owner = indices[definition['ownerID']]
     nodes[owner].update(parent=None, translation=frame(row['owner']), rotation=[0., 0., 0., 1.],
                         scale=[scale, scale, scale])
@@ -400,7 +413,8 @@ def compare(capture, document, tolerance=1e-4, mode='full'):
             identity_matches(scenario['definition'], seed, frame_row['components'][index], index)
         if mode == 'one-step':
             results.append(replay_one_step(scenario, seed,
-                [dict(deltaTime=f['deltaTime'], worldColliders=f['colliders'], **f['components'][index]) for f in frames],
+                [dict(deltaTime=f['deltaTime'], avatar=f['avatar'], worldColliders=f['colliders'],
+                      **f['components'][index]) for f in frames],
                 tolerance))
             continue
         bind_frames = [dict(deltaTime=f['deltaTime'], avatar=f['avatar'], components=[f['components'][index]])
@@ -413,7 +427,7 @@ def compare(capture, document, tolerance=1e-4, mode='full'):
     gate = [row for row in results if row['model'] == model]
     worst = max(gate, key=lambda row: row[metric])
     full_scope = ('Recorded original DynamicBone particle positions compared with the independent float32 replay seeded from the same reset state: the parity gate replays only recorded world inputs (root, owner, colliders, deltaTime) with bind locals scaled by objectScale; the bind-hierarchy-under-recorded-avatar model is kept as a rigidity diagnostic; particle world positions compared, applied rotations recorded as context only')
-    one_step_scope = ('Recorded original DynamicBone integrator state (m_Position/m_PrevPosition per particle, m_ObjectMove/m_ObjectScale/m_Time/m_ObjectPrevPosition/m_Weight per component, collider lossyScale and serialized collider parameters) drives a one-step oracle prediction per frame: each frame starts from the previous frame\'s recorded internal state and predicts the recorded internal m_Position, so a reported error is a one-step input or method defect rather than accumulated drift; the root is pinned to the recorded root world with the recorded objectScale, particle chains keep raw bind locals, colliders use their recorded world transform and lossy scale')
+    one_step_scope = ('Recorded original DynamicBone integrator state (m_Position/m_PrevPosition per particle, m_ObjectMove/m_ObjectScale/m_Time/m_ObjectPrevPosition/m_Weight per component, collider lossyScale and serialized collider parameters) drives a one-step oracle prediction per frame: each frame starts from the previous frame\'s recorded internal state and predicts the recorded internal m_Position, so a reported error is a one-step input or method defect rather than accumulated drift; the root is pinned to the recorded root world position with the animated avatar world rotation as its live basis and the recorded objectScale as its uniform scale, particle chains keep raw bind locals, colliders use their recorded world transform and lossy scale')
     return dict(schemaVersion=1, tolerance=tolerance, frameCount=len(frames), mode=mode,
         scope=one_step_scope if mode == 'one-step' else full_scope,
         components=results, maxParticleError=worst[metric],
