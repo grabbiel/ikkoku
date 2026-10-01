@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreMath
 import Scene
 import Character
@@ -16,6 +17,7 @@ struct StudioScenario: Decodable {
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"setAnimation"`,
         /// `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`, `"setFK"`,
+        /// `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
         /// `"captureBone"`, `"advance"`, `"orbit"`, `"setAutomaticBlink"`,
         /// `"export"`, `"reimport"`, `"assert"`.
         let op: String
@@ -62,6 +64,14 @@ struct StudioScenario: Decodable {
         /// setFK: the replacement local rotation in euler degrees (3 values),
         /// the number the inspector's FK readout shows.
         let rotation: [Float]?
+        /// setPoseMode: the mode to select, the lowercase words "object",
+        /// "fk" or "ik" (the inspector's mode picker choices).
+        let mode: String?
+        /// dragGizmo: the rotate-gizmo axis to grab, "x", "y" or "z".
+        let axis: String?
+        /// dragGizmo: the [dx, dy] pixel offset the mouse drag travels
+        /// (viewport pixels, origin top-left like the view's own events).
+        let pixels: [Float]?
         /// assert only: the live animation state the preview plays for the
         /// named character (the inspector readback); every field is optional
         /// and only the keys present in the JSON are compared — like the
@@ -139,6 +149,10 @@ struct StudioScenario: Decodable {
             /// not just the edited number — survived the round trip.
             let from: String?
             let within: Float?
+            /// assert a mouse or scripted drag actually turned the bone: the
+            /// held rotation must have a non-zero component, because a drag's
+            /// angle is not known in advance and cannot be matched exactly.
+            let nonZero: Bool?
         }
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
@@ -153,7 +167,7 @@ struct StudioScenario: Decodable {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains,
                  group, category, no, speed, on, bone, rotation, animation, fk,
-                 seconds, dx, dy, eyeLook, blink, handPattern
+                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels
         }
 
         init(from decoder: Decoder) throws {
@@ -197,6 +211,12 @@ struct StudioScenario: Decodable {
             eyeLook = try c.decodeIfPresent(EyeLookValue.self, forKey: .eyeLook)
             blink = try c.decodeIfPresent(BlinkValue.self, forKey: .blink)
             handPattern = try c.decodeIfPresent(HandPatternValue.self, forKey: .handPattern)
+            // setPoseMode / selectBone / dragGizmo parameters: like every
+            // optional key above, an absent one stays `nil` and the op that
+            // needs it reports the missing field itself.
+            mode = try c.decodeIfPresent(String.self, forKey: .mode)
+            axis = try c.decodeIfPresent(String.self, forKey: .axis)
+            pixels = try c.decodeIfPresent([Float].self, forKey: .pixels)
             // `decodeIfPresent` reads both `null` and an absent key as `nil`;
             // `contains` distinguishes "assert the orbit view" from "no
             // camera check declared", so the camera check is decoded by hand.
@@ -376,6 +396,17 @@ struct StudioScenario: Decodable {
                 }
                 guard floatEqual(held.x, expected[0]), floatEqual(held.y, expected[1]), floatEqual(held.z, expected[2]) else {
                     return "assert fk: bone \(edit.bone) is (\(held.x), \(held.y), \(held.z)) degrees, expected \(expected)"
+                }
+            }
+            if edit.nonZero == true {
+                // A drag's angle comes out of the ring geometry, not the
+                // scenario, so this only demands the rotation actually moved
+                // off zero — the number itself is reported by `dragGizmo`.
+                guard let held = studio.doc.objects[i].sourceFKRotations?[Int(edit.bone)] else {
+                    return "assert fk: object \(edit.key) holds no FK rotation for bone \(edit.bone)"
+                }
+                guard held.x.magnitude > tolerance || held.y.magnitude > tolerance || held.z.magnitude > tolerance else {
+                    return "assert fk: bone \(edit.bone) holds (\(held.x), \(held.y), \(held.z)) degrees — nothing rotated it"
                 }
             }
             guard let label = edit.from else { return nil }
@@ -626,7 +657,7 @@ struct StudioScenario: Decodable {
                     record(step, false, "setFK: bone and rotation [3 finite degrees] are required"); continue
                 }
                 guard let i = studio.doc.index(of: id), let preview = studio.sourceShapePreview(for: id),
-                      let target = preview.controller.targets.first(where: { $0.bone.id == Int(boneID) && $0.hasGuide }) else {
+                      preview.controller.targets.contains(where: { $0.bone.id == Int(boneID) && $0.hasGuide }) else {
                     record(step, false, "setFK: bone \(step.bone.map(String.init) ?? "<missing>") has no original guide on source key \(step.key ?? -1)")
                     continue
                 }
@@ -642,6 +673,130 @@ struct StudioScenario: Decodable {
                         animationState: edited.sourceAnimation, animationElapsed: studio.sourceAnimationTime)
                     record(step, true, "source key \(step.key!) FK bone \(boneID)=\(rotation) degrees, enableFK \(edited.sourceKinematics?.enableFK == true)")
                 } catch { studio.undo(); record(step, false, "setFK: \(error)") }
+            case "setPoseMode":
+                // The inspector's mode Picker assigns `studio.poseMode`
+                // directly; the scenario JSON spells the modes in lowercase
+                // and the raw values are capitalized, so the mapping is
+                // explicit and an unknown word names the accepted ones.
+                guard let mode = step.mode else {
+                    record(step, false, "setPoseMode: mode (\"object\", \"fk\" or \"ik\") is required"); continue
+                }
+                let poseMode: PoseMode
+                switch mode {
+                case "object": poseMode = .object
+                case "fk": poseMode = .fk
+                case "ik": poseMode = .ik
+                default: record(step, false, "setPoseMode: unknown mode \"\(mode)\", expected \"object\", \"fk\" or \"ik\""); continue
+                }
+                studio.poseMode = poseMode
+                record(step, true, "pose mode \(studio.poseMode.rawValue)")
+            case "selectBone":
+                guard let id = object(step) else { record(step, false, "selectBone: no object with source key \(step.key ?? -1)"); continue }
+                guard let boneID = step.bone else {
+                    record(step, false, "selectBone: bone (the pose-contract catalog id) is required"); continue
+                }
+                guard let preview = studio.sourceShapePreview(for: id),
+                      let target = preview.controller.targets.first(where: { $0.bone.id == Int(boneID) }) else {
+                    record(step, false, "selectBone: bone \(boneID) is not in source key \(step.key!)'s pose contract"); continue
+                }
+                // The inspector's bone popup assigns `model.selectedBone`
+                // (the rig node index); `selection`'s didSet resets it, so
+                // the object is selected first, exactly like the UI order.
+                studio.selection = id
+                studio.selectedBone = target.node
+                if studio.selectedBone == target.node {
+                    record(step, true, "source key \(step.key!) selected bone \(boneID) (node \(target.node), guide \(target.hasGuide))")
+                } else {
+                    record(step, false, "selectBone: selectedBone reads \(String(describing: studio.selectedBone)), expected node \(target.node)")
+                }
+            case "dragGizmo":
+                guard let id = object(step) else { record(step, false, "dragGizmo: no object with source key \(step.key ?? -1)"); continue }
+                guard let boneID = step.bone, let axisName = step.axis,
+                      let pixels = step.pixels, pixels.count == 2, pixels.allSatisfy({ $0.isFinite }) else {
+                    record(step, false, "dragGizmo: bone, axis (\"x\", \"y\" or \"z\") and pixels [dx, dy] are required"); continue
+                }
+                guard let axis = GizmoAxis(rawValue: ["x": 1, "y": 2, "z": 3][axisName] ?? -1) else {
+                    record(step, false, "dragGizmo: unknown axis \"\(axisName)\", expected \"x\", \"y\" or \"z\""); continue
+                }
+                // The real handlers only reach the guide path through this
+                // state, so say so here instead of reporting a bare miss
+                // after the pixel scan.
+                guard studio.poseMode == .fk else {
+                    record(step, false, "dragGizmo: pose mode is \(studio.poseMode.rawValue), run setPoseMode fk first"); continue
+                }
+                guard studio.selection == id, let node = studio.selectedBone,
+                      let preview = studio.sourceShapePreview(for: id),
+                      preview.controller.targets.contains(where: { $0.node == node && $0.bone.id == Int(boneID) && $0.hasGuide }) else {
+                    record(step, false, "dragGizmo: source key \(step.key!) bone \(step.bone!) is not the selected guide (run selectBone first)"); continue
+                }
+                guard let anchor = studio.sourceGuidePixel(of: Int(boneID)) else {
+                    record(step, false, "dragGizmo: bone \(boneID) does not project into the view camera"); continue
+                }
+                let wanted = PickIDs.gizmo(axis)
+                func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
+                // The rotate ring of a selected guide is about 0.9 * 90
+                // world-units-per-pixel (~81 px) in radius and only a few px
+                // wide, so a ±120 px box around the bone's projected origin
+                // covers it: a coarse pass locates the ring, a fine pass
+                // around that hit lands squarely on it. The pass records the
+                // first pixel of every axis ring — a ring turned nearly
+                // edge-on to the camera projects to a sub-pixel sliver no
+                // pixel picks, and then the failure has to name which rings
+                // the camera does show.
+                func scan(_ radius: Float, by: Float, centeredAt center: SIMD2<Float>) -> [GizmoAxis: SIMD2<Float>] {
+                    var hits: [GizmoAxis: SIMD2<Float>] = [:]
+                    var y = center.y - radius
+                    while y <= center.y + radius {
+                        var x = center.x - radius
+                        while x <= center.x + radius {
+                            let p = SIMD2<Float>(x, y)
+                            if let hit = PickIDs.axis(from: picked(p)), hit.rawValue <= 3, hits[hit] == nil {
+                                hits[hit] = p
+                                if hits.count == 3 { return hits }
+                            }
+                            x += by
+                        }
+                        y += by
+                    }
+                    return hits
+                }
+                let coarse = scan(120, by: 10, centeredAt: anchor)
+                let fine = coarse[axis].flatMap { scan(20, by: 4, centeredAt: $0) }
+                guard let start = (fine ?? coarse)[axis] else {
+                    let axisWord: (GizmoAxis) -> String = { $0 == .x ? "x" : $0 == .y ? "y" : "z" }
+                    let seen = [GizmoAxis.x, .y, .z].compactMap { a -> String? in
+                        guard let p = coarse[a] else { return nil }
+                        return "\(axisWord(a)) ring at (\(p.x), \(p.y))"
+                    }
+                    record(step, false, "dragGizmo: no pixel within ±120 px of bone \(boneID)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
+                        + (seen.isEmpty ? "the scan sees no axis ring at all (anchor pixel picks \(picked(anchor)))"
+                                        : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) ring (edge-on to the camera?)"))
+                    continue
+                }
+                let pickedID = picked(start)
+                // One mouseDown, eight interpolated mouseDragged steps to the
+                // requested offset, one mouseUp — the view's own coordinator
+                // path (left button, no modifiers), nothing re-implemented.
+                let noModifiers = NSEvent.ModifierFlags()
+                let undoDepth = studio.undoStack.count
+                studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
+                guard studio.undoStack.count == undoDepth + 1 else {
+                    studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
+                    record(step, false, "dragGizmo: mouseDown picked the ring but grabbed no guide (picked id \(pickedID))"); continue
+                }
+                var point = start
+                var previous = start
+                for i in 1...8 {
+                    point = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)
+                    studio.mouseDragged(to: point, delta: point - previous, button: 0, modifiers: noModifiers)
+                    previous = point
+                }
+                studio.mouseUp(at: point, button: 0, modifiers: noModifiers)
+                let degrees = studio.doc.object(id)?.sourceFKRotations?[Int(boneID)]
+                guard let held = degrees else {
+                    record(step, false, "dragGizmo: the drag left no FK rotation on bone \(boneID) — mouseDragged never reached setSourceFKRotation"); continue
+                }
+                record(step, true, "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees")
             case "captureBone":
                 guard let id = object(step) else { record(step, false, "captureBone: no object with source key \(step.key ?? -1)"); continue }
                 guard let boneID = step.bone, let label = step.name, !label.isEmpty else {

@@ -1,0 +1,17 @@
+{
+  "steps": [
+    {"op": "captureBone", "key": 65, "bone": 21, "name": "handL-before"},
+    {"op": "setPoseMode", "mode": "fk"},
+    {"op": "selectBone", "key": 65, "bone": 19},
+    {"op": "dragGizmo", "key": 65, "bone": 19, "axis": "z", "pixels": [60, 40]},
+    {"op": "assert", "fk": {"key": 65, "bone": 19, "nonZero": true}},
+    {"op": "assert", "fk": {"key": 65, "bone": 21, "from": "handL-before"}},
+    {"op": "captureBone", "key": 65, "bone": 21, "name": "handL-dragged"},
+    {"op": "undo"},
+    {"op": "assert", "fk": {"key": 65, "bone": 21, "from": "handL-before", "within": 0.0001}},
+    {"op": "redo"},
+    {"op": "export", "path": ".local/verification/scenario-exports/fk-mouse-drag.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/fk-mouse-drag.png"},
+    {"op": "assert", "fk": {"key": 65, "bone": 21, "from": "handL-dragged", "within": 0.02}}
+  ]
+}
