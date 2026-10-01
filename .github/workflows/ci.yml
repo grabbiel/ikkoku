@@ -71,7 +71,10 @@ jobs:
 
   reverse-tools:
     name: Reverse tools (Python suites, pinned requirements)
-    runs-on: ubuntu-latest
+    # macOS arm64 like the machines that generate the checked-in float32
+    # fixtures: numpy float32 results differ in the last bits on x86 Linux,
+    # and test_checked_in_fixture_matches_generator compares exactly.
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
