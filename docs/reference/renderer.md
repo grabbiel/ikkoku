@@ -398,7 +398,7 @@ both frame variants reference the same source capture, SHA-256
 | Geometry diagnostic | 0.9998196 | Not a color gate | 18 differing silhouette pixels; depth p99 0 m, normals 0 bytes; passes frozen geometry |
 | Production native toon | See geometry diagnostic | Mean 31.2763; p99 239 | Fails source color parity |
 | Translated garments | 0.9995455 | Mean 0.1169; p99 2 | Passes selected garment color gate |
-| Translated full character (reference run `frame-mips.json`; identical on `frame.json`) | 0.9988685 | Mean 0.2087; p99 4 | Fails full-character silhouette gate (112 differing pixels); color gate passes |
+| Translated full character (reference run `frame-mips.json`; same silhouette on `frame.json`) | 0.9988685 | Mean 0.2087; p99 4 (`frame.json`: mean 0.2268, p99 5) | Fails full-character silhouette gate (112 differing pixels) on both variants; color gate passes on `frame-mips.json` and fails on `frame.json` (found 2026-10-01) |
 
 The earlier documentation quoted mean 26.9362/p99 242 (older capture) and
 mean 0.2267/p99 5 (previous code) for the full character. Current code
@@ -501,9 +501,26 @@ covered in the `main_hair`-only render but empty in the full translated
 render; neighbouring pixels show the reverse. This points to interactions
 between families in the full draw, most likely inter-family depth or stencil
 state/order at the hair crown (for example, the stencil that lets eyebrows
-and eyelines show through front hair). Next compare the pass states
-(`stencilRef`, `stencilReadMask`, `stencilWriteMask`, comparison ops and queue
-order) of `main_hair`, `main_hair_front`, `toon_eyew_lod0` and their outlines.
+and eyelines show through front hair). That pass-state comparison was
+performed (2026-10-01): `stencilReadMask`/`stencilWriteMask` are 255
+everywhere; `main_hair`, `main_skin`, `main_item`, `main_opaque`,
+`toon_nose_lod0` and both hair outlines request `always`+`keep` at
+`stencilRef` 0, `main_hair_front` and its outline request `notEqual`+`keep`
+at reference 2, and the toon eye families request `always`+`replace` writing
+2 — exactly what the probe already applies in the serialized queue order
+(`main_hair` 2000 → `main_hair_front` 2850 → toon families 2900–3000), so no
+mismatch exists and stencil state cannot explain the residual. The smallest family set that
+reproduces it is {`main_hair`, `main_hair_front`}: the pair render is
+pixel-identical to the full translated render across the crown box, which
+holds 13 alpha-coverage differences (7 native-only, 6 original-only). The
+remaining depth-precision hypothesis — the original D3D11 player stored
+depth in 24 bits while Apple silicon exposes no depth24+stencil format — was
+tested with the opt-in `IKKOKU_ORIGINAL_FRAME_DEPTH24=1` flag, which
+re-emits the rasterized fragment depth quantized to the 24-bit fixed-point
+grid through a `[[depth(any)]]` output member: coverage is bit-identical
+everywhere (silhouette IoU 0.998868 and crown 7/6 before and after) while the
+color buffer differs at 155 pixels (3 in the crown box), proving the
+emulation is live — so 24-bit depth precision is not the cause either.
 The boundary-pixel classes are now attributed and
 re-measured (2026-09-26 re-run on both frame variants: same
 `sourceFrameSHA256` 13bd11c2…; 61 native-only / 51 original-only pixels),
