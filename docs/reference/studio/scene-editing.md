@@ -31,13 +31,70 @@ Generate the optional native evidence by setting `IKKOKU_STUDIO_EDIT_OUTPUT` to 
 
 The default report is `.local/reverse/studio-edited/verification.json`. Rendering an edited scene still depends on the separately converted geometry, materials, animation and native plug-in adapters; serialization coverage does not imply execution of the original plug-ins.
 
+## Native workspace layout
+
+The native Studio workspace reserves 250 points for the object tree and 350 for
+the inspector. Its toolbar overlays the viewport and scrolls horizontally when
+its controls exceed the available width, including the extra FK group picker.
+Toolbar content must not contribute a minimum width to the viewport container.
+Timeline key markers overlay the scrubber, so their geometry reader takes the
+slider's height instead of expanding the timeline row into the viewport.
+These layout rules apply to both native and source scenes; they do not change
+scene persistence or original Timeline-plugin support.
+
+Visible regression check, 2026-10-17: the previous layout clipped the tree and
+right inspector at the minimum window size and devoted roughly half the centre
+column to the timeline. With the layout fix, the tree, all five inspector tabs
+and full slider values fit at the same minimum size, and the timeline occupies a
+single bottom row. Native Window → Move & Resize → Top Left reaches the app's
+minimum size on the tested display; Zoom also verifies the larger layout. The
+horizontal scrollbar exposes Camera/Capture and timeline controls, FK mode
+exposes its group picker, the Scene tab opens, timeline hide/show works and
+scrubbing 0→2.5→0 reads back correctly. Xcode 27 Debug build passes. Captures and
+source-scene identity remain local; no scene file was saved or changed. This
+closes the layout regression only; the full ST-T01 guide/undo/save acceptance
+remains separate.
+
 ## App boundary and remaining work
 
-The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved and reports itself in the inspector. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
+The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
 
 The export validator rejects added/deleted/duplicated objects, reparenting, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
 Implement missing field/topology writers and source-key remapping under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
+
+## Shape and color reset contract
+
+The source inspector and scenario runner share `StudioModel.resetSourceShape`:
+resetting the face clears only `sourceFaceValues`, and resetting the body clears
+only `sourceBodyValues`. The other shape domain and color edits remain intact.
+`resetSourceColorEdits` clears every color override while retaining both shape
+domains. Each operation rebuilds the preview through the same setters used for
+edits and records an undo snapshot.
+
+The ST-T06c scenarios in the [verification guide](../../../Tools/verification/README.md#shapecolor-visual-and-reset-acceptance-st-t06c)
+exercise production renders at a fixed camera and clock. They distinguish
+visible change (>2/255 in any RGBA8 channel) from exact reset restoration (zero
+maximum channel delta), and compare restored exports against the initial source
+SHA even after reimport. A changed-export rejection after reimport guards against
+comparing an output with itself. On 2026-10-17, the shape and color scenarios
+passed 45 and 31 steps respectively: 76 face, 40,270/38,581 body and 10,251
+skin pixels exceeded the visible-change threshold; resets had zero differing
+RGBA8 bytes and restored exports matched the initial source SHA. These checks
+cover supported bound skin colors
+and face/body shape slots.
+
+Visible UI follow-up on 2026-10-17 used the same final Debug app build and a
+CharaStudio-authored source scene. In the Face inspector, height changed from
+0.5 to 0.8 and Face width from 0.5 to 1.0. Each section's visible Reset to card
+button restored its saved 0.5 value, confirmed by slider readback and reset
+status; the body height change and restoration were visible in the viewport.
+Source Pose and Clothes tabs were also reachable. The window was maximized
+because the default width clipped inspector controls; that layout defect is
+separate from reset semantics. The native color panel did not open through the
+available UI automation, so interactive color editing remains unverified.
+Unbound hair-color writeback, the broader ST-T01 guide/undo/save workflow and
+original-player appearance parity remain open. No source file was overwritten.
 
 ## CharaStudio reload acceptance
 

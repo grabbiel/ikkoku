@@ -101,7 +101,7 @@ camera/route active flags and card edits; undo/redo and native save/reload that
 keep a source scene's props, cameras, routes and light. Two app-level lanes now
 exercise much of the checklist below **headlessly**, through `StudioModel` /
 `MakerModel` calls and, for the FK guide, the real mouse handlers and GPU pick:
-`Tools/verification/lanes/studio-scenarios.json` (31 checks) and
+`Tools/verification/lanes/studio-scenarios.json` (34 checks) and
 `maker-scenarios.json` (4 checks); run them with
 `python3 Tools/verification/run.py --manifest <lane> --environment
 .local/verification/environment.json --strict`. GitHub Actions (PR #70) runs only
@@ -235,22 +235,28 @@ because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
       (`Tools/reverse/compare_scene_reload.py` passed;
       [scene-editing](../reference/studio/scene-editing.md#charastudio-reload-acceptance);
       playing is read from the `active` flag, not from motion; passed 2026-09-30)
-- [ ] ST-T06 shape values: change a source character's face shape slider: the face
-      updates; export and reload keep the new value. Body shape and Reset to card
-      behave the same way, and a value edited back to the card's saved rate exports
-      byte-identical bytes (first slice, PR #64). (automated in part:
-      `Tools/verification/scenarios/face-shape.json` covers a face and a body slot
-      edit → export → reimport read-back; the live visual update, Reset to card and
-      the back-to-saved-rate byte-identical case are not automated; passed 2026-09-29)
-- [ ] ST-T06 colors: change a source character's hair or skin color: the preview
-      updates; export and reload keep it. Reset to card restores the saved colors,
-      and a color edited back to the saved rgba exports byte-identical bytes
-      (second slice; no PR number yet). (automated in part:
-      `Tools/verification/scenarios/color-edit.json` covers a skin color edit →
-      export → reimport read-back; the hair color is not automated because
-      `hair.parts.0.baseColor` binds no material on the imported assembly and export
-      skips its writeback; the preview update, Reset to card and the back-to-saved
-      byte-identical case are not automated; passed 2026-09-29)
+- [x] ST-T06 shape values: face/body edits change the production preview, export and
+      reload retain the values, Reset to card restores the saved values, and editing
+      back to saved rates exports byte-identical bytes. Verified headlessly through
+      `StudioModel` and the production renderer on 2026-10-17: `face-shape.json`
+      covers edited export/reimport; `shape-visual-reset.json` adds fixed-camera,
+      fixed-clock 512x512 comparisons (face: 76 pixels, body: 40,270 / 38,581 pixels
+      differ by >2/255), exact RGBA8 reset restoration, isolation of the opposite
+      shape domain, and initial-source SHA checks before and after reimport. A
+      changed export after reimport must fail that SHA check. The inspector and
+      runner share `resetSourceShape`; mouse-driven slider/button acceptance remains
+      separate from these headless checks.
+- [x] ST-T06 colors: bound skin-color edits change the production preview, export and
+      reload retain the rgba, Reset to card restores saved colors, and editing back
+      to the saved rgba exports byte-identical bytes. Verified headlessly on
+      2026-10-17: `color-edit.json` covers edited export/reimport;
+      `color-visual-reset.json` measures 10,251 pixels differing by >2/255 at
+      512x512, exact RGBA8 restoration, shape/color reset isolation, and restored
+      export identity against the initial source SHA. Changed exports remain
+      distinguishable after reimport. Hair color is outside this acceptance:
+      `hair.parts.0.baseColor` binds no material on this fixture and export skips
+      its writeback. Mouse-driven controls and original-player shader parity remain
+      separate gates.
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates
