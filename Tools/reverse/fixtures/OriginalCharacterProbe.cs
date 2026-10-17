@@ -273,6 +273,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(skinned!=null){mesh=new Mesh();skinned.BakeMesh(mesh);}else mesh=renderer.GetComponent<MeshFilter>().sharedMesh;
         var positions=mesh.vertices;var normals=mesh.normals;
         var worldPositions=new Vector3[positions.Length];var worldNormals=new Vector3[positions.Length];
+        var sourceVertexNormals=new Vector3[positions.Length];
         if(skinned!=null) {
             // Unity 5.6 BakeMesh embeds the renderer scale in its local output.
             // Evaluate the original skin matrices directly to avoid applying
@@ -291,9 +292,14 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             for(int i=0;i<sourcePositions.Length;i++) {
                 var weight=weights[i];int[] indices={weight.boneIndex0,weight.boneIndex1,weight.boneIndex2,weight.boneIndex3};float[] values={weight.weight0,weight.weight1,weight.weight2,weight.weight3};
                 for(int lane=0;lane<4;lane++)if(values[lane]!=0){worldPositions[i]+=palette[indices[lane]].MultiplyPoint3x4(sourcePositions[i])*values[lane];worldNormals[i]+=palette[indices[lane]].MultiplyVector(sourceNormals[i])*values[lane];}
+                // Preserve the skinned renderer-local NORMAL before the world
+                // diagnostic normal is normalized. Outline shaders consume its
+                // magnitude directly; an inverse transpose of the normalized
+                // world vector cannot recover that original vertex input.
+                sourceVertexNormals[i]=renderer.transform.worldToLocalMatrix.MultiplyVector(worldNormals[i]);
                 worldNormals[i]=worldNormals[i].normalized;
             }
-        } else for(int i=0;i<positions.Length;i++){worldPositions[i]=renderer.transform.TransformPoint(positions[i]);worldNormals[i]=renderer.transform.localToWorldMatrix.inverse.transpose.MultiplyVector(normals[i]).normalized;}
+        } else for(int i=0;i<positions.Length;i++){sourceVertexNormals[i]=normals[i];worldPositions[i]=renderer.transform.TransformPoint(positions[i]);worldNormals[i]=renderer.transform.localToWorldMatrix.inverse.transpose.MultiplyVector(normals[i]).normalized;}
         var tangents=mesh.tangents;var uv=mesh.uv;var uv1=mesh.uv2;var uv2=mesh.uv3;var uv3=mesh.uv4;var colors=mesh.colors;
         string file="mesh-"+index+".bin";
         using(var output=new BinaryWriter(File.Create(Path.Combine(folder,file)))) {
@@ -312,6 +318,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var materials=new List<object>();foreach(var material in renderer.sharedMaterials)materials.Add(ExportMaterial(material));
         var result=new Dictionary<string,object>{{"name",renderer.name},{"path",RelativePath(renderer.transform)},{"mesh",skinned!=null?skinned.sharedMesh.name:mesh.name},{"lossyScale",V(renderer.transform.lossyScale)},{"rendererMatrix",M(renderer.transform.localToWorldMatrix)},{"geometryMethod",skinned!=null?"original mesh blend shapes and bone world matrices times bind poses":"original static world matrix"},{"file",file},{"vertices",positions.Length},{"submeshes",mesh.subMeshCount},{"materials",materials}};
         result["uv3File"]=uv3File;
+        string normalFile="mesh-"+index+"-source-normals.bin";
+        using(var output=new BinaryWriter(File.Create(Path.Combine(folder,normalFile))))foreach(var normal in sourceVertexNormals)Write(output,normal);
+        // geometrySHA256 binds the sidecar to this capture's frozen mesh file.
+        result["sourceVertexNormals"]=new Dictionary<string,object>{{"file",normalFile},{"count",positions.Length},{"space","unity-renderer-local"},{"sha256",Sha256File(Path.Combine(folder,normalFile))},{"geometrySHA256",Sha256File(Path.Combine(folder,file))}};
         if(skinned!=null)Destroy(mesh);return result;
     }
     object ExportMaterial(Material material) {
@@ -350,6 +360,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var readback=new Texture2D(target.width,target.height,TextureFormat.RGBA32,false,true);readback.ReadPixels(new Rect(0,0,target.width,target.height),0,0);readback.Apply(false,false);
         File.WriteAllBytes(Path.Combine(folder,file),readback.EncodeToPNG());Destroy(readback);RenderTexture.active=previous;
     }
+    static string Sha256File(string path){using(var hash=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(hash.ComputeHash(File.ReadAllBytes(path))).Replace("-",String.Empty).ToLowerInvariant();}
     static void Write(BinaryWriter w,Vector3 v){w.Write(v.x);w.Write(v.y);w.Write(v.z);}static void Write(BinaryWriter w,Vector2 v){w.Write(v.x);w.Write(v.y);}
     static Color ParseColor(string value) { var parts=value.Split(',');if(parts.Length!=4)throw new Exception("Invalid RGBA color: "+value);return new Color(float.Parse(parts[0],CultureInfo.InvariantCulture),float.Parse(parts[1],CultureInfo.InvariantCulture),float.Parse(parts[2],CultureInfo.InvariantCulture),float.Parse(parts[3],CultureInfo.InvariantCulture)); }
     static float[] V(Vector2 v){return new[]{v.x,v.y};}static float[] V(Vector3 v){return new[]{v.x,v.y,v.z};}static float[] V(Vector4 v){return new[]{v.x,v.y,v.z,v.w};}static float[] V(Quaternion v){return new[]{v.x,v.y,v.z,v.w};}static float[] V(Color v){return new[]{v.r,v.g,v.b,v.a};}

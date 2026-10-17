@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Metal
 import CoreGraphics
 import simd
@@ -17,6 +18,40 @@ public struct OriginalFrameProbe {
     public let sourceFar: Float
 
     public enum ProbeError: Error { case invalid(String), gpu(String) }
+
+    /// Optional lossless source shader input. World-space diagnostic normals are
+    /// normalized and cannot recover the magnitude of a skinned local NORMAL.
+    /// Keep this separate from the geometry/depth-normal control buffers.
+    ///
+    /// `nil` (no descriptor) selects the legacy reconstruction for old captures.
+    /// A present descriptor must be complete: renderer-local space, a plain
+    /// sidecar filename, `count` equal to the frozen mesh's vertex count, the
+    /// sidecar SHA-256 and the SHA-256 of the frozen geometry file it was
+    /// captured or reconstructed with (`geometryFile`, the mesh row's `file`).
+    /// The values are returned exactly as stored: no normalization or scaling.
+    static func sourceVertexNormals(_ descriptor: Any?, vertexCount: Int, geometryFile: Any?, directory: URL) throws -> [Float3]? {
+        guard let descriptor else { return nil }
+        func plainName(_ value: Any?) -> String? {
+            guard let name = value as? String, !name.isEmpty, !name.hasPrefix("."), name == (name as NSString).lastPathComponent else { return nil }
+            return name
+        }
+        func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+        guard let row = descriptor as? [String: Any],
+              row["space"] as? String == "unity-renderer-local",
+              let filename = plainName(row["file"]), let geometry = plainName(geometryFile), filename != geometry,
+              let count = row["count"] as? Int, count == vertexCount, (1...1_000_000).contains(count),
+              let expectedHash = row["sha256"] as? String,
+              let expectedGeometryHash = row["geometrySHA256"] as? String else { throw ProbeError.invalid("Invalid source vertex-normal descriptor") }
+        guard sha256(try Data(contentsOf: directory.appendingPathComponent(geometry))) == expectedGeometryHash else {
+            throw ProbeError.invalid("Source vertex normals belong to different frozen geometry")
+        }
+        let data = try Data(contentsOf: directory.appendingPathComponent(filename))
+        guard data.count == count * 12, sha256(data) == expectedHash else {
+            throw ProbeError.invalid("Source vertex-normal length or SHA256 mismatch")
+        }
+        var reader = ProbeBinary(data: data)
+        return try (0..<count).map { _ in try reader.float3() }
+    }
 
     public static func load(url: URL, resources: ResourceStore) throws -> Self {
         guard let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any],
