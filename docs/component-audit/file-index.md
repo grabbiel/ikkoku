@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**769 files indexed; 769 assigned; 0 unassigned.**
+**772 files indexed; 772 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
 | [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 178 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 294 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 124 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 153 |
+| Conversion / recovery / verification tool | 154 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
 | Runtime / shared shader declaration | 163 |
-| Test / validation | 147 |
+| Test / validation | 149 |
 
 ## App / gameplay / plugins
 
@@ -666,6 +666,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/GLTFImportTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/MaterialImportTests.swift](../../Packages/Engine/Tests/EngineTests/MaterialImportTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
@@ -701,6 +702,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/fixtures/OriginalShaderProbe.cs](../../Tools/reverse/fixtures/OriginalShaderProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/item_shader_contract.py](../../Tools/reverse/item_shader_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_character_probe.py](../../Tools/reverse/original_character_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_frame_normals.py](../../Tools/reverse/original_frame_normals.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_shader_probe.py](../../Tools/reverse/original_shader_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_texture_mips.py](../../Tools/reverse/original_texture_mips.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/rig_inventory.py](../../Tools/reverse/rig_inventory.py) | Conversion / recovery / verification tool |
@@ -712,6 +714,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_export_prefab.py](../../Tools/reverse/test_export_prefab.py) | Test / validation |
 | [Tools/reverse/test_eye_shader_contract.py](../../Tools/reverse/test_eye_shader_contract.py) | Test / validation |
 | [Tools/reverse/test_original_character_probe.py](../../Tools/reverse/test_original_character_probe.py) | Test / validation |
+| [Tools/reverse/test_original_frame_normals.py](../../Tools/reverse/test_original_frame_normals.py) | Test / validation |
 | [Tools/reverse/test_original_shader_probe.py](../../Tools/reverse/test_original_shader_probe.py) | Test / validation |
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |
 | [Tools/reverse/test_rig_parity.py](../../Tools/reverse/test_rig_parity.py) | Test / validation |

@@ -387,7 +387,7 @@ state and captured textures. It compiles translated programs per job. Production
 `Renderer` still selects authored native toon/eye/outline materials; there is no
 live source-program registry integration.
 
-Comparing a frozen original character frame (controls in the commands below;
+Historical comparison of a frozen original character frame (controls below;
 re-run against current code on 2026-09-26 into `.local/r1b/probe`, starting
 from the original captures `.local/reverse/original-character-probe/{frame.json,frame-mips.json}`;
 both frame variants reference the same source capture, SHA-256
@@ -400,14 +400,19 @@ both frame variants reference the same source capture, SHA-256
 | Translated garments | 0.9995455 | Mean 0.1169; p99 2 | Passes selected garment color gate |
 | Translated full character (reference run `frame-mips.json`; same silhouette on `frame.json`) | 0.9988685 | Mean 0.2087; p99 4 (`frame.json`: mean 0.2268, p99 5) | Fails full-character silhouette gate (112 differing pixels) on both variants; color gate passes on `frame-mips.json` and fails on `frame.json` (found 2026-10-01) |
 
+These rows use the legacy shader `NORMAL` input, which old captures still use.
+The [2026-10-17 source-normal comparison](#preserve-source-shader-normal-magnitude-r1-2026-10-17)
+gives this fixture's hair meshes their source normals. With them, the translated
+full-character silhouette passes on both variants (44 differing pixels, IoU
+0.9995552). The generated-mip color gate still fails.
+
 The earlier documentation quoted mean 26.9362/p99 242 (older capture) and
-mean 0.2267/p99 5 (previous code) for the full character. Current code
-reduces the color residual below the p99 ≤4 gate on both frame variants; the
-remaining residual is geometric — thin hair/outline edges — and concentrates
-in the hair families (attribution below). Re-running the probe with the
-opt-in draw trace (2026-09-26) reproduced every figure unchanged; the trace
-diagnostic adds records but cannot change draw order, so no gate result
-moved.
+mean 0.2267/p99 5 (previous code) for the full character. The authored-mip
+variant passes p99 ≤4; the generated-mip variant still fails at p99 5. The
+September residual concentrates in the hair families (attribution below).
+Re-running the probe with the opt-in draw trace (2026-09-26) reproduced every
+figure unchanged; the trace diagnostic adds records but cannot change draw
+order, so no gate result moved.
 
 Per-family attribution — each family rendered alone, compared only where it
 is front-most in both renders (`IKKOKU_ORIGINAL_FRAME_FAMILIES=1`):
@@ -486,7 +491,8 @@ The authored-mip exporter exists, but its availability does not prove every
 comparison used authored source chains. Shader recipes, player probes and exact
 reproduction commands are in [material expansion](character/material-expansion.md).
 
-Next: the draw-order hypotheses are now exhausted — the opt-in draw trace
+Historical next step before the 2026-10-17 normal-input investigation: the
+draw-order hypotheses were exhausted — the opt-in draw trace
 (2026-09-26, section above) shows the class flips but none of the four
 ordering checks yields a fix — so attribute the hair/outline edge residual
 to a concrete binding or state difference before any gate relaxation, then
@@ -533,10 +539,169 @@ the conversion tables above), every hair/outline fragment keeps the
 `discard`-under-`_Cutoff`/`_alpha_a`-`_alpha_b` semantics unchanged from
 the DXBC, and the stored outline pass states map to the same culling
 (0→none/1→front/2→back), depth and stencil states the probe already
-applies. Track R1/R2 and CMT-04; R1 remains open — per-family isolation and
-silhouette-class attribution exist, but the full-character silhouette gate
-still fails (112 differing pixels) and no cause has been confirmed for the
-hair-edge residual.
+applies. Those historical runs left 112 differing pixels. The normal-input experiment
+below subsequently identified a distinct vertex binding error; R1/R2 and CMT-04
+remain open for the remaining coverage and production integration.
+
+### Preserve source shader normal magnitude (R1, 2026-10-17)
+
+Issue #94. The capture normalizes world-space normals for the geometry/depth
+diagnostic. The legacy translated-probe input rebuilds the source shader
+`NORMAL` from that unit vector as `transpose(ObjectToWorld) · n`, which loses the
+original skinned magnitude. The four retained hair meshes have a uniform renderer
+scale of 0.868346. On those meshes the legacy local normal has length 0.8683459;
+the original weighted renderer-local normal has length 1 ± 3e-7. The recovered
+hair forward vertex programs normalize their lighting normal (`dp3`/`rsq`).
+Both hair outline programs and the skin outline program instead compute
+`v0.xyz + v1.xyz · width` (`mad`) in object space before `unity_ObjectToWorld`.
+With the legacy input, the hair outline shells' world-space extrusion therefore
+carried an extra factor of 0.868346, about 13% too thin. Pass states and draw
+order were already correct.
+
+**Sidecar contract.** `OriginalCharacterProbe.cs` writes an additional
+`mesh-<i>-source-normals.bin` for every exported mesh. The mesh row gains a
+`sourceVertexNormals` descriptor:
+`{file, count, space: "unity-renderer-local", sha256, geometrySHA256}`. The
+binary holds `count` little-endian float32 triples and is never normalized.
+Skinned meshes use the blend-shape-adjusted source normal, weighted by bone-world
+× bind-pose matrices and mapped through the renderer's inverse linear transform.
+Static meshes keep the original mesh normal. `geometrySHA256` is the hash of the
+row's frozen `mesh-<i>.bin`. The world-normal, position, tangent and UV buffers
+and every existing file are unchanged; the capture only adds files and the
+descriptor.
+
+`OriginalFrameProbe.sourceVertexNormals` validates the descriptor before
+`TranslatedSourceShaderProbe` consumes it. It checks the coordinate space,
+plain filenames, `count` against the frozen vertex count (1…1,000,000), byte
+length, sidecar SHA-256, `geometrySHA256` against the row's geometry file and
+finite values. Any malformed or mismatched descriptor fails the probe; there is
+no fallback. Only the vertex `NORMAL` register changes. Positions, tangents,
+UVs, matrices, materials, programs, ordering and gates are untouched.
+
+The mapping assumes that the original player skins normals linearly, without
+renormalization or an inverse transpose. In that case the outline's world
+extrusion equals the weighted world normal, whatever object space the player
+uses for skinned draws. The comparison below is consistent with that assumption;
+no Unity skinning code was inspected. On these meshes, renormalizing would change
+lengths by at most 3e-7.
+
+**Old captures (limitation).** A mesh row without `sourceVertexNormals` keeps the
+legacy reconstruction exactly. Every capture made before this change therefore
+keeps outline extrusion scaled by its renderer scale: 0.868346 for this fixture's
+hair and 0.904527 for its face meshes, including the `main_skin` face outline.
+Results from those captures are not upgraded. Their magnitude can be recovered
+only by a fresh capture with the amended probe, or offline where a hash-verified
+rig exists. The amended C# compiles with the C# 5 language level used by the
+player's .NET Framework `csc`, but it has not yet run in the original player.
+
+**Offline reconstruction for retained captures.**
+[original_frame_normals.py](../../Tools/reverse/original_frame_normals.py)
+rebuilds selected meshes from hash-verified Maker rigs and their original bundles.
+Reconstructed positions and normalized directions must match the frozen geometry
+within 1e-5 m and 1e-5. The tool rejects ambiguous joint names, conflicting
+duplicate bone rows, active morph weights, invalid skin weights and
+non-finite data. It keeps weighted non-unit normals. Output goes to a new directory:
+links to the unchanged inputs, the sidecars, `source-normal-reconstruction.json`
+(provenance) and `frame-with-source-normals.json`. It neither runs the player nor
+alters retained captures. Only the hair rigs (`101:2`, `102:1`) of this fixture
+are in the retained library. The face, body and garment meshes kept legacy inputs.
+Body and garment renderers have scale 1.
+
+Controlled rerun (2026-10-17, M2 Ultra, one Debug build for all cases; only the
+frame input differs). Inputs: `.local/r1c/probe/frame-mips.json`
+(`13bd11c2…66f039`, authored mips), `.local/r1c/probe/frame.json`
+(`9aa4de39…bcc750`, generated mips) and
+`.local/reverse/maker-library/library.json` (`d898fea1…cbb609`). The baseline
+folders link the retained capture unchanged:
+
+```sh
+xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator -configuration Debug \
+  -derivedDataPath .local/build -destination 'platform=macOS,arch=arm64' build
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_frame_normals.py \
+  --frame .local/r1c/probe/frame-mips.json \
+  --library .local/reverse/maker-library/library.json \
+  --entry 101:2 --entry 102:1 --family main_hair --family main_hair_front \
+  --output .local/r1-normal/<run>/candidate-mips
+IKKOKU_ORIGINAL_FRAME_PROBE=$PWD/.local/r1-normal/<run>/candidate-mips/frame-with-source-normals.json \
+IKKOKU_ORIGINAL_FRAME_FAMILIES=1 \
+IKKOKU_ORIGINAL_FRAME_FAMILY_SETS=main_hair,main_hair_front \
+  .local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_original_frame.py \
+  .local/r1-normal/<run>/candidate-mips
+```
+
+Repeat with `frame.json` in another new directory for the generated-mip variant.
+Run the app as a bounded subprocess (600 s was the limit; it exits after the
+probe). Baseline input: a new directory of links to `.local/r1c/probe`
+(excluding `native-*` and `frame-comparison.json`), run with the unmodified
+`frame-mips.json`/`frame.json`.
+
+The 15,956 reconstructed hair vertices (12,049 + 1,188 + 1,144 + 1,575) matched
+positions within 3.23e-7 m and normal directions within 1.21e-7. The sidecars are
+byte-identical between the two variants. They are also identical to the first
+private reconstruction of the same data.
+
+| Translated full character | Legacy NORMAL (baseline) | Source NORMAL sidecar (candidate) | Gate result |
+| --- | --- | --- | --- |
+| Authored mips (`frame-mips.json`) | 112 differing px (61 native-only / 51 original-only); IoU 0.9988684583; color mean 0.2087, p99 4 | **44 differing px (3 / 41); IoU 0.9995552051**; color mean 0.2089, p99 4 | Silhouette fail → **pass**; color pass → pass |
+| Generated mips (`frame.json`) | 112 differing px; IoU 0.9988684583; color mean 0.2267, p99 5 | **44 differing px; IoU 0.9995552051**; color mean 0.2268, p99 5 | Silhouette fail → **pass**; color p99 **still fails** (5 > 4) |
+
+Supporting measurements from the same runs:
+
+- **Hair crown.** The inclusive x345–423, y96–116 box goes from 7 native-only /
+  6 original-only pixels to 0/0. The wider x320–446, y90–146 box goes from
+  23/8 to 0/0.
+- **Hair pair.** The {`main_hair`, `main_hair_front`} pair render matches the
+  full render's crown coverage before and after the change. In the wider box it
+  has one extra original-only pixel in each case (9 vs 8; 1 vs 0).
+- **Remaining silhouette classes.** The candidate adds no new differing pixel:
+  its 44 are a subset of the baseline's 112. The 3 native-only pixels are
+  `main_opaque` 1 and overlap 2. The 41 original-only pixels are `main_skin` 31,
+  none 8 and `main_hair` 2. The `main_skin`-only render has identical coverage
+  before and after. Its 31 pixels are not attributed by this experiment.
+- **Unchanged images.** `native-geometry.png`, `native-depth-normals.png`,
+  `native-color.png` and `native-main_opaque.png` are byte-identical between
+  baseline and candidate. Geometry IoU stays 0.9998196.
+
+Coverage is deterministic across repeated runs. Across two runs of this build,
+translated RGB differed at ≤4 pixels by ≤4 channel bytes. Against the first
+private experiment's build, it differed at ≤14 pixels by ≤6 bytes. Color means
+therefore vary in the fifth decimal, and p99 values do not change.
+
+**Supported.** For this frozen fixture, the hypothesis holds: the lost magnitude
+explains the hair-crown silhouette residual and the silhouette gate failure.
+
+**Still failing (recorded, gates unchanged):**
+
+- Generated-mip translated color, p99 5.
+- Per-family hair color, compared where each family is front-most:
+  - `main_hair`: mean 1.001, p99 24 (authored mips); 1.035, p99 23 (generated
+    mips).
+  - `main_hair_front`: mean 0.845, p99 22 (authored mips); 0.916, p99 23
+    (generated mips).
+- Production native toon color, mean 31.28, p99 239. `passesAllGates` remains
+  false.
+
+This is a frozen-geometry diagnostic of one controlled character. It does not
+establish live-app or whole-character source parity, other shader and asset
+families, or production material integration. Those remain open under R1/R2.
+
+Malformed real-data controls also ran against the derived authored-mip frame.
+A wrong `geometrySHA256` stops the probe with exit 1, as does a mesh row
+pointing at another mesh's sidecar (length/SHA-256 mismatch). Validation:
+
+| Check | Result |
+| --- | --- |
+| Debug app build | Succeeded |
+| `swift test --package-path Packages/Engine` | 525 tests, 460 passed, 65 named fixture skips, 0 failed; includes the 2 new sidecar tests |
+| `Tools/reverse` suite | 360 run, 6 skipped, 0 failed; includes the 6 new reconstruction tests |
+| `Tools/reverse/analysis` suite | 211 passed |
+| Capture plugin | Roslyn compile at `-langversion:5` against the retained managed references |
+
+Private evidence (inputs, outputs, logs, build and input hashes) is in
+`.local/r1-normal/rerun-2026-10-17/`. The first private experiment is in
+`.local/r1-normal/codex-2026-10-17/`. No image threshold, shader program or
+texture changed.
 
 ### Native pose gate
 
