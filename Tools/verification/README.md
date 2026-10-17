@@ -67,7 +67,7 @@ them claims whole-game parity; read each `tolerance`.
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup run, then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report; `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. |
-| `studio-scenarios.json` | Thirty-two `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
+| `studio-scenarios.json` | Thirty-four `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-10-17: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
 | `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 
 ## Studio scenario hook (T-T04)
@@ -85,7 +85,9 @@ tolerance. A failing `assert`/edit step is recorded and the run
 continues; a failing `export`/`reimport` stops it. Both write only under
 `.local/`. Ops: `select`, `setVisible`, `rename`, `toggleCamera`,
 `toggleRoute`, `undo`, `redo`, `newScene`, `setFace`, `setBody`
-`{key,index,value}`, `setColor` `{key,id,rgba[4]}`, `setAnimation`
+`{key,index,value}`, `setColor` `{key,id,rgba[4]}`, `resetShape`
+`{key,face:true|false}` (shared with the inspector; clears only the selected
+shape domain), `resetColors` `{key}` (clears color edits, preserving shapes), `setAnimation`
 `{key,group,category,no}` (a clip must exist in the
 `IKKOKU_STUDIO_ANIMATION_CATALOG` or the op fails before mutating),
 `setAnimationSpeed` `{key,speed}`, `setForceLoop` `{key,on}`,
@@ -157,19 +159,81 @@ automatable halves of the Studio checklist in
 which checklist claims (live visuals, CharaStudio reload, unbound hair
 color writeback) stay unchecked.
 
+### Shape/color visual and reset acceptance (ST-T06c)
+
+`captureRender` `{name,path?}` renders the current production frame at 512×512,
+with grid and gizmos omitted. Pixels are retained under `name`; an optional
+`.local/` PNG output can be listed as a hashed lane artifact. Capture and export
+outputs must differ from both the initially imported and currently imported
+source paths; these guards run before any output is removed or written. An `assert` may
+include `render: {from,changedPixelsAtLeast?,changedPixelsAtMost?,maxChannelDeltaAtMost?}`.
+A changed pixel has at least one RGBA8 channel differing by more than 2/255.
+At least one pixel-count bound is required; both must lie in 0…262144 and minimum
+must not exceed maximum. The optional maximum channel delta is 0…255; zero
+requires exact byte restoration. Successful reports include the measured count,
+exactly changed pixel count, maximum channel delta, dimensions and bounds.
+`changedPixelsAtMost: 0` alone allows differences of up to two channel units.
+
+`exportIdenticalToSource: ".local/…png"` compares the exported SHA-256 with the
+source SHA captured **at scenario start**, even after reimport; the initial
+source path itself is refused. `assertRejected` accepts the same assertion
+fields plus a nonempty `errorContains`: exactly one assertion must fail with
+that diagnostic fragment. The shape/color scenarios use it to reject a changed
+export after reimport, preventing output-versus-itself comparisons. The shape
+scenario also checks that unchanged pixels cannot satisfy a visible-change
+claim and rejects missing, negative, inverted and oversized render bounds.
+
+`shape-visual-reset.json` edits face slot 20 on key 0 and body slot 0 on keys 0
+and 65, checks each shape reset preserves the other domain, and restores values
+explicitly before export. `color-visual-reset.json` edits `body.skinMainColor`
+on key 0, checks reset isolation from shape edits in both directions, and
+restores the saved rgba explicitly before export. Both assert their fixture's
+starting values, require at least 50 visibly changed pixels, and require exact
+RGBA8 restoration after reset. They declare the scene, rig and Maker-library
+file fixtures (including hashes) and never advance the clock or move the camera, so unrelated animation cannot
+satisfy the change check or alter export bytes. The original `face-shape` and
+`color-edit` checks continue to cover edited-value export/reimport. Recorded 2026-10-17: the two new scenarios passed 45/45 and 31/31 steps;
+face/body/skin edits changed 76, 40,270 / 38,581 and 10,251 pixels respectively,
+and every reset comparison had zero exact pixel differences and maximum channel
+delta 0. Restored exports matched the initial source SHA. These are
+headless model calls and production-render checks; mouse-driven slider/button
+interaction and original-player appearance comparison remain separate gates.
+The attempted visible-window check on 2026-10-17 was blocked by the native UI
+tool reporting that Computer Use permissions were not granted; no interactive
+acceptance is claimed from that attempt.
+
+The 2026-10-17 full lane initially passed 31/34 checks (0 skipped). The existing
+synthetic blink/hand checks discovered a local Maker library and could not render
+their minimal card (`Unsupported hair part array`). After explicitly disabling
+that unrelated catalog for those three checks, their strict rerun passed 3/3
+(11, 13 and 11 steps). The private input bytes and all assertions stayed unchanged;
+this is playback coverage without assembled hair/clothes. The first failure
+reports remain retained as evidence; these counts describe the full run plus the
+corrected subset, not a second complete lane run.
+Additional local negative probes confirmed that `assert face:true` fails decoding
+and that capture/export refuse both the initial and current source paths after
+reimport; the copied synthetic inputs remained byte-identical.
+
 No `studio-scenarios` check reads the environment file's own `IKKOKU_SOURCE_SCENE`
 (the `app-smoke` and `private-source` lanes use it for a different
 scene). Each check aliases it through the fixture `from` key instead.
-The ten character scenarios (`visibility-folder`, `rename-folder`,
+The twelve character scenarios (`visibility-folder`, `rename-folder`,
 `face-shape`, `color-edit`, `item-props`, `undo-props`, `undo-no-catalog`,
-`animation-select`, `fk-edit`, `fk-mouse-drag`) take
+`animation-select`, `fk-edit`, `fk-mouse-drag`, `shape-visual-reset`,
+`color-visual-reset`) take
 `IKKOKU_STUDIO_SCENARIO_SCENE`, which must be the scene whose object
 keys they address (`koikatu_cs0002591.png`: keys 0, 65 and 622);
 `animation-select`, `fk-edit` and `fk-mouse-drag` additionally require
 `IKKOKU_STUDIO_ANIMATION_CATALOG` (set at import, it lets
 `setAnimation` validate and resolve the selected clip; `fk-mouse-drag`
-needs it only to import the same scene state `fk-edit` edits). That
-scene has neither a camera nor a route-bearing object, so the six
+needs it only to import the same scene state `fk-edit` edits). The two visual
+reset scenarios additionally require `IKKOKU_MAKER_LIBRARY`; their pixel and
+color results depend on the selected assembly. The synthetic `blink-toggle`,
+`hand-patterns` and `hand-patterns-kept` checks explicitly set
+`IKKOKU_MAKER_LIBRARY=none`: their minimal cards exercise playback, not converted
+hair/clothes, and must not inherit a developer’s optional assembly library.
+
+`koikatu_cs0002591.png` has neither a camera nor a route-bearing object, so the six
 camera/route scenarios take a probe scene: `camera-load-winner`,
 `camera-deactivate`, `camera-rename` and `undo-camera` run against the
 two-active-camera scene-x (`IKKOKU_CAMERA_OBJECT_PROBE_SCENE`),

@@ -567,11 +567,11 @@ class CheckExecutionTests(unittest.TestCase):
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
-                "setFace", "setBody", "setColor", "setAnimation", "setAnimationSpeed",
+                "setFace", "setBody", "setColor", "resetShape", "resetColors", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
-                "dragGizmo", "captureBone",
+                "dragGizmo", "captureBone", "captureRender",
                 "advance", "orbit", "setAutomaticBlink",
-                "export", "reimport", "assert"}
+                "export", "reimport", "assert", "assertRejected"}
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "resetShapes", "export", "reimport", "assert"}
@@ -598,7 +598,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 32)
+        self.assertEqual(len(self.checks), 34)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -659,6 +659,15 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     rgba = step["rgba"]
                     self.assertEqual(len(rgba), 4)
                     self.assertTrue(all(0 <= c <= 1 for c in rgba))
+                if op == "resetShape":
+                    self.assertIsInstance(step["key"], int)
+                    self.assertIsInstance(step["face"], bool)
+                if op == "resetColors":
+                    self.assertIsInstance(step["key"], int)
+                if op == "captureRender":
+                    self.assertTrue(step["name"])
+                    if "path" in step:
+                        self.assertTrue(step["path"].startswith(".local/"))
                 if op == "setAnimation":
                     for slot in ("group", "category", "no"):
                         self.assertIsInstance(step[slot], int)
@@ -685,13 +694,32 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op in ("export", "reimport", "saveDocument", "loadDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
-                if op == "assert":
+                if op in ("assert", "assertRejected"):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
                                             "sourceRuntime", "animation", "fk",
                                             "eyeLook", "blink", "handPattern",
-                                            "diagnosticContains") if k in step]
+                                            "diagnosticContains", "render",
+                                            "exportIdenticalToSource") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    if op == "assertRejected":
+                        self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
+                        self.assertEqual(len(declared), 1, "negative control must isolate one assertion")
+                    if "exportIdenticalToSource" in step:
+                        self.assertTrue(step["exportIdenticalToSource"].startswith(".local/"))
+                    if "render" in step:
+                        render = step["render"]
+                        self.assertTrue(render["from"])
+                        for bound in ("changedPixelsAtLeast", "changedPixelsAtMost", "maxChannelDeltaAtMost"):
+                            if bound in render:
+                                self.assertIs(type(render[bound]), int)
+                        if op != "assertRejected":
+                            self.assertTrue("changedPixelsAtLeast" in render or "changedPixelsAtMost" in render)
+                            self.assertLessEqual(0, render.get("changedPixelsAtLeast", 0))
+                            self.assertLessEqual(render.get("changedPixelsAtLeast", 0), render.get("changedPixelsAtMost", 512 * 512))
+                            self.assertLessEqual(render.get("changedPixelsAtMost", 512 * 512), 512 * 512)
+                            self.assertLessEqual(0, render.get("maxChannelDeltaAtMost", 255))
+                            self.assertLessEqual(render.get("maxChannelDeltaAtMost", 255), 255)
                     if any(k in step for k in ("name", "visible", "face", "body", "color")):
                         self.assertIsInstance(step.get("key"), int,
                                               "object asserts need a source key")
@@ -740,6 +768,34 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertGreater(ops.index("reimport"), ops.index("export"))
             self.assertEqual(ops[-1], "assert",
                              "the last step must verify the reloaded state: %s" % path)
+
+    def test_synthetic_motion_checks_do_not_discover_a_maker_library(self):
+        # These minimal cards exercise blink/hand playback, not assembled
+        # hair/clothes. A developer's optional library must not change import.
+        checks = {check["id"]: check for check in self.checks}
+        for name in ("blink-toggle", "hand-patterns", "hand-patterns-kept"):
+            self.assertEqual(checks["studio-scenario-" + name]["env"].get("IKKOKU_MAKER_LIBRARY"),
+                             "none")
+
+    def test_visual_reset_controls_keep_clock_and_camera_fixed(self):
+        checks = {check["id"]: check for check in self.checks}
+        for name in ("shape-visual-reset", "color-visual-reset"):
+            self.assertIn({"env": "IKKOKU_MAKER_LIBRARY", "kind": "file"},
+                          checks["studio-scenario-" + name]["fixtures"],
+                          "visual evidence must hash its selected assembly catalog")
+            with open(os.path.join(self.SCENARIO_DIR, name + ".json"), encoding="utf-8") as handle:
+                steps = json.load(handle)["steps"]
+            self.assertFalse({"advance", "orbit", "toggleCamera", "setAnimation"} &
+                             {step["op"] for step in steps},
+                             "visual differences and export identity must isolate edits at a fixed time/camera")
+            self.assertTrue(any(step["op"] == "assert" and "exportIdenticalToSource" in step
+                                for step in steps), "restored export needs a positive identity control")
+            rejected = next(i for i, step in enumerate(steps)
+                            if step["op"] == "assertRejected" and "exportIdenticalToSource" in step)
+            output = steps[rejected]["exportIdenticalToSource"]
+            self.assertTrue(any(step["op"] == "reimport" and step["path"] == output
+                                for step in steps[:rejected]),
+                            "changed-export control must run after reimport to catch self-comparison")
 
 
 class MakerScenarioLaneTests(unittest.TestCase):

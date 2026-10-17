@@ -667,8 +667,7 @@ struct FaceInspector: View {
 
     private func resetSourceShape(_ o: StudioObject, face: Bool) {
         do {
-            if face { try model.setSourceShapeValues(o.id, face: nil, body: o.sourceBodyValues) }
-            else { try model.setSourceShapeValues(o.id, face: o.sourceFaceValues, body: nil) }
+            try model.resetSourceShape(o.id, face: face)
             model.status = face ? "Face shape reset to the card's saved values" : "Body shape reset to the card's saved values"
         } catch { model.status = "Shape reset: \(error)" }
     }

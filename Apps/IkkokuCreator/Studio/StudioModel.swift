@@ -428,6 +428,15 @@ final class StudioModel: ViewportInputHandler {
         doc.objects[i].sourceBodyValues = body
     }
 
+    /// "Reset to card" for one shape domain: nil clears that domain's edit so
+    /// the card's saved values render again, leaving the other domain's edit
+    /// untouched. The inspector's button and the scenario's `resetShape` op
+    /// share this one path.
+    func resetSourceShape(_ id: UUID, face: Bool) throws {
+        if face { try setSourceShapeValues(id, face: nil, body: doc.object(id)?.sourceBodyValues) }
+        else { try setSourceShapeValues(id, face: doc.object(id)?.sourceFaceValues, body: nil) }
+    }
+
     /// Live preview for color editing. Rebuilds the preview appearance first,
     /// so a rejected color leaves both preview and document untouched.
     func setSourceColorEdit(_ id: UUID, colorID: String, rgba: Float4) throws {
