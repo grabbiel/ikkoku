@@ -25,6 +25,9 @@ may be discussed in more than one report; one primary owner is listed here.
 
 **769 files indexed; 769 assigned; 0 unassigned.**
 
+2026-10-17 layout follow-up changes the indexed `StudioView.swift` and its owning
+Studio audit/reference only; inventory membership is unchanged.
+
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 61 |
