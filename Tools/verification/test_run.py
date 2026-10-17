@@ -84,6 +84,32 @@ class SwiftTestingParserTests(unittest.TestCase):
         self.assertEqual(parsed["tests"][0]["status"], "failed")
         self.assertEqual(parsed["executed"], 1)
 
+    def test_multiple_executables_sum_totals_and_preserve_results(self):
+        # SwiftPM emits one summary per test executable. Keep fixture skips
+        # and failures visible when aggregating the combined process log.
+        parsed = run.parse_swift_testing(
+            "✔ Test geometry() passed after 0.001 seconds.\n"
+            '➜ Test sourceFixture() skipped: "Requires IKKOKU_FIXTURE"\n'
+            "✔ Test run with 2 tests in 1 suite passed after 0.002 seconds.\n"
+            "✘ Test application() recorded an issue at App.swift:12:3:\n"
+            "✘ Test application() failed after 0.001 seconds.\n"
+            "✘ Test run with 1 test in 1 suite failed after 0.002 seconds with 1 issue.\n")
+        self.assertEqual(parsed["total"], 3)
+        self.assertEqual(parsed["executed"], 2)
+        self.assertEqual(parsed["counts"], {"passed": 1, "failed": 1, "skipped": 1})
+        by_name = {test["name"]: test for test in parsed["tests"]}
+        self.assertEqual(by_name["sourceFixture()"]["reason"], "Requires IKKOKU_FIXTURE")
+        self.assertEqual(by_name["application()"]["status"], "failed")
+
+    def test_multiple_executable_summary_only_totals(self):
+        parsed = run.parse_swift_testing(
+            "✔ Test run with 511 tests in 0 suites passed after 1.0 seconds.\n"
+            "✔ Test run with 12 tests in 0 suites passed after 0.1 seconds.\n")
+        self.assertEqual(parsed["total"], 523)
+        self.assertEqual(parsed["executed"], 523)
+        self.assertEqual(parsed["counts"], {"passed": 523, "failed": 0, "skipped": 0})
+        self.assertEqual(parsed["tests"], [])
+
     def test_unrelated_output_not_parsed(self):
         self.assertIsNone(run.parse_swift_testing("hello world\n"))
 

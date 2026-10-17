@@ -30,6 +30,16 @@ python3 Tools/verification/run.py --manifest Tools/verification/lanes/maker.json
 
 Options: `--environment PATH` (JSON file providing declared fixture paths; must stay in `.local/`), `--report PATH` (must stay under `.local/verification/`; an existing file is never overwritten), `--strict` (fails a check if any declared fixture is missing), and `--timeout SECONDS` (default 240 per check, overridable per check via `timeout`).
 
+Swift Testing reports sum the `Test run with N …` totals from each test
+executable in the check's process log. Those totals include skipped tests;
+`executed` and passed/failed/skipped counts come from named per-test results
+when available. Repeated issue/failure lines for one test retain its worst
+status without counting it twice. Reports created before the 2026-10-17
+accounting fix kept only the last executable's total: the Engine run with
+511 + 12 tests incorrectly reported `total: 12`, while its per-test counts
+remained correct. Historical reports are retained as recorded; re-parsing
+their logs corrects accounting but does not constitute a new test execution.
+
 ## Environment isolation
 
 Each check inherits the shell environment with every `IKKOKU_*` variable removed, then receives only its declared fixtures supplied by the environment file, followed by its own `env` settings; `--strict` also sets `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`. The environment file holds fixture paths only; capture and UI settings belong in the check's `env`.

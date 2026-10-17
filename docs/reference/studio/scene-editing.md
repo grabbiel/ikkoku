@@ -31,6 +31,30 @@ Generate the optional native evidence by setting `IKKOKU_STUDIO_EDIT_OUTPUT` to 
 
 The default report is `.local/reverse/studio-edited/verification.json`. Rendering an edited scene still depends on the separately converted geometry, materials, animation and native plug-in adapters; serialization coverage does not imply execution of the original plug-ins.
 
+## Native workspace layout
+
+The native Studio workspace reserves 250 points for the object tree and 350 for
+the inspector. Its toolbar overlays the viewport and scrolls horizontally when
+its controls exceed the available width, including the extra FK group picker.
+Toolbar content must not contribute a minimum width to the viewport container.
+Timeline key markers overlay the scrubber, so their geometry reader takes the
+slider's height instead of expanding the timeline row into the viewport.
+These layout rules apply to both native and source scenes; they do not change
+scene persistence or original Timeline-plugin support.
+
+Visible regression check, 2026-10-17: the previous layout clipped the tree and
+right inspector at the minimum window size and devoted roughly half the centre
+column to the timeline. With the layout fix, the tree, all five inspector tabs
+and full slider values fit at the same minimum size, and the timeline occupies a
+single bottom row. Native Window → Move & Resize → Top Left reaches the app's
+minimum size on the tested display; Zoom also verifies the larger layout. The
+horizontal scrollbar exposes Camera/Capture and timeline controls, FK mode
+exposes its group picker, the Scene tab opens, timeline hide/show works and
+scrubbing 0→2.5→0 reads back correctly. Xcode 27 Debug build passes. Captures and
+source-scene identity remain local; no scene file was saved or changed. This
+closes the layout regression only; the full ST-T01 guide/undo/save acceptance
+remains separate.
+
 ## App boundary and remaining work
 
 The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
