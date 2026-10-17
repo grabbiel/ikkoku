@@ -79,6 +79,92 @@ resolution, source inventory matching and cache integrity. Reference availabilit
 is a filename check, not proof that a
 Unity API implementation has a native equivalent.
 
+## Independent REA check — 2026-10-17
+
+At repository base `d671aee`, REA **6.5.0** independently inspected the five
+retained DLLs using its execution-free `rea-dotnet-static` provider. All five
+were classified as Unity Mono CIL with complete metadata coverage. Their source
+hashes match the installation inventory and the recovery manifests; REA's
+`TypeDef`, `MethodDef`, `TypeRef` and `AssemblyRef` counts match the corresponding
+ILSpy tables. The game and Studio main DLLs have different hashes and MVIDs even
+though their four recorded table counts agree: they are separate inputs.
+
+| Input | SHA-256 | TypeDef / MethodDef | Verified retained files | Selected methods cross-checked |
+| --- | --- | ---: | ---: | ---: |
+| Game CSharp | `0038281caf8df48a7903c55dc389642eeeb3f2a9114bd9d68ac11c8ac0396bc5` | 4,581 / 31,220 | 2,058 | 105 |
+| Studio CSharp | `902b9a237337b17a64514bdb0d857b460ece4fb6a57c658375dd32c5fa504c45` | 4,581 / 31,220 | 2,058 | 115 |
+| Shared firstpass | `ca572fff8740bbcd58d549723c80b0088d6676611eae2ab91624f460739aea10` | 1,620 / 7,451 | 947 | 38 |
+| Game UnityScript | `577f3c430705b0012b56bebc0511e81c495111a9e50b6ca56015fab3ae943766` | 3 / 18 | 17 | 18 |
+| Studio UnityScript | `9ce7621ac1e6f586a83a2c0a4a8904a3a7a269372e291496667d4d6ca06bcade` | 3 / 18 | 17 | 18 |
+
+Re-running the recovery command above reused all five generations after the
+existing integrity checks: **5,097 retained files**, including the **4,987 C#
+project files**, passed exact file-set, length and SHA-256 checks. All **26**
+reference DLL hashes still match their manifest identities. The **20** fallback
+type exports retain successful commands and no detected error stubs; unresolved
+decompiler diagnostics remain zero. The recovery regression suite executed
+**17 tests, all passing**, with no skipped cases:
+
+```sh
+python3 -m unittest discover -s Tools/reverse -p 'test_recover_managed.py'
+```
+
+REA member inspection also cross-checked **294** selected method tokens, names
+and RVAs against ILSpy's retained `MethodDef` rows; every selected method has a
+file-backed CIL body. Selection was `ADV.Program` and `ActionGame.Cycle` in the
+game, `Studio.OCIChar` and `Studio.SceneInfo` in Studio,
+`RootMotion.FinalIK.IKSolverFullBody` and `RootMotion.FinalIK.IKSolverTrigonometric`
+in firstpass, and all methods in both small UnityScript assemblies. Coverage is
+complete for these selections, not for every method's behavior. In particular,
+`ADV.Program` still requires its documented fallback C# export.
+
+The complete private records and local cross-check are under
+`.local/rea-audit-2026-10-17/`: `integrity-report.json`, `cross_check.py`,
+`recovery-reuse.json` (one JSON record per line), `recovery-tests.log`, and the
+REA `*-artifact.json` / `*-members.json` files. `firstpass-ik-members.json` is
+the successful firstpass selection; the earlier `firstpass-members.json`
+explicitly reports an unmatched `DynamicBone` selection and supports no member
+coverage claim. These files, DLLs and recovered source remain uncommitted.
+
+| Input | REA artifact Evidence ID | REA selected-member Evidence ID |
+| --- | --- | --- |
+| Game CSharp | `ev_7b717e04a2da835b9595cd7f44a17ff58edecadae885cd6f6da2ea6c66e5bd7f` | `ev_575a067e6059ff61d27c57410b1b8f9e898a9115c76e7b25b61dfb4762c550d6` |
+| Studio CSharp | `ev_8149a2c85887d082e17faee67384e092c627a6ac854d1b85c59a52a2b7ecd08b` | `ev_9f8da1d0633a47c6d8dd4e6cada806e77d8e0c32512e0b058a727099a18d3685` |
+| Shared firstpass | `ev_833191b4737590bba02b05d368444cc3710302fe96749996cf3100a38be506c6` | `ev_7b90a3d977b46786c388410be05735452e3969ac1b9193e1e90d76a7cf4c76e3` |
+| Game UnityScript | `ev_c21ef3405075a6c52a32abd135e4139e4d110238cc36fca4d418ee09661da26d` | `ev_743cd742a78ad3338e1e7a466fc4a5bd389470f1d647f5d84007c41d9e52b16c` |
+| Studio UnityScript | `ev_218cbd36f6ddc40a661431fe1b43b4ddcfc557cedf370ea13d30e7216f2169f6` | `ev_d7c09b7dd42933e9add9bad71dd2354703e440af0556990314fd5027c22531e9` |
+
+To reproduce the independent inspection, run the pinned CLI against each input
+in the recovery command above, saving its complete JSON under `.local/`. For
+example:
+
+```sh
+mkdir -p .local/rea-audit
+npx -y rea-agents@6.5.0 inspect-managed-artifact \
+  .local/reverse/managed/CharaStudio/Assembly-CSharp.dll --json \
+  > .local/rea-audit/studio-artifact.json
+npx -y rea-agents@6.5.0 inspect-managed-members \
+  .local/reverse/managed/CharaStudio/Assembly-CSharp.dll \
+  --type Studio.OCIChar --type Studio.SceneInfo --json \
+  > .local/rea-audit/studio-members.json
+```
+
+Use the artifact digest and MVID when interpreting tokens. Check
+`normalized_result.metadata.status`, table counts,
+`normalized_result.coverage` and `selection.unmatched_type_names` before using
+member rows; an omitted type selection is represented by `selection: null`.
+The CLI does not require MCP registration or Hopper/Ghidra for these managed
+operations. This run used the CLI because REA was not connected to the active
+client; no client configuration or analysis engine was changed.
+
+**Conclusion:** the retained five-assembly recovery is intact and independently
+corroborated as usable static evidence. This did not recompile the C#, prove the
+semantics of every recovered expression, execute the original player, or verify
+native feature parity. VR-specific code, arbitrary plugins, launcher/native
+engine internals, serialized assets and whole-game behavior remain outside this
+check. The renderer, dynamics and Animator failures recorded in their owning
+references remain open; successful recovery does not close them.
+
 ## Native translations built from this evidence
 
 The current [app/gameplay/plugin audit](../component-audit/app-gameplay-and-plugins.md)

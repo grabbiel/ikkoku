@@ -269,11 +269,12 @@ def _test_counts(per_test):
 
 
 def parse_swift_testing(output):
-    """Per-test results plus the summary total, or None if nothing parsed.
+    """Per-test results plus summed executable totals, or None if unparsed.
 
     `Test run with N …` totals INCLUDE skipped tests, so when per-test
     records exist they dominate the counts; otherwise executed falls back
-    to total − skipped and everything else counts as passed.
+    to the summed total and everything counts as passed. SwiftPM can run
+    multiple test executables, each emitting its own summary line.
     """
     per_test = {}
     reasons = {}
@@ -281,7 +282,7 @@ def parse_swift_testing(output):
     for line in output.splitlines():
         summary = SWIFT_TOTAL_RE.search(line)
         if summary:
-            total = int(summary.group(1))
+            total = (total or 0) + int(summary.group(1))
             continue
         for pattern, status in ((SWIFT_PASSED_RE, "passed"),
                                 (SWIFT_SKIPPED_RE, "skipped"),
@@ -300,7 +301,7 @@ def parse_swift_testing(output):
         counts = _test_counts(per_test)
         executed = counts["passed"] + counts["failed"]
     else:
-        # Only the summary line parsed: attribute everything to passed.
+        # Only summary lines parsed: attribute everything to passed.
         counts = {"passed": total, "failed": 0, "skipped": 0}
         executed = total
     return _test_result("swift-testing", total, executed, counts,

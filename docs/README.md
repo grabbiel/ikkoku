@@ -1,7 +1,9 @@
 # Documentation
 
-Current review: **2026-09-25**, working tree based on `2cfb859`, including uncommitted
-implementation. Ikkoku is a partial Swift + Metal reconstruction with a separate
+Baseline code review: **2026-09-25**, working tree based on `2cfb859`, including
+then-uncommitted implementation. Dated follow-ups in the component reports record
+later merged slices; the baseline date is not a fresh all-project verification.
+Ikkoku is a partial Swift + Metal reconstruction with a separate
 bundled prototype. The [component audit](component-audit/README.md) is the current
 feature-status and implementation-backlog entry point. No whole-game completion
 percentage or general mod compatibility is claimed.
@@ -45,7 +47,8 @@ run; use the owning audit task to decide what still needs verification.
 
 - [Native bundled asset contract](reference/native-assets.md)
 - [Unity coordinates, renderer and matched-frame evidence](reference/renderer.md)
-- [Managed assembly recovery](reference/managed-recovery.md)
+- [Managed assembly recovery](reference/managed-recovery.md), including the
+  [2026-10-17 independent REA check](reference/managed-recovery.md#independent-rea-check--2026-10-17)
 
 ### Character and Maker
 

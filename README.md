@@ -35,7 +35,10 @@ fixtures and otherwise return without exercising source behavior.
 
 ## Current scope
 
-Reviewed against the working tree on 2026-09-25:
+The baseline audit is dated 2026-09-25, with maintained follow-ups through merged
+`main` commit `d671aee` (2026-10-01). The
+[2026-10-17 REA check](docs/reference/managed-recovery.md#independent-rea-check--2026-10-17)
+corroborates the retained managed recovery; it does not certify runtime parity.
 
 - **Maker:** original normal male/female assemblies, heads 0/200/201, 52 face and
   44 body controls, bounded card-selected hair/clothes/accessories, material
@@ -43,11 +46,13 @@ Reviewed against the working tree on 2026-09-25:
   is limited; special assemblies and arbitrary mod assets remain unsupported.
 - **Studio:** source record decoding, selected character reconstruction, cameras,
   FK/IK kernels, animation and bounded original-scene editing. Full-body IK has a
-  recovered-source oracle; source Pose/Face/Clothes inspectors are still blocked
-  by a UI gate. Many decoded scene objects and settings lack runtime consumers.
+  recovered-source oracle; source Pose/Face/Clothes inspectors are reachable and
+  selected editor workflows have headless scenario coverage. Full interactive
+  acceptance remains open. Many decoded scene objects and settings lack runtime consumers.
 - **Renderer:** native toon rendering and a separate source-shader diagnostic
   pipeline. Frozen geometry and selected garment comparisons pass; full-character
-  color parity fails. Diagnostic translations are not the production renderer.
+  silhouette parity fails, and color passes only for the mip-preserved fixture
+  variant. Diagnostic translations are not the production renderer.
 - **Gameplay and mods:** cycle and fixed-event eligibility kernels, bounded ADV and translated
   plugin execution, archive/catalog resolution and two exact native plugin
   adapters. No complete playable game host or general managed-plugin compatibility.
