@@ -58,8 +58,19 @@ passed 45 and 31 steps respectively: 76 face, 40,270/38,581 body and 10,251
 skin pixels exceeded the visible-change threshold; resets had zero differing
 RGBA8 bytes and restored exports matched the initial source SHA. These checks
 cover supported bound skin colors
-and face/body shape slots; unbound hair-color writeback, mouse-driven controls
-and original-player visual parity remain outside this scope.
+and face/body shape slots.
+
+Visible UI follow-up on 2026-10-17 used the same final Debug app build and a
+CharaStudio-authored source scene. In the Face inspector, height changed from
+0.5 to 0.8 and Face width from 0.5 to 1.0. Each section's visible Reset to card
+button restored its saved 0.5 value, confirmed by slider readback and reset
+status; the body height change and restoration were visible in the viewport.
+Source Pose and Clothes tabs were also reachable. The window was maximized
+because the default width clipped inspector controls; that layout defect is
+separate from reset semantics. The native color panel did not open through the
+available UI automation, so interactive color editing remains unverified.
+Unbound hair-color writeback, the broader ST-T01 guide/undo/save workflow and
+original-player appearance parity remain open. No source file was overwritten.
 
 ## CharaStudio reload acceptance
 
