@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**769 files indexed; 769 assigned; 0 unassigned.**
+**771 files indexed; 771 assigned; 0 unassigned.**
 
 2026-10-17 layout follow-up changes the indexed `StudioView.swift` and its owning
 Studio audit/reference only; inventory membership is unchanged.
@@ -34,13 +34,13 @@ Studio audit/reference only; inventory membership is unchanged.
 | [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 291 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 124 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 126 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 153 |
+| Conversion / recovery / verification tool | 155 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
@@ -776,6 +776,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/charastudio-route-rename.json](../../Tools/verification/scenarios/charastudio-route-rename.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-route-stop.json](../../Tools/verification/scenarios/charastudio-route-stop.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/color-visual-reset.json](../../Tools/verification/scenarios/color-visual-reset.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/eye-look-orbit.json](../../Tools/verification/scenarios/eye-look-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/fk-edit.json](../../Tools/verification/scenarios/fk-edit.json) | Conversion / recovery / verification tool |
@@ -796,6 +797,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-play-state.json](../../Tools/verification/scenarios/route-play-state.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/shape-visual-reset.json](../../Tools/verification/scenarios/shape-visual-reset.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |

@@ -1,7 +1,9 @@
 import Foundation
 import AppKit
 import CoreMath
+import CryptoKit
 import Scene
+import Renderer
 import Character
 import Studio
 
@@ -15,11 +17,11 @@ struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
-        /// `"setFace"`, `"setBody"`, `"setColor"`, `"setAnimation"`,
-        /// `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`, `"setFK"`,
-        /// `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
-        /// `"captureBone"`, `"advance"`, `"orbit"`, `"setAutomaticBlink"`,
-        /// `"export"`, `"reimport"`, `"assert"`.
+        /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`,
+        /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
+        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
+        /// `"captureBone"`, `"captureRender"`, `"advance"`, `"orbit"`,
+        /// `"setAutomaticBlink"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         let visible: Bool?
@@ -31,6 +33,10 @@ struct StudioScenario: Decodable {
         let path: String?
         /// assert only: the face slot and rate the object must show.
         let face: SlotValue?
+        /// resetShape: the domain to reset — the same `face` key that asserts
+        /// carry as a `{index, value}` slot, spelled `true`/`false` only for
+        /// this operation.
+        let faceReset: Bool?
         /// assert only: the body slot and rate the object must show (the
         /// mirror of `face`, so the body-shape half of ST-T06 is assertable).
         let body: SlotValue?
@@ -99,6 +105,32 @@ struct StudioScenario: Decodable {
         /// assert only: the saved hand-pattern numbers the character's record
         /// carries for the left and right hand (0 is "no pattern").
         let handPattern: HandPatternValue?
+        /// assert only: the current render compared with a `captureRender`
+        /// capture, resolved by the `from` label like `animation`/`fk`; at
+        /// least one of the two bounds must be named to assert anything.
+        let render: RenderValue?
+        /// assert only: the sha256 of this exported `.local/` file must equal
+        /// the source identity captured at scenario start, the
+        /// byte-identity check for edits made back to the card's saved values.
+        let exportIdenticalToSource: String?
+        /// assertRejected only: exactly one assertion must fail with this
+        /// diagnostic fragment, so negative controls cannot pass on unrelated failures.
+        let errorContains: String?
+
+        struct RenderValue: Decodable {
+            /// the `captureRender` label whose pixels are the baseline.
+            let from: String
+            /// the render changed at least this many pixels against the capture
+            /// (a pixel counts as changed when one of R, G, B or A moves by
+            /// more than 2/255 — noise below that stays invisible).
+            let changedPixelsAtLeast: Int?
+            /// the render changed at most this many pixels against the capture
+            /// (0 allows no pixel to exceed the 2/255 channel tolerance).
+            let changedPixelsAtMost: Int?
+            /// Optional stricter bound on the largest channel difference;
+            /// zero requires exact restoration of every rendered RGBA8 byte.
+            let maxChannelDeltaAtMost: Int?
+        }
 
         struct EyeLookValue: Decodable {
             let key: Int32
@@ -167,7 +199,8 @@ struct StudioScenario: Decodable {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains,
                  group, category, no, speed, on, bone, rotation, animation, fk,
-                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels
+                 seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
+                 render, exportIdenticalToSource, errorContains
         }
 
         init(from decoder: Decoder) throws {
@@ -181,7 +214,15 @@ struct StudioScenario: Decodable {
             id = try c.decodeIfPresent(String.self, forKey: .id)
             rgba = try c.decodeIfPresent([Float].self, forKey: .rgba)
             path = try c.decodeIfPresent(String.self, forKey: .path)
-            face = try c.decodeIfPresent(SlotValue.self, forKey: .face)
+            // A boolean is valid only for resetShape. A malformed assertion
+            // such as face:true must fail decoding rather than assert nothing.
+            if op == "resetShape" {
+                faceReset = try c.decodeIfPresent(Bool.self, forKey: .face)
+                face = nil
+            } else {
+                faceReset = nil
+                face = try c.decodeIfPresent(SlotValue.self, forKey: .face)
+            }
             body = try c.decodeIfPresent(SlotValue.self, forKey: .body)
             color = try c.decodeIfPresent(ColorValue.self, forKey: .color)
             routePlaying = try c.decodeIfPresent(RoutePlayingValue.self, forKey: .routePlaying)
@@ -211,6 +252,12 @@ struct StudioScenario: Decodable {
             eyeLook = try c.decodeIfPresent(EyeLookValue.self, forKey: .eyeLook)
             blink = try c.decodeIfPresent(BlinkValue.self, forKey: .blink)
             handPattern = try c.decodeIfPresent(HandPatternValue.self, forKey: .handPattern)
+            // Same rule as `animation`/`fk`: an absent key stays `nil`
+            // ("not asserted"); a present `render` object only asserts the
+            // bounds it names, and `exportIdenticalToSource` is a bare path.
+            render = try c.decodeIfPresent(RenderValue.self, forKey: .render)
+            exportIdenticalToSource = try c.decodeIfPresent(String.self, forKey: .exportIdenticalToSource)
+            errorContains = try c.decodeIfPresent(String.self, forKey: .errorContains)
             // setPoseMode / selectBone / dragGizmo parameters: like every
             // optional key above, an absent one stays `nil` and the op that
             // needs it reports the missing field itself.
@@ -260,6 +307,15 @@ struct StudioScenario: Decodable {
     /// depends on the file they were to write or to read back.
     static func run(_ scenario: StudioScenario, studio: StudioModel) -> Report {
         var results: [Report.StepResult] = []
+        // Freeze the imported source identity before any export/reimport step.
+        // Comparing against doc.sourceSceneFile later can compare an export
+        // with itself after reimport and falsely certify a changed scene.
+        let originalSourcePath = studio.doc.sourceSceneFile.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        let originalSourceSHA256 = studio.doc.sourceSceneSHA256
+        func isSourcePath(_ url: URL) -> Bool {
+            let current = studio.doc.sourceSceneFile.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+            return url.path == originalSourcePath || url.path == current
+        }
         @discardableResult
         func record(_ step: Step, _ ok: Bool, _ detail: String) -> Bool {
             results.append(Report.StepResult(op: step.op, ok: ok, detail: detail))
@@ -327,6 +383,112 @@ struct StudioScenario: Decodable {
         }
         /// Positions recorded by `captureBone` steps, keyed by step name.
         var capturedBonePositions: [String: Float3] = [:]
+        /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
+        var capturedRenders: [String: (width: Int, height: Int, bytes: [UInt8])] = [:]
+        /// The single headless render size every `captureRender` uses, so a
+        /// baseline and its comparison frame always share a resolution and the
+        /// pixel counts mean the same thing across a scenario.
+        let renderSide = 512
+        /// Reads `image`'s RGBA8 pixels into a flat buffer, or nil when the
+        /// bitmap context could not be built.
+        func renderBytes(_ image: CGImage) -> [UInt8]? {
+            var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+            let read = bytes.withUnsafeMutableBytes { buffer -> Bool in
+                guard let context = CGContext(data: buffer.baseAddress, width: image.width, height: image.height,
+                                              bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                              space: space,
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+                return true
+            }
+            return read ? bytes : nil
+        }
+        /// Pixels that differ between two equal-size RGBA8 buffers, counting a
+        /// pixel as changed when any of its four channels moves by more than 2.
+        func pixelDifference(_ a: [UInt8], _ b: [UInt8]) -> (changed: Int, exactChanged: Int, maximum: Int) {
+            var count = 0, exactCount = 0, maximum = 0
+            for i in stride(from: 0, to: a.count, by: 4) {
+                var delta = 0
+                for channel in 0..<4 { delta = max(delta, abs(Int(a[i + channel]) - Int(b[i + channel]))) }
+                if delta > 2 { count += 1 }
+                if delta > 0 { exactCount += 1 }
+                maximum = max(maximum, delta)
+            }
+            return (count, exactCount, maximum)
+        }
+        /// The current frame rendered offscreen at `renderSide`² from the live
+        /// camera, gizmos and grid stripped exactly like the export thumbnail,
+        /// so captures stay comparable while the scenario selects nothing.
+        func captureStudioRender() -> CGImage? {
+            var f = studio.frame
+            f.gizmos = []
+            f.effects.showGrid = false
+            return studio.host.renderer.capture(frame: f, width: renderSide, height: renderSide)
+        }
+        /// Pixels the current render moved against a `captureRender` baseline.
+        func assertRender(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.render else { return nil }
+            guard check.changedPixelsAtLeast != nil || check.changedPixelsAtMost != nil else {
+                return "assert render: name changedPixelsAtLeast or changedPixelsAtMost"
+            }
+            let minimum = check.changedPixelsAtLeast ?? 0, maximum = check.changedPixelsAtMost ?? renderSide * renderSide
+            guard (0...renderSide * renderSide).contains(minimum),
+                  (0...renderSide * renderSide).contains(maximum), minimum <= maximum else {
+                return "assert render: bounds must satisfy 0 <= minimum <= maximum <= \(renderSide * renderSide)"
+            }
+            if let bound = check.maxChannelDeltaAtMost, !(0...255).contains(bound) {
+                return "assert render: maxChannelDeltaAtMost must be in 0...255"
+            }
+            guard let base = capturedRenders[check.from] else {
+                return "assert render: no captureRender pixels recorded under \"\(check.from)\""
+            }
+            guard let now = captureStudioRender() else {
+                return "assert render: the current frame did not render at \(renderSide)x\(renderSide)"
+            }
+            guard now.width == base.width, now.height == base.height else {
+                return "assert render: current render is \(now.width)x\(now.height), the capture was \(base.width)x\(base.height)"
+            }
+            guard let nowBytes = renderBytes(now) else {
+                return "assert render: the current render's pixels could not be read"
+            }
+            let difference = pixelDifference(base.bytes, nowBytes), changed = difference.changed
+            details.append("render \(renderSide)x\(renderSide): \(changed) pixels differ by >2/255 against \"\(check.from)\"; bounds \(minimum)...\(maximum); exactChangedPixels=\(difference.exactChanged), maxChannelDelta=\(difference.maximum)")
+            if let bound = check.changedPixelsAtLeast, changed < bound {
+                return "assert render: \(changed) pixels changed against \"\(check.from)\", expected at least \(bound) — the frame did not visibly update"
+            }
+            if let bound = check.changedPixelsAtMost, changed > bound {
+                return "assert render: \(changed) pixels changed against \"\(check.from)\", expected at most \(bound) — the frame did not restore the captured state"
+            }
+            if let bound = check.maxChannelDeltaAtMost, difference.maximum > bound {
+                return "assert render: maxChannelDelta \(difference.maximum) exceeds \(bound) against \"\(check.from)\""
+            }
+            return nil
+        }
+        /// Byte identity between an exported file and the imported original
+        /// scene: how "a value or color edited back to the card's saved
+        /// rate/rgba exports byte-identical bytes" is proven.
+        func assertExportIdenticalToSource(_ step: Step, details: inout [String]) -> String? {
+            guard let path = step.exportIdenticalToSource else { return nil }
+            guard let url = insideLocal(path) else {
+                return "assert exportIdenticalToSource: path must stay under .local/: \(path)"
+            }
+            guard let scenePath = originalSourcePath, let sourceSHA = originalSourceSHA256 else {
+                return "assert exportIdenticalToSource: the scenario started without an imported original scene"
+            }
+            guard url.path != scenePath else {
+                return "assert exportIdenticalToSource: output must differ from the original source path"
+            }
+            guard let exported = try? Data(contentsOf: url) else {
+                return "assert exportIdenticalToSource: \"\(path)\" could not be read"
+            }
+            let exportedSHA = SHA256.hash(data: exported).map { String(format: "%02x", $0) }.joined()
+            guard exportedSHA == sourceSHA else {
+                return "assert exportIdenticalToSource: exported SHA256 \(exportedSHA) differs from initial source SHA256 \(sourceSHA)"
+            }
+            details.append("export \(path): \(exported.count) bytes; SHA256 \(exportedSHA) equals initial source")
+            return nil
+        }
         /// The state the inspector shows for a source character: the document
         /// edit when present, the card-saved state otherwise — the same rule
         /// as `StudioModel.selectedSourceAnimationState`, but by source key so
@@ -606,6 +768,25 @@ struct StudioScenario: Decodable {
                     try studio.setSourceColorEdit(id, colorID: colorID, rgba: Float4(rgba))
                     record(step, true, "source key \(step.key!) color \"\(colorID)\"=\(rgba)")
                 } catch { record(step, false, "setColor: \(error)") }
+            case "resetShape":
+                guard let id = object(step) else { record(step, false, "resetShape: no object with source key \(step.key ?? -1)"); continue }
+                guard let face = step.faceReset else {
+                    record(step, false, "resetShape: face must be true (face domain) or false (body domain)"); continue
+                }
+                // The inspector's "Reset to card" button and this op share
+                // `StudioModel.resetSourceShape`, so the lane proves the app's
+                // own reset path, not a re-implementation of it.
+                do {
+                    try studio.resetSourceShape(id, face: face)
+                    record(step, true, "source key \(step.key!) \(face ? "face" : "body") shape reset to the card's saved values")
+                } catch { record(step, false, "resetShape: \(error)") }
+            case "resetColors":
+                guard let id = object(step) else { record(step, false, "resetColors: no object with source key \(step.key ?? -1)"); continue }
+                // Same shared path as the inspector's "Reset to card" button.
+                do {
+                    try studio.resetSourceColorEdits(id)
+                    record(step, true, "source key \(step.key!) color edits cleared, the card's saved colors render again")
+                } catch { record(step, false, "resetColors: \(error)") }
             case "setAnimation":
                 guard let id = object(step) else { record(step, false, "setAnimation: no object with source key \(step.key ?? -1)"); continue }
                 guard let group = step.group, let category = step.category, let no = step.no else {
@@ -807,6 +988,24 @@ struct StudioScenario: Decodable {
                     capturedBonePositions[label] = position
                     record(step, true, "captured bone \(boneID) at (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureBone: \(error)") }
+            case "captureRender":
+                guard let label = step.name, !label.isEmpty else {
+                    record(step, false, "captureRender: name (the capture label) is required"); continue
+                }
+                guard let image = captureStudioRender(), let bytes = renderBytes(image) else {
+                    record(step, false, "captureRender: the current frame did not render at \(renderSide)x\(renderSide)"); continue
+                }
+                if let path = step.path {
+                    guard let url = insideLocal(path), !isSourcePath(url) else {
+                        record(step, false, "captureRender: output must stay under .local/ and differ from both initial and current source paths"); continue
+                    }
+                    do {
+                        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try ImageIO.pngData(image).write(to: url, options: .atomic)
+                    } catch { record(step, false, "captureRender: \(error)"); continue }
+                }
+                capturedRenders[label] = (image.width, image.height, bytes)
+                record(step, true, "captured the current render as \(image.width)x\(image.height) RGBA8 under \"\(label)\"")
             case "advance":
                 guard let seconds = step.seconds, seconds.isFinite, seconds > 0, seconds <= 3600 else {
                     record(step, false, "advance: seconds must be a finite duration in (0, 3600]"); continue
@@ -851,6 +1050,10 @@ struct StudioScenario: Decodable {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
                     break scenarioLoop
                 }
+                guard !isSourcePath(url) else {
+                    record(step, false, "export: output must differ from both initial and current source paths")
+                    break scenarioLoop
+                }
                 do {
                     // The lane may name a report directory that does not exist
                     // yet; write(to:) needs the parent, so create it (.local/
@@ -860,8 +1063,7 @@ struct StudioScenario: Decodable {
                     // scene; a lane rerun must not fail on its own stale
                     // artifact, so a previous report output under .local/ is
                     // cleared first — never the imported scene itself.
-                    if FileManager.default.fileExists(atPath: url.path),
-                       url.path != studio.doc.sourceSceneFile.map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }) {
+                    if FileManager.default.fileExists(atPath: url.path) {
                         try FileManager.default.removeItem(at: url)
                     }
                     try studio.exportSourceScene(to: url)
@@ -889,8 +1091,9 @@ struct StudioScenario: Decodable {
                     record(step, false, "reimport failed, stopping: \(error)")
                     break scenarioLoop
                 }
-            case "assert":
+            case "assert", "assertRejected":
                 var problems: [String] = []
+                var details: [String] = []
                 let needsObject = step.name != nil || step.visible != nil || step.face != nil || step.body != nil || step.color != nil
                 var id: UUID?
                 if needsObject, step.key == nil {
@@ -972,14 +1175,25 @@ struct StudioScenario: Decodable {
                 if let problem = assertEyeLook(step) { problems.append(problem) }
                 if let problem = assertBlink(step) { problems.append(problem) }
                 if let problem = assertHandPattern(step) { problems.append(problem) }
+                // The render and export-identity checks resolve their own
+                // inputs (the `from` label / the file path) inside the check
+                // value, like `animation`/`fk`.
+                if let problem = assertRender(step, details: &details) { problems.append(problem) }
+                if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
                     let diagnostics = studio.doc.sourcePreviewDiagnostics ?? []
                     if !diagnostics.contains(where: { $0.contains(needle) }) {
                         problems.append("assert diagnosticContains: no diagnostic contains \"\(needle)\"")
                     }
                 }
-                if problems.isEmpty {
-                    record(step, true, "assert passed for source key \(step.key.map(String.init) ?? "n/a")")
+                if step.op == "assertRejected" {
+                    guard let expected = step.errorContains, !expected.isEmpty else {
+                        record(step, false, "assertRejected: errorContains must be nonempty"); continue
+                    }
+                    let matched = problems.count == 1 && problems[0].contains(expected)
+                    record(step, matched, matched ? "rejected as expected: \(problems[0])" : "expected one failure containing \"\(expected)\"; received \(problems)")
+                } else if problems.isEmpty {
+                    record(step, true, (["assert passed for source key \(step.key.map(String.init) ?? "n/a")"] + details).joined(separator: "; "))
                 } else {
                     record(step, false, problems.joined(separator: "; "))
                 }
