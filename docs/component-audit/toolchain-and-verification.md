@@ -70,6 +70,18 @@ These commands are useful diagnostic consumers, not gameplay/UI implementations.
 
 ### Evidence available at this audit
 
+**2026-10-17 verification accounting correction (T-T04 / E-T03):** SwiftPM
+emits separate Swift Testing summaries for the Engine package's two test
+executables. The runner now sums those totals instead of retaining only the
+last one. Re-parsing the dated public-input Engine log gives 523 total,
+458 passed, 65 skipped and zero failed; re-parsing the private-source lane
+log gives 523 total, 503 passed, 20 skipped and zero failed, with 32 fixture
+paths supplied and 15 optional fixtures unavailable. The old `total: 12`
+did not affect named per-test counts or executed-test bounds. Two regression
+tests cover combined executable logs (including skips, failures and repeated
+issue lines) and summary-only output. These are accounting checks on retained
+logs, not new source-parity runs; the original reports remain unchanged.
+
 The following are **retained local results**, not a new claim that every test was
 executed during the documentation pass:
 
