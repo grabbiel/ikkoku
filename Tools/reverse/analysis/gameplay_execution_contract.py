@@ -21,17 +21,24 @@ SUPPORTED = {0, 1, 3, 4, 12, 14, 15, 22, 23, 25}
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def selected_source(index_path, type_name):
+def recovered_project(index_path):
+    """Main-game Assembly-CSharp recovery directory, selected project and overrides."""
     index = json.loads(Path(index_path).read_text())
     assembly = next(a for a in index["assemblies"] if "Koikatu_Data/Managed/Assembly-CSharp.dll" in a["sourcePaths"])
     directory = Path(assembly["directory"])
     manifest = json.loads((directory / "manifest.json").read_text())
     overrides = {item["type"]: item for item in manifest.get("typeOverrides", [])}
+    return dict(directory=directory, selectedProject=assembly["selectedProject"], overrides=overrides)
+
+
+def selected_source(index_path, type_name, project=None):
+    project = project or recovered_project(index_path)
+    directory, overrides = project["directory"], project["overrides"]
     if type_name in overrides:
         selected = directory / overrides[type_name]["file"]
     else:
         namespace, _, name = type_name.rpartition(".")
-        roots = [directory / assembly["selectedProject"] / namespace, directory / assembly["selectedProject"] / namespace.replace(".", "/")]
+        roots = [directory / project["selectedProject"] / namespace, directory / project["selectedProject"] / namespace.replace(".", "/")]
         selected = next((root / (name + ".cs") for root in roots if (root / (name + ".cs")).is_file()), None)
         if selected is None:
             raise ValueError("Missing selected recovered type: " + type_name)
@@ -50,12 +57,20 @@ def source_evidence(index_path):
     for name in types:
         path, _ = selected_source(index_path, name)
         result.append(dict(type=name, path=str(path), sha256=digest(path)))
-    _, text = selected_source(index_path, "ADV.Command")
-    commands = [s.strip() for s in re.search(r"enum Command\s*\{(.*?)\}", text, re.S).group(1).split(",") if s.strip()]
+    commands = command_enum(selected_source(index_path, "ADV.Command")[1])
     expected = {0: "None", 1: "VAR", 3: "Calc", 4: "Clamp", 12: "Tag", 14: "IF", 15: "Switch", 22: "Close", 23: "Jump", 25: "Wait"}
     if any(commands[index] != name for index, name in expected.items()):
         raise ValueError("Command ordinals differ from translated source contract")
     return result, commands
+
+
+def command_enum(text):
+    """Ordinal-ordered names of the recovered implicit-valued ADV.Command enum."""
+    body = re.search(r"enum Command\s*\{(.*?)\}", text, re.S).group(1)
+    names = [s.strip() for s in body.split(",") if s.strip()]
+    if any(not re.fullmatch(r"\w+", name) for name in names):
+        raise ValueError("ADV.Command enum has explicit values or unexpected members")
+    return names
 
 
 def mono_records(path, expected_class):

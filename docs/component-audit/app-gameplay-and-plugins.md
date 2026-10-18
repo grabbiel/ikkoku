@@ -67,8 +67,8 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 Sources: [SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift),
 [SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift),
 [SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift).
-Recovery: `Tools/reverse/analysis/gameplay_contract.py` and
-`gameplay_execution_contract.py`; CLI: `GameplayTrace.swift` and
+Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
+`gameplay_execution_contract.py` and `adv_command_coverage.py`; CLI: `GameplayTrace.swift` and
 `GameplayExecutionInspection.swift`.
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
@@ -79,10 +79,10 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py` and
 | G04 · Fixed-event table decode and eligibility | Fully ported — inspected selection rules | First unfinished event only; weekday/period/day/lesson conditions, map lookup and wait-point layer match. Failed eligibility does not search later unfinished events. Tested against 4,032 independent contexts for 48 source entries. | Extend catalog coverage independently; selected event still needs G-T02 dispatch. |
 | G05 · Fixed-event placement and execution | Pending | `Selection` contains asset, map and optional wait-point/layer identity. No NPC entity spawn, movement, encounter dispatch or completion persistence consumes it in the app. | G-T02: bind selection to native state and a recovered scenario with exact completion flags. |
 | G06 · ADV program decoding and batch/wait execution | Mid-stage | Bounded program/argument/variable sizes; `multi` batching, local jump recursion budget, cancelable Wait and explicit ready/waiting/faulted/exhausted states. A fault preserves already-executed scalar effects for inspection; this VM is not a transaction. | G-T03: implement frame/task/scene host integration and saveable running-state model. |
-| G07 · ADV scalar commands | Mid-stage | IDs 0/1/3/4/12/14/15/22/23/25 implement None, VAR, Calc, Clamp, Tag, IF, Switch, Close, local Jump and Wait. Int32 wrapping and source boxed conversion failures are deliberate. Calc is left-to-right. | Expand unsupported numeric literals, source RNG alternatives and culture-sensitive comparisons only with source oracles; keep unsupported cases explicit. |
-| G08 · ADV source data exercised | Infancy | Original scenario 301 executes Calc/Clamp then halts at pc 2 / command 165 (`HeroineParam`). The executable prefix is evidence, not scenario completion. | G-T02: implement player/heroine parameter binding first and reproduce the complete numeric scenario. |
-| G09 · Dialogue, choices and UI flow | Pending | No text/choice renderer, input state, localization flow or dialogue backlog is driven by ADV. `requestNext` is supplied by tests/CLI. | G-T03: recover blocking semantics, implement display/input actions and test skip/choice/save/load. |
-| G10 · Cross-file ADV, tasks, animation/camera/audio actions | Pending | External `file:tag` jumps and unknown commands fault with command index/reason. Studio animation/audio consumers are not wired to ADV. | G-T03: identity-preserving scenario resolver plus typed presentation commands and cancellation barriers. |
+| G07 · ADV scalar commands | Mid-stage | IDs 0/1/3/4/12/14/15/22/23/25 implement None, VAR, Calc, Clamp, Tag, IF, Switch, Close, local Jump and Wait. Int32 wrapping and source boxed conversion failures are deliberate. Calc is left-to-right. In the 294,393 installed scenario records, 8 of these IDs occur (28,564 records; None/Switch never occur). Inside them, 101 VAR records use random alternatives and 299 IF records name an external `file:tag` branch; both still fault natively. | Expand source RNG alternatives (101 records), unsupported numeric literals and culture-sensitive comparisons only with source oracles; keep unsupported cases explicit. Rerun `adv_command_coverage.py` after each change. |
+| G08 · ADV source data exercised | Infancy | All 10,463 `ScenarioData` assets in the 225 installed `adv/scenario` bundles were run with default inputs: 10,369 halt at the statically predicted index, ID and reason; 87 close or exhaust (74 empty, 13 Close-only); 7 fault earlier on absent host variables; 0 unexplained. 9,569 assets halt at index 0 and only 1,360 records precede a first unsupported command. Scenario 301 still halts at pc 2 / 165 (`HeroineParam`, sole blocker of 76 `common_param` assets). No asset with dialogue or presentation content completes. | G-T02: implement `HeroineParam` and reproduce the numeric scenarios. G-T03: implement families in the measured first-blocker order ([ADV coverage](../reference/gameplay/adv.md#original-scenario-command-coverage-g-t03-first-slice)). |
+| G09 · Dialogue, choices and UI flow | Pending | No text/choice renderer, input state, localization flow or dialogue backlog is driven by ADV. `requestNext` is supplied by tests/CLI. Measured use: Text 63,122 records in 8,956 assets, Voice 31,165, Choice 466; Text is the first blocker of only 46 assets because character look, BGM, map and fade commands precede it. After the first nine commands of the measured greedy order (character look/expression/motion, BGM, Voice, Text), 2,124 assets would contain no unsupported ordinal (a static ceiling, not playback). | G-T03: recover blocking semantics, implement display/input actions and test skip/choice/save/load. |
+| G10 · Cross-file ADV, tasks, animation/camera/audio actions | Pending | External `file:tag` jumps and unknown commands fault with command index/reason; this halting position is now checked across the installed corpus. Studio animation/audio consumers are not wired to ADV. Top first blockers: CharaLookNeck 2,977 assets, BGMPlay 2,588, MapChange 1,262, Fade 1,112, BGLoad 784, CharaExpression 462. Open has 2,869 records; Task/TaskEnd 156/117. | G-T03: identity-preserving scenario resolver plus typed presentation commands and cancellation barriers, in the measured order. |
 | G11 · NPC population, navigation and decisions | Pending | No native NPC behavior-tree runner, source action/navigation tables, map topology, pathfinding or encounter loop is connected. | G-T04: recover one map and one neutral NPC route; implement decisions, movement and save-state continuity against numeric traces. |
 | G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. | G-T01/G-T02: recover native session schema and original load/save adapters before treating scalar variables as campaign state. |
 | G13 · Full original game screens/modes | Pending | The app has Maker and Studio only. Original title/start/load, school/map interaction, menus and the remaining game modes are absent. | Build an explicit recovered mode inventory with dependencies and one vertical slice per mode; no overall completion percentage is defensible yet. |
@@ -98,11 +98,19 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py` and
   bindings without renaming original IDs. Acceptance: the existing original
   scenario 301 finishes with source-verified values and a fixed event executes
   once across save/reload.
-- **G-T03 — Expand ADV by command family (P1/P2).** Export an inventory of every
-  command used by selected scenarios, including counts and unsupported reasons.
-  Implement file resolution, dialogue/choices, async tasks and presentation
-  consumers with cancellation/save rules. Acceptance: scenario command coverage
-  is measured and unsupported commands halt at the correct source index.
+- **G-T03 — Expand ADV by command family (P1/P2).** First slice done:
+  `adv_command_coverage.py` inventories all 225 installed scenario bundles
+  (10,463 assets, 294,393 records, 120 ordinals) with recovered handler classes,
+  and the native run halts at the predicted index for every asset whose outcome
+  does not depend on absent host variables (0 unexplained); a gated Engine test
+  (`IKKOKU_ADV_COVERAGE_SAMPLE`, 32 stratified assets) keeps this checked. Next:
+  implement families in the measured order (CharaLookNeck/LookEyes, BGMPlay,
+  MapChange, Fade/SceneFade, BGLoad, Chara/Base Expression, Motion, Voice, Text),
+  then file resolution (Open, external IF branches), dialogue/choices and async
+  tasks with cancellation/save rules. Acceptance per family: its records execute
+  through a typed host effect, a rerun moves the affected halts to the next
+  predicted index with 0 unexplained mismatches, and dialogue/choice slices test
+  skip, choice and save/reload.
 - **G-T04 — NPC vertical slice (P2).** Extract wait points/navigation/action data
   for one map; implement decisions and movement separately from render animation.
   Acceptance: captured source numeric positions/decisions match over a fixed
@@ -167,7 +175,7 @@ Concrete Studio integration is covered in [Studio](studio.md).
 
 - Gameplay tests: `SourceGameplayCycleTests.swift`,
   `SourceGameplayExecutionTests.swift`, `test_gameplay_contract.py`,
-  `test_gameplay_execution_contract.py`. Their references are independent
+  `test_gameplay_execution_contract.py`, `test_adv_command_coverage.py`. Their references are independent
   calculations/recovered-source fixtures, **not a complete running game**.
 - Plugin tests: `SourcePluginRuntimeTests.swift`,
   `SourceNativePluginPackageTests.swift`, `SourceMuteInBackgroundTests.swift`,
