@@ -8,6 +8,14 @@ extension SourceCharacterCard {
     public enum Record: Hashable, Sendable {
         case face, body, hair
         case clothes(coordinate: Int), accessory(coordinate: Int), makeup(coordinate: Int)
+        /// The saved outfit (ChaFile.coordinate index) this record belongs to;
+        /// nil for the outfit-independent Custom records.
+        public var coordinate: Int? {
+            switch self {
+            case .clothes(let index), .accessory(let index), .makeup(let index): index
+            case .face, .body, .hair: nil
+            }
+        }
     }
     /// A Unity Color is four numeric MessagePack array members in RGBA order.
     /// Asset identities cannot be changed here: their saved resolver metadata
@@ -21,15 +29,39 @@ extension SourceCharacterCard {
     public struct Edits: Sendable {
         public var faceValues: [Float]?, bodyValues: [Float]?
         public var colors: [ColorEdit]
+        /// The worn outfit (Status.coordinateType, 0...6); nil keeps the saved
+        /// one. The card must carry that outfit in its Coordinate list. See
+        /// `editedStatus(coordinate:)` for the exact Status fields written.
+        public var coordinateType: Int?
         /// nil preserves the old image; empty Data removes it; nonempty data
         /// must contain exactly one CRC-valid PNG, without an appended card.
         public var thumbnailData: Data?, faceThumbnailData: Data?
         public init(faceValues: [Float]? = nil, bodyValues: [Float]? = nil,
-                    colors: [ColorEdit] = [], thumbnailData: Data? = nil,
+                    colors: [ColorEdit] = [], coordinateType: Int? = nil, thumbnailData: Data? = nil,
                     faceThumbnailData: Data? = nil) {
             self.faceValues = faceValues; self.bodyValues = bodyValues; self.colors = colors
+            self.coordinateType = coordinateType
             self.thumbnailData = thumbnailData; self.faceThumbnailData = faceThumbnailData
         }
+    }
+
+    /// Number of saved outfits in the Coordinate block (ChaFile.coordinate);
+    /// an original card always carries seven.
+    public func coordinateCount() throws -> Int {
+        guard let block = block(named: "Coordinate"), block.version == "0.0.0",
+              let entries = try SourceMessagePack.decode(block.data).arrayValue, entries.count <= 64 else {
+            throw cardEditError("Coordinate list is unavailable or unsupported.")
+        }
+        return entries.count
+    }
+
+    /// The saved worn outfit, ChaFileStatus.coordinateType (0 when the card
+    /// has no Status block, the ChaFileStatus.MemberInit default).
+    public func savedCoordinateType() throws -> Int {
+        guard let status = block(named: "Status") else { return 0 }
+        guard let value = try SourceMessagePack.decode(status.data).stringKeyedMap()["coordinateType"] else { return 0 }
+        guard let index = value.integerValue, (0..<7).contains(index) else { throw cardEditError("Saved Status.coordinateType is not an outfit index in 0...6.") }
+        return index
     }
 
     /// Original bytes for one current-version appearance record. This does not
@@ -131,6 +163,9 @@ extension SourceCharacterCard {
             let updated = try tokens.applying(patches)
             if updated != block.data { replacements["Coordinate"] = updated }
         }
+        if let coordinate = edits.coordinateType, let status = try editedStatus(coordinate: coordinate) {
+            replacements["Status"] = status
+        }
         let thumbnail = try Self.editedPNG(edits.thumbnailData, original: thumbnailData)
         let faceThumbnail = try Self.editedPNG(edits.faceThumbnailData, original: faceThumbnailData)
         if replacements.isEmpty && thumbnail == thumbnailData && faceThumbnail == faceThumbnailData { return preservedData }
@@ -179,10 +214,50 @@ extension SourceCharacterCard {
         let verified = try Self.decode(result)
         if let face = edits.faceValues, try verified.customization().faceValues != face { throw cardEditError("Face edit verification failed.") }
         if let body = edits.bodyValues, try verified.customization().bodyValues != body { throw cardEditError("Body edit verification failed.") }
+        if let coordinate = edits.coordinateType, try verified.savedCoordinateType() != coordinate { throw cardEditError("Outfit edit verification failed.") }
         guard verified.trailingData == trailingData else { throw cardEditError("Trailer preservation verification failed.") }
         for block in blocks where replacements[block.name] == nil {
             guard verified.block(named: block.name)?.data == block.data else { throw cardEditError("Unedited block preservation verification failed.") }
         }
+        return result
+    }
+
+    /// CharaStudio's outfit buttons (MPCharCtrl.StateInfo.OnClickCosType ->
+    /// OCIChar.SetCoordinateInfo) call ChaControl.ChangeCoordinateType(type,
+    /// changeBackCoordinateType: true): it copies chaFile.coordinate[type]
+    /// into the runtime nowCoordinate (returning false, changing nothing, when
+    /// the card has no such entry), then writes backCoordinateType = the old
+    /// coordinateType and coordinateType = type. The scene save serializes
+    /// ChaFile.status as this block; no Coordinate record changes. Loading a
+    /// scene forces the same call with the saved index (AddObjectAssist.
+    /// UpdateState), so after one change from the loaded outfit the original
+    /// holds backCoordinateType = the saved coordinateType; that is what is
+    /// written here. A chain of changes (A -> B -> C stores back = B) is not
+    /// reproduced, and nothing in the recovered Studio/ChaControl code reads
+    /// backCoordinateType. Returns nil (no bytes change) when `coordinate` is
+    /// already the saved outfit; a changed integer is written in the compact
+    /// positive-fixint form MessagePack-CSharp uses for 0...6.
+    private func editedStatus(coordinate: Int) throws -> Data? {
+        guard (0..<7).contains(coordinate) else { throw cardEditError("Outfit index must be in 0...6.") }
+        guard try savedCoordinateType() != coordinate else { return nil }
+        guard try coordinateCount() > coordinate else { throw cardEditError("The card has no saved outfit \(coordinate).") }
+        guard let status = block(named: "Status"), status.version == "0.0.0" else { throw cardEditError("Unsupported or missing Status block.") }
+        let tokens = try CardTokenDocument(status.data)
+        let fields = try SourceMessagePack.decode(status.data).stringKeyedMap()
+        let current = try tokens.node(at: [.key("coordinateType")])
+        guard current.kind == .scalar, let saved = try tokens.value(current).integerValue, (0..<7).contains(saved) else {
+            throw cardEditError("Saved Status.coordinateType is not an outfit index in 0...6.")
+        }
+        var patches = [CardBytePatch(range: current.range, replacement: Data([UInt8(coordinate)]))]
+        if fields["backCoordinateType"] != nil {
+            let back = try tokens.node(at: [.key("backCoordinateType")])
+            guard back.kind == .scalar, let previous = try tokens.value(back).integerValue else {
+                throw cardEditError("Saved Status.backCoordinateType is not an integer.")
+            }
+            if previous != saved { patches.append(.init(range: back.range, replacement: Data([UInt8(saved)]))) }
+        }
+        let result = try tokens.applying(patches)
+        _ = try SourceMessagePack.decode(result)
         return result
     }
 

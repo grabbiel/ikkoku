@@ -199,3 +199,36 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
         }
     }
 }
+
+@Test func sourceSceneExportValidationAcceptsCharacterOutfitAndRejectsPlaceholderOrInvalidOutfit() throws {
+    let source = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    let baseline = exportValidationDocument(source)
+    // A rendered character's outfit selection is a serializable card edit.
+    for outfit in 0..<7 {
+        var document = baseline; document.objects[0].sourceOutfit = outfit
+        try SourceSceneExportValidation.validate(document, against: source.snapshot)
+    }
+    for outfit in [-1, 7] {
+        var document = baseline; document.objects[0].sourceOutfit = outfit
+        #expect(throws: (any Error).self, Comment(rawValue: "\(outfit)")) { try SourceSceneExportValidation.validate(document, against: source.snapshot) }
+    }
+    var placeholder = baseline; placeholder.objects[1].sourceOutfit = 2
+    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(placeholder, against: source.snapshot) }
+}
+
+@Test func studioDocumentOutfitSelectionRoundTripsAndLegacyDocumentsDecodeWithoutIt() throws {
+    let source = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    var document = exportValidationDocument(source)
+    document.objects[0].sourceOutfit = 3
+    let encoded = try CardIO.encode(document, keyword: CardIO.sceneKeyword, thumbnail: nil)
+    let decoded = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: encoded)
+    #expect(decoded == document && decoded.objects[0].sourceOutfit == 3)
+    // A document written before sourceOutfit existed has no such key at all.
+    var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
+    var objects = try #require(json["objects"] as? [[String: Any]])
+    for i in objects.indices { objects[i].removeValue(forKey: "sourceOutfit") }
+    json["objects"] = objects
+    let legacy = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(legacy.objects.allSatisfy { $0.sourceOutfit == nil })
+    try SourceSceneExportValidation.validate(legacy, against: source.snapshot)
+}

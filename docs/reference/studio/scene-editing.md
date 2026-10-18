@@ -13,7 +13,7 @@ Supported edits are:
 - Character FK bones, IK targets and look-at target transforms; item FK transforms identified by their original ordinal bone name.
 - Character `enableFK`, `enableIK`, seven `activeFK` flags and five `activeIK` flags. Flags are written literally; source loading gives IK precedence if both modes are enabled.
 - Character animation catalog IDs, speed, pattern, force-loop, options and normalized time; ordered voice playlists and repeat mode, including variable-length replacement.
-- Embedded card body/face values, supported color fields and face thumbnail, using the existing bounded card editor. Head/sex/bone type, asset IDs, saved resolver identities and opaque card plug-ins remain unchanged.
+- Embedded card body/face values, supported color fields, the worn outfit (`Status.coordinateType`, see [source outfit selection](#source-outfit-selection-st-c03-first-slice)) and face thumbnail, using the existing bounded card editor. Head/sex/bone type, asset IDs, saved resolver identities and opaque card plug-ins remain unchanged.
 - Current camera and ten saved camera slots, preserving position, all three Euler angles, all three distance components and field of view. Only the 40-byte version-2 payload changes.
 - A replacement scene PNG only when explicitly supplied. It must be one complete CRC-valid PNG; an embedded card cannot acquire a PNG prefix.
 
@@ -57,7 +57,7 @@ remains separate.
 
 ## App boundary and remaining work
 
-The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
+The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
 
 The export validator rejects added/deleted/duplicated objects, reparenting, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
@@ -95,6 +95,109 @@ separate from reset semantics. The native color panel did not open through the
 available UI automation, so interactive color editing remains unverified.
 Unbound hair-color writeback, the broader ST-T01 guide/undo/save workflow and
 original-player appearance parity remain open. No source file was overwritten.
+
+## Source outfit selection (ST-C03 first slice)
+
+Reviewed 2026-10-17. CharaStudio's outfit buttons follow this recovered chain;
+the C# remains private under `.local/reverse` and is not committed:
+
+- `MPCharCtrl.StateInfo.OnClickCosType` (managed recovery,
+  `Studio/MPCharCtrl.cs`) calls `OCIChar.SetCoordinateInfo(type)`, then refreshes
+  the clothing-detail and accessory panels.
+- `OCIChar.SetCoordinateInfo` (`decompiled/Studio/Studio.OCIChar.cs`) does
+  nothing unless the type differs from `fileStatus.coordinateType` or `_force`
+  is set. Otherwise it calls `ChaControl.ChangeCoordinateType(type)` and reloads
+  the clothes. `OCICharFemale` then also refreshes bust softness/gravity, skirt
+  dynamics and skirt FK activation.
+- `ChaControl.ChangeCoordinateType(type, changeBackCoordinateType: true)`
+  (`decompiled/Character/ChaControl.Koikatu.cs`) returns false without changing
+  anything when `chaFile.coordinate.Length <= type`. Otherwise it loads that
+  saved coordinate into `nowCoordinate`, stores the old `coordinateType` in
+  `backCoordinateType` and sets `coordinateType = type`. No `Coordinate` record
+  changes. Apart from this assignment and `ChaFileStatus`'s own
+  initialization/copy, the recovered Assembly-CSharp contains no
+  `backCoordinateType` reference.
+- On scene load, `AddObjectAssist.UpdateState` copies the saved `ChaFileStatus`,
+  then calls `SetCoordinateInfo(saved, _force: true)`. After loading,
+  `backCoordinateType` therefore equals the saved outfit. The same method then
+  reapplies every `clothesState` entry. Saving a scene writes `ChaFile.status`
+  to the embedded card's `Status` block.
+
+The native port has four parts:
+
+- **Card writer.** `SourceCharacterCard.Edits.coordinateType` writes
+  `coordinateType` and, if it differs, `backCoordinateType` = the saved outfit
+  (see [card editing](../character/cards.md#editing-and-exporting-original-cards)).
+  This reproduces one switch after a load. A chain A→B→C stores back = B in the
+  original, but here it stores A, because only the final selection persists.
+- **Preview.** `SourceStudioCharacterPreview(reference:resources:coordinate:)`
+  assembles the requested saved coordinate instead of `Status.coordinateType`.
+  Before any asset registration, it rejects an index outside 0…6 or one that
+  the card does not carry. It exposes `savedCoordinate`, `outfitCount` and a
+  diagnostic naming the replaced outfit.
+- **Model.** `StudioModel.setSourceOutfit(_:coordinate:)` is called by both the
+  Clothes inspector's Outfit picker and the scenario `setOutfit` op. It rebuilds
+  the preview with the object's color edits and current pose state, validates
+  the edited pose, and only then records one undo snapshot. It also sets
+  `StudioObject.sourceOutfit`: nil for the saved outfit, and nil when a legacy
+  document is decoded. While clothes/accessory/makeup color edits for the
+  current outfit exist, it refuses the switch because those edits address that
+  outfit's records; face, body, hair and shape edits are kept. A refused switch
+  leaves the document and preview unchanged.
+- **Export.** `exportSourceScene` merges `coordinateType` into the character's
+  card `Edits` only when the rendered outfit differs from the saved one. The
+  export validator rejects an out-of-range `sourceOutfit` and any `sourceOutfit`
+  on a placeholder.
+
+The Outfit picker numbers outfits from 1 by name (for example "4 Swimsuit");
+documents, scenarios and this page use the 0-based `coordinateType` index. The
+tab lists every `conversionMissing` selection of the chosen outfit with its
+source ID. The preview diagnostic states that the card identity is preserved.
+No other ID is substituted. `loadScene` now calls `refresh()` after source
+rehydration and plug-in restoration. Before that fix, the first frame after a
+native load was stale: undo after an outfit switch missed the loaded capture by
+138,276 pixels.
+
+Evidence, 2026-10-17 (headless, no VM): the complete `studio-scenarios` lane
+passed 37/37 with `--strict` and 0 skipped. Source scene `koikatu_cs0002591.png`
+has SHA-256 `029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`
+(595,127 bytes). Character key 65 has saved outfit 0 with `backCoordinateType`
+0; key 0 also saves outfit 0. Both cards carry all seven coordinates.
+
+- Outfit 3 (Swimsuit) changes 19,155 of 262,144 pixels in the 512×512
+  production render by more than 2/255. In total, 33,204 pixels differ at all,
+  with a maximum channel delta of 146. Its top, bottom, gloves, pants, socks and
+  outer shoes resolve to the converted library's empty entries. The bra (source
+  ID 2) and shorts (ID 1) are `conversionMissing`, and nothing is drawn for
+  them. Outfit 2 resolves converted outer shoes while its top is missing.
+- Undo, redo, the switch back to outfit 0, the post-reimport outfit 3 render and
+  undo after a native load all restore every RGBA8 byte, with maximum channel
+  delta 0. After the native document loads in a fresh process, switching to outfit 0
+  measures the same 19,155 / 33,204 / 146 difference as the original switch.
+  The loaded frame is therefore consistent with outfit 3, although it was not
+  byte-compared across processes.
+- The saved-outfit export has the source SHA-256 before and after reimport.
+- The outfit 3 export (688,155 bytes, SHA-256
+  `35087745d5a2c5c93d41b690234c1aff0eb88af5743e0382fb02b0135eefe659`) was
+  compared independently in Python with `msgpack`, not with app code. After the
+  scene PNG, both scene bodies have the same length and differ only at body
+  offset 142,432, where key 65's `Status.coordinateType` changes from 0 to 3.
+  No other card block, card or scene byte changes. The leading scene PNG differs
+  because every edited export renders a new thumbnail.
+- Engine tests assert the rewrite of both fields on a synthetic card whose
+  `Status` integers are int64-encoded. `coordinateType` 1→0 and
+  `backCoordinateType` 2→1 shrink `Status` by 16 bytes because each changed
+  value becomes a fixint. The real scene card already stores fixints, so its
+  export changes one byte. When `backCoordinateType` already
+  matches, only `coordinateType` changes. Unrelated blocks, thumbnails,
+  KKEx and trailer bytes are identical.
+
+Remaining exclusions: `clothesState` 0–3 (including half-dressed state) and
+`showAccessory` are not consumed or editable. A saved all-off state on key 0
+still renders clothed, a pre-existing gap. Shoes type, accessory groups, the
+female skirt-dynamics and skirt-FK refresh, CharaStudio reload of the changed
+export, mouse-driven use of the picker, and original-player appearance
+parity remain unverified.
 
 ## CharaStudio reload acceptance
 

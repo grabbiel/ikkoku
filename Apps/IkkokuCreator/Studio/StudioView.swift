@@ -710,13 +710,16 @@ struct ClothesInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
         if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
-            SectionBox(title: "Accessories") {
-                let labels = model.sourceAccessoryLabels(for: o.id)
-                ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                    Text(label).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier("studio.source.accessory.\(index)")
+            VStack(alignment: .leading, spacing: 10) {
+                if let preview = model.sourceShapePreview(for: o.id) { sourceOutfit(o, preview: preview) }
+                SectionBox(title: "Accessories") {
+                    let labels = model.sourceAccessoryLabels(for: o.id)
+                    ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
+                        Text(label).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("studio.source.accessory.\(index)")
+                    }
+                    if labels.isEmpty { Text("Source accessory selections are unavailable.").foregroundStyle(.secondary) }
                 }
-                if labels.isEmpty { Text("Source accessory selections are unavailable.").foregroundStyle(.secondary) }
             }
             .onAppear { model.displayedInspectorView = "ClothesInspector.sourceAccessoryLabels" }
             .onDisappear { if model.displayedInspectorView == "ClothesInspector.sourceAccessoryLabels" { model.displayedInspectorView = "none" } }
@@ -755,6 +758,48 @@ struct ClothesInspector: View {
         } else {
             ContentUnavailableView("Select a character", systemImage: "tshirt", description: Text("Clothing states work on characters."))
         }
+    }
+}
+
+extension ClothesInspector {
+    /// The source character's outfit selection (ST-C03), the counterpart of
+    /// CharaStudio's seven outfit buttons. Choosing an outfit goes through
+    /// `StudioModel.setSourceOutfit`, the same path the scenario's `setOutfit`
+    /// op drives; only outfits the card saves are offered. Selections of the
+    /// shown outfit that are not converted are listed with their saved source
+    /// IDs, as the preview's diagnostics report them; no other ID is
+    /// substituted. The picker numbers outfits from 1; documents and scenarios
+    /// use the 0-based Status.coordinateType index.
+    @ViewBuilder
+    func sourceOutfit(_ o: StudioObject, preview: SourceStudioCharacterPreview) -> some View {
+        let names = SourceStudioCharacterPreview.outfitNames
+        SectionBox(title: "Outfit") {
+            if preview.outfitCount > preview.coordinate {
+                Picker("Outfit", selection: Binding(get: { preview.coordinate }, set: { value in
+                    do {
+                        try model.setSourceOutfit(o.id, coordinate: value)
+                        model.status = "Outfit \(value + 1) (\(names[value])) selected"
+                    } catch { model.status = "Outfit: \(error)" }
+                })) {
+                    ForEach(0..<min(preview.outfitCount, names.count), id: \.self) { index in
+                        Text("\(index + 1) \(names[index])\(index == preview.savedCoordinate ? " (saved)" : "")").tag(index)
+                    }
+                }
+                .accessibilityIdentifier("studio.source.outfit")
+            } else {
+                Text("This card's saved outfit list is unavailable, so the outfit cannot be changed.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            let prefix = "outfit\(preview.coordinate)."
+            let unconverted = preview.selections.filter { $0.property.hasPrefix(prefix) && $0.status != "converted" && $0.status != "empty" }
+            ForEach(Array(unconverted.enumerated()), id: \.offset) { _, selection in
+                Text("\(selection.property.dropFirst(prefix.count)): \(selection.status), source ID \(selection.sourceID)")
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+            Text("Export writes the selected outfit into the embedded card; the saved outfit writes nothing.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("studio.source.outfitSection")
     }
 }
 

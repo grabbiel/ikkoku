@@ -386,12 +386,27 @@ original card format.
 returns a new `Data` value. It never writes or overwrites a file. Its supported
 edits are the 52 face values, 44 body values, existing RGBA color arrays in
 face/body/hair records, existing RGBA colors in a selected coordinate's
-clothes/accessory/makeup records, and optional replacement thumbnails. Shape and
+clothes/accessory/makeup records, the worn-outfit index in `Status`, and
+optional replacement thumbnails. Shape and
 color numbers must be finite Float32 values with the expected array lengths.
 Editing a sex or asset identity is deliberately outside this API: retaining the
 old Sideloader resolver entry after changing its destination would create a
 misleading identity. Hair selections, clothing selections, card parameters,
 ABMX, resolver metadata and other plug-in bytes remain unchanged.
+
+`Edits.coordinateType` (ST-C03, 2026-10-17) selects the worn outfit, the
+`ChaFileStatus.coordinateType` integer in the `Status` block. The index must lie
+in 0…6, and the card's `Coordinate` list must contain that entry
+(`coordinateCount()`). Otherwise the edit is rejected, as is any `Status`
+version other than `0.0.0`. An edit to the saved index (`savedCoordinateType()`;
+0 when the block or key is absent, matching `ChaFileStatus.MemberInit`) changes
+nothing. A changed index rewrites the `coordinateType` value as a positive
+fixint. If the saved `backCoordinateType` differs from the saved
+`coordinateType`, the writer also sets it to the saved outfit. No other `Status`
+field and no `Coordinate` record changes. This follows
+`ChaControl.ChangeCoordinateType`, described in the
+[Studio outfit section](../studio/scene-editing.md#source-outfit-selection-st-c03-first-slice). The re-decoded card must read back the requested
+outfit.
 
 The writer indexes original MessagePack token spans. Only numeric leaves whose
 Float32 values actually changed are replaced, using the source Float32 wire

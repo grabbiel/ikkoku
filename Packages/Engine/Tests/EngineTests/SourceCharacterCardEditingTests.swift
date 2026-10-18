@@ -214,3 +214,77 @@ func sourceCardEditingWritesIndependentOracleEvidence() throws {
         #expect(try card.editedData(.init()) == card.preservedData)
     }
 }
+
+/// An EditingFixture-shaped card with three saved outfits and a Status block
+/// whose integers use the fixture's int64 encoding (so a changed outfit also
+/// resizes the block), a stale backCoordinateType and an unknown extension.
+func outfitCard(coordinateType: Int64 = 1, back: Int64 = 2, statusVersion: String = "0.0.0", png: Data = OriginalCardFixture.png, trailer: Data? = nil) throws -> Data {
+    typealias F = OriginalCardFixture
+    let base = try SourceCharacterCard.decode(EditingFixture.card())
+    let coordinates = try #require(base.block(named: "Coordinate"))
+    let entry = try #require(SourceMessagePack.decode(coordinates.data).arrayValue?.first?.binaryValue)
+    let status = EditingFixture.fields([("version", .string("0.0.0")), ("coordinateType", .integer(coordinateType)),
+        ("backCoordinateType", .integer(back)), ("clothesState", .binary(Data([0, 1, 2, 3, 0, 0, 0, 0, 0]))),
+        ("showAccessory", .array(Array(repeating: .bool(true), count: 20))), ("unknownStatus", .ext(5, Data([4, 5, 6])))])
+    var blocks = base.blocks.map { F.Block(name: $0.name, version: $0.version, data: $0.data) }
+    blocks.sort { (base.block(named: $0.name)?.position ?? 0) < (base.block(named: $1.name)?.position ?? 0) }
+    let index = try #require(blocks.firstIndex { $0.name == "Coordinate" })
+    blocks[index].data = F.pack(.array(Array(repeating: .binary(entry), count: 3)))
+    // Status sits before the plug-in block, so a resize moves its offsets.
+    let plugins = try #require(blocks.firstIndex { $0.name == "KKEx" })
+    blocks.insert(.init(name: "Status", version: statusVersion, data: status), at: plugins)
+    return F.card(blocks: blocks, png: png, trailer: trailer ?? base.trailingData)
+}
+
+@Test func sourceCardEditingOutfitWritesOnlyStatusCoordinateAndBackType() throws {
+    let bytes = try outfitCard(), original = try SourceCharacterCard.decode(bytes)
+    #expect(try original.savedCoordinateType() == 1 && original.coordinateCount() == 3)
+    // Selecting the saved outfit is a no-op: every byte, including the
+    // non-compact integer encoding, survives.
+    #expect(try original.editedData(.init(coordinateType: 1)) == bytes)
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(coordinateType: 0)))
+    #expect(try edited.savedCoordinateType() == 0)
+    let originalStatus = try #require(original.block(named: "Status")), editedStatus = try #require(edited.block(named: "Status"))
+    let before = try SourceMessagePack.decode(originalStatus.data).stringKeyedMap()
+    let after = try SourceMessagePack.decode(editedStatus.data).stringKeyedMap()
+    // ChangeCoordinateType(type, changeBackCoordinateType: true) keeps the
+    // outfit that was worn (the saved one) as backCoordinateType.
+    #expect(after["coordinateType"]?.integerValue == 0 && after["backCoordinateType"]?.integerValue == 1)
+    #expect(after.filter { !["coordinateType", "backCoordinateType"].contains($0.key) } == before.filter { !["coordinateType", "backCoordinateType"].contains($0.key) })
+    // The two changed int64 tokens became one-byte fixints.
+    #expect(editedStatus.data.count == originalStatus.data.count - 16)
+    // No Coordinate record, Custom record, plug-in block, legacy trailer or
+    // thumbnail moved; only the following block's offset changed.
+    for block in original.blocks where block.name != "Status" {
+        #expect(edited.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+    #expect(edited.trailingData == original.trailingData && edited.thumbnailData == original.thumbnailData && edited.faceThumbnailData == original.faceThumbnailData)
+    #expect(try edited.extensions().plugins.keys.sorted() == original.extensions().plugins.keys.sorted())
+    #expect(try edited.recordData(.clothes(coordinate: 2)) == original.recordData(.clothes(coordinate: 2)))
+    // Combined with a shape edit in one Edits, both land.
+    var face = try original.customization().faceValues; face[5] = 0.625
+    let combined = try SourceCharacterCard.decode(original.editedData(.init(faceValues: face, coordinateType: 2)))
+    #expect(try combined.savedCoordinateType() == 2 && combined.customization().faceValues == face)
+    // An already-current back value is not rewritten: only coordinateType moves.
+    let aligned = try SourceCharacterCard.decode(outfitCard(coordinateType: 1, back: 1))
+    let onlyType = try SourceCharacterCard.decode(aligned.editedData(.init(coordinateType: 2)))
+    let alignedStatus = try #require(aligned.block(named: "Status")), onlyTypeStatus = try #require(onlyType.block(named: "Status"))
+    #expect(onlyTypeStatus.data.count == alignedStatus.data.count - 8)
+    #expect(try SourceMessagePack.decode(onlyTypeStatus.data).stringKeyedMap()["backCoordinateType"]?.integerValue == 1)
+}
+
+@Test func sourceCardEditingOutfitRejectsInvalidMissingAndUnsupportedSelections() throws {
+    let original = try SourceCharacterCard.decode(outfitCard())
+    // Outside CoordinateType, or not one of the card's saved outfits.
+    for index in [-1, 7, 3, 6] {
+        #expect(throws: (any Error).self, Comment(rawValue: "\(index)")) { try original.editedData(.init(coordinateType: index)) }
+    }
+    // A newer Status block version is not edited, and a card without a
+    // Status block keeps its implicit outfit 0 but cannot select another.
+    let newer = try SourceCharacterCard.decode(outfitCard(statusVersion: "0.0.1"))
+    #expect(throws: (any Error).self) { try newer.editedData(.init(coordinateType: 0)) }
+    let statusless = try SourceCharacterCard.decode(EditingFixture.card())
+    #expect(try statusless.savedCoordinateType() == 0)
+    #expect(try statusless.editedData(.init(coordinateType: 0)) == statusless.preservedData)
+    #expect(throws: (any Error).self) { try statusless.editedData(.init(coordinateType: 1)) }
+}

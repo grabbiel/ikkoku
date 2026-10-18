@@ -101,7 +101,7 @@ camera/route active flags and card edits; undo/redo and native save/reload that
 keep a source scene's props, cameras, routes and light. Two app-level lanes now
 exercise much of the checklist below **headlessly**, through `StudioModel` /
 `MakerModel` calls and, for the FK guide, the real mouse handlers and GPU pick:
-`Tools/verification/lanes/studio-scenarios.json` (34 checks) and
+`Tools/verification/lanes/studio-scenarios.json` (37 checks) and
 `maker-scenarios.json` (4 checks); run them with
 `python3 Tools/verification/run.py --manifest <lane> --environment
 .local/verification/environment.json --strict`. GitHub Actions (PR #70) runs only
@@ -257,6 +257,18 @@ because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
       `hair.parts.0.baseColor` binds no material on this fixture and export skips
       its writeback. Mouse-driven controls and original-player shader parity remain
       separate gates.
+- [ ] ST-C03 outfit selection: the Clothes tab's Outfit picker switches a source
+      character to another saved outfit, which renders, undoes and survives native
+      save/reload. Export writes `Status.coordinateType`; selecting the saved outfit
+      again exports byte-identical bytes. Unconverted parts are diagnosed and never
+      substituted. (Automated in part, headlessly on 2026-10-17: `outfit-select.json`
+      measures 19,155 pixels differing by >2/255 for outfit 3 at 512x512, exact undo,
+      redo and return restoration, restored-export SHA identity before and after
+      reimport and outfit read-back after reimport; `reload-save-outfit.json` and
+      `reload-load-outfit.json` cover native save/load. The visible picker,
+      CharaStudio reload of the changed export, clothes state and accessory
+      visibility remain unchecked;
+      [outfit selection](../reference/studio/scene-editing.md#source-outfit-selection-st-c03-first-slice).)
 - [ ] ST-T11 routes: route children and route characters move along their routes, and the
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates

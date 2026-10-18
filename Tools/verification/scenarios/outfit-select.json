@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 0, "saved": 0}},
+    {"op": "captureRender", "name": "base", "path": ".local/verification/renders/outfit-base.png"},
+    {"op": "setOutfit", "key": 65, "index": 7, "errorContains": "0...6"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 0}, "render": {"from": "base", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "setOutfit", "key": 65, "index": 3},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 3, "saved": 0, "resolved": "outfit3.ChaFileClothes.ClothesTop", "missing": "outfit3.ChaFileClothes.ClothesBra"}, "render": {"from": "base", "changedPixelsAtLeast": 10000}},
+    {"op": "captureRender", "name": "swim", "path": ".local/verification/renders/outfit-swim.png"},
+    {"op": "assertRejected", "outfit": {"key": 65, "coordinate": 0}, "errorContains": "coordinate is 3"},
+    {"op": "assertRejected", "render": {"from": "swim", "changedPixelsAtLeast": 1}, "errorContains": "the frame did not visibly update"},
+    {"op": "undo"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 0}, "render": {"from": "base", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "redo"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 3}, "render": {"from": "swim", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "setOutfit", "key": 65, "index": 0},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 0, "saved": 0}, "render": {"from": "base", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "export", "path": ".local/verification/scenario-exports/outfit-restored.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/outfit-restored.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/outfit-restored.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/outfit-restored.png"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 0, "saved": 0}},
+    {"op": "setOutfit", "key": 65, "index": 3},
+    {"op": "export", "path": ".local/verification/scenario-exports/outfit-changed.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/outfit-changed.png"},
+    {"op": "assertRejected", "exportIdenticalToSource": ".local/verification/scenario-exports/outfit-changed.png", "errorContains": "differs from initial source SHA256"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 3, "saved": 3, "missing": "outfit3.ChaFileClothes.ClothesBra"}, "render": {"from": "swim", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "assert", "outfit": {"key": 0, "coordinate": 0, "saved": 0}},
+    {"op": "setOutfit", "key": 65, "index": 2},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 2, "saved": 3, "resolved": "outfit2.ChaFileClothes.ClothesShoesOuter", "missing": "outfit2.ChaFileClothes.ClothesTop"}}
+  ]
+}

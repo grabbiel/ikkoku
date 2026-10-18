@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**774 files indexed; 774 assigned; 0 unassigned.**
+**777 files indexed; 777 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 294 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 126 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 129 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 156 |
+| Conversion / recovery / verification tool | 159 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
@@ -789,10 +789,13 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/maker-reset-shapes.json](../../Tools/verification/scenarios/maker-reset-shapes.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-shape-roundtrip.json](../../Tools/verification/scenarios/maker-shape-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/neck-look-orbit.json](../../Tools/verification/scenarios/neck-look-orbit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/outfit-select.json](../../Tools/verification/scenarios/outfit-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-outfit.json](../../Tools/verification/scenarios/reload-load-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-props.json](../../Tools/verification/scenarios/reload-load-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-route.json](../../Tools/verification/scenarios/reload-load-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-camera.json](../../Tools/verification/scenarios/reload-save-camera.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-outfit.json](../../Tools/verification/scenarios/reload-save-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-props.json](../../Tools/verification/scenarios/reload-save-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
