@@ -661,7 +661,7 @@ public final class SourceStudioCharacterPreview {
         // here the edit is explicit, so an unbound color is reported instead.
         let unbound = (edits?.keys.sorted() ?? []).filter { !fields.contains($0) && draft.color($0) != nil }
         for id in unbound.sorted() {
-            messages.append("\(id) binds no material on this assembly; the edited color is retained for export but not rendered.")
+            messages.append("\(id) binds no material on this assembly; the edited color is retained in the native document but not rendered and is skipped by original-scene export.")
         }
         // Every fallible stage ran; the swap itself cannot fail, so the old
         // preview (unregistered in its deinit) survives a rejected edit.

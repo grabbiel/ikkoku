@@ -15,10 +15,8 @@ struct StudioView: View {
             workspace.frame(width: 250)
             Divider()
             VStack(spacing: 0) {
-                ZStack(alignment: .top) {
-                    ViewportView(renderer: model.host.renderer, handler: model)
-                    toolbar
-                }
+                ViewportView(renderer: model.host.renderer, handler: model)
+                    .overlay(alignment: .top) { toolbar }
                 if model.showTimeline { Divider(); timelineBar }
             }
             Divider()
@@ -94,6 +92,19 @@ struct StudioView: View {
     // MARK: Toolbar
 
     private var toolbar: some View {
+        // Overlay content must fit the viewport without widening either side panel.
+        ScrollView(.horizontal) {
+            toolbarControls
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .controlSize(.small)
+        .padding(8)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .padding(10)
+        .accessibilityIdentifier("studio.toolbar")
+    }
+
+    private var toolbarControls: some View {
         HStack(spacing: 8) {
             Picker("", selection: $model.gizmoMode) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").tag(GizmoMode.translate)
@@ -142,10 +153,7 @@ struct StudioView: View {
             Toggle(isOn: $model.doc.effects.showGrid) { Image(systemName: "grid") }.toggleStyle(.button).help("Grid (G)")
             Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder") }
         }
-        .controlSize(.small)
-        .padding(8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .padding(10)
+        .fixedSize(horizontal: true, vertical: true)
     }
 
     // MARK: Timeline
@@ -156,15 +164,17 @@ struct StudioView: View {
                 .help("Play / pause (Space in the viewport)")
             Button { model.timelinePlaying = false; model.timelineTime = 0 } label: { Image(systemName: "backward.end.fill") }
             Text(String(format: "%.2f s", model.timelineTime)).font(.caption.monospacedDigit()).frame(width: 52)
-            ZStack(alignment: .leading) {
-                Slider(value: $model.timelineTime, in: 0...max(model.doc.timeline.duration, 0.1))
-                GeometryReader { geo in
-                    ForEach(model.selectedKeyframes) { k in
-                        let x = CGFloat(k.time / max(model.doc.timeline.duration, 0.1)) * geo.size.width
-                        Rectangle().fill(Color.accentColor).frame(width: 3, height: 10).position(x: x, y: geo.size.height - 3)
-                    }
-                }.allowsHitTesting(false)
-            }
+            Slider(value: $model.timelineTime, in: 0...max(model.doc.timeline.duration, 0.1))
+                .overlay(alignment: .leading) {
+                    // Key markers use the slider's height; a sibling GeometryReader
+                    // would expand the entire timeline into the viewport.
+                    GeometryReader { geo in
+                        ForEach(model.selectedKeyframes) { k in
+                            let x = CGFloat(k.time / max(model.doc.timeline.duration, 0.1)) * geo.size.width
+                            Rectangle().fill(Color.accentColor).frame(width: 3, height: 10).position(x: x, y: geo.size.height - 3)
+                        }
+                    }.allowsHitTesting(false)
+                }
             Text("Length").font(.caption)
             TextField("", value: $model.doc.timeline.duration, format: .number.precision(.fractionLength(1))).textFieldStyle(.roundedBorder).frame(width: 48).font(.caption)
             Toggle("Loop", isOn: $model.doc.timeline.loop).font(.caption)
@@ -667,8 +677,7 @@ struct FaceInspector: View {
 
     private func resetSourceShape(_ o: StudioObject, face: Bool) {
         do {
-            if face { try model.setSourceShapeValues(o.id, face: nil, body: o.sourceBodyValues) }
-            else { try model.setSourceShapeValues(o.id, face: o.sourceFaceValues, body: nil) }
+            try model.resetSourceShape(o.id, face: face)
             model.status = face ? "Face shape reset to the card's saved values" : "Body shape reset to the card's saved values"
         } catch { model.status = "Shape reset: \(error)" }
     }

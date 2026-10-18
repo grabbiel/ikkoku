@@ -1014,6 +1014,7 @@
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/blink-toggle.json",
+        "IKKOKU_MAKER_LIBRARY": "none",
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-blink-toggle.json"
       },
       "referenceTier": "app-smoke",
@@ -1052,6 +1053,7 @@
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hand-patterns.json",
+        "IKKOKU_MAKER_LIBRARY": "none",
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hand-patterns.json"
       },
       "referenceTier": "app-smoke",
@@ -1086,6 +1088,7 @@
       ],
       "env": {
         "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/hand-patterns-kept.json",
+        "IKKOKU_MAKER_LIBRARY": "none",
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-hand-patterns-kept.json"
       },
       "referenceTier": "app-smoke",
@@ -1098,6 +1101,110 @@
         {
           "path": ".local/verification/scenario-exports/hand-patterns-kept.png",
           "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-shape-visual-reset",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/shape-visual-reset.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-shape-visual-reset.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Headless StudioModel edits and shared Reset to card paths at a fixed clock/camera; production 512x512 renders must change at least 50 pixels by >2/255 and restore exactly (maximum RGBA8 channel delta 0). Check domain isolation, restored export SHA256 against the initial source, and changed-export rejection after reimport. This does not exercise mouse-driven sliders or establish source shader parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-shape-visual-reset.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/shape-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/shape-changed.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/shape-base.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/shape-face.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/shape-body.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-color-visual-reset",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/color-visual-reset.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-color-visual-reset.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Headless StudioModel edits and shared Reset to card paths at a fixed clock/camera; production 512x512 renders must change at least 50 pixels by >2/255 and restore exactly (maximum RGBA8 channel delta 0). Check domain isolation, restored export SHA256 against the initial source, and changed-export rejection after reimport. This does not exercise mouse-driven sliders or establish source shader parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-color-visual-reset.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/color-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/color-changed.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/color-base.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/color-edited.png",
+          "kind": "render-capture"
         }
       ],
       "timeout": 600

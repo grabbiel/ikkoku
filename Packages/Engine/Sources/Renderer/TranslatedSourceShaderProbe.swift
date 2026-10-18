@@ -305,6 +305,10 @@ public extension OriginalFrameProbe {
                     uv3 = bytes.withUnsafeBytes { raw in (0..<mesh.vertexCount).map { Float2(raw.loadUnaligned(fromByteOffset: $0 * 8, as: Float.self), raw.loadUnaligned(fromByteOffset: $0 * 8 + 4, as: Float.self)) } }
                 }
                 let registers = try semantics.keys.map { key -> Int in guard let value = Int(key) else { throw ProbeError.invalid("Vertex register") }; return value }.sorted()
+                // Source NORMAL: a hashed renderer-local sidecar when the capture
+                // carries one; otherwise (old captures) the legacy transpose of the
+                // normalized world normal below, which loses skinned magnitude.
+                let sourceNormals = try Self.sourceVertexNormals(sourceMesh["sourceVertexNormals"], vertexCount: mesh.vertexCount, geometryFile: sourceMesh["file"], directory: folder)
                 var input: [Float4] = []
                 let vertices = mesh.baseVertices.contents().bindMemory(to: DeformedVertex.self, capacity: mesh.vertexCount)
                 for vertex in 0..<mesh.vertexCount {
@@ -312,7 +316,9 @@ public extension OriginalFrameProbe {
                         let semantic = semantics[String(register)]!, key = semantic["name"] as? String
                         switch key {
                         case "POSITION": let p = vertices[vertex].position; input.append(worldToObject * Float4(p.x, p.y, -p.z, 1))
-                        case "NORMAL": let n = vertices[vertex].normal; input.append(objectToWorld.transpose * Float4(n.x, n.y, -n.z, 0))
+                        case "NORMAL":
+                            if let sourceNormals { input.append(Float4(sourceNormals[vertex], 0)) }
+                            else { let n = vertices[vertex].normal; input.append(objectToWorld.transpose * Float4(n.x, n.y, -n.z, 0)) }
                         case "TANGENT": let tangent = UnityCoordinates.tangent(vertices[vertex].tangent); let transformed = worldToObject * Float4(tangent.x, tangent.y, tangent.z, 0); input.append(Float4(simd_normalize(Float3(transformed.x, transformed.y, transformed.z)), tangent.w))
                         case "TEXCOORD":
                             let set = try integer(semantic["index"])
