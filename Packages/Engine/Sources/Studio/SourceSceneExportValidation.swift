@@ -37,6 +37,9 @@ public enum SourceSceneExportValidation {
                 throw RigError.invalid("Original-scene export does not yet support changing an object's type.")
             }
             let fallbackName: String
+            if let outfit = object.sourceOutfit, !(0..<7).contains(outfit) {
+                throw RigError.invalid("Source outfit selection must be in 0...6.")
+            }
             if importedKind == .character {
                 guard original.character != nil, !routeChild, let reference = object.sourceCharacter,
                       reference.objectKey == key, reference.sceneFile.utf8.elementsEqual(sceneFile.utf8),
@@ -45,7 +48,7 @@ public enum SourceSceneExportValidation {
                 }
                 fallbackName = "Source character \(key)"
             } else {
-                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
+                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
                     throw RigError.invalid("Retained source placeholders cannot contain character references or FK edits.")
                 }
                 // Routes like folders: their saved name is the baseline the

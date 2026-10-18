@@ -224,21 +224,61 @@ Additional local negative probes confirmed that `assert face:true` fails decodin
 and that capture/export refuse both the initial and current source paths after
 reimport; the copied synthetic inputs remained byte-identical.
 
+### Outfit selection (ST-C03 first slice)
+
+`setOutfit` `{key,index,errorContains?}` calls `StudioModel.setSourceOutfit`,
+the same method as the Clothes inspector's Outfit picker. With
+`errorContains`, the selection must be refused with that fragment, and the
+document's `sourceOutfit` and the rendered preview instance must stay unchanged.
+`assert`/`assertRejected` accept
+`outfit: {key,coordinate?,saved?,resolved?,missing?}`. It reads the live
+preview: `coordinate` is the assembled outfit and `saved` is the embedded card's
+`Status.coordinateType`. `resolved` names a selection property, such as
+`outfit3.ChaFileClothes.ClothesTop`, that must have resolved to a library entry
+with the card's source ID. `missing` names one that must be `conversionMissing`,
+with no entry and a matching preview diagnostic.
+
+`outfit-select.json` (28 steps) uses source character key 65. It begins on the
+saved outfit 0 and checks that outfit 7 is refused without changing the render.
+Outfit 3 must change at least 10,000 pixels, resolve `ClothesTop` and report
+`ClothesBra` as `conversionMissing`. Unchanged-render and wrong-outfit controls
+must fail through `assertRejected`. Undo, redo and the switch back to outfit 0
+must reproduce the captured renders exactly. The restored export must equal the
+initial source SHA before and after reimport. The outfit 3 export must differ;
+after reimport, saved and rendered outfit 3 must reproduce the earlier render
+exactly. Key 0 must keep its outfit 0, and outfit 2's converted outer shoes must
+resolve. `reload-save-outfit` and `reload-load-outfit` form the usual native
+save/load pair, and the load side declares no scene fixture. After the fresh
+process loads the document, outfit 3 must be selected over the card's saved 0.
+Switching to 0 must change the render, and undo must restore the loaded frame
+exactly. All three checks declare the scene, rig and Maker-library fixtures; the
+load side omits the scene. Their pixel results depend on that library.
+Recorded 2026-10-17, on the Debug build of this change: the complete lane passed
+37/37 with `--strict` and 0 skipped. The three outfit checks passed 28/28, 6/6
+and 8/8 steps. Outfit 3 changed 19,155 pixels by more than 2/255; 33,204 pixels
+differed at all, with a maximum channel delta of 146. Every exact comparison had
+0 differing pixels and channel delta 0. The restored export kept SHA-256
+`029f0b1d…` before and after reimport, while the outfit 3 export had
+`35087745…`. In the fresh load process, switching to outfit 0 produced the same
+19,155 / 33,204 / 146 difference. These checks call model methods headlessly; the
+visible picker and CharaStudio reload remain separate gates.
+
 No `studio-scenarios` check reads the environment file's own `IKKOKU_SOURCE_SCENE`
 (the `app-smoke` and `private-source` lanes use it for a different
 scene). Each check aliases it through the fixture `from` key instead.
-The twelve character scenarios (`visibility-folder`, `rename-folder`,
+The fourteen character scenarios (`visibility-folder`, `rename-folder`,
 `face-shape`, `color-edit`, `item-props`, `undo-props`, `undo-no-catalog`,
 `animation-select`, `fk-edit`, `fk-mouse-drag`, `shape-visual-reset`,
-`color-visual-reset`) take
+`color-visual-reset`, `outfit-select`, `reload-save-outfit`) take
 `IKKOKU_STUDIO_SCENARIO_SCENE`, which must be the scene whose object
 keys they address (`koikatu_cs0002591.png`: keys 0, 65 and 622);
 `animation-select`, `fk-edit` and `fk-mouse-drag` additionally require
 `IKKOKU_STUDIO_ANIMATION_CATALOG` (set at import, it lets
 `setAnimation` validate and resolve the selected clip; `fk-mouse-drag`
 needs it only to import the same scene state `fk-edit` edits). The two visual
-reset scenarios additionally require `IKKOKU_MAKER_LIBRARY`; their pixel and
-color results depend on the selected assembly. The synthetic `blink-toggle`,
+reset scenarios and the three outfit checks additionally require
+`IKKOKU_MAKER_LIBRARY`; their pixel and color results depend on the selected
+assembly. The synthetic `blink-toggle`,
 `hand-patterns` and `hand-patterns-kept` checks explicitly set
 `IKKOKU_MAKER_LIBRARY=none`: their minimal cards exercise playback, not converted
 hair/clothes, and must not inherit a developer’s optional assembly library.
@@ -248,10 +288,10 @@ camera/route scenarios take a probe scene: `camera-load-winner`,
 `camera-deactivate`, `camera-rename` and `undo-camera` run against the
 two-active-camera scene-x (`IKKOKU_CAMERA_OBJECT_PROBE_SCENE`),
 `route-play-state` and `undo-route` against the scene with two
-saved-active routes (`IKKOKU_ROUTE_PROBE_SCENE`). The six `reload-*`
+saved-active routes (`IKKOKU_ROUTE_PROBE_SCENE`). The eight `reload-*`
 scenarios run as ordered save→load pairs (`test_run.py` pins the
-adjacency): `reload-save-props`/`reload-save-camera`/`reload-save-route`
-take the same scene as their character/camera/route counterparts and
+adjacency): `reload-save-props`/`reload-save-camera`/`reload-save-route`/`reload-save-outfit`
+take the same scene as their character/camera/route/outfit counterparts and
 `saveDocument` a native card under `.local/verification/scenario-exports/`,
 and the `reload-load-*` check immediately after each one loads that card
 back. The load-side checks deliberately declare NO scene fixture: with
