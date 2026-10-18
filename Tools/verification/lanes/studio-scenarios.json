@@ -1208,6 +1208,123 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-outfit-select",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/outfit-select.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-outfit-select.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Headless StudioModel.setSourceOutfit (the Clothes inspector's Outfit picker path) on source character key 65 at a fixed clock/camera: an out-of-range outfit is refused with the document and preview unchanged; outfit 3 must change at least 10,000 pixels of the production 512x512 render by >2/255 and report its unconverted bra slot as conversionMissing; undo, redo and a return to the saved outfit must restore the captured renders exactly (maximum RGBA8 channel delta 0). The saved-outfit export must equal the initial source SHA256 before and after reimport; the outfit-3 export must differ and reimport with Status.coordinateType 3. Outfit 2's converted outer shoes must resolve after reimport. Clothes state, accessory visibility and source shader parity are not covered.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-outfit-select.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/outfit-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/outfit-changed.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/outfit-base.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/outfit-swim.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-outfit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-outfit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-outfit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Selects outfit 3 on source character key 65 (render changes at least 10,000 pixels by >2/255) and saves the native document card. The next check loads it in a fresh process.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-outfit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-outfit.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-outfit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-outfit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-outfit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE: source character key 65 must rebuild with outfit 3 over its saved outfit 0 (bra slot diagnosed as conversionMissing) while key 0 keeps its saved outfit 0; selecting outfit 0 must change at least 10,000 pixels and undo must restore the loaded render exactly.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-outfit.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

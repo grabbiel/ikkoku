@@ -1,0 +1,12 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-outfit.png"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 3, "saved": 0, "missing": "outfit3.ChaFileClothes.ClothesBra"}},
+    {"op": "assert", "outfit": {"key": 0, "coordinate": 0, "saved": 0}},
+    {"op": "captureRender", "name": "loaded"},
+    {"op": "setOutfit", "key": 65, "index": 0},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 0, "saved": 0}, "render": {"from": "loaded", "changedPixelsAtLeast": 10000}},
+    {"op": "undo"},
+    {"op": "assert", "outfit": {"key": 65, "coordinate": 3, "saved": 0}, "render": {"from": "loaded", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}}
+  ]
+}

@@ -52,6 +52,11 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// saved colors. Export writes each differing color back into the embedded
     /// card together with any shape arrays.
     public var sourceColorEdits: [String: Float4]?
+    /// Selected saved outfit (ChaFileStatus.coordinateType, 0...6); nil keeps
+    /// the card's saved outfit. The preview rebuilds for it and export writes
+    /// it into the embedded card's Status block. Documents saved before this
+    /// field existed decode it as nil.
+    public var sourceOutfit: Int?
     public var sourceKinematics: SourceStudioKinematicState?
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState?

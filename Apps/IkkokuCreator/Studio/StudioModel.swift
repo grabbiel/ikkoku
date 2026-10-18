@@ -460,6 +460,41 @@ final class StudioModel: ViewportInputHandler {
         doc.objects[i].sourceColorEdits = nil
     }
 
+    /// Outfit selection (ST-C03), the counterpart of CharaStudio's outfit
+    /// buttons (MPCharCtrl.StateInfo.OnClickCosType -> OCIChar.SetCoordinateInfo):
+    /// the character is rebuilt for the card's saved outfit `coordinate`, with
+    /// its converted clothes/accessories and card materials, before anything
+    /// is recorded, so a rejected outfit (out of range, not saved on the card,
+    /// unbuildable assembly, or kept FK/IK/shape/animation edits that do not
+    /// fit it) leaves both the preview and the document untouched. Missing
+    /// conversions stay the preview's diagnostics; no other ID is substituted.
+    /// Outfit-scoped color edits are keyed by outfit-independent draft IDs, so
+    /// they must be reset first rather than silently move to another outfit.
+    /// The document stores nil for the card's saved outfit, so selecting it
+    /// again exports byte-identical card bytes.
+    func setSourceOutfit(_ id: UUID, coordinate: Int) throws {
+        guard let i = doc.index(of: id), let reference = doc.objects[i].sourceCharacter, let current = sourceInstances[id] else {
+            throw RigError.invalid("Outfit selection needs a loaded source character.")
+        }
+        guard coordinate != current.coordinate else { return }
+        let object = doc.objects[i]
+        let scoped = current.draftColors.filter { $0.record.coordinate != nil && object.sourceColorEdits?[$0.id] != nil }
+        guard scoped.isEmpty else {
+            throw RigError.invalid("Reset the color edits of outfit \(current.coordinate) (\(scoped.map(\.label).joined(separator: ", "))) before selecting another outfit.")
+        }
+        let stored = coordinate == current.savedCoordinate ? nil : coordinate
+        let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: stored)
+        fresh.automaticBlink = sourceAutomaticBlink
+        if let edits = object.sourceColorEdits { try fresh.setColorEdits(edits) }
+        _ = try fresh.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues,
+            ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+        pushUndo(force: true)
+        // The cache entry goes first: the document's didSet refresh then
+        // keeps this instance instead of building the same outfit again.
+        sourceInstances[id] = fresh
+        doc.objects[i].sourceOutfit = stored
+    }
+
     func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
         sourceAnimationCatalog?.entries
             .filter { $0.group == group && (category == nil || $0.category == category) && $0.file != nil }
@@ -501,7 +536,7 @@ final class StudioModel: ViewportInputHandler {
 
     func pluginAttachmentFrame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
         if sourceInstances[parent.id] == nil, let reference = parent.sourceCharacter {
-            let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+            let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: parent.sourceOutfit)
             preview.automaticBlink = sourceAutomaticBlink
             if let edits = parent.sourceColorEdits { try? preview.setColorEdits(edits) }
             sourceInstances[parent.id] = preview
@@ -1083,13 +1118,18 @@ final class StudioModel: ViewportInputHandler {
                 }
                 edits.kinematics[key] = .init(enableFK: true, enableIK: false, activeFK: groups)
             }
-            if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil {
-                // Export writes back only the arrays and colors that actually
-                // differ from the embedded card's saved values; a value edited
-                // back to the saved rate or color produces no card edit and
-                // stays byte-identical. Shape and color edits on one character
-                // merge into one Edits so neither overwrites the other.
-                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape or color edits require a loaded source character.") }
+            if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil || object.sourceOutfit != nil {
+                // Export writes back only the arrays, colors and outfit that
+                // actually differ from the embedded card's saved values; a
+                // value edited back to the saved rate, color or outfit produces
+                // no card edit and stays byte-identical. Shape, color and
+                // outfit edits on one character merge into one Edits so none
+                // overwrites another.
+                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape, color or outfit edits require a loaded source character.") }
+                guard preview.coordinate == (object.sourceOutfit ?? preview.savedCoordinate) else {
+                    throw RigError.invalid("The rendered outfit differs from the document's outfit selection; let the preview rebuild before exporting.")
+                }
+                let outfit = preview.coordinate != preview.savedCoordinate ? preview.coordinate : nil
                 let face = object.sourceFaceValues != preview.savedFaceValues ? object.sourceFaceValues : nil
                 let body = object.sourceBodyValues != preview.savedBodyValues ? object.sourceBodyValues : nil
                 var colors: [SourceCharacterCard.ColorEdit] = []
@@ -1100,7 +1140,9 @@ final class StudioModel: ViewportInputHandler {
                     // edit from the document's edited value explicitly.
                     colors.append(.init(record: color.record, path: color.path, rgba: [rgba.x, rgba.y, rgba.z, rgba.w]))
                 }
-                if face != nil || body != nil || !colors.isEmpty { edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors) }
+                if face != nil || body != nil || !colors.isEmpty || outfit != nil {
+                    edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors, coordinateType: outfit)
+                }
             }
             if let character = original.character {
                 try SourceStudioIKEditing.appendEdits(objectKey: key, record: character, overrides: object.sourceIKOverrides ?? [:], state: object.sourceKinematics, to: &edits)
@@ -1226,6 +1268,10 @@ final class StudioModel: ViewportInputHandler {
         doc = d
         rehydrateSourceRuntime()
         try restoreSourcePlugins()
+        // The document's didSet rendered before the rehydrated cameras,
+        // props and scene light existed; render once more so the first frame
+        // after a load (a capture, an export thumbnail) shows them.
+        refresh()
         sceneURL = url
         status = "Loaded scene \(url.lastPathComponent)"
     }
@@ -1330,9 +1376,12 @@ final class StudioModel: ViewportInputHandler {
                 if let reference = o.sourceCharacter {
                     do {
                         let preview: SourceStudioCharacterPreview
-                        if let cached = sourceInstances[o.id], cached.reference == reference { preview = cached }
+                        if let cached = sourceInstances[o.id], cached.reference == reference,
+                           cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { preview = cached }
                         else {
-                            let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                            // The document's outfit selection (scene reload,
+                            // undo/redo) rebuilds the assembly for that outfit.
+                            let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: o.sourceOutfit)
                             fresh.automaticBlink = sourceAutomaticBlink
                             // Document color edits (scene reload, undo/redo)
                             // rebuild the new preview's appearance the way the

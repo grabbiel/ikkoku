@@ -41,7 +41,17 @@ public final class SourceStudioCharacterPreview {
     public private(set) var diagnostics: [String]
     public let record: KoikatsuCharacterRecord
     public let selections: [SourceMakerLibrary.Selection]
+    /// The outfit this preview assembled: the `coordinate` init argument when
+    /// one was given, the card's saved Status.coordinateType otherwise.
     public let coordinate: Int
+    /// The embedded card's saved Status.coordinateType — the import baseline.
+    /// Export writes an outfit edit back only when it differs from this.
+    public let savedCoordinate: Int
+    /// How many outfits the embedded card saves (ChaFile.coordinate entries;
+    /// seven on an original card, 0 when the Coordinate list is unreadable).
+    public let outfitCount: Int
+    /// ChaFileDefine.CoordinateType order, the seven CharaStudio outfit buttons.
+    public static let outfitNames = ["School uniform", "After school", "Gym", "Swimsuit", "Club", "Casual", "Pajamas"]
     public let expressionInputs: SourceExpressionInputs?
     /// Saved ChaFileStatus.eyesBlink. The Studio card loader applies this flag
     /// on load, so a card that does not blink keeps fixed blink flags.
@@ -188,7 +198,14 @@ public final class SourceStudioCharacterPreview {
     }
     public func clearDynamicsStep() { dynamicsStep = nil; evaluatedCache = nil; dynamics?.resetHistory() }
 
-    public init(reference: SourceStudioCharacterReference, resources: ResourceStore) throws {
+    /// `coordinate` selects a saved outfit other than the card's
+    /// Status.coordinateType (ST-C03): CharaStudio's OCIChar.SetCoordinateInfo
+    /// reloads the clothes from chaFile.coordinate[type], so the whole
+    /// assembly — converted clothes/accessories, card materials, shape
+    /// baseline, IK and dynamics bindings — is built for that outfit exactly
+    /// as an import of a card saved with it. nil keeps the saved outfit; an
+    /// index outside 0...6 or one the card does not save is rejected.
+    public init(reference: SourceStudioCharacterReference, resources: ResourceStore, coordinate selectedCoordinate: Int? = nil) throws {
         self.reference = reference
         self.resources = resources
         attachments = try reference.attachmentCatalogFile.map { try SourceStudioAttachments.load(url: URL(fileURLWithPath: $0)) }
@@ -209,9 +226,17 @@ public final class SourceStudioCharacterPreview {
         guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
         try SourceMakerLibrary.validateAssemblyIdentity(card: card)
         let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
-        let coordinate = status["coordinateType"]?.integerValue ?? 0
-        guard (0..<7).contains(coordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
+        let savedCoordinate = status["coordinateType"]?.integerValue ?? 0
+        guard (0..<7).contains(savedCoordinate) else { throw RigError.invalid("Unsupported saved Studio outfit index.") }
+        let outfitCount = (try? card.coordinateCount()) ?? 0
+        if let selectedCoordinate {
+            guard (0..<7).contains(selectedCoordinate) else { throw RigError.invalid("Studio outfit index must be in 0...6.") }
+            guard selectedCoordinate < outfitCount else { throw RigError.invalid("This card saves no outfit \(selectedCoordinate).") }
+        }
+        let coordinate = selectedCoordinate ?? savedCoordinate
         self.coordinate = coordinate
+        self.savedCoordinate = savedCoordinate
+        self.outfitCount = outfitCount
         let (eyesBlink, blinkDiagnostic) = SourceStudioBlink.decode(status)
         self.eyesBlink = eyesBlink
         // OCIChar.ChangeBlink applies the saved card flag right after the load.
@@ -239,6 +264,9 @@ public final class SourceStudioCharacterPreview {
         var appearance = try SourcePreviewAppearance.load(url: rigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
         var messages: [String] = []
         if let blinkDiagnostic { messages.append(blinkDiagnostic) }
+        if coordinate != savedCoordinate {
+            messages.append("Outfit \(coordinate) (\(Self.outfitNames[coordinate])) replaces the card's saved outfit \(savedCoordinate); original-scene export writes it to Status.coordinateType.")
+        }
         let draft: SourceCardAppearance?
         do { draft = try SourceCardAppearance(card: card, coordinate: coordinate) }
         catch {

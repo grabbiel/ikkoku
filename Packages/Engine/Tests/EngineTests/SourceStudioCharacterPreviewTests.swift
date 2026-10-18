@@ -114,3 +114,24 @@ func sourceStudioCharacterPreviewRejectsUnsupportedEmbeddedSexAndHeadWhenSupplie
         #expect(resources.mesh(MeshHandle(id: 1)) == nil)
     }
 }
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
+func sourceStudioCharacterPreviewRejectsUnsavedOutfitSelectionBeforeAssetRegistrationWhenSupplied() throws {
+    let input = try sourceStudioPreviewInputs()
+    let data = try Data(contentsOf: input.scene)
+    let reference = sourceStudioReference(scene: input.scene, data: data, rig: input.rig, catalog: input.catalog)
+    // The synthetic card saves no Coordinate entries: its implicit outfit 0
+    // still previews, but no outfit can be selected explicitly.
+    for (index, expected) in [(0, "saves no outfit 0"), (7, "0...6"), (-1, "0...6")] {
+        let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+        do {
+            _ = try SourceStudioCharacterPreview(reference: reference, resources: resources, coordinate: index)
+            Issue.record("Outfit \(index) unexpectedly produced a preview.")
+        } catch { #expect(String(describing: error).contains(expected), Comment(rawValue: "\(error)")) }
+        #expect(resources.mesh(MeshHandle(id: 1)) == nil)
+    }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let saved = try SourceStudioCharacterPreview(reference: reference, resources: resources)
+    #expect(saved.coordinate == 0 && saved.savedCoordinate == 0 && saved.outfitCount == 0)
+}

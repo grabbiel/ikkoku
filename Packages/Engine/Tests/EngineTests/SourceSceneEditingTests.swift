@@ -530,3 +530,35 @@ private func sceneEditingRoundTrips(_ urls: [URL]) throws {
     #expect(!urls.isEmpty)
     #expect(objectsChecked > 0 && charactersChecked > 0)
 }
+
+@Test func sourceSceneEditingWritesEmbeddedOutfitSelectionAndSavedOutfitKeepsEveryByte() throws {
+    // Embedded scene cards carry no PNG prefix and no legacy trailer.
+    let card = try outfitCard(png: Data(), trailer: Data())
+    let scene = SceneDocumentBytes.scene(card: card).data
+    let original = try KoikatsuSceneReader.decodeDocument(scene)
+    let before = try SourceCharacterCard.decode(card)
+    // Selecting the saved outfit (here 1) writes nothing: the scene stays byte-identical.
+    #expect(try original.editedData(.init(cards: [10: .init(coordinateType: 1)])) == scene)
+    let edited = try KoikatsuSceneReader.decodeDocument(original.editedData(.init(cards: [10: .init(coordinateType: 2)])))
+    #expect(edited.settings == original.settings && edited.trailingData == original.trailingData)
+    #expect(edited.snapshot.roots[1] == original.snapshot.roots[1])
+    let after = try #require(edited.snapshot.roots[0].character).card()
+    #expect(try after.savedCoordinateType() == 2)
+    // Only the Status block changed; card plug-ins, records and identity stay.
+    for block in before.blocks where block.name != "Status" {
+        #expect(after.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+    #expect(try after.customization().faceValues == before.customization().faceValues)
+    let character = try #require(edited.snapshot.roots[0].character), saved = try #require(original.snapshot.roots[0].character)
+    #expect(character.bones == saved.bones && character.animation == saved.animation && character.neckData == saved.neckData)
+    // Reading the edited scene back as the source, its saved outfit is now 2,
+    // so selecting 2 again is a no-op on the edited bytes.
+    let reread = try KoikatsuSceneReader.decodeDocument(edited.preservedData)
+    #expect(try reread.editedData(.init(cards: [10: .init(coordinateType: 2)])) == edited.preservedData)
+    // A missing or out-of-range outfit rejects the whole scene edit.
+    for index in [3, 7, -1] {
+        #expect(throws: (any Error).self, Comment(rawValue: "\(index)")) {
+            try original.editedData(.init(cards: [10: .init(coordinateType: index)]))
+        }
+    }
+}

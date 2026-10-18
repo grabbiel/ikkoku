@@ -17,7 +17,7 @@ struct StudioScenario: Decodable {
     struct Step: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
-        /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`,
+        /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
         /// `"captureBone"`, `"captureRender"`, `"advance"`, `"orbit"`,
@@ -115,7 +115,27 @@ struct StudioScenario: Decodable {
         let exportIdenticalToSource: String?
         /// assertRejected only: exactly one assertion must fail with this
         /// diagnostic fragment, so negative controls cannot pass on unrelated failures.
+        /// setOutfit: the selection must be refused with this fragment and
+        /// leave the document's outfit and the rendered preview unchanged.
         let errorContains: String?
+        /// assert only: the outfit the named character's live preview
+        /// assembled, read from the rendered preview (not the document).
+        let outfit: OutfitValue?
+
+        struct OutfitValue: Decodable {
+            let key: Int32
+            /// the outfit index the rendered preview assembled.
+            let coordinate: Int?
+            /// the embedded card's saved Status.coordinateType as imported.
+            let saved: Int?
+            /// a selection property (e.g. `outfit3.ChaFileClothes.ClothesTop`)
+            /// the preview must have resolved to a library entry: converted
+            /// geometry, or the library's explicit empty ("none") entry.
+            let resolved: String?
+            /// a selection property the preview must report as
+            /// `conversionMissing`, with an import diagnostic naming it.
+            let missing: String?
+        }
 
         struct RenderValue: Decodable {
             /// the `captureRender` label whose pixels are the baseline.
@@ -200,7 +220,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains,
                  group, category, no, speed, on, bone, rotation, animation, fk,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
-                 render, exportIdenticalToSource, errorContains
+                 render, exportIdenticalToSource, errorContains, outfit
         }
 
         init(from decoder: Decoder) throws {
@@ -258,6 +278,7 @@ struct StudioScenario: Decodable {
             render = try c.decodeIfPresent(RenderValue.self, forKey: .render)
             exportIdenticalToSource = try c.decodeIfPresent(String.self, forKey: .exportIdenticalToSource)
             errorContains = try c.decodeIfPresent(String.self, forKey: .errorContains)
+            outfit = try c.decodeIfPresent(OutfitValue.self, forKey: .outfit)
             // setPoseMode / selectBone / dragGizmo parameters: like every
             // optional key above, an absent one stays `nil` and the op that
             // needs it reports the missing field itself.
@@ -669,6 +690,43 @@ struct StudioScenario: Decodable {
             return problems.isEmpty ? nil : "assert handPattern: character \(check.key) " + problems.joined(separator: "; ")
         }
 
+        /// The live outfit readback: the rendered preview's assembled outfit,
+        /// the card's saved outfit and its resolved selections/diagnostics.
+        func assertOutfit(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.outfit else { return nil }
+            guard let preview = characterPreview(check.key) else {
+                return "assert outfit: source key \(check.key) is not a rendered character"
+            }
+            details.append("outfit \(check.key): rendered \(preview.coordinate), saved \(preview.savedCoordinate), \(preview.outfitCount) saved outfits")
+            if let expected = check.coordinate, preview.coordinate != expected {
+                return "assert outfit: character \(check.key) coordinate is \(preview.coordinate), expected \(expected)"
+            }
+            if let expected = check.saved, preview.savedCoordinate != expected {
+                return "assert outfit: character \(check.key) saved coordinate is \(preview.savedCoordinate), expected \(expected)"
+            }
+            func selection(_ property: String) -> SourceMakerLibrary.Selection? {
+                preview.selections.first { $0.property.utf8.elementsEqual(property.utf8) }
+            }
+            if let property = check.resolved {
+                guard let found = selection(property) else { return "assert outfit: no selection \(property)" }
+                guard found.status == "converted" || found.status == "empty", let entry = found.entry, entry.id == found.sourceID else {
+                    return "assert outfit: \(property) is \(found.status), expected a resolved library entry"
+                }
+                details.append("\(property): \(found.status) library entry category \(entry.category) ID \(entry.id) (saved \(found.savedID))")
+            }
+            if let property = check.missing {
+                guard let found = selection(property) else { return "assert outfit: no selection \(property)" }
+                guard found.status == "conversionMissing", found.entry == nil else {
+                    return "assert outfit: \(property) is \(found.status), expected conversionMissing"
+                }
+                guard preview.diagnostics.contains(where: { $0.hasPrefix(property + ": conversionMissing") }) else {
+                    return "assert outfit: no preview diagnostic reports \(property) as conversionMissing"
+                }
+                details.append("\(property): conversionMissing, source ID \(found.sourceID), diagnosed")
+            }
+            return nil
+        }
+
         scenarioLoop: for step in scenario.steps {
             // Steps run microseconds apart, inside the editor's 0.4 s
             // edit-coalescing window (startup's import opens it too), so an
@@ -787,6 +845,28 @@ struct StudioScenario: Decodable {
                     try studio.resetSourceColorEdits(id)
                     record(step, true, "source key \(step.key!) color edits cleared, the card's saved colors render again")
                 } catch { record(step, false, "resetColors: \(error)") }
+            case "setOutfit":
+                guard let id = object(step) else { record(step, false, "setOutfit: no object with source key \(step.key ?? -1)"); continue }
+                guard let index = step.index else { record(step, false, "setOutfit: index (the outfit 0...6) is required"); continue }
+                // The inspector's Outfit picker calls the same
+                // StudioModel.setSourceOutfit, so the lane drives the app's path.
+                let before = (studio.doc.object(id)?.sourceOutfit, studio.sourceShapePreview(for: id).map(ObjectIdentifier.init))
+                do {
+                    try studio.setSourceOutfit(id, coordinate: index)
+                    if let expected = step.errorContains {
+                        record(step, false, "setOutfit: outfit \(index) was accepted, expected a refusal containing \"\(expected)\"")
+                    } else {
+                        let preview = studio.sourceShapePreview(for: id)
+                        record(step, true, "source key \(step.key!) outfit \(index) selected; rendered \(preview.map { String($0.coordinate) } ?? "none"), document sourceOutfit \(studio.doc.object(id)?.sourceOutfit.map(String.init) ?? "nil")")
+                    }
+                } catch {
+                    guard let expected = step.errorContains else { record(step, false, "setOutfit: \(error)"); continue }
+                    let unchanged = studio.doc.object(id)?.sourceOutfit == before.0
+                        && studio.sourceShapePreview(for: id).map(ObjectIdentifier.init) == before.1
+                    let matched = String(describing: error).contains(expected)
+                    record(step, matched && unchanged, matched && unchanged ? "refused as expected, document and preview unchanged: \(error)"
+                        : "expected a refusal containing \"\(expected)\" that leaves the outfit unchanged; received \(error), unchanged=\(unchanged)")
+                }
             case "setAnimation":
                 guard let id = object(step) else { record(step, false, "setAnimation: no object with source key \(step.key ?? -1)"); continue }
                 guard let group = step.group, let category = step.category, let no = step.no else {
@@ -1180,6 +1260,7 @@ struct StudioScenario: Decodable {
                 // value, like `animation`/`fk`.
                 if let problem = assertRender(step, details: &details) { problems.append(problem) }
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
+                if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
                     let diagnostics = studio.doc.sourcePreviewDiagnostics ?? []
                     if !diagnostics.contains(where: { $0.contains(needle) }) {
