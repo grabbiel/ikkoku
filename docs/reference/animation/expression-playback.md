@@ -701,6 +701,24 @@ and the write-back geometry have no rig-level test and no rendered
 comparison against the original preview — the wiring is verified by the two
 app/Engine builds and the runtime tests alone.
 
+Original-scene check (2026-10-22): the original CharaStudio authored
+`scene-neck-target.png` from the synthetic fixture card. Key 0 has neck TARGET
+and key 147 has neck AWAY, both with eyes TARGET and target type 0. The probe
+recorded each head's yaw from its body under the saved camera and with that
+camera orbited ±60°. The lane's `neck-target-orbit` scenario drives the
+running Studio tick on that scene. Under the saved camera, after 3 s, the
+horizontal bearing of hair-front bone 100 is 6.698° (TARGET) and 59.879° (AWAY).
+The original's settled head yaws are 6.699° and 59.862°. After each orbit leg,
+TARGET turns toward the camera's side and AWAY to the opposite side, as in the
+original. The orbit-phase magnitudes are recorded but not compared, because the
+original phases had not settled after 120 frames. Numbers, commands and
+evidence are in
+[the fixture-scene section](../studio/scene-editing.md#charastudio-authored-route-children-and-neck-targetaway-fixtures).
+This is still a bone-position check, not a rendered comparison. The FK-owned
+neck case is not exercised. `SourceStudioNeckLookOverride.resolve`, the data
+path behind `ikkoku-inspect look-data`, still gives TARGET/AWAY the stale
+"Neck gaze solver pending; animated pose kept." reason.
+
 ### Eye look solver
 
 The eyes have their own calculator, `EyeLookCalc.EyeUpdateCalc`, whose rules

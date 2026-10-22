@@ -113,7 +113,11 @@ there — a ring turned edge-on to the camera projects to a sub-pixel sliver
 nothing picks, and then the failure names the rings the camera does see),
 `captureBone`
 `{key,bone,name}` (memorizes that guide bone's position in the character's
-rig frame under a label for a later `fk`/`from` compare),
+rig frame under a label for a later `fk`/`from` compare), `captureObject`
+`{key,name}` (memorizes one object's world position under a label for a later
+`position` compare; it reads `StudioModel.sourceObjectWorldMatrix`, the same
+placement walk `refresh()` renders with, so a route child follows its route's
+`childRoot`),
 `advance` `{seconds}` (walks the app's own live step at its 1/30 s cadence —
 the blink clocks, the neck/eye gaze solvers, dynamics and the route/animation
 clocks all run, exactly like the editor's timer tick — and starts a new blink
@@ -134,7 +138,10 @@ document's FK edit in degrees; `from` names a `captureBone` label and asserts
 the bone MOVED further than the tolerance from it, or stayed within `within`
 of it; `nonZero` asserts the held rotation has a component past the
 tolerance — a drag's angle comes out of the ring geometry and cannot be
-matched to a number), `eyeLook`
+matched to a number), `position` `{key,from,within?}` (the object's world
+displacement from a `captureObject` label: by default it must have MOVED
+further than the tolerance; with `within` it must still sit within that bound,
+and the failure names the distance and the current position), `eyeLook`
 `{key,lookType?,horizontalSign?,verticalAbove?,verticalBelow?}` (the live gaze
 solver's last-frame iris-shift rates: `lookType` names the pattern's type,
 `horizontalSign` asserts both eyes' rates are non-zero and share that sign — a
@@ -299,12 +306,17 @@ back. The load-side checks deliberately declare NO scene fixture: with
 caches and the load asserts would pass vacuously; without it the process
 starts on the empty document and only `loadDocument` + rehydration can
 produce the asserted cache entries (that is exactly the ST-T01 defect the
-pair pins).
+pair pins). The two CharaStudio-authored fixture scenes (see "Route children and
+neck TARGET/AWAY" below) arrive the same way: `route-children-motion` aliases
+`IKKOKU_SOURCE_SCENE` from `IKKOKU_ROUTE_CHILDREN_SCENE` and
+`neck-target-orbit` from `IKKOKU_NECK_TARGET_SCENE`.
 
 ```sh
-# Build Debug first, then (needs the six private fixture paths — scenario
-# scene, avatar, item catalog, animation catalog, camera probe scene, route
-# probe scene — in .local/verification/environment.json):
+# Build Debug first, then (needs the 13 private fixture paths — scenario
+# scene, avatar, item catalog, animation catalog, look settings, hand patterns,
+# Maker library, camera probe scene, route probe scene, synthetic scene, the
+# CharaStudio FK scene and the route-children / neck-target scenes — in
+# .local/verification/environment.json):
 python3 Tools/verification/run.py \
   --manifest Tools/verification/lanes/studio-scenarios.json \
   --environment .local/verification/environment.json --strict
