@@ -17,6 +17,8 @@ public struct SourceMakerLibrary: Sendable {
         public let category: Int, id: Int, name: String
         public let modGUID: String?, empty: Bool?
         public let rig: File?, appearance: File?, cardBindings: File?, bodyMask: File?
+        /// Converted prefab renderers and serialized materials (`materials.json`).
+        public let materialEvidence: File?
         public let meshNames: [String]?, attachment: Attachment?
     }
     public struct Assembly: Decodable, Sendable {
@@ -43,7 +45,7 @@ public struct SourceMakerLibrary: Sendable {
         }
         let result = Self(sourceURL: url.resolvingSymlinksInPath(), directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
         for entry in result.entries {
-            for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask].compactMap({ $0 }) { _ = try result.contained(ref) }
+            for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask, entry.materialEvidence].compactMap({ $0 }) { _ = try result.contained(ref) }
         }
         var identities = Set<String>()
         for assembly in result.assemblies {
@@ -76,6 +78,12 @@ public struct SourceMakerLibrary: Sendable {
         let bytes = try input.read(upToCount: maximumBytes + 1) ?? Data()
         guard bytes.count <= maximumBytes, SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == ref.sha256.lowercased() else { throw RigError.invalid("Changed or oversized converted Maker asset: \(ref.file).") }
         return url
+    }
+    /// Verified bytes of an entry's converted material evidence, or `nil`
+    /// when the library has none for it.
+    public func materialEvidenceData(for entry: Entry) throws -> Data? {
+        guard let ref = entry.materialEvidence else { return nil }
+        return try Data(contentsOf: verified(ref, maximumBytes: 32 * 1024 * 1024))
     }
     public struct Selection: Sendable {
         public let property: String, category: Int, savedID: Int, sourceID: Int

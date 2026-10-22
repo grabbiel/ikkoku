@@ -249,6 +249,21 @@
           "env": "IKKOKU_MAKER_ASSEMBLIES",
           "kind": "file",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_SHADER_BINDING_PROBE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_HEAD_MATERIAL_CONTRACT",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SHADER_BINDING_SUPPLEMENT",
+          "kind": "file",
+          "optional": true
         }
       ],
       "env": {},
