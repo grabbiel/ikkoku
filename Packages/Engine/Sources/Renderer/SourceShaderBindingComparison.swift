@@ -167,7 +167,7 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
         }
         for name in globalOrder {
             guard let input = usedGlobals[name] else { continue }
-            findings.append(compareGlobal(input, bindings: bindings, globals: globals, texturesByFile: texturesByFile))
+            findings += compareGlobal(input, bindings: bindings, globals: globals, texturesByFile: texturesByFile)
         }
         return summarize(findings: findings, diagnostics: diagnostics, contractUses: contractUses,
                          provenance: bindings.provenance.merging(provenance) { _, new in new })
@@ -390,20 +390,20 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
     }
 
     private static func compareGlobal(_ input: SourceShaderProgramContract.Input, bindings: SourceShaderBindingSet,
-                                      globals: [String: Any], texturesByFile: [String: [String: Any]]) -> Finding {
+                                      globals: [String: Any], texturesByFile: [String: [String: Any]]) -> [Finding] {
         if input.isTexture {
+            // Identity and, when a texture is bound, its sampler state.
             let capture = (globals[input.name] as? String).flatMap { texturesByFile[$0] }
-            var findings = textureFindings(name: input.name, native: bindings.globalTextures[input.name], capture: capture, fallback: "none",
-                                           renderer: nil, family: "global", materialName: nil)
-            return findings.removeFirst()
+            return textureFindings(name: input.name, native: bindings.globalTextures[input.name], capture: capture, fallback: "none",
+                                   renderer: nil, family: "global", materialName: nil)
         }
         let capture: [Float]?, captureSource: String
         if let number = globals[input.name] as? NSNumber { capture = [number.floatValue]; captureSource = "capture globals" }
         else if let list = globals[input.name] as? [NSNumber] { capture = list.map(\.floatValue); captureSource = "capture globals" }
         else if input.name.hasSuffix("_ST") { capture = [1, 1, 0, 0]; captureSource = "probe convention [1,1,0,0] (global texture transform)" }
         else { capture = nil; captureSource = "absent from capture globals" }
-        return vectorFinding(input: input, native: bindings.globalVectors[input.name], capture: capture, captureSource: captureSource,
-                             category: .vector, renderer: nil, family: "global", materialName: nil, bothUnbound: false)
+        return [vectorFinding(input: input, native: bindings.globalVectors[input.name], capture: capture, captureSource: captureSource,
+                              category: .vector, renderer: nil, family: "global", materialName: nil, bothUnbound: false)]
     }
 
     // MARK: - Summary

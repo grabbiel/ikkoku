@@ -193,7 +193,9 @@ private enum ShaderBindingFixture {
     #expect(status(nil, nil, .texture, "_RampG") == .exact)
     let ramp = try #require(F.finding(comparison, nil, nil, .vector, "_RampG_ST"))
     #expect(ramp.status == .missingNatively && ramp.captureSource?.hasPrefix("probe convention") == true)
-    #expect(comparison.findings.filter { $0.family == "global" }.count == 4)
+    // Four globals, plus the bound `_RampG`'s sampler (not derived here).
+    #expect(comparison.findings.filter { $0.family == "global" }.count == 5)
+    #expect(status(nil, nil, .sampler, "_RampG") == .missingNatively)
     #expect(comparison.overall.total == comparison.findings.count)
     #expect(comparison.byCategory.values.map(\.total).reduce(0, +) == comparison.findings.count)
     #expect(comparison.familyTotals.values.map(\.total).reduce(0, +) == comparison.findings.count)
@@ -212,6 +214,29 @@ private enum ShaderBindingFixture {
     #expect(!SourceShaderBindingComparison.sevenDigitEqual(0.3071, 0.307))
     #expect(!SourceShaderBindingComparison.sevenDigitEqual(.nan, .nan))
     #expect(SourceShaderBindingComparison.vectorTolerance == 1e-5)
+}
+
+@Test func sourceShaderBindingFrameSubstitutionReplacesOnlyResolvedNativeValues() throws {
+    typealias F = ShaderBindingFixture
+    let contract = try F.testContract()
+    let catalog = SourceShaderProgramCatalog(programs: [F.testShader: [contract]])
+    let (data, report) = try SourceShaderBindingFrameSubstitution.substitute(bindings: F.bindings(contract: contract),
+        frame: JSONSerialization.data(withJSONObject: F.frame()), catalog: catalog)
+    #expect(report.substituted == ["queue": 1, "vector": 2, "textureTransform": 2, "texture": 2, "sampler": 1, "globalVector": 1, "globalTexture": 1])
+    #expect(report.keptCapture == ["synthetic unresolved reason": 1, "clock": 1, "global not derived": 1, "sampler state not derived": 1,
+                                   "native texture pixels are not available to the probe (identity differs from the capture)": 1])
+    // Only the near-equal `_Cutoff` and the prefab `_Mask` scale change value.
+    #expect(report.changedValues == 2)
+    let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let materials = try #require((frame["meshes"] as? [[String: Any]])?.first?["materials"] as? [[String: Any]])
+    let properties = try #require(materials[0]["properties"] as? [String: Any])
+    #expect((properties["_Cutoff"] as? NSNumber)?.floatValue == 0.500004)
+    #expect(((properties["_Mask"] as? [String: Any])?["scale"] as? [NSNumber])?.map(\.floatValue) == [2, 2])
+    #expect((properties["_Mask"] as? [String: Any])?["file"] as? String == "m.bin")
+    #expect(properties["_Spec"] == nil && properties["_Unbound"] == nil)
+    // Slot 1 is beyond the submesh count, so the probe never binds it.
+    #expect((materials[1]["properties"] as? [String: Any])?["_Cutoff"] as? Double == 0.5)
+    #expect(frame["nativeBindingSubstitution"] != nil && (frame["globals"] as? [String: Any])?["_Time"] as? [Int] == [0, 1, 2, 3])
 }
 
 // MARK: - Derivation on synthetic inputs
@@ -344,7 +369,7 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
     let comparison = try SourceShaderBindingComparison.compare(bindings: bindings, frame: frameData, catalog: catalog)
     let overall = comparison.overall
     #expect(overall.differs == 0)
-    #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (567, 29, 15, 1, 612))
+    #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (567, 29, 16, 1, 613))
     // Every remaining gap is one of the named, unresolvable causes.
     let causes = Set(comparison.gaps.map(\.cause))
     #expect(causes.allSatisfy { $0.hasPrefix("sampler state") || $0.hasPrefix("EyeLookMaterialControll") || $0.hasPrefix("frame clock")

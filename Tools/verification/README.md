@@ -12,7 +12,7 @@ starts a CI job, downloads anything, or runs commands through a shell.
 # Public lane — safe without any private data:
 python3 Tools/verification/run.py --manifest Tools/verification/lanes/public.json
 
-# Private-source lane — the one Engine-suite check declares 47 fixture
+# Private-source lane — the one Engine-suite check declares 51 fixture
 # variables, all `"optional": true`, so it runs whatever is supplied.
 # Without an environment file it runs with none supplied and lists
 # everything under `missingFixtures` (a supplied-but-unreadable path
