@@ -37,7 +37,7 @@ public final class LoadedAsset: @unchecked Sendable {
         self.url = url
         self.asset = asset
         self.resources = resources
-        self.skeleton = Skeleton.from(asset: asset)
+        self.skeleton = try Skeleton.from(asset: asset)
         // Joint remap: garments/hair are skinned to the body skeleton; extra bones (hair chains) follow their nearest body ancestor.
         var remap: [UInt16]? = nil
         if let target = targetSkeleton, let skin = asset.skins.first {

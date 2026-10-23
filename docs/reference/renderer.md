@@ -354,6 +354,85 @@ pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
 
+## Checked math, legacy skeletons and cameras (R4)
+
+The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
+`lookRotation`, `inverse`, `rotationQuaternion`, `scaleFactors`) keep their
+formulas and assume finite, usable input. `rotationQuaternion` divides by
+unsigned column lengths, so a reflected basis yields a nonunit quaternion and
+shear is silently dropped. Import, decoding and editing boundaries use the
+checked forms instead. For accepted input they return exactly the unchecked
+result, so existing valid results do not change. Otherwise they throw
+`MathContractError` naming the rejected argument:
+
+| Checked form | Throws for |
+| --- | --- |
+| `Float3.checkedNormalized` | Nonfinite components or squared length; length at most `minimumDirectionLength` (1e-6) |
+| `simd_quatf.checkedRotation(from:to:)` | Either direction, as above |
+| `simd_quatf.checkedLookRotation(forward:up:)` | Either direction, as above; forward along ±X with a parallel up, where the +X fallback has no perpendicular |
+| `float4x4.checkedInverse` | Nonfinite entries, a zero determinant or a nonfinite inverse |
+| `float4x4.checkedRotationQuaternion` | Nonfinite entries, a nonaffine bottom row, a basis column of length at most 1e-8, dependent columns, a reflection, or shear (normalized columns farther than `tolerance`, default 1e-4, from orthogonal) |
+| `float4x4.checkedTRS` | As above, except that a reflection is kept as a negative X scale so `Transform.trs` rebuilds the matrix |
+
+These decompose native-basis matrices. They do not replace
+`UnityCoordinates.matrix`, which converts raw Unity matrices without any
+decomposition.
+
+The legacy name-keyed `Skeleton` serves generated assets; source rigs use
+`RigDefinition`. `Skeleton.init(bones:)` and `extended(with:)` throw
+`SkeletonError` naming the bone for any of these:
+
+- a duplicate name;
+- an out-of-range or self parent;
+- a cycle;
+- a nonfinite rest translation or scale;
+- a rest rotation that is not a finite unit quaternion (±1e-3);
+- a nonfinite or nonaffine inverse bind.
+
+Bones may be listed in any index order. `order` is the former parent-first
+order, now computed without recursion.
+
+`Skeleton.from` also rejects a skin with missing or repeated joint nodes, or one
+whose bind count does not match its joints. It folds two kinds of non-joint node
+into the child joint's rest TRS: a root joint's ancestors, and any non-identity
+node between two joints. It decomposes those folded matrices, and authored joint
+matrices, with `checkedTRS`. A mirrored Armature therefore becomes a negative
+root scale, and shear fails as `unsupportedTransform`. A TRS joint directly under
+its joint parent keeps its authored values.
+
+On 2026-10-23, a local, uncommitted pure-Python reader checked all 44 bundled
+skinned files: 42 GLBs plus the two glTF fixtures. All had unique joint names and
+rest rotations within 8e-8 of unit length. Their roots had no reflection and no
+shear above 7e-8. None had intermediate non-joint nodes or authored joint
+matrices. Their rest data is therefore unchanged. A file that fails becomes an
+`AssetLibrary` load failure instead of a trap.
+
+`OrbitCamera.validate()` never edits the camera. It rejects:
+
+- nonfinite fields;
+- a nonpositive distance or near plane;
+- a vertical field of view outside (0, 180) degrees;
+- an orientation override that is not a finite unit quaternion (±1e-3);
+- a position that coincides with the target.
+
+`KoikatsuCameraRecord.nativeCamera()` validates its result. The app also
+validates every camera of a native scene card it opens or imports
+(`StudioDocument.validateCameras()`).
+
+The override, field of view and near plane round-trip exactly through the
+native scene card. Dolly, pan and field-of-view edits keep the override. `orbit`,
+or any `yaw`/`pitch` assignment, clears it. Original camera records store only
+pivot, Z-X-Y Euler rotation, distance vector and vertical field of view. An
+edited export therefore re-imports to the same view and field of view, but
+native-only `near` returns to its default. The viewport camera is always an
+infinite reverse-Z perspective; orthographic cameras are not represented.
+Camera-object look-through (`SourceStudioCameraObjects.viewCamera`) still uses
+unchecked `rotationQuaternion`. A reflected parent therefore remains unsupported
+there.
+
+`swift test --package-path Packages/Engine --filter 'checked|legacySkeleton|importedCamera|DegenerateDecodedCameras'`
+runs the synthetic tests for these contracts.
+
 ## Verification and remaining limits
 
 `swift test --package-path Packages/Engine --filter 'unity|imported'` exercises

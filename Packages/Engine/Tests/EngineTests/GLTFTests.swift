@@ -19,7 +19,7 @@ private func fixtureURL(_ name: String) -> URL {
     #expect(mesh.vertexCount == 425)
     #expect(mesh.isSkinned)
     #expect(mesh.morphTargets.map(\.name) == ["DisplaceY", "DisplaceX"])
-    let skel = try #require(Skeleton.from(asset: asset))
+    let skel = try #require(try Skeleton.from(asset: asset))
     #expect(skel.count == 6)
     #expect(skel["spine_b"] != nil)
     let rest = skel.restPose.skinMatrices(skeleton: skel)
@@ -31,7 +31,7 @@ private func fixtureURL(_ name: String) -> URL {
 
 @Test func poseDeltaRotatesBone() throws {
     let asset = try GLBLoader.load(url: fixtureURL("rig_fixture.gltf"))
-    let skel = try #require(Skeleton.from(asset: asset))
+    let skel = try #require(try Skeleton.from(asset: asset))
     let pose = PoseDelta(rotations: ["spine_a": Float3(0, 0, 90)]).apply(to: skel)
     let world = pose.worldMatrices(skeleton: skel)
     let tipIndex = try #require(skel["tip"])
