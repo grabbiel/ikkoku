@@ -1191,7 +1191,7 @@ GAMEPLAY_SCENARIO_OPS = ("perform", "run", "reload", "assert")
 GAMEPLAY_OPERATIONS = ("nextPeriod", "changePeriod", "changeWeek", "nextWeek",
                        "reloadNightMenuWeek", "completeNightMenu", "beginMapMove",
                        "finishMapMove")
-GAMEPLAY_RUN_CONDITIONS = ("idle", "eventRunning", "mapLoading", "barrier")
+GAMEPLAY_RUN_CONDITIONS = ("idle", "eventRunning", "mapLoading", "barrier", "parameterInserted")
 
 
 class GameplayScenarioLaneTests(unittest.TestCase):
@@ -1261,9 +1261,16 @@ class GameplayScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step.get("until", "idle"), GAMEPLAY_RUN_CONDITIONS)
                 if op == "assert":
                     declared = [k for k in ("period", "week", "savedWeek", "activeMap",
-                                            "completedEvents", "runningEvent", "idle")
+                                            "completedEvents", "runningEvent", "idle",
+                                            "heroineParameters", "eventVariables", "insertions")
                                 if k in step]
                     self.assertTrue(declared, "assert declares nothing")
+                    if "heroineParameters" in step:
+                        self.assertIsInstance(step.get("heroine"), int,
+                                              "heroineParameters names no saved heroine")
+                    for key in ("heroineParameters", "eventVariables"):
+                        for value in step.get(key, {}).values():
+                            self.assertRegex(value, r"^System\.[A-Za-z0-9]+:", "%s value is not <type>:<value>" % key)
                     if "activeMap" in step:
                         self.assertIn(step["activeMap"], maps)
 

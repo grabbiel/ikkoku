@@ -60,8 +60,19 @@ func inspectADVExecution(url: URL) throws -> [String: Any] {
             var sceneFadeRegulate: Bool?
             /// "summary" (default: identity, pc, blocking, kind) or "full".
             var requestDetail: String?
+            /// "full" (default: every variable in every snapshot) or "changes"
+            /// (only variables whose value changed since the previous snapshot).
+            var variableDetail: String?
+            /// Binds `currentHeroine` (and `Manager.Game.Player`) with the
+            /// collection's character tables, seeded as `SetADVParam(scenario)`.
+            var character: CaseCharacter?
         }
+        struct CaseCharacter: Decodable { var heroine: SourceHeroineParameters; var player: SourcePlayerParameters? }
         var cases: [Case]
+        /// Paths relative to the input file: `Manager.Game.scenarioParameterDic`
+        /// for ParameterFile, and the call-name/voice tables for bound characters.
+        var parameterLibraryPath: String?
+        var characterTablesPath: String?
     }
     let data = try gameplayExecutionData(url)
     let input: Input
@@ -69,8 +80,13 @@ func inspectADVExecution(url: URL) throws -> [String: Any] {
     else if let single = try? JSONDecoder().decode(Input.Case.self, from: data) { input = Input(cases: [single]) }
     else {
         input = Input(cases: [.init(name: nil, program: try SourceADVProgram.decode(data), variables: nil, ticks: nil, instructionBudget: nil,
-                                    autoAcknowledge: nil, autoNext: nil, mapVariables: nil, sceneFadeRegulate: nil, requestDetail: nil)])
+                                    autoAcknowledge: nil, autoNext: nil, mapVariables: nil, sceneFadeRegulate: nil, requestDetail: nil,
+                                    variableDetail: nil, character: nil)],
+                      parameterLibraryPath: nil, characterTablesPath: nil)
     }
+    func relative(_ path: String) -> URL { URL(fileURLWithPath: path, relativeTo: url.deletingLastPathComponent()).standardizedFileURL }
+    let library = try input.parameterLibraryPath.map { try SourceADVParameterLibrary.decode(gameplayExecutionData(relative($0))) }
+    let tables = try input.characterTablesPath.map { try SourceCharacterTables.decode(gameplayExecutionData(relative($0))) }
     guard input.cases.count <= 1000, input.cases.reduce(0, { $0 + ($1.ticks?.count ?? 0) }) <= 100_000 else {
         throw SourceGameplayExecutionError.invalidData("ADV execution scenario/frame count")
     }
@@ -82,8 +98,15 @@ func inspectADVExecution(url: URL) throws -> [String: Any] {
             throw SourceGameplayExecutionError.invalidData("ADV requestDetail must be summary or full")
         }
         let full = item.requestDetail == "full"
+        guard ["full", "changes"].contains(item.variableDetail ?? "full") else {
+            throw SourceGameplayExecutionError.invalidData("ADV variableDetail must be full or changes")
+        }
+        let changesOnly = item.variableDetail == "changes"
+        let binding = item.character.map { SourceADVCharacterBinding(heroine: $0.heroine, player: $0.player, tables: tables) }
         var machine = try SourceADVInterpreter(program: item.program, variables: item.variables ?? [:],
-                                               sceneFadeRegulate: item.sceneFadeRegulate ?? true)
+                                               sceneFadeRegulate: item.sceneFadeRegulate ?? true,
+                                               character: binding, parameterLibrary: library)
+        var reportedVariables: [String: SourceADVValue] = [:], reportedInsertions = 0
         func drain(_ machine: inout SourceADVInterpreter) throws -> [Any] {
             let drained = machine.drainRequests()
             totalRequests += drained.count
@@ -104,9 +127,14 @@ func inspectADVExecution(url: URL) throws -> [String: Any] {
         }
         func snapshot(_ machine: inout SourceADVInterpreter) throws -> [String: Any] {
             let requests = try drain(&machine)
-            emittedStateEntries += 1 + machine.variables.count + machine.waits.count + requests.count + machine.pending.count
+            let variables = changesOnly ? machine.variables.filter { reportedVariables[$0.key] != $0.value } : machine.variables
+            reportedVariables = machine.variables
+            let insertions = Array(machine.insertions[reportedInsertions...])
+            reportedInsertions = machine.insertions.count
+            emittedStateEntries += 1 + variables.count + machine.waits.count + requests.count + machine.pending.count + insertions.count
             guard emittedStateEntries <= 1_000_000 else { throw SourceGameplayExecutionError.invalidData("ADV trace output state limit") }
-            var state: [String: Any] = ["pc": machine.pc, "status": machine.status, "variables": try gameplayJSONObject(machine.variables),
+            var state: [String: Any] = ["pc": machine.pc, "status": machine.status, "variables": try gameplayJSONObject(variables),
+                    "commandCount": machine.commands.count, "insertions": try gameplayJSONObject(insertions),
                     "waits": try gameplayJSONObject(machine.waits), "fault": try gameplayJSONObject(machine.fault),
                     "closed": machine.closed, "executedInstructions": machine.executedInstructions, "batch": machine.batch,
                     "awaitingNext": machine.awaitingNext, "pending": try gameplayJSONObject(machine.pending),
@@ -129,9 +157,16 @@ func inspectADVExecution(url: URL) throws -> [String: Any] {
         }
         totalInstructions += machine.executedInstructions
         guard totalInstructions <= 1_000_000 else { throw SourceGameplayExecutionError.invalidData("ADV trace total instruction limit") }
-        cases.append(["name": item.name ?? item.program.name, "snapshots": snapshots])
+        var result: [String: Any] = ["name": item.name ?? item.program.name, "snapshots": snapshots]
+        if let character = machine.character {
+            emittedStateEntries += machine.replaces.count
+            result["replaces"] = machine.replaces
+            result["heroine"] = try gameplayJSONObject(character.heroine)
+        }
+        cases.append(result)
     }
-    return ["schemaVersion": 2, "caseCount": cases.count, "executedInstructions": totalInstructions, "requestCount": totalRequests, "cases": cases,
-            "scope": "Bounded source scalar ADV commands plus typed host requests for presentation commands; unsupported operations fault with pc and reason. "
+    return ["schemaVersion": 3, "caseCount": cases.count, "executedInstructions": totalInstructions, "requestCount": totalRequests, "cases": cases,
+            "scope": "Bounded source scalar ADV commands, typed host requests for presentation commands, and HeroineParam/ParameterFile over "
+                + "a bound native heroine and parameter library; unsupported operations fault with pc and reason. "
                 + "No presentation is performed and Close does not unload a native scene."]
 }
