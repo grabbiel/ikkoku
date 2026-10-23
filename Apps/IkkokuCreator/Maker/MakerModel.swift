@@ -318,7 +318,7 @@ final class MakerModel: ViewportInputHandler {
             } catch { appearanceDiagnostics.append("Appearance retained as reference: \(error)") }
         }
         let preview = try SourceRigPreview(source: source, contract: contract, resources: host.renderer.resources,
-            appearance: appearance, expressionContract: expressions, bodyOptions: options)
+            appearance: appearance, expressionContract: expressions, bodyOptions: options, lateCorrectionOptions: .init())
         if imported != nil {
             guard preview.supportsFaceCustomization, preview.bodyCoverage?.completeSlots.count == 44 else {
                 throw RigError.invalid("Card import requires an assembled avatar with complete face and body bindings.")
@@ -401,7 +401,8 @@ final class MakerModel: ViewportInputHandler {
                 appearance = cardApplication?.appearance ?? base
             }
             let preview = try SourceRigPreview(source: current.source, contract: current.contract,
-                resources: host.renderer.resources, appearance: appearance, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions)
+                resources: host.renderer.resources, appearance: appearance, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions,
+            lateCorrectionOptions: current.lateCorrectionOptions)
             let candidate = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
                 bodyValues: applySourceCustomization && preview.supportsBodyCustomization ? sourceBodyValues : nil,
                 faceValues: applySourceCustomization && preview.supportsFaceCustomization ? sourceFaceValues : nil,
@@ -638,7 +639,8 @@ final class MakerModel: ViewportInputHandler {
             resources: host.renderer.resources, modLibrary: sourceModLibrary)
         let application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared, modLibrary: sourceModLibrary)
         let preview = try SourceRigPreview(source: prepared.source, contract: current.contract, resources: host.renderer.resources,
-            appearance: application?.appearance ?? base, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions)
+            appearance: application?.appearance ?? base, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions,
+            lateCorrectionOptions: current.lateCorrectionOptions)
         let pose = try sourceUpstreamPose(preview: preview, at: sourceAnimationTime)
         let frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
             expression: effectiveSourceExpressionInputs, showBones: showBones, poseOverride: pose)
@@ -676,7 +678,8 @@ final class MakerModel: ViewportInputHandler {
         } else { prepared = sourcePreparedAssets }
         let application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared, modLibrary: sourceModLibrary)
         let preview = try SourceRigPreview(source: prepared?.source ?? current.source, contract: current.contract, resources: host.renderer.resources,
-            appearance: application?.appearance ?? base, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions)
+            appearance: application?.appearance ?? base, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions,
+            lateCorrectionOptions: current.lateCorrectionOptions)
         _ = try preview.bounds(bodyValues: applySourceCustomization ? sourceBodyValues : nil,
             faceValues: applySourceCustomization ? sourceFaceValues : nil,
             boneModifiers: applySourceBoneModifiers ? sourceBoneModifiers : nil, coordinate: draft.coordinate)
