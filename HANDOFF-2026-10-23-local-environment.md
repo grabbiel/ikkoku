@@ -227,7 +227,7 @@ interaction.
   virtual ends, broader cloth coverage and original-player skirt parity remain
   open. [Scope and timing](docs/reference/animation/dynamics.md#selected-skirt-and-garment-root-dynamics-st-t08e).
 
-Final runtime `dffc9df` builds in Debug and Release. Scenario-only `83cb84b`
+Measurement runtime `dffc9df` builds in Debug and Release. Scenario-only `83cb84b`
 corrects the skirt fixture's unavailable clip by selecting converted T-pose
 `[0,0,0]` and freezing speed to zero; test-only `c5822a8` checks eye row 30 →
 FBS 21 and the gag-eye diagnostic. Full Release Engine/CoreMath results are
@@ -236,6 +236,14 @@ and focused reverse-tool suites pass 180 + 56 tests. Studio has passing evidence
 for all 52 unique scenarios: 51/52 in the full run, then 2/2 for the corrected
 skirt pair, with thresholds unchanged. Maker passes 4/4 and gameplay 1/1.
 [Lane details](Tools/verification/README.md#combined-local-continuation-2026-10-23).
+
+[Integration PR #135](https://github.com/grabbiel/ikkoku/pull/135) also fixes a
+review finding: expression-edited hidden characters can export after native
+reload. It constructs a temporary export preview with the same resource and
+identity guards, without adding live simulation work. The old binary fails the
+regression; the fixed Debug/Release builds and expression scenarios pass.
+Benchmark hashes above refer to the earlier measured runtime; Engine code is
+unchanged by this export-only correction.
 
 **Next performance work:** interactive main-thread/SwiftUI scheduling. Final
 source idle presents 119.8 FPS; orbit presents 48.1 FPS with 30.4 hitches/s and

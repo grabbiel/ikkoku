@@ -1325,8 +1325,32 @@ final class StudioModel: ViewportInputHandler {
                     rotationDegrees: rotationChanged ? UnityCoordinates.sourceEulerDegrees(object.transform.quaternion) : original.transform.rotationDegrees,
                     scale: object.transform.scale)))
             }
+            var exportPreview = sourceInstances[object.id]
+            if object.sourceExpression != nil {
+                guard original.character != nil, let reference = object.sourceCharacter else {
+                    throw RigError.invalid("Face state edits require a source character reference.")
+                }
+                guard !resourceBlockedObjects.contains(object.id) else {
+                    throw RigError.invalid("Resolve the source character's blocked resources before exporting face state edits.")
+                }
+                if exportPreview == nil {
+                    // Hidden characters are loaded lazily after a native reload.
+                    // Reconstruct only this export's validation baseline; never
+                    // populate the live render cache or advance its simulation.
+                    let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: object.sourceOutfit)
+                    try fresh.setShapeValues(face: object.sourceFaceValues, body: object.sourceBodyValues)
+                    if let colors = object.sourceColorEdits { try fresh.setColorEdits(colors) }
+                    try fresh.setWear(clothesState: object.sourceClothesState, showAccessory: object.sourceShowAccessory)
+                    try fresh.setExpressionState(object.sourceExpression)
+                    exportPreview = fresh
+                }
+                guard let preview = exportPreview, preview.reference == reference,
+                      preview.coordinate == (object.sourceOutfit ?? preview.savedCoordinate) else {
+                    throw RigError.invalid("The source character preview differs from the document's reference or outfit; let the preview refresh before exporting.")
+                }
+            }
             if let rotations = object.sourceFKRotations, !rotations.isEmpty {
-                guard let preview = sourceInstances[object.id], let character = original.character else { throw RigError.invalid("Source FK character is not loaded.") }
+                guard let preview = exportPreview, let character = original.character else { throw RigError.invalid("Source FK character is not loaded.") }
                 var groups = character.activeFK
                 for (id, degrees) in rotations {
                     guard let boneID = Int32(exactly: id), let bone = character.bones[boneID],
@@ -1344,7 +1368,7 @@ final class StudioModel: ViewportInputHandler {
             // rate is not an original value and never exported.
             var faceState = SourceCharacterCard.StatusFaceEdit()
             if let expression = object.sourceExpression {
-                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Face state edits require a loaded source character.") }
+                guard let preview = exportPreview, original.character != nil else { throw RigError.invalid("Face state edits require a loaded source character.") }
                 guard preview.expressionState == expression else {
                     throw RigError.invalid("The rendered face state differs from the document; let the preview refresh before exporting.")
                 }
@@ -1359,7 +1383,7 @@ final class StudioModel: ViewportInputHandler {
                 // no card edit and stays byte-identical. Shape, color and
                 // outfit edits on one character merge into one Edits so none
                 // overwrites another.
-                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape, color, outfit, wear or face state edits require a loaded source character.") }
+                guard let preview = exportPreview, original.character != nil else { throw RigError.invalid("Shape, color, outfit, wear or face state edits require a loaded source character.") }
                 guard preview.coordinate == (object.sourceOutfit ?? preview.savedCoordinate) else {
                     throw RigError.invalid("The rendered outfit differs from the document's outfit selection; let the preview rebuild before exporting.")
                 }
@@ -1391,7 +1415,7 @@ final class StudioModel: ViewportInputHandler {
             if let character = original.character {
                 try SourceStudioIKEditing.appendEdits(objectKey: key, record: character, overrides: object.sourceIKOverrides ?? [:], state: object.sourceKinematics, to: &edits)
             }
-            if let character = original.character, let preview = sourceInstances[object.id] {
+            if let character = original.character, let preview = exportPreview {
                 let animation = try preview.savedAnimationState(animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
                 if animation != SourceStudioAnimationState(record: character) { edits.animations[key] = animation }
             } else if object.sourceAnimation != nil { throw RigError.invalid("Animation edits require a loaded source character.") }

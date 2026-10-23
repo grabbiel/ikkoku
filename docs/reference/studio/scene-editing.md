@@ -545,6 +545,20 @@ Private final evidence is in `.local/codex-resume-2026-10-23/integration/`:
 `original-player-body-match.json` and `expression-perf-{1,2,3}.log`; the eye-row
 diagnosis and focused regression log are in the sibling `expression/` directory.
 
+**Hidden-character export follow-up (PR #135).** Final review reproduced a
+missing-preview error after editing a character, hiding it and reloading the
+native scene. Export now prepares a temporary preview only when an
+expression-edited character has no live preview; it preserves resource-block,
+reference and outfit validation and applies combined shape/color/wear/face
+edits. The temporary preview never enters the live cache, so hidden characters
+add no frame-loop work. The regression fails at export on the old Release app
+and passes on the fix; Debug and Release builds succeed. The paired scenarios
+now save key 65 hidden, export in a fresh process, reimport and verify visibility
+and all eleven fields, then reload the native file again for the existing
+Reset/Undo and exact-pixel checks: **7/7 save and 16/16 load steps pass**; the
+83-step edit scenario also passes again. This does not generalize support to hidden
+characters carrying only older shape/wear edits.
+
 ## CharaStudio reload acceptance
 
 Reviewed 2026-09-30. This closes the "reload in the original CharaStudio" half of the ST-T03 edit destinations: our app's own exported scene records are loaded into the real CharaStudio player, and the state the player shows is recorded and compared claim by claim.

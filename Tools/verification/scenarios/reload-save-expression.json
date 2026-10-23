@@ -48,6 +48,11 @@
       }
     },
     {
+      "op": "setVisible",
+      "key": 65,
+      "visible": false
+    },
+    {
       "op": "saveDocument",
       "path": ".local/verification/scenario-exports/reload-save-expression.png"
     },
@@ -67,7 +72,8 @@
         "edited": true,
         "eyesLookPattern": 4,
         "neckLookPattern": 0
-      }
+      },
+      "visible": false
     }
   ]
 }

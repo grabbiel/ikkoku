@@ -1031,7 +1031,26 @@ class StudioScenarioLaneTests(unittest.TestCase):
             # for all ST-T03/T04/T15 scenarios, or the native document-card
             # pair (saveDocument → loadDocument) for the ST-T01 reload
             # scenarios, whose load side is a SEPARATE load-first check.
-            if "saveDocument" in ops or "loadDocument" in ops:
+            if check["id"] == "studio-scenario-reload-load-expression":
+                # This one load-first regression exports a hidden expression
+                # edit before any live preview can be built. It then reloads
+                # the same native file for the usual Reset/Undo assertions.
+                # Keep both format boundaries ordered and prohibit a same-
+                # process native save from replacing the fresh-process input.
+                self.assertEqual(os.path.basename(path), "reload-load-expression.json")
+                self.assertEqual(ops[0], "loadDocument")
+                self.assertNotIn("saveDocument", ops)
+                self.assertEqual(ops.count("loadDocument"), 2)
+                self.assertEqual(ops.count("export"), 1)
+                self.assertEqual(ops.count("reimport"), 1)
+                exported, imported = ops.index("export"), ops.index("reimport")
+                reloaded = ops.index("loadDocument", 1)
+                self.assertLess(exported, imported)
+                self.assertLess(imported, reloaded)
+                self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+                self.assertEqual(steps[0]["path"], steps[reloaded]["path"])
+                self.assertNotIn("setVisible", ops[:exported])
+            elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "
                                  "original-format round trip: %s" % path)

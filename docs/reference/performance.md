@@ -809,7 +809,7 @@ Private logs and executable/source provenance are in
 ## Combined integration acceptance (2026-10-23)
 
 The performance, source-expression and selected-skirt branches are integrated
-on `codex/continue-claude-2026-10-23`. The final runtime is `dffc9df`; `83cb84b`
+on `codex/continue-claude-2026-10-23`. The measured runtime is `dffc9df`; `83cb84b`
 corrects only the skirt scenario's animation setup, and `c5822a8` adds a fixture
 assertion without changing runtime code. Debug and Release app builds succeed.
 
@@ -905,6 +905,18 @@ establish a resolved interaction bottleneck.
   known startup-Mute fixture binding failure (target 10, no loaded scene).
   A concurrent DerivedData build collision was rerun alone successfully;
   it is not an unresolved build failure.
+
+Post-review export correction for PR #135: expression-edited characters can now
+export after a hidden native reload. Export prepares a temporary validation
+preview when needed, honors blocked resources and source/outfit identity, and
+never inserts it into the live cache. This changes only the explicit export
+path; the timing and executable hashes above remain those of the measured
+`dffc9df` runtime. The old app fails the regression at export; Debug and Release
+builds of the fix pass, as do the expression scenarios. The final paired scenario
+saves the character hidden and exports from a fresh process before checking both
+original and native reloaded values (7/7 save, 16/16 load; edit rerun 83/83).
+Evidence is in `integration/expression-hidden-*`
+and `codex-expression-hidden-*.json` reports.
 
 Private evidence is under `.local/codex-resume-2026-10-23/`: `baseline/captures/`,
 `integration/{captures,performance-only-control,window-performance}/`,

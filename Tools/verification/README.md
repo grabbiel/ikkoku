@@ -86,7 +86,7 @@ them claims whole-game parity; read each `tolerance`.
 ## Combined local continuation (2026-10-23)
 
 The performance, expression and skirt work is integrated on
-`codex/continue-claude-2026-10-23`. Final runtime `dffc9df` builds in Debug and
+`codex/continue-claude-2026-10-23`. Measurement runtime `dffc9df` builds in Debug and
 Release. Later `83cb84b` changes skirt setup only, and `c5822a8` adds a fixture
 assertion. Results below supersede the historical lane counts above for this
 branch; they do not close unrelated missing-fixture findings.
@@ -138,7 +138,14 @@ Face-inspector editing, Undo, Redo and Reset were checked separately. The
 original-player comparison accepts all 308 serialized-field claims; the final
 export's scene body matches that input exactly, with only its thumbnail changed.
 These results do not claim unsupported tears, cheek, gag-eye or voice-lip-sync
-visual parity.
+visual parity. PR #135 adds a cross-format regression: save an edited character
+hidden, load in a fresh app process, export/reimport the original format, then
+reload native state for the existing Reset/Undo assertions. The old Release
+binary fails at export; the export-local preview fix passes without introducing
+hidden-character work into live frames. The runner requires this specific load
+check to verify both format boundaries, preserving native-only rules for every
+other reload pair. The final save/load pair passes **7/7 and 16/16** steps,
+and the edit scenario again passes **83/83**.
 
 ## Studio scenario hook (T-T04)
 

@@ -1828,11 +1828,15 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-expression.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Source Expression controls share StudioModel editing: validates fields, rendered pixels, exact undo/redo/reset, native reload and identity-preserving original export. Undrawn fields must report explicit diagnostics.",
+      "tolerance": "Source Expression controls share StudioModel editing: validates fields, rendered pixels, exact undo/redo/reset, native reload and identity-preserving original export. Undrawn fields must report explicit diagnostics. Hidden expression-edited characters still export after native reload without populating the live preview cache; reimport retains visibility and all eleven serialized fields.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-reload-load-expression.json",
           "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-hidden-expression-original.png",
+          "kind": "exported-scene"
         }
       ],
       "timeout": 600
