@@ -852,8 +852,8 @@ captured for comparison.
 ## Verification and reproduction
 
 The focused native run (`swift test --filter 'sourceFixedEvent|sourceADV|sourceCLR'`)
-has 29 tests: thirteen cover scheduler behavior, command batching, waits,
-arithmetic, type-sensitive comparisons, fault positions, loop budgets, float
+has 30 tests, including the G-T02 gated sample test. Thirteen cover scheduler
+behavior, command batching, waits, arithmetic, type-sensitive comparisons, fault positions, loop budgets, float
 interchange, the original parameter scenario and the coverage sample; sixteen in
 `SourceADVHostRequestTests.swift` cover the Mono parsers, every presentation
 command's defaults and argument forms, invalid and unmodelled forms, blocking
@@ -863,7 +863,7 @@ bindings across advances and jumps, host failure, JSON round trips and
 save/restore mid-wait, mid-acknowledgement and mid-Next.
 
 G-T02 adds 18 tests in `SourceADVCharacterBindingTests.swift` (filter
-`'sourceCharacter|sourceConvert|sourceHeroine|sourcePlayer|sourceParameterFile|sourceOriginalParameter|sourceBoundInterpreter|sourceInterpreterState|sourceADVCharacter'`):
+`'sourceCharacterKeyTables|sourceCharacterDefaults|sourceConvertToInt32|sourceHeroine|sourcePlayerSetADVParam|sourceParameterFile|sourceOriginalParameterShape|sourceBoundInterpreter|sourceInterpreterStateFromBefore|sourceADVCharacter'`):
 
 - the key tables (58/29 and 31/13, Replace keys, members) and the new-game
   defaults;
