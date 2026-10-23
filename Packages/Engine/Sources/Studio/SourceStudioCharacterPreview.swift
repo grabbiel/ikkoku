@@ -810,7 +810,7 @@ public final class SourceStudioCharacterPreview {
         }
         var draft = try SourceCardAppearance(card: appearanceCard, coordinate: coordinate)
         let supported = Set(draft.colors.map(\.id))
-        for (id, rgba) in edits.map { $0.sorted { $0.key < $1.key } } ?? [] {
+        for (id, rgba) in edits.map({ $0.sorted { $0.key < $1.key } }) ?? [] {
             guard supported.contains(id) else { throw RigError.invalid("Unsupported color field \(id).") }
             // setColor validates finiteness and the 0...1 range; rethrow with
             // the field named so the inspector reports which color was rejected.

@@ -587,6 +587,20 @@ parallel suite, however, its two tests stalled together in their first
 exceeded the lane's 600 s timeout. The cause was not isolated further. The GPU
 tests now also run one at a time (`@Suite(.serialized)`).
 
+The stall did not reproduce on the reference Mac (24 cores; Xcode 27.0, Swift
+6.4; 2026-10-23). That run used the textured version from `dbb62d2^`, unchanged
+except for timestamped progress lines, with the rest of the suite at
+`claude/local-wave-verify` `5c24bb9`. `swift test --package-path
+Packages/Engine` passed six times:
+- four parallel runs: all 654 tests passed in 10.0–10.5 s, and the
+  create–remove test took about 10 s;
+- one `--no-parallel` run: 17.2 s;
+- one parallel run with `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`, which limits
+  the cooperative pool to one thread: 17.0 s.
+
+No texture-loader deadlock was isolated, so nothing was changed. The CI runner
+that stalled differs: 3 vCPUs and Xcode 26.6 / Swift 6.3.3.
+
 - `characterCreateRemoveCyclesReturnTheResourceStoreToBaseline` runs four
   create–draw–remove cycles, alternating five and two garments. It alternates
   the explicit release with `deinit`. After each removal, the pending frame still renders with
@@ -832,6 +846,17 @@ rejections now also cover a zero-length lower bone and a nonfinite pole.
 `swift test --package-path Packages/Engine --filter solveTwoBone` runs them.
 Swift was not compiled locally, so the CI Engine suite is the only test run.
 Studio's IK handles, drag and status line were not run interactively.
+
+App check, 2026-10-23 (local-wave-verify, Debug build): the studio lane's
+`reload-save-ik` / `reload-load-ik` pair drives a native female's Left hand IK
+through the Pose tab's methods. It reads the rendered instance's pose; see
+[Native IK re-solve and unsolved status](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
+The end reached each target within 1.5e-7 m. A +0.02/−0.02 Stepper round trip
+on X returned the same target float and a bit-identical arm. A 1e20 target
+reported "Left hand IK left unsolved: IK reach is not finite." and left the arm
+bit-identical to its pre-IK pose. With this section's former update patched
+back in, the four reach asserts failed by 16–74 mm. Enabling IK at the hand's
+own position moves the elbow about 2.3 cm, to the default pole's side.
 
 Remaining limits:
 

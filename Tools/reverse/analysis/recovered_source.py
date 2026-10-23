@@ -24,6 +24,7 @@ except ImportError:  # Imported as analysis.recovered_source from Tools/reverse.
 
 MAIN_GAME = 'Koikatu_Data/Managed/Assembly-CSharp.dll'
 FIRSTPASS = 'Koikatu_Data/Managed/Assembly-CSharp-firstpass.dll'
+CHARA_STUDIO = 'CharaStudio_Data/Managed/Assembly-CSharp.dll'
 
 
 class RecoveredSourceError(ValueError):

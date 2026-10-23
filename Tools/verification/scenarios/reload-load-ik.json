@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-ik.png"},
+    {"op": "assert", "ik": {"character": "Hana", "chain": "hand_L", "enabled": true, "solved": true, "reachesTarget": 0.001, "target": [0.3, null, null]}},
+    {"op": "assertRejected", "statusContains": "IK left unsolved", "errorContains": "does not contain \"IK left unsolved\""},
+    {"op": "setIKEnabled", "character": "Hana", "chain": "hand_L", "on": false},
+    {"op": "assertRejected", "ik": {"character": "Hana", "chain": "hand_L", "reachesTarget": 0.001}, "errorContains": "from its target"},
+    {"op": "undo"},
+    {"op": "assert", "ik": {"character": "Hana", "chain": "hand_L", "enabled": true, "solved": true, "reachesTarget": 0.001, "target": [0.3, null, null]}}
+  ]
+}

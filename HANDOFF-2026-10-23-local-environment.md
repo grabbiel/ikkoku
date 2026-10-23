@@ -189,10 +189,10 @@ This needs push rights; the cloud session's proxy refused branch deletion.
 
 | Task | Status |
 | --- | --- |
-| L1 app checks | open |
-| L2 lanes | open |
-| L3 A-T04 probe rerun | open |
-| L4 T-T01 versions | open |
-| L5 E-T02 rerun | open |
-| L6 texture-loader stall | open |
-| L7 branch cleanup | open |
+| L1 app checks | partial (#133): A-T01 ticked. A-T05 and A06 stay open on `app-smoke` 6/7 (`startup-mute-capture` binds source object 10 but loads no scene). Left for the user: the Xcode navigator's `Packages/` (T-T02); choosing a moved copy through the menu, then opening a scene saved against another location (A-T02); the #115 handle-drag re-solve; and the #110 pose and camera halves by hand |
+| L2 lanes | done (#133): counts in `Tools/verification/README.md`. Open findings: `startup-mute-capture`; the appearance root exceeds the runner's tree bounds; no managed recovery export; `maker_roundtrip.py` argv |
+| L3 A-T04 probe rerun | done (#132): `native-adapter-capture-04`, both configs exit 0, 89/89 compared |
+| L4 T-T01 versions | done (#133) |
+| L5 E-T02 rerun | done (#133) |
+| L6 texture-loader stall | done (#133): not reproduced in six local runs |
+| L7 branch cleanup | done (orchestrator, 2026-10-23: rechecked against origin/main and each branch's merged PR, then deleted the 32 listed merged claude/* branches and the unmerged claude/r6-character-lifetime-diag; its two TEMP commits are kept privately as patches) |

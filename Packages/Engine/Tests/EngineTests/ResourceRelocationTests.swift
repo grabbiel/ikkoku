@@ -404,6 +404,72 @@ private struct RelocationFixture {
     #expect(regenerated.root == maker.root)
 }
 
+@Test func convertedSelectionRecordsAndReportsItsCompanionFiles() throws {
+    let fixture = try RelocationFixture()
+    defer { fixture.remove() }
+    let fm = FileManager.default
+    // The lookups read the companions beside the female base manifest; the helper is
+    // exactly the former `../` expression of AppState and MakerModel.
+    let rig = fixture.old.appendingPathComponent("rigs/source-avatar.json")
+    #expect(ResourceCompanion.studioPoseContract.url(besideManifest: rig)
+            == rig.deletingLastPathComponent().appendingPathComponent("../studio-pose/contract.json").standardizedFileURL)
+    #expect(ResourceCompanion.femaleBaseAnimation.url(besideManifest: rig)
+            == rig.deletingLastPathComponent().appendingPathComponent("../animation-assets/female-base/animation.json").standardizedFileURL)
+    // The fixture layout has the Studio pose contract and no animation library.
+    let location = try ResourceLibraryLocation.convertedRoot(fixture.old)
+    let contract = fixture.old.appendingPathComponent("studio-pose/contract.json").standardizedFileURL
+    #expect(location.companions == [ResourceCompanionRecord(companion: .studioPoseContract, path: contract.path,
+                                                            sha256: fixture.digest("studio-pose/contract.json"))])
+    #expect(try ResourceLibraryLocation.decode(location.encoded()) == location)
+    let missingAnimation = location.companionProblems()
+    #expect(missingAnimation.map(\.companion) == [.femaleBaseAnimation])
+    #expect(missingAnimation.first?.currentSHA256 == nil)
+    #expect(missingAnimation.first?.description.contains("animation-assets/female-base/animation.json is missing") == true)
+    // A companion added after the selection is reported as unrecorded, not trusted.
+    let animation = fixture.old.appendingPathComponent("animation-assets/female-base/animation.json")
+    try fm.createDirectory(at: animation.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data(#"{"states":[]}"#.utf8).write(to: animation)
+    let unrecorded = try #require(location.companionProblems().first)
+    #expect(unrecorded.companion == .femaleBaseAnimation && unrecorded.recordedSHA256 == nil && unrecorded.currentSHA256 != nil)
+    let complete = try ResourceLibraryLocation.convertedRoot(fixture.old)
+    #expect(complete.companions.map(\.companion) == [.studioPoseContract, .femaleBaseAnimation])
+    #expect(complete.companionProblems().isEmpty)
+    // Other contract bytes after the selection are a change.
+    try Data(#"{"bones":[],"regenerated":true}"#.utf8).write(to: contract)
+    let changed = complete.companionProblems()
+    #expect(changed.map(\.companion) == [.studioPoseContract])
+    #expect(changed.first?.recordedSHA256 == fixture.digest("studio-pose/contract.json"))
+    #expect(changed.first?.description.contains("changed since the library was selected") == true)
+    // The 2026-10-23 manual run: the layout copied with maker-library/ and rigs/
+    // only. The selection still succeeds (the Maker needs no companion) and names
+    // the missing contract instead of reporting success.
+    let copy = fixture.base.appendingPathComponent("copy", isDirectory: true)
+    for folder in ["maker-library", "rigs"] {
+        try fm.createDirectory(at: copy, withIntermediateDirectories: true)
+        try fm.copyItem(at: fixture.old.appendingPathComponent(folder), to: copy.appendingPathComponent(folder))
+    }
+    let partial = try ResourceLibraryLocation.convertedRoot(copy)
+    #expect(partial.libraries.map(\.kind) == [.femaleBase, .makerLibrary])
+    #expect(partial.companions.isEmpty)
+    let gaps = partial.companionProblems()
+    #expect(gaps.map(\.companion) == [.studioPoseContract, .femaleBaseAnimation])
+    #expect(gaps.first?.path == copy.appendingPathComponent("studio-pose/contract.json").standardizedFileURL.path)
+    #expect(gaps.first?.description.contains("source scene characters cannot be previewed") == true)
+    // Without a female base no companion applies.
+    let makerOnly = fixture.base.appendingPathComponent("maker-only", isDirectory: true)
+    try fm.createDirectory(at: makerOnly, withIntermediateDirectories: true)
+    try fm.copyItem(at: fixture.old.appendingPathComponent("maker-library"), to: makerOnly.appendingPathComponent("maker-library"))
+    let maker = try ResourceLibraryLocation.convertedRoot(makerOnly)
+    #expect(maker.companions.isEmpty && maker.companionProblems().isEmpty)
+    // A selection saved before companions were recorded decodes with none; a
+    // duplicate companion record is refused.
+    let legacy = try ResourceLibraryLocation.decode(Data(#"{"version":1,"libraries":[]}"#.utf8))
+    #expect(legacy.companions.isEmpty)
+    var duplicate = complete
+    duplicate.companions.append(duplicate.companions[0])
+    #expect(throws: ResourceLibraryError.self) { try ResourceLibraryLocation.decode(duplicate.encoded()) }
+}
+
 @Test func documentsWithoutABindingResolveInPlaceAndUnsupportedBindingsAreRefused() throws {
     let fixture = try RelocationFixture()
     defer { fixture.remove() }
