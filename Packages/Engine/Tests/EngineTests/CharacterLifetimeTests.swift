@@ -208,13 +208,6 @@ func onlyASubmittedFrameCreatedAfterARetirementCompletesIt() throws {
 }
 
 @Test func renderStatusReporterShowsAProblemOnceAndRestoresTheStatusAfterRecovery() {
-    var reporter = RenderStatusReporter()
-    var status = "Ready"
-    func poll(_ error: RenderFrameError?, _ statistics: RenderFrameStatistics, at time: Double) -> String? {
-        let text = reporter.status(current: status, error: error, statistics: statistics, now: time)
-        if let text { status = text }
-        return text
-    }
     let healthy = RenderFrameStatistics()
     var dropped = RenderFrameStatistics()
     dropped.enabledLights = 10
@@ -224,30 +217,42 @@ func onlyASubmittedFrameCreatedAfterARetirementCompletesIt() throws {
     let unshaded = "2 enabled lights are not shaded: frames shade at most \(IK_MAX_LIGHTS) lights."
     #expect(RenderStatusReporter.message(error: nil, statistics: dropped) == unshaded)
     #expect(RenderStatusReporter.message(error: failure, statistics: dropped) == skipped)
-
-    // Times are exact binary fractions so the one-second comparisons are exact.
+    #expect(RenderStatusReporter.message(error: nil, statistics: healthy) == nil)
     #expect(RenderStatusReporter.clearDelay == 1)
-    #expect(poll(nil, healthy, at: 0) == nil)
-    #expect(poll(failure, healthy, at: 0.25) == skipped)
-    // Polling the same problem never rewrites the line.
-    #expect(poll(failure, healthy, at: 0.5) == nil)
-    // A frame that succeeds in between does not clear it at once (no flicker).
-    #expect(poll(nil, healthy, at: 0.75) == nil)
-    #expect(poll(failure, healthy, at: 1) == nil)
-    #expect(poll(nil, healthy, at: 1.25) == nil)
-    #expect(poll(nil, healthy, at: 2) == nil)
-    // After a second of healthy frames the replaced status returns.
-    #expect(poll(nil, healthy, at: 2.25) == "Ready")
-    #expect(status == "Ready")
-    #expect(poll(nil, healthy, at: 3) == nil)
 
-    #expect(poll(nil, dropped, at: 4) == unshaded)
-    // A status other code wrote meanwhile is kept, and the same problem is not written over it.
-    status = "Saved scene"
-    #expect(poll(nil, dropped, at: 4.25) == nil)
-    #expect(status == "Saved scene")
-    // A different problem is shown; recovery then restores the status it replaced.
-    #expect(poll(failure, dropped, at: 4.5) == skipped)
-    #expect(poll(nil, healthy, at: 5) == nil)
-    #expect(poll(nil, healthy, at: 6) == "Saved scene")
+    // One editor-timer poll per step. `overwrite` is a status other code writes
+    // first; `written` is what the reporter returns; `line` is the status after.
+    // Times are exact binary fractions so the one-second comparisons are exact.
+    typealias Step = (overwrite: String?, error: RenderFrameError?, statistics: RenderFrameStatistics, time: Double,
+                      written: String?, line: String)
+    let steps: [Step] = [
+        (nil, nil, healthy, 0, nil, "Ready"),
+        (nil, failure, healthy, 0.25, skipped, skipped),
+        // Polling the same problem never rewrites the line.
+        (nil, failure, healthy, 0.5, nil, skipped),
+        // A frame that succeeds in between does not clear it at once (no flicker).
+        (nil, nil, healthy, 0.75, nil, skipped),
+        (nil, failure, healthy, 1, nil, skipped),
+        (nil, nil, healthy, 1.25, nil, skipped),
+        (nil, nil, healthy, 2, nil, skipped),
+        // After a second of healthy frames the replaced status returns.
+        (nil, nil, healthy, 2.25, "Ready", "Ready"),
+        (nil, nil, healthy, 3, nil, "Ready"),
+        (nil, nil, dropped, 4, unshaded, unshaded),
+        // A status other code wrote meanwhile is kept; the same problem is not written over it.
+        ("Saved scene", nil, dropped, 4.25, nil, "Saved scene"),
+        // A different problem is shown, and recovery restores the status it replaced.
+        (nil, failure, dropped, 4.5, skipped, skipped),
+        (nil, nil, healthy, 5, nil, skipped),
+        (nil, nil, healthy, 6, "Saved scene", "Saved scene"),
+    ]
+    var reporter = RenderStatusReporter()
+    var status = "Ready"
+    for (index, step) in steps.enumerated() {
+        if let overwrite = step.overwrite { status = overwrite }
+        let written = reporter.status(current: status, error: step.error, statistics: step.statistics, now: step.time)
+        if let written { status = written }
+        #expect(written == step.written, "step \(index) at \(step.time)s")
+        #expect(status == step.line, "step \(index) at \(step.time)s")
+    }
 }
