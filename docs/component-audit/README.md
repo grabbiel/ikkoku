@@ -67,7 +67,7 @@ have not been established. Current catalog counts state their actual denominator
 | Full-body IK/guides | Mid-stage | Recovered solver tests exist; editor reachability and actual original-player full-body comparison remain |
 | Animator/dynamics | Mid-stage | Selected normal states and hair chains; remaining controllers, loop correction, cloth and full sequence parity |
 | Voice/audio | Mid-stage | Scheduler/mixer subset; original waveform coverage, spatial/lip-sync and scene sound consumers |
-| Gameplay as a playable game | Infancy | Isolated cycle/event/ADV kernels lack session, NPC, scene and presentation host |
+| Gameplay as a playable game | Infancy | A headless native host runs one synthetic fixed event across save/reload; NPC, scene, presentation, original save state and an interactive mode are missing |
 | General managed plugin compatibility | Infancy | Strict bounded AST subset plus two exact native adapters; no general Harmony/coroutine/Unity host |
 | Recovery/build/test infrastructure | Mid-stage | Reproducibility, explicit fixture skips, automatic orchestration and release gating |
 
@@ -120,7 +120,9 @@ compile and its only Swift test run. Each slice's report row names its evidence.
   rejected; packaged glTF loads are confined to their verified package root.
 - G-T01 ([#105](https://github.com/grabbiel/ikkoku/pull/105)): engine
   `SourceGameplaySession` with classified, acknowledged completion barriers and a
-  deterministic mid-barrier reload. No app host consumes it yet (A-T01).
+  deterministic mid-barrier reload. A-T01's first slice adds the native
+  `SourceGameplayHost` that consumes it and a headless app mode
+  (`IKKOKU_GAMEPLAY_SCENARIO`); the app run is pending.
 - R4 ([#106](https://github.com/grabbiel/ikkoku/pull/106), [#110](https://github.com/grabbiel/ikkoku/pull/110)):
   degenerate math, legacy skeletons, cameras, IK, gaze, rays, poses and mirrored
   camera-object parents now produce named errors.
@@ -385,7 +387,7 @@ None of this wave has been run in the app; the three app items below are still o
 | 3 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
 | 4 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
 | 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
-| 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. **2026-10-23:** G-T01's engine slice (`SourceGameplaySession`, #105) is merged; the app host (A-T01) and G-T02 bindings remain. |
+| 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. **2026-10-23:** G-T01's engine slice (`SourceGameplaySession`, #105) is merged. A-T01's first slice (`SourceGameplayHost` and the headless `IKKOKU_GAMEPLAY_SCENARIO` mode) is CI-verified only, and its app lane has not run. G-T02 bindings remain. |
 | 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. **2026-10-23:** P-T02's first slice is merged as #112 (library generations, one dependency graph, saved selections). App selection wiring, batch DLL triage and P-T01/03/05 remain. P-T04's Swift slice (#107) is also merged. |
 | 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. **2026-10-23:** T-T01's first slice is merged as #116 (recorded prerequisites, `doctor.py`, a CI check). Versions for the unrecorded tools and the deployment matrix remain. |
 

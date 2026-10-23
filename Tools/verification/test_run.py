@@ -642,6 +642,7 @@ MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
 APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
                         "IKKOKU_NATIVE_PLUGIN_REPORT", "IKKOKU_BENCHMARK_OUTPUT",
                         "IKKOKU_STUDIO_SCENARIO_REPORT", "IKKOKU_MAKER_SCENARIO_REPORT",
+                        "IKKOKU_GAMEPLAY_SCENARIO_REPORT",
                         "IKKOKU_SAVE_CARD", "IKKOKU_SAVE_SCENE", "IKKOKU_EXPORT_SOURCE_CARD",
                         "IKKOKU_EXPORT_SOURCE_SCENE")
 
@@ -767,9 +768,10 @@ class StudioScenarioLaneTests(unittest.TestCase):
             self.checks = run.validate_manifest(json.load(handle))
 
     def scenario_files(self):
-        # maker-*.json belongs to the maker-scenarios lane, not this one.
+        # maker-*.json and gameplay-*.json belong to their own lanes, not this one.
         return sorted(name for name in os.listdir(self.SCENARIO_DIR)
-                      if name.endswith(".json") and not name.startswith("maker-"))
+                      if name.endswith(".json")
+                      and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
         self.assertEqual(len(self.checks), 39)
@@ -1087,6 +1089,99 @@ class MakerScenarioLaneTests(unittest.TestCase):
             self.assertGreater(ops.index("reimport"), ops.index("export"))
             self.assertEqual(ops[-1], "assert",
                              "the last step must verify the reloaded card: %s" % path)
+
+
+GAMEPLAY_SCENARIO_OPS = ("perform", "run", "reload", "assert")
+GAMEPLAY_OPERATIONS = ("nextPeriod", "changePeriod", "changeWeek", "nextWeek",
+                       "reloadNightMenuWeek", "completeNightMenu", "beginMapMove",
+                       "finishMapMove")
+GAMEPLAY_RUN_CONDITIONS = ("idle", "eventRunning", "mapLoading", "barrier")
+
+
+class GameplayScenarioLaneTests(unittest.TestCase):
+    """A-T01: the gameplay-scenarios lane and its scenario files are well-formed.
+
+    The Engine test `sourceGameplayHostShippedScenarioPersistsReloadsAndResumesIdentically`
+    runs the same scenario in CI; the lane runs it through the built app on the
+    Mac. This keeps the lane from shipping a scenario the hook cannot decode, a
+    snapshot or report outside `.local/`, or an undeclared output.
+    """
+
+    LANE = os.path.join(_HERE, "lanes", "gameplay-scenarios.json")
+    SCENARIO_DIR = os.path.join(_HERE, "scenarios")
+
+    def setUp(self):
+        with open(self.LANE, encoding="utf-8") as handle:
+            self.checks = run.validate_manifest(json.load(handle))
+
+    def scenario(self, check):
+        with open(os.path.join(run.REPO_ROOT, check["env"]["IKKOKU_GAMEPLAY_SCENARIO"]),
+                  encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_lane_validates_and_covers_every_gameplay_scenario(self):
+        self.assertEqual(len(self.checks), 1)
+        referenced = set()
+        for check in self.checks:
+            self.assertEqual(check["referenceTier"], "app-smoke")
+            self.assertEqual(check.get("fixtures", []), [],
+                             "the controlled catalog is synthetic: %s" % check["id"])
+            scenario = check["env"]["IKKOKU_GAMEPLAY_SCENARIO"]
+            referenced.add(os.path.basename(scenario))
+            self.assertTrue(os.path.isfile(os.path.join(run.REPO_ROOT, scenario)),
+                            "lane names a missing scenario: %s" % scenario)
+        files = sorted(name for name in os.listdir(self.SCENARIO_DIR)
+                       if name.endswith(".json") and name.startswith("gameplay-"))
+        self.assertEqual(sorted(referenced), files)
+
+    def test_report_and_snapshots_are_local_artifacts(self):
+        for check in self.checks:
+            artifacts = [a["path"] for a in check.get("artifacts", [])]
+            report = check["env"]["IKKOKU_GAMEPLAY_SCENARIO_REPORT"]
+            self.assertTrue(report.startswith(".local/verification/"))
+            self.assertIn(report, artifacts)
+            paths = [step["path"] for step in self.scenario(check)["steps"]
+                     if step["op"] == "reload" and "path" in step]
+            self.assertTrue(paths)
+            for path in paths:
+                self.assertTrue(path.startswith(".local/verification/"),
+                                "snapshots must stay under .local/verification: %s" % path)
+                self.assertIn(path, artifacts, "snapshot must be a hashed artifact: %s" % path)
+
+    def test_step_shape(self):
+        for check in self.checks:
+            scenario = self.scenario(check)
+            self.assertEqual(scenario["schemaVersion"], 1)
+            catalog = scenario["catalog"]
+            self.assertEqual(catalog["schemaVersion"], 1)
+            self.assertIn(scenario["start"]["map"], catalog["mapNumbers"])
+            maps = set(catalog["mapNumbers"])
+            for step in scenario["steps"]:
+                op = step["op"]
+                self.assertIn(op, GAMEPLAY_SCENARIO_OPS)
+                if op == "perform":
+                    self.assertIn(step["operation"], GAMEPLAY_OPERATIONS)
+                if op == "run":
+                    self.assertIn(step.get("until", "idle"), GAMEPLAY_RUN_CONDITIONS)
+                if op == "assert":
+                    declared = [k for k in ("period", "week", "savedWeek", "activeMap",
+                                            "completedEvents", "runningEvent", "idle")
+                                if k in step]
+                    self.assertTrue(declared, "assert declares nothing")
+                    if "activeMap" in step:
+                        self.assertIn(step["activeMap"], maps)
+
+    def test_scenario_reloads_mid_event_and_ends_verified(self):
+        for check in self.checks:
+            steps = self.scenario(check)["steps"]
+            ops = [step["op"] for step in steps]
+            self.assertEqual(ops[-1], "assert")
+            # A reload while the event's map loads and one while a barrier is held.
+            stops = [steps[i - 1].get("until") for i, op in enumerate(ops)
+                     if op == "reload" and i > 0]
+            self.assertIn("mapLoading", stops)
+            self.assertIn("barrier", stops)
+            self.assertGreater(len(ops) - 1 - ops[::-1].index("reload"), ops.index("perform"))
 
 
 if __name__ == "__main__":
