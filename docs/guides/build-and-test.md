@@ -301,8 +301,12 @@ copied to a temporary folder, with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and
   6 characters with no `Unresolved` line.
 
 That run covers the selection path, not relocation: the scene was saved after
-the copy was chosen. Not yet run: open a scene saved against one location after
-choosing a moved copy through the menu.
+the copy was chosen. The user's relocation run, the same day on main `c9df5df`,
+saved the scene from the Debug app with `.local/reverse/` chosen, then chose the
+moved copy, which held the libraries, both companions and the scene. The Release
+app, copied outside the checkout with `IKKOKU_SOURCE_TREE_FALLBACKS=0`, opened the
+saved scene with `Resource check: 31 references: 0 resolved, 31 relocated, 0
+unresolved.` and all 6 characters.
 
 ## Test layers
 
@@ -539,7 +543,8 @@ converted assets. Reload steps with a `path` write the host snapshot there and
 resume from the file read back. The report at `IKKOKU_GAMEPLAY_SCENARIO_REPORT`
 lists every step, reload and host trace entry. The app exits 0 only when every
 step passed. The Engine suite runs the same shipped scenario in CI; the app run
-is the `gameplay-scenarios` lane (not yet run on the Mac):
+is the `gameplay-scenarios` lane (passed 1/1 `--strict` on the Mac on 2026-10-23; see
+`Tools/verification/README.md`):
 
 ```sh
 python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json
