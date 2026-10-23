@@ -23,14 +23,14 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**811 files indexed; 811 assigned; 0 unassigned.**
+**812 files indexed; 812 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 79 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 302 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 303 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 136 |
 
 | File role | Files |
@@ -42,7 +42,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
 | Runtime / shared shader declaration | 175 |
-| Test / validation | 163 |
+| Test / validation | 164 |
 
 ## App / gameplay / plugins
 
@@ -691,6 +691,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/GLTFTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/MaterialImportTests.swift](../../Packages/Engine/Tests/EngineTests/MaterialImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
