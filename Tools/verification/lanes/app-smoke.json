@@ -64,6 +64,39 @@
       "referenceTier": "app-smoke",
       "tolerance": "Validates the report produced by studio-inspector-capture; until the PR #5 app hooks exist, nothing writes that JSON, so this check fails on the absent report — exactly as intended.",
       "timeout": 120
+    },
+    {
+      "id": "build-release-app",
+      "argv": ["xcodebuild", "-project", "Ikkoku.xcodeproj", "-scheme", "IkkokuCreator", "-configuration", "Release", "-derivedDataPath", ".local/build-release", "-destination", "platform=macOS,arch=arm64", "ARCHS=arm64", "build"],
+      "env": {},
+      "referenceTier": "app-smoke",
+      "tolerance": "Builds the optimized app that release-startup-capture launches. The flags match the CI release-package job, except that signing stays on. Debug lanes cannot catch optimizer-only faults: on 2026-10-23 every Release render crashed while all Debug lanes passed (R6, FrameRing.allocate(array:)).",
+      "artifacts": [
+        {"path": ".local/build-release/Build/Products/Release/Ikkoku.app/Contents/MacOS/Ikkoku", "kind": "built-executable"}
+      ],
+      "timeout": 1800
+    },
+    {
+      "id": "release-startup-capture",
+      "argv": [".local/build-release/Build/Products/Release/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "env": {
+        "IKKOKU_SOURCE_TREE_FALLBACKS": "0",
+        "IKKOKU_AUTOCAPTURE": ".local/verification/captures/release-startup.png"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Release smoke: renders the bundled public Maker character once and exits 0 with a nonempty PNG. Source-tree fallbacks are off and the saved converted library is ignored in an automated run, so only bundled assets are used and no fixture is needed. Before the R6 fix (2026-10-23, Xcode 27.0 / Swift 6.4) this run crashed with SIGSEGV in Renderer.prepare on the first skinned frame. The PNG proves only that one optimized frame rendered and was written; it is not a visual reference.",
+      "artifacts": [
+        {"path": ".local/verification/captures/release-startup.png", "kind": "render-capture"}
+      ],
+      "timeout": 300
+    },
+    {
+      "id": "engine-release-frame-ring",
+      "argv": ["swift", "test", "-c", "release", "-Xswiftc", "-enable-testing", "--package-path", "Packages/Engine", "--scratch-path", ".local/swift-release", "--filter", "frameRing"],
+      "env": {},
+      "referenceTier": "synthetic",
+      "tolerance": "Runs the FrameRing tests optimized; a cold build takes about four minutes. frameRingArrayAllocationReachesAThrowingCallerWithoutAnError calls allocate(array:) from a throwing caller. Before the R6 fix, this release run ended with signal 11; the Debug suite passed. GPU cases need a Metal device.",
+      "timeout": 1200
     }
   ]
 }

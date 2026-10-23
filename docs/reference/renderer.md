@@ -438,11 +438,70 @@ metallib:
   64-target truncation differs by more than 1e-2.
 - `resourceStoreAddRemoveCyclesKeepResourceCountsBounded` runs 40
   mesh/texture/deform/hidden add-remove cycles.
+- `frameRingArrayAllocationReachesAThrowingCallerWithoutAnError` calls
+  `allocate(array:)` three times from an out-of-line throwing caller and reads
+  the values back. An empty array takes one aligned slot. It guards the Release
+  fault below and only means something when the suite runs optimized.
+
+**Release fault (found and fixed 2026-10-23).** This slice was first run in
+the app on 2026-10-23 (main `87cf261`, Xcode 27.0, Swift 6.4
+`swiftlang-6.4.0.34.1`, macOS 27.0.1). Every render from a Release build
+crashed on its first skinned frame: thumbnails, `IKKOKU_AUTOCAPTURE`, and the
+interactive display link. All Debug builds and lanes passed. The crash was a
+SIGSEGV in `objc_retain`, called from `Renderer.prepare` at offset 156. A
+Release build of the commit before #119 (`17aef4a`) captured normally.
+
+An lldb register trace on the Release binary isolated the cause:
+
+1. `allocate(array:)` copied the array inside an `array.withUnsafeBytes`
+   closure. In the optimized build, that non-throwing closure loaded
+   `MTLBuffer.contents()` into x21, the Swift error register. It then
+   tail-called `memmove` without restoring x21. Trace: x21 = `0x0` on entry,
+   `0x10ac88000` at the `b memmove`.
+2. The standard library's `withUnsafeBytes` saw a nonzero x21 after the closure
+   returned. It treated that as an error thrown by the closure and returned it.
+3. `allocate(array:)` does not check x21 after that call, because the closure
+   cannot throw, so it returned normally with x21 still set.
+4. `buildContext` treated that as a thrown error at its first array allocation,
+   the morph entries.
+5. `prepare`'s `catch` retained the "error", which is a raw buffer pointer, and
+   crashed.
+
+Before #119, `allocate(array:)` did not throw, so nothing read the clobbered
+register. In an otool scan of the whole Release binary, this closure is the
+only function that overwrites x21 without saving it and then tail-calls
+another symbol.
+
+The fix copies the array without a closure, through a typed-pointer helper
+(`FrameRing.copy`, using implicit array-to-pointer conversion). A two-module
+package of about 60 lines reproduces the fault outside ikkoku with the same
+closure. `swift run -c release repro` exits 139 (SIGSEGV), while the Debug
+build and the closure-free variant run cleanly. It is kept as private
+evidence for a Swift compiler report, together with the traces and the
+disassembly, under `.local/local-wave-verify/` (`swift-x21-repro/`,
+`release-crash-x21-closure-trace.txt`).
+
+Guards are in the local `app-smoke` lane
+([Tools/verification/README.md](../../Tools/verification/README.md)):
+
+- `build-release-app` builds the Release app.
+- `release-startup-capture` renders one bundled Maker frame with that build,
+  with source-tree fallbacks off.
+- `engine-release-frame-ring` runs `swift test -c release -Xswiftc
+  -enable-testing --filter frameRing`.
+
+Before the fix, the smoke check exited with signal 11 (SIGSEGV) and the
+optimized test run ended with signal 11. CI does not run these checks. Its
+runners use Xcode 26.6 (Swift 6.3.3), and whether that compiler emits the same
+code is unverified.
 
 Run them with
 `swift test --package-path Packages/Engine --filter 'frameRing|lightPacking|activeMorphEntries|rendererCapture|resourceStoreAddRemove'`.
-Swift was not compiled locally, so the CI Engine suite is the only test run.
-Nothing here was run in the app.
+The first slice was written without a local compiler; CI's Engine suite was
+its only test run. The local run on 2026-10-23 is described above: optimized,
+`--filter frameRing` passed 4/4 after the fix. The app run covered only the
+Release smoke and thumbnail captures. Concurrent interactive/capture/pick
+stress is still not run.
 
 ### Character and import lifetime (R6, second slice)
 
@@ -1241,10 +1300,46 @@ reason instead of a value.
 **Supplement.** [source_binding_supplement.py](../../Tools/reverse/source_binding_supplement.py)
 exports source metadata that the existing contracts omit, without pixels:
 material keywords, `Texture2D` sampler/mip state, the `chara/mm_base.unity3d`
-`cf_m_body` draw material and catalog rows. The fixture run covered 13 bundles
+`cf_m_body` draw material and catalog rows. The #102 fixture run covered 13 bundles
 plus `mm_base` and categories 2 (`cha_eyeset`), 420, 423, 424, 432 and 433. It
 exported 431 materials, 1,603 textures, 1 draw material and 80 catalog rows to
 `.local/r1-live-bindings/supplement.json` (`ec8bcfc5…a05f6`).
+
+The sampler-bundle run (2026-10-23) adds the four catalog bundles behind the 8
+sampler states the #102 run could not resolve: `chara/mt_hairgloss_00.unity3d`,
+`chara/mt_nip_00.unity3d`, `chara/mt_body_detail_00.unity3d` and
+`chara/mt_ramp_00.unity3d`. They were located, not guessed. The fixture's
+textures are hair gloss row 433/0 (`cf_hair_00_01_mh`), nip 423/0
+(`cw_t_nip_000`), body detail 420/0 (`cf_body_00_n`, `cf_body_00_line`) and
+ramp 432/1 (`gt_ramp_01`). In all 32 `abdata/list/characustom/*.unity3d` files
+of the install, categories 420, 423 and 432 are defined only in `00.unity3d`,
+and 433 in `00.unity3d` plus `06.unity3d` (rows 6–8). No ID repeats. Those rows
+name the four bundles as `MainAB`/`MainTexAB`. The install's
+`abdata/abdata` `AssetBundleManifest` (329 bundles) lists all four with no
+dependencies. They were copied read-only from `C:\Illusion\Koikatsu\abdata`
+into the same relative path under `.local/reverse/rigs/source/abdata`, each
+with a `vm_source.py`-format `.provenance.json`:
+
+| Bundle | Bytes | SHA-256 |
+| --- | ---: | --- |
+| `chara/mt_hairgloss_00.unity3d` | 179,507 | `bccfffb854fb8e29057b7cd185c1bd51618bd735cf5dd4877c559b3c6f107253` |
+| `chara/mt_nip_00.unity3d` | 389,017 | `82311edd0eefdcdf98432ee7174c2d8a9d813a6c6254bf8f908726516719520d` |
+| `chara/mt_body_detail_00.unity3d` | 2,500,686 | `7032f145fb57ed082e2162f1869bdcc5ae5b9b8fbc996195a8b6cd9901675346` |
+| `chara/mt_ramp_00.unity3d` | 6,049 | `931947989e635591f4c67ca2ded6399726474214f232e70b6a2416a3a359866b` |
+
+The copy, the list files and the manifest travelled in one batched VM read
+(`.local/r1-sampler-bundles/batched_fetch.py`, the same record and provenance
+format as `vm_source.py fetch`; the per-file equivalent is
+`vm_source.py --output .local/reverse/rigs fetch abdata/chara/<bundle>`). The six
+list files already in the mirror were byte-identical to the install's. With the
+four bundles the run exports 431 materials, 1,650 textures, 1 draw material and
+80 catalog rows to `.local/r1-sampler-bundles/supplement.json`
+(`941f4704…63d92d7`); the #102 output is a subset of it. The new rows give
+`cf_hair_00_01_mh` Bilinear/Repeat/aniso 1/11 mips, `cw_t_nip_000`
+Bilinear/Clamp/1/10, `cf_body_00_n` Bilinear/Repeat/1/1, `mt_body_detail_00`'s
+`cf_body_00_line` Bilinear/Repeat/1/11 and `gt_ramp_01` Bilinear/Clamp/1/1.
+`mm_base` holds a different `cf_body_00_line` (1 mip). The derivation looks catalog
+textures up by bundle and name, so it takes the `mt_body_detail_00` copy.
 
 ```sh
 cd Tools/reverse && ../../.local/reverse/unitypy-venv/bin/python source_binding_supplement.py \
@@ -1254,6 +1349,16 @@ cd Tools/reverse && ../../.local/reverse/unitypy-venv/bin/python source_binding_
   --bundle chara/mt_eyebrow_00.unity3d --bundle chara/mt_eyeline_up_00.unity3d --bundle chara/mt_eyeline_down_00.unity3d \
   --bundle chara/mt_nose_00.unity3d --bundle chara/mt_eye_hi_up_00.unity3d --bundle chara/mt_eye_hi_down_00.unity3d \
   --bundle chara/mt_mask_body_00.unity3d --draw-material chara/mm_base.unity3d:cf_m_body \
+  --category 2 --category 420 --category 423 --category 424 --category 432 --category 433
+# sampler-bundle run: the same arguments plus the four catalog bundles
+cd Tools/reverse && ../../.local/reverse/unitypy-venv/bin/python source_binding_supplement.py \
+  --source ../../.local/reverse/rigs/source/abdata --output ../../.local/r1-sampler-bundles/supplement.json \
+  --bundle chara/bo_hair_b_00.unity3d --bundle chara/bo_hair_f_00.unity3d --bundle chara/co_top_00.unity3d \
+  --bundle chara/co_bot_00.unity3d --bundle chara/co_shoes_00.unity3d --bundle chara/bo_head_00.unity3d \
+  --bundle chara/mt_eyebrow_00.unity3d --bundle chara/mt_eyeline_up_00.unity3d --bundle chara/mt_eyeline_down_00.unity3d \
+  --bundle chara/mt_nose_00.unity3d --bundle chara/mt_eye_hi_up_00.unity3d --bundle chara/mt_eye_hi_down_00.unity3d \
+  --bundle chara/mt_mask_body_00.unity3d --bundle chara/mt_hairgloss_00.unity3d --bundle chara/mt_nip_00.unity3d \
+  --bundle chara/mt_body_detail_00.unity3d --bundle chara/mt_ramp_00.unity3d --draw-material chara/mm_base.unity3d:cf_m_body \
   --category 2 --category 420 --category 423 --category 424 --category 432 --category 433
 ```
 
@@ -1291,6 +1396,11 @@ Packages/Engine/.build/debug/ikkoku-inspect shader-bindings .local/r1c/probe/fix
   .local/reverse/maker-library/library.json .local/reverse/rigs/head-materials/contract.json \
   .local/r1c/probe/shaders .local/r1c/probe/frame-mips.json \
   --supplement .local/r1-live-bindings/supplement.json > .local/r1-live-bindings/shader-bindings.json
+# the same comparison with the sampler-bundle supplement
+Packages/Engine/.build/debug/ikkoku-inspect shader-bindings .local/r1c/probe/fixture-card.png \
+  .local/reverse/maker-library/library.json .local/reverse/rigs/head-materials/contract.json \
+  .local/r1c/probe/shaders .local/r1c/probe/frame-mips.json \
+  --supplement .local/r1-sampler-bundles/supplement.json > .local/r1-sampler-bundles/shader-bindings-after.json
 ```
 
 The gated Engine test `sourceShaderBindingsMatchTheControlledOriginalFrame`
@@ -1299,31 +1409,46 @@ The gated Engine test `sourceShaderBindingsMatchTheControlledOriginalFrame`
 `IKKOKU_SHADER_BINDING_SUPPLEMENT`) pins the numbers below. It checks the
 `frame-mips.json` hash and adds two controls. In the capture-side mutation, one
 hair `_Color` lane +0.01 gives exactly 1 `differs`. Without the supplement, the
-derivation reports its gaps instead of guessing.
+derivation reports its gaps instead of guessing. The test accepts either
+supplement and pins each one's numbers. If the supplement lists all four sampler
+bundles, it expects the totals in the table and 66 of 66 samplers exact. If it
+lists none of them (the #102 supplement), it expects 567/29/0/16/1 and 8
+samplers missing for the "sampler state" cause. A supplement that holds only
+some of the four fails. Mutation control for the sampler rows: a copy of the
+new supplement with `gt_ramp_01`'s wrap changed from Clamp to Repeat
+(`.local/r1-sampler-bundles/controls/`) gives 574 exact and 1 `differs`
+(`_RampG` wrap). With it the gated test fails with 5 issues.
 
 Inputs: `frame-mips.json` `13bd11c2…66f039`, card `4b892fc4…ce53c65`, library
 `d898fea1…cbb609`, head contract `e77ca3f7…c39393` and supplement
-`ec8bcfc5…a05f6`. Native bindings against the authored-mip capture:
+`941f4704…63d92d7` (sampler-bundle run; the #102 supplement was
+`ec8bcfc5…a05f6`). Native bindings against the authored-mip capture:
 
 | Family | Exact | Within tolerance | Differs | Missing natively | Extra | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| global | 7 | 0 | 0 | 3 | 0 | 10 |
-| main_hair | 28 | 3 | 0 | 1 | 0 | 32 |
-| main_hair_front | 84 | 9 | 0 | 3 | 0 | 96 |
+| global | 8 | 0 | 0 | 2 | 0 | 10 |
+| main_hair | 29 | 3 | 0 | 0 | 0 | 32 |
+| main_hair_front | 87 | 9 | 0 | 0 | 0 | 96 |
 | main_item | 73 | 2 | 0 | 0 | 0 | 75 |
 | main_opaque | 147 | 3 | 0 | 0 | 0 | 150 |
-| main_skin | 125 | 3 | 0 | 3 | 0 | 131 |
+| main_skin | 128 | 3 | 0 | 0 | 0 | 131 |
 | toon_eye_lod0 | 34 | 4 | 0 | 6 | 0 | 44 |
 | toon_eyew_lod0 | 54 | 5 | 0 | 0 | 1 | 60 |
 | toon_glasses_lod0 / toon_textureanimation / toon_nose_lod0 | 3 / 3 / 9 | 0 | 0 | 0 | 0 | 3 / 3 / 9 |
-| **Overall** | **567** | **29** | **0** | **16** | **1** | **613** |
+| **Overall** | **575** | **29** | **0** | **8** | **1** | **613** |
+| Overall with the #102 supplement (before) | 567 | 29 | 0 | 16 | 1 | 613 |
 
 By category, shader (20), queue (20), keywords (20) and pass state (31) are all
 exact. Vectors are 191 exact, 18 within tolerance and 2 missing, with the largest
 |Δ| 1.2e-7 from float32 colour rounding. Textures are 100 exact and 9
 within-tolerance composites. Texture transforms are 100 exact, 2 within
-tolerance and 6 missing; samplers are 58 exact and 8 missing. The generated-mip
-`frame.json` (`9aa4de39…bcc750`) gives the same totals. Without the supplement
+tolerance and 6 missing; samplers are 66 of 66 exact (58 exact and 8 missing
+with the #102 supplement). The four bundles closed one global sampler
+(`_RampG`), one in `main_hair`, three in `main_hair_front` and three in
+`main_skin`. Their 5 texture findings were already exact by type and name. They
+now also match by width and height (1024², 512², 8², 1024² and 256×4). With the
+#102 supplement the generated-mip `frame.json` (`9aa4de39…bcc750`) gave the same
+totals; it was not rerun with the new supplement. Without the supplement
 the same derivation reports 456 exact, 27 within tolerance, 2 differing, 114
 missing and 1 extra of 600 (fewer inputs, because the body shader is unknown).
 The step-4 fixes closed `cha_eyeset` (eye pattern, gag eyes, eyeshadow alpha), `mt_hairgloss`,
@@ -1335,11 +1460,10 @@ identity. The 2 former `differs` were `_expression_ST` on the eyes: the probe's
 became within tolerance once the eye pattern established that `_expression` is
 empty on both sides.
 
-Remaining gaps by cause, none guessed:
+Remaining gaps by cause, none guessed. The 8 sampler states that the #102
+supplement left missing (`mt_hairgloss_00`, `mt_nip_00`, `mt_body_detail_00`
+and `mt_ramp_00` `_RampG`) are closed by the sampler-bundle run above:
 
-- 8 sampler states: `mt_hairgloss_00`, `mt_nip_00`, `mt_body_detail_00` and
-  `mt_ramp_00` (`_RampG`) are not in the local bundle set and need the VM to
-  fetch. Their identity still matches by name.
 - 6 `EyeLookMaterialControll` iris/highlight offsets: they depend on gaze, so
   they need the Studio eye-look runtime rather than the card alone. The capture
   shows x ±0.02.
@@ -1350,7 +1474,7 @@ Remaining gaps by cause, none guessed:
   submesh, so Unity draws it over the last submesh, but the probe's
   `materials.prefix(submeshes)` skips it. This is a probe gap, not a native one.
 
-**Proof of concept (step 5).** `--write-frame <file>` writes a copy of the
+**Proof of concept (step 5, with the #102 supplement).** `--write-frame <file>` writes a copy of the
 capture frame next to it. In that copy, every resolved native value replaces
 the bound value: 201 vectors, 58 transforms, 19 queues, 49 samplers and 6
 globals. A slot that the native recipe leaves empty is removed. 98 texture
@@ -1384,7 +1508,11 @@ one frozen frame. Body renderers other than `o_body_a` are not enumerated.
 unresolved, and composite content is not compared. Other heads, hair, clothes
 and accessories, mods and male cards need their own converted evidence. Private
 evidence (both comparison runs, the frame.json run, the PoC folders, logs, frame
-and render diffs, and the scripts) is in `.local/r1-live-bindings/`.
+and render diffs, and the scripts) is in `.local/r1-live-bindings/`. The
+sampler-bundle run's evidence is in `.local/r1-sampler-bundles/`: the copy
+manifest and provenance (`vm-copy/copy-manifest.json`), the install's list files
+and `abdata` manifest, the supplement, before/after comparisons and the wrap
+mutation control. The PoC substitution was not rerun with the new supplement.
 
 ### Native pose gate
 
