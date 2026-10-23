@@ -121,8 +121,11 @@ that sets recovery status. The resolver adds no new heuristic.
 | `analysis/card_roundtrip.py` | Both pinned hashes | Took the first sorted generation directory for each hash and ignored the index |
 | `analysis/studio_fullbody_oracle.py` | Firstpass | `--recovered-project` copied files from any directory. `--recovery-index` replaces it; nothing is copied if any of the 14 files is refused |
 | `dynamics_contract.py` | Main game | Read `assemblies[0]` and its `project/` directory directly |
+| `analysis/studio_animation_contract.py` | CharaStudio | `--source` hashed four files from any directory. `--recovery-index` replaces it |
+| `test_male_body_parity.py` | Main game | Read `ShapeHeadInfoFemale.cs` from the narrow `decompiled/Character/Koikatu` tree; `--recovery-index` is new |
 
 For valid inputs these consumers record the same paths, hashes and text as before.
+The last two moved after the private rerun below showed byte-identical output.
 This assumes the main game's `Assembly-CSharp.dll` is the first indexed assembly,
 as in the recovery command above. `Tools/translation/translate.py` translates an
 explicitly supplied C# file and does not read the manifest. It now refuses any
@@ -144,17 +147,64 @@ pointed at a primary project directory, a stub can still reach it.
   `analysis/expression_contract.py`, `analysis/animation_playback_contract.py`,
   `analysis/card_contract.py`, `analysis/gameplay_contract.py`,
   `analysis/studio_scene_contract.py`, `analysis/studio_pose_contract.py`,
-  `analysis/studio_animation_contract.py`, `analysis/mod_catalog_contract.py`
-  (`ChaControl` and copied game types), `clothed_material_contract.py` and the
-  parity scripts `test_face_rig_parity.py`, `test_avatar_parity.py` and
-  `test_male_body_parity.py`.
+  `analysis/mod_catalog_contract.py` (`ChaControl` and copied game types),
+  `clothed_material_contract.py` and the parity scripts
+  `test_face_rig_parity.py` and `test_avatar_parity.py`.
 - Plugin and mod sources outside the five recovered assemblies:
   `analysis/abmx_contract.py`, `analysis/resolver_contract.py`, the Sideloader
   part of `analysis/mod_catalog_contract.py`,
   `analysis/accessory_names_oracle.py`, `analysis/mute_plugin_oracle.py`, and the
   ExtendedSave sources in `card_contract.py` and `studio_scene_contract.py`.
 
-Fifteen synthetic tests in `Tools/reverse/analysis/test_recovered_source.py`
+**Private rerun (2026-10-23).** On the reference Mac, each game-type generator
+first ran on its current input. It then ran again with its inputs resolved
+through `recovered_source.py`. A generator moved only when the two runs wrote
+byte-identical output. The run used the private five-assembly generations, at
+`claude/local-wave-verify` `5c24bb9`. All 13 first runs exited 0. Their
+contracts matched the recorded ones apart from the run's own paths (worktree
+and output locations). Two outputs also differed for other reasons. `clothed_material_contract.py` omits the
+VM-only shader disassembly. The parity reports name a newer native inspector and
+regenerated avatar files.
+
+Two generators moved: `studio_animation_contract.py` records only file names and
+hashes, and the `test_male_body_parity.py` report records no source path. The
+rest stayed, for one of two reasons:
+
+- **Same input bytes, but the output records where each source was read.** The
+  resolver run differed only in those paths:
+  - `character_contracts.py`: three source paths;
+  - `expression_contract.py`: `decompiledManifest`, `chaControl` and
+    `chaReference`, so the reference file's `contractSHA256` changes with them;
+  - `animation_playback_contract.py`: the `file` of 9 contract entries and 15
+    dependency-inventory entries (`reference.json` is unchanged);
+  - `clothed_material_contract.py`: two `sourceEvidence` paths;
+  - `test_avatar_parity.py`: five `assemblyEvidence` paths.
+
+  `test_face_rig_parity.py` also requires its setter file to be one the shape
+  contract records. It therefore refuses the recovered path until
+  `character_contracts.py` moves. Against a shape contract regenerated through
+  the resolver, it passes and records the new paths. Moving any of these
+  generators changes its output bytes and every recorded hash of that output.
+- **Different input bytes.** The narrow files were decompiled without the full
+  reference set. ILSpy therefore wrote extra casts, `//IL_…` comments and
+  expanded auto-properties. These contracts record each input's SHA-256, so
+  their output cannot be byte-identical:
+  - `card_contract.py`: `PngFile`, plus the ExtendedSave and PluginData sources
+    outside the recovery;
+  - `gameplay_contract.py`: 9 of its 11 sources, plus a 0-byte
+    `ActionGame.PlayerAction.cs` with no recovered type;
+  - `studio_scene_contract.py`: `CameraControl` and `CameraLightCtrl`, plus
+    ExtendedSave;
+  - `studio_pose_contract.py`: `OCIRoute`;
+  - `mod_catalog_contract.py`: `ChaFileClothes`, `AssetBundleManager` and
+    `CustomSelectListCtrl`. `Illusion.Utils.Value` has no recovered type, and
+    Sideloader is outside the recovery.
+
+  Fed resolver bytes, `gameplay_contract.py` still produced the same 264 cases
+  and 454 steps, and `mod_catalog_contract.py` the same catalog. Only their
+  source evidence changed (paths, hashes and anchor line numbers).
+
+Sixteen synthetic tests in `Tools/reverse/analysis/test_recovered_source.py`
 cover the resolver. They build each generation with the real
 `recover_managed.recover()` and a fake decompiler, then check:
 
@@ -164,12 +214,14 @@ cover the resolver. They build each generation with the real
 - unclean fallbacks never revert to the primary;
 - hash, missing, ambiguous and manifest errors fail by name.
 
-Three of these tests run real generators. `trigonometric_ik_contract.evidence`
+Four of these tests run real generators. `trigonometric_ik_contract.evidence`
 refuses a `// System.…Exception:` primary stub that its earlier check accepted.
 `card_roundtrip.managed_evidence` uses the indexed generation rather than a stale
 generation that sorts first. `studio_fullbody_oracle.copy_sources` copies nothing
-when one file is a stub. These tests use synthetic trees only; the private
-five-assembly generations have not been rerun through the moved consumers.
+when one file is a stub. `studio_animation_contract.contract` refuses a stubbed
+Studio type, and otherwise hashes the recorded bytes under the same keys as
+before. These tests use synthetic trees only. The private rerun covered only the two
+consumers it moved, not the six moved earlier.
 
 ## Independent REA check — 2026-10-17
 

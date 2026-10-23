@@ -12,18 +12,20 @@ from pathlib import Path
 import subprocess
 import tempfile
 
+from analysis.recovered_source import MAIN_GAME, RecoveredAssembly
 from test_avatar_parity import source_reference, compare_avatar
-from test_face_rig_parity import source_operations
+from test_face_rig_parity import source_text_operations
 from test_rig_parity import file_record, verify_provenance, REPO
 
 
-def run(avatar, reference, inspector, output):
+def run(avatar, reference, inspector, output, recovery_index):
     manifest=json.loads(avatar.read_text());folder=avatar.parent
     contract_path=folder/'character-shape-contract.json';contract=json.loads(contract_path.read_text())
     reference_doc=json.loads(reference.read_text())
     domain=next(d for d in contract['domains'] if d['id']=='face')
-    source=REPO/'.local/reverse/decompiled/Character/Koikatu/ShapeHeadInfoFemale.cs'
-    operations=source_operations(source,domain)
+    # The setters come from the indexed managed recovery, never a directory guess (E-T02).
+    source=RecoveredAssembly(recovery_index,source_path=MAIN_GAME).source('ShapeHeadInfoFemale')
+    operations=source_text_operations(source.text,domain)
     files=[manifest['bodySkeleton'],manifest['headSkeleton'],manifest['body']['file'],manifest['head']['file'],
            *[r['file'] for r in manifest['clothes']],*[r['file'] for r in manifest['hair']]]
     for file in files:verify_provenance(json.loads((folder/file).read_text()),contract)
@@ -62,4 +64,6 @@ if __name__=='__main__':
     parser.add_argument('--reference',type=Path,default=REPO/'.local/reverse/male/body-reference/reference.json')
     parser.add_argument('--inspect',type=Path,default=REPO/'Packages/Engine/.build/debug/ikkoku-inspect')
     parser.add_argument('--output',type=Path,default=REPO/'.local/reverse/male/body-vertex-parity-report.json')
-    args=parser.parse_args();run(args.avatar,args.reference,args.inspect,args.output)
+    parser.add_argument('--recovery-index',type=Path,default=REPO/'.local/reverse/managed-recovery/index.json',
+                        help='Managed recovery index; ShapeHeadInfoFemale resolves only through its manifest.')
+    args=parser.parse_args();run(args.avatar,args.reference,args.inspect,args.output,args.recovery_index)

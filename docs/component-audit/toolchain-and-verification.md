@@ -31,7 +31,7 @@ in [the file index](file-index.md).
 | --- | --- | --- | --- |
 | E01 · Backend/version inventory | Fully ported — inspected installation triage | Checks `Managed` and `il2cpp_data`, reads Unity version header, records assemblies/bundles/tools. Actual inventory identifies Koikatu and CharaStudio as Mono Unity 5.6.2f1; VR is Mono 5.6.3f1. This is not an IL2CPP title. | Retain hash/version identity on future rescans; a new install must not reuse incompatible contracts silently. |
 | E02 · Explicit VM file transfer | Mid-stage | `prlctl exec` runs quoted/encoded PowerShell; relative source paths, byte cap, base64 transfer, source/native SHA-256 and provenance sidecars. It reads the installed file, not the running game's memory. | E-T01: timeout/cancellation, atomic fetch writes and resumable transport; test VM offline/partial transfer and destination reuse. |
-| E03 · Managed source/IL/metadata recovery | Mid-stage | Immutable generation key includes assembly/reference/tool identities. Dumps TypeDef/MethodDef/AssemblyRef/TypeRef, full C# project and IL, and detects decompiler stubs. Per-type compatibility overrides are preserved rather than silently replacing evidence. Every generator that reads these exports now resolves through [`recovered_source.py`](../reference/managed-recovery.md#consuming-recovered-source): the indexed selected project, clean per-type fallbacks only, and named refusals otherwise. `translate.py` refuses stub-marked input. | E-T02 (partial): move the generators that still read older narrow `.local/reverse/decompiled/` trees after a private rerun confirms identical contracts. Produce unresolved recovery coverage by subsystem. |
+| E03 · Managed source/IL/metadata recovery | Mid-stage | Immutable generation key includes assembly/reference/tool identities. Dumps TypeDef/MethodDef/AssemblyRef/TypeRef, full C# project and IL, and detects decompiler stubs. Per-type compatibility overrides are preserved rather than silently replacing evidence. Every generator that reads these exports now resolves through [`recovered_source.py`](../reference/managed-recovery.md#consuming-recovered-source): the indexed selected project, clean per-type fallbacks only, and named refusals otherwise. `translate.py` refuses stub-marked input. | E-T02 (partial): the 2026-10-23 private rerun moved `studio_animation_contract.py` and `test_male_body_parity.py`, whose output stayed byte-identical. Eleven generators still read narrow `.local/reverse/decompiled/` trees. Five of them record a source path that would change, face parity checks its source against the shape contract's recorded path, and five record hashes of inputs that differ in the recovery; [consumers not moved](../reference/managed-recovery.md#consuming-recovered-source) gives the reason for each. Accepting new provenance paths, or re-pinning hashes, needs a decision. Produce unresolved recovery coverage by subsystem. |
 | E04 · Inspected managed exports | Fully ported — artifact recovery only | Private index reports five selected assemblies recovered, with 2,026 main-game, 2,026 Studio, 929 firstpass and two 3-file UnityScript project exports. Nine overrides each for main/Studio and two for firstpass resolve recorded decompiler diagnostics. The [2026-10-17 REA check](../reference/managed-recovery.md#independent-rea-check--2026-10-17) independently confirms all five source identities and four metadata table counts, 5,097 retained artifact hashes, 26 reference DLL hashes, and 294 selected method tokens/names/RVAs. The 17 recovery regressions pass. | Static recovery is corroborated; these checks prove neither C# recompilation nor semantic/runtime equivalence. Remaining game/plugin/VR assemblies and native feature verification are separate work. |
 | E05 · IL2CPP/AOT/Ghidra pipeline | Pending — conditional, not needed for this install | Detection exists, but no Il2CppDumper/GameAssembly/global-metadata recovery or Ghidra automation implementation is checked in. | Only activate this branch if a future inspected installation actually uses IL2CPP; do not spend current Mono-port work on struct-padding parity. |
 | E06 · Unity asset conversion | Mid-stage | UnityPy-based catalog/prefab/rig/material/animation tools export selected typed data. This is an explicit conversion pipeline, not a bulk AssetRipper project import with automatic feature parity. | Coverage inventory must distinguish catalog-known, fetched, decoded, converted, drawable and behavior-verified entries. |
@@ -235,7 +235,8 @@ data is deliberately not copied into the documentation or distribution.
 - **E-T02 — Recovery consumer consistency (P1, partial).** Require every contract generator
   to resolve selected project and per-type fallback via the recovery manifest.
   Accept when a primary error stub cannot accidentally become translation input.
-  Implemented 2026-10-23 with synthetic fixtures only. The shared resolver
+  Implemented 2026-10-23 with synthetic fixtures; a private rerun the same
+  day moved two more generators (below). The shared resolver
   `Tools/reverse/analysis/recovered_source.py` selects a generation from
   `index.json`. It returns the manifest-selected project file, or a type's
   fallback only where that fallback is recorded clean, and checks each file
@@ -247,14 +248,26 @@ data is deliberately not copied into the documentation or distribution.
   full-body oracle and dynamics. Their output is unchanged for valid inputs. The
   body-shape `--source` and full-body `--recovered-project` directory options
   are replaced by `--recovery-index`. `Tools/translation/translate.py` refuses
-  stub-marked sources before building or writing anything. Fifteen resolver and
+  stub-marked sources before building or writing anything. Sixteen resolver and
   consumer tests in `analysis/test_recovered_source.py`, plus the updated
-  gameplay helper tests, cover these paths. Three of the tests run real
-  generators against stub trees. Remaining: the consumers listed under
-  [consumers not moved](../reference/managed-recovery.md#consuming-recovered-source)
-  read older narrow decompilations or an explicit directory. They can still
-  ingest a stub if pointed at one. No private five-assembly generation has
-  been rerun through the moved consumers.
+  gameplay helper tests, cover these paths. Four of the tests run real
+  generators against stub trees.
+  Private rerun (2026-10-23): each of the 13 unmoved game-type generators ran
+  on its current input, then with its inputs resolved through the resolver,
+  against the private five-assembly generations. Two wrote byte-identical
+  output and moved: `studio_animation_contract.py` (`--recovery-index`
+  replaces `--source`) and `test_male_body_parity.py`. The other 11 stay; see
+  [consumers not moved](../reference/managed-recovery.md#consuming-recovered-source).
+  - Five record where each source was read, so their output changes:
+    character shape, expression, animation playback, clothed material and
+    avatar parity. Face parity is tied to the shape contract's provenance.
+  - Five record hashes of narrow inputs whose bytes differ in the recovery:
+    card, gameplay, Studio scene, Studio pose and mod catalog. Fed resolver
+    bytes, the gameplay cases and mod catalog were otherwise unchanged.
+
+  Remaining: those 11 generators read older narrow decompilations or an
+  explicit directory, and can still ingest a stub if pointed at one. The six
+  consumers moved earlier have not been rerun on the private generations.
 - **E-T03 — Reproducible evidence manifests (P1, partial).** Standardize source
   hash, native executable/tool hash, input data, configuration, reference tier and
   tolerance/gate output. Accept when a new run can reproduce each claimed parity
