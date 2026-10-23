@@ -73,7 +73,6 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         public let schemaVersion: Int
         public let encoding: String
         public let entries: [Entry]
-        public let unavailable: [[String: String]]?
     }
 
     public let label = "native texture store"
