@@ -40,6 +40,12 @@ public enum SourceSceneExportValidation {
             if let outfit = object.sourceOutfit, !(0..<7).contains(outfit) {
                 throw RigError.invalid("Source outfit selection must be in 0...6.")
             }
+            if let state = object.sourceClothesState, state.count != 9 || state.contains(where: { $0 > 3 }) {
+                throw RigError.invalid("Source clothes state must be nine ClothesKind values, each in 0...3.")
+            }
+            if let flags = object.sourceShowAccessory, flags.count != 20 {
+                throw RigError.invalid("Source accessory visibility must contain exactly 20 slot flags.")
+            }
             if importedKind == .character {
                 guard original.character != nil, !routeChild, let reference = object.sourceCharacter,
                       reference.objectKey == key, reference.sceneFile.utf8.elementsEqual(sceneFile.utf8),
@@ -48,7 +54,7 @@ public enum SourceSceneExportValidation {
                 }
                 fallbackName = "Source character \(key)"
             } else {
-                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
+                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceClothesState == nil, object.sourceShowAccessory == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
                     throw RigError.invalid("Retained source placeholders cannot contain character references or FK edits.")
                 }
                 // Routes like folders: their saved name is the baseline the

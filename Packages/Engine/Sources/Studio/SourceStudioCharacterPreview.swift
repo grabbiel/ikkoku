@@ -52,6 +52,29 @@ public final class SourceStudioCharacterPreview {
     public let outfitCount: Int
     /// ChaFileDefine.CoordinateType order, the seven CharaStudio outfit buttons.
     public static let outfitNames = ["School uniform", "After school", "Gym", "Swimsuit", "Club", "Casual", "Pajamas"]
+    /// ST-C03 wear: the embedded card's saved Status.clothesState, shoesType
+    /// and showAccessory as imported (the ChaFileStatus.MemberInit default
+    /// for a field the card does not save).
+    public let savedWear: SourceCharacterCard.StatusWear
+    /// The recovered ChaControl clothes-state rules of the assembled
+    /// outfit's garments (dictStateType and the linked-garment flags).
+    public let wearRules: SourceStudioWear
+    /// Which assembled renderers belong to which garment, accessory and hair.
+    public let wearLayout: SourceStudioWearLayout
+    /// The clothes state a scene load leaves for the saved bytes: Reload's
+    /// UpdateClothesStateAll, then AddObjectAssist.UpdateState's
+    /// SetClothesState loop.
+    public let loadedClothesState: [UInt8]
+    /// Accessory slots this outfit saves (type 121...130); CharaStudio's
+    /// accessory toggles are interactable only for loaded accessories.
+    public let savedAccessorySlots: [Int]
+    /// The rendered clothes state: `loadedClothesState` until `setWear`.
+    public private(set) var clothesState: [UInt8]
+    /// The rendered accessory flags: the saved flags until `setWear`.
+    public private(set) var showAccessory: [Bool]
+    /// The renderers the current wear hides, and its fallback report.
+    public private(set) var wearEvaluation: SourceStudioWearLayout.Evaluation
+    private let hideHairSlots: Set<Int>
     public let expressionInputs: SourceExpressionInputs?
     /// Saved ChaFileStatus.eyesBlink. The Studio card loader applies this flag
     /// on load, so a card that does not blink keeps fixed blink flags.
@@ -260,10 +283,80 @@ public final class SourceStudioCharacterPreview {
         let prepared = try library?.prepare(card: card, coordinate: coordinate, baseURL: rigURL)
         selections = prepared?.selections ?? []
         let source = try prepared?.source ?? SourceRig.loadModel(url: rigURL)
+        // ST-C03: the saved wear, the outfit's catalog rows and the assembled
+        // garment structure give the clothes state the load leaves and the
+        // renderers UpdateVisible switches off.
+        var wearMessages: [String] = []
+        var savedWear = SourceCharacterCard.StatusWear.memberInit
+        do { savedWear = try SourceCharacterCard.StatusWear(status: status) }
+        catch { wearMessages.append("Saved clothes state or accessory visibility is unreadable (\(error)); the ChaFileStatus defaults (all on, every accessory shown) render instead.") }
+        let wearCatalog: SourceMakerLibrary.WearCatalog
+        do {
+            guard let library else { throw RigError.invalid("no converted Maker library is selected") }
+            wearCatalog = try library.wearCatalog(card: card, coordinate: coordinate)
+        } catch {
+            let parts = (try? card.recordFields(.clothes(coordinate: coordinate)))?["parts"]?.arrayValue ?? []
+            let ids = (0..<9).map { slot in parts.indices.contains(slot) ? ((try? parts[slot].stringKeyedMap())?["id"]?.integerValue ?? 0) : 0 }
+            wearCatalog = .init(clothes: Array(repeating: .unknown("no catalog"), count: 9), clothesIDs: ids,
+                            clothesModded: Array(repeating: false, count: 9), accessories: [:])
+            wearMessages.append("Clothes catalog rows are unavailable (\(error)); every clothes state is selectable and the saved bytes are kept.")
+        }
+        let clothingSlots = prepared?.clothingSlots
+            ?? selectedManifest.clothes.enumerated().map { $0.element.slot ?? ([0, 1, 8].indices.contains($0.offset) ? [0, 1, 8][$0.offset] : -1) }
+        let wearLayout = SourceStudioWearLayout(source: source, clothingSlots: clothingSlots)
+        let wearRules = SourceStudioWear(catalog: wearCatalog.clothes, switchNodes: (0..<9).map { kind in
+            if case .row = wearCatalog.clothes[kind] { return wearLayout.switchNodes[kind] ?? [] }
+            return []
+        }, ids: wearCatalog.clothesIDs, modded: wearCatalog.clothesModded)
+        let loadedClothesState = wearRules.loaded(savedWear.clothesState)
+        var hideHairSlots = Set<Int>(), unknownHair: [Int] = []
+        for (slot, row) in wearCatalog.accessories {
+            switch row {
+            case .row(let fields): if (Int(fields["HideHair"] ?? "0") ?? -1) != 0 { hideHairSlots.insert(slot) } // GetInfoInt != 0
+            case .none: break
+            case .unknown: unknownHair.append(slot)
+            }
+        }
+        self.savedWear = savedWear
+        self.wearRules = wearRules
+        self.wearLayout = wearLayout
+        self.loadedClothesState = loadedClothesState
+        self.savedAccessorySlots = wearCatalog.accessories.keys.sorted()
+        self.hideHairSlots = hideHairSlots
+        clothesState = loadedClothesState
+        showAccessory = savedWear.showAccessory
+        let wearEvaluation = wearLayout.evaluate(rules: wearRules, states: loadedClothesState, shoesType: savedWear.shoesType,
+                                                 showAccessory: savedWear.showAccessory, hideHairSlots: hideHairSlots)
+        self.wearEvaluation = wearEvaluation
+        func names(_ kinds: [Int]) -> String { kinds.isEmpty ? "none" : kinds.map { SourceStudioWear.kindNames[$0] }.joined(separator: ", ") }
+        wearMessages.append("Saved clothes state \(savedWear.clothesState.map(String.init).joined(separator: ",")) (shoesType \(savedWear.shoesType)) loads as \(loadedClothesState.map(String.init).joined(separator: ",")); assembled garments rendered: \(names(wearEvaluation.renderedClothing)), hidden: \(names(wearLayout.clothingKinds.filter { !wearEvaluation.renderedClothing.contains($0) })).")
+        let hiddenSlots = savedWear.showAccessory.indices.filter { !savedWear.showAccessory[$0] }
+        if !hiddenSlots.isEmpty { wearMessages.append("Saved showAccessory hides accessory slots \(hiddenSlots.map(String.init).joined(separator: ", ")).") }
+        let unknownKinds = wearRules.unknownKinds.filter { if case .unknown = wearCatalog.clothes[$0] { return true }; return [0, 1, 2, 3].contains($0) }
+        if !unknownKinds.isEmpty {
+            wearMessages.append("Clothes-state rules for \(names(unknownKinds)) are unknown (no converted catalog row): every state is selectable, the saved bytes are kept, and their one-piece links read false.")
+        }
+        if wearLayout.clothingKinds.contains(8) {
+            if savedWear.shoesType == 0 {
+                wearMessages.append("shoesType 0 shows the indoor shoes, which are not assembled; the outdoor shoe geometry stands in and follows the indoor shoes' state.")
+            } else if savedWear.shoesType != 1 {
+                wearMessages.append("shoesType \(savedWear.shoesType) shows neither shoe; the shoe geometry stays hidden.")
+            }
+        }
+        for (field, standard) in [("visibleSimple", false), ("visibleHeadAlways", true), ("visibleBodyAlways", true)] {
+            if case .bool(let value) = status[field], value != standard {
+                wearMessages.append("Saved Status.\(field) \(value) is not applied; the preview renders with the default \(standard).")
+            }
+        }
+        if !unknownHair.isEmpty {
+            wearMessages.append("Accessory slots \(unknownHair.sorted().map(String.init).joined(separator: ", ")) have no converted catalog row; their HideHair flags are unknown and never hide the hair.")
+        }
+        wearMessages += wearEvaluation.fallbacks
         let contract = try SourceShapeContract.decode(Self.read(directory.appendingPathComponent("character-shape-contract.json"), maximum: 32 * 1024 * 1024))
         var appearance = try SourcePreviewAppearance.load(url: rigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
         var messages: [String] = []
         if let blinkDiagnostic { messages.append(blinkDiagnostic) }
+        messages += wearMessages
         if coordinate != savedCoordinate {
             messages.append("Outfit \(coordinate) (\(Self.outfitNames[coordinate])) replaces the card's saved outfit \(savedCoordinate); original-scene export writes it to Status.coordinateType.")
         }
@@ -532,7 +625,8 @@ public final class SourceStudioCharacterPreview {
                       world: float4x4, objectID: UInt32, fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                       animationElapsed: Float = 0) throws -> RenderFrame {
         var frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
-            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed))
+            expression: effectiveExpressionInputs(), poseOverride: editedPose(fkRotations: fkRotations, faceValues: faceValues, bodyValues: bodyValues, ikTargets: ikTargets, kinematics: kinematics, animationState: animationState, animationElapsed: animationElapsed),
+            hiddenParts: wearEvaluation.hiddenParts, sourceBodyAlpha: wearEvaluation.bodyAlpha)
         for i in frame.items.indices { frame.items[i].model = world * frame.items[i].model; frame.items[i].objectID = objectID }
         applyIrisTransforms(to: &frame)
         frame.sceneBounds = frame.sceneBounds.transformed(by: world)
@@ -572,6 +666,33 @@ public final class SourceStudioCharacterPreview {
             frame.items[i].material.uniforms.irisST1 = st[1]
             frame.items[i].material.uniforms.irisST2 = st[2]
         }
+    }
+
+    /// Applies the document's wear (ST-C03). `clothesState` nil renders the
+    /// loaded state of the card's saved bytes and `showAccessory` nil the
+    /// saved flags. Values render as given — the Studio model produces them
+    /// with `wearRules.setting`, the CharaStudio button path — so only their
+    /// shape is checked, and a rejected value leaves the rendered wear as it
+    /// was. Nothing is rebuilt: the next `frame` hides or shows the
+    /// assembled renderers and sets the body cut-out, and `wearDiagnostics`
+    /// reports any state drawn with the dressed meshes instead.
+    public func setWear(clothesState: [UInt8]?, showAccessory: [Bool]?) throws {
+        let clothes = clothesState ?? loadedClothesState, accessories = showAccessory ?? savedWear.showAccessory
+        guard clothes.count == 9, clothes.allSatisfy({ $0 <= 3 }) else {
+            throw RigError.invalid("Clothes state must be nine ClothesKind values, each in 0...3.")
+        }
+        guard accessories.count == 20 else { throw RigError.invalid("Accessory visibility must contain exactly 20 slot flags.") }
+        guard clothes != self.clothesState || accessories != showAccessory else { return }
+        wearEvaluation = wearLayout.evaluate(rules: wearRules, states: clothes, shoesType: savedWear.shoesType,
+                                             showAccessory: accessories, hideHairSlots: hideHairSlots)
+        self.clothesState = clothes
+        self.showAccessory = accessories
+    }
+
+    /// The current wear's fallback lines (empty when every state renders
+    /// natively), plus the hair hidden by a HideHair accessory.
+    public var wearDiagnostics: [String] {
+        wearEvaluation.fallbacks + (wearEvaluation.hairHidden ? ["A shown HideHair accessory hides the hair (ChaControl.CheckHideHair)."] : [])
     }
 
     /// Validates edited face/body slot rates and rebuilds the shape baseline
