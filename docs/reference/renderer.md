@@ -1624,6 +1624,12 @@ following, with thresholds unchanged:
 | `main_hair_front` | 6,154 | 0.841 | 22 | 45 | fail (frozen probe: 0.845 / 22) |
 | `main_item`, `toon_nose_lod0` | 0 | — | — | — | never frontmost |
 
+A rerun on the merged build `51b457e` (`m1-capture-v4-merged`) gave the same
+result for every gate. The character mean was 0.1915 with p99 4 and the same
+2 silhouette pixels. Family pixel counts moved by at most 12 and means by at
+most 0.0004. The live `main_hair` and `main_opaque` renders vary slightly from
+run to run, as they do in the frozen probe.
+
 The hair families fail by the same amount as in the frozen probe, so their
 residual is not caused by live inputs. In `toon_eyew_lod0`, a single pixel
 exceeds 4 bytes. The geometry and depth gates are the first live-vertex
