@@ -212,3 +212,18 @@ and garment on the body, and a morph-target contact sheet to
   app prints that log only at startup and after autocapture; there is no
   interactive view. Bundled assets currently report nothing except the influence
   fold in the two `Assets/fixtures` rigs.
+* **Package containment.** Catalog entries are package loads:
+  `AssetLibrary.asset(_:)` loads a relative catalog path with
+  `GLBLoader.load(url:packageRoot:)` under the asset root (`IKKOKU_ASSETS`, the app
+  bundle's resources or the source tree's `Assets/`). The asset file must resolve inside
+  that root after symlinks. Each external buffer/image URI must be a canonical
+  relative path after percent-decoding (no scheme or drive, absolute path,
+  backslash, NUL, or empty, `.` or `..` segment), and its `realpath` must stay inside
+  the root. All references are checked before any external bytes are read; an
+  escape fails with `GLTFError.escapesPackageRoot`. `data:` URIs and the GLB `BIN`
+  chunk are always allowed. Keep any symlink in the asset tree pointing inside it.
+  An absolute path, as recorded in a native scene's `assetFile` after File → Import
+  Model, is an explicit user choice and loads through the separately named
+  `GLBLoader.loadTrustedFile(url:)`/`AssetLibrary.importTrustedStaticAsset(url:)`
+  without containment. The library's PNG texture, sidecar and body-mask reads are
+  not glTF references and are not part of this check.

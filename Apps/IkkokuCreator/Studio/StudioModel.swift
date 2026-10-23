@@ -680,8 +680,9 @@ final class StudioModel: ViewportInputHandler {
     }
 
     /// Import a converted static prefab, retaining the glTF node transforms and materials.
+    /// The user chose this file, so it loads under the trusted standalone-file policy.
     func importModel(from url: URL) throws {
-        let asset = try library.importStaticAsset(url: url)
+        let asset = try library.importTrustedStaticAsset(url: url)
         var object = StudioObject(name: url.deletingPathExtension().lastPathComponent, kind: .item)
         object.assetFile = url.standardizedFileURL.path
         add(object)
@@ -890,7 +891,8 @@ final class StudioModel: ViewportInputHandler {
                 do {
                     let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
                     if loadedItemAssets[asset.url.path] == nil {
-                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url)
+                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
+                            packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
                     }
                     object.name = "\(asset.name) (source item \(record.sourceKey))"
                     itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
@@ -978,7 +980,11 @@ final class StudioModel: ViewportInputHandler {
             guard let path = object.assetFile else { continue }
             let asset: LoadedAsset
             if let cached = loaded[path] { asset = cached }
-            else { asset = try library.importStaticAsset(url: URL(fileURLWithPath: path)); loaded[path] = asset }
+            else {
+                let url = URL(fileURLWithPath: path)
+                asset = try library.importStaticAsset(url: url, packageRoot: KoikatsuAssetResolver.packageRoot(of: url))
+                loaded[path] = asset
+            }
             bounds.expand(asset.bounds.transformed(by: imported.worldMatrix(of: object.id)))
         }
         pushUndo(force: true)
