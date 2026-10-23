@@ -124,10 +124,22 @@ def run(args):
             argv = ([args.wrap] if args.wrap else []) + guard
             log_path = output[:-5] + ".log"
             print("[perf] %s -> %s" % (workload, output), flush=True)
-            with open(log_path, "w", encoding="utf-8") as log:
-                code = subprocess.run(argv, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+            # A run whose window was not composited (the user switched Spaces,
+            # say) says nothing about presentation: run it again.
+            for attempt in range(1 + args.retries):
+                with open(log_path, "w", encoding="utf-8") as log:
+                    code = subprocess.run(argv, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
+                reason = None
+                if code == 0 and os.path.exists(output):
+                    with open(output, encoding="utf-8") as handle:
+                        reason = uncomposited(json.load(handle))
+                if not reason:
+                    break
+                print("[perf] %s: %s; %s" % (workload, reason, "running it again" if attempt < args.retries else "giving up"), flush=True)
             if code != 0 or not os.path.exists(output):
                 failures.append("%s: exit %s (see %s)" % (workload, code, log_path))
+            elif reason:
+                failures.append("%s: window not composited in %d attempts (%s)" % (workload, 1 + args.retries, reason))
     summarize([args.out])
     if failures:
         print("\n".join(["[perf] FAILED"] + failures), file=sys.stderr)
@@ -429,6 +441,7 @@ def main(argv=None):
     runner.add_argument("--seconds", type=int, default=10)
     runner.add_argument("--warmup", type=int, default=3)
     runner.add_argument("--repeat", type=int, default=1)
+    runner.add_argument("--retries", type=int, default=2, help="reruns of a launch whose window was not composited")
     runner.add_argument("--startup-timeout", type=int, default=180, help="seconds allowed beyond warmup+recording")
     runner.add_argument("--wrap", help="command each launch runs under, e.g. a machine-wide app lock script")
     runner.add_argument("--set", action="append", metavar="IKKOKU_PERF_X=VALUE", help="extra launch variable")

@@ -6,7 +6,9 @@ needed; xctrace exports are synthetic XML in the shape `xctrace export` writes.
 import argparse
 import contextlib
 import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -123,6 +125,32 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIsNone(perf_trace.uncomposited(saturated))
         self.assertIsNone(perf_trace.uncomposited(busy))
         self.assertIsNone(perf_trace.uncomposited(report()))
+
+    def test_run_repeats_a_launch_whose_window_was_not_composited(self):
+        hidden = report()
+        hidden["summary"].update(displayLinkCallbacks=1200, droppedDrawables=1200)
+        shown = report()
+        shown["summary"].update(displayLinkCallbacks=1200, droppedDrawables=0)
+        launches = []
+
+        def launch(argv, env, **kwargs):
+            launches.append(argv)
+            with open(env["IKKOKU_PERF_TRACE"], "w") as handle:
+                json.dump(hidden if len(launches) == 1 else shown, handle)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with tempfile.TemporaryDirectory() as folder:
+            fixture = os.path.join(folder, "fixture")
+            open(fixture, "w").close()
+            environment = os.path.join(folder, "environment.json")
+            with open(environment, "w") as handle:
+                json.dump({"IKKOKU_SOURCE_AVATAR": fixture, "IKKOKU_MAKER_LIBRARY": fixture}, handle)
+            args = argparse.Namespace(environment=environment, workloads="studio-native", out=os.path.join(folder, "out"),
+                                      repeat=1, retries=2, seconds=10, warmup=3, startup_timeout=180, set=None,
+                                      app="/apps/Ikkoku", xctrace=None, wrap=None)
+            with mock.patch.object(perf_trace.subprocess, "run", side_effect=launch), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(perf_trace.run(args), 0)
+        self.assertEqual(len(launches), 2)
 
     def test_summary_flags_input_that_an_idle_workload_did_not_send(self):
         idle = report()
