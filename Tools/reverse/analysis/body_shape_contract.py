@@ -16,6 +16,11 @@ from pathlib import Path
 import struct
 import subprocess
 
+try:  # Run as a script or from Tools/reverse/analysis.
+    from recovered_source import MAIN_GAME, RecoveredAssembly
+except ImportError:  # Imported as analysis.body_shape_contract from Tools/reverse.
+    from analysis.recovered_source import MAIN_GAME, RecoveredAssembly
+
 ROOT = Path(__file__).resolve().parents[3]
 LOCAL = ROOT / ".local/reverse"
 
@@ -169,7 +174,8 @@ static class Program {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, help="Override the source directory selected by the hash-validated recovery index.")
+    parser.add_argument("--recovery-index", type=Path, default=LOCAL / "managed-recovery/index.json",
+                        help="Managed recovery index; sources resolve only through its manifest.")
     parser.add_argument("--rig", type=Path, default=LOCAL / "rigs/neutral-rig.json")
     parser.add_argument("--contract", type=Path, default=LOCAL / "rigs/character-shape-contract.json")
     parser.add_argument("--corrections", type=Path, default=LOCAL / "rigs/textassets/shapecorrect.bytes")
@@ -178,14 +184,13 @@ def main() -> None:
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / ".local"):
         raise ValueError("source-derived proof output must remain inside ignored .local/")
-    if args.source is None:
-        index = json.loads((LOCAL / "managed-recovery/index.json").read_text())
-        assembly = next(a for a in index["assemblies"] if "Koikatu_Data/Managed/Assembly-CSharp.dll" in a["sourcePaths"])
-        if assembly["status"] != "recovered" or hashlib.sha256(Path(assembly["assembly"]).read_bytes()).hexdigest() != assembly["assemblySHA256"]:
-            raise ValueError("managed assembly provenance changed")
-        args.source = Path(assembly["directory"]) / assembly["selectedProject"]
-    paths = [args.source / name for name in ("ShapeBodyInfoFemale.cs", "ShapeInfoBase.cs", "AnimationKeyInfo.cs")]
-    body_source, base_source, animation_source = [p.read_text() for p in paths]
+    recovery = RecoveredAssembly(args.recovery_index, source_path=MAIN_GAME)
+    if recovery.status != "recovered":
+        raise ValueError("managed assembly provenance changed")
+    recovery.verify_assembly()
+    sources = [recovery.source(name) for name in ("ShapeBodyInfoFemale", "ShapeInfoBase", "AnimationKeyInfo")]
+    paths = [source.path for source in sources]
+    body_source, base_source, animation_source = [source.text for source in sources]
     update = method(body_source, "public override void Update()").replace("public override", "public")
     always = method(body_source, "public override void UpdateAlways()").replace("public override", "public")
     always = re.sub(r"\(bool\)(fixCorrectBone\[\d\])", r"\1 != null", always)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 from pathlib import Path
@@ -18,6 +19,17 @@ ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 TYPES = {"Void": "Void", "Float": "Float", "Double": "Double", "Int32": "Int32", "Bool": "Bool", "String": "String", "Vector3": "SIMD3<Float>", "Object": "any SourceAPIObject", "Transform": "any SourceAPITransform", "Space": "SourceAPISpace"}
 LIFECYCLES = {name: "source" + name for name in ("Awake", "OnEnable", "Start", "Update", "FixedUpdate", "LateUpdate", "OnDisable", "OnDestroy")}
+
+
+def recovery_markers():
+    # The managed recovery owns the one ILSpy error-stub marker definition.
+    spec = importlib.util.spec_from_file_location("ikkoku_recover_managed", ROOT / "Tools/reverse/analysis/recover_managed.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.has_error_stub
+
+
+has_error_stub = recovery_markers()
 
 
 def digest(data: bytes) -> str:
@@ -187,6 +199,9 @@ class Emitter:
 
 
 def translate(source: Path, type_name: str, output: Path, *, methods: list[str] | None = None, component: bool = False, assembly: Path | None = None, plugin_guid: str | None = None, build_dir: Path | None = None) -> dict:
+    # A decompiler error stub is never translation input, even where it still parses.
+    if has_error_stub(source.read_text(errors='replace')):
+        raise ValueError("Source contains ILSpy error-stub markers; resolve recovered types through Tools/reverse/analysis/recovered_source.py")
     output.mkdir(parents=True, exist_ok=True)
     (output / 'Translated.swift').unlink(missing_ok=True)
     dll = build_frontend(build_dir or ROOT / '.local' / 'translation-tools')

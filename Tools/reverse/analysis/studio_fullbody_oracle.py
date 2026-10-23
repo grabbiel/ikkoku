@@ -7,22 +7,26 @@ written only to the supplied ignored local output directory. No images are read.
 from __future__ import annotations
 import argparse, copy, hashlib, json, subprocess
 from pathlib import Path
+from recovered_source import FIRSTPASS, RecoveredAssembly
 from studio_ik_bindings import extract
 
 SOLVER_FILES = ['IKSolver','IKSolverFullBody','IKSolverFullBodyBiped','FBIKChain','IKEffector','IKConstraintBend','IKMapping','IKMappingSpine','IKMappingLimb','IKMappingBone','FullBodyBipedChain','FullBodyBipedEffector']
+REPO=Path(__file__).resolve().parents[3]
 def digest(p): return hashlib.sha256(p.read_bytes()).hexdigest()
+def copy_sources(index,recovered):
+    """Copy the selected-project or clean-fallback solver sources unchanged; nothing is written if any is refused."""
+    recovery=RecoveredAssembly(index,source_path=FIRSTPASS)
+    sources=[(name,recovery.source(folder+'.'+name)) for folder,names in [('RootMotion.FinalIK',SOLVER_FILES),('RootMotion',['V3Tools','QuaTools'])] for name in names]
+    for name,source in sources:(recovered/(name+'.cs')).write_bytes(source.data)
+    return [{'path':str(source.path.resolve()),'sha256':source.sha256} for _,source in sources]
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--bundle',type=Path,required=True);p.add_argument('--recovered-project',type=Path,required=True)
+    p.add_argument('--bundle',type=Path,required=True);p.add_argument('--recovery-index',type=Path,default=REPO/'.local/reverse/managed-recovery/index.json')
     p.add_argument('--output',type=Path,required=True);args=p.parse_args()
     repo=Path(__file__).resolve().parents[3];out=args.output.resolve()
     if '.local' not in out.parts: raise ValueError('Original derived evidence must remain in ignored .local output')
     host=repo/'Tools/reverse/fixtures/FinalIKOracle';build=out/'oracle';recovered=build/'recovered';recovered.mkdir(parents=True,exist_ok=True)
-    source_evidence=[]
-    for folder,names in [('RootMotion.FinalIK',SOLVER_FILES),('RootMotion',['V3Tools','QuaTools'])]:
-        for name in names:
-            source=args.recovered_project/folder/(name+'.cs');(recovered/source.name).write_bytes(source.read_bytes())
-            source_evidence.append({'path':str(source.resolve()),'sha256':digest(source)})
+    source_evidence=copy_sources(args.recovery_index,recovered)
     (build/'UnityEngine.csproj').write_text(f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><AssemblyName>UnityEngine</AssemblyName><AssemblyVersion>0.0.0.0</AssemblyVersion><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup><ItemGroup><Compile Include="{host / "UnityShim.cs"}" /></ItemGroup></Project>')
     (build/'Oracle.csproj').write_text(f'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup><ItemGroup><Compile Include="{host / "Program.cs"}"/><Compile Include="{host / "RecoverySurface.cs"}"/><Compile Include="recovered/*.cs"/><ProjectReference Include="UnityEngine.csproj"/></ItemGroup></Project>')
     subprocess.run(['dotnet','build',str(build/'Oracle.csproj'),'--nologo','-v:q'],check=True)

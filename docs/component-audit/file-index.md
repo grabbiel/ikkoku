@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**799 files indexed; 799 assigned; 0 unassigned.**
+**801 files indexed; 801 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,18 +31,18 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 302 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 130 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 132 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 162 |
+| Conversion / recovery / verification tool | 163 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
 | Runtime / shared shader declaration | 173 |
-| Test / validation | 158 |
+| Test / validation | 159 |
 
 ## App / gameplay / plugins
 
@@ -771,6 +771,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/reverse/README.md](../../Tools/reverse/README.md) | Documentation / historical evidence |
 | [Tools/reverse/analysis/decompile_studio.py](../../Tools/reverse/analysis/decompile_studio.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/recover_managed.py](../../Tools/reverse/analysis/recover_managed.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/recovered_source.py](../../Tools/reverse/analysis/recovered_source.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/test_recovered_source.py](../../Tools/reverse/analysis/test_recovered_source.py) | Test / validation |
 | [Tools/reverse/catalog.py](../../Tools/reverse/catalog.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/inventory.ps1](../../Tools/reverse/inventory.ps1) | Conversion / recovery / verification tool |
 | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | Conversion / recovery / verification tool |
