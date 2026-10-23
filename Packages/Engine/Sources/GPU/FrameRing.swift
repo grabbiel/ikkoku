@@ -138,14 +138,27 @@ public final class FrameRing: @unchecked Sendable {
     }
 
     /// Copies an array into the open frame. The allocation addresses element 0.
+    ///
+    /// The copy deliberately avoids a `withUnsafeBytes` closure. With Xcode 27.0
+    /// (Swift 6.4) in Release, that closure overwrote the Swift error register
+    /// with `MTLBuffer.contents()` before tail-calling memmove. `withUnsafeBytes`
+    /// then returned that pointer as a thrown error. This function did not check
+    /// the register after a call that cannot throw, so it passed the pointer to
+    /// its caller. `Renderer.prepare` crashed retaining it on the first skinned
+    /// frame (R6; docs/reference/renderer.md#frame-uniforms).
     public func allocate<T>(array: [T]) throws -> FrameAllocation {
-        let target = try allocate(byteCount: max(MemoryLayout<T>.stride * array.count, 1))
-        array.withUnsafeBytes { source in
-            if let base = source.baseAddress {
-                target.buffer.contents().advanced(by: target.offset).copyMemory(from: base, byteCount: source.count)
-            }
+        let byteCount = MemoryLayout<T>.stride * array.count
+        let target = try allocate(byteCount: max(byteCount, 1))
+        if byteCount > 0 {
+            FrameRing.copy(array, byteCount: byteCount, to: target.buffer.contents().advanced(by: target.offset))
         }
         return target
+    }
+
+    /// `elements` is the array's own storage for the duration of the call
+    /// (implicit array-to-pointer argument conversion).
+    private static func copy<T>(_ elements: UnsafePointer<T>, byteCount: Int, to destination: UnsafeMutableRawPointer) {
+        destination.copyMemory(from: elements, byteCount: byteCount)
     }
 
     /// Reserves `byteCount` uninitialized bytes in the open frame.

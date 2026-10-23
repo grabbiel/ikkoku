@@ -438,11 +438,70 @@ metallib:
   64-target truncation differs by more than 1e-2.
 - `resourceStoreAddRemoveCyclesKeepResourceCountsBounded` runs 40
   mesh/texture/deform/hidden add-remove cycles.
+- `frameRingArrayAllocationReachesAThrowingCallerWithoutAnError` calls
+  `allocate(array:)` three times from an out-of-line throwing caller and reads
+  the values back. An empty array takes one aligned slot. It guards the Release
+  fault below and only means something when the suite runs optimized.
+
+**Release fault (found and fixed 2026-10-23).** This slice was first run in
+the app on 2026-10-23 (main `87cf261`, Xcode 27.0, Swift 6.4
+`swiftlang-6.4.0.34.1`, macOS 27.0.1). Every render from a Release build
+crashed on its first skinned frame: thumbnails, `IKKOKU_AUTOCAPTURE`, and the
+interactive display link. All Debug builds and lanes passed. The crash was a
+SIGSEGV in `objc_retain`, called from `Renderer.prepare` at offset 156. A
+Release build of the commit before #119 (`17aef4a`) captured normally.
+
+An lldb register trace on the Release binary isolated the cause:
+
+1. `allocate(array:)` copied the array inside an `array.withUnsafeBytes`
+   closure. In the optimized build, that non-throwing closure loaded
+   `MTLBuffer.contents()` into x21, the Swift error register. It then
+   tail-called `memmove` without restoring x21. Trace: x21 = `0x0` on entry,
+   `0x10ac88000` at the `b memmove`.
+2. The standard library's `withUnsafeBytes` saw a nonzero x21 after the closure
+   returned. It treated that as an error thrown by the closure and returned it.
+3. `allocate(array:)` does not check x21 after that call, because the closure
+   cannot throw, so it returned normally with x21 still set.
+4. `buildContext` treated that as a thrown error at its first array allocation,
+   the morph entries.
+5. `prepare`'s `catch` retained the "error", which is a raw buffer pointer, and
+   crashed.
+
+Before #119, `allocate(array:)` did not throw, so nothing read the clobbered
+register. In an otool scan of the whole Release binary, this closure is the
+only function that overwrites x21 without saving it and then tail-calls
+another symbol.
+
+The fix copies the array without a closure, through a typed-pointer helper
+(`FrameRing.copy`, using implicit array-to-pointer conversion). A two-module
+package of about 60 lines reproduces the fault outside ikkoku with the same
+closure. `swift run -c release repro` exits 139 (SIGSEGV), while the Debug
+build and the closure-free variant run cleanly. It is kept as private
+evidence for a Swift compiler report, together with the traces and the
+disassembly, under `.local/local-wave-verify/` (`swift-x21-repro/`,
+`release-crash-x21-closure-trace.txt`).
+
+Guards are in the local `app-smoke` lane
+([Tools/verification/README.md](../../Tools/verification/README.md)):
+
+- `build-release-app` builds the Release app.
+- `release-startup-capture` renders one bundled Maker frame with that build,
+  with source-tree fallbacks off.
+- `engine-release-frame-ring` runs `swift test -c release -Xswiftc
+  -enable-testing --filter frameRing`.
+
+Before the fix, the smoke check exited with signal 11 (SIGSEGV) and the
+optimized test run ended with signal 11. CI does not run these checks. Its
+runners use Xcode 26.6 (Swift 6.3.3), and whether that compiler emits the same
+code is unverified.
 
 Run them with
 `swift test --package-path Packages/Engine --filter 'frameRing|lightPacking|activeMorphEntries|rendererCapture|resourceStoreAddRemove'`.
-Swift was not compiled locally, so the CI Engine suite is the only test run.
-Nothing here was run in the app.
+The first slice was written without a local compiler; CI's Engine suite was
+its only test run. The local run on 2026-10-23 is described above: optimized,
+`--filter frameRing` passed 4/4 after the fix. The app run covered only the
+Release smoke and thumbnail captures. Concurrent interactive/capture/pick
+stress is still not run.
 
 ### Character and import lifetime (R6, second slice)
 
