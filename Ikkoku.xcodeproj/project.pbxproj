@@ -147,7 +147,6 @@
 			fileSystemSynchronizedGroups = (
 				796F38603037800D007ABF96 /* Assets */,
 				79A8E8C93034D9BC004895DE /* Apps */,
-				79A8E8D33034E43B004895DE /* Packages */,
 			);
 			name = IkkokuCreator;
 			packageProductDependencies = (

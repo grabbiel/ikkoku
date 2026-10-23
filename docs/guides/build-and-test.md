@@ -1,6 +1,7 @@
 # Build, test and capture
 
-Reviewed 2026-09-25; setup path and prerequisites reviewed 2026-10-23 (T-T01).
+Reviewed 2026-09-25; setup path and prerequisites reviewed 2026-10-23 (T-T01);
+Release packaging added 2026-10-23 (T-T02).
 Commands run from the repository root unless stated otherwise.
 See the [documentation index](../README.md) and
 [verification audit](../component-audit/toolchain-and-verification.md) for scope.
@@ -48,7 +49,8 @@ variables from an earlier shell session.
    The project signs automatically with its configured development team.
    Without that team, append `CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""`
    as CI does. CI only checks that such a build compiles and links; launching
-   an unsigned build has not been verified.
+   an unsigned build has not been verified. To package a Release build, see
+   [Package and inspect a Release build](#package-and-inspect-a-release-build).
 
 CI runs the same checker with `--require public` before the public lane.
 Optional workflows have their own entries below and runbooks:
@@ -124,6 +126,65 @@ Alternatively open `Ikkoku.xcodeproj` and run the `IkkokuCreator` scheme. The pr
 is `Ikkoku.app`. `IKKOKU_ASSETS=/absolute/path/to/Assets` overrides the bundled native
 asset root when launching the executable directly. Build with `-configuration
 Release` for measurements and use the corresponding `Products/Release` executable.
+
+## Package and inspect a Release build
+
+Build the Release app from a clean checkout, then inspect what it would ship:
+
+```sh
+git status --short --ignored -- Assets    # expect no output: Xcode copies Assets/ from disk
+xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator \
+  -configuration Release -derivedDataPath .local/build-release \
+  -destination 'platform=macOS,arch=arm64' ARCHS=arm64 build
+python3 Tools/verification/inspect_app_bundle.py \
+  .local/build-release/Build/Products/Release/Ikkoku.app \
+  --report .local/verification/reports/release-bundle.json
+```
+
+The app target copies its `Assets/` folder as a file-system synchronized
+group. Untracked or git-ignored files there, such as regenerated `.gltf`/`.bin`
+intermediates, are copied too. Until 2026-10-23 the target also listed
+`Packages/`, which copied the whole Engine package, tests and fixtures
+included, into `Contents/Resources/Engine/`. Any folder added to the app
+target's synchronized groups ships its non-source files as resources. The
+[inspector](../../Tools/verification/README.md#release-bundle-inspector-t-t02)
+fails on any file that is neither a declared build product nor a tracked
+asset, so build releases from a clean tree. It also requires the metallib, the
+catalog and every catalog-referenced asset, an `arm64` executable, and no
+private or original-game content. `ARCHS=arm64` keeps Release to the
+Apple Silicon slice; without it, Release also compiles an untested `x86_64`
+slice. Append `CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""` without the
+development team, as CI's `release-package` job does.
+
+Three lookups have **source-tree fallbacks**, which are paths inside the
+checkout the binary was compiled from (`#filePath`). The asset root falls back
+to `Assets/` when the bundle has no `catalog.json`. Maker and Studio also find
+the git-ignored Maker library and original male/female bases under
+`.local/reverse/`. These paths exist only on the build machine, so an app moved
+elsewhere on that machine still finds them. Every use prints a
+`[ikkoku] source-tree fallback:` line. `IKKOKU_SOURCE_TREE_FALLBACKS=0`
+disables all three. Explicit `IKKOKU_ASSETS`, `IKKOKU_MAKER_LIBRARY` and
+`IKKOKU_SOURCE_AVATAR`/`IKKOKU_SOURCE_MALE_AVATAR` still apply. Unset or any
+other value keeps the development defaults in both configurations.
+
+To check that the bundle alone supplies the app's resources, launch a copy
+outside the checkout with the fallbacks off. The thumbnail mode loads the
+metallib, the catalog and every catalog entry, renders them offscreen and
+exits:
+
+```sh
+WORK="$(mktemp -d)"
+ditto .local/build-release/Build/Products/Release/Ikkoku.app "$WORK/Ikkoku.app"
+(cd "$WORK" && IKKOKU_SOURCE_TREE_FALLBACKS=0 IKKOKU_RENDER_THUMBS="$WORK/thumbs" \
+  ./Ikkoku.app/Contents/MacOS/Ikkoku; echo "exit $?")
+```
+
+Expect an `[ikkoku] assets root:` line naming the copy's
+`Ikkoku.app/Contents/Resources` (possibly with a `/private` prefix), no
+`source-tree fallback` line, `… thumbnails written` and exit 0. **This launch
+has not been run** (T-T02). CI only builds and inspects the bundle. The
+launch also does not cover a clean user profile, signing, notarization or an
+installer.
 
 ## Test layers
 
@@ -276,7 +337,8 @@ and `IKKOKU_APPLICATION_FOCUS`.
 Startup inputs (`IKKOKU_SOURCE_SCENE`, `IKKOKU_SOURCE_CARD`, `IKKOKU_OPEN_RIG`,
 `IKKOKU_BONE_MODIFIERS`, `IKKOKU_MOD_LIBRARY` and the Studio plugin, step and
 animation-time inputs) and data sources (`IKKOKU_ASSETS`, avatars, the Maker
-library, contracts and Studio catalogs) also apply to an interactive launch.
+library, contracts, Studio catalogs and `IKKOKU_SOURCE_TREE_FALLBACKS`) also
+apply to an interactive launch.
 One environment file often supplies them to several modes, so a mode that does
 not read them ignores them; only an empty value is rejected. Other tools' fixture
 variables are ignored. `IKKOKU_SOURCE_PLUGIN_DELTA` still needs

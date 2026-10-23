@@ -415,6 +415,8 @@ extension CaptureRequest {
         "IKKOKU_STUDIO_ANIMATION_CATALOG", "IKKOKU_STUDIO_ATTACHMENT_CATALOG", "IKKOKU_STUDIO_ITEM_CATALOG",
         "IKKOKU_STUDIO_DYNAMICS", "IKKOKU_STUDIO_HAND_PATTERNS", "IKKOKU_STUDIO_LOOK_SETTINGS",
         "IKKOKU_STUDIO_VOICE_CATALOG",
+        // `0` turns off the build checkout's development defaults (EngineHost, T-T02).
+        "IKKOKU_SOURCE_TREE_FALLBACKS",
     ]
 
     /// Name prefixes used only by capture variables: an unknown name with one of

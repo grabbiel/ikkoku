@@ -34,7 +34,7 @@
       "env": {},
       "minimumTests": 25,
       "referenceTier": "synthetic",
-      "tolerance": "Unit tests of the verification runner and the prerequisite checker on sample runner and tool output; they do not probe the installed toolchain.",
+      "tolerance": "Unit tests of the verification runner, the prerequisite checker and the release-bundle inspector on sample runner and tool output and synthetic app bundles; they do not probe the installed toolchain or inspect a built app.",
       "timeout": 120
     },
     {
