@@ -213,11 +213,12 @@ public struct SourceMakerLibrary: Sendable {
             throw RigError.invalid("Selected card and base assembly identities differ.")
         }
         let folder = baseURL.deletingLastPathComponent().resolvingSymlinksInPath()
-        func base(_ path: String) throws -> SourceRig {
+        func componentURL(_ path: String) throws -> URL {
             let url = folder.appendingPathComponent(path).resolvingSymlinksInPath()
             guard !path.hasPrefix("/"), url.path.hasPrefix(folder.path + "/") else { throw RigError.invalid("Base component escapes its folder.") }
-            return try SourceRig.load(url: url)
+            return url
         }
+        func base(_ path: String) throws -> SourceRig { try SourceRig.load(url: componentURL(path)) }
         let references = try card.modReferences()
         var selections: [Selection] = [], diagnostics: [String] = [], materials: [MaterialComponent] = []
         var bodyMask: URL?, clearBodyMask = false
@@ -227,15 +228,19 @@ public struct SourceMakerLibrary: Sendable {
             throw RigError.invalid("Base avatar requires explicit clothing slot metadata.")
         }
         var hairBySlot: [Int: (SourceRig, [String]?)] = [:], clothesBySlot: [Int: (SourceRig, [String]?)] = [:]
+        // Validate every reference path and slot, but parse its geometry only
+        // if the resolved selection still needs that fallback. Converted and
+        // explicit-empty selections otherwise discarded these expensive loads.
+        var referenceHair: [Int: (URL, [String]?)] = [:], referenceClothes: [Int: (URL, [String]?)] = [:]
         for (i, part) in manifest.hair.enumerated() {
             let slot = part.slot ?? i
-            guard (0..<4).contains(slot), hairBySlot[slot] == nil else { throw RigError.invalid("Invalid or duplicate base hair slot.") }
-            hairBySlot[slot] = (try base(part.file), part.meshNames)
+            guard (0..<4).contains(slot), referenceHair[slot] == nil else { throw RigError.invalid("Invalid or duplicate base hair slot.") }
+            referenceHair[slot] = (try componentURL(part.file), part.meshNames)
         }
         for (i, part) in manifest.clothes.enumerated() {
             let slot = part.slot ?? [0, 1, 8][i]
-            guard (0..<9).contains(slot), clothesBySlot[slot] == nil else { throw RigError.invalid("Invalid or duplicate base clothing slot.") }
-            clothesBySlot[slot] = (try base(part.file), part.meshNames)
+            guard (0..<9).contains(slot), referenceClothes[slot] == nil else { throw RigError.invalid("Invalid or duplicate base clothing slot.") }
+            referenceClothes[slot] = (try componentURL(part.file), part.meshNames)
         }
         func integer(_ fields: [String: SourceMessagePackValue], _ name: String) throws -> Int {
             guard let value = fields[name]?.integerValue, Int32(exactly: value) != nil else { throw RigError.invalid("Missing or invalid Maker selection \(name).") }
@@ -262,7 +267,7 @@ public struct SourceMakerLibrary: Sendable {
         for (slot, part) in hairParts.enumerated() {
             let id = try integer(part.stringKeyedMap(), "id"), property = "ChaFileHair." + ["HairBack", "HairFront", "HairSide", "HairOption"][slot]
             let value = try selected(101 + slot, id, property, "hair-\(slot)/")
-            if selections.last?.entry != nil { hairBySlot[slot] = value }
+            if selections.last?.entry != nil { hairBySlot[slot] = value; referenceHair[slot] = nil }
         }
         let clothesFields = try card.recordFields(.clothes(coordinate: coordinate))
         guard let parts = clothesFields["parts"]?.arrayValue, parts.count <= 9 else { throw RigError.invalid("Unsupported clothes array.") }
@@ -270,7 +275,7 @@ public struct SourceMakerLibrary: Sendable {
             let id = try integer(part.stringKeyedMap(), "id")
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
             let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/")
-            if selections.last?.entry != nil { clothesBySlot[slot] = value }
+            if selections.last?.entry != nil { clothesBySlot[slot] = value; referenceClothes[slot] = nil }
             if slot == 0, selections.last?.entry?.empty == true { clearBodyMask = true }
         }
         diagnostics.append("Converted clothing assembles the outdoor shoes and only the fully-dressed meshes; the saved clothes state is preserved (Studio renders it on these meshes, the Maker preview does not).")
@@ -288,6 +293,14 @@ public struct SourceMakerLibrary: Sendable {
                   attachment.positionScale == 0.01 else { throw RigError.invalid("Unsupported accessory attachment behavior.") }
             accessories.append(.init(source: rig, parent: parent, slot: slot, meshNames: meshes,
                 overrides: try SourceAccessoryMove.overrides(fields: fields, rig: rig, attachment: attachment)))
+        }
+        for slot in referenceHair.keys.sorted() {
+            let (url, meshes) = referenceHair[slot]!
+            hairBySlot[slot] = (try SourceRig.load(url: url), meshes)
+        }
+        for slot in referenceClothes.keys.sorted() {
+            let (url, meshes) = referenceClothes[slot]!
+            clothesBySlot[slot] = (try SourceRig.load(url: url), meshes)
         }
         let hair = hairBySlot.keys.sorted().compactMap { hairBySlot[$0] }, clothes = clothesBySlot.keys.sorted().compactMap { clothesBySlot[$0] }
         let convertedSlots = Set(selections.filter { $0.entry != nil && $0.property.contains(".ChaFileClothes.Clothes") }.compactMap { selection in
