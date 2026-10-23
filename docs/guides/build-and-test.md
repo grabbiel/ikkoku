@@ -104,8 +104,39 @@ IKKOKU_CAPTURE_UI="$PWD/.local/studio-ui.png" IKKOKU_CAPTURE_UI_MODE=studio \
 ```
 
 UI capture opens the application window; it is distinct from offscreen rendering.
-It currently ignores PNG-write failures, so inspect the output file rather than
-relying on its exit status (A-T05).
+It waits for readiness rather than a fixed delay. SwiftUI `onAppear` must have
+run, and a visible window's laid-out bounds must be nonzero and unchanged for
+five polls 0.1 s apart. Otherwise it exits 1 after `IKKOKU_CAPTURE_UI_TIMEOUT`
+seconds (default 30, at most 600), naming what was not ready.
+
+Capture outputs are read back after writing: the UI PNG and
+`IKKOKU_CAPTURE_UI_REPORT`, thumbnails, offscreen PNGs and JSON reports. Each
+must be nonempty and byte-identical to what was written, and a PNG must be
+complete and decode at the captured pixel size. A failure prints the path and
+exits 1; "written" is printed only after verification. Parent directories are
+not created. `IKKOKU_RENDER_THUMBS=<dir>` attempts every catalog entry, lists
+each failure and exits 1 if any entry failed or none was written (A-T05).
+
+CI compiles this app path but does not run it. Confirm it on the Mac:
+
+```sh
+APP=.local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku
+# Destination under a missing directory: exit 1, path named, no "written".
+IKKOKU_CAPTURE_UI="$PWD/.local/a-t05-missing/ui.png" "$APP"; echo "exit $?"
+# A directory at the destination: exit 1.
+mkdir -p .local/a-t05-dir
+IKKOKU_CAPTURE_UI="$PWD/.local/a-t05-dir" "$APP"; echo "exit $?"
+# Forced readiness timeout: exit 1 with "not ready after".
+IKKOKU_CAPTURE_UI="$PWD/.local/a-t05-ui.png" IKKOKU_CAPTURE_UI_TIMEOUT=0.05 "$APP"; echo "exit $?"
+# Normal capture: exit 0 after "ui snapshot written" and "ui report written".
+IKKOKU_CAPTURE_UI="$PWD/.local/a-t05-ui.png" \
+  IKKOKU_CAPTURE_UI_REPORT="$PWD/.local/a-t05-ui.json" "$APP"; echo "exit $?"
+# Thumbnails: exit 0 with the count written; a file in place of the folder exits 1.
+IKKOKU_RENDER_THUMBS="$PWD/.local/a-t05-thumbs" "$APP"; echo "exit $?"
+touch .local/a-t05-file
+IKKOKU_RENDER_THUMBS="$PWD/.local/a-t05-file" "$APP"; echo "exit $?"
+```
+
 Source-rig, card, scene, plugin and matched-player capture recipes live with their
 [technical references](../README.md#technical-references). Headless captures exit
 before `NSApplication` finishes launching. The Mute native adapter therefore defers
