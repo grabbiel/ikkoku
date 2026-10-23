@@ -27,6 +27,11 @@ public final class Renderer: @unchecked Sendable {
     public private(set) var lastFrameGPUTime: Double = 0
     /// Invalid skin bindings are skipped during interactive rendering; captures fail.
     public private(set) var lastDeformationErrors: [String] = []
+    /// Live source-shader draws encoded by the last prepared frame, and any
+    /// item that fell back to its native toon draw at render time (with why).
+    public internal(set) var lastSourceShaderLive = SourceShaderLiveFrameReport()
+    var liveEncoder: SourceShaderLiveEncoder?
+    var liveEncoderError: String?
 
     public init(gpu: GPUContext) throws {
         self.gpu = gpu
@@ -75,6 +80,11 @@ public final class Renderer: @unchecked Sendable {
         cb.present(drawable)
         cb.commit()
     }
+
+    /// Runs `body` under the render lock (live validation captures).
+    func renderLockedLive(_ body: () -> Void) { renderLock.lock(); body(); renderLock.unlock() }
+    /// Starts a frame-ring region for an offscreen frame.
+    func frameRingBegin() { frameRing.beginFrame(frameIndex); frameIndex &+= 1 }
 
     private func ensureTargets(width: Int, height: Int) -> RenderTargets? {
         if let t = targets, t.width == width, t.height == height { return t }
@@ -216,9 +226,14 @@ public final class Renderer: @unchecked Sendable {
         let deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)]
         let width: Int
         let height: Int
+        /// Live source-shader draws in source queue order; empty unless an
+        /// item carries `sourceShader`.
+        var live: [LiveRecord] = []
+        /// The stencil-capable main-pass pipelines, set only with live draws.
+        var stencilMainPass: Pipelines.MainPass? = nil
     }
 
-    private func prepare(frame input: RenderFrame, targets: RenderTargets) -> FrameContext {
+    func prepare(frame input: RenderFrame, targets: RenderTargets) -> FrameContext {
         var frame = input
         frame.retainTextures(from: resources)
         lastDeformationErrors = []
@@ -319,6 +334,7 @@ public final class Renderer: @unchecked Sendable {
         var casters: [DrawRecord] = []
         var deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)] = []
         var deformSeen = Set<UInt64>()
+        var liveCandidates: [DrawRecord] = []
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
@@ -365,21 +381,48 @@ public final class Renderer: @unchecked Sendable {
             let moff = frameRing.allocate(mu)
             let c = item.model.transformPoint(mesh.bounds.center)
             let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, drawOffset: doff, materialOffset: moff, distance: length(c - cp))
-            if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
+            if item.sourceShader != nil { liveCandidates.append(rec) }
+            else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
             if item.castsShadow && !item.material.transparent { casters.append(rec) }
         }
-        opaque.sort { a, b in
+        var liveReport = SourceShaderLiveFrameReport()
+        let live = liveCandidates.isEmpty ? [] : prepareLive(liveCandidates, deforms: deforms, report: &liveReport, opaque: &opaque, transparent: &transparent)
+        lastSourceShaderLive = liveReport
+        opaque = Self.sortedOpaque(opaque)
+        transparent = Self.sortedTransparent(transparent)
+        var context = FrameContext(frame: frame, frameOffset: frameOffset, lightsOffset: lightsOffset, postOffset: postOffset,
+                                   opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms, width: W, height: H)
+        if !live.isEmpty {
+            do { context.stencilMainPass = try pipelines.stencilMainPass(); context.live = live }
+            catch {
+                // Without the stencil pipelines nothing can draw live: every
+                // live item returns to its native draw, reported.
+                lastSourceShaderLive.fallbacks += live.map { "\($0.draw.material.label): stencil main-pass pipelines unavailable (\(error)); drawn toon" }
+                lastSourceShaderLive.draws = 0
+                let back = live.map(\.record)
+                context = FrameContext(frame: frame, frameOffset: frameOffset, lightsOffset: lightsOffset, postOffset: postOffset,
+                                       opaque: Self.sortedOpaque(opaque + back.filter { !$0.item.material.transparent }),
+                                       transparent: Self.sortedTransparent(transparent + back.filter { $0.item.material.transparent }),
+                                       shadowCasters: casters, deforms: deforms, width: W, height: H)
+            }
+        }
+        return context
+    }
+
+    static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
+        records.sorted { a, b in
             if a.item.order != b.item.order { return a.item.order < b.item.order }
             if a.item.material.uniforms.kind != b.item.material.uniforms.kind { return a.item.material.uniforms.kind < b.item.material.uniforms.kind }
             return a.item.mesh.id < b.item.mesh.id
         }
-        transparent.sort {
+    }
+
+    static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
+        records.sorted {
             if $0.distance != $1.distance { return $0.distance > $1.distance }
             if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
             return $0.item.mesh.id < $1.item.mesh.id
         }
-        return FrameContext(frame: frame, frameOffset: frameOffset, lightsOffset: lightsOffset, postOffset: postOffset,
-                            opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms, width: W, height: H)
     }
 
     // MARK: - Encoding
@@ -387,13 +430,14 @@ public final class Renderer: @unchecked Sendable {
     private func encode(frame: RenderFrame, target: any MTLTexture, targets: RenderTargets, commandBuffer cb: any MTLCommandBuffer) {
         let ctx = prepare(frame: frame, targets: targets)
         encodeDeform(ctx, cb)
+        if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
         encodeShadow(ctx, cb)
         encodeMain(ctx, targets: targets, cb)
         encodePost(ctx, targets: targets, target: target, cb)
         encodeOverlay(ctx, targets: targets, target: target, cb)
     }
 
-    private func encodeDeform(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
+    func encodeDeform(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
         guard !ctx.deforms.isEmpty, let enc = cb.makeComputeCommandEncoder() else { return }
         enc.label = "Deform"
         enc.setComputePipelineState(pipelines.deform)
@@ -417,7 +461,7 @@ public final class Renderer: @unchecked Sendable {
         enc.endEncoding()
     }
 
-    private func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
+    func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
         enc.setVertexBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
         enc.setFragmentBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
         enc.setFragmentBuffer(frameRing.buffer, offset: ctx.lightsOffset, index: Int(BufferIndexLights.rawValue))
@@ -497,13 +541,24 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 0
+        // Live source-shader draws need stencil; frames without them keep the
+        // depth-only attachment and pipelines unchanged.
+        var main = pipelines.depthOnlyMainPass
+        if let stencilPass = ctx.stencilMainPass, let depthStencil = try? targets.msaaDepthStencil() {
+            main = stencilPass
+            pass.depthAttachment.texture = depthStencil
+            pass.stencilAttachment.texture = depthStencil
+            pass.stencilAttachment.loadAction = .clear
+            pass.stencilAttachment.storeAction = .dontCare
+            pass.stencilAttachment.clearStencil = 0
+        }
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Main"
         bindCommon(enc, ctx)
 
         if !fx.transparentBackground {
             enc.pushDebugGroup("Background")
-            enc.setRenderPipelineState(pipelines.background)
+            enc.setRenderPipelineState(main.background)
             enc.setDepthStencilState(pipelines.depthNone)
             enc.setCullMode(.none)
             var bgFrame = FrameUniforms()
@@ -518,7 +573,7 @@ public final class Renderer: @unchecked Sendable {
         }
         if fx.showGrid {
             enc.pushDebugGroup("Grid")
-            enc.setRenderPipelineState(pipelines.grid)
+            enc.setRenderPipelineState(main.grid)
             enc.setDepthStencilState(pipelines.depthTest)
             enc.setCullMode(.none)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
@@ -532,18 +587,27 @@ public final class Renderer: @unchecked Sendable {
             bindDraw(enc, rec)
             bindTextures(enc, m, frame: ctx.frame)
             if outlinesOn && rec.item.outline && (m.uniforms.flags & MaterialFlagNoOutline.rawValue) == 0 {
-                enc.setRenderPipelineState(pipelines.outline)
+                enc.setRenderPipelineState(main.outline)
                 enc.setDepthStencilState(pipelines.depthWrite)
                 enc.setCullMode(.front)
                 drawIndexed(enc, rec.mesh)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-            enc.setRenderPipelineState(nativeEye ? pipelines.eye : pipelines.toonOpaque)
+            enc.setRenderPipelineState(nativeEye ? main.eye : main.toonOpaque)
             enc.setDepthStencilState(pipelines.depthWrite)
             enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(enc, rec.mesh)
         }
         enc.popDebugGroup()
+
+        if !ctx.live.isEmpty, pass.stencilAttachment.texture != nil {
+            enc.pushDebugGroup("SourceShaderLive")
+            encodeLiveDraws(enc, ctx, target: TranslatedSourceTarget(color: Pipelines.hdrFormat, depthStencil: Pipelines.depthStencilFormat, sampleCount: Pipelines.sampleCount))
+            // Translated programs bind buffers 0 and 8…, textures 0…; restore
+            // the native frame bindings for the passes that follow.
+            bindCommon(enc, ctx)
+            enc.popDebugGroup()
+        }
 
         if !ctx.transparent.isEmpty {
             enc.pushDebugGroup("Transparent")
@@ -551,7 +615,7 @@ public final class Renderer: @unchecked Sendable {
             for rec in ctx.transparent {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-                enc.setRenderPipelineState(nativeEye ? pipelines.eyeBlend : pipelines.toonBlend)
+                enc.setRenderPipelineState(nativeEye ? main.eyeBlend : main.toonBlend)
                 bindDraw(enc, rec)
                 bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
@@ -563,7 +627,7 @@ public final class Renderer: @unchecked Sendable {
         let depthGizmos = ctx.frame.gizmos.filter { $0.depthTest && !$0.vertices.isEmpty }
         if !depthGizmos.isEmpty {
             enc.pushDebugGroup("GizmosDepth")
-            enc.setRenderPipelineState(pipelines.gizmoHDR)
+            enc.setRenderPipelineState(main.gizmoHDR)
             enc.setDepthStencilState(pipelines.depthTest)
             enc.setCullMode(.none)
             encodeGizmos(enc, depthGizmos)
@@ -661,7 +725,7 @@ public final class Renderer: @unchecked Sendable {
         enc.setRenderPipelineState(pipelines.pick)
         enc.setDepthStencilState(pipelines.depthWrite)
         enc.setCullMode(.none)
-        for rec in ctx.opaque + ctx.transparent where rec.item.objectID != 0 {
+        for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 {
             bindDraw(enc, rec)
             bindTextures(enc, rec.item.material, frame: ctx.frame)
             enc.setFragmentBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))

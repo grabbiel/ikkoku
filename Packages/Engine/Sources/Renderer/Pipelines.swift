@@ -50,32 +50,7 @@ final class Pipelines: @unchecked Sendable {
         }
         func render(_ label: String, _ v: String, _ f: String?, color: MTLPixelFormat?, depth: MTLPixelFormat?, samples: Int,
                     blend: Blend = .none, configure: ((MTLRenderPipelineDescriptor) -> Void)? = nil) throws -> any MTLRenderPipelineState {
-            let d = MTLRenderPipelineDescriptor()
-            d.label = label
-            d.vertexFunction = try fn(v)
-            d.fragmentFunction = try f.map { try fn($0) }
-            d.rasterSampleCount = samples
-            if let color {
-                d.colorAttachments[0].pixelFormat = color
-                switch blend {
-                case .none: break
-                case .alpha:
-                    let a = d.colorAttachments[0]!
-                    a.isBlendingEnabled = true
-                    a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
-                    a.sourceRGBBlendFactor = .sourceAlpha; a.destinationRGBBlendFactor = .oneMinusSourceAlpha
-                    a.sourceAlphaBlendFactor = .one; a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-                case .additive:
-                    let a = d.colorAttachments[0]!
-                    a.isBlendingEnabled = true
-                    a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
-                    a.sourceRGBBlendFactor = .one; a.destinationRGBBlendFactor = .one
-                    a.sourceAlphaBlendFactor = .one; a.destinationAlphaBlendFactor = .one
-                }
-            }
-            if let depth { d.depthAttachmentPixelFormat = depth }
-            configure?(d)
-            return try device.makeRenderPipelineState(descriptor: d)
+            try Pipelines.build(device: device, library: library, label, v, f, color: color, depth: depth, samples: samples, blend: blend, configure: configure)
         }
 
         let hdr = Pipelines.hdrFormat, ldr = Pipelines.ldrFormat, dep = Pipelines.depthFormat, ms = Pipelines.sampleCount
@@ -114,6 +89,78 @@ final class Pipelines: @unchecked Sendable {
     }
 
     enum Blend { case none, alpha, additive }
+
+    static func build(device: any MTLDevice, library: any MTLLibrary, _ label: String, _ v: String, _ f: String?, color: MTLPixelFormat?, depth: MTLPixelFormat?,
+                      stencil: MTLPixelFormat? = nil, samples: Int, blend: Blend = .none,
+                      configure: ((MTLRenderPipelineDescriptor) -> Void)? = nil) throws -> any MTLRenderPipelineState {
+        func fn(_ name: String) throws -> any MTLFunction {
+            guard let f = library.makeFunction(name: name) else { throw RendererError.missingFunction(name) }
+            return f
+        }
+        let d = MTLRenderPipelineDescriptor()
+        d.label = label
+        d.vertexFunction = try fn(v)
+        d.fragmentFunction = try f.map { try fn($0) }
+        d.rasterSampleCount = samples
+        if let color {
+            d.colorAttachments[0].pixelFormat = color
+            switch blend {
+            case .none: break
+            case .alpha:
+                let a = d.colorAttachments[0]!
+                a.isBlendingEnabled = true
+                a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+                a.sourceRGBBlendFactor = .sourceAlpha; a.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                a.sourceAlphaBlendFactor = .one; a.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            case .additive:
+                let a = d.colorAttachments[0]!
+                a.isBlendingEnabled = true
+                a.rgbBlendOperation = .add; a.alphaBlendOperation = .add
+                a.sourceRGBBlendFactor = .one; a.destinationRGBBlendFactor = .one
+                a.sourceAlphaBlendFactor = .one; a.destinationAlphaBlendFactor = .one
+            }
+        }
+        if let depth { d.depthAttachmentPixelFormat = depth }
+        if let stencil { d.stencilAttachmentPixelFormat = stencil }
+        configure?(d)
+        return try device.makeRenderPipelineState(descriptor: d)
+    }
+
+    /// The main-pass pipelines. The live source-shader path needs a stencil
+    /// buffer (the original hair-front and eye passes test and write stencil
+    /// reference 2), so a frame with live draws renders its main pass into a
+    /// depth+stencil target with these same shaders recompiled for that
+    /// attachment; a frame without live draws keeps the depth-only set.
+    struct MainPass {
+        let background, grid, outline, toonOpaque, toonBlend, eye, eyeBlend, gizmoHDR: any MTLRenderPipelineState
+    }
+    static let depthStencilFormat: MTLPixelFormat = .depth32Float_stencil8
+    var depthOnlyMainPass: MainPass {
+        MainPass(background: background, grid: grid, outline: outline, toonOpaque: toonOpaque, toonBlend: toonBlend,
+                 eye: eye, eyeBlend: eyeBlend, gizmoHDR: gizmoHDR)
+    }
+    private let stencilLock = NSLock()
+    private var stencilPass: MainPass?
+    /// Built on first use (only when a frame has live source-shader draws).
+    func stencilMainPass() throws -> MainPass {
+        stencilLock.lock(); defer { stencilLock.unlock() }
+        if let stencilPass { return stencilPass }
+        let hdr = Pipelines.hdrFormat, ds = Pipelines.depthStencilFormat, ms = Pipelines.sampleCount
+        func render(_ label: String, _ v: String, _ f: String, blend: Blend = .none) throws -> any MTLRenderPipelineState {
+            try Pipelines.build(device: device, library: library, label + "Stencil", v, f, color: hdr, depth: ds, stencil: ds, samples: ms, blend: blend)
+        }
+        let result = MainPass(
+            background: try render("Background", "fullscreen_vertex", "background_fragment"),
+            grid: try render("Grid", "grid_vertex", "grid_fragment", blend: .alpha),
+            outline: try render("Outline", "outline_vertex", "outline_fragment"),
+            toonOpaque: try render("ToonOpaque", "toon_vertex", "toon_fragment"),
+            toonBlend: try render("ToonBlend", "toon_vertex", "toon_fragment", blend: .alpha),
+            eye: try render("Eye", "toon_vertex", "eye_fragment"),
+            eyeBlend: try render("EyeBlend", "toon_vertex", "eye_fragment", blend: .alpha),
+            gizmoHDR: try render("GizmoHDR", "gizmo_vertex", "gizmo_fragment", blend: .alpha))
+        stencilPass = result
+        return result
+    }
 }
 
 public enum RendererError: Error, CustomStringConvertible {

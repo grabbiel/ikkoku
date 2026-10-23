@@ -14,9 +14,12 @@ final class RenderTargets: @unchecked Sendable {
     let bloom: [any MTLTexture]
     let pick: any MTLTexture
     let pickDepth: any MTLTexture
+    private let device: any MTLDevice
+    private let lock = NSLock()
+    private var depthStencil: (any MTLTexture)?
 
     init(device: any MTLDevice, width: Int, height: Int) throws {
-        self.width = width; self.height = height
+        self.width = width; self.height = height; self.device = device
         func tex(_ format: MTLPixelFormat, _ w: Int, _ h: Int, samples: Int = 1, usage: MTLTextureUsage, memoryless: Bool = false, label: String) throws -> any MTLTexture {
             let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: max(w, 1), height: max(h, 1), mipmapped: false)
             d.sampleCount = samples
@@ -42,5 +45,18 @@ final class RenderTargets: @unchecked Sendable {
         bloom = mips
         pick = try tex(Pipelines.pickFormat, width, height, usage: .renderTarget, label: "Pick")
         pickDepth = try tex(Pipelines.depthFormat, width, height, usage: .renderTarget, memoryless: true, label: "PickDepth")
+    }
+
+    /// MSAA depth+stencil for main passes with live source-shader draws;
+    /// created on first use so frames without them allocate nothing new.
+    func msaaDepthStencil() throws -> any MTLTexture {
+        lock.lock(); defer { lock.unlock() }
+        if let depthStencil { return depthStencil }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.depthStencilFormat, width: max(width, 1), height: max(height, 1), mipmapped: false)
+        d.sampleCount = Pipelines.sampleCount; d.textureType = .type2DMultisample; d.usage = .renderTarget; d.storageMode = .memoryless
+        guard let t = device.makeTexture(descriptor: d) else { throw RendererError.textureCreationFailed }
+        t.label = "MSAADepthStencil"
+        depthStencil = t
+        return t
     }
 }
