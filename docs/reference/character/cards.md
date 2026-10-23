@@ -372,11 +372,10 @@ shape selection, and the ABMX bridge. Set `IKKOKU_SOURCE_CARD_FIXTURE` and
 to enable the independent Python/native comparison. Tests and synthetic captures
 do not establish full compatibility with saved characters or arbitrary mods.
 
-Remaining work includes expanding converted selections, transactional asset-ID
+Remaining work includes expanding converted selections, mod asset-ID
 and resolver edits, compatibility migrations, unsupported dependency conversion,
 special/modded heads, standalone coordinate-card framing and additional behavior
-adapters. The current source UI reports selected assets but does not edit their
-identities. Native rendering coverage is distinct from preserving and editing the
+adapters. The source UI edits the bounded vanilla hair/clothing selections below. Native rendering coverage is distinct from preserving and editing the
 original card format.
 
 
@@ -391,7 +390,7 @@ accessory visibility in `Status`, and optional replacement thumbnails. Shape and
 color numbers must be finite Float32 values with the expected array lengths.
 Editing a sex or asset identity is deliberately outside this API: retaining the
 old Sideloader resolver entry after changing its destination would create a
-misleading identity. Hair selections, clothing selections, card parameters,
+misleading identity. The separate selection API below handles bounded vanilla hair/clothing edits. Card parameters,
 ABMX, resolver metadata and other plug-in bytes remain unchanged.
 
 `Edits.coordinateType` (ST-C03, 2026-10-17) selects the worn outfit, the
@@ -502,3 +501,66 @@ restored and enabled because the original plug-in payload is preserved.
 `Tools/reverse/analysis/maker_roundtrip.py` independently audits explicit app
 exports, including all 96 shape values, selected color leaves, every untouched
 record token and opaque block, header relocation, and both PNG dimensions/CRCs.
+
+### Transactional vanilla Maker selections (CMT-02, 2026-10-23)
+
+After importing an original card, **Hair and clothing** lists the converted
+vanilla choices for four hair slots and eight clothing kinds in the displayed
+outfit. Inner shoes, head and accessory selection, mod asset selection and profile
+editing remain outside this slice. Explicit empty catalog rows mean no asset;
+numeric ID 0 is not assumed to mean empty. An unavailable saved selection is shown
+with its source ID and GUID. Unreadable resolver metadata disables the pickers
+instead of presenting the numeric ID as a vanilla selection. Missing assembly
+appearance data or an unreadable appearance draft also disables replacement with
+an explicit reason; preserving the existing imported preview remains supported.
+
+`SourceCharacterCard.selectingVanillaAsset(_:at:)` patches the existing Int32 ID
+at its typed original destination. It removes every exact-property resolver
+record for that destination, including shadowed duplicates, from both UAR markers
+in the current version-3 KKEx block and a version-2 legacy trailer. Surviving
+resolver binary records, their order and unknown fields stay byte-identical, as do
+all unrelated plugin entries and untouched card records. Resolver property
+matching uses exact UTF-8 bytes; LocalSlot never becomes asset identity. Unsupported
+or malformed metadata rejects the edit. Other saved part fields (colors, patterns,
+emblems and sub-part IDs) and their separate resolver records are retained. This
+is an intentional preservation contract, not a claim that the original Maker
+retains or resets those fields identically when changing an item. The ordinary card reader remains more
+permissive so an unsupported card can still be inspected and preserved.
+
+`MakerModel.selectSourceAsset` builds a candidate card, applies pending supported
+colors to its appearance draft, prepares the selected geometry, and validates its
+pose and finite bounds before replacing the visible state. Shape values, current
+outfit, camera and unrelated edits survive. A failure preserves the current card,
+preview and pending draft. Selecting the same effective vanilla identity preserves
+the preview and GPU resources; selecting the same numeric ID as a saved mod still
+removes the matching resolver identity. Selected-hair dynamics remain disabled
+rather than carrying particle bindings from the old assembly.
+
+**Export Edited Source Card…** writes the working original card plus shape/color
+edits and fresh thumbnails. Reimport uses `SourceCharacterCard`; this does not
+introduce a source-rig variant of the native JSON `CharacterCard` format. The
+selected outfit is still a view choice, while each outfit's edited clothing ID is
+saved in that outfit's Coordinate record.
+
+The synthetic `SourceCharacterCardSelectionTests` cover no-op bytes, exact resolver
+cleanup across both markers and formats, duplicate records, unknown data, outfit
+isolation and invalid requests. The 46-step `maker-selection-roundtrip.json`
+scenario exercises the shared model API, pending colors, shape edits, unavailable
+selection rejection, GPU identity on no-op, warmed hair/clothing resource counts,
+late candidate rejection from an invalid pending shape, and
+export/reimport of hair and two outfits. Six interleaved Release runs passed 46/46
+checks each; every late rejection reported the intended `invalidRate` from pose
+validation, with unchanged resources even on the first failure. A separate
+copied-library hash-mismatch case passed 4/4 with unchanged preview, card, pending
+colors and resources. The 30 targeted Engine checks all executed and passed with
+strict private fixtures enabled, including the ten-card selection fixture set.
+
+Independent original-format token audits verified the scripted export's 13 allowed
+scalar leaves and the visible UI export's two intended ID leaves (back hair 2 → 9,
+top 38 → 39). Other outfits, records, unknown fields and trailers stayed intact;
+full/face thumbnails were valid. A separate synthetic wire audit verified exact UAR
+cleanup across both markers and Extended Save locations. The visible UI also
+confirmed outfit isolation and export/reimport. Actual app/UI cards in these
+checks had no targeted UAR metadata; mod-to-vanilla cleanup is covered by the
+synthetic Engine/wire checks. These are native API/persistence and bounded UI
+checks, not an original-player render comparison or proof of complete Maker coverage.

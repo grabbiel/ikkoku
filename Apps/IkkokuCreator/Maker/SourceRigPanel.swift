@@ -17,6 +17,40 @@ struct SourceRigPanel: View {
                 Text("Original geometry, shape curves and facial expressions. Materials are still being rebuilt.")
                     .font(.caption).foregroundStyle(.secondary)
                 Divider()
+                if !model.sourceSelectionRows.isEmpty {
+                    DisclosureGroup("Hair and clothing") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let reason = model.sourceSelectionRows.first?.unavailableReason {
+                                Text(reason).font(.caption).foregroundStyle(.secondary)
+                            }
+                            if model.sourceCoordinateCount > 1 {
+                                Picker("Outfit", selection: Binding(get: { model.sourceBoneModifierCoordinate }, set: { index in
+                                    do { try model.selectSourceCoordinate(index) }
+                                    catch { model.status = "Outfit: \(error)" }
+                                })) {
+                                    ForEach(0..<model.sourceCoordinateCount, id: \.self) { Text("Outfit \($0 + 1)").tag($0) }
+                                }
+                            }
+                            ForEach(model.sourceSelectionRows) { row in
+                                Picker(row.label, selection: Binding(get: { row.selectedID }, set: { id in
+                                    guard let id else { return }
+                                    do { try model.selectSourceAsset(row.slot, id: id) }
+                                    catch { model.status = "Selection: \(error)" }
+                                })) {
+                                    if row.selectedID == nil {
+                                        Text("Unavailable · \(row.current)").tag(Int?.none).disabled(true)
+                                    }
+                                    ForEach(row.choices) { choice in Text(choice.name).tag(Int?.some(choice.id)) }
+                                }
+                                .disabled(row.choices.isEmpty)
+                                .accessibilityIdentifier("source-selection-" + row.id)
+                                .help(row.current)
+                            }
+                            Text("Converted original assets. Clothing changes only this outfit; the preview uses dressed meshes and outer shoes. Unavailable selections stay saved until replaced.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 if !model.sourceAssetSelections.isEmpty {
                     DisclosureGroup("Card-selected assets") {
                         ScrollView {
@@ -116,7 +150,7 @@ struct SourceRigPanel: View {
                                 do { try model.applySourceAppearance() }
                                 catch { model.status = "Appearance: \(error)" }
                             }.disabled(model.sourceAppearanceAppliedFields.isEmpty)
-                            Text("Export writes shape and supported color edits to a new original-format card. Other fields and plugin data are preserved.")
+                            Text("Export writes selections, shape and supported color edits to a new original-format card. Other fields and plugin data are preserved.")
                                 .font(.caption).foregroundStyle(.secondary)
                             if !model.sourceAppearanceDiagnostics.isEmpty {
                                 DisclosureGroup("Appearance compatibility") {
