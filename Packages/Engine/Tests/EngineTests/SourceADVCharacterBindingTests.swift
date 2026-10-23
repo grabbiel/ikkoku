@@ -434,3 +434,177 @@ private func encodedRoundTrip(_ vm: SourceADVInterpreter) throws -> SourceADVInt
     #expect(old.character == nil)
     #expect(old.commands == old.program.commands)
 }
+
+// MARK: - Original data (gated)
+
+/// G-T02 coverage sample: original scenario assets run with the new-game
+/// heroine and player bound to the extracted tables and parameter library.
+/// Every expected value comes from the Python tools
+/// (`adv_command_coverage.py`, `adv_character_tables.py`: the static model, the
+/// request model, the Params key table derived from the recovered `SaveData`
+/// source and the parameter-program model), never from this interpreter.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ADV_CHARACTER_SAMPLE"]),
+               "Requires IKKOKU_ADV_CHARACTER_SAMPLE"))
+func sourceADVCharacterSampleRunsBoundOriginalScenarios() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_ADV_CHARACTER_SAMPLE")
+    struct Sample: Decodable {
+        struct Halt: Decodable { var index: Int; var id: Int; var kind: String; var reason: String }
+        struct Outcome: Decodable, Equatable { var status: String; var pc: Int?; var id: Int? }
+        struct Mutation: Decodable { var replacedIndex: Int; var replacedExpandedIndex: Int; var expectedHalt: Halt?; var exactPrediction: Bool }
+        struct Insertion: Decodable, Equatable { var pc: Int; var asset: String; var count: Int }
+        struct Case: Decodable {
+            var name: String; var stratum: String; var program: SourceADVProgram
+            var firstStaticHalt: Halt?; var exactPrediction: Bool
+            var reachableOutcomes: [Outcome]; var mayLoop: Bool; var mutation: Mutation?
+            var predictedInsertions: [Insertion]?; var expectedHeroine: [String: Int32]?
+        }
+        struct Character: Decodable { var heroine: SourceHeroineParameters; var player: SourcePlayerParameters }
+        struct LibraryCheck: Decodable { var asset: String; var expectedHeroine: [String: Int32] }
+        var schemaVersion: Int; var frameSeconds: Float; var tickSlack: Int; var cases: [Case]
+        var parameterLibraryPath: String; var characterTablesPath: String; var sourceKeysPath: String
+        var character: Character; var libraryChecks: [LibraryCheck]
+    }
+    let url = URL(fileURLWithPath: path)
+    let data = try Data(contentsOf: url)
+    let sample = try JSONDecoder().decode(Sample.self, from: data)
+    let raw = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let predicted = try #require(raw["cases"] as? [[String: Any]]).map { $0["predictedRequests"] as? [Any] }
+    func sibling(_ name: String) -> URL { url.deletingLastPathComponent().appendingPathComponent(name) }
+    let library = try SourceADVParameterLibrary.decode(Data(contentsOf: sibling(sample.parameterLibraryPath)))
+    let tables = try SourceCharacterTables.decode(Data(contentsOf: sibling(sample.characterTablesPath)))
+    #expect(sample.schemaVersion == 3)
+    #expect(sample.cases.count >= 20)
+    #expect(sample.cases.filter { $0.stratum == "parameter-file" }.count >= 5)
+
+    // The key table equals the one derived from the recovered SaveData source:
+    // names, Params command types, writability, members and field initializers.
+    let keyData = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: sibling(sample.sourceKeysPath))) as? [String: Any])
+    let seeded = try SourceADVInterpreter(program: .init(name: "seed", commands: []),
+                                          character: .init(heroine: sample.character.heroine, player: sample.character.player, tables: tables))
+    for (kind, keys) in [("heroine", SourceHeroineParameters.keys), ("player", SourcePlayerParameters.keys)] {
+        let rows = try #require(keyData[kind] as? [[String: Any]])
+        #expect(rows.map { $0["key"] as? String } == keys.map(\.key), "\(kind) key order")
+        for (row, key) in zip(rows, keys) {
+            #expect(row["command"] as? String == key.command.rawValue, "\(key.key)")
+            #expect(row["writable"] as? Bool == key.writable, "\(key.key)")
+            if let member = row["member"] as? String { #expect(key.member.hasSuffix("." + member), "\(key.key): \(key.member)") }
+            guard kind == "heroine", key.writable, let value = row["default"] else { continue }
+            let expected: SourceADVValue? = switch key.command {
+            case .int: (value as? NSNumber).map { .integer($0.int32Value) }
+            case .bool: (value as? Bool).map { .boolean($0) }
+            default: (value as? String).map { .string($0) }
+            }
+            #expect(seeded.variables[key.key] == expected, "\(key.key) new-game value")
+        }
+    }
+
+    // Changed writable Int fields of the bound heroine, by member name.
+    let start = sample.character.heroine
+    func changes(_ vm: SourceADVInterpreter) throws -> [String: Int32] {
+        let before = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(start)) as? [String: Any])
+        let bound = try #require(vm.character)
+        let after = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(bound.heroine)) as? [String: Any])
+        var result: [String: Int32] = [:]
+        for key in SourceHeroineParameters.keys where key.writable && key.command == .int {
+            let member = String(key.key.dropFirst(2))
+            let old = (before[member] as? NSNumber)?.int32Value, new = (after[member] as? NSNumber)?.int32Value
+            if let new, new != old { result[member] = new }
+        }
+        return result
+    }
+    func run(_ program: SourceADVProgram) throws -> (vm: SourceADVInterpreter, requests: [SourceADVHostRequest]) {
+        let binding = SourceADVCharacterBinding(heroine: start, player: sample.character.player, tables: tables)
+        var vm = try SourceADVInterpreter(program: program, character: binding, parameterLibrary: library)
+        var requests: [SourceADVHostRequest] = []
+        func service() throws {
+            requests += vm.drainRequests()
+            for pending in vm.pending { try vm.acknowledge(pending.requestID) }
+        }
+        do { try vm.start() } catch { guard vm.fault != nil else { throw error } }
+        try service()
+        var frames = 0
+        let limit = program.commands.count + library.programs.values.reduce(0) { $0 + $1.count } + sample.tickSlack
+        while vm.fault == nil && !vm.closed && !vm.exhausted && frames < limit {
+            do { try vm.tick(deltaTime: sample.frameSeconds, requestNext: vm.awaitingNext) } catch { guard vm.fault != nil else { throw error } }
+            try service()
+            frames += 1
+        }
+        return (vm, requests)
+    }
+    func expectHalt(_ vm: SourceADVInterpreter, _ halt: Sample.Halt?, _ label: String) {
+        guard let halt else { #expect(vm.closed || vm.exhausted, "\(label)"); return }
+        #expect(vm.fault?.pc == halt.index, "\(label)")
+        #expect(vm.fault?.commandID == halt.id, "\(label)")
+        #expect(vm.fault?.reason.contains(halt.reason) == true, "\(label)")
+    }
+    func same(_ a: Any, _ b: Any) -> Bool {
+        switch (a, b) {
+        case let (x as [String: Any], y as [String: Any]):
+            return Set(x.keys) == Set(y.keys) && x.allSatisfy { key, value in y[key].map { same(value, $0) } ?? false }
+        case let (x as [Any], y as [Any]): return x.count == y.count && zip(x, y).allSatisfy { same($0, $1) }
+        case let (x as String, y as String): return x == y
+        case let (x as NSNumber, y as NSNumber):
+            let bools = (CFGetTypeID(x) == CFBooleanGetTypeID(), CFGetTypeID(y) == CFBooleanGetTypeID())
+            guard bools.0 == bools.1 else { return false }
+            return bools.0 ? x.boolValue == y.boolValue : Float(x.doubleValue) == Float(y.doubleValue)
+        default: return false
+        }
+    }
+    var exact = 0, mutations = 0, sequences = 0, insertionRuns = 0, heroineChanges = 0
+    for (item, expectedRequests) in zip(sample.cases, predicted) {
+        let (vm, requests) = try run(item.program)
+        // Indexes refer to the native command list; a straight-line run builds the static expansion.
+        let observed = Sample.Outcome(status: vm.status, pc: vm.fault?.pc, id: vm.fault?.commandID)
+        let looping = item.mayLoop && (vm.fault?.reason.contains("budget") == true
+                                       || ["waiting", "frameBoundary", "awaitingNext", "awaitingHost"].contains(vm.status))
+        guard item.exactPrediction else {
+            #expect(looping || vm.commands.count != vm.program.commands.count || item.reachableOutcomes.contains(observed),
+                    "\(item.name): \(observed) is not statically reachable")
+            continue
+        }
+        exact += 1
+        #expect(item.reachableOutcomes.contains(observed), "\(item.name): \(observed) is not statically reachable")
+        expectHalt(vm, item.firstStaticHalt, item.name)
+        let insertions = vm.insertions.map { Sample.Insertion(pc: $0.pc, asset: $0.asset, count: $0.count) }
+        #expect(insertions == item.predictedInsertions, "\(item.name): ParameterFile insertions")
+        if !insertions.isEmpty { insertionRuns += 1 }
+        if let expected = item.expectedHeroine {
+            #expect(try changes(vm) == expected, "\(item.name): heroine fields")
+            for (member, value) in expected { #expect(vm.variables["H_" + member] == .integer(value), "\(item.name): H_\(member)") }
+            if !expected.isEmpty { heroineChanges += 1 }
+        }
+        if let expectedRequests {
+            sequences += 1
+            let native = try JSONSerialization.jsonObject(with: JSONEncoder().encode(requests))
+            #expect(same(native, expectedRequests), "\(item.name): native host requests differ from the model")
+        }
+        guard let mutation = item.mutation, mutation.exactPrediction else { continue }
+        mutations += 1
+        var commands = item.program.commands
+        let original = commands[mutation.replacedIndex]
+        commands[mutation.replacedIndex] = .init(id: 0, multi: original.multi, hash: original.hash, version: original.version)
+        let mutated = try run(SourceADVProgram(name: item.program.name, commands: commands)).vm
+        expectHalt(mutated, mutation.expectedHalt, item.name + " mutation")
+        #expect(mutated.fault?.pc != mutation.replacedExpandedIndex, "\(item.name) mutation")
+    }
+    #expect(exact >= 20)
+    #expect(mutations >= 5)
+    #expect(sequences >= 10)
+    #expect(insertionRuns >= 5)
+    #expect(heroineChanges >= 1)
+
+    // Every modelled library program, run directly (as original asset 301 is
+    // in the contract fixture) and through a one-line ParameterFile.
+    #expect(sample.libraryChecks.count >= 50)
+    #expect(sample.libraryChecks.contains { $0.asset == "301" && !$0.expectedHeroine.isEmpty })
+    for check in sample.libraryChecks {
+        let commands = try #require(library.programs[check.asset])
+        for program in [SourceADVProgram(name: check.asset, commands: commands),
+                        SourceADVProgram(name: "via-parameter-file", commands: [.init(id: 201, args: [check.asset])])] {
+            let vm = try run(program).vm
+            #expect(vm.fault == nil && vm.exhausted, "\(check.asset) \(program.name): \(vm.fault?.reason ?? vm.status)")
+            #expect(try changes(vm) == check.expectedHeroine, "\(check.asset) \(program.name)")
+            for (member, value) in check.expectedHeroine { #expect(vm.variables["H_" + member] == .integer(value), "\(check.asset)") }
+        }
+    }
+}

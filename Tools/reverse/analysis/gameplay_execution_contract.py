@@ -23,7 +23,8 @@ CLASSES = {"1-1": 0, "2-1": 1, "2-2": 2, "3-1": 3}
 SCALAR = {0, 1, 3, 4, 12, 14, 15, 22, 23, 25}
 # Presentation commands executed as typed host requests (see adv_host_requests.py).
 PRESENTATION = {16, 17, 18, 19, 35, 37, 44, 45, 88, 106, 112, 125, 128, 169}
-SUPPORTED = SCALAR | PRESENTATION
+BINDINGS = {165, 201}  # HeroineParam, ParameterFile (G-T02: a bound heroine and parameter library)
+SUPPORTED = SCALAR | PRESENTATION | BINDINGS
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
