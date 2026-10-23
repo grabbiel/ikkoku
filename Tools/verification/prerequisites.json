@@ -1,0 +1,279 @@
+{
+  "schemaVersion": 1,
+  "reviewed": "2026-10-23",
+  "notes": [
+    "Single source for the tool versions that Tools/verification/doctor.py checks and that docs/guides/build-and-test.md shows; regenerate that table with `python3 Tools/verification/doctor.py --markdown`.",
+    "Requirements: `>=V` minimum, `V.*` same release series, `==V` exact pin, `unrecorded` = presence only because no version is documented anywhere in the repository.",
+    "statedIn lists every other place that restates a version; `{version}` and `{major}` in a phrase are filled from the requirement and test_doctor.py fails when a phrase is missing.",
+    "observed records dated runs only; it is evidence, not a supported-version claim."
+  ],
+  "tiers": {
+    "public": "Needed to build the app and run the public verification lane (what CI runs). No private data.",
+    "optional": "Needed only for the named workflow; most of these consume private `.local/` inputs."
+  },
+  "tools": [
+    {
+      "id": "host",
+      "name": "Apple Silicon Mac",
+      "probe": "host",
+      "requirement": "macos-arm64",
+      "statedIn": [{"path": "README.md", "phrase": "Apple Silicon development host"}],
+      "observed": [],
+      "install": "Use macOS on Apple Silicon; the app builds for platform=macOS,arch=arm64. The minimum host macOS version is unrecorded."
+    },
+    {
+      "id": "xcode",
+      "name": "Xcode",
+      "candidates": ["xcodebuild"],
+      "argv": ["{exe}", "-version"],
+      "parser": "xcodebuild",
+      "requirement": ">=26",
+      "statedIn": [
+        {"path": "README.md", "phrase": "Xcode {version}"},
+        {"path": "Tools/verification/README.md", "phrase": "needs Xcode {version}"}
+      ],
+      "observed": [
+        "26.0.1, reference Mac, 2026-09-29",
+        "26.6 (17F113), CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"
+      ],
+      "install": "Install Xcode 26 and select it: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+    },
+    {
+      "id": "metal",
+      "name": "Metal compiler",
+      "candidates": ["xcrun"],
+      "argv": ["{exe}", "-sdk", "macosx", "metal", "--version"],
+      "parser": "metal",
+      "requirement": "unrecorded",
+      "statedIn": [],
+      "observed": [],
+      "install": "Install the Xcode Metal Toolchain component: xcodebuild -downloadComponent MetalToolchain"
+    },
+    {
+      "id": "swift",
+      "name": "Swift",
+      "candidates": ["swift"],
+      "argv": ["{exe}", "--version"],
+      "parser": "swift",
+      "requirement": ">=6.0",
+      "statedIn": [
+        {"path": "Packages/Engine/Package.swift", "phrase": "swift-tools-version: {version}"},
+        {"path": "README.md", "phrase": "Swift {major} tooling"}
+      ],
+      "observed": ["6.3.3, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"],
+      "install": "Swift ships with Xcode; select Xcode 26 with xcode-select."
+    },
+    {
+      "id": "python3",
+      "name": "Python 3 (python3 on PATH)",
+      "candidates": ["python3"],
+      "argv": ["{exe}", "--version"],
+      "parser": "python",
+      "requirement": "unrecorded",
+      "statedIn": [],
+      "observed": [
+        "3.15.0, CI macos-26-arm64 image 20261013.0424.1, public lane passed, 2026-10-23",
+        "3.11.15, Linux container: mod-tools, runner-self and validator suites passed, 2026-10-23"
+      ],
+      "install": "Any python3 on PATH; the public Python suites and the lane runner use the standard library only."
+    },
+    {
+      "id": "dotnet-sdk",
+      "name": ".NET SDK",
+      "candidates": ["dotnet"],
+      "argv": ["{exe}", "--list-sdks"],
+      "parser": "dotnet-sdks",
+      "requirement": ">=10.0",
+      "statedIn": [
+        {"path": "Tools/translation/frontend/Translation.csproj", "phrase": "<TargetFramework>net{version}</TargetFramework>"},
+        {"path": "docs/reference/managed-recovery.md", "phrase": ".NET {major}"}
+      ],
+      "observed": [
+        ".NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md)",
+        "CI macos-26-arm64 image builds the net10.0 frontend: translation suite passed, 2026-10-23 (SDK version not logged)"
+      ],
+      "install": "Install a .NET 10 SDK from https://dotnet.microsoft.com/download and put dotnet on PATH."
+    },
+    {
+      "id": "reverse-python",
+      "name": "Python 3.12 venv for Tools/reverse",
+      "candidates": [".local/reverse/unitypy-venv/bin/python"],
+      "argv": ["{exe}", "--version"],
+      "parser": "python",
+      "requirement": "3.12.*",
+      "statedIn": [
+        {"path": "Tools/reverse/README.md", "phrase": "Use Python {version}"},
+        {"path": ".github/workflows/ci.yml", "phrase": "python-version: '{version}'"}
+      ],
+      "observed": [
+        "3.12, CI reverse-tools job (actions/setup-python); first hosted run 2026-10-01",
+        "3.14 could not build the pinned dependencies on the reference Mac (Tools/reverse/README.md)"
+      ],
+      "install": "python3.12 -m venv .local/reverse/unitypy-venv && .local/reverse/unitypy-venv/bin/python -m pip install -r Tools/reverse/requirements.txt"
+    },
+    {
+      "id": "reverse-packages",
+      "name": "Tools/reverse pinned packages",
+      "label": "reverse venv",
+      "probe": "requirements",
+      "interpreter": "reverse-python",
+      "file": "Tools/reverse/requirements.txt",
+      "install": ".local/reverse/unitypy-venv/bin/python -m pip install -r Tools/reverse/requirements.txt"
+    },
+    {
+      "id": "assets-python",
+      "name": "Asset-pipeline python3 (PY)",
+      "candidates": ["$PY", "/opt/homebrew/bin/python3"],
+      "argv": ["{exe}", "--version"],
+      "parser": "python",
+      "requirement": "unrecorded",
+      "statedIn": [],
+      "observed": [],
+      "install": "A python3 with numpy and Pillow; Tools/assets/run_all.sh uses $PY, default /opt/homebrew/bin/python3."
+    },
+    {
+      "id": "assets-numpy",
+      "name": "numpy (asset python)",
+      "probe": "package",
+      "interpreter": "assets-python",
+      "distribution": "numpy",
+      "requirement": "unrecorded",
+      "statedIn": [],
+      "observed": [],
+      "install": "$PY -m pip install numpy"
+    },
+    {
+      "id": "assets-pillow",
+      "name": "Pillow (asset python)",
+      "probe": "package",
+      "interpreter": "assets-python",
+      "distribution": "Pillow",
+      "requirement": "unrecorded",
+      "statedIn": [],
+      "observed": [],
+      "install": "$PY -m pip install Pillow"
+    },
+    {
+      "id": "blender",
+      "name": "Blender",
+      "candidates": ["$BLENDER", "/Applications/Blender.app/Contents/MacOS/Blender"],
+      "argv": ["{exe}", "--version"],
+      "parser": "blender",
+      "requirement": "5.1.*",
+      "statedIn": [{"path": "Tools/assets/README.md", "phrase": "Blender {version}"}],
+      "observed": [],
+      "install": "Install Blender 5.1 at /Applications/Blender.app or set BLENDER=/path/to/Blender (Tools/assets/run_all.sh does not search PATH)."
+    },
+    {
+      "id": "ilspycmd",
+      "name": "ILSpy command (primary)",
+      "candidates": [".local/reverse/tools/ilspycmd"],
+      "argv": ["{exe}", "--version"],
+      "parser": "ilspycmd",
+      "requirement": "==11.1.0.9782",
+      "statedIn": [
+        {"path": "Tools/reverse/README.md", "phrase": "ilspycmd --version {version}"},
+        {"path": "docs/reference/managed-recovery.md", "phrase": "ilspycmd --version {version}"},
+        {"path": "docs/reference/studio/binary-contracts.md", "phrase": "ilspycmd --version {version}"}
+      ],
+      "observed": ["11.1.0.9782 on .NET 10.0.10 arm64, reference Mac (docs/reference/studio/binary-contracts.md)"],
+      "install": "dotnet tool install ilspycmd --version 11.1.0.9782 --tool-path .local/reverse/tools"
+    },
+    {
+      "id": "ilspycmd-compat",
+      "name": "ILSpy command (per-type fallback)",
+      "candidates": [".local/reverse/tools-compat/ilspycmd"],
+      "argv": ["{exe}", "--version"],
+      "parser": "ilspycmd",
+      "requirement": "==9.1.0.7988",
+      "statedIn": [{"path": "docs/reference/managed-recovery.md", "phrase": "ilspycmd --version {version}"}],
+      "observed": ["9.1.0.7988 with roll-forward on .NET 10, reference Mac (docs/reference/managed-recovery.md)"],
+      "install": "dotnet tool install ilspycmd --version 9.1.0.7988 --allow-roll-forward --tool-path .local/reverse/tools-compat"
+    },
+    {
+      "id": "prlctl",
+      "name": "Parallels prlctl",
+      "candidates": ["prlctl"],
+      "argv": ["{exe}", "--version"],
+      "parser": "prlctl",
+      "requirement": "unrecorded",
+      "statedIn": [],
+      "observed": [],
+      "install": "Install Parallels Desktop with a Windows VM that has guest tools and the game installed; see Tools/reverse/README.md."
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "app-build",
+      "tier": "public",
+      "name": "Build Ikkoku.app",
+      "tools": ["host", "xcode", "metal"],
+      "exercisedBy": "`xcodebuild -scheme IkkokuCreator … build` (CI `app-build` job)",
+      "doc": "docs/guides/build-and-test.md"
+    },
+    {
+      "id": "metal-shaders",
+      "tier": "public",
+      "name": "Compile Metal shaders",
+      "tools": ["metal"],
+      "exercisedBy": "`IkkokuShaders.metallib` in the app build and the standalone `xcrun -sdk macosx metal … -c Shaders/Toon.metal` check",
+      "doc": "docs/reference/renderer.md"
+    },
+    {
+      "id": "engine-tests",
+      "tier": "public",
+      "name": "Engine package tests",
+      "tools": ["swift"],
+      "exercisedBy": "`swift test --package-path Packages/Engine` (public lane); GPU cases skip without a Metal device",
+      "doc": "docs/guides/build-and-test.md"
+    },
+    {
+      "id": "python-tests",
+      "tier": "public",
+      "name": "Public Python suites and lane runner",
+      "tools": ["python3"],
+      "exercisedBy": "`Tools/verification/run.py` and the mod-tools, runner-self and validator suites (public lane)",
+      "doc": "Tools/verification/README.md"
+    },
+    {
+      "id": "translation-frontend",
+      "tier": "public",
+      "name": "Roslyn translation frontend",
+      "tools": ["python3", "dotnet-sdk", "swift"],
+      "exercisedBy": "`Tools/translation/tests` (public lane): builds the frontend with `dotnet` and compiles Swift with `swiftc`",
+      "doc": "docs/reference/mods/api-substitution.md"
+    },
+    {
+      "id": "reverse-tools",
+      "tier": "optional",
+      "name": "Tools/reverse Python environment",
+      "tools": ["reverse-python", "reverse-packages"],
+      "exercisedBy": "`Tools/reverse` unit tests (CI `reverse-tools` job, with its own Python 3.12) and the extraction exporters (private inputs)",
+      "doc": "Tools/reverse/README.md"
+    },
+    {
+      "id": "asset-regeneration",
+      "tier": "optional",
+      "name": "Bundled asset regeneration",
+      "tools": ["blender", "assets-python", "assets-numpy", "assets-pillow"],
+      "exercisedBy": "`Tools/assets/run_all.sh`; its ignored MakeHuman sources are not checked",
+      "doc": "Tools/assets/README.md"
+    },
+    {
+      "id": "managed-recovery",
+      "tier": "optional",
+      "name": "Managed recovery and .NET oracles",
+      "tools": ["python3", "dotnet-sdk", "ilspycmd", "ilspycmd-compat"],
+      "exercisedBy": "`recover_managed.py` and the `net10.0` oracle generators (private DLLs)",
+      "doc": "docs/reference/managed-recovery.md"
+    },
+    {
+      "id": "vm-probes",
+      "tier": "optional",
+      "name": "VM transfer and original-player probes",
+      "tools": ["python3", "prlctl"],
+      "exercisedBy": "`vm_source.py` and the `original_*_probe.py` probes; the VM and guest are not checked",
+      "doc": "Tools/reverse/README.md"
+    }
+  ]
+}

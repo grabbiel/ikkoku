@@ -10,11 +10,11 @@ milestones; a successful extractor does not complete a gameplay feature.
 | ID / feature | Status | Specific review comments | Pending action |
 | --- | --- | --- | --- |
 | T01 · Swift package module graph | Mid-stage | `Packages/Engine/Package.swift` exposes nine library targets plus `IkkokuInspect`, with CoreMathTests/EngineTests. Gameplay has no Unity dependency; Studio depends on Gameplay. Character depends on Renderer for preview construction, so it is not a pure data/logic layer. | T-T01: document dependency boundaries and test pure logic separately from Metal-backed consumers. |
-| T02 · Native macOS build | Mid-stage | Current arm64 Release app built successfully before this documentation audit. Xcode app target declares macOS 14.6 and Swift 5 language mode; SwiftPM uses Swift tools 6 / macOS 14. They are distinct settings. The `IkkokuShaders` target declares macOS 26.0 in Debug and Release; do not describe app 14.6 as a verified product-wide minimum. | T-T01: establish supported deployment/architecture matrix, align intentional settings, run app and package checks in CI. |
+| T02 · Native macOS build | Mid-stage | Current arm64 Release app built successfully before this documentation audit. Xcode app target declares macOS 14.6 and Swift 5 language mode; SwiftPM uses Swift tools 6 / macOS 14. They are distinct settings. The `IkkokuShaders` target declares macOS 26.0 in Debug and Release; do not describe app 14.6 as a verified product-wide minimum. | T-T01 (partial): toolchain versions are now recorded and checked (T06). Still establish the supported deployment/architecture matrix and align intentional settings. CI has built the app and run the package tests since 2026-09-29 (T07). |
 | T03 · Shader compilation and bundled resources | Mid-stage | Xcode builds Metal resources for the app; the runtime also has local/development shader and asset discovery paths. Package tests alone are not proof that an archived app contains its assets/metallib. | T-T02: build/archive from a clean checkout and validate resource lookup without source-tree fallbacks. |
 | T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no checked-in release automation, installer, notarization procedure or converted-library setup UI. App sandbox is disabled. | T-T02: write and exercise a release process, including private-content exclusion and user-owned external library access. |
 | T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. | T-T03: unify output policy and provenance checks; verify distributable artifact contents rather than relying only on Git ignore. |
-| T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Blender and local ILSpy/oracle tools are still environment prerequisites. | T-T01: record supported tool versions/install checks, lock a reproducible tool environment, fail helpfully when optional tools are absent. |
+| T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Since 2026-10-23 (T-T01), `Tools/verification/prerequisites.json` records each documented version once: Xcode ≥26, Swift ≥6.0, .NET SDK ≥10.0, a Python 3.12 venv with the `requirements.txt` pins, ilspycmd 11.1.0.9782 and 9.1.0.7988, and Blender 5.1. The Metal compiler, public `python3`, asset numpy/Pillow, Parallels `prlctl` and the host macOS version are *unrecorded*, so only their presence is checked. `doctor.py` reports every capability; only `--require`d ones can fail. | T-T01 (partial): record versions for the unrecorded entries from a reference-Mac run; pin the asset Python packages; certify Blender reproducibility across versions. |
 | T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe. Since 2026-09-29 `.github/workflows/ci.yml` runs the `public.json` lane skip-tolerant (no `--strict`) and an unsigned Debug app build on `macos-26` runners for pull requests and pushes to `main`; it is not a required status check, and the private lanes stay local because they need `.local/` fixtures or the VM. | T-T04 (partial): Maker import/outfit-switch/edit/export/reimport session scenarios now run headlessly in `maker-scenarios.json` (4/4 `--strict`, 2026-09-29); source-inspector hooks are merged (PR #5), while full interaction through visible Maker/Studio controls remains an acceptance boundary. |
 
 ## E. Original installation access and recovery
@@ -107,10 +107,29 @@ data is deliberately not copied into the documentation or distribution.
 
 ## Actionable infrastructure tasks
 
-- **T-T01 — Reproducible developer environment (P1).** Record Xcode, Swift, .NET,
+- **T-T01 — Reproducible developer environment (P1, partial).** Record Xcode, Swift, .NET,
   ILSpy, Python packages and Blender versions; add prerequisite checks and one
   documented setup path. Accept when a clean checkout builds public tools/app
-  without depending on a previous agent's shell environment.
+  without depending on a previous agent's shell environment. Implemented
+  2026-10-23: `Tools/verification/prerequisites.json` is the single record of
+  versions, and the [build guide](../guides/build-and-test.md#prerequisites)
+  table is generated from it. Versions the repository does not document are
+  recorded as *unrecorded*. `Tools/verification/doctor.py` (stdlib) reports per
+  capability which tools are present and whether they meet the record. Its
+  public capabilities are the app build, Metal shaders, Engine tests, Python
+  suites and translation frontend; the optional ones are reverse tools, asset
+  regeneration, managed recovery and VM probes. It exits 1 only for an unmet
+  `--require`d capability and never reads `.local/` data. The build guide's
+  [clean-checkout setup](../guides/build-and-test.md#set-up-a-clean-checkout)
+  is the one documented path. CI's public-lane job now runs `--require public`
+  before the build. `test_doctor.py` (29 tests in `runner-self-tests`) covers
+  parsing of recorded CI and format-sample outputs, absent tools, the generated
+  table and restated versions. It passed on Python 3.10–3.13 in a Linux
+  container, where every Apple/.NET tool is reported absent and the checker
+  exits 0 without `--require`. Real reverse-tools detection (Python 3.12 with
+  all three pins `ok`) was checked against a scratch venv. Still open: a clean
+  checkout on a second Mac, launching an unsigned build, the deployment
+  matrix (T02) and versions for the unrecorded entries (T06).
 - **T-T02 — Release packaging (P1).** Inspect archived contents, provide library
   selection/relocation, and verify all app resources on a clean user profile.
   Accept when the app works outside the checkout and no private recovered files

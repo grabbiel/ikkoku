@@ -1,0 +1,294 @@
+{
+  "schemaVersion": 1,
+  "notes": [
+    "Probe outputs for test_doctor.py. Each sample is evaluated against the real requirement in prerequisites.json and must give the expected status/version/detail.",
+    "provenance `recorded: ...` is output captured from a named run. `format sample: ...` follows the tool's documented or commonly seen output layout; its numbers are illustrative and were not captured on the reference Mac.",
+    "`absent: true` means no candidate executable resolved; `host` samples feed the built-in platform probe."
+  ],
+  "samples": [
+    {
+      "id": "xcodebuild-ci-26.6",
+      "tool": "xcode",
+      "provenance": "recorded: CI public-lane job 120179165932 (run 39881335551), macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+      "returncode": 0,
+      "output": "Xcode 26.6\nBuild version 17F113\n",
+      "expect": {"status": "ok", "version": "26.6", "detail": "build 17F113"}
+    },
+    {
+      "id": "xcodebuild-16.4",
+      "tool": "xcode",
+      "provenance": "format sample: an Xcode older than the recorded minimum",
+      "returncode": 0,
+      "output": "Xcode 16.4\nBuild version 16F6\n",
+      "expect": {"status": "mismatch", "version": "16.4"}
+    },
+    {
+      "id": "xcodebuild-command-line-tools-only",
+      "tool": "xcode",
+      "provenance": "format sample: xcode-select pointing at the Command Line Tools",
+      "returncode": 1,
+      "output": "xcode-select: error: tool 'xcodebuild' requires Xcode, but active developer directory '/Library/Developer/CommandLineTools' is a command line tools instance\n",
+      "expect": {"status": "error", "version": null, "detail": "xcode-select: error: tool 'xcodebuild' requires Xcode, but active developer directory '/Library/Developer/CommandLineTools' is a command line tools instance"}
+    },
+    {
+      "id": "xcodebuild-absent",
+      "tool": "xcode",
+      "provenance": "format sample: no xcodebuild on PATH (as in the Linux container)",
+      "absent": true,
+      "error": "not found: xcodebuild",
+      "expect": {"status": "absent", "version": null, "detail": "not found: xcodebuild"}
+    },
+    {
+      "id": "swift-ci-6.3.3",
+      "tool": "swift",
+      "provenance": "recorded: CI public-lane job 120179165932 (run 39881335551), stdout then stderr, 2026-10-23",
+      "returncode": 0,
+      "output": "Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)\nTarget: arm64-apple-macosx26.0\nswift-driver version: 1.148.6 \n",
+      "expect": {"status": "ok", "version": "6.3.3", "detail": "target arm64-apple-macosx26.0"}
+    },
+    {
+      "id": "swift-terminal-interleaved",
+      "tool": "swift",
+      "provenance": "format sample: the same CI output as a terminal interleaves it (driver line on stderr, no newline)",
+      "returncode": 0,
+      "output": "swift-driver version: 1.148.6 Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)\nTarget: arm64-apple-macosx26.0\n",
+      "expect": {"status": "ok", "version": "6.3.3"}
+    },
+    {
+      "id": "swift-5.10",
+      "tool": "swift",
+      "provenance": "format sample: a Swift 5 toolchain below swift-tools-version 6.0",
+      "returncode": 0,
+      "output": "Apple Swift version 5.10 (swiftlang-5.10.0.13 clang-1500.3.9.4)\nTarget: arm64-apple-macosx14.0\n",
+      "expect": {"status": "mismatch", "version": "5.10"}
+    },
+    {
+      "id": "swift-open-source-linux",
+      "tool": "swift",
+      "provenance": "format sample: open-source toolchain wording",
+      "returncode": 0,
+      "output": "Swift version 6.0.3 (swift-6.0.3-RELEASE)\nTarget: x86_64-unknown-linux-gnu\n",
+      "expect": {"status": "ok", "version": "6.0.3", "detail": "target x86_64-unknown-linux-gnu"}
+    },
+    {
+      "id": "metal-installed",
+      "tool": "metal",
+      "provenance": "format sample: `xcrun -sdk macosx metal --version` with the toolchain installed",
+      "returncode": 0,
+      "output": "Apple metal version 32023.620 (metalfe-32023.620)\nTarget: air64-apple-darwin25.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/metal/current/bin\n",
+      "expect": {"status": "present", "version": "32023.620", "detail": "target air64-apple-darwin25.0.0"}
+    },
+    {
+      "id": "metal-toolchain-missing",
+      "tool": "metal",
+      "provenance": "format sample: Xcode 26 without the Metal Toolchain component (the case docs/guides/build-and-test.md describes)",
+      "returncode": 1,
+      "output": "error: error: cannot execute tool 'metal' due to missing Metal Toolchain; use: xcodebuild -downloadComponent MetalToolchain\n",
+      "expect": {"status": "error", "version": null}
+    },
+    {
+      "id": "metal-command-line-tools-only",
+      "tool": "metal",
+      "provenance": "format sample: xcrun from the Command Line Tools, which have no metal",
+      "returncode": 72,
+      "output": "xcrun: error: unable to find utility \"metal\", not a developer tool or in PATH\n",
+      "expect": {"status": "error", "version": null}
+    },
+    {
+      "id": "dotnet-sdks-8-9-10",
+      "tool": "dotnet-sdk",
+      "provenance": "format sample: `dotnet --list-sdks` with three SDKs",
+      "returncode": 0,
+      "output": "8.0.404 [/usr/local/share/dotnet/sdk]\n9.0.101 [/usr/local/share/dotnet/sdk]\n10.0.100 [/usr/local/share/dotnet/sdk]\n",
+      "expect": {"status": "ok", "version": "10.0.100", "detail": "installed SDKs: 8.0.404, 9.0.101, 10.0.100"}
+    },
+    {
+      "id": "dotnet-sdks-below-10",
+      "tool": "dotnet-sdk",
+      "provenance": "format sample: no SDK that can build net10.0",
+      "returncode": 0,
+      "output": "8.0.404 [/usr/local/share/dotnet/sdk]\n9.0.101 [/usr/local/share/dotnet/sdk]\n",
+      "expect": {"status": "mismatch", "version": "9.0.101"}
+    },
+    {
+      "id": "dotnet-sdk-preview",
+      "tool": "dotnet-sdk",
+      "provenance": "format sample: a release-candidate SDK in a user directory",
+      "returncode": 0,
+      "output": "10.0.100-rc.2.25502.107 [/Users/dev/.dotnet/sdk]\n",
+      "expect": {"status": "ok", "version": "10.0.100-rc.2.25502.107"}
+    },
+    {
+      "id": "dotnet-runtime-only",
+      "tool": "dotnet-sdk",
+      "provenance": "format sample: a runtime-only install lists no SDKs",
+      "returncode": 0,
+      "output": "",
+      "expect": {"status": "absent", "version": null, "detail": "dotnet runs but lists no installed SDK"}
+    },
+    {
+      "id": "python3-ci-3.15.0",
+      "tool": "python3",
+      "provenance": "recorded: CI public-lane job 120179165932 (run 39881335551), 2026-10-23",
+      "returncode": 0,
+      "output": "Python 3.15.0\n",
+      "expect": {"status": "present", "version": "3.15.0"}
+    },
+    {
+      "id": "python3-container-3.11.15",
+      "tool": "python3",
+      "provenance": "recorded: Linux development container, 2026-10-23",
+      "returncode": 0,
+      "output": "Python 3.11.15\n",
+      "expect": {"status": "present", "version": "3.11.15"}
+    },
+    {
+      "id": "reverse-python-3.12",
+      "tool": "reverse-python",
+      "provenance": "format sample: a 3.12 venv interpreter",
+      "returncode": 0,
+      "output": "Python 3.12.11\n",
+      "expect": {"status": "ok", "version": "3.12.11"}
+    },
+    {
+      "id": "reverse-python-3.14",
+      "tool": "reverse-python",
+      "provenance": "format sample: the 3.14 interpreter Tools/reverse/README.md reports could not build the pins",
+      "returncode": 0,
+      "output": "Python 3.14.0\n",
+      "expect": {"status": "mismatch", "version": "3.14.0"}
+    },
+    {
+      "id": "reverse-python-absent",
+      "tool": "reverse-python",
+      "provenance": "format sample: venv not created yet",
+      "absent": true,
+      "error": "not found: .local/reverse/unitypy-venv/bin/python",
+      "expect": {"status": "absent", "version": null}
+    },
+    {
+      "id": "blender-5.1",
+      "tool": "blender",
+      "provenance": "format sample: `Blender --version` layout; build values illustrative",
+      "returncode": 0,
+      "output": "Blender 5.1.0\n\tbuild date: 2026-01-01\n\tbuild time: 00:00:00\n\tbuild commit date: 2026-01-01\n\tbuild commit time: 00:00\n\tbuild hash: 0123456789ab\n\tbuild branch: blender-v5.1-release\n\tbuild platform: Darwin\n\tbuild type: Release\n",
+      "expect": {"status": "ok", "version": "5.1.0", "detail": "build 0123456789ab"}
+    },
+    {
+      "id": "blender-4.2-lts",
+      "tool": "blender",
+      "provenance": "format sample: an LTS release outside the recorded 5.1 series",
+      "returncode": 0,
+      "output": "Blender 4.2.3 LTS\n\tbuild date: 2024-01-01\n\tbuild hash: 0123456789ab\n",
+      "expect": {"status": "mismatch", "version": "4.2.3"}
+    },
+    {
+      "id": "blender-unparsed",
+      "tool": "blender",
+      "provenance": "format sample: a wrapper that prints no version",
+      "returncode": 0,
+      "output": "usage: blender [args ...]\n",
+      "expect": {"status": "unparsed", "version": null, "detail": "usage: blender [args ...]"}
+    },
+    {
+      "id": "ilspycmd-11.1",
+      "tool": "ilspycmd",
+      "provenance": "format sample: ilspycmd --version prints the tool and decompiler versions",
+      "returncode": 0,
+      "output": "ilspycmd: 11.1.0.9782\nICSharpCode.Decompiler: 11.1.0.9782\n",
+      "expect": {"status": "ok", "version": "11.1.0.9782", "detail": "decompiler 11.1.0.9782"}
+    },
+    {
+      "id": "ilspycmd-9.1-in-primary-slot",
+      "tool": "ilspycmd",
+      "provenance": "format sample: the fallback version installed at the primary path",
+      "returncode": 0,
+      "output": "ilspycmd: 9.1.0.7988\nICSharpCode.Decompiler: 9.1.0.7988\n",
+      "expect": {"status": "mismatch", "version": "9.1.0.7988"}
+    },
+    {
+      "id": "ilspycmd-compat-9.1",
+      "tool": "ilspycmd-compat",
+      "provenance": "format sample: the per-type fallback version",
+      "returncode": 0,
+      "output": "ilspycmd: 9.1.0.7988\nICSharpCode.Decompiler: 9.1.0.7988\n",
+      "expect": {"status": "ok", "version": "9.1.0.7988"}
+    },
+    {
+      "id": "ilspycmd-missing-runtime",
+      "tool": "ilspycmd-compat",
+      "provenance": "format sample: tool shim without a compatible .NET runtime",
+      "returncode": 150,
+      "output": "You must install or update .NET to run this application.\n",
+      "expect": {"status": "error", "version": null, "detail": "You must install or update .NET to run this application."}
+    },
+    {
+      "id": "prlctl",
+      "tool": "prlctl",
+      "provenance": "format sample: `prlctl --version`; numbers illustrative",
+      "returncode": 0,
+      "output": "prlctl version 26.1.1 (57288)\n",
+      "expect": {"status": "present", "version": "26.1.1", "detail": "build 57288"}
+    },
+    {
+      "id": "package-numpy-pinned",
+      "tool": "reverse-packages:numpy",
+      "provenance": "format sample: the importlib.metadata probe prints one version",
+      "returncode": 0,
+      "output": "2.2.6\n",
+      "expect": {"status": "ok", "version": "2.2.6"}
+    },
+    {
+      "id": "package-unitypy-wrong-pin",
+      "tool": "reverse-packages:unitypy",
+      "provenance": "format sample: a different UnityPy than requirements.txt pins",
+      "returncode": 0,
+      "output": "1.22.0\n",
+      "expect": {"status": "mismatch", "version": "1.22.0"}
+    },
+    {
+      "id": "package-msgpack-missing",
+      "tool": "reverse-packages:msgpack",
+      "provenance": "format sample: the probe exits 3 when the distribution is not installed",
+      "returncode": 3,
+      "output": "",
+      "expect": {"status": "absent", "version": null}
+    },
+    {
+      "id": "package-pillow-unrecorded",
+      "tool": "assets-pillow",
+      "provenance": "format sample: any Pillow satisfies the unrecorded requirement",
+      "returncode": 0,
+      "output": "11.3.0\n",
+      "expect": {"status": "present", "version": "11.3.0"}
+    },
+    {
+      "id": "host-apple-silicon",
+      "tool": "host",
+      "provenance": "format sample: native arm64 python on macOS 26",
+      "host": {"system": "Darwin", "machine": "arm64", "macVersion": "26.0", "appleSilicon": true},
+      "expect": {"status": "ok", "version": "26.0", "detail": "macOS arm64"}
+    },
+    {
+      "id": "host-rosetta",
+      "tool": "host",
+      "provenance": "format sample: an x86_64 python under Rosetta on Apple Silicon",
+      "host": {"system": "Darwin", "machine": "x86_64", "macVersion": "26.0", "appleSilicon": true},
+      "expect": {"status": "ok", "detail": "x86_64 process on Apple Silicon (Rosetta)"}
+    },
+    {
+      "id": "host-intel-mac",
+      "tool": "host",
+      "provenance": "format sample: an Intel Mac",
+      "host": {"system": "Darwin", "machine": "x86_64", "macVersion": "15.6", "appleSilicon": false},
+      "expect": {"status": "mismatch", "detail": "macOS x86_64"}
+    },
+    {
+      "id": "host-linux-container",
+      "tool": "host",
+      "provenance": "recorded: Linux development container, 2026-10-23",
+      "host": {"system": "Linux", "machine": "x86_64", "macVersion": "", "appleSilicon": false},
+      "expect": {"status": "mismatch", "version": null, "detail": "Linux x86_64"}
+    }
+  ]
+}
