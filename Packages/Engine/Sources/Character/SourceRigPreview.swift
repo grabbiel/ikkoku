@@ -142,7 +142,8 @@ public final class SourceRigPreview {
                       heightScale: Float? = nil, bodyValues: [Float]? = nil, faceValues: [Float]? = nil,
                       expression: SourceExpressionInputs? = nil,
                       boneModifiers: SourceBoneModifiers? = nil, coordinate: Int = 0,
-                      showBones: Bool = false, poseOverride: RigPose? = nil) throws -> RenderFrame {
+                      showBones: Bool = false, poseOverride: RigPose? = nil,
+                      hiddenParts: Set<Int> = [], sourceBodyAlpha: SIMD2<Float>? = nil) throws -> RenderFrame {
         guard poseOverride == nil || (heightScale == nil && bodyValues == nil && faceValues == nil && boneModifiers == nil) else {
             throw RigError.invalid("A final source pose cannot also request shape or modifier evaluation.")
         }
@@ -150,12 +151,19 @@ public final class SourceRigPreview {
             ?? evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers, coordinate: coordinate)
         let morphWeights = try expressionWeights(expression)
         var items: [RenderItem] = []
-        for (index, part) in source.parts.enumerated() where part.rendererEnabled && source.rig.activeNodes[part.node] {
+        // `hiddenParts` are renderers whose GameObject the source switched
+        // off at runtime (ChaControl.UpdateVisible); `sourceBodyAlpha` is the
+        // ChangeAlphaMask (_alpha_a, _alpha_b) pair for the body coverage mask.
+        for (index, part) in source.parts.enumerated() where part.rendererEnabled && source.rig.activeNodes[part.node] && !hiddenParts.contains(index) {
             var material = MaterialState(uniforms: .make(kind: MaterialKindCloth))
             material.uniforms.baseColor = supportsFaceCustomization ? Float4(0.78, 0.75, 0.70, 1)
                 : (index.isMultiple(of: 2) ? Float4(0.34, 0.50, 0.68, 1) : Float4(0.75, 0.80, 0.88, 1))
             material.uniforms.outline.w = 0.8
-            for (pass, surface) in (appearance?.materials[part.mesh.name] ?? [material]).enumerated() {
+            for (pass, authored) in (appearance?.materials[part.mesh.name] ?? [material]).enumerated() {
+                var surface = authored
+                if let alpha = sourceBodyAlpha, (surface.uniforms.flags & MaterialFlagSourceBodyMask.rawValue) != 0 {
+                    surface.uniforms.sourceAlphaA = alpha.x; surface.uniforms.sourceAlphaB = alpha.y
+                }
                 var item = RenderItem(mesh: meshes[index], material: surface, model: evaluation.worldMatrices[part.node], objectID: 1,
                                       deformKey: keyBase | UInt64(index), skinSet: keyBase | UInt64(part.skin),
                                       morphWeights: morphWeights[part.mesh.name] ?? [])

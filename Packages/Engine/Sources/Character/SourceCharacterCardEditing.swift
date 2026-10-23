@@ -33,16 +33,79 @@ extension SourceCharacterCard {
         /// one. The card must carry that outfit in its Coordinate list. See
         /// `editedStatus(coordinate:)` for the exact Status fields written.
         public var coordinateType: Int?
+        /// The nine Status.clothesState bytes (ChaFileDefine.ClothesKind
+        /// order, each 0 on, 1 half, 2 half 2, 3 off); nil keeps the saved
+        /// bytes. Only the bin payload bytes of the existing field change.
+        public var clothesState: [UInt8]?
+        /// The twenty Status.showAccessory flags; nil keeps the saved flags.
+        /// Only the changed bool tokens of the existing array change.
+        public var showAccessory: [Bool]?
         /// nil preserves the old image; empty Data removes it; nonempty data
         /// must contain exactly one CRC-valid PNG, without an appended card.
         public var thumbnailData: Data?, faceThumbnailData: Data?
         public init(faceValues: [Float]? = nil, bodyValues: [Float]? = nil,
-                    colors: [ColorEdit] = [], coordinateType: Int? = nil, thumbnailData: Data? = nil,
+                    colors: [ColorEdit] = [], coordinateType: Int? = nil,
+                    clothesState: [UInt8]? = nil, showAccessory: [Bool]? = nil, thumbnailData: Data? = nil,
                     faceThumbnailData: Data? = nil) {
             self.faceValues = faceValues; self.bodyValues = bodyValues; self.colors = colors
             self.coordinateType = coordinateType
+            self.clothesState = clothesState; self.showAccessory = showAccessory
             self.thumbnailData = thumbnailData; self.faceThumbnailData = faceThumbnailData
         }
+    }
+
+    /// The ChaFileStatus wear fields as the card saves them: `clothesState`
+    /// holds one byte per ChaFileDefine.ClothesKind (top, bot, bra, shorts,
+    /// gloves, panst, socks, shoes_inner, shoes_outer; 0 on, 1 half, 2 half 2,
+    /// 3 off), `shoesType` selects the inner (0) or outer (1) shoes, and
+    /// `showAccessory` is one flag per accessory slot. A field the Status map
+    /// does not carry is the ChaFileStatus.MemberInit default (all on, inner
+    /// shoes, every accessory shown); a field of another shape is rejected,
+    /// never guessed. MessagePack-CSharp writes the byte[] as bin; a card
+    /// that spells it as an array of nine small integers (written by other
+    /// tools) is read by value.
+    public struct StatusWear: Equatable, Sendable {
+        public var clothesState: [UInt8]
+        public var shoesType: Int
+        public var showAccessory: [Bool]
+        public static let memberInit = StatusWear(clothesState: Array(repeating: 0, count: 9), shoesType: 0,
+                                                  showAccessory: Array(repeating: true, count: 20))
+        public init(clothesState: [UInt8], shoesType: Int, showAccessory: [Bool]) {
+            self.clothesState = clothesState; self.shoesType = shoesType; self.showAccessory = showAccessory
+        }
+        public init(status: [String: SourceMessagePackValue]) throws {
+            self = .memberInit
+            if let value = status["clothesState"] {
+                let bytes: [Int]
+                if case .binary(let data) = value { bytes = data.map(Int.init) }
+                else if let members = value.arrayValue, members.allSatisfy({ $0.integerValue != nil }) {
+                    bytes = members.compactMap(\.integerValue)
+                } else { bytes = [] }
+                guard bytes.count == 9 else { throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.") }
+                guard bytes.allSatisfy({ (0...3).contains($0) }) else { throw cardEditError("Saved Status.clothesState has a value outside 0...3.") }
+                clothesState = bytes.map(UInt8.init)
+            }
+            if let value = status["shoesType"] {
+                guard let type = value.integerValue, (0...255).contains(type) else { throw cardEditError("Saved Status.shoesType is not a byte.") }
+                shoesType = type
+            }
+            if let value = status["showAccessory"] {
+                guard let flags = value.arrayValue, flags.count == 20 else {
+                    throw cardEditError("Saved Status.showAccessory is not the 20-slot bool array.")
+                }
+                showAccessory = try flags.map {
+                    guard case .bool(let flag) = $0 else { throw cardEditError("Saved Status.showAccessory has a non-bool member.") }
+                    return flag
+                }
+            }
+        }
+    }
+
+    /// The embedded card's saved wear fields (MemberInit defaults when the
+    /// card has no Status block).
+    public func savedStatusWear() throws -> StatusWear {
+        guard let status = block(named: "Status") else { return .memberInit }
+        return try StatusWear(status: SourceMessagePack.decode(status.data).stringKeyedMap())
     }
 
     /// Number of saved outfits in the Coordinate block (ChaFile.coordinate);
@@ -163,7 +226,8 @@ extension SourceCharacterCard {
             let updated = try tokens.applying(patches)
             if updated != block.data { replacements["Coordinate"] = updated }
         }
-        if let coordinate = edits.coordinateType, let status = try editedStatus(coordinate: coordinate) {
+        if edits.coordinateType != nil || edits.clothesState != nil || edits.showAccessory != nil,
+           let status = try editedStatus(coordinate: edits.coordinateType, clothesState: edits.clothesState, showAccessory: edits.showAccessory) {
             replacements["Status"] = status
         }
         let thumbnail = try Self.editedPNG(edits.thumbnailData, original: thumbnailData)
@@ -215,6 +279,20 @@ extension SourceCharacterCard {
         if let face = edits.faceValues, try verified.customization().faceValues != face { throw cardEditError("Face edit verification failed.") }
         if let body = edits.bodyValues, try verified.customization().bodyValues != body { throw cardEditError("Body edit verification failed.") }
         if let coordinate = edits.coordinateType, try verified.savedCoordinateType() != coordinate { throw cardEditError("Outfit edit verification failed.") }
+        if edits.clothesState != nil || edits.showAccessory != nil {
+            let before = try savedStatusWear(), after = try verified.savedStatusWear()
+            guard after.clothesState == (edits.clothesState ?? before.clothesState), after.shoesType == before.shoesType,
+                  after.showAccessory == (edits.showAccessory ?? before.showAccessory) else {
+                throw cardEditError("Clothes state or accessory visibility edit verification failed.")
+            }
+        }
+        if let original = block(named: "Status"), let edited = verified.block(named: "Status"), original.data != edited.data {
+            // Every Status field other than the edited ones must decode
+            // exactly as saved (the byte patches cannot reach them).
+            var old = try SourceMessagePack.decode(original.data).stringKeyedMap(), new = try SourceMessagePack.decode(edited.data).stringKeyedMap()
+            for key in ["coordinateType", "backCoordinateType", "clothesState", "showAccessory"] { old[key] = nil; new[key] = nil }
+            guard old == new else { throw cardEditError("Unedited Status field preservation verification failed.") }
+        }
         guard verified.trailingData == trailingData else { throw cardEditError("Trailer preservation verification failed.") }
         for block in blocks where replacements[block.name] == nil {
             guard verified.block(named: block.name)?.data == block.data else { throw cardEditError("Unedited block preservation verification failed.") }
@@ -234,28 +312,113 @@ extension SourceCharacterCard {
     /// holds backCoordinateType = the saved coordinateType; that is what is
     /// written here. A chain of changes (A -> B -> C stores back = B) is not
     /// reproduced, and nothing in the recovered Studio/ChaControl code reads
-    /// backCoordinateType. Returns nil (no bytes change) when `coordinate` is
-    /// already the saved outfit; a changed integer is written in the compact
+    /// backCoordinateType. A changed integer is written in the compact
     /// positive-fixint form MessagePack-CSharp uses for 0...6.
-    private func editedStatus(coordinate: Int) throws -> Data? {
-        guard (0..<7).contains(coordinate) else { throw cardEditError("Outfit index must be in 0...6.") }
-        guard try savedCoordinateType() != coordinate else { return nil }
-        guard try coordinateCount() > coordinate else { throw cardEditError("The card has no saved outfit \(coordinate).") }
-        guard let status = block(named: "Status"), status.version == "0.0.0" else { throw cardEditError("Unsupported or missing Status block.") }
+    ///
+    /// The clothes-state buttons (MPCharCtrl.StateInfo.OnClickClothingDetails
+    /// -> OCIChar.SetClothesState -> ChaControl.SetClothesState) and the
+    /// accessory toggles (OnClickAccessories -> OCIChar.ShowAccessory) write
+    /// ChaFileStatus.clothesState[kind] / showAccessory[slot], which the
+    /// scene save serializes in the same block: the 9-byte bin payload (or,
+    /// for a card that spells it as an array, the nine fixint members) and
+    /// the 20 bool tokens are patched in place (same header, same length), so
+    /// no other byte of the block moves. A wear field the card does not save
+    /// is appended after the last entry (bin 9 / array16 of 20 bools, the
+    /// MessagePack-CSharp forms) and only the map count changes. Returns nil
+    /// (no bytes change) when every requested field already holds the saved
+    /// value.
+    private func editedStatus(coordinate: Int?, clothesState: [UInt8]?, showAccessory: [Bool]?) throws -> Data? {
+        if let coordinate {
+            guard (0..<7).contains(coordinate) else { throw cardEditError("Outfit index must be in 0...6.") }
+        }
+        if let clothesState {
+            guard clothesState.count == 9, clothesState.allSatisfy({ $0 <= 3 }) else {
+                throw cardEditError("Clothes state must be nine ClothesKind values, each in 0...3.")
+            }
+        }
+        if let showAccessory, showAccessory.count != 20 { throw cardEditError("Accessory visibility must contain exactly 20 slot flags.") }
+        let changeCoordinate = try coordinate.map { try savedCoordinateType() != $0 } ?? false
+        if changeCoordinate, let coordinate, try coordinateCount() <= coordinate { throw cardEditError("The card has no saved outfit \(coordinate).") }
+        guard let status = block(named: "Status"), status.version == "0.0.0" else {
+            if !changeCoordinate, clothesState.map({ $0 == StatusWear.memberInit.clothesState }) ?? true,
+               showAccessory.map({ $0 == StatusWear.memberInit.showAccessory }) ?? true { return nil }
+            throw cardEditError("Unsupported or missing Status block.")
+        }
         let tokens = try CardTokenDocument(status.data)
         let fields = try SourceMessagePack.decode(status.data).stringKeyedMap()
-        let current = try tokens.node(at: [.key("coordinateType")])
-        guard current.kind == .scalar, let saved = try tokens.value(current).integerValue, (0..<7).contains(saved) else {
-            throw cardEditError("Saved Status.coordinateType is not an outfit index in 0...6.")
-        }
-        var patches = [CardBytePatch(range: current.range, replacement: Data([UInt8(coordinate)]))]
-        if fields["backCoordinateType"] != nil {
-            let back = try tokens.node(at: [.key("backCoordinateType")])
-            guard back.kind == .scalar, let previous = try tokens.value(back).integerValue else {
-                throw cardEditError("Saved Status.backCoordinateType is not an integer.")
+        var patches: [CardBytePatch] = []
+        if changeCoordinate, let coordinate {
+            let current = try tokens.node(at: [.key("coordinateType")])
+            guard current.kind == .scalar, let saved = try tokens.value(current).integerValue, (0..<7).contains(saved) else {
+                throw cardEditError("Saved Status.coordinateType is not an outfit index in 0...6.")
             }
-            if previous != saved { patches.append(.init(range: back.range, replacement: Data([UInt8(saved)]))) }
+            patches.append(CardBytePatch(range: current.range, replacement: Data([UInt8(coordinate)])))
+            if fields["backCoordinateType"] != nil {
+                let back = try tokens.node(at: [.key("backCoordinateType")])
+                guard back.kind == .scalar, let previous = try tokens.value(back).integerValue else {
+                    throw cardEditError("Saved Status.backCoordinateType is not an integer.")
+                }
+                if previous != saved { patches.append(.init(range: back.range, replacement: Data([UInt8(saved)]))) }
+            }
         }
+        let saved = try StatusWear(status: fields)
+        // A field the card does not save (its MemberInit default applies) is
+        // appended to the root map in the form MessagePack-CSharp writes, the
+        // map count is raised, and no existing byte changes.
+        var appended = Data(), appendedCount = 0
+        if let clothesState, clothesState != saved.clothesState {
+            if fields["clothesState"] == nil {
+                appended += Data([0xac]) + Data("clothesState".utf8) + Data([0xc4, 0x09]) + Data(clothesState); appendedCount += 1
+            } else {
+                let node = try tokens.node(at: [.key("clothesState")])
+                if node.kind == .array {
+                    guard node.children.count == 9 else { throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.") }
+                    for (child, value) in zip(node.children, clothesState) {
+                        guard child.kind == .scalar, child.range.count == 1, let old = try tokens.value(child).integerValue, (0...3).contains(old) else {
+                            throw cardEditError("Saved Status.clothesState array members must be positive fixints 0...3.")
+                        }
+                        if old != Int(value) { patches.append(.init(range: child.range, replacement: Data([value]))) }
+                    }
+                } else {
+                    guard node.kind == .scalar, case .binary(let bytes) = try tokens.value(node), bytes.count == 9, node.range.count > 9 else {
+                        throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.")
+                    }
+                    patches.append(.init(range: (node.range.upperBound - 9)..<node.range.upperBound, replacement: Data(clothesState)))
+                }
+            }
+        }
+        if let showAccessory, showAccessory != saved.showAccessory, fields["showAccessory"] == nil {
+            appended += Data([0xad]) + Data("showAccessory".utf8) + Data([0xdc, 0x00, 0x14]) + Data(showAccessory.map { $0 ? 0xc3 : 0xc2 })
+            appendedCount += 1
+        } else if let showAccessory, showAccessory != saved.showAccessory {
+            let node = try tokens.node(at: [.key("showAccessory")])
+            guard node.kind == .array, node.children.count == 20 else {
+                throw cardEditError("Saved Status.showAccessory is not the 20-slot bool array.")
+            }
+            for (child, flag) in zip(node.children, showAccessory) {
+                guard child.kind == .scalar, child.range.count == 1, case .bool(let old) = try tokens.value(child) else {
+                    throw cardEditError("Saved Status.showAccessory has a non-bool member.")
+                }
+                if old != flag { patches.append(.init(range: child.range, replacement: Data([flag ? 0xc3 : 0xc2]))) }
+            }
+        }
+        if appendedCount > 0 {
+            guard tokens.root.kind == .map, tokens.root.range == 0..<status.data.count else { throw cardEditError("Status block is not one MessagePack map.") }
+            let count = tokens.root.children.count / 2, header = status.data[status.data.startIndex]
+            let next = count + appendedCount
+            switch header {
+            case 0x80...0x8f:
+                patches.append(.init(range: 0..<1, replacement: next <= 15 ? Data([0x80 | UInt8(next)]) : Data([0xde]) + cardBig(UInt64(next), count: 2)))
+            case 0xde:
+                guard next <= 0xffff else { throw cardEditError("Status map is too large.") }
+                patches.append(.init(range: 0..<3, replacement: Data([0xde]) + cardBig(UInt64(next), count: 2)))
+            case 0xdf:
+                patches.append(.init(range: 0..<5, replacement: Data([0xdf]) + cardBig(UInt64(next), count: 4)))
+            default: throw cardEditError("Status block is not one MessagePack map.")
+            }
+            patches.append(.init(range: status.data.count..<status.data.count, replacement: appended))
+        }
+        guard !patches.isEmpty else { return nil }
         let result = try tokens.applying(patches)
         _ = try SourceMessagePack.decode(result)
         return result
