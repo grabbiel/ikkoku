@@ -309,5 +309,20 @@ for i in 0..<2001 {{
         (self.evidence / 'original-math-parity.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
+class ErrorStubInputTests(unittest.TestCase):
+    """Runs without the frontend: the guard precedes any build or output."""
+
+    def test_recovery_error_stub_is_never_translation_input(self):
+        for stub in ['// System.InvalidOperationException: primary failed method', '// Error decompiling Fixture.Utility.Value']:
+            with self.subTest(stub=stub), tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / 'Input.cs'
+                source.write_text('namespace Fixture; public static class Utility { public static float Value() {\n' + stub + '\n} }')
+                output = Path(directory) / 'output'
+                with self.assertRaisesRegex(ValueError, 'error-stub'):
+                    translation.translate(source, 'Fixture.Utility', output, methods=['Value'], build_dir=Path(directory) / 'frontend')
+                self.assertFalse(output.exists())
+                self.assertFalse((Path(directory) / 'frontend').exists())
+
+
 if __name__ == '__main__':
     unittest.main()

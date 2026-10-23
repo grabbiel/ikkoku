@@ -16,6 +16,35 @@ public struct OrbitCamera: Sendable, Equatable, Codable {
 
     public init() {}
 
+    /// Rejects an imported or decoded camera whose view or projection would be
+    /// nonfinite (R4): nonfinite fields, a nonpositive distance or near plane, a
+    /// vertical field of view outside (0, 180) degrees, an override that is not
+    /// a finite unit quaternion, or a position that coincides with the target.
+    /// It never edits the camera, so a valid roll override and lens are kept.
+    public func validate() throws {
+        guard target.x.isFinite, target.y.isFinite, target.z.isFinite, yaw.isFinite, pitch.isFinite else {
+            throw RigError.invalid("Camera target or orbit angles are not finite.")
+        }
+        guard distance.isFinite, distance > 0 else { throw RigError.invalid("Camera distance \(distance) is not finite and positive.") }
+        guard fovDegrees.isFinite, fovDegrees > 0, fovDegrees < 180 else {
+            throw RigError.invalid("Camera field of view \(fovDegrees) is outside (0, 180) degrees.")
+        }
+        guard near.isFinite, near > 0 else { throw RigError.invalid("Camera near plane \(near) is not finite and positive.") }
+        if let q = orientationOverride {
+            guard q.x.isFinite, q.y.isFinite, q.z.isFinite, q.w.isFinite, abs(simd_length(q) - 1) < 1e-3 else {
+                throw RigError.invalid("Camera orientation override is not a finite unit quaternion.")
+            }
+        }
+        // A distance that vanishes against a large target leaves no view direction.
+        guard (try? (position - target).checkedNormalized()) != nil else {
+            throw RigError.invalid("Camera position coincides with its target.")
+        }
+        let view = viewMatrix(), projection = projectionMatrix(aspect: 1)
+        guard (0..<4).allSatisfy({ c in (0..<4).allSatisfy { view[c][$0].isFinite && projection[c][$0].isFinite } }) else {
+            throw RigError.invalid("Camera view or projection matrix is not finite.")
+        }
+    }
+
     public var position: Float3 {
         if let orientationOverride { return target + simd_quatf(vector: orientationOverride).act(Float3(0, 0, distance)) }
         let cp = cos(pitch), sp = sin(pitch)
@@ -51,7 +80,9 @@ public struct OrbitCamera: Sendable, Equatable, Codable {
         distance = clamp(distance * exp(-amount * 0.1), 0.15, 50)
     }
 
-    /// Ray through a viewport point (pixels, origin top-left).
+    /// Ray through a viewport point (pixels, origin top-left). A zero-size
+    /// viewport or a camera that fails `validate()` gives a nonfinite ray,
+    /// which hits nothing (see `Ray`).
     public func ray(atPixel p: Float2, viewport: Float2) -> Ray {
         let ndc = Float2(p.x / viewport.x * 2 - 1, 1 - p.y / viewport.y * 2)
         let invVP = (projectionMatrix(aspect: viewport.x / viewport.y) * viewMatrix()).inverse
@@ -62,13 +93,16 @@ public struct OrbitCamera: Sendable, Equatable, Codable {
         return Ray(origin: a, direction: b - a)
     }
 
-    /// World → pixel. Returns nil when behind the camera.
+    /// World → pixel. Returns nil when behind the camera, and (R4) when the
+    /// pixel is not finite: a nonfinite point, a zero-size viewport or a
+    /// camera that fails `validate()`.
     public func project(_ world: Float3, viewport: Float2) -> Float2? {
         let vp = projectionMatrix(aspect: viewport.x / viewport.y) * viewMatrix()
         let c = vp * Float4(world.x, world.y, world.z, 1)
         if c.w <= 0 { return nil }
         let ndc = Float2(c.x, c.y) / c.w
-        return Float2((ndc.x + 1) * 0.5 * viewport.x, (1 - ndc.y) * 0.5 * viewport.y)
+        let pixel = Float2((ndc.x + 1) * 0.5 * viewport.x, (1 - ndc.y) * 0.5 * viewport.y)
+        return pixel.x.isFinite && pixel.y.isFinite ? pixel : nil
     }
 
     /// Pixel size of one world unit at a given world point (for screen-constant gizmos).

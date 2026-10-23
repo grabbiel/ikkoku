@@ -38,9 +38,8 @@ final class Pipelines: @unchecked Sendable {
     let depthTest: any MTLDepthStencilState           // greater, no write
     let depthNone: any MTLDepthStencilState           // always, no write
 
-    init(gpu: GPUContext) throws {
+    init(gpu: GPUContext, library: any MTLLibrary) throws {
         let device = gpu.device
-        let library = try gpu.makeShaderLibrary()
         self.device = device
         self.library = library
 

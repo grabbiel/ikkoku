@@ -8,6 +8,11 @@ public enum GLTFError: Error, CustomStringConvertible {
     case missingBuffer(Int)
     case unsupportedAccessor(String)
     case missingAttribute(String)
+    case unsupportedExtensions([String])
+    /// A package load met an asset file or external buffer/image URI that is not a
+    /// canonical relative reference resolving inside the verified package root.
+    /// Raised before the referenced bytes are read.
+    case escapesPackageRoot(uri: String, reason: String)
     case io(String)
 
     public var description: String {
@@ -17,20 +22,70 @@ public enum GLTFError: Error, CustomStringConvertible {
         case .missingBuffer(let i): return "glTF buffer \(i) is missing."
         case .unsupportedAccessor(let s): return "Unsupported accessor: \(s)"
         case .missingAttribute(let s): return "Primitive lacks attribute \(s)."
+        case .unsupportedExtensions(let names):
+            return "glTF requires unsupported extension(s): \(names.joined(separator: ", "))."
+        case .escapesPackageRoot(let uri, let reason):
+            return "glTF reference '\(uri)' is outside its package: \(reason)."
         case .io(let s): return s
         }
     }
 }
 
-/// Loads `.glb` (binary) and `.gltf` (JSON + external/base64 buffers).
-public enum GLBLoader {
+/// Where a glTF's external (non-`data:`) buffer and image URIs may be read from.
+/// `data:` URIs and the GLB `BIN` chunk are embedded and always allowed.
+public enum GLTFExternalResources: Sendable {
+    /// Embedded data only; any external URI fails the load.
+    case embeddedOnly
+    /// A trusted standalone file the user chose explicitly. URIs resolve relative to
+    /// `directory` with no containment or symlink policy.
+    case trustedFile(directory: URL)
+    /// A package or library asset. URIs resolve relative to `directory` and must be
+    /// canonical relative paths after percent-decoding (no scheme or drive, absolute
+    /// path, backslash, NUL, or empty, `.` or `..` segment) whose symlink-resolved
+    /// file lies inside `root`. Every reference is checked before any external byte
+    /// is read.
+    case packaged(root: URL, directory: URL)
+}
 
-    public static func load(url: URL) throws -> GLTFAsset {
-        let data = try Data(contentsOf: url)
-        return try load(data: data, baseURL: url.deletingLastPathComponent(), sourceURL: url)
+/// Loads `.glb` (binary) and `.gltf` (JSON + external/base64 buffers).
+///
+/// Unsupported data that would change an asset's meaning is rejected (`GLTFError`).
+/// Data the native pipeline reduces or ignores is reported in `GLTFAsset.diagnostics`.
+/// The trust boundary is explicit: `load(url:packageRoot:)` confines a package or
+/// library asset and its external files to a verified root, while
+/// `loadTrustedFile(url:)` keeps the unconfined behavior for a file the user chose.
+public enum GLBLoader {
+    /// glTF extensions this loader implements. Any other `extensionsRequired` entry is
+    /// rejected; any other `extensionsUsed` entry is reported as `unsupported_extension`.
+    public static let supportedExtensions: Set<String> = []
+
+    /// Native materials sample imported base-color/normal textures with `linearRepeat`
+    /// (`Shaders/Common.h`): linear magnification, trilinear minification, REPEAT wrap.
+    static func samplerMatchesNative(_ sampler: GLTFRoot.Sampler) -> Bool {
+        (sampler.wrapS ?? 10497) == 10497 && (sampler.wrapT ?? 10497) == 10497
+            && (sampler.magFilter ?? 9729) == 9729 && [9729, 9987].contains(sampler.minFilter ?? 9987)
     }
 
-    public static func load(data: Data, baseURL: URL?, sourceURL: URL? = nil) throws -> GLTFAsset {
+    /// Loads a standalone file the user chose explicitly (file dialog, command-line or
+    /// environment path, a native scene's recorded model path). External URIs resolve
+    /// relative to the file without package containment or symlink policy.
+    public static func loadTrustedFile(url: URL) throws -> GLTFAsset {
+        let data = try Data(contentsOf: url)
+        return try load(data: data, external: .trustedFile(directory: url.deletingLastPathComponent()), sourceURL: url)
+    }
+
+    /// Loads an asset from a package or library whose root the caller verified. The
+    /// asset file and every external buffer/image must resolve, after symlinks, inside
+    /// `packageRoot`; otherwise `GLTFError.escapesPackageRoot` is thrown before the
+    /// offending bytes are read. External URIs resolve relative to `url`'s directory.
+    public static func load(url: URL, packageRoot: URL) throws -> GLTFAsset {
+        let file = try contained(url, root: packageRoot, reference: url.path)
+        let data = try Data(contentsOf: file)
+        return try load(data: data, external: .packaged(root: packageRoot, directory: url.deletingLastPathComponent()),
+                        sourceURL: url)
+    }
+
+    public static func load(data: Data, external: GLTFExternalResources = .embeddedOnly, sourceURL: URL? = nil) throws -> GLTFAsset {
         var json: Data
         var bin: Data?
         if data.count >= 12, data.readUInt32(at: 0) == 0x46546C67 { // "glTF"
@@ -62,10 +117,63 @@ public enum GLBLoader {
         }
         let root = try JSONDecoder().decode(GLTFRoot.self, from: json)
         try root.validateReferences()
-        let ctx = try Context(root: root, bin: bin, baseURL: baseURL)
+        let ctx = try Context(root: root, bin: bin, external: external)
         var asset = try ctx.build()
         asset.url = sourceURL
         return asset
+    }
+
+    // MARK: - External references
+
+    /// Resolves a non-`data:` buffer/image URI under `external` without reading it;
+    /// nil when only embedded data is allowed.
+    static func externalURL(_ uri: String, external: GLTFExternalResources) throws -> URL? {
+        switch external {
+        case .embeddedOnly:
+            return nil
+        case .trustedFile(let directory):
+            return directory.appendingPathComponent(uri.removingPercentEncoding ?? uri)
+        case .packaged(let root, let directory):
+            // Decoded once before the checks, so `%2E%2E%2F` is the `../` it encodes.
+            guard let path = uri.removingPercentEncoding else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "its percent-encoding is invalid")
+            }
+            guard !path.hasPrefix("/") else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "an absolute path is not package-relative")
+            }
+            guard !path.contains(":") else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "a URI scheme (such as file:) or drive is not package-relative")
+            }
+            guard !path.contains("\\"), !path.contains("\0"),
+                  path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "it is not a canonical relative path")
+            }
+            return try contained(directory.appendingPathComponent(path), root: root, reference: uri)
+        }
+    }
+
+    /// The canonical file for `candidate` when it exists and, after every symlink is
+    /// resolved, lies strictly inside `root`.
+    static func contained(_ candidate: URL, root: URL, reference: String) throws -> URL {
+        guard let rootPath = canonicalPath(root) else { throw GLTFError.io("Package root \(root.path) does not exist.") }
+        guard let path = canonicalPath(candidate) else { throw GLTFError.io("Package file '\(reference)' does not exist.") }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard path.hasPrefix(prefix) else {
+            throw GLTFError.escapesPackageRoot(uri: reference, reason: "it resolves outside the package root")
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// `realpath(3)`: the existing item's absolute path with every symlink, `.` and
+    /// `..` resolved, or nil when it does not exist. Root and candidate are both
+    /// canonicalized this way; `URL.resolvingSymlinksInPath()` drops a leading
+    /// `/private` only for some paths, so its results are not comparable.
+    static func canonicalPath(_ url: URL) -> String? {
+        url.withUnsafeFileSystemRepresentation { path -> String? in
+            guard let path, let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
     }
 
     // MARK: - Decoding context
@@ -73,11 +181,32 @@ public enum GLBLoader {
     private final class Context {
         let root: GLTFRoot
         var buffers: [Data]
-        let baseURL: URL?
+        /// Resolved (and, for a package, contained) external image files by image index.
+        let imageURLs: [Int: URL]
+        var diagnostics: [GLTFDiagnostic] = []
 
-        init(root: GLTFRoot, bin: Data?, baseURL: URL?) throws {
+        func report(_ code: String, _ message: String) {
+            diagnostics.append(GLTFDiagnostic(code: code, message: message))
+        }
+
+        init(root: GLTFRoot, bin: Data?, external: GLTFExternalResources) throws {
             self.root = root
-            self.baseURL = baseURL
+            // Every external buffer and image reference is resolved first, so a package
+            // reference outside its root fails before any external bytes are read.
+            var bufferURLs: [Int: URL] = [:], imageURLs: [Int: URL] = [:]
+            for (i, buffer) in (root.buffers ?? []).enumerated() {
+                guard let uri = buffer.uri, !uri.hasPrefix("data:") else { continue }
+                guard let url = try GLBLoader.externalURL(uri, external: external) else { throw GLTFError.missingBuffer(i) }
+                bufferURLs[i] = url
+            }
+            for (i, image) in (root.images ?? []).enumerated() {
+                guard image.bufferView == nil, let uri = image.uri, !uri.hasPrefix("data:") else { continue }
+                guard let url = try GLBLoader.externalURL(uri, external: external) else {
+                    throw GLTFError.io("External image requires a base URL: \(uri)")
+                }
+                imageURLs[i] = url
+            }
+            self.imageURLs = imageURLs
             var bufs: [Data] = []
             for (i, b) in (root.buffers ?? []).enumerated() {
                 if let uri = b.uri {
@@ -88,9 +217,8 @@ public enum GLBLoader {
                         }
                         bufs.append(d)
                     } else {
-                        guard let base = baseURL else { throw GLTFError.missingBuffer(i) }
-                        let u = base.appendingPathComponent(uri.removingPercentEncoding ?? uri)
-                        bufs.append(try Data(contentsOf: u))
+                        guard let url = bufferURLs[i] else { throw GLTFError.missingBuffer(i) }
+                        bufs.append(try Data(contentsOf: url))
                     }
                 } else if i == 0, let bin {
                     bufs.append(bin)
@@ -314,6 +442,13 @@ public enum GLBLoader {
         }
 
         func build() throws -> GLTFAsset {
+            // Required extensions were rejected during validation; used ones are only ignored.
+            var reportedExtensions = Set<String>()
+            for name in root.extensionsUsed ?? [] where !GLBLoader.supportedExtensions.contains(name) {
+                guard reportedExtensions.insert(name).inserted else { continue }
+                report("unsupported_extension", "Extension \(name) is declared in extensionsUsed but not supported; its data is ignored.")
+            }
+
             // Nodes
             var nodes: [NodeData] = []
             for n in root.nodes ?? [] {
@@ -330,7 +465,7 @@ public enum GLBLoader {
                     if let rr = n.rotation, rr.count == 4 { r = simd_quatf(ix: rr[0], iy: rr[1], iz: rr[2], r: rr[3]) }
                 }
                 nodes.append(NodeData(name: n.name ?? "", children: n.children ?? [], parent: nil, mesh: n.mesh, skin: n.skin,
-                                      translation: t, rotation: r, scale: s, extras: n.extras, authoredMatrix: authored))
+                                      translation: t, rotation: r, scale: s, extras: n.extras, authoredMatrix: authored, weights: n.weights))
             }
             for (i, n) in nodes.enumerated() { for c in n.children where c < nodes.count { nodes[c].parent = i } }
             let sceneIndex = root.scene ?? 0
@@ -338,7 +473,7 @@ public enum GLBLoader {
 
             // Materials
             var materials: [MaterialData] = []
-            for m in root.materials ?? [] {
+            for (mi, m) in (root.materials ?? []).enumerated() {
                 let pbr = m.pbrMetallicRoughness
                 let bc = pbr?.baseColorFactor ?? [1, 1, 1, 1]
                 let ef = m.emissiveFactor ?? [0, 0, 0]
@@ -349,12 +484,25 @@ public enum GLBLoader {
                     normalImage: m.normalTexture.flatMap { root.textures?[$0.index].source },
                     emissiveFactor: Float3(ef[0], ef[1], ef[2]),
                     alphaMode: m.alphaMode ?? "OPAQUE", alphaCutoff: m.alphaCutoff ?? 0.5,
-                    doubleSided: m.doubleSided ?? false, extras: m.extras))
+                    doubleSided: m.doubleSided ?? false, extras: m.extras,
+                    baseColorTexCoord: pbr?.baseColorTexture?.texCoord ?? 0, normalTexCoord: m.normalTexture?.texCoord ?? 0))
+                let label = m.name.map { "'\($0)'" } ?? "\(mi)"
+                let ignoredSlots = [("metallicRoughnessTexture", pbr?.metallicRoughnessTexture), ("occlusionTexture", m.occlusionTexture),
+                                    ("emissiveTexture", m.emissiveTexture)].filter { $0.1 != nil }.map { $0.0 }
+                if !ignoredSlots.isEmpty {
+                    report("unsupported_texture_slot", "Material \(label) \(ignoredSlots.joined(separator: ", ")) is not sampled by native materials.")
+                }
+                for (slot, binding) in [("baseColorTexture", pbr?.baseColorTexture), ("normalTexture", m.normalTexture)] {
+                    guard let info = binding, let samplerIndex = root.textures?[info.index].sampler,
+                          let sampler = root.samplers?[samplerIndex], !GLBLoader.samplerMatchesNative(sampler) else { continue }
+                    report("unsupported_sampler", "Material \(label) \(slot) sampler (mag \(sampler.magFilter ?? 9729), min \(sampler.minFilter ?? 9987), "
+                        + "wrap \(sampler.wrapS ?? 10497)/\(sampler.wrapT ?? 10497)) is sampled with linear mipmapped REPEAT by native materials.")
+                }
             }
 
             // Images
             var images: [ImageData] = []
-            for img in root.images ?? [] {
+            for (imageIndex, img) in (root.images ?? []).enumerated() {
                 if let bv = img.bufferView {
                     images.append(ImageData(name: img.name ?? "", data: try bufferViewData(bv).data, mimeType: img.mimeType))
                 } else if let uri = img.uri {
@@ -365,8 +513,7 @@ public enum GLBLoader {
                         }
                         images.append(ImageData(name: img.name ?? "", data: d, mimeType: img.mimeType))
                     } else {
-                        guard let baseURL else { throw GLTFError.io("External image requires a base URL: \(uri)") }
-                        let imageURL = baseURL.appendingPathComponent(uri.removingPercentEncoding ?? uri)
+                        guard let imageURL = imageURLs[imageIndex] else { throw GLTFError.io("External image requires a base URL: \(uri)") }
                         images.append(ImageData(name: img.name ?? uri, data: try Data(contentsOf: imageURL), mimeType: img.mimeType))
                     }
                 } else {
@@ -383,16 +530,22 @@ public enum GLBLoader {
 
             // Meshes
             var meshes: [MeshGroup] = []
+            var ignoredAttributes = Set<String>(), ignoredTargetAttributes = Set<String>()
             for m in root.meshes ?? [] {
                 let targetNames = m.extras?["targetNames"]?.stringArray ?? []
                 var prims: [MeshData] = []
                 for (pi, p) in m.primitives.enumerated() {
                     guard (p.mode ?? 4) == 4 else { continue } // triangles only
+                    let name = m.primitives.count > 1 ? "\(m.name ?? "mesh")#\(pi)" : (m.name ?? "mesh")
                     guard let posAcc = p.attributes["POSITION"] else { throw GLTFError.missingAttribute("POSITION") }
                     let positions = try readFloat3(posAcc)
                     var normals = try p.attributes["NORMAL"].map { try readFloat3($0) } ?? []
                     let tangents = try p.attributes["TANGENT"].map { try readFloat4($0) } ?? []
                     let uvs = try p.attributes["TEXCOORD_0"].map { try readFloat2($0) } ?? []
+                    // Secondary sets are independent streams (for example iris or lightmap UVs);
+                    // an absent set stays empty and the GPU upload aliases UV0 for it.
+                    let uvs1 = try p.attributes["TEXCOORD_1"].map { try readFloat2($0) } ?? []
+                    let uvs2 = try p.attributes["TEXCOORD_2"].map { try readFloat2($0) } ?? []
                     let colors = try p.attributes["COLOR_0"].map { try readFloat4($0, defaultW: 1) } ?? []
                     var joints: [SIMD4<UInt16>] = []
                     var weights: [Float4] = []
@@ -401,19 +554,40 @@ public enum GLBLoader {
                         let wv = try readFloat4(w)
                         joints = (0..<(jv.count / jc)).map { SIMD4<UInt16>(UInt16(jv[$0*jc]), UInt16(jv[$0*jc+1]), UInt16(jv[$0*jc+2]), UInt16(jv[$0*jc+3])) }
                         weights = wv
-                        // Fold a second influence set into the first four by keeping the largest weights.
-                        if let j1 = p.attributes["JOINTS_1"], let w1 = p.attributes["WEIGHTS_1"] {
+                        // The GPU skin layout has four lanes. Further sets (JOINTS_1/WEIGHTS_1, ...;
+                        // validated contiguous) are folded in by keeping the largest four weights
+                        // and renormalizing. That is lossy, so it is always reported.
+                        var extraSets: [(joints: [UInt32], components: Int, weights: [Float4])] = []
+                        while let j1 = p.attributes["JOINTS_\(extraSets.count + 1)"], let w1 = p.attributes["WEIGHTS_\(extraSets.count + 1)"] {
                             let (jv1, jc1) = try readUInts(j1)
                             let wv1 = try readFloat4(w1)
+                            extraSets.append((joints: jv1, components: jc1, weights: wv1))
+                        }
+                        if !extraSets.isEmpty {
+                            var lossy = 0
                             for v in 0..<joints.count {
                                 var pairs: [(UInt16, Float)] = (0..<4).map { (joints[v][$0], weights[v][$0]) }
-                                pairs += (0..<4).map { (UInt16(jv1[v*jc1+$0]), wv1[v][$0]) }
+                                for extra in extraSets {
+                                    pairs += (0..<4).map { (UInt16(extra.joints[v * extra.components + $0]), extra.weights[v][$0]) }
+                                }
                                 pairs.sort { $0.1 > $1.1 }
+                                if pairs[4...].contains(where: { $0.1 != 0 }) { lossy += 1 }
                                 let sum = max(pairs[0].1 + pairs[1].1 + pairs[2].1 + pairs[3].1, 1e-6)
                                 joints[v] = SIMD4<UInt16>(pairs[0].0, pairs[1].0, pairs[2].0, pairs[3].0)
                                 weights[v] = Float4(pairs[0].1, pairs[1].1, pairs[2].1, pairs[3].1) / sum
                             }
+                            report("skin_influences_reduced", "Primitive \(name) declares \(4 * (extraSets.count + 1)) skin influences per vertex "
+                                + "(JOINTS_0...JOINTS_\(extraSets.count)); kept the largest 4 and renormalized. "
+                                + "\(lossy) of \(joints.count) vertices lost nonzero weight.")
                         }
+                    }
+                    let consumed: Set<String> = ["POSITION", "NORMAL", "TANGENT", "TEXCOORD_0", "TEXCOORD_1", "TEXCOORD_2", "COLOR_0", "_REGION"]
+                    for semantic in p.attributes.keys where !consumed.contains(semantic)
+                        && GLTFRoot.attributeSet(semantic, prefix: "JOINTS_") == nil && GLTFRoot.attributeSet(semantic, prefix: "WEIGHTS_") == nil {
+                        ignoredAttributes.insert(semantic)
+                    }
+                    for target in p.targets ?? [] {
+                        for semantic in target.keys where semantic != "POSITION" && semantic != "NORMAL" { ignoredTargetAttributes.insert(semantic) }
                     }
                     var regions: [UInt8] = []
                     if let r = p.attributes["_REGION"] {
@@ -440,16 +614,33 @@ public enum GLBLoader {
                         let name = ti < targetNames.count ? targetNames[ti] : "target\(ti)"
                         targets.append(.init(name: name, positionDeltas: pd, normalDeltas: nd))
                     }
-                    let name = m.primitives.count > 1 ? "\(m.name ?? "mesh")#\(pi)" : (m.name ?? "mesh")
-                    prims.append(MeshData(name: name, positions: positions, normals: normals, tangents: tangents, uvs: uvs, colors: colors,
+                    prims.append(MeshData(name: name, positions: positions, normals: normals, tangents: tangents, uvs: uvs,
+                                          uvs1: uvs1, uvs2: uvs2, colors: colors,
                                           joints: joints, weights: weights, indices: indices, morphTargets: targets,
                                           materialIndex: p.material, regions: regions, extras: p.extras))
                 }
-                meshes.append(MeshGroup(name: m.name ?? "", primitives: prims, extras: m.extras))
+                meshes.append(MeshGroup(name: m.name ?? "", primitives: prims, extras: m.extras, weights: m.weights))
+            }
+            if !ignoredAttributes.isEmpty {
+                report("ignored_attribute", "Vertex attributes \(ignoredAttributes.sorted().joined(separator: ", ")) are not decoded.")
+            }
+            if !ignoredTargetAttributes.isEmpty {
+                report("ignored_morph_attribute", "Morph target attributes \(ignoredTargetAttributes.sorted().joined(separator: ", ")) are not decoded; "
+                    + "only POSITION and NORMAL deltas are applied.")
             }
 
-            return GLTFAsset(url: nil, nodes: nodes, rootNodes: roots, meshes: meshes, materials: materials,
-                             images: images, skins: skins, extras: root.extras)
+            var asset = GLTFAsset(url: nil, nodes: nodes, rootNodes: roots, meshes: meshes, materials: materials,
+                                  images: images, skins: skins, extras: root.extras)
+            // Initial weights are retained (`GLTFAsset.initialMorphWeights(ofNode:)`), but no
+            // native render path consumes them yet: morphs start at zero there.
+            for (node, mesh) in asset.meshNodes {
+                let initial = asset.initialMorphWeights(ofNode: node)
+                guard initial.contains(where: { $0 != 0 }) else { continue }
+                report("initial_morph_weights_not_applied", "Node '\(asset.nodes[node].name)' (mesh '\(asset.meshes[mesh].name)') authors nonzero "
+                    + "initial morph weights \(initial); native render paths start every morph target at zero.")
+            }
+            asset.diagnostics = diagnostics
+            return asset
         }
     }
 }

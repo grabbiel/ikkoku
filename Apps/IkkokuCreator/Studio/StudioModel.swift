@@ -192,12 +192,19 @@ final class StudioModel: ViewportInputHandler {
     /// position and rotation copied every `LateUpdate`, scale ignored and the
     /// scene field of view kept) while the guard holds; otherwise the document
     /// camera. `doc.camera` is never written here, so a throw — or any guard
-    /// miss — returns the saved camera untouched.
+    /// miss — returns the saved camera untouched. A source camera is solved
+    /// from its parent frame so a mirrored parent is rejected by name (R4)
+    /// before the Studio walk folds it into a rotation it cannot represent.
     var viewCamera: OrbitCamera {
         guard let id = activeSourceCamera, let entry = sourceCameraEntry(of: id) else { return doc.camera }
         do {
-            return try SourceStudioCameraObjects.viewCamera(
-                world: sourceWorldMatrix(of: id, document: doc, previews: sourceInstances), base: doc.camera)
+            let (object, parentFrame) = try sourceParentFrame(of: id, document: doc, previews: sourceInstances, visited: [])
+            // Same composition as `sourceWorldMatrix`, whose native branch has no Studio rule.
+            guard object.sourceObjectKey != nil else {
+                return try SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
+            }
+            return try SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
+                                                            localRotation: object.transform.quaternion, base: doc.camera)
         } catch {
             let message = "Source camera \(entry.objectKey) view unresolved: \(error); using the saved camera."
             if status != message { status = message }
@@ -673,8 +680,9 @@ final class StudioModel: ViewportInputHandler {
     }
 
     /// Import a converted static prefab, retaining the glTF node transforms and materials.
+    /// The user chose this file, so it loads under the trusted standalone-file policy.
     func importModel(from url: URL) throws {
-        let asset = try library.importStaticAsset(url: url)
+        let asset = try library.importTrustedStaticAsset(url: url)
         var object = StudioObject(name: url.deletingPathExtension().lastPathComponent, kind: .item)
         object.assetFile = url.standardizedFileURL.path
         add(object)
@@ -883,7 +891,8 @@ final class StudioModel: ViewportInputHandler {
                 do {
                     let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
                     if loadedItemAssets[asset.url.path] == nil {
-                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url)
+                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
+                            packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
                     }
                     object.name = "\(asset.name) (source item \(record.sourceKey))"
                     itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
@@ -971,7 +980,11 @@ final class StudioModel: ViewportInputHandler {
             guard let path = object.assetFile else { continue }
             let asset: LoadedAsset
             if let cached = loaded[path] { asset = cached }
-            else { asset = try library.importStaticAsset(url: URL(fileURLWithPath: path)); loaded[path] = asset }
+            else {
+                let url = URL(fileURLWithPath: path)
+                asset = try library.importStaticAsset(url: url, packageRoot: KoikatsuAssetResolver.packageRoot(of: url))
+                loaded[path] = asset
+            }
             bounds.expand(asset.bounds.transformed(by: imported.worldMatrix(of: object.id)))
         }
         pushUndo(force: true)
@@ -1165,7 +1178,7 @@ final class StudioModel: ViewportInputHandler {
         if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
-            edits.thumbnailData = try ImageIO.pngData(image)
+            edits.thumbnailData = try CaptureOutput.pngData(image)
         }
         try source.editedData(edits).write(to: url, options: .atomic)
         status = "Exported edited original scene to \(url.lastPathComponent)"
@@ -1259,6 +1272,7 @@ final class StudioModel: ViewportInputHandler {
         let data = try Data(contentsOf: url)
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
         try d.validateHierarchy()
+        try d.validateCameras()
         pushUndo(force: true)
         stopSourceVoices()
         instances.removeAll()
@@ -1279,8 +1293,9 @@ final class StudioModel: ViewportInputHandler {
     func importScene(from url: URL) throws {
         let data = try Data(contentsOf: url)
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
-        guard d.sourcePluginState == nil, d.sourceNativePlugins?.isEmpty != false else { throw SourcePluginError.invalid("Open a plugin-bound scene separately; merging would change its object or configuration identities.") }
+        guard d.sourcePluginState == nil, d.sourceNativePlugins?.isEmpty != false, d.sourcePluginLibrary == nil else { throw SourcePluginError.invalid("Open a plugin-bound scene separately; merging would change its object or configuration identities.") }
         try d.validateHierarchy()
+        try d.validateCameras()
         pushUndo(force: true)
         var remap: [UUID: UUID] = [:]
         for o in d.objects { remap[o.id] = UUID() }
@@ -1413,6 +1428,12 @@ final class StudioModel: ViewportInputHandler {
                 inst.gazeTarget = gazeTarget(for: o, root: world)
                 inst.clothingVisible = o.clothingVisible
                 inst.accessoriesVisible = o.accessoriesVisible
+                // R4: a chain with degenerate joints or target keeps its pose; say which and why.
+                let ikFailures = inst.ikFailures()
+                if let chain = IKChain.allCases.first(where: { ikFailures[$0] != nil }), let failure = ikFailures[chain] {
+                    let message = "\(chain.label) IK left unsolved: \(failure)"
+                    if status != message { status = message }
+                }
                 let r = inst.build(objectID: objectID)
                 items += r.items
                 skinSets[inst.instanceID] = r.skinSet
@@ -1559,6 +1580,27 @@ final class StudioModel: ViewportInputHandler {
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
                                    previews: [UUID: SourceStudioCharacterPreview],
                                    visited: Set<UUID>) throws -> float4x4 {
+        let (object, parentFrame) = try sourceParentFrame(of: id, document: document, previews: previews, visited: visited)
+        // Native objects (no source key) keep the native full-TRS composition
+        // of `StudioDocument.worldMatrix(of:)`, which setParent and native
+        // gizmo edits also use; only source records follow the Studio rule.
+        guard object.sourceObjectKey != nil else { return parentFrame * object.transform.matrix }
+        // Documents saved before `sourceRecordKind` was recorded carry no
+        // record kind; their import made every non-character placeholder a
+        // `.folder`, so those fall back to the non-scalable rule (an item's
+        // authored scale is then dropped) and characters stay scalable.
+        let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
+        return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
+            localPosition: object.transform.position, localRotation: object.transform.quaternion,
+            localScale: object.transform.scale, scalable: scalable)
+    }
+
+    /// The object `id` and the frame `sourceWorldMatrix` composes its own
+    /// transform under: identity for a root, a route parent's `childRoot`, or
+    /// the parent's world matrix times the attachment point's frame.
+    private func sourceParentFrame(of id: UUID, document: StudioDocument,
+                                   previews: [UUID: SourceStudioCharacterPreview],
+                                   visited: Set<UUID>) throws -> (object: StudioObject, frame: float4x4) {
         guard let object = document.object(id) else { throw RigError.invalid("Missing Studio object.") }
         var visited = visited
         guard visited.insert(id).inserted else { throw RigError.invalid("Invalid Studio parent hierarchy.") }
@@ -1591,18 +1633,7 @@ final class StudioModel: ViewportInputHandler {
                 }
             }
         }
-        // Native objects (no source key) keep the native full-TRS composition
-        // of `StudioDocument.worldMatrix(of:)`, which setParent and native
-        // gizmo edits also use; only source records follow the Studio rule.
-        guard object.sourceObjectKey != nil else { return parentFrame * object.transform.matrix }
-        // Documents saved before `sourceRecordKind` was recorded carry no
-        // record kind; their import made every non-character placeholder a
-        // `.folder`, so those fall back to the non-scalable rule (an item's
-        // authored scale is then dropped) and characters stay scalable.
-        let scalable = object.sourceRecordKind.map(SourceStudioWorldTransform.isScalable) ?? (object.kind != .folder)
-        return try SourceStudioWorldTransform.world(parentFrame: parentFrame,
-            localPosition: object.transform.position, localRotation: object.transform.quaternion,
-            localScale: object.transform.scale, scalable: scalable)
+        return (object, parentFrame)
     }
 
     /// The import's authored route data, but only while the document still

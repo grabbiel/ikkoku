@@ -44,6 +44,8 @@ their logs corrects accounting but does not constitute a new test execution.
 
 Each check inherits the shell environment with every `IKKOKU_*` variable removed, then receives only its declared fixtures supplied by the environment file, followed by its own `env` settings; `--strict` also sets `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`. The environment file holds fixture paths only; capture and UI settings belong in the check's `env`.
 
+The app checks the capture variables it receives before any work and exits 1 on an invalid combination (A06; see [capture request validation](../../docs/guides/build-and-test.md#capture-request-validation)). `test_run.py` keeps the lanes within those rules: each `app-smoke` check selects at most one capture mode, and `IKKOKU_NATIVE_PLUGIN_REPORT` or `IKKOKU_APPLICATION_FOCUS` appears only with `IKKOKU_AUTOCAPTURE`. It also requires the app's `CaptureRequest` inventory to name exactly the `IKKOKU_*` variables the app reads.
+
 ## Manifest schema (schemaVersion 2)
 
 Each manifest is `{"schemaVersion": 2, "checks": [...]}` and every check needs:
@@ -57,7 +59,7 @@ Each manifest is `{"schemaVersion": 2, "checks": [...]}` and every check needs:
 | `minimumTests` / `maximumSkipped` | Bounds on the parsed results. `minimumTests` counts EXECUTED tests (passed + failed). PR #4 supplies named per-test fixture skips, which the lanes report; earlier `guard let env … else { return }` tests appeared as executed passes without their data. Read per-test names and skips before claiming source-data coverage. |
 | `referenceTier` | One of `synthetic`, `recovered-code-oracle`, `original-managed-dll`, `original-player-probe`, `app-smoke`; any other value rejects the manifest. A tier is declared metadata; the runner never infers it. |
 | `tolerance` | Optional free text telling readers what the check does **not** prove. |
-| `artifacts` | Files hashed AFTER the run (built binaries, generated reports). A missing artifact fails the check. Paths must stay inside the repository. |
+| `artifacts` | Files hashed AFTER the run (built binaries, generated reports). A missing or empty (0-byte) artifact fails the check, even after exit 0. Paths must stay inside the repository. `test_run.py` requires every `app-smoke` check to declare each output path it passes to the app (captures, UI PNG/report, scenario/plugin reports) as an artifact. |
 | `timeout` | Per-check override of `--timeout`, in seconds. |
 
 ## Reference tiers
@@ -76,7 +78,7 @@ them claims whole-game parity; read each `tolerance`.
 | `public.json` | Engine `swift test`, mod-tools / translation / runner-self / studio-validator `unittest` suites | 5/5 checks pass (Engine `swift test` runs 369 tests, plus Python suites). Gated Swift tests use PR #4 named skips; without PR #4, early returns would report as executed passes. |
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
-| `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup run, then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report; `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. |
+| `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup app capture (its plugin report and Maker PNG hashed as artifacts; the app accepts the adapter report only with `IKKOKU_AUTOCAPTURE`, A06), then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report and hashes both the UI PNG and that report, so an exit-0 run that leaves either missing or empty fails (A-T05); `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. The lane has not been rerun since A-T05 (2026-10-23) added the PNG and Mute-report artifacts, or since A06 added the Mute check's `IKKOKU_AUTOCAPTURE` (without it the app never exited, so the check could only time out). |
 | `studio-scenarios.json` | Thirty-four `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-10-17: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
 | `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 
@@ -311,7 +313,7 @@ python3 Tools/verification/run.py \
 ```
 
 A declared `artifacts` entry is hashed only AFTER the run — an artifact
-the check never produced (or an oversized one) FAILS the check, e.g.
+the check never produced (or an empty or oversized one) FAILS the check, e.g.
 `studio-inspector-capture` while the PR #5 hooks are absent, or
 `build-debug-app` if the build itself fails.
 
@@ -366,13 +368,91 @@ python3 Tools/verification/run.py \
   --environment .local/verification/environment.json --strict
 ```
 
+## Prerequisite checker (T-T01)
+
+```sh
+python3 Tools/verification/doctor.py                    # report only; exit 0
+python3 Tools/verification/doctor.py --require public   # exit 1 if a public capability is unmet
+python3 Tools/verification/doctor.py --require reverse-tools --tool reverse-python=python3.12
+python3 Tools/verification/doctor.py --json             # machine-readable report
+python3 Tools/verification/doctor.py --markdown         # regenerate the build-guide table
+```
+
+`doctor.py` is stdlib-only. `prerequisites.json` is the single record of tool
+versions, and the [build guide's table](../../docs/guides/build-and-test.md#prerequisites)
+is generated from it. Each tool is probed once with a `--version`-style
+command, or `importlib.metadata` in the documented interpreter, at its
+documented path. Those paths include the `.local/reverse/` venv and ILSpy
+shims. The checker never reads `.local/` data or fixtures, installs nothing and
+writes nothing. Every capability is reported. Only those selected by
+`--require` (`public`, `optional`, `all` or capability ids) affect the exit
+status: 1 when one is unmet, 2 for invalid arguments or an invalid
+prerequisites file. `--tool ID=PATH` substitutes an executable. A set `$PY` or
+`$BLENDER` is used exclusively, as `Tools/assets/run_all.sh` does.
+`--verbose` prints each probe and its raw output.
+
+Requirements are `>=V`, `V.*`, `==V` or `unrecorded`: presence only, because
+the repository documents no version. Reverse-tool pins are read from
+`Tools/reverse/requirements.txt` rather than restated. A tool is `ok` or
+`present` (satisfied), or `mismatch`, `unparsed`, `error` or `absent`.
+`test_doctor.py` runs in the `runner-self-tests` check. It evaluates every
+sample in `doctor-samples.json`, each marked `recorded` (captured from a named
+run) or `format sample` (layout only, illustrative numbers). It also fails
+when the generated table, a restated version (`statedIn`) or the public tier
+drifts from the prerequisites file.
+
+## Release bundle inspector (T-T02)
+
+```sh
+python3 Tools/verification/inspect_app_bundle.py \
+  .local/build-release/Build/Products/Release/Ikkoku.app \
+  --report .local/verification/reports/release-bundle.json
+```
+
+`inspect_app_bundle.py` is stdlib-only and checks a built `.app` against
+`app-bundle-rules.json`, the reviewed list of what a Release bundle must and
+must not contain. Each rule states its reason. It reads the bundle, and runs
+`git ls-files`, `rev-parse` and `status` in `--checkout` (default: this
+repository). It never launches the app. Any error finding gives exit 1; no
+error gives 0, and invalid arguments or rules give 2.
+
+| Check | Fails when |
+| --- | --- |
+| Required resources | `IkkokuShaders.metallib` (with its `MTLB` signature), `catalog.json` or `Assets.car` is missing or empty, or a model, mask or texture that `catalog.json` references is not under `Contents/Resources` (bare texture names resolve under `Textures/`, as in `AssetLibrary.texture`) |
+| Identity and architecture | Info.plist's executable, identifier or package type differ from the rules, or any Mach-O file lacks an `arm64` slice (`arm64e` alone does not count) |
+| Provenance | A file is neither a declared build product nor a git-tracked `Assets/` file at the path Xcode copies it to (an `explicitFolders` subfolder keeps its path; anything else lands directly in `Resources`), a membership-exception fixture ships, a tracked asset is absent, or a symlink leaves the bundle. A tracked asset whose bytes differ from the checkout is only a warning |
+| Private content | A `.local`, build/cache or original-installation path component (`abdata`, `BepInEx`, `Managed`, `UserData`, `decompiled`, `reverse` and others); repository source (`.swift`, `.c`, `.h`, `.metal`, `.py` and others; the first CI Release build found the whole Engine package, tests and fixtures included, under `Contents/Resources/Engine/`); recovered source (`.cs`, `.il`, `.csproj`, `.shader`); a managed assembly by name or PE header; a Unity asset bundle by name or `UnityFS`-style signature; a mod archive; Python bytecode; a PNG with bytes after `IEND`; or a card/scene keyword |
+| Build-machine paths | `/Users/`, `/home/`, `/private/var/folders/`, `/Volumes/`, `.local/` or the checkout root appear in Info.plist, a text resource, a PNG text chunk or a GLB JSON chunk |
+
+Compiled build products (the executable, metallib and `Assets.car`) are not
+failed for path strings. Their counts are recorded under `pathReferences`. The
+Swift 5 app target's `#file`/`#filePath` strings embed the checkout path in the
+executable. Image data and GLB binary chunks are not scanned, because random
+bytes can contain any short sequence.
+
+The report records the tool and rules hashes, the checkout revision and dirty
+flag, a bundle tree hash, Info.plist version keys (including
+`LSMinimumSystemVersion`), executable architectures, each required file's
+hash, catalog reference counts, every file with its size, hash and class
+(`build-product`, `tracked-asset`, `excluded-asset`, `unexpected` or `symlink`),
+and the findings. The rules target the Release product. A Debug build fails as
+`unexpected-file` on its `Ikkoku.debug.dylib` and preview dylibs.
+
+`test_inspect_app_bundle.py` runs in the `runner-self-tests` check with synthetic
+bundles only. It also checks that `explicitFolders`, the excluded fixtures,
+the product name and the bundle identifier match `Ikkoku.xcodeproj`, and that
+every reference in the checked-in `Assets/catalog.json` is a tracked asset.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request to `main`, every push to
-`main` and on manual dispatch. It runs three jobs on GitHub-hosted `macos-26`
+`main` and on manual dispatch. It runs four jobs on GitHub-hosted `macos-26`
 runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 
-- `public-lane` builds the Engine tests (`swift build --build-tests`, so the
+- `public-lane` first runs `doctor.py --require public --verbose`, so a missing
+  Xcode, Metal compiler, Swift, `python3` or .NET SDK fails with the fix named
+  (10 s and 5/5 public capabilities met in the first dispatched run,
+  2026-10-23). It then builds the Engine tests (`swift build --build-tests`, so the
   lane's 600 s `swift test` timeout does not include a cold build), then runs
   `public.json` **without `--strict`**. Fixture-gated Swift tests report named
   skips instead of failing; the report and per-check logs are uploaded as the
@@ -380,6 +460,16 @@ runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 - `app-build` builds `IkkokuCreator` Debug with code signing disabled
   (`CODE_SIGNING_ALLOWED=NO`), because the runner has no development-team
   identity. It checks that the app compiles and links, and nothing more.
+- `release-package` (T-T02) runs `doctor.py --require app-build`, then builds
+  `IkkokuCreator` in the Release configuration, unsigned and `ARCHS=arm64`,
+  from the clean checkout. It zips the app with `ditto` and extracts it into
+  `$RUNNER_TEMP`, outside the checkout. It then runs the
+  [release bundle inspector](#release-bundle-inspector-t-t02) on that copy and
+  uploads the JSON report as the `release-bundle-report` artifact. The job
+  never launches the app. Its first dispatched run (2026-10-23) found the whole
+  Engine package under `Contents/Resources/Engine/`, 247 files. Once the app
+  target stopped synchronizing `Packages/`, runs 39888875495 and 39889709790
+  passed with 207 files, 0 errors and 0 warnings.
 - `reverse-tools` (`macos-26`, Python 3.12) installs only the pinned
   `Tools/reverse/requirements.txt` and runs the `Tools/reverse` and
   `Tools/reverse/analysis` unittest suites. Without `.local/` they skip or
@@ -414,7 +504,7 @@ sha256; `swift`/`xcodebuild`/`python3` versions (absent tools report
 `IKKOKU_*` names actually passed, `env` with values only for the check's own
 settings, `suppliedFixtures`/`missingFixtures` with paths and hashes,
 `referenceTier`, `tolerance`, artifact hashes taken **after** the run (a
-missing artifact fails the check), exit code, elapsed seconds, and the log
+missing or empty artifact fails the check), exit code, elapsed seconds, and the log
 path plus its hash.
 Reports and logs live under the git-ignored `.local/verification/`.
 `Tools/verification/environment.example.json` carries placeholder paths

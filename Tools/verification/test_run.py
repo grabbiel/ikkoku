@@ -6,6 +6,7 @@ Stdlib only. Run from the repository root with:
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -525,6 +526,41 @@ class CheckExecutionTests(unittest.TestCase):
             self.assertEqual(record["status"], "failed")
             self.assertIn("not hashed", record["error"])
 
+    def test_empty_artifact_fails_even_after_exit_zero(self):
+        # A-T05: a capture that exits 0 and claims "written" but leaves a
+        # zero-byte file has not produced its output.
+        with tempfile.TemporaryDirectory(dir=run.REPO_ROOT) as artifact_dir:
+            artifact = os.path.join(artifact_dir, "captures", "ui.png")
+            record = self.run_check(
+                argv=[sys.executable, "-c",
+                      "open(%r, 'wb').close(); print('[ikkoku] ui snapshot written to %s')"
+                      % (artifact, artifact)],
+                artifacts=[{"path": os.path.relpath(artifact, run.REPO_ROOT),
+                            "kind": "ui-capture"}])
+            self.assertEqual(record["exitCode"], 0)
+            self.assertEqual(record["status"], "failed")
+            self.assertIn("artifact is empty", record["error"])
+            self.assertIsNone(record["artifacts"][0]["sha256"])
+
+    def test_nonzero_capture_exit_fails_without_hashing_outputs(self):
+        # A-T05: the app exits nonzero when a required output is missing
+        # (here the PNG) even though another output (the report) was
+        # written; the runner must not accept or hash that run's artifacts.
+        with tempfile.TemporaryDirectory(dir=run.REPO_ROOT) as artifact_dir:
+            report = os.path.join(artifact_dir, "captures", "ui.json")
+            png = os.path.join(artifact_dir, "captures", "ui.png")
+            record = self.run_check(
+                argv=[sys.executable, "-c",
+                      "import sys; open(%r, 'w').write('{}');"
+                      "print('[ikkoku] ui snapshot failed: %s: could not be written');"
+                      "sys.exit(1)" % (report, png)],
+                artifacts=[{"path": os.path.relpath(png, run.REPO_ROOT), "kind": "ui-capture"},
+                           {"path": os.path.relpath(report, run.REPO_ROOT),
+                            "kind": "capture-report"}])
+            self.assertEqual(record["status"], "failed")
+            self.assertEqual(record["error"], "command exited 1")
+            self.assertEqual(record["artifacts"], [])
+
     def test_artifact_parent_created_before_command(self):
         with tempfile.TemporaryDirectory(dir=run.REPO_ROOT) as artifact_dir:
             artifact = os.path.join(artifact_dir, "nested", "captures", "pose.json")
@@ -601,6 +637,118 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "resetShapes", "export", "reimport", "assert"}
+
+# App settings that name a file the app is asked to write (A-T05).
+APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
+                        "IKKOKU_NATIVE_PLUGIN_REPORT", "IKKOKU_BENCHMARK_OUTPUT",
+                        "IKKOKU_STUDIO_SCENARIO_REPORT", "IKKOKU_MAKER_SCENARIO_REPORT",
+                        "IKKOKU_SAVE_CARD", "IKKOKU_SAVE_SCENE", "IKKOKU_EXPORT_SOURCE_CARD",
+                        "IKKOKU_EXPORT_SOURCE_SCENE")
+
+
+class AppOutputArtifactTests(unittest.TestCase):
+    """A-T05: every output an app-smoke check requests is a hashed artifact.
+
+    The app now exits nonzero when a required output is missing, but a lane
+    check only fails on an absent (or empty) file it declares; an undeclared
+    output could silently go missing behind a zero exit.
+    """
+
+    def app_smoke_checks(self):
+        lanes = sorted(os.path.join(_HERE, "lanes", name)
+                       for name in os.listdir(os.path.join(_HERE, "lanes"))
+                       if name.endswith(".json"))
+        for lane in lanes:
+            for check in run.load_manifest(lane):
+                if check["referenceTier"] == "app-smoke":
+                    yield os.path.basename(lane), check
+
+    def test_every_requested_app_output_is_a_declared_artifact(self):
+        requested = 0
+        for lane, check in self.app_smoke_checks():
+            artifacts = [artifact["path"] for artifact in check.get("artifacts", [])]
+            for name in APP_OUTPUT_VARIABLES:
+                value = check.get("env", {}).get(name)
+                if value is None:
+                    continue
+                requested += 1
+                self.assertIn(value, artifacts, "%s/%s: %s=%s must be a declared artifact"
+                              % (lane, check["id"], name, value))
+        self.assertGreater(requested, 0)
+
+    def test_ui_capture_hashes_both_png_and_report(self):
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        capture = checks["studio-inspector-capture"]
+        artifacts = [artifact["path"] for artifact in capture["artifacts"]]
+        self.assertTrue(capture["env"]["IKKOKU_CAPTURE_UI"].endswith(".png"))
+        self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
+        self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
+
+    def test_capture_only_plugin_evidence_runs_inside_a_capture(self):
+        # A06: the app rejects IKKOKU_NATIVE_PLUGIN_REPORT and IKKOKU_APPLICATION_FOCUS
+        # without IKKOKU_AUTOCAPTURE, the capture that ends the headless run; before,
+        # such a launch stayed open and the check could only time out.
+        checked = 0
+        for lane, check in self.app_smoke_checks():
+            env = check.get("env", {})
+            if "IKKOKU_NATIVE_PLUGIN_REPORT" in env or "IKKOKU_APPLICATION_FOCUS" in env:
+                checked += 1
+                self.assertIn("IKKOKU_AUTOCAPTURE", env, "%s/%s" % (lane, check["id"]))
+        self.assertGreater(checked, 0)
+
+    def test_each_app_check_selects_at_most_one_capture_mode(self):
+        with open(CAPTURE_REQUEST_SOURCE, encoding="utf-8") as handle:
+            selectors = re.findall(r'ModeSelector\("(IKKOKU_[A-Z0-9_]+)",', handle.read())
+        self.assertIn("IKKOKU_CAPTURE_RIG", selectors)
+        for lane, check in self.app_smoke_checks():
+            names = set(check.get("env", {})) | {fixture["env"] for fixture in check.get("fixtures", [])}
+            chosen = sorted(names.intersection(selectors))
+            self.assertLessEqual(len(chosen), 1, "%s/%s selects %s" % (lane, check["id"], chosen))
+
+
+CAPTURE_REQUEST_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sources", "Renderer",
+                                      "CaptureRequest.swift")
+CAPTURE_OUTPUT_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sources", "Renderer",
+                                     "CaptureOutput.swift")
+# Whole variable names; the capture prefixes such as "IKKOKU_CAPTURE_" end in "_".
+IKKOKU_LITERAL = re.compile(r'"(IKKOKU_[A-Z0-9_]*[A-Z0-9])"')
+
+
+def _ikkoku_literals(*paths):
+    names = set()
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            names.update(IKKOKU_LITERAL.findall(handle.read()))
+    return names
+
+
+class CaptureRequestInventoryTests(unittest.TestCase):
+    """A06: the startup capture check classifies every variable the app reads.
+
+    `CaptureRequest.validate` rejects a capture option outside the modes that
+    read it and an unknown `IKKOKU_CAPTURE_*` name, so an app variable missing
+    from its inventory would be rejected or go unchecked. The Swift tests cover
+    the rules; this keeps the inventory and the app's reads in step.
+    """
+
+    def app_variables(self):
+        sources = []
+        for root, _, files in os.walk(os.path.join(run.REPO_ROOT, "Apps", "IkkokuCreator")):
+            sources.extend(os.path.join(root, name) for name in files if name.endswith(".swift"))
+        self.assertTrue(sources)
+        return _ikkoku_literals(*sources)
+
+    def test_every_variable_the_app_reads_is_classified(self):
+        # IKKOKU_CAPTURE_UI_TIMEOUT is the UICaptureReadiness constant in CaptureOutput.swift.
+        inventory = _ikkoku_literals(CAPTURE_REQUEST_SOURCE, CAPTURE_OUTPUT_SOURCE)
+        missing = sorted(self.app_variables() - inventory)
+        self.assertEqual(missing, [], "add these to CaptureRequest's inventory: %s" % missing)
+
+    def test_inventory_names_only_variables_the_app_reads(self):
+        read = self.app_variables() | _ikkoku_literals(CAPTURE_OUTPUT_SOURCE)
+        stale = sorted(_ikkoku_literals(CAPTURE_REQUEST_SOURCE) - read)
+        self.assertEqual(stale, [], "the app no longer reads: %s" % stale)
 
 
 class StudioScenarioLaneTests(unittest.TestCase):

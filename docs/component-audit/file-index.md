@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**788 files indexed; 788 assigned; 0 unassigned.**
+**815 files indexed; 815 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 63 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 79 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 301 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 130 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 303 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 139 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
-| Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 161 |
+| Build / repository configuration | 8 |
+| Conversion / recovery / verification tool | 166 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 26 |
-| Runtime / shared shader declaration | 169 |
-| Test / validation | 152 |
+| Reference host / controlled fixture | 27 |
+| Runtime / shared shader declaration | 175 |
+| Test / validation | 165 |
 
 ## App / gameplay / plugins
 
@@ -73,26 +73,40 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceIRProgram.swift](../../Packages/Engine/Sources/Gameplay/SourceIRProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift](../../Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourcePluginLibraryIndex.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginLibraryIndex.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/CaptureRequest.swift](../../Packages/Engine/Sources/Renderer/CaptureRequest.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
 | [Tools/reverse/analysis/accessory_names_oracle.py](../../Tools/reverse/analysis/accessory_names_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_command_coverage.py](../../Tools/reverse/analysis/adv_command_coverage.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/adv_host_requests.py](../../Tools/reverse/analysis/adv_host_requests.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_contract.py](../../Tools/reverse/analysis/gameplay_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_execution_contract.py](../../Tools/reverse/analysis/gameplay_execution_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/mute_plugin_oracle.py](../../Tools/reverse/analysis/mute_plugin_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_adv_command_coverage.py](../../Tools/reverse/analysis/test_adv_command_coverage.py) | Test / validation |
+| [Tools/reverse/analysis/test_adv_host_requests.py](../../Tools/reverse/analysis/test_adv_host_requests.py) | Test / validation |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Host.cs](../../Tools/reverse/fixtures/MutePluginOracle/Host.cs) | Reference host / controlled fixture |
@@ -108,8 +122,10 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Tools/translation/frontend/UnitySurface.txt](../../Tools/translation/frontend/UnitySurface.txt) | Conversion / recovery / verification tool |
 | [Tools/translation/native_adapters.py](../../Tools/translation/native_adapters.py) | Conversion / recovery / verification tool |
 | [Tools/translation/plugin.py](../../Tools/translation/plugin.py) | Conversion / recovery / verification tool |
+| [Tools/translation/plugin_library.py](../../Tools/translation/plugin_library.py) | Conversion / recovery / verification tool |
 | [Tools/translation/studio_execution_probe.py](../../Tools/translation/studio_execution_probe.py) | Conversion / recovery / verification tool |
 | [Tools/translation/tests/test_native_adapters.py](../../Tools/translation/tests/test_native_adapters.py) | Test / validation |
+| [Tools/translation/tests/test_plugin_library.py](../../Tools/translation/tests/test_plugin_library.py) | Test / validation |
 | [Tools/translation/tests/test_studio_execution_probe.py](../../Tools/translation/tests/test_studio_execution_probe.py) | Test / validation |
 | [Tools/translation/tests/test_translation.py](../../Tools/translation/tests/test_translation.py) | Test / validation |
 | [Tools/translation/translate.py](../../Tools/translation/translate.py) | Conversion / recovery / verification tool |
@@ -671,9 +687,11 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFImportTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFImportTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/MaterialImportTests.swift](../../Packages/Engine/Tests/EngineTests/MaterialImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaleAvatarTests.swift) | Test / validation |
@@ -760,21 +778,28 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/reverse/README.md](../../Tools/reverse/README.md) | Documentation / historical evidence |
 | [Tools/reverse/analysis/decompile_studio.py](../../Tools/reverse/analysis/decompile_studio.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/recover_managed.py](../../Tools/reverse/analysis/recover_managed.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/recovered_source.py](../../Tools/reverse/analysis/recovered_source.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/test_recovered_source.py](../../Tools/reverse/analysis/test_recovered_source.py) | Test / validation |
 | [Tools/reverse/catalog.py](../../Tools/reverse/catalog.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/inventory.ps1](../../Tools/reverse/inventory.ps1) | Conversion / recovery / verification tool |
 | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_recover_managed.py](../../Tools/reverse/test_recover_managed.py) | Test / validation |
 | [Tools/reverse/vm_source.py](../../Tools/reverse/vm_source.py) | Conversion / recovery / verification tool |
 | [Tools/verification/README.md](../../Tools/verification/README.md) | Documentation / historical evidence |
+| [Tools/verification/app-bundle-rules.json](../../Tools/verification/app-bundle-rules.json) | Build / repository configuration |
 | [Tools/verification/checks/studio_inspector_report.py](../../Tools/verification/checks/studio_inspector_report.py) | Conversion / recovery / verification tool |
 | [Tools/verification/checks/test_studio_inspector_report.py](../../Tools/verification/checks/test_studio_inspector_report.py) | Test / validation |
+| [Tools/verification/doctor-samples.json](../../Tools/verification/doctor-samples.json) | Reference host / controlled fixture |
+| [Tools/verification/doctor.py](../../Tools/verification/doctor.py) | Conversion / recovery / verification tool |
 | [Tools/verification/environment.example.json](../../Tools/verification/environment.example.json) | Conversion / recovery / verification tool |
+| [Tools/verification/inspect_app_bundle.py](../../Tools/verification/inspect_app_bundle.py) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/app-smoke.json](../../Tools/verification/lanes/app-smoke.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/maker.json](../../Tools/verification/lanes/maker.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/maker-scenarios.json](../../Tools/verification/lanes/maker-scenarios.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/private-source.json](../../Tools/verification/lanes/private-source.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
+| [Tools/verification/prerequisites.json](../../Tools/verification/prerequisites.json) | Build / repository configuration |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/animation-select.json](../../Tools/verification/scenarios/animation-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/blink-toggle.json](../../Tools/verification/scenarios/blink-toggle.json) | Conversion / recovery / verification tool |
@@ -817,6 +842,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-route.json](../../Tools/verification/scenarios/undo-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
+| [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
+| [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |
 | [docs/README.md](../../docs/README.md) | Documentation / historical evidence |
 | [docs/architecture.md](../../docs/architecture.md) | Documentation / historical evidence |

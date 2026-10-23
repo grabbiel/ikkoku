@@ -45,6 +45,10 @@ input returns exit status 2 and source-located diagnostics. A previous generated
 Swift file in that output directory is removed before another attempt, so a
 rejection cannot leave an older translation masquerading as the current one.
 Recovered source, translations and original-DLL validation remain in `.local/`.
+A source containing the managed recovery's ILSpy error-stub markers raises an
+error before any build or output (E-T02). Take recovered game types from their
+selected project or clean fallback; see
+[consuming recovered source](../managed-recovery.md#consuming-recovered-source).
 
 ## Supported subset
 

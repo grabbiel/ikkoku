@@ -354,6 +354,338 @@ pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
 
+### Renderer limits and resource lifetime (R6, first slice)
+
+**Uniform ring.** `FrameRing` keeps three 8 MiB regions in one shared buffer.
+It no longer calls `precondition` when a region fills. An allocation that does
+not fit goes to an overflow buffer of at least one region size (larger for
+larger requests). Every allocation returns its own buffer and offset
+(`FrameAllocation`), and the renderer binds that pair. The ring tracks each
+region as in flight from `endFrame(retainedUntilCompletionOf:)` until that
+command buffer's completion handler runs. A frame never writes into a region
+still in flight. If its preferred region (`frameIndex % 3`) is busy, it takes
+another free region; if every region is busy, the whole frame goes into
+overflow buffers. This holds in any commit order. Before this change, the
+region was chosen by frame index alone, and interactive draws commit outside
+the render lock. A capture or pick completing in between could therefore let a
+new frame reuse the region of an older frame that had not completed. Overflow
+buffers go back to a pool of at most six only after completion (or at once
+when a frame is abandoned unsubmitted). Steady large scenes therefore reuse
+them instead of allocating every frame. When the device refuses an overflow
+buffer, the ring throws `FrameRingError.allocationFailed(bytes:)` and never
+terminates. All ring allocations now happen while the frame is being prepared,
+before any encoder exists. This includes the background frame uniforms and
+gizmo vertices and draw uniforms, which were previously allocated mid-pass. A
+failed allocation therefore leaves the command buffer empty. Interactive
+`draw` skips the frame and keeps the previously presented image; `pick`
+returns 0; `capture` returns nil; `benchmark` throws
+`RenderBenchmarkError.frame`. The reason appears in `Renderer.lastFrameError`
+as `RenderFrameError.uniformAllocation`. Command-buffer, render-target and
+pick-readback allocation failures are reported there too; the pick readback
+buffer is no longer force-unwrapped.
+
+**Frame statistics.** `Renderer.lastFrameStatistics` describes the most
+recently prepared frame: the last draw, pick, capture or benchmark sample.
+It reports enabled and shaded lights, `droppedLights`, deform dispatches,
+active morph entries, the largest morph set, and the frame's ring region,
+region bytes, overflow bytes and overflow buffer count.
+
+**Lights.** Selection is unchanged: the first `IK_MAX_LIGHTS` (8) enabled
+`RenderFrame.lights`, in list order, are shaded. Enabled lights beyond that are
+no longer silent. They are counted in `lastFrameStatistics.droppedLights`.
+
+**Active morphs.** The `prefix(IK_MAX_ACTIVE_MORPHS)` truncation is removed.
+`deform_vertices` already loops over `activeMorphCount` entries read from an
+unbounded device buffer, so one dispatch accumulates every meaningful target.
+A meaningful target has an index inside the mesh's targets and a finite weight
+whose magnitude exceeds 1e-4. The kernel, `ShaderTypes.h` and every struct
+layout are unchanged. For 64 or fewer entries, the entry list, its order and
+the per-vertex summation order are the same as before, so output does not
+change. GPU cost grows linearly with the entry count. Source expressions still
+reject sets above 64 in `SourceRigPreview.expressionWeights`; that is now a
+stricter source-path validation, not a renderer capacity.
+
+**Resource store.** `deformBuffer(for:vertexCount:)` returns nil instead of
+force-unwrapping a refused allocation. The renderer records that as a
+deformation error, so interactive draws skip the item and captures fail. Mesh
+registration now throws `ResourceError.bufferAllocation` when the
+vertex-color, morph-delta or morph-normal buffer is refused. Before, a missing
+morph-delta buffer left the kernel indexing the 256-byte dummy buffer.
+`setHiddenBuffer` always uploads a new buffer, so a frame already submitted
+keeps the mask it was encoded with. It returns false and drops the old mask
+when Metal refuses the buffer. `releaseHiddenBuffers(keys:)` mirrors
+`releaseDeformBuffers(keys:)`. `CharacterInstance` still releases neither when
+a character is removed.
+
+**Tests.** `RendererLimitsTests.swift` builds the production pipelines from
+`Shaders/` with `Renderer(gpu:shaderLibrary:)`, because the test bundle has no
+metallib:
+
+- `frameRingSpillsPastItsRegionWithIntactDataAndTypedErrors` covers overflow
+  placement, data read-back and the typed errors.
+- `frameRingNeverReusesARegionStillInFlight` holds regions with uncommitted
+  command buffers.
+- `frameRingRecyclesOverflowBuffersOnlyAfterCompletion` runs 24 frames that
+  use one overflow buffer.
+- `lightPackingKeepsTheFirstEightEnabledLightsAndCountsTheRest` and
+  `activeMorphEntriesKeepEveryMeaningfulTargetInCallerOrder` check selection
+  without a GPU.
+- `rendererCaptureCrossesTheUniformRegionAndReportsItsLimits` runs a real
+  32×32 capture that includes a 9.6 MB gizmo batch. Only its last triangle
+  covers the view, in red, and the test asserts the red center pixel. The same
+  capture has 12 lights (2 disabled, so 2 dropped) and a 100-target morph. Its
+  deformation buffer is read back and compared with a CPU sum to 1e-4; the
+  64-target truncation differs by more than 1e-2.
+- `resourceStoreAddRemoveCyclesKeepResourceCountsBounded` runs 40
+  mesh/texture/deform/hidden add-remove cycles.
+
+Run them with
+`swift test --package-path Packages/Engine --filter 'frameRing|lightPacking|activeMorphEntries|rendererCapture|resourceStoreAddRemove'`.
+Swift was not compiled locally, so the CI Engine suite is the only test run.
+Nothing here was run in the app.
+
+Remaining R6 work:
+
+- An interactive draw, pick and capture stress run that submits concurrently.
+- Bounded counts across real character, scene and import/delete cycles.
+  `CharacterInstance` does not release its deform or hidden buffers.
+- Allocation-failure injection beyond the oversized overflow request.
+- App-level reporting of `lastFrameError`.
+
+## Checked math, legacy skeletons and cameras (R4)
+
+The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
+`lookRotation`, `inverse`, `rotationQuaternion`, `scaleFactors`) keep their
+formulas and assume finite, usable input. `rotationQuaternion` divides by
+unsigned column lengths, so a reflected basis yields a nonunit quaternion and
+shear is silently dropped. Import, decoding and editing boundaries use the
+checked forms instead. For accepted input they return exactly the unchecked
+result, so existing valid results do not change. Otherwise they throw
+`MathContractError` naming the rejected argument:
+
+| Checked form | Throws for |
+| --- | --- |
+| `Float3.checkedNormalized` | Nonfinite components or squared length; length at most `minimumDirectionLength` (1e-6) |
+| `simd_quatf.checkedRotation(from:to:)` | Either direction, as above |
+| `simd_quatf.checkedLookRotation(forward:up:)` | Either direction, as above; forward along ±X with a parallel up, where the +X fallback has no perpendicular |
+| `float4x4.checkedInverse` | Nonfinite entries, a zero determinant or a nonfinite inverse |
+| `float4x4.checkedRotationQuaternion` | Nonfinite entries, a nonaffine bottom row, a basis column of length at most 1e-8, dependent columns, a reflection, or shear (normalized columns farther than `tolerance`, default 1e-4, from orthogonal) |
+| `float4x4.checkedTRS` | As above, except that a reflection is kept as a negative X scale so `Transform.trs` rebuilds the matrix |
+
+These decompose native-basis matrices. They do not replace
+`UnityCoordinates.matrix`, which converts raw Unity matrices without any
+decomposition.
+
+The legacy name-keyed `Skeleton` serves generated assets; source rigs use
+`RigDefinition`. `Skeleton.init(bones:)` and `extended(with:)` throw
+`SkeletonError` naming the bone for any of these:
+
+- a duplicate name;
+- an out-of-range or self parent;
+- a cycle;
+- a nonfinite rest translation or scale;
+- a rest rotation that is not a finite unit quaternion (±1e-3);
+- a nonfinite or nonaffine inverse bind.
+
+Bones may be listed in any index order. `order` is the former parent-first
+order, now computed without recursion.
+
+`Skeleton.from` also rejects a skin with missing or repeated joint nodes, or one
+whose bind count does not match its joints. It folds two kinds of non-joint node
+into the child joint's rest TRS: a root joint's ancestors, and any non-identity
+node between two joints. It decomposes those folded matrices, and authored joint
+matrices, with `checkedTRS`. A mirrored Armature therefore becomes a negative
+root scale, and shear fails as `unsupportedTransform`. A TRS joint directly under
+its joint parent keeps its authored values.
+
+On 2026-10-23, a local, uncommitted pure-Python reader checked all 44 bundled
+skinned files: 42 GLBs plus the two glTF fixtures. All had unique joint names and
+rest rotations within 8e-8 of unit length. Their roots had no reflection and no
+shear above 7e-8. None had intermediate non-joint nodes or authored joint
+matrices. Their rest data is therefore unchanged. A file that fails becomes an
+`AssetLibrary` load failure instead of a trap.
+
+`OrbitCamera.validate()` never edits the camera. It rejects:
+
+- nonfinite fields;
+- a nonpositive distance or near plane;
+- a vertical field of view outside (0, 180) degrees;
+- an orientation override that is not a finite unit quaternion (±1e-3);
+- a position that coincides with the target.
+
+`KoikatsuCameraRecord.nativeCamera()` validates its result. The app also
+validates every camera of a native scene card it opens or imports
+(`StudioDocument.validateCameras()`).
+
+The override, field of view and near plane round-trip exactly through the
+native scene card. Dolly, pan and field-of-view edits keep the override. `orbit`,
+or any `yaw`/`pitch` assignment, clears it. Original camera records store only
+pivot, Z-X-Y Euler rotation, distance vector and vertical field of view. An
+edited export therefore re-imports to the same view and field of view, but
+native-only `near` returns to its default. The viewport camera is always an
+infinite reverse-Z perspective; orthographic cameras are not represented.
+
+### Runtime callers (second slice)
+
+The second R4 slice (2026-10-23) moved the runtime callers that receive user
+edits or imported data onto checked forms. Accepted input still gives exactly
+the former result. Each test compares the new path with a copy of the former
+formula. The exception is two-bone IK. A later fix changed its results on
+purpose ([lower-bone fix](#legacy-two-bone-ik-lower-bone-fix)).
+
+- **Two-bone IK.** `IKSolver.checkedTwoBone` throws `MathContractError` for:
+  a nonfinite joint, target or pole; an upper (`b - a`) or lower (`c - b`)
+  bone no longer than `Float3.minimumDirectionLength`; a reach with no
+  direction (target and end both on the root); any other nonfinite solution.
+  `IKSolver.solveTwoBone` is the per-chain update of
+  `CharacterInstance.applyIK`, applied to a pose. This slice kept the former
+  formula, which the lower-bone fix below corrects. It also throws `PoseError`
+  for a pose or bone index that does not fit the skeleton.
+  `CharacterInstance.solveIK` leaves a failed chain's rotations unchanged and
+  returns its error. `applyIK` keeps its signature, and `ikFailures()` reports
+  the reasons; the Studio status line shows the first one.
+- **Prototype gaze.** `CharacterGaze.apply` is the former
+  `CharacterInstance.applyGaze`. These leave the pose unchanged:
+  a nonfinite target; a character root with no finite inverse; a target the
+  root maps to a nonfinite point; a pose that does not fit the skeleton. A head
+  or eye whose frame has no finite inverse, or whose direction to the target is
+  nonfinite, keeps its rotation. The source eye and neck look controllers
+  already reject such input with `RigError` and are unchanged.
+- **Poses.** `Pose.validate(for:)` throws `PoseError.countMismatch`, naming the
+  first array that lacks one entry per bone. These checked forms validate
+  first:
+  - `checkedWorldMatrices`;
+  - `checkedSkinMatrices`, which also checks a supplied world array;
+  - `checkedBlended`, which checks both poses;
+  - `checkedWorldRotation`, which throws `PoseError.boneOutOfRange` for a bad
+    index;
+  - `PoseDelta.checkedApply`, which checks a supplied base.
+
+  The unchecked forms still trap on a mismatch. `CharacterInstance.jointPosition`
+  now returns nil instead.
+- **Rays.** A ray whose origin or direction is not finite hits nothing: every
+  intersection returns nil and `closest`/`distance` return infinity. NaN slab
+  distances used to leave the slab test's initial interval in place, so it
+  reported a hit at distance 0 for every box. A zero direction produces such a
+  ray, as does `OrbitCamera.ray(atPixel:viewport:)` with a zero-size viewport.
+  `Ray.checked(origin:direction:)` and `checkedTransformed(by:)` throw instead.
+  `OrbitCamera.project` returns nil for a nonfinite pixel.
+- **Projections.** `checkedPerspectiveReverseZ`,
+  `checkedPerspectiveReverseZInfinite`, `checkedOrthographicReverseZ` and
+  `checkedLookAt` throw `MathContractError` for a nonfinite argument or result.
+  The new `outOfRange` case covers a field of view outside (0, π), a
+  nonpositive aspect or near plane, a far plane not beyond near, and coincident
+  orthographic bounds. `checkedLookAt` also rejects an eye at the center, a zero
+  up, and a view along ±Z with a parallel up, whose +Z fallback is parallel too.
+  `OrbitCamera` keeps the unchecked builders behind `validate()`.
+- **Camera-object look-through.**
+  `SourceStudioCameraObjects.viewCamera(world:base:)` rejects a mirrored world
+  matrix (negative determinant) with
+  `SourceStudioCameraObjectError.reflectedFrame`. It rejects a singular one with
+  `RigError`, and validates its result with `OrbitCamera.validate()`. The
+  original copies the camera's `transform.rotation`. The ST-A06 capture shows
+  that rotation unaffected by a non-uniform parent scale. A mirrored matrix,
+  however, does not say which axis carries the mirror, and no capture covers a
+  mirrored parent, so the case is rejected rather than guessed. The Studio walk
+  (`SourceStudioWorldTransform.world`) composes a child's rotation with the
+  parent frame's unchecked `rotationQuaternion`. That turns a mirror into a
+  nonunit rotation, which the composed matrix no longer shows. The app
+  therefore builds the camera from the parent frame with
+  `viewCamera(parentFrame:localPosition:localRotation:base:)`, which rejects a
+  mirrored parent by name.
+
+Remaining R4 work found in this slice:
+
+- A mirror further up a camera's chain still reaches the camera through
+  `SourceStudioWorldTransform.world`. So does a parent with two negative scale
+  components, which as a matrix is a proper rotation. Every other child of a
+  mirrored source parent gets the same nonunit rotation. Supporting these needs
+  the walk to carry Unity's product of local rotations, and an original
+  capture.
+- `CharacterInstance.applyIK` applied the upper delta to the lower bone twice,
+  because `p.worldRotation(li)` already includes it. The hand or foot therefore
+  missed its target. A local float64 replay of a 0.30 m + 0.28 m arm missed
+  targets 0.49 m and 0.51 m from the shoulder by 0.13 m and 0.23 m. R4 kept the
+  formula, because a fix changes valid results. The
+  [lower-bone fix](#legacy-two-bone-ik-lower-bone-fix) has since corrected it.
+- These remain unchecked: `IKSolver.ccd`, which has no runtime caller; the
+  renderer's shadow light frame (unchecked `lookAt`/`orthographicReverseZ`,
+  degenerate only for a nonfinite light direction or scene bounds); and the
+  unused `StudioModel.applyGaze()`.
+- DynamicBone and hair numerics are unchanged, because their original-parity
+  tests need private fixtures that CI lacks. `HairDynamics.step` decomposes the
+  character root with unchecked `rotationQuaternion`, and it keeps a NaN spring
+  state until `reset()`. `SourceDynamicBone` already skips near-zero arcs and
+  rejects nonfinite particles.
+
+`swift test --package-path Packages/Engine --filter 'checked|legacySkeleton|legacyPose|solveTwoBone|nonfiniteRays|characterGaze|sourceCameraObject|sourceWorldTransform|importedCamera|DegenerateDecodedCameras'`
+runs the synthetic tests for these contracts.
+
+### Legacy two-bone IK lower-bone fix
+
+`IKSolver.twoBone` returns world-space deltas for the bones' rotations from
+before the solve: the new upper world rotation is `upper * oldUpperWorld`, and
+the new lower one `lower * oldLowerWorld`. The second slice's `solveTwoBone`
+read the lower bone's world rotation only after writing the upper bone. That
+rotation already carried the upper delta, and the update then multiplied by
+the delta again. The lower bone therefore ended at
+`lower * upper * upper * oldLowerWorld`, and the hand or foot missed reachable
+targets. The fix (2026-10-23) reads both world rotations before writing
+either. It then makes `lower * oldLowerWorld` local to the lower bone's parent,
+the upper bone as just written. `twoBone`, `checkedTwoBone` and their
+`MathContractError`/`PoseError` cases are unchanged, so degenerate chains are
+rejected exactly as before.
+
+Results change for every enabled prototype IK chain, which only native
+Studio characters have; Maker sets no targets. Native scenes and timeline keys
+store targets and poles, not solved rotations. They need no migration, and
+they now render with each end on its target.
+
+A local, uncommitted plain-Python replay of the solver checked the fix in
+float64, and in float32 with rounding after every operation (close to, but not
+exactly, simd arithmetic):
+
+| Case | Former update | Fixed update |
+| --- | --- | --- |
+| The R4 test's two targets (0.30 m + 0.28 m arm, upper arm FK (0, 20, 10)°) | missed by 0.156 m and 0.127 m | within 6e-17 m (float64), 1.6e-7 m (float32) |
+| The same targets from the rest pose | missed by 0.239 m and 0.137 m | within 6e-17 m |
+| 144 reachable targets: 4 poses, arm and leg, 3 directions, 35/70/95 % of reach, default and explicit pole | missed every one, by 0.046 m to 1.14 m | within 5.7e-16 m (float64), 2.5e-7 m (float32) |
+| 96 targets at 102 % and 150 % of reach | — | end on the line to the target, 1e-4 m short of full reach; elbow or knee at most 7.7 mm off the line, at least 4.9 mm toward the pole |
+| Re-solve from the solved pose, explicit pole | — | rotations change by at most 2.2e-7, joints move at most 2.5e-7 m (float32) |
+
+The second slice's figures (0.13 m and 0.23 m) are closest to the rest-pose
+case; that replay is not in the repository. The poses include root
+rotations, uniform root scales of 0.85 and 1.3, a 1.1 upper-bone scale, and a
+non-uniform lower-bone scale. The lower-bone scale applies after that bone's
+rotation, so it only resizes the bone.
+
+`RigTests.swift` replaces the second slice's former-formula comparison with
+these cases in Float. Reachable ends must lie within 1e-4 m of the target,
+and unreachable ones within 2e-4 m of full reach. It also keeps a copy of the
+former update, to show it missing the R4 targets by more than 0.1 m. Further
+tests check the bend side for opposite poles, a re-solve with an explicit
+pole, and arm-then-leg solving in `IKChain` order. The degenerate-pose
+rejections now also cover a zero-length lower bone and a nonfinite pole.
+`swift test --package-path Packages/Engine --filter solveTwoBone` runs them.
+Swift was not compiled locally, so the CI Engine suite is the only test run.
+Studio's IK handles, drag and status line were not run interactively.
+
+Remaining limits:
+
+- The result is exact only when the upper bone and its ancestors have uniform
+  scale, because `Pose.worldRotation` ignores scale. The replay's arm missed by
+  0.078 m under a (1, 1.3, 0.8) root scale. The bundled sliders scale only the
+  head, eyes, bust, hands and feet, and always uniformly.
+- `simd_quatf.rotation(from:to:)` returns identity below about 1.4 mrad
+  (`dot > 0.999999`), so a correction that small is skipped. An end can then
+  sit up to about 1.4e-3 × the chain length (0.8 mm on the 0.58 m arm) from
+  its target.
+- A target closer than the difference of the two bone lengths folds the
+  chain, and the end stops at that distance from the root.
+- The default pole follows the current mid joint, so a re-solve from a solved
+  pose can turn the bend plane. `CharacterInstance` always solves from the FK
+  pose.
+
 ## Verification and remaining limits
 
 `swift test --package-path Packages/Engine --filter 'unity|imported'` exercises
@@ -986,9 +1318,14 @@ outfit and standard bone type; other animated states remain untested.
 ## Resource and measurement boundaries
 
 The live renderer supports four skin influences and a single morph frame per
-target. More than 64 active morphs can be silently truncated; the light budget is
-eight and the uniform ring preconditions on exceeding its 8 MiB region. glTF UV1/2,
-initial morph weights and tangent morphs are not fully consumed. There is no
+target. Every meaningful active morph is accumulated (there is no 64-entry cap).
+The light budget is eight, and enabled lights beyond it are counted in
+`Renderer.lastFrameStatistics.droppedLights`. Uniforms beyond the ring's 8 MiB
+region go to overflow buffers; a refused buffer becomes `lastFrameError`
+([R6](#renderer-limits-and-resource-lifetime-r6-first-slice)). glTF UV1/2
+are decoded, but native materials sample imported glTF textures on UV0 and
+`LoadedAsset` rejects other selections. Initial morph weights are retained but not
+applied, and tangent morphs are ignored; the loader reports both. There is no
 complete LOD, streaming or frustum-culling system. R3/R5/R6 define fixes and checks.
 
 A recorded Release fixture on M2 Ultra at 600×800 rendered 28 items, 60,761 triangles

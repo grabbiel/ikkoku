@@ -58,21 +58,28 @@ public final class SourcePluginRuntime {
             }
         }
     }
+    /// Field initializers can reach host APIs (Instantiate, SetActive), whose
+    /// clone and activation callbacks touch other entries. A rejected attachment
+    /// therefore rolls back as one transaction, exactly like a failed frame.
     @discardableResult public func attach(program: SourceIRProgram, object: any SourceAPIObject, saved: SourcePluginBindingState? = nil) throws -> Int {
         guard program.mode == "component", (world.isSourceAlive(object) || saved?.destroyed == true), entries.count < 1024 else { throw SourcePluginError.invalid("Invalid or excessive component attachment.") }
-        let component = try SourceIRComponent(program: program, context: context, gameObject: object), entry = Entry(component)
-        if let saved {
-            guard saved.type.utf8.elementsEqual(program.type.utf8), saved.sourceSHA256 == program.source.sha256,
-                  saved.pluginGUID.utf8.elementsEqual((program.identity.pluginGUID ?? "").utf8),
-                  saved.objectIdentity.utf8.elementsEqual(object.sourceIdentity.utf8) else {
-                throw SourcePluginError.invalid("Saved plugin state does not match its program and object identities.")
+        var index = 0
+        try transaction {
+            let component = try SourceIRComponent(program: program, context: context, gameObject: object), entry = Entry(component)
+            if let saved {
+                guard saved.type.utf8.elementsEqual(program.type.utf8), saved.sourceSHA256 == program.source.sha256,
+                      saved.pluginGUID.utf8.elementsEqual((program.identity.pluginGUID ?? "").utf8),
+                      saved.objectIdentity.utf8.elementsEqual(object.sourceIdentity.utf8) else {
+                    throw SourcePluginError.invalid("Saved plugin state does not match its program and object identities.")
+                }
+                try component.restoreFields(saved.fields)
+                entry.awake = saved.awake; entry.started = saved.started; entry.enabled = saved.enabled
+                entry.destroying = saved.destroyed == true
+                entry.active = saved.awake && saved.enabled && world.isSourceActive(object)
             }
-            try component.restoreFields(saved.fields)
-            entry.awake = saved.awake; entry.started = saved.started; entry.enabled = saved.enabled
-            entry.destroying = saved.destroyed == true
-            entry.active = saved.awake && saved.enabled && world.isSourceActive(object)
+            entries.append(entry); index = entries.count - 1
         }
-        entries.append(entry); return entries.count - 1
+        return index
     }
     public func component(at index: Int) throws -> SourceIRComponent {
         guard entries.indices.contains(index) else { throw SourcePluginError.invalid("Unknown plugin component.") }; return entries[index].component

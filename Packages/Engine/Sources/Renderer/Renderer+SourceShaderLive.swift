@@ -3,6 +3,7 @@ import Metal
 import CoreGraphics
 import simd
 import CoreMath
+import GPU
 import ShaderTypes
 
 /// What the last prepared frame did with live source-shader items.
@@ -33,14 +34,15 @@ extension Renderer {
         let deformed: any MTLBuffer
         let skinBuffer: (any MTLBuffer)?
         let boneCount: Int
-        let morphOffset: Int
+        /// The deformation's morph entries (nil for a static mesh).
+        let morphs: FrameAllocation?
         let morphCount: Int
         let streams: SourceVertexStreams?
     }
 
     /// Splits live candidates into drawable live records and render-time
     /// fallbacks (returned to the native lists with a reason).
-    func prepareLive(_ candidates: [DrawRecord], deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)],
+    func prepareLive(_ candidates: [DrawRecord], deforms: [DeformRecord],
                      report: inout SourceShaderLiveFrameReport, opaque: inout [DrawRecord], transparent: inout [DrawRecord]) -> [LiveRecord] {
         func fallBack(_ record: DrawRecord, _ reason: String) {
             report.fallbacks.append("\(record.item.sourceShader?.material.label ?? record.mesh.name): \(reason); drawn toon")
@@ -79,7 +81,7 @@ extension Renderer {
                 seen[key] = output; inputs[layout] = output
                 jobs.append(LiveInputJob(layout: layout, output: output, mesh: mesh, deformed: record.vertexBuffer,
                                          skinBuffer: deform?.skinBuffer, boneCount: deform?.boneCount ?? 0,
-                                         morphOffset: deform?.morphOffset ?? 0, morphCount: deform?.morphCount ?? 0, streams: draw.streams))
+                                         morphs: deform?.morphs, morphCount: deform?.morphCount ?? 0, streams: draw.streams))
             }
             if let failure { fallBack(record, failure); continue }
             records.append(LiveRecord(record: record, draw: draw, inputs: inputs, jobs: jobs))
@@ -104,7 +106,7 @@ extension Renderer {
             var params = SourceShaderLiveEncoder.Params()
             params.vertexCount = UInt32(job.mesh.vertexCount); params.registerCount = UInt32(job.layout.count)
             params.hasSkin = job.skinBuffer != nil && job.mesh.skin != nil ? 1 : 0; params.boneCount = UInt32(job.boneCount)
-            params.activeMorphCount = UInt32(job.morphCount); params.hasMorphNormals = job.mesh.morphNormals != nil ? 1 : 0
+            params.activeMorphCount = job.morphs != nil ? UInt32(job.morphCount) : 0; params.hasMorphNormals = job.mesh.morphNormals != nil ? 1 : 0
             params.hasUV3 = job.streams?.uv3 != nil ? 1 : 0; params.hasColors = job.streams?.colors != nil ? 1 : 0
             withUnsafeMutableBytes(of: &params.semantics) { raw in
                 let lanes = raw.bindMemory(to: UInt32.self)
@@ -114,7 +116,7 @@ extension Renderer {
             enc.setBuffer(job.deformed, offset: 0, index: 1)
             enc.setBuffer(job.mesh.skin ?? dummy, offset: 0, index: 2)
             enc.setBuffer(job.skinBuffer ?? dummy, offset: 0, index: 3)
-            enc.setBuffer(frameRing.buffer, offset: job.morphOffset, index: 4)
+            enc.setBuffer(job.morphs?.buffer ?? dummy, offset: job.morphs?.offset ?? 0, index: 4)
             enc.setBuffer(job.mesh.morphNormals ?? dummy, offset: 0, index: 5)
             enc.setBuffer(job.mesh.texcoords, offset: 0, index: 6)
             enc.setBuffer(job.mesh.texcoords1, offset: 0, index: 7)
@@ -173,10 +175,12 @@ public extension Renderer {
         guard let color = gpu.device.makeTexture(descriptor: colorDescriptor), let depth = gpu.device.makeTexture(descriptor: depthDescriptor),
               let cb = gpu.commandQueue.makeCommandBuffer() else { throw RendererError.textureCreationFailed }
         let targets = try RenderTargets(device: gpu.device, width: width, height: height)
+        var failure: (any Error)?
         renderLockedLive {
             frameRingBegin()
-            let ctx = prepare(frame: frame, targets: targets)
-            guard lastDeformationErrors.isEmpty else { return }
+            let ctx: FrameContext
+            do { ctx = try prepare(frame: frame, targets: targets) } catch { failure = error; frameRing.abandonFrame(); return }
+            guard lastDeformationErrors.isEmpty else { frameRing.abandonFrame(); return }
             encodeDeform(ctx, cb)
             if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
             let pass = MTLRenderPassDescriptor()
@@ -184,12 +188,14 @@ public extension Renderer {
             pass.colorAttachments[0].clearColor = clear
             pass.depthAttachment.texture = depth; pass.depthAttachment.loadAction = .clear; pass.depthAttachment.storeAction = .dontCare; pass.depthAttachment.clearDepth = 0
             pass.stencilAttachment.texture = depth; pass.stencilAttachment.loadAction = .clear; pass.stencilAttachment.storeAction = .dontCare; pass.stencilAttachment.clearStencil = 0
-            guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { frameRing.abandonFrame(); failure = RenderFrameError.commandBufferUnavailable; return }
             enc.label = "SourceShaderLiveValidation"
             encodeLiveDraws(enc, ctx, target: .probe, families: families)
             enc.endEncoding()
+            frameRing.endFrame(retainedUntilCompletionOf: cb)
             cb.commit()
         }
+        if let failure { throw failure }
         guard lastDeformationErrors.isEmpty else { throw RenderBenchmarkError.deformation(lastDeformationErrors) }
         cb.waitUntilCompleted()
         guard cb.status == .completed else { throw RenderBenchmarkError.gpu(cb.error?.localizedDescription ?? "Command failed") }
@@ -225,16 +231,18 @@ public extension Renderer {
         guard let color = device.makeTexture(descriptor: colorDescriptor), let depth = device.makeTexture(descriptor: depthDescriptor),
               let depthState = device.makeDepthStencilState(descriptor: stateDescriptor), let cb = gpu.commandQueue.makeCommandBuffer() else { throw RendererError.textureCreationFailed }
         let targets = try RenderTargets(device: device, width: width, height: height)
+        var failure: (any Error)?
         renderLockedLive {
             frameRingBegin()
-            let ctx = prepare(frame: frame, targets: targets)
-            guard lastDeformationErrors.isEmpty else { return }
+            let ctx: FrameContext
+            do { ctx = try prepare(frame: frame, targets: targets) } catch { failure = error; frameRing.abandonFrame(); return }
+            guard lastDeformationErrors.isEmpty else { frameRing.abandonFrame(); return }
             encodeDeform(ctx, cb)
             let pass = MTLRenderPassDescriptor(); pass.colorAttachments[0].texture = color
             pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
             pass.colorAttachments[0].clearColor = depthNormals ? MTLClearColorMake(1, 1, 1, 1) : MTLClearColorMake(0, 0, 0, 1)
             pass.depthAttachment.texture = depth; pass.depthAttachment.loadAction = .clear; pass.depthAttachment.storeAction = .dontCare; pass.depthAttachment.clearDepth = 0
-            guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { frameRing.abandonFrame(); failure = RenderFrameError.commandBufferUnavailable; return }
             enc.setRenderPipelineState(pipeline); enc.setDepthStencilState(depthState); enc.setCullMode(.back)
             var view = ctx.frame.camera.viewMatrix(), projection = ctx.frame.camera.projectionMatrix(aspect: Float(width) / Float(height)), farPlane = far
             enc.setVertexBytes(&view, length: MemoryLayout<float4x4>.stride, index: 1)
@@ -249,8 +257,10 @@ public extension Renderer {
                 enc.drawIndexedPrimitives(type: .triangle, indexCount: record.mesh.indexCount, indexType: .uint32, indexBuffer: record.mesh.indices, indexBufferOffset: 0)
             }
             enc.endEncoding()
+            frameRing.endFrame(retainedUntilCompletionOf: cb)
             cb.commit()
         }
+        if let failure { throw failure }
         guard lastDeformationErrors.isEmpty else { throw RenderBenchmarkError.deformation(lastDeformationErrors) }
         cb.waitUntilCompleted()
         guard cb.status == .completed else { throw RenderBenchmarkError.gpu(cb.error?.localizedDescription ?? "Command failed") }

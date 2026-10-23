@@ -34,10 +34,11 @@ public final class LoadedAsset: @unchecked Sendable {
     private let lock = NSLock()
 
     init(url: URL, asset: GLTFAsset, resources: ResourceStore, targetSkeleton: Skeleton? = nil, namePrefix: String? = nil) throws {
+        try LoadedAsset.requirePrimaryTextureCoordinates(asset)
         self.url = url
         self.asset = asset
         self.resources = resources
-        self.skeleton = Skeleton.from(asset: asset)
+        self.skeleton = try Skeleton.from(asset: asset)
         // Joint remap: garments/hair are skinned to the body skeleton; extra bones (hair chains) follow their nearest body ancestor.
         var remap: [UInt16]? = nil
         if let target = targetSkeleton, let skin = asset.skins.first {
@@ -80,6 +81,24 @@ public final class LoadedAsset: @unchecked Sendable {
             }
         }
         self.parts = parts
+    }
+
+    /// Native toon materials sample imported base-color and normal textures with UV0
+    /// (`Toon.metal` `in.uv`). A drawn glTF texture that selects TEXCOORD_1/2 is rejected
+    /// before any GPU registration rather than drawn with the wrong coordinates. The decoded
+    /// `GLTFAsset` still retains the selection and the secondary UV streams.
+    static func requirePrimaryTextureCoordinates(_ asset: GLTFAsset) throws {
+        for (_, mesh) in asset.meshNodes {
+            for primitive in asset.meshes[mesh].primitives {
+                guard let index = primitive.materialIndex, asset.materials.indices.contains(index) else { continue }
+                let material = asset.materials[index]
+                let bindings = [("baseColorTexture", material.baseColorImage, material.baseColorTexCoord),
+                                ("normalTexture", material.normalImage, material.normalTexCoord)]
+                for (slot, image, texCoord) in bindings where image != nil && texCoord != 0 {
+                    throw GLTFError.io("Material '\(material.name)' samples \(slot) from TEXCOORD_\(texCoord); native materials sample TEXCOORD_0 only.")
+                }
+            }
+        }
     }
 
     public var bounds: AABB {
@@ -126,11 +145,25 @@ public final class AssetLibrary: @unchecked Sendable {
 
     public func fileExists(_ relativePath: String) -> Bool { FileManager.default.fileExists(atPath: url(relativePath).path) }
 
-    /// Explicit import boundary for static converted prefabs. Errors are surfaced to
-    /// the caller and failed imports are retryable after the source file is repaired.
-    public func importStaticAsset(url: URL) throws -> LoadedAsset {
+    /// Explicit import boundary for a static converted prefab inside a verified package
+    /// root (a converted Studio item export directory, a catalog-relative library item).
+    /// The file and every external glTF buffer/image must resolve inside `packageRoot`
+    /// (`GLTFError.escapesPackageRoot` otherwise). Errors are surfaced to the caller and
+    /// failed imports are retryable after the source file is repaired.
+    public func importStaticAsset(url: URL, packageRoot: URL) throws -> LoadedAsset {
+        try importStatic(url) { try GLBLoader.load(url: $0, packageRoot: packageRoot) }
+    }
+
+    /// Explicit import boundary for a static model file the user chose (file dialog,
+    /// `IKKOKU_CAPTURE_MODEL`, a native scene's recorded absolute `assetFile`). External
+    /// glTF buffers/images resolve relative to the file without package containment.
+    public func importTrustedStaticAsset(url: URL) throws -> LoadedAsset {
+        try importStatic(url) { try GLBLoader.loadTrustedFile(url: $0) }
+    }
+
+    private func importStatic(_ url: URL, load: (URL) throws -> GLTFAsset) throws -> LoadedAsset {
         let source = url.standardizedFileURL
-        let gltf = try GLBLoader.load(url: source)
+        let gltf = try load(source)
         guard gltf.skins.isEmpty else {
             throw GLTFError.io("Static model import does not support skinned characters; a skeleton mapping is required.")
         }
@@ -141,21 +174,28 @@ public final class AssetLibrary: @unchecked Sendable {
         assets[source.path] = loaded
         failed.remove(source.path)
         log.append("Imported \(source.lastPathComponent): \(loaded.parts.count) static parts")
+        log += gltf.diagnostics.map { "\(source.lastPathComponent): \($0)" }
         return loaded
     }
 
     /// Loads a GLB/glTF relative to the assets root (or an absolute path). Pass the body skeleton for
     /// garments/hair so their joint indices are remapped onto it (cached per skeletonKey).
+    /// A relative (catalog) path is a package load confined to `root`. An absolute path is a
+    /// model file recorded from an explicit user import (`StudioObject.assetFile`) and keeps
+    /// the trusted-file policy; converted item assets reach this cache through
+    /// `importStaticAsset(url:packageRoot:)` first.
     public func asset(_ relativePath: String, skeleton: Skeleton? = nil, skeletonKey: String? = nil, namePrefix: String? = nil) -> LoadedAsset? {
         let key = skeleton == nil ? relativePath : "\(relativePath)@\(skeletonKey ?? "skel")"
         if let a = assets[key] { return a }
         if failed.contains(key) { return nil }
-        let u = relativePath.hasPrefix("/") ? URL(fileURLWithPath: relativePath) : url(relativePath)
+        let absolute = relativePath.hasPrefix("/")
+        let u = absolute ? URL(fileURLWithPath: relativePath) : url(relativePath)
         do {
-            let gltf = try GLBLoader.load(url: u)
+            let gltf = try absolute ? GLBLoader.loadTrustedFile(url: u) : GLBLoader.load(url: u, packageRoot: root)
             let loaded = try LoadedAsset(url: u, asset: gltf, resources: resources, targetSkeleton: skeleton, namePrefix: namePrefix)
             assets[key] = loaded
             log.append("Loaded \(relativePath): \(loaded.parts.count) parts, \(loaded.skeleton?.count ?? 0) bones")
+            log += gltf.diagnostics.map { "\(relativePath): \($0)" }
             return loaded
         } catch {
             failed.insert(key)

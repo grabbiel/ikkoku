@@ -402,7 +402,8 @@ do {
         // Validate every referenced model before producing a usable native scene.
         var models: [String: GLTFAsset] = [:]
         for path in Set(document.objects.compactMap(\.assetFile)) {
-            let model = try GLBLoader.load(url: URL(fileURLWithPath: path))
+            let modelURL = URL(fileURLWithPath: path)
+            let model = try GLBLoader.load(url: modelURL, packageRoot: KoikatsuAssetResolver.packageRoot(of: modelURL))
             guard model.skins.isEmpty, !model.meshNodes.isEmpty else { throw GLTFError.io("Layout assets must contain static meshes.") }
             models[path] = model
         }
@@ -424,7 +425,8 @@ do {
         report["objectCount"] = document.objects.count
         report["scope"] = "Prop/folder transforms and visibility only; source materials, animation, cameras and scene settings are not applied."
     case "model":
-        let model = try GLBLoader.load(url: url)
+        // The command-line argument names the file explicitly: a trusted standalone load.
+        let model = try GLBLoader.loadTrustedFile(url: url)
         var bounds = AABB.empty
         var vertices = 0, triangles = 0
         for (node, mesh) in model.meshNodes {

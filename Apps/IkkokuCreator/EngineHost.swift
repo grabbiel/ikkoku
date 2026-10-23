@@ -34,7 +34,27 @@ final class EngineHost {
         for line in library.log { print("[ikkoku] \(line)") }
     }
 
-    /// Asset root: $IKKOKU_ASSETS, else the app bundle, else the source tree (development).
+    /// Source-tree development defaults (T-T02). Without an explicit variable, three lookups
+    /// fall back to paths inside the checkout this binary was compiled from (`#filePath`):
+    /// its `Assets/` when the bundle has no `catalog.json`, and the git-ignored
+    /// `.local/reverse/` Maker library and original male/female bases. Those paths exist only
+    /// on the build machine, where a moved or installed app would still silently find them.
+    /// `IKKOKU_SOURCE_TREE_FALLBACKS=0` turns all three off, so a launch shows whether the
+    /// bundle alone supplies its resources; unset or any other value keeps the defaults.
+    /// Explicit `IKKOKU_ASSETS`, `IKKOKU_MAKER_LIBRARY` and `IKKOKU_SOURCE_*AVATAR` values are
+    /// not fallbacks and still apply. Each fallback that is used prints a
+    /// `[ikkoku] source-tree fallback:` line.
+    static var sourceTreeFallbacksEnabled: Bool {
+        ProcessInfo.processInfo.environment["IKKOKU_SOURCE_TREE_FALLBACKS"] != "0"
+    }
+
+    /// The checkout this binary was compiled from: Apps/IkkokuCreator/EngineHost.swift → repo root.
+    private static var sourceTreeRoot: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// Asset root: $IKKOKU_ASSETS, else the app bundle, else the source tree (development;
+    /// see `sourceTreeFallbacksEnabled`).
     static func locateAssets() -> URL {
         let fm = FileManager.default
         if let env = ProcessInfo.processInfo.environment["IKKOKU_ASSETS"], fm.fileExists(atPath: env) {
@@ -43,18 +63,23 @@ final class EngineHost {
         if let res = Bundle.main.resourceURL, fm.fileExists(atPath: res.appendingPathComponent("catalog.json").path) {
             return res
         }
-        // Apps/IkkokuCreator/EngineHost.swift → repo root
-        let here = URL(fileURLWithPath: #filePath)
-        let repo = here.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return repo.appendingPathComponent("Assets")
+        guard sourceTreeFallbacksEnabled else {
+            print("[ikkoku] the app bundle has no catalog.json and IKKOKU_SOURCE_TREE_FALLBACKS=0 disables the source-tree assets")
+            return Bundle.main.resourceURL ?? Bundle.main.bundleURL
+        }
+        let assets = sourceTreeRoot.appendingPathComponent("Assets")
+        print("[ikkoku] source-tree fallback: assets root \(assets.path) (the app bundle has no catalog.json)")
+        return assets
     }
 
     static func locateMakerLibrary() throws -> SourceMakerLibrary? {
         let override = ProcessInfo.processInfo.environment["IKKOKU_MAKER_LIBRARY"]
         if override == "none" { return nil }
-        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let url = override.map { URL(fileURLWithPath: $0) } ?? repo.appendingPathComponent(".local/reverse/maker-library/library.json")
-        if override == nil && !FileManager.default.fileExists(atPath: url.path) { return nil }
+        if let override { return try SourceMakerLibrary.load(url: URL(fileURLWithPath: override)) }
+        guard sourceTreeFallbacksEnabled else { return nil }
+        let url = sourceTreeRoot.appendingPathComponent(".local/reverse/maker-library/library.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        print("[ikkoku] source-tree fallback: Maker library \(url.path)")
         return try SourceMakerLibrary.load(url: url)
     }
 
@@ -71,9 +96,8 @@ final class EngineHost {
             }
             url = URL(fileURLWithPath: override).standardizedFileURL
         } else {
-            let source = URL(fileURLWithPath: #filePath)
-            let repo = source.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            url = repo.appendingPathComponent(sex == .male ? ".local/reverse/male/source-male-avatar.json" : ".local/reverse/rigs/source-avatar.json")
+            guard sourceTreeFallbacksEnabled else { return nil }
+            url = sourceTreeRoot.appendingPathComponent(sex == .male ? ".local/reverse/male/source-male-avatar.json" : ".local/reverse/rigs/source-avatar.json")
         }
         let appearance = url.deletingPathExtension().appendingPathExtension("appearance.json")
         for file in [url, appearance] {
@@ -88,6 +112,7 @@ final class EngineHost {
         guard header.schemaVersion == 1, header.kind == (sex == .male ? "koikatsu-male-avatar" : "koikatsu-female-avatar") else {
             throw EngineHostError.invalidSourceAvatar("Original base must be a supported \(sex == .male ? "male" : "female") avatar manifest: \(url.path)")
         }
+        if override == nil { print("[ikkoku] source-tree fallback: original base \(url.path)") }
         // The complete hierarchy, palette and appearance validation happens in
         // openSourceRig before it replaces the current character.
         return url

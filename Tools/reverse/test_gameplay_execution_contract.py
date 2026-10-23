@@ -1,10 +1,11 @@
+import hashlib
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from analysis.gameplay_execution_contract import adv_fixtures, convert_fixed, evaluate_fixed, extract_tables, selected_source
+from analysis.gameplay_execution_contract import RecoveredErrorStub, adv_fixtures, convert_fixed, evaluate_fixed, extract_tables, selected_source
 
 
 class GameplayExecutionContractTests(unittest.TestCase):
@@ -62,21 +63,30 @@ class GameplayExecutionContractTests(unittest.TestCase):
             table,_=extract_tables(Path("fixture"),[])
         self.assertEqual(table["classSchedules"][0]["days"][0]["lessons"],["教室","room"])
 
+    def recovery(self, root, files, overrides=()):
+        """Minimal indexed generation in recover_managed.py's layout, with recorded file hashes."""
+        for name,text in files.items():(root/name).parent.mkdir(parents=True,exist_ok=True);(root/name).write_text(text)
+        summary=dict(assemblySHA256="a"*64,selectedProject="project",status="recovered",sourcePaths=["Koikatu_Data/Managed/Assembly-CSharp.dll"])
+        records=[dict(path=name,bytes=(root/name).stat().st_size,sha256=hashlib.sha256((root/name).read_bytes()).hexdigest()) for name in files]
+        (root/"manifest.json").write_text(json.dumps(dict(identity=dict(assemblySHA256="a"*64),summary=summary,files=records,typeOverrides=list(overrides))))
+        (root/"index.json").write_text(json.dumps(dict(assemblies=[dict(directory=str(root),**summary)])))
+        return root/"index.json"
+
     def test_selected_type_override_supersedes_broken_primary(self):
         with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);(root/"project").mkdir();(root/"fallback.cs").write_text("public class Sample {}")
-            (root/"manifest.json").write_text(json.dumps(dict(typeOverrides=[dict(type="Sample",file="fallback.cs")])))
-            (root/"index.json").write_text(json.dumps(dict(assemblies=[dict(directory=directory,selectedProject="project",sourcePaths=["Koikatu_Data/Managed/Assembly-CSharp.dll"])])))
-            path,text=selected_source(root/"index.json","Sample")
+            root=Path(directory)
+            index=self.recovery(root,{"project/Sample.cs":"// System.InvalidOperationException: broken","fallback.cs":"public class Sample {}"},
+                                [dict(type="Sample",file="fallback.cs",exitCode=0,timedOut=False,hasErrorStub=False)])
+            path,text=selected_source(index,"Sample")
             self.assertEqual(path,root/"fallback.cs")
             self.assertIn("Sample",text)
 
     def test_decompiler_error_stub_is_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);(root/"project").mkdir();(root/"project/Sample.cs").write_text("Error decompiling")
-            (root/"manifest.json").write_text("{}")
-            (root/"index.json").write_text(json.dumps(dict(assemblies=[dict(directory=directory,selectedProject="project",sourcePaths=["Koikatu_Data/Managed/Assembly-CSharp.dll"])])))
-            with self.assertRaisesRegex(ValueError,"stub"):selected_source(root/"index.json","Sample")
+        # The earlier helper accepted the System.*Exception comment marker that recovery itself detects.
+        for stub in ["Error decompiling","// System.InvalidOperationException: broken","throw new NotImplementedException();"]:
+            with self.subTest(stub=stub), tempfile.TemporaryDirectory() as directory:
+                index=self.recovery(Path(directory),{"project/Sample.cs":"public class Sample { void Run() { "+stub+" } }"})
+                with self.assertRaisesRegex(RecoveredErrorStub,"stub"):selected_source(index,"Sample")
 
     def test_hand_derived_adv_cases_include_blocking_and_fault_boundaries(self):
         cases={case["name"]:case for case in adv_fixtures()["cases"]}

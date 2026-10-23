@@ -58,9 +58,191 @@ Installed Chainloader recovery also confirms that an outdated soft dependency
 does not prevent loading, and process filters remove literal `.exe` before
 case-insensitive comparison. Native process matching currently uses Foundation's
 case-insensitive comparison; full non-ASCII source collation parity is not proven.
-Standalone version validation and a shared IR/native-adapter dependency graph
-remain pending. The fixed step is explicit: the controlled original Unity player
-measured 0.02 s.
+These rules live in `SourcePluginGraph`, which profiles, IR packages and native
+adapters share. It also validates every declared version on its own; see
+[dependency policy](#selection-and-dependency-policy). The fixed step is explicit:
+the controlled original Unity player measured 0.02 s.
+
+## Plugin library
+
+Added 2026-10-23 as the P-T02 first slice and tested with synthetic fixtures
+only. `Tools/translation/plugin_library.py` indexes packages already published
+by `plugin.py`, translated and native-adapter alike, into immutable numbered
+generations. `SourcePluginLibraryIndex` (Gameplay) reads them and resolves exact
+selections. The Python tests run locally and in the public CI lane. The Swift
+reader was not compiled locally; the CI Engine suite verifies it. No installed
+plugin directory has been scanned.
+
+```sh
+python3 Tools/translation/plugin_library.py scan \
+  --library .local/plugins/library --root .local/plugins/packages
+python3 Tools/translation/plugin_library.py show --library .local/plugins/library
+```
+
+Repeat `--root` for several directories; later scans reuse the saved roots.
+`show --generation N` prints an older generation. Revisions copy recovered
+sources and original assemblies, so the scanner refuses a library inside the
+repository unless it is under ignored `.local/`. It never loads or runs a DLL.
+
+### Format
+
+```text
+library.json                    commit point: every published generation and its index hash
+generations/000001.json         immutable generation index, one per number
+revisions/<manifestSHA256>/     immutable copy of every file of one package
+.staging/, .scan.lock           scratch and the advisory scan lock; never library content
+```
+
+`library.json` has `schemaVersion: 1`, `kind: "ikkoku-plugin-library"`,
+`scanner` (`{"id": "ikkoku.plugin-library", "version": "1.0.0"}`), `roots`
+(`id` is the SHA-256 of the absolute `path`), `current` and `generations`.
+Each generation record is `{number, index, indexSHA256}`, numbered strictly
+upward, and `current` is the last number. Each generation index has
+`schemaVersion: 1`, `kind: "ikkoku-plugin-generation"`, `number`, `previous`
+(`{number, indexSHA256}` or null), `scanner`, `roots`, `revisions`,
+`conflicts`, `packages` and `diagnostics`. A revision record is:
+
+```json
+{
+  "kind": "ikkoku-translated-plugin",
+  "guid": "Creator.Mixed_é", "version": "1.2.3", "name": "Original name",
+  "manifest": "revisions/<manifestSHA256>/manifest.json",
+  "manifestSHA256": "...", "packageSHA256": "...",
+  "processes": ["CharaStudio"],
+  "dependencies": [{"guid": "Hard.ID", "minimumVersion": "1.2", "required": true}],
+  "incompatibilities": ["Other.ID"], "types": ["Author.Plugin"],
+  "converter": {"id": "ikkoku.translation", "irSchemaVersion": "1",
+                "emitterSHA256": "...", "bridgeSHA256": "...", "semanticSurfaceSHA256": "..."},
+  "sources": [{"rootID": "...", "relativePath": "author-plugin"}]
+}
+```
+
+A revision's exact identity is its GUID, version and `manifestSHA256`. The
+manifest pins the program hashes of an IR package and the original assembly and
+configuration hashes of an adapter, so it also binds converter output. For an
+IR package, `converter` repeats the program's emitter, bridge and semantic-surface
+hashes; components from different converter revisions are rejected. An adapter
+revision has kind `ikkoku-native-plugin-adapter` and converter
+`{"id": "ikkoku.native-adapter", "adapterID", "sourceSHA256"}`. Its manifest
+declares no dependencies or incompatibilities. `packageSHA256` is the SHA-256 of
+the compact sorted-key JSON array of `{bytes, path, sha256}` for every package
+file, ordered by UTF-8 path. Evidence files such as `conversion.json` and
+`Translated.swift` are covered too.
+
+`conflicts` lists each GUID with several revisions, with sorted
+`manifestSHA256s`. GUIDs group by UTF-8 bytes, so `Creator.é` and its decomposed
+spelling are two GUIDs. `packages` records every discovered directory with its
+`rootID`, `relativePath`, `status` (`ready`, `rejected` or `invalid`) and
+diagnostics. A `plugin.py` rejection (a `conversion.json` without a manifest) is
+`rejected`, with `source_<CODE>` diagnostics. Generation `diagnostics` include
+skipped `.plugin-stage-*` and symlinked directories. They also warn about missing
+hard dependencies, unmet minimum versions and incompatibilities present in the
+same generation.
+
+### Generations and immutability
+
+Every scan hashes and copies each regular package file into staging. Symlinks,
+special files and non-canonical names reject the package, as do more than 256
+files, 32 MiB per file or 96 MiB per package. The scanner then validates the
+staged copy:
+
+- strict UTF-8 JSON, without duplicate keys, non-finite numbers or unknown
+  manifest fields;
+- a bounded identity and a [standalone version](#selection-and-dependency-policy);
+- program hashes, plus a ready component whose type and plugin GUID match;
+- for adapters, a registered original-assembly digest whose adapter ID, type,
+  identity and process list are identical (only Mute may keep a configuration).
+
+A valid copy is renamed to `revisions/<manifestSHA256>/`. A new generation,
+numbered one higher, is published only when its content differs from the
+current generation's (every field except `number` and `previous`). An unchanged
+rescan publishes nothing. The generation file is written beside its final name
+and hard-linked into place, so it never replaces a file. The atomic replacement
+of `library.json` is the commit point. Until then, readers keep seeing the
+previous generation.
+
+An interrupted scan leaves no staging files. A revision directory that was
+already renamed is adopted on the next scan only if its bytes are identical.
+Likewise, an unpublished generation file is adopted only when identical. A
+differing one is skipped, which leaves a gap in the numbering.
+
+Published generation files and revision directories are never rewritten. A
+changed indexed revision reports `revision_changed`, and a deleted one
+`revision_missing`. The same manifest with different files reports
+`manifest_reused`, and an unindexed differing directory `revision_unindexed`.
+Such a package is left out of the new generation, while older generations still
+list it and fail to resolve it by name. A changed published generation file
+blocks every later scan. Recovery is explicit: reimport into a fresh library.
+There is no garbage collection.
+
+### Selection and dependency policy
+
+`SourcePluginLibraryIndex.load(libraryURL:generation:)` checks the generation
+numbering, the index hash and record shapes, then recomputes the duplicate-GUID
+conflicts. `select(guids:choosing:process:)` picks exact revisions. A GUID with
+one revision in the generation is selected directly. A GUID with several needs
+an explicit manifest SHA-256; neither a higher version nor discovery order
+decides. The installed Chainloader's own duplicate rule has not been re-derived
+for this policy.
+
+A `SourcePluginLibrarySelection` records the library file, generation,
+generation SHA-256, process and each revision's kind, GUID, version and manifest
+hash. It always resolves against its recorded generation:
+
+- another generation fails with `selectionMismatch`;
+- a revision absent there fails with `revisionUnavailable`, naming the GUID,
+  version, hash and generation;
+- a rewritten generation index fails with `generationChanged`.
+
+Upgrading is a new explicit `select` against the current generation.
+`load(_:)` then verifies every selected package. IR revisions go through
+`SourcePluginPackage.load` and must match the record's manifest hash, identity,
+processes, dependencies, incompatibilities, types and converter hashes. Adapter
+revisions go through `SourceNativePluginPackage.load`, which needs the exact
+original assembly. Failures name the revision (`revisionInvalid`,
+`revisionChanged`).
+
+`SourcePluginGraph.order` is the one dependency graph for profiles and library
+selections of both kinds:
+
+- GUIDs compare as ordinal UTF-8 bytes. Case and canonical equivalence never
+  match, and a duplicate GUID fails, including across kinds.
+- Process filters apply as described above.
+- Every package version and every declared minimum, including soft ones, must
+  be 2–4 dot-separated ASCII decimal parts within Int32. Whitespace, signs,
+  prefixes and suffixes are rejected even where .NET might parse them. Profiles
+  now also reject a package whose own version is not numeric, even when nothing
+  depends on it.
+- A hard dependency must be present and meet its minimum under .NET ordering:
+  an absent component is -1, so 1.0 is older than 1.0.0. An outdated soft
+  dependency is not enforced, but a present soft dependency is ordered first.
+- An incompatibility with a present GUID fails, including with itself. A cycle,
+  including through soft edges, fails with its GUID path.
+
+### Saved scenes and migration
+
+`StudioDocument.sourcePluginLibrary` is an optional selection. Documents saved
+before it existed decode it as nil, and the `sourcePluginState` and
+`sourceNativePlugins` formats are unchanged, so no migration is required. A
+translated-plugin profile may name `<library>/revisions/<manifestSHA256>/manifest.json`
+as a package `manifest`. That path is immutable, so a saved `sourcePluginState`
+keeps restoring after newer generations are published.
+`SourcePluginLibraryTests.swift` covers this, together with the graph, selection,
+conflict and byte-verification rules above. `test_plugin_library.py` covers the
+scanner.
+
+Not yet implemented:
+
+- App wiring: no menu or environment path creates, restores or upgrades
+  `sourcePluginLibrary`. The app still mounts adapters from individual manifests
+  and IR packages from profiles, and merging a scene with a selection is refused.
+- Batch DLL triage that recovers each entry type, assembly-level dependencies,
+  packages with several types, and converter migrations.
+- Adapter dependency metadata in the registry, for when a registered plugin
+  declares one.
+- Recovery of the installed Chainloader's duplicate and `System.Version` rules
+  from private evidence.
+- A joint cross-language test. Each side's tests check the documented schema.
 
 ## Execution and persistence
 
@@ -68,8 +250,21 @@ The runtime handles Awake, OnEnable, Start, FixedUpdate, Update, LateUpdate,
 OnDisable and OnDestroy. Its scene adapter converts Unity coordinates once,
 resolves source character attachment frames, and excludes scale from self-space
 Translate. A failed frame restores document changes, component fields, lifecycle
-flags, clocks, pending destruction and trace together. Fuel, nesting, component
-count and fixed-step limits bound execution. Recursive methods fail before
+flags, clocks, pending destruction and trace together. A rejected attachment
+also rolls back as one transaction. This matters because a field initializer can
+reach Instantiate or SetActive, whose clone and activation callbacks run other
+components before a later initializer fails.
+
+These limits bound execution:
+
+- 20,000 instructions per component for each top-level callback. A nested
+  callback of the same component draws on the same fuel.
+- 16 evaluation levels at run time; validation rejects nesting deeper than 24.
+- Call depth 8, nested invocation depth 8 and nested activation depth 8.
+- 64 nested Studio world transactions and, by default, 64 fixed steps per frame.
+- 1,024 components; a further attachment is rejected as invalid.
+
+Run-time limits raise the budget error, so recursive methods fail before
 exhausting a native thread stack.
 
 The original Unity 5.6.2f1 lifecycle probe establishes:
@@ -115,6 +310,27 @@ field/clock values. Frontend tests also compile generated Swift and, with origin
 fixtures available, compare 4,002 recovered numeric method evaluations against
 unmodified original DLLs. Check executed fixture cases separately from a default
 test run whose private-fixture checks may be skipped.
+
+`SourcePluginFaultInjectionTests.swift` (P-T04 Swift slice, added 2026-10-23,
+synthetic fixtures) checks the interpreter and Studio host without the .NET or
+swiftc legs. Its verification is the CI Engine `swift test` run. It was not
+compiled locally. The suite covers:
+
+- Fixed-seed SplitMix64 mutation of IR and manifests. Each operation either
+  commits with finite host transforms and declared field types, or throws a
+  defined error and leaves the full snapshot unchanged. A second run must match
+  the first.
+- Random typed expressions checked bit for bit against an independent Swift
+  evaluation, including NaN and infinity.
+- Fuel, nesting, recursion, activation ping-pong and fixed-step budgets.
+- Failures injected into each lifecycle callback and into
+  Instantiate/Destroy/SetEnabled; retried runs must match a clean run in the
+  order listed above.
+- Attachment-resolver failures at every call of a frame, and an `afterUpdate`
+  failure, through both the runtime and `SourceStudioPluginSession`.
+
+IEEE results such as infinity remain bit-exact field values. Float literals
+outside Float range and nonfinite transform writes are rejected.
 
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized

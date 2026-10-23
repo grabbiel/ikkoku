@@ -21,6 +21,7 @@ extension KoikatsuCameraRecord {
         camera.pitch = asin(min(max(-forward.y, -1), 1))
         camera.fovDegrees = fieldOfView
         camera.orientationOverride = orientation.vector
+        try camera.validate()
         return camera
     }
 }

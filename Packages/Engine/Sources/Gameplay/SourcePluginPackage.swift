@@ -54,55 +54,16 @@ public struct SourcePluginPackage: Sendable {
 
 /// A deterministic dependency order. Identity uses UTF-8 bytes, preserving the
 /// original GUID's case and Unicode instead of Swift's canonical String equality.
+/// `SourcePluginGraph` holds the rules shared with native adapters and library
+/// selections; profile loads keep reporting `SourcePluginError`.
 public struct SourcePluginLibrary: Sendable {
     public let packages: [SourcePluginPackage]
     public init(packages requested: [SourcePluginPackage], process: String = "CharaStudio") throws {
-        guard requested.count <= 256 else { throw SourcePluginError.invalid("Too many plugin packages.") }
-        var byID: [Data: SourcePluginPackage] = [:]
-        for package in requested {
-            guard byID.updateValue(package, forKey: package.ordinalGUID) == nil else { throw SourcePluginError.invalid("Duplicate mounted plugin GUID.") }
-            let filters = package.manifest.processes
-            // The installed Chainloader removes literal lowercase ".exe"
-            // occurrences before its invariant case-insensitive comparison.
-            guard filters.isEmpty || filters.contains(where: { $0.replacingOccurrences(of: ".exe", with: "").compare(process, options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX")) == .orderedSame }) else {
-                throw SourcePluginError.invalid("Plugin \(package.manifest.identity.guid) does not target \(process).")
-            }
+        do {
+            let nodes = requested.map { SourcePluginGraph.Node(package: $0) }
+            packages = try SourcePluginGraph.order(nodes, process: process).map { requested[$0] }
+        } catch let error as SourcePluginLibraryError {
+            throw SourcePluginError.invalid(error.description)
         }
-        var ordered: [SourcePluginPackage] = [], visiting = Set<Data>(), visited = Set<Data>()
-        func version(_ text: String) throws -> [UInt32] {
-            let parts = text.split(separator: ".", omittingEmptySubsequences: false)
-            guard (2...4).contains(parts.count), parts.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy({ (48...57).contains($0) }) }) else {
-                throw SourcePluginError.invalid("Dependency version requires a .NET numeric version.")
-            }
-            var values: [UInt32] = []
-            for part in parts { guard let value = UInt32(part), value <= Int32.max else { throw SourcePluginError.invalid("Dependency version overflow.") }; values.append(value) }
-            // .NET Version compares absent build/revision as -1, not zero.
-            return values
-        }
-        func meets(_ actual: String, minimum: String) throws -> Bool {
-            let a = try version(actual).map(Int64.init), b = try version(minimum).map(Int64.init)
-            for i in 0..<4 { let x = i < a.count ? a[i] : -1, y = i < b.count ? b[i] : -1; if x != y { return x > y } }
-            return true
-        }
-        func visit(_ package: SourcePluginPackage) throws {
-            let id = package.ordinalGUID
-            if visited.contains(id) { return }
-            guard visiting.insert(id).inserted else { throw SourcePluginError.invalid("Plugin dependency cycle.") }
-            for incompatible in package.manifest.incompatibilities where byID[Data(incompatible.utf8)] != nil {
-                throw SourcePluginError.invalid("Plugin incompatibility: \(package.manifest.identity.guid) / \(incompatible).")
-            }
-            for dependency in package.manifest.dependencies {
-                guard let mounted = byID[Data(dependency.guid.utf8)] else {
-                    if dependency.required { throw SourcePluginError.invalid("Missing plugin dependency: \(dependency.guid).") }; continue
-                }
-                if dependency.required, let minimum = dependency.minimumVersion, try !meets(mounted.manifest.identity.version, minimum: minimum) {
-                    throw SourcePluginError.invalid("Dependency version is too old: \(dependency.guid).")
-                }
-                try visit(mounted)
-            }
-            visiting.remove(id); visited.insert(id); ordered.append(package)
-        }
-        for package in requested { try visit(package) }
-        self.packages = ordered
     }
 }
