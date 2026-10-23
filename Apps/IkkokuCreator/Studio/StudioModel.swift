@@ -1259,6 +1259,7 @@ final class StudioModel: ViewportInputHandler {
         let data = try Data(contentsOf: url)
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
         try d.validateHierarchy()
+        try d.validateCameras()
         pushUndo(force: true)
         stopSourceVoices()
         instances.removeAll()
@@ -1281,6 +1282,7 @@ final class StudioModel: ViewportInputHandler {
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
         guard d.sourcePluginState == nil, d.sourceNativePlugins?.isEmpty != false else { throw SourcePluginError.invalid("Open a plugin-bound scene separately; merging would change its object or configuration identities.") }
         try d.validateHierarchy()
+        try d.validateCameras()
         pushUndo(force: true)
         var remap: [UUID: UUID] = [:]
         for o in d.objects { remap[o.id] = UUID() }

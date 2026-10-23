@@ -36,6 +36,102 @@ import Renderer
     #expect(edited.orientationOverride == nil)
 }
 
+private func cameraRight(_ camera: OrbitCamera) -> SIMD3<Float> {
+    let view = camera.viewMatrix()
+    return SIMD3(view[0][0], view[1][0], view[2][0])
+}
+
+private func cameraUp(_ camera: OrbitCamera) -> SIMD3<Float> {
+    let view = camera.viewMatrix()
+    return SIMD3(view[0][1], view[1][1], view[2][1])
+}
+
+@Test func importedCameraRollAndLensSurviveDocumentAndOriginalExportUntilOrbitEdit() throws {
+    let scene = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    // Rolled source cameras (Unity Z) with offset distance vectors and narrow, normal and wide lenses.
+    let records = [
+        KoikatsuCameraRecord(position: .init(0.2, 1.1, -0.4), rotationDegrees: .init(12, -35, 40), distance: .init(0.1, -0.2, -3), fieldOfView: 10),
+        KoikatsuCameraRecord(position: .init(-1, 0.5, 2), rotationDegrees: .init(70, 150, -75), distance: .init(0, 0, -1.5), fieldOfView: 60),
+        KoikatsuCameraRecord(position: .init(3, -2, 0.5), rotationDegrees: .init(-60, 10, -130), distance: .init(0.4, 0.3, -8), fieldOfView: 150)]
+    for record in records {
+        // Original file → native camera: the override keeps the roll; FOV is the vertical lens.
+        let source = try KoikatsuSceneReader.decodeDocument(scene.editedData(.init(currentCamera: record, cameraSlots: [4: record])))
+        let camera = try source.settings.camera.nativeCamera()
+        try camera.validate()
+        let roll = try #require(camera.orientationOverride)
+        #expect(abs(cameraRight(camera).y) > 0.1)
+        #expect(try source.settings.cameraSlots[4].nativeCamera() == camera)
+        #expect(camera.fovDegrees == record.fieldOfView)
+        #expect(camera.projectionMatrix(aspect: 1.5) == Projection.perspectiveReverseZInfinite(
+            fovyRadians: record.fieldOfView.degreesToRadians, aspect: 1.5, near: camera.near))
+
+        // Native scene card: every field survives exactly, including the native-only near plane, so the
+        // app's export comparison against the re-imported record writes nothing for an unedited camera.
+        var nearEdited = camera
+        nearEdited.near = 0.02
+        var document = StudioDocument()
+        document.camera = camera
+        document.cameraSlots[3] = nearEdited
+        let restored = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword,
+                                         from: CardIO.encode(document, keyword: CardIO.sceneKeyword, thumbnail: nil))
+        try restored.validateCameras()
+        #expect(try restored.camera == source.settings.camera.nativeCamera())
+        #expect(restored.cameraSlots[3] == nearEdited)
+
+        // Dolly, pan and lens edits keep the roll; the edited original export re-imports to the same view.
+        var edited = restored.camera
+        edited.dolly(1.5)
+        edited.pan(dx: 20, dy: -10)
+        edited.fovDegrees = 35
+        #expect(edited.orientationOverride == roll)
+        let exported = try KoikatsuSceneReader.decodeDocument(source.editedData(.init(currentCamera: edited.sourceCameraRecord())))
+        let reimported = try exported.settings.camera.nativeCamera()
+        #expect(reimported.fovDegrees == 35)
+        #expect(simd_length(reimported.position - edited.position) < 1e-4)
+        #expect(simd_length(reimported.forward - edited.forward) < 1e-4)
+        #expect(simd_length(cameraUp(reimported) - cameraUp(edited)) < 1e-4)
+
+        // An orbit edit is the intentional change that returns to two-angle control: the roll goes away.
+        var orbited = restored.camera
+        orbited.orbit(dx: 0.05, dy: 0.02)
+        #expect(orbited.orientationOverride == nil)
+        #expect(abs(cameraRight(orbited).y) < 1e-6)
+        #expect(orbited.fovDegrees == record.fieldOfView)
+        try orbited.validate()
+    }
+}
+
+@Test func studioDocumentRejectsDegenerateDecodedCameras() throws {
+    try StudioDocument().validateCameras()
+    func makeCamera(_ edit: (inout OrbitCamera) -> Void) -> OrbitCamera {
+        var result = OrbitCamera()
+        edit(&result)
+        return result
+    }
+    let invalid = [
+        makeCamera { $0.distance = 0 }, makeCamera { $0.distance = -1 }, makeCamera { $0.near = 0 },
+        makeCamera { $0.near = .infinity }, makeCamera { $0.fovDegrees = 0 }, makeCamera { $0.fovDegrees = 180 },
+        makeCamera { $0.fovDegrees = .nan }, makeCamera { $0.target.x = .nan }, makeCamera { $0.yaw = .infinity },
+        makeCamera { $0.orientationOverride = Float4(0, 0, 0, 0) }, makeCamera { $0.orientationOverride = Float4(0, 0, 0, 2) },
+        makeCamera { $0.orientationOverride = Float4(.nan, 0, 0, 1) },
+        // A distance that vanishes against a far target leaves no view direction.
+        makeCamera { $0.target = Float3(repeating: 1e6); $0.distance = 1e-30 }]
+    for value in invalid {
+        #expect(throws: RigError.self) { try value.validate() }
+        var current = StudioDocument()
+        current.camera = value
+        #expect(throws: RigError.self) { try current.validateCameras() }
+        var slot = StudioDocument()
+        slot.cameraSlots[7] = value
+        #expect(throws: RigError.self) { try slot.validateCameras() }
+        var object = StudioObject(name: "Camera", kind: .camera)
+        object.savedCamera = value
+        var saved = StudioDocument()
+        saved.objects.append(object)
+        #expect(throws: RigError.self) { try saved.validateCameras() }
+    }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_EXPANSION", "IKKOKU_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_SOURCE_MALE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
                "Requires IKKOKU_STUDIO_EXPANSION, IKKOKU_MAKER_LIBRARY, IKKOKU_SOURCE_AVATAR, IKKOKU_SOURCE_MALE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioExpandedCardsUseMakerSelectionsAndAttachmentCatalogWhenSupplied() throws {
