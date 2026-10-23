@@ -43,7 +43,7 @@ def check_adapter_reports(reports,manifests,events):
   for state in (mount,final):
    if not state['mounted'] or state['focusObservers']!=2:raise ValueError(mode+': Mute adapter must own exactly one focus observer set')
    if state['launchObserver']!=state['awaitingInitialFocus']:raise ValueError(mode+': deferred initial focus observer is inconsistent')
-  if not report['applicationCreated'] and not mount['awaitingInitialFocus']:raise ValueError(mode+': initial focus was sampled before NSApplication existed')
+  if not report['launchFinished'] and not mount['awaitingInitialFocus']:raise ValueError(mode+': initial focus was sampled before launching finished')
   if events and final['awaitingInitialFocus']:raise ValueError(mode+': focus events did not supersede the deferred initial sample')
   if final['enabled']!=mount['enabled'] or enabled not in (None,mount['enabled']):raise ValueError(mode+': Mute configuration changed')
   enabled=mount['enabled'];base=trace[0]

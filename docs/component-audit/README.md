@@ -81,6 +81,9 @@ or hardens the implementation. Task IDs in the reports are stable references.
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
 [recorded acceptance](../reference/mods/native-adapters.md#verified-release-acceptance).
+On 2026-10-23 the enabled configuration regressed on macOS 27 and was fixed and
+reverified headlessly (`native-adapter-capture-04`; see
+[Local rerun on macOS 27](../reference/mods/native-adapters.md#local-rerun-on-macos-27-2026-10-23)).
 
 **Merged 2026-09-28 (PRs #3–#39):** first slices of orders 1–3 and a large part of
 order 4 (Studio source animation selection, hand patterns, blink, neck look-at,
