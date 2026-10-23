@@ -435,6 +435,9 @@ item 0 scale x was patched from −1 to +1 (byte offset 883,
 `.local/vm-mirrored-camera/controls/`) failed 4 of 17 steps — the three
 fallback/status asserts and the "not looking through camera 2" control —
 because camera 2 then looks through from (−1.0754863, 0.95720124, 0.17588627).
+The full studio lane (`studio-scenarios.json`, 40 checks, `--strict`) then
+ran on the Debug build of `6270e82` and passed 40/40 in 1,368 s, with
+`studio-scenario-mirrored-camera` at 17/17.
 Evidence: `.local/vm-mirrored-camera/runs/`. This is a headless model check:
 the visible status line and rendered pixels are not asserted, and the
 original's own mirrored look-through pose is recorded, not reproduced.
