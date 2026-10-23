@@ -525,7 +525,35 @@ How to read the expected gain column:
 
 ## Validation of this change
 
-TBD-VALIDATION
+All runs were on `0a19718` or later. The reports are under
+`.local/verification/app-perf` in the worktree and `.local/app-perf/lanes`.
+
+- **Engine suite.** Plain `swift test --package-path Packages/Engine`: 656
+  tests passed. With every private fixture exported (`IKKOKU_*` from the
+  fixture map), 655 passed and 1 failed:
+  `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested` (a hash
+  mismatch against a private oracle fixture). It fails identically on
+  `origin/main` `d9684e8`, so it is a stale private fixture, not this change.
+- **Lane `public`.** Runner self-tests passed: 175, including the 6 in
+  `test_perf_trace.py`. Engine unit tests: 525 passed, 68 skipped. One
+  translation test errors in a worktree checkout ("Recovered original source
+  and translations must remain under ignored .local"), identically on
+  `origin/main`.
+  - **Under `--strict`** the lane also fails `engine-unit-tests`, because
+    strict mode sets `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`. The public lane
+    supplies no fixtures, so its 67 fixture-gated tests fail by design.
+- **Lane `maker`.**
+  - Default mode: 6 passed and 2 skipped, both for missing optional fixtures
+    (`IKKOKU_APPEARANCE_REFERENCE_ROOT`, `IKKOKU_MANAGED_RECOVERY_EXPORT`).
+  - One failure: `maker-roundtrip-audit` refuses its output path because a
+    worktree's `.local/reverse` is a symlink outside the worktree's
+    `.local`. It fails the same way on `origin/main`.
+  - Under `--strict` the two skips become failures.
+- **Lane `private-source`.**
+  - Default mode: 675 passed, 2 skipped.
+  - Under `--strict` it stops before running, on the optional
+    `IKKOKU_APPEARANCE_REFERENCE_ROOT` that the fixture map does not supply.
+- **App lanes**, each `--strict` under the app lock: TBD-APP-LANES.
 
 ## Limits of these numbers
 
