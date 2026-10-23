@@ -159,6 +159,14 @@ public struct StudioDocument: Codable, Sendable, Equatable {
         }
     }
 
+    /// Validate decoded cameras (scene camera, saved slots and camera objects)
+    /// before they drive the viewport; see `OrbitCamera.validate()`.
+    public func validateCameras() throws {
+        try camera.validate()
+        for slot in cameraSlots { try slot?.validate() }
+        for object in objects { try object.savedCamera?.validate() }
+    }
+
     /// World matrix including parents.
     public func worldMatrix(of id: UUID) -> float4x4 {
         guard let o = object(id) else { return matrix_identity_float4x4 }

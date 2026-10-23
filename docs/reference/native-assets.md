@@ -52,6 +52,10 @@ root
 ```
 Weights: max 4 influences per vertex, normalised. Bone placement is derived
 from the mesh (slice centroids), verified by a render with bones drawn.
+Joint names must be unique within a skin. The engine's `Skeleton.from` rejects
+duplicate names and sheared Armature or intermediate-node transforms with a
+named error; see the
+[import contract](renderer.md#checked-math-legacy-skeletons-and-cameras-r4).
 
 ## Body files: `Assets/Characters/body_f.glb`, `body_m.glb`
 

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import simd
 import CoreMath
+import Assets
 @testable import Scene
 
 private func expectMatrix(_ actual: float4x4, _ expected: float4x4, tolerance: Float = 1e-5) {
@@ -137,4 +138,111 @@ private func sourceMorphFixture() throws -> [String: Any] {
         channels[0]["frames"] = frames; meshes[0]["morphChannels"] = channels; document["meshes"] = meshes
         #expect(throws: RigError.self) { try SourceRig.decode(JSONSerialization.data(withJSONObject: document)) }
     }
+}
+
+// MARK: - Legacy name-keyed Skeleton contracts (R4)
+
+private func legacyBone(_ name: String, _ parent: Int?, translation: Float3 = Float3(0, 1, 0)) -> Skeleton.Bone {
+    Skeleton.Bone(name: name, parent: parent, restTranslation: translation)
+}
+
+/// A JSON glTF with one skin and no buffers; inverse binds default to identity.
+private func skinnedGLTF(_ nodes: [[String: Any]], joints: [Int]) throws -> GLTFAsset {
+    let root: [String: Any] = ["asset": ["version": "2.0"], "nodes": nodes, "skins": [["joints": joints]],
+                               "scenes": [["nodes": [0]]], "scene": 0]
+    return try GLBLoader.load(data: JSONSerialization.data(withJSONObject: root), baseURL: nil)
+}
+
+@Test func legacySkeletonRejectsInvalidGraphsAndRestDataNamingTheBone() throws {
+    let root = legacyBone("root", nil)
+    #expect(throws: SkeletonError.duplicateName("arm")) { try Skeleton(bones: [root, legacyBone("arm", 0), legacyBone("arm", 0)]) }
+    #expect(throws: SkeletonError.duplicateName("")) { try Skeleton(bones: [legacyBone("", nil), legacyBone("", 0)]) }
+    #expect(throws: SkeletonError.invalidParent(bone: "arm", parent: 5)) { try Skeleton(bones: [root, legacyBone("arm", 5)]) }
+    #expect(throws: SkeletonError.invalidParent(bone: "arm", parent: -1)) { try Skeleton(bones: [root, legacyBone("arm", -1)]) }
+    #expect(throws: SkeletonError.invalidParent(bone: "arm", parent: 1)) { try Skeleton(bones: [root, legacyBone("arm", 1)]) }
+    #expect(throws: SkeletonError.cycle(bone: "a")) {
+        try Skeleton(bones: [legacyBone("a", 1), legacyBone("b", 2), legacyBone("c", 0)])
+    }
+    var nonfinite = legacyBone("arm", 0)
+    nonfinite.restScale.y = .infinity
+    #expect(throws: SkeletonError.invalidRestTransform(bone: "arm")) { try Skeleton(bones: [root, nonfinite]) }
+    var nonunit = legacyBone("arm", 0)
+    nonunit.restRotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 0.5)
+    #expect(throws: SkeletonError.invalidRestTransform(bone: "arm")) { try Skeleton(bones: [root, nonunit]) }
+    var projective = legacyBone("arm", 0)
+    projective.inverseBind.columns.3.w = 2
+    #expect(throws: SkeletonError.invalidInverseBind(bone: "arm")) { try Skeleton(bones: [root, projective]) }
+    let base = try Skeleton(bones: [root, legacyBone("head", 0)])
+    let hair = try base.extended(with: [legacyBone("front/hair1", 1), legacyBone("front/hair2", 2)])
+    #expect(hair.count == 4 && hair["front/hair2"] == 3 && hair.order == [0, 1, 2, 3])
+    #expect(throws: SkeletonError.duplicateName("head")) { try base.extended(with: [legacyBone("head", 1)]) }
+}
+
+@Test func legacySkeletonEvaluatesChildrenListedBeforeParentsInFormerOrder() throws {
+    // Indices: 0 = tip (child of 2), 1 = root, 2 = mid (child of 1).
+    let skeleton = try Skeleton(bones: [
+        legacyBone("tip", 2, translation: Float3(0, 0.5, 0)), legacyBone("root", nil, translation: Float3(1, 0, 0)),
+        Skeleton.Bone(name: "mid", parent: 1, restTranslation: Float3(0, 1, 0),
+                      restRotation: simd_quatf(angle: .pi / 2, axis: Float3(0, 0, 1)), restScale: Float3(repeating: 2))])
+    #expect(skeleton.order == [1, 2, 0])
+    #expect(skeleton["tip"] == 0 && skeleton["root"] == 1 && skeleton["mid"] == 2)
+    #expect(skeleton.bones[1].children == [2] && skeleton.bones[2].children == [0])
+    // The tip's (0, 0.5, 0) offset is scaled by 2 and turned 90 degrees about Z under mid at (1, 1, 0).
+    let world = skeleton.restWorldMatrices()
+    #expect(simd_length(world[0].translation - Float3(0, 1, 0)) < 1e-5)
+
+    // Same parent-first order as the former recursive visit for an arbitrary index order.
+    let parents: [Int?] = [3, nil, 1, 1, 0, 3, 7, nil, 5, 2]
+    let shuffled = try Skeleton(bones: parents.enumerated().map { legacyBone("b\($0.offset)", $0.element) })
+    var visited = [Bool](repeating: false, count: parents.count), former: [Int] = []
+    func visit(_ index: Int) {
+        if visited[index] { return }
+        if let parent = parents[index] { visit(parent) }
+        visited[index] = true
+        former.append(index)
+    }
+    for index in parents.indices { visit(index) }
+    #expect(shuffled.order == former)
+}
+
+@Test func legacySkeletonImportFoldsMirroredAndIntermediateTransformsAndRejectsShear() throws {
+    // Mirrored Armature (non-joint) → root joint → rotated offset (non-joint) → tip joint.
+    let asset = try skinnedGLTF([
+        ["name": "Armature", "children": [1], "scale": [-1, 1, 1]],
+        ["name": "root", "children": [2], "translation": [0, 1, 0]],
+        ["name": "offset", "children": [3], "rotation": [0, 0, 0.38268343, 0.9238795]],
+        ["name": "tip", "translation": [0, 0.5, 0]]], joints: [1, 3])
+    let skeleton = try #require(try Skeleton.from(asset: asset))
+    #expect(skeleton.count == 2 && skeleton.bones[1].parent == 0)
+    // The mirror is a negative scale instead of a nonunit quaternion with unsigned scale.
+    #expect(skeleton.bones[0].restScale.x < 0)
+    let world = skeleton.restWorldMatrices()
+    for (index, node) in [(0, 1), (1, 3)] {
+        let expected = asset.worldMatrix(ofNode: node)
+        for column in 0..<4 { #expect(simd_length(world[index][column] - expected[column]) < 1e-5) }
+    }
+
+    let sheared = try skinnedGLTF([
+        ["name": "Armature", "children": [1], "matrix": [1, 0, 0, 0, 0.5, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]],
+        ["name": "root"]], joints: [1])
+    #expect(throws: SkeletonError.unsupportedTransform(bone: "root", .unsupportedMatrix("rest matrix"))) {
+        try Skeleton.from(asset: sheared)
+    }
+    let duplicate = try skinnedGLTF([["name": "root", "children": [1]], ["name": "root"]], joints: [0, 1])
+    #expect(throws: SkeletonError.duplicateName("root")) { try Skeleton.from(asset: duplicate) }
+    let unnamed = try skinnedGLTF([["children": [1]], [:]], joints: [0, 1])
+    #expect(throws: SkeletonError.duplicateName("")) { try Skeleton.from(asset: unnamed) }
+
+    let noSecondSkin = try Skeleton.from(asset: asset, skinIndex: 1) == nil
+    let noNegativeSkin = try Skeleton.from(asset: asset, skinIndex: -1) == nil
+    #expect(noSecondSkin && noNegativeSkin)
+    var missingNode = asset
+    missingNode.skins[0].jointNodes = [1, 9]
+    #expect(throws: SkeletonError.self) { try Skeleton.from(asset: missingNode) }
+    var repeatedJoint = asset
+    repeatedJoint.skins[0].jointNodes = [1, 1]
+    #expect(throws: SkeletonError.self) { try Skeleton.from(asset: repeatedJoint) }
+    var missingBinds = asset
+    missingBinds.skins[0].inverseBindMatrices = []
+    #expect(throws: SkeletonError.self) { try Skeleton.from(asset: missingBinds) }
 }
