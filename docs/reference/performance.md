@@ -85,9 +85,9 @@ is untouched) and `IKKOKU_PERF_INPUT_HZ` (default 120).
   into draw, model (ticks, refreshes and input handlers, nested intervals
   counted once) and other (SwiftUI updates, layout, AppKit event handling);
 - Maker ticks and refreshes (explicit hooks in `MakerModel`), Studio live ticks
-  and `refresh()` calls (inferred from properties they assign; explicit hooks
-  wait until `StudioModel.swift` is free, see `PerfTrace.observeStudio`) and
-  every viewport input call;
+  and `refresh()` calls (inferred from properties they assign, see
+  `PerfTrace.observeStudio`; explicit hooks in `StudioModel.swift` are left to
+  phase 2, which changes that file anyway) and every viewport input call;
 - process CPU, main-thread CPU, peak `phys_footprint` and peak Metal
   allocation, window occlusion samples and the machine's load average;
 - startup marks in seconds since process start: `appStateInit`, `engineReady`,
@@ -134,7 +134,21 @@ signposts; for a trace without them it shifts the report's marks onto trace
 time through a startup mark both contain (`--report`, default: the report
 beside the trace). It prints time per thread and binary, the heaviest functions by self
 and inclusive time and, with `--focus REGEX`, what the outermost matching frame
-spends its time calling. [test_perf_trace.py](../../Tools/verification/test_perf_trace.py)
+spends its time calling.
+
+`summarize` also checks that a run is valid. A drawable whose presented time
+is 0 was never shown on screen. When more than a tenth of a run's drawables
+were never shown while its main thread was not saturated (under 900 ms/s
+busy), the window was not being composited. That happens, for example, while
+the user switches desktops or full-screen apps during the run. `summarize`
+then prints a `WARNING` for that run, which must be repeated. A saturated run
+can drop drawables legitimately, so it is not flagged. The check was added
+after the baseline. Of the cited runs, only the Engine -O `studio-idle`
+baseline trips it (82 of 460 drawables never shown), so its presented FPS and
+hitches are marked in the table; its model-side numbers are unaffected. Every
+other number on this page comes from runs without the warning.
+
+[test_perf_trace.py](../../Tools/verification/test_perf_trace.py)
 covers the launch environments, the summary row, the export reader and the
 launch guard with synthetic data (it runs in the `runner-self-tests` check of
 the public lane).
@@ -190,7 +204,7 @@ How to read the table:
 | Workload | Build | Presented FPS | Hitches/s | Presented interval p50 / p95 ms | Main busy ms/s (draw / model / other) | Tick | Refresh | Input p50 ms | Draw ms | GPU ms | Peak MiB |
 | --- | --- | ---: | ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: |
 | studio-idle | Release | 44.7 | 14.9 | 8.3 / 50.0 | 680 (31 / 651 / 0) | 43.38 × 15 | 23.25 × 15 | – | 0.67 | 1.90 | 935 |
-| studio-idle | Engine -O | 37.4 | 14.9 | | 673 (31 / 644 / 0) | 42.87 × 15 | 23.28 × 15 | – | 0.68 | 1.90 | 941 |
+| studio-idle | Engine -O | 37.4 (window partly off screen) | 14.9 (same) | | 673 (31 / 644 / 0) | 42.87 × 15 | 23.28 × 15 | – | 0.68 | 1.90 | 941 |
 | studio-idle | Debug | 0.0 | 0.0 | | 997 (13 / 986 / 0) | 1753 × 1 | 1015 × 1 | – | 10.38 | 3.54 | 900 |
 | studio-orbit | Release | 40.0 | 32.2 | 25.0 / 41.7 | 996 (33 / 74 / 889) | – | 0.89 × 76 | 0.97 | 0.81 | 1.37 | 945 |
 | studio-orbit | Engine -O | 50.3 | 19.3 | | 987 (41 / 133 / 813) | – | 1.02 × 114 | 1.16 | 0.80 | 1.39 | 950 |

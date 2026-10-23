@@ -205,16 +205,34 @@ def row(name, report):
 def uncomposited(report):
     """Why a report's presentation numbers cannot be trusted, or None.
 
-    A drawable whose presented handler reports time 0 was never shown. A
-    saturated main thread drops some, but when most drawables are dropped while
-    the main thread has time to spare, the window was not being composited
-    (another Space, a full-screen app or Mission Control during the run)."""
+    A drawable whose presented handler reports time 0 was never shown. When a
+    frame takes seconds (Debug source scenes), the few drawables of a run can
+    expire legitimately. Otherwise a large dropped share means the window was
+    not being composited (another Space, a full-screen app or Mission Control
+    during the run): over a tenth with the main thread not saturated, or over a
+    quarter of at least 100 drawables even when it is."""
     summary = report["summary"]
     callbacks = summary.get("displayLinkCallbacks", 0)
     dropped = summary.get("droppedDrawables", 0)
     busy = summary["mainThread"]["busyMsPerSecond"]
-    if callbacks >= 30 and dropped > 0.1 * callbacks and busy < 900:
+    idle_drops = callbacks >= 30 and dropped > 0.1 * callbacks and busy < 900
+    saturated_drops = callbacks >= 100 and dropped > 0.25 * callbacks
+    if idle_drops or saturated_drops:
         return "%d of %d drawables never presented with the main thread %.0f ms/s busy" % (dropped, callbacks, busy)
+    return None
+
+
+# Workloads that send no viewport input, so any input call came from a person.
+INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "startup"}
+
+
+def stray_input(report):
+    """Input calls the workload did not send (someone moved the mouse over the window), or None."""
+    if report.get("workload") not in INPUTLESS_WORKLOADS:
+        return None
+    calls = sum(report["summary"].get("inputCalls", {}).values())
+    if calls:
+        return "%d input calls the workload did not send; someone used the mouse over the window, check it against a rerun" % calls
     return None
 
 
@@ -231,6 +249,9 @@ def summarize(directories):
             reason = uncomposited(report)
             if reason:
                 warnings.append("%s: %s; the window was probably not on screen, rerun it" % (label, reason))
+            stray = stray_input(report)
+            if stray:
+                warnings.append("%s: %s" % (label, stray))
     for warning in warnings:
         print("[perf] WARNING " + warning)
     return 0

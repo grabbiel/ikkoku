@@ -112,9 +112,29 @@ class PerfTraceTests(unittest.TestCase):
         saturated = report()
         saturated["summary"].update(displayLinkCallbacks=40, droppedDrawables=38)
         saturated["summary"]["mainThread"]["busyMsPerSecond"] = 999
+        busy_hidden = report()
+        busy_hidden["summary"].update(displayLinkCallbacks=265, droppedDrawables=213)
+        busy_hidden["summary"]["mainThread"]["busyMsPerSecond"] = 999
+        busy = report()
+        busy["summary"].update(displayLinkCallbacks=432, droppedDrawables=49)
+        busy["summary"]["mainThread"]["busyMsPerSecond"] = 998
         self.assertIn("1100 of 1200 drawables", perf_trace.uncomposited(hidden))
+        self.assertIn("213 of 265 drawables", perf_trace.uncomposited(busy_hidden))
         self.assertIsNone(perf_trace.uncomposited(saturated))
+        self.assertIsNone(perf_trace.uncomposited(busy))
         self.assertIsNone(perf_trace.uncomposited(report()))
+
+    def test_summary_flags_input_that_an_idle_workload_did_not_send(self):
+        idle = report()
+        idle["workload"] = "studio-idle"
+        idle["summary"]["inputCalls"] = {"mouseMoved": 12}
+        orbit = report()
+        orbit["workload"] = "studio-orbit"
+        orbit["summary"]["inputCalls"] = {"mouseDragged": 900}
+        self.assertIn("12 input calls", perf_trace.stray_input(idle))
+        self.assertIsNone(perf_trace.stray_input(orbit))
+        idle["summary"]["inputCalls"] = {}
+        self.assertIsNone(perf_trace.stray_input(idle))
 
     def test_profile_resolves_refs_and_charges_focus_callees(self):
         args = argparse.Namespace(trace="unused.trace", whole=True, thread="Main Thread", top=10, binary="Ikkoku", focus="^hot$", skip_toc=True)
