@@ -97,9 +97,13 @@ public final class ResourceStore: @unchecked Sendable {
     public let blackTexture: any MTLTexture
     public let flatNormalTexture: any MTLTexture
     public let dummyBuffer: any MTLBuffer
+    /// Translated original programs and their pipelines, shared by the
+    /// frozen-frame probe and the opt-in live source-shader path.
+    public let translatedPipelines: TranslatedSourcePipelineCache
 
     public init(device: any MTLDevice) {
         self.device = device
+        self.translatedPipelines = TranslatedSourcePipelineCache(device: device)
         self.textureLoader = MTKTextureLoader(device: device)
         whiteTexture = ResourceStore.makeSolid(device: device, rgba: [255, 255, 255, 255], label: "White")
         blackTexture = ResourceStore.makeSolid(device: device, rgba: [0, 0, 0, 0], label: "Black")
