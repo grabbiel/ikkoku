@@ -58,6 +58,15 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// it into the embedded card's Status block. Documents saved before this
     /// field existed decode it as nil.
     public var sourceOutfit: Int?
+    /// Edited clothes state (ChaFileStatus.clothesState, nine ClothesKind
+    /// bytes 0 on ... 3 off) as the rendered outfit holds it after the
+    /// CharaStudio SetClothesState rules; nil keeps the state the card's saved
+    /// bytes load as. Export writes it into the embedded card's Status block
+    /// when it differs from the saved bytes. Older documents decode nil.
+    public var sourceClothesState: [UInt8]?
+    /// Edited accessory visibility (ChaFileStatus.showAccessory, 20 slots);
+    /// nil keeps the card's saved flags. Older documents decode nil.
+    public var sourceShowAccessory: [Bool]?
     public var sourceKinematics: SourceStudioKinematicState?
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState?

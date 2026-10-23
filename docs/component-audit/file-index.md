@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**829 files indexed; 829 assigned; 0 unassigned.**
+**836 files indexed; 836 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 87 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
-| [Studio / IK / animation](studio.md) | 178 |
+| [Studio / IK / animation](studio.md) | 180 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 304 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 144 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 149 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 170 |
+| Conversion / recovery / verification tool | 175 |
 | Documentation / historical evidence | 54 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 181 |
-| Test / validation | 168 |
+| Runtime / shared shader declaration | 182 |
+| Test / validation | 169 |
 
 ## App / gameplay / plugins
 
@@ -315,6 +315,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift](../../Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioVoice.swift](../../Packages/Engine/Sources/Studio/SourceStudioVoice.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioWear.swift](../../Packages/Engine/Sources/Studio/SourceStudioWear.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift](../../Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
@@ -360,6 +361,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioRouteTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioSceneLightTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioVoiceTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioWearTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWearTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
@@ -812,6 +814,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
 | [Tools/verification/prerequisites.json](../../Tools/verification/prerequisites.json) | Build / repository configuration |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/accessory-toggle.json](../../Tools/verification/scenarios/accessory-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/animation-select.json](../../Tools/verification/scenarios/animation-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/blink-toggle.json](../../Tools/verification/scenarios/blink-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
@@ -822,6 +825,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/charastudio-hide-rename.json](../../Tools/verification/scenarios/charastudio-hide-rename.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-route-rename.json](../../Tools/verification/scenarios/charastudio-route-rename.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/charastudio-route-stop.json](../../Tools/verification/scenarios/charastudio-route-stop.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/clothes-saved-off.json](../../Tools/verification/scenarios/clothes-saved-off.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/clothes-toggle.json](../../Tools/verification/scenarios/clothes-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-edit.json](../../Tools/verification/scenarios/color-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/color-visual-reset.json](../../Tools/verification/scenarios/color-visual-reset.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/eye-look-orbit.json](../../Tools/verification/scenarios/eye-look-orbit.json) | Conversion / recovery / verification tool |
@@ -840,10 +845,12 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/neck-target-orbit.json](../../Tools/verification/scenarios/neck-target-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/outfit-select.json](../../Tools/verification/scenarios/outfit-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-clothes.json](../../Tools/verification/scenarios/reload-load-clothes.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-outfit.json](../../Tools/verification/scenarios/reload-load-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-props.json](../../Tools/verification/scenarios/reload-load-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-route.json](../../Tools/verification/scenarios/reload-load-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-camera.json](../../Tools/verification/scenarios/reload-save-camera.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-clothes.json](../../Tools/verification/scenarios/reload-save-clothes.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-outfit.json](../../Tools/verification/scenarios/reload-save-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-props.json](../../Tools/verification/scenarios/reload-save-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
