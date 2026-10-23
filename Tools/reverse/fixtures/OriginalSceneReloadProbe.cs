@@ -2,8 +2,12 @@
 // original CharaStudio player shows after loading them. Scene records are uploaded beside the plugin as
 // reload-*.png (the route probe's upload pattern); only those files are read. A synthetic fixture card
 // uploaded beside the plugin as author-card.png (driver --author-character, the ST-T01 source scene)
-// first makes the player author scene-char.png from it: one female, FK disabled, default pose. No
-// installed cards, saves, media or third-party plug-ins are read or written.
+// first makes the player author scene-char.png from it: one female, FK disabled, default pose. An
+// author-scenes.txt beside the card (driver --author-scenes) instead lists which fixture scenes to author
+// from that card: "char" (scene-char.png), "route-children" (scene-route-children.png: one playing route
+// whose children are a folder and the fixture female) and "neck-target" (scene-neck-target.png: two
+// fixture females, neck pattern TARGET and AWAY, eyes pattern TARGET); each is read back into an emptied
+// scene and traced. No installed cards, saves, media or third-party plug-ins are read or written.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -36,11 +40,24 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         var dir=Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
         var files=new List<string>(Directory.GetFiles(dir,"reload-*.png"));files.Sort();
         var card=Path.Combine(dir,"author-card.png"); // an uploaded fixture card (driver --author-character) switches to author mode first
+        var sceneList=Path.Combine(dir,"author-scenes.txt"); // driver --author-scenes: the fixture scenes to author; absent = scene-char.png only
         if(error==null&&files.Count==0&&!File.Exists(card))error="no reload-*.png scene records and no author-card.png beside the plugin";
+        var authored=new List<string>();
         if(error==null&&File.Exists(card)) {
+            if(File.Exists(sceneList)){foreach(var line in File.ReadAllLines(sceneList)){var name=line.Trim();if(name.Length>0)authored.Add(name);}}
+            else authored.Add("char");
+            if(authored.Count==0)error="author-scenes.txt lists no fixture scene";
+        }
+        foreach(var scene in authored) {
+            if(error!=null)break;
             IEnumerator run=null;
-            try{run=AuthorCase(card);}catch(Exception e){error="author-card.png: "+e;}
-            while(error==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){error="author-card.png: "+e;}if(error!=null||!more)break;yield return current;}
+            try{
+                if(scene=="char")run=AuthorCase(card);
+                else if(scene=="route-children")run=AuthorRouteChildren(card);
+                else if(scene=="neck-target")run=AuthorNeckTarget(card);
+                else throw new Exception("unknown fixture scene \""+scene+"\" (char, route-children or neck-target)");
+            }catch(Exception e){error="author "+scene+": "+e;}
+            while(error==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){error="author "+scene+": "+e;}if(error!=null||!more)break;yield return current;}
         }
         foreach(var file in files) {
             if(error!=null)break;
@@ -50,8 +67,8 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         }
         try{File.WriteAllText(Path.Combine(folder,"reload-trace.json"),J(K("schemaVersion",1,"framesPerPhase",Frames,"cases",cases)));}catch(Exception e){if(error==null)error="trace write: "+e;}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"mode",mode,
-            "voiceRepair",voiceRepair,
-            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state, and per-character FK state, active FK groups, saved and live bone transforms; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled; this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
+            "voiceRepair",voiceRepair,"authorScenes",authored,
+            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent and world position, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees); this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();} // repeat until the player exits
     }
@@ -95,18 +112,10 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         studio.InitScene(false);
         for(int i=0;i<3;i++)yield return null;
         if(studio.dicObjectCtrl.Count!=0)throw new Exception("author mode expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
-        var cardFile=new ChaFileControl();cardFile.skipRangeCheck=true;
-        if(!cardFile.LoadCharaFile(card,byte.MaxValue,true))throw new Exception("ChaFileControl.LoadCharaFile returned false for "+card);
-        var info=new OICharInfo(cardFile,Studio.Studio.GetNewIndex());
-        var character=AddObjectFemale.Load(info,null,null);
-        if(character==null)throw new Exception("AddObjectFemale.Load returned null for "+card);
-        Studio.Studio.AddInfo(info,character); // Load registers only the ctrl info (it is the _addInfo:false scene-restore path); sceneInfo.dicObject is what Save serializes
+        AddFixtureFemale(card);
         var authored=Record();
         cases["author"]=K("label","author","card",Path.GetFileName(card),"scene","scene-char.png","afterLoad",authored,"settled",authored);
-        foreach(var entry in studio.dicObjectCtrl)entry.Value.OnSavePreprocessing();
-        studio.sceneInfo.cameraSaveData=studio.cameraCtrl.Export(); // the route probe's save rule: the view belongs to the record
-        string scene=Path.Combine(folder,"scene-char.png");
-        if(!studio.sceneInfo.Save(scene))throw new Exception("Studio.sceneInfo.Save returned false for "+scene);
+        string scene=SaveScene("scene-char.png");
         // Read the saved scene back into an emptied scene (the camera probe's InitScene(false)-then-load rule),
         // so the trace also shows what the player itself sees when it opens our FK edit's source scene.
         studio.InitScene(false);
@@ -116,6 +125,121 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         var afterLoad=Record();
         for(int i=0;i<Frames;i++)yield return new WaitForEndOfFrame();
         cases["charastudio-fk-source"]=K("label","charastudio-fk-source","scene","scene-char.png","afterLoad",afterLoad,"settled",Record());
+    }
+    // One female from the synthetic fixture card through the player's own scene-restore call (see AuthorCase).
+    OCIChar AddFixtureFemale(string card) {
+        var cardFile=new ChaFileControl();cardFile.skipRangeCheck=true;
+        if(!cardFile.LoadCharaFile(card,byte.MaxValue,true))throw new Exception("ChaFileControl.LoadCharaFile returned false for "+card);
+        var info=new OICharInfo(cardFile,Studio.Studio.GetNewIndex());
+        var character=AddObjectFemale.Load(info,null,null);
+        if(character==null)throw new Exception("AddObjectFemale.Load returned null for "+card);
+        Studio.Studio.AddInfo(info,character); // Load registers only the ctrl info (it is the _addInfo:false scene-restore path); sceneInfo.dicObject is what Save serializes
+        return character;
+    }
+    // The route probe's save rule: every object's own save preprocessing (a character writes its live neck
+    // and eye look state into neckByteData/eyesByteData there), and the view belongs to the record.
+    string SaveScene(string name) {
+        foreach(var entry in studio.dicObjectCtrl)entry.Value.OnSavePreprocessing();
+        studio.sceneInfo.cameraSaveData=studio.cameraCtrl.Export();
+        string scene=Path.Combine(folder,name);
+        if(!studio.sceneInfo.Save(scene))throw new Exception("Studio.sceneInfo.Save returned false for "+scene);
+        return scene;
+    }
+    // ST-T11 route children fixture: one looping four-point route, saved playing, whose two children are a
+    // folder and the fixture female. They are parented the way the workspace tree's drag does it
+    // (TreeNodeCtrl.SetParent -> Studio.OnParentage -> OCIRoute.OnAttach, which records each child in
+    // routeInfo.child under the route's childRoot) while the route is stopped, so their saved local
+    // placement is relative to point 0. The read-back loads the saved scene into an emptied scene (the load
+    // path plays an active route) and traces every object's world position at load and RouteFrames later.
+    const int RouteFrames=60;
+    static readonly Vector3[] RoutePoints={new Vector3(0f,0f,0f),new Vector3(1.2f,0f,0f),new Vector3(1.2f,0f,1.2f),new Vector3(0f,0f,1.2f)};
+    IEnumerator AuthorRouteChildren(string card) {
+        mode="author";
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("route-children expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
+        var route=AddObjectRoute.Add();
+        if(route==null)throw new Exception("AddObjectRoute.Add returned null (route asset failed to load)");
+        route.routeInfo.name="IKKOKU-RC";
+        route.routeInfo.changeAmount.pos=Vector3.zero;route.routeInfo.changeAmount.rot=Vector3.zero;route.routeInfo.changeAmount.OnChange();
+        for(int i=1;i<RoutePoints.Length;i++)if(route.AddPoint()==null)throw new Exception("OCIRoute.AddPoint returned null");
+        if(route.listPoint.Count!=RoutePoints.Length)throw new Exception("route holds "+route.listPoint.Count+" points, expected "+RoutePoints.Length);
+        for(int i=0;i<RoutePoints.Length;i++){var ca=route.listPoint[i].routePointInfo.changeAmount;ca.pos=RoutePoints[i];ca.OnChange();}
+        route.routeInfo.loop=true;
+        var fold=AddObjectFolder.Add();
+        if(fold==null)throw new Exception("AddObjectFolder.Add returned null");
+        fold.name="IKKOKU-RC-F";
+        fold.objectInfo.changeAmount.pos=new Vector3(0f,0.5f,0f);fold.objectInfo.changeAmount.rot=Vector3.zero;fold.objectInfo.changeAmount.OnChange();
+        var female=AddFixtureFemale(card);
+        female.objectInfo.changeAmount.pos=Vector3.zero;female.objectInfo.changeAmount.OnChange();
+        for(int i=0;i<3;i++)yield return null;
+        foreach(var child in new ObjectCtrlInfo[]{fold,female}) {
+            studio.treeNodeCtrl.SetParent(child.treeNodeObject,route.treeNodeObject);
+            if(child.parentInfo!=route||!route.routeInfo.child.Contains(child.objectInfo))
+                throw new Exception("TreeNodeCtrl.SetParent did not attach object "+child.objectInfo.dicKey+" to the route");
+        }
+        if(route.routeInfo.child.Count!=2)throw new Exception("route holds "+route.routeInfo.child.Count+" children, expected the folder and the female");
+        if(!route.Play())throw new Exception("OCIRoute.Play returned false");
+        var authored=Record();
+        cases["route-children-author"]=K("label","route-children-author","card",Path.GetFileName(card),"scene","scene-route-children.png","afterLoad",authored,"settled",authored);
+        string scene=SaveScene("scene-route-children.png"); // saved right after Play, like the route probe: active=true
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("route-children expects an empty scene before the read-back, found "+studio.dicObjectCtrl.Count+" objects");
+        if(!studio.LoadScene(scene))throw new Exception("Studio.LoadScene returned false for "+scene);
+        var afterLoad=Record();float loadTime=Time.time;
+        for(int i=0;i<RouteFrames;i++)yield return null;
+        var moved=Record();
+        cases["route-children"]=K("label","route-children","scene","scene-route-children.png","afterLoad",afterLoad,"settled",moved,
+            "settledFrames",RouteFrames,"settledSeconds",Time.time-loadTime);
+    }
+    // ST-T07 neck look fixture: two fixture females side by side, neck pattern 1 (kocchi, TARGET) and 2
+    // (acchi, AWAY), both eyes pattern 1 (kocchi, TARGET), set through OCIChar's own pattern calls (the
+    // MPCharCtrl look buttons) and given LookFrames frames to run before the save, so the saved neck bytes
+    // hold the controllers' live state. The read-back loads it into an emptied scene and records both
+    // characters' neck/head under the saved camera and after orbiting the Studio camera LookYaw degrees to
+    // either side (CameraControl.Import of the saved view with rotate.y moved), LookFrames frames each.
+    const int LookFrames=120;
+    const float LookYaw=60f;
+    static readonly int[] NeckPatterns={1,2};
+    const int EyesPattern=1;
+    IEnumerator AuthorNeckTarget(string card) {
+        mode="author";
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("neck-target expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
+        var characters=new List<OCIChar>();
+        for(int i=0;i<NeckPatterns.Length;i++) {
+            var female=AddFixtureFemale(card);
+            female.objectInfo.changeAmount.pos=new Vector3(i==0?-0.5f:0.5f,0f,0f);female.objectInfo.changeAmount.OnChange();
+            female.ChangeLookNeckPtn(NeckPatterns[i]);
+            female.ChangeLookEyesPtn(EyesPattern);
+            characters.Add(female);
+        }
+        for(int i=0;i<LookFrames;i++)yield return null;
+        for(int i=0;i<characters.Count;i++) {
+            var status=characters[i].charFileStatus;
+            if(status.neckLookPtn!=NeckPatterns[i]||status.eyesLookPtn!=EyesPattern)
+                throw new Exception("character "+characters[i].objectInfo.dicKey+" holds neck "+status.neckLookPtn+" eyes "+status.eyesLookPtn+" before the save");
+        }
+        var authored=Record();
+        cases["neck-target-author"]=K("label","neck-target-author","card",Path.GetFileName(card),"scene","scene-neck-target.png","afterLoad",authored,"settled",authored);
+        string scene=SaveScene("scene-neck-target.png");
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("neck-target expects an empty scene before the read-back, found "+studio.dicObjectCtrl.Count+" objects");
+        if(!studio.LoadScene(scene))throw new Exception("Studio.LoadScene returned false for "+scene);
+        var afterLoad=Record();
+        var saved=studio.cameraCtrl.Export();
+        var phases=new List<object>();
+        foreach(float yaw in new[]{0f,LookYaw,-LookYaw}) {
+            var view=new Studio.CameraControl.CameraData(saved);view.rotate.y=saved.rotate.y+yaw;
+            studio.cameraCtrl.Import(view);
+            for(int i=0;i<LookFrames;i++)yield return null;
+            phases.Add(K("cameraYawOffset",yaw,"frames",LookFrames,"cameraRotate",V(studio.cameraCtrl.Export().rotate),"snapshot",Record()));
+        }
+        studio.cameraCtrl.Import(saved);
+        cases["neck-target"]=K("label","neck-target","scene","scene-neck-target.png","afterLoad",afterLoad,"settled",((Dictionary<string,object>)phases[0])["snapshot"],"orbit",phases);
     }
     // Each uploaded record is loaded into an emptied scene (the camera probe's InitScene(false)-then-load rule).
     // "afterLoad" is measured as soon as LoadScene returns, "settled" Frames frames later.
@@ -144,6 +268,9 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 "cameraActive",cam!=null?(object)cam.cameraInfo.active:null,
                 "viewCamera",cam!=null?(object)(studio.ociCamera==cam):null,
                 "routePlaying",route!=null?(object)route.isPlay:null,
+                "parentKey",ctrl.parentInfo==null?null:(object)ctrl.parentInfo.objectInfo.dicKey,
+                "worldPosition",ctrl.guideObject==null||ctrl.guideObject.transformTarget==null?null:(object)V(ctrl.guideObject.transformTarget.position),
+                "routeChildRootPosition",route==null||route.childRoot==null?null:(object)V(route.childRoot.position),
                 "character",chr==null?null:CharRecord(chr,(OICharInfo)info)));
         }
         return K("objectCount",studio.dicObjectCtrl.Count,
@@ -167,7 +294,36 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 "worldPosition",target==null?null:(object)V(target.position),
                 "worldRotation",target==null?null:(object)Q(target.rotation)));
         }
-        return K("dicKey",info.dicKey,"enableFK",info.enableFK,"enableIK",info.enableIK,"activeFK",groups,"bones",bones);
+        return K("dicKey",info.dicKey,"enableFK",info.enableFK,"enableIK",info.enableIK,"activeFK",groups,"bones",bones,"look",LookRecord(ctrl));
+    }
+    // The saved/live look patterns and the neck/head the look controllers drive, with the signed yaw (degrees,
+    // about world up, positive = +Y right-hand turn) of the head's forward and of the head-to-camera
+    // direction, each measured from the body root's forward: TARGET turns the head toward the camera's side,
+    // AWAY away from it.
+    static Dictionary<string,object> LookRecord(OCIChar ctrl) {
+        var cha=ctrl.charInfo;var status=ctrl.charFileStatus;
+        var root=cha.objBodyBone==null?null:cha.objBodyBone.transform;
+        var neck=Find(root,"cf_j_neck");var head=Find(root,"cf_j_head");
+        var camera=Camera.main==null?null:Camera.main.transform;
+        Vector3 body=cha.transform.forward;
+        return K("neckLookPtn",status.neckLookPtn,"eyesLookPtn",status.eyesLookPtn,
+            "neckTargetType",status.neckTargetType,"eyesTargetType",status.eyesTargetType,
+            "neckControllerPtn",cha.neckLookCtrl==null?null:(object)cha.neckLookCtrl.ptnNo,
+            "eyeControllerPtn",cha.eyeLookCtrl==null?null:(object)cha.eyeLookCtrl.ptnNo,
+            "bodyWorldRotation",Q(cha.transform.rotation),
+            "neckLocalRotation",neck==null?null:(object)Q(neck.localRotation),
+            "headLocalRotation",head==null?null:(object)Q(head.localRotation),
+            "headWorldPosition",head==null?null:(object)V(head.position),
+            "headWorldRotation",head==null?null:(object)Q(head.rotation),
+            "cameraWorldPosition",camera==null?null:(object)V(camera.position),
+            "headYawFromBody",head==null?null:(object)Yaw(body,head.forward),
+            "cameraYawFromBody",head==null||camera==null?null:(object)Yaw(body,camera.position-head.position));
+    }
+    static float Yaw(Vector3 from,Vector3 to){from.y=0f;to.y=0f;return Vector3.Angle(from,to)*Mathf.Sign(Vector3.Cross(from,to).y);}
+    static Transform Find(Transform t,string name) {
+        if(t==null)return null;if(t.name==name)return t;
+        for(int i=0;i<t.childCount;i++){var found=Find(t.GetChild(i),name);if(found!=null)return found;}
+        return null;
     }
     static string Name(ObjectInfo info) { // names live on the concrete info types, not on ObjectInfo
         var cam=info as OICameraInfo;if(cam!=null)return cam.name;

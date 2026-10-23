@@ -1,0 +1,32 @@
+{
+  "steps": [
+    {"op": "assert", "diagnosticContains": "Neck look override live: TARGET follows the Studio camera from the saved fixAngle."},
+    {"op": "assert", "diagnosticContains": "Neck look override live: AWAY follows the Studio camera from the saved fixAngle."},
+    {"op": "advance", "seconds": 3},
+    {"op": "assert", "eyeLook": {"key": 0, "lookType": "TARGET"}},
+    {"op": "assert", "eyeLook": {"key": 147, "lookType": "TARGET"}},
+    {"op": "captureBone", "key": 0, "bone": 100, "name": "target-hair-front"},
+    {"op": "captureBone", "key": 147, "bone": 100, "name": "away-hair-front"},
+    {"op": "orbit", "dx": 1.0471976, "dy": 0},
+    {"op": "advance", "seconds": 3},
+    {"op": "assertRejected", "fk": {"key": 0, "bone": 100, "from": "target-hair-front", "within": 0.05}, "errorContains": "expected the pose reproduced within 0.05"},
+    {"op": "assertRejected", "fk": {"key": 147, "bone": 100, "from": "away-hair-front", "within": 0.15}, "errorContains": "expected the pose reproduced within 0.15"},
+    {"op": "captureBone", "key": 0, "bone": 100, "name": "target-hair-plus"},
+    {"op": "captureBone", "key": 147, "bone": 100, "name": "away-hair-plus"},
+    {"op": "assertRejected", "fk": {"key": 147, "bone": 100, "from": "target-hair-plus", "within": 0.15}, "errorContains": "expected the pose reproduced within 0.15"},
+    {"op": "orbit", "dx": -2.0943951, "dy": 0},
+    {"op": "advance", "seconds": 3},
+    {"op": "assertRejected", "fk": {"key": 0, "bone": 100, "from": "target-hair-plus", "within": 0.1}, "errorContains": "expected the pose reproduced within 0.1"},
+    {"op": "assertRejected", "fk": {"key": 147, "bone": 100, "from": "away-hair-plus", "within": 0.15}, "errorContains": "expected the pose reproduced within 0.15"},
+    {"op": "assert", "fk": {"key": 147, "bone": 100, "from": "away-hair-front", "within": 0.01}},
+    {"op": "captureBone", "key": 0, "bone": 100, "name": "target-hair-minus"},
+    {"op": "assertRejected", "fk": {"key": 147, "bone": 100, "from": "target-hair-minus", "within": 0.15}, "errorContains": "expected the pose reproduced within 0.15"},
+    {"op": "export", "path": ".local/verification/scenario-exports/neck-target-orbit.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/neck-target-orbit.png"},
+    {"op": "assert", "diagnosticContains": "Neck look override live: TARGET follows the Studio camera from the saved fixAngle."},
+    {"op": "assert", "diagnosticContains": "Neck look override live: AWAY follows the Studio camera from the saved fixAngle."},
+    {"op": "advance", "seconds": 3},
+    {"op": "assert", "fk": {"key": 0, "bone": 100, "from": "target-hair-minus", "within": 0.01}},
+    {"op": "assert", "fk": {"key": 147, "bone": 100, "from": "away-hair-front", "within": 0.01}}
+  ]
+}
