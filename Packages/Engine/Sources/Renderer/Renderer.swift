@@ -248,6 +248,12 @@ public final class Renderer: @unchecked Sendable {
     // MARK: - Offscreen capture
 
     public func capture(frame: RenderFrame, width: Int, height: Int) -> CGImage? {
+        capture(frame: frame, width: width, height: height, configureTargets: nil)
+    }
+
+    /// `capture` with a hook on the fresh render targets before encoding
+    /// (tests inject target failures through it).
+    func capture(frame: RenderFrame, width: Int, height: Int, configureTargets: ((RenderTargets) -> Void)?) -> CGImage? {
         guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
@@ -262,6 +268,7 @@ public final class Renderer: @unchecked Sendable {
         guard let targets = try? RenderTargets(device: gpu.device, width: width, height: height) else {
             renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: width, height: height)); return nil
         }
+        configureTargets?(targets)
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
         var encoded = true
         do { try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb) } catch { encoded = false }
@@ -390,8 +397,17 @@ public final class Renderer: @unchecked Sendable {
         /// Live source-shader draws in source queue order; empty unless an
         /// item carries `sourceShader`.
         var live: [LiveRecord] = []
-        /// The stencil-capable main-pass pipelines, set only with live draws.
-        var stencilMainPass: Pipelines.MainPass? = nil
+        /// The stencil-capable main pass, set exactly when `live` is non-empty.
+        var liveMainPass: LiveMainPass? = nil
+    }
+
+    /// What a main pass with live source-shader draws needs beyond the
+    /// depth-only pass: stencil-capable pipelines and the MSAA depth-stencil
+    /// target. Both are resolved in `prepare`, so a failure returns the live
+    /// items to their toon draws with a reported reason instead of dropping them.
+    struct LiveMainPass {
+        let pipelines: Pipelines.MainPass
+        let depthStencil: any MTLTexture
     }
 
     /// Enabled lights in list order. Only the first `IK_MAX_LIGHTS` fit
@@ -612,13 +628,14 @@ public final class Renderer: @unchecked Sendable {
         }
         var liveReport = SourceShaderLiveFrameReport()
         var live = liveCandidates.isEmpty ? [] : prepareLive(liveCandidates, deforms: deforms, report: &liveReport, opaque: &opaque, transparent: &transparent)
-        var stencilMainPass: Pipelines.MainPass?
+        var liveMainPass: LiveMainPass?
         if !live.isEmpty {
-            do { stencilMainPass = try pipelines.stencilMainPass() }
+            do { liveMainPass = LiveMainPass(pipelines: try pipelines.stencilMainPass(), depthStencil: try targets.msaaDepthStencil()) }
             catch {
-                // Without the stencil pipelines nothing can draw live: every
-                // live item returns to its native draw, reported.
-                liveReport.fallbacks += live.map { "\($0.draw.material.label): stencil main-pass pipelines unavailable (\(error)); drawn toon" }
+                // Without the stencil pipelines or the depth-stencil target
+                // nothing can draw live: every live item returns to its
+                // native draw, reported.
+                liveReport.fallbacks += live.map { "\($0.draw.material.label): stencil main pass unavailable (\(error)); drawn toon" }
                 liveReport.draws = 0
                 for record in live.map(\.record) {
                     if record.item.material.transparent { transparent.append(record) } else { opaque.append(record) }
@@ -643,7 +660,7 @@ public final class Renderer: @unchecked Sendable {
         }
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
                             opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms,
-                            gizmos: gizmos, width: W, height: H, live: live, stencilMainPass: stencilMainPass)
+                            gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
     }
 
     static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
@@ -781,10 +798,10 @@ public final class Renderer: @unchecked Sendable {
         // Live source-shader draws need stencil; frames without them keep the
         // depth-only attachment and pipelines unchanged.
         var main = pipelines.depthOnlyMainPass
-        if let stencilPass = ctx.stencilMainPass, let depthStencil = try? targets.msaaDepthStencil() {
-            main = stencilPass
-            pass.depthAttachment.texture = depthStencil
-            pass.stencilAttachment.texture = depthStencil
+        if let liveMain = ctx.liveMainPass {
+            main = liveMain.pipelines
+            pass.depthAttachment.texture = liveMain.depthStencil
+            pass.stencilAttachment.texture = liveMain.depthStencil
             pass.stencilAttachment.loadAction = .clear
             pass.stencilAttachment.storeAction = .dontCare
             pass.stencilAttachment.clearStencil = 0
@@ -833,7 +850,7 @@ public final class Renderer: @unchecked Sendable {
         }
         enc.popDebugGroup()
 
-        if !ctx.live.isEmpty, pass.stencilAttachment.texture != nil {
+        if !ctx.live.isEmpty, ctx.liveMainPass != nil {
             enc.pushDebugGroup("SourceShaderLive")
             encodeLiveDraws(enc, ctx, target: TranslatedSourceTarget(color: Pipelines.hdrFormat, depthStencil: Pipelines.depthStencilFormat, sampleCount: Pipelines.sampleCount))
             // Translated programs bind buffers 0 and 8…, textures 0…; restore

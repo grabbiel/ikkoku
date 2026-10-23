@@ -17,6 +17,7 @@ final class RenderTargets: @unchecked Sendable {
     private let device: any MTLDevice
     private let lock = NSLock()
     private var depthStencil: (any MTLTexture)?
+    private var depthStencilFailure: (any Error)?
 
     init(device: any MTLDevice, width: Int, height: Int) throws {
         self.width = width; self.height = height; self.device = device
@@ -51,6 +52,7 @@ final class RenderTargets: @unchecked Sendable {
     /// created on first use so frames without them allocate nothing new.
     func msaaDepthStencil() throws -> any MTLTexture {
         lock.lock(); defer { lock.unlock() }
+        if let depthStencilFailure { throw depthStencilFailure }
         if let depthStencil { return depthStencil }
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.depthStencilFormat, width: max(width, 1), height: max(height, 1), mipmapped: false)
         d.sampleCount = Pipelines.sampleCount; d.textureType = .type2DMultisample; d.usage = .renderTarget; d.storageMode = .memoryless
@@ -58,5 +60,11 @@ final class RenderTargets: @unchecked Sendable {
         t.label = "MSAADepthStencil"
         depthStencil = t
         return t
+    }
+
+    /// Test injection: makes `msaaDepthStencil()` throw `error` (nil restores it).
+    func failDepthStencilCreation(with error: (any Error)?) {
+        lock.lock(); defer { lock.unlock() }
+        depthStencilFailure = error
     }
 }

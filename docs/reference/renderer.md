@@ -1507,7 +1507,10 @@ Source slots that no native item draws are listed as unmatched. At render time,
 the renderer returns an item to its toon draw, listed in
 `Renderer.lastSourceShaderLive`, when it has no deformation this frame, its stream
 vertex count differs, or it has an unsupported input or a UV1/UV2 that would alias
-UV0. A draw that fails to encode is not drawn and is listed too.
+UV0. It does the same for every live item of the frame when the stencil
+pipelines or the MSAA depth-stencil target cannot be created. Both are resolved
+while the frame is prepared, before anything is encoded. A draw that fails to
+encode is not drawn and is listed too.
 
 **Frame graph.** Live items leave the native opaque and transparent lists. The
 main pass draws them after native opaques and before native transparents, in
@@ -1711,6 +1714,9 @@ across builds.
   native/stream/zero, UV3/COLOR defaults;
 - validation-capture pixels, including the refusal to alias UV0;
 - a production main-pass live draw that leaves later toon frames unchanged;
+- an injected depth-stencil target failure, after which the live item is drawn
+  toon (pixels equal to the toon frame) with one reported fallback, plus the
+  same frame drawing live once the target is available;
 - stream manifests, assembly mapping and configuration.
 
 The gated `liveSourceShadersMeetTheControlledOriginalFrameGates` repeats the

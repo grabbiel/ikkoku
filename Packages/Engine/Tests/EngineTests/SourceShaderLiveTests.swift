@@ -500,6 +500,38 @@ func liveSourceDrawsRunInTheProductionMainPassAndLeaveToonFramesUnchanged() thro
     #expect(toonAfter == toonBefore)
 }
 
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceDrawsFallBackToToonWhenTheStencilTargetIsUnavailable() throws {
+    let renderer = try makeLiveTestRenderer()
+    let resources = renderer.resources
+    let directory = try LiveProgramFixture.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let program = try resources.translatedPipelines.program(url: try LiveProgramFixture.write(LiveProgramFixture.uv, family: "live_uv", to: directory))
+    let material = SourceShaderLiveMaterial(label: "o_uv slot 0", family: "live_uv", queue: 2000, passes: [program],
+                                            vectors: ["_Color": [0, 0, 1, 1]], textures: [:], conventions: [], textureSources: [:])
+    let mesh = try resources.register(mesh: coverMesh("o_uv/0", uvs1: Array(repeating: Float2(1, 1), count: 3)))
+    let toonItem = RenderItem(mesh: mesh, material: MaterialState(uniforms: .make(kind: MaterialKindItem)), model: matrix_identity_float4x4, objectID: 1)
+    var liveItem = toonItem
+    liveItem.sourceShader = SourceShaderLiveDraw(material: material, streams: nil, sourceOrder: 0)
+
+    let toon = try rgba(try #require(renderer.capture(frame: RenderFrame(items: [toonItem]), width: 16, height: 16)))
+    // The MSAA depth-stencil target cannot be created: the live item is drawn
+    // toon and reported, never dropped.
+    let failed = try rgba(try #require(renderer.capture(frame: RenderFrame(items: [liveItem]), width: 16, height: 16, configureTargets: {
+        $0.failDepthStencilCreation(with: RendererError.textureCreationFailed)
+    })))
+    #expect(renderer.lastFrameError == nil)
+    #expect(renderer.lastSourceShaderLive.draws == 0)
+    #expect(renderer.lastSourceShaderLive.fallbacks.count == 1)
+    #expect(renderer.lastSourceShaderLive.fallbacks.first?.hasPrefix("o_uv slot 0: stencil main pass unavailable (") == true)
+    #expect(renderer.lastSourceShaderLive.fallbacks.first?.hasSuffix("); drawn toon") == true)
+    #expect(failed == toon)
+    // Mutation control: with the target available the same frame draws live.
+    let live = try rgba(try #require(renderer.capture(frame: RenderFrame(items: [liveItem]), width: 16, height: 16)))
+    #expect(renderer.lastSourceShaderLive.draws == 1 && renderer.lastSourceShaderLive.fallbacks.isEmpty)
+    #expect(live != toon)
+}
+
 // MARK: - Assembly
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
