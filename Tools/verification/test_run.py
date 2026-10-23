@@ -629,7 +629,8 @@ class CheckExecutionTests(unittest.TestCase):
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
-                "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit", "setAnimation", "setAnimationSpeed",
+                "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
+                "setClothesState", "setAccessoryVisible", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink",
@@ -685,6 +686,20 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertTrue(capture["env"]["IKKOKU_CAPTURE_UI"].endswith(".png"))
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
+
+    def test_release_smoke_renders_with_the_optimized_app(self):
+        # R6 (2026-10-23): every Release render crashed while the Debug lanes
+        # passed, so app-smoke builds Release and renders one frame with it.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("build-release-app"), order.index("release-startup-capture"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        build = checks["build-release-app"]["argv"]
+        self.assertEqual(build[build.index("-configuration") + 1], "Release")
+        smoke = checks["release-startup-capture"]
+        self.assertIn("/Release/Ikkoku.app/", smoke["argv"][0])
+        self.assertEqual(smoke["env"].get("IKKOKU_SOURCE_TREE_FALLBACKS"), "0")
+        self.assertTrue(smoke["env"]["IKKOKU_AUTOCAPTURE"].endswith(".png"))
 
     def test_capture_only_plugin_evidence_runs_inside_a_capture(self):
         # A06: the app rejects IKKOKU_NATIVE_PLUGIN_REPORT and IKKOKU_APPLICATION_FOCUS
@@ -774,7 +789,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 39)
+        self.assertEqual(len(self.checks), 44)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -845,6 +860,19 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIs(type(step["index"]), int)
                     if "errorContains" in step:
                         self.assertTrue(step["errorContains"], "a refused outfit needs a specific diagnostic")
+                if op in ("setClothesState", "setAccessoryVisible"):
+                    self.assertIsInstance(step["key"], int)
+                    self.assertIs(type(step["index"]), int)
+                    if op == "setClothesState":
+                        self.assertIs(type(step["state"]), int)
+                    else:
+                        self.assertIsInstance(step["on"], bool)
+                    if "errorContains" in step:
+                        self.assertTrue(step["errorContains"], "a refused wear edit needs a specific diagnostic")
+                    else:
+                        self.assertIn(step["index"], range(8) if op == "setClothesState" else range(20))
+                        if op == "setClothesState":
+                            self.assertIn(step["state"], range(4))
                 if op == "captureRender":
                     self.assertTrue(step["name"])
                     if "path" in step:
@@ -885,7 +913,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "render",
-                                            "exportIdenticalToSource", "outfit") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -921,6 +949,21 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if "position" in step:
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
+                    if "clothes" in step:
+                        clothes = step["clothes"]
+                        self.assertIsInstance(clothes["key"], int)
+                        self.assertTrue({"state", "saved", "rendered", "accessories", "accessoriesOff",
+                                         "edited", "fallbacks", "diagnosticContains"} & set(clothes),
+                                        "a clothes assert must name what it checks: %s" % path)
+                        for name in ("state", "saved"):
+                            if name in clothes:
+                                self.assertEqual(len(clothes[name]), 9)
+                                self.assertTrue(all(v in range(4) for v in clothes[name]))
+                        if "rendered" in clothes:
+                            self.assertTrue(all(v in range(9) for v in clothes["rendered"]))
+                        for name in ("accessories", "accessoriesOff"):
+                            if name in clothes:
+                                self.assertTrue(all(v in range(20) for v in clothes[name]))
                     for slot in ("face", "body"):
                         if slot in step:
                             self.assertIsInstance(step[slot]["index"], int)
@@ -949,7 +992,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -975,7 +1018,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
 
     def test_visual_reset_controls_keep_clock_and_camera_fixed(self):
         checks = {check["id"]: check for check in self.checks}
-        for name in ("shape-visual-reset", "color-visual-reset", "outfit-select"):
+        for name in ("shape-visual-reset", "color-visual-reset", "outfit-select",
+                     "clothes-saved-off", "clothes-toggle", "accessory-toggle"):
             self.assertIn({"env": "IKKOKU_MAKER_LIBRARY", "kind": "file"},
                           checks["studio-scenario-" + name]["fixtures"],
                           "visual evidence must hash its selected assembly catalog")
