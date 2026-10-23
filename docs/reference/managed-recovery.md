@@ -79,6 +79,98 @@ resolution, source inventory matching and cache integrity. Reference availabilit
 is a filename check, not proof that a
 Unity API implementation has a native equivalent.
 
+## Consuming recovered source
+
+Since E-T02 (2026-10-23), contract generators read these generations only
+through `Tools/reverse/analysis/recovered_source.py`.
+`RecoveredAssembly(index, source_path=…)` or `RecoveredAssembly(index, sha256=…)`
+selects an assembly's generation from `index.json`, not from a directory glob.
+It also checks that the index agrees with that generation's `manifest.json`
+identity and selected project. `source(type_name)` then resolves one type:
+
+- A type with a recorded `typeOverrides` entry uses that fallback file. The name
+  may be the exact metadata name or an unambiguous name without generic arity.
+  The fallback is used only if its command exited 0, did not time out and has no
+  error stub. Otherwise the request fails; it never reverts to the primary file.
+- Any other type comes from the manifest-selected project, at
+  `project/<dotted namespace>/<Type>.cs`. This is the same layout
+  `recover_managed.py` uses when an override supersedes a primary file. A nested
+  namespace directory is also accepted, but not if both layouts exist.
+- The returned file must stay inside the generation, appear in the manifest
+  inventory and match its recorded size and SHA-256. It must contain no
+  stub marker and have no recorded decompiler diagnostic.
+
+Refusals are named `ValueError` subclasses:
+
+| Exception | Raised when |
+| --- | --- |
+| `RecoveredErrorStub` | The chosen file has a stub marker or recorded diagnostic, or is empty; the fallback is unclean; or the primary failure log names the type but no fallback is recorded |
+| `MissingRecoveredSource` | The index lists no such assembly, or the manifest records no file for the type |
+| `RecoveredHashMismatch` | A file, manifest identity or (with `verify_assembly()`) original DLL differs from its record; or a file is unrecorded, missing or outside the generation |
+| `AmbiguousRecoveredSource` | The index lists two generations for one assembly, two fallbacks share one arity-free name, or both namespace layouts exist |
+| `RecoveryManifestError` | The index or manifest is unreadable or inconsistent, or the recovery selected no project |
+
+Stub markers come from `recover_managed.py`'s `ERROR_STUB`, the same definition
+that sets recovery status. The resolver adds no new heuristic.
+
+| Consumer | Assembly | Previous lookup |
+| --- | --- | --- |
+| `analysis/gameplay_execution_contract.py`, `analysis/adv_command_coverage.py` | Main game | Own helper checked only `Error decompiling` and `throw new NotImplementedException`; the second check remains as a consumer-specific refusal. ADV handler lookup treats only stubbed types as existing; hash, ambiguity and manifest errors now propagate |
+| `analysis/trigonometric_ik_contract.py` | Firstpass | Own override lookup checked only `Error decompiling` |
+| `analysis/body_shape_contract.py` | Main game | `--source` accepted any directory. `--recovery-index` replaces it; the generator still requires `recovered` status and the DLL hash |
+| `analysis/card_roundtrip.py` | Both pinned hashes | Took the first sorted generation directory for each hash and ignored the index |
+| `analysis/studio_fullbody_oracle.py` | Firstpass | `--recovered-project` copied files from any directory. `--recovery-index` replaces it; nothing is copied if any of the 14 files is refused |
+| `dynamics_contract.py` | Main game | Read `assemblies[0]` and its `project/` directory directly |
+
+For valid inputs these consumers record the same paths, hashes and text as before.
+This assumes the main game's `Assembly-CSharp.dll` is the first indexed assembly,
+as in the recovery command above. `Tools/translation/translate.py` translates an
+explicitly supplied C# file and does not read the manifest. It now refuses any
+source with these stub markers before building or writing anything. Its
+`plugin.py` caller therefore applies the same refusal to the plugin types it
+decompiles.
+
+**Consumers not moved.** These generators predate the complete recovery. They
+read narrow ILSpy `-t` decompilations under `.local/reverse/decompiled/`, or an
+explicit `--source`/`--source-root` directory. Those decompilations have no
+primary/fallback split and their manifests use other schemas; only
+`decompile_studio.py` is checked in. Moving them would change the text they
+parse and the evidence they record. That requires a private rerun to confirm the
+contracts are unchanged. None of them refuses stub markers today
+(`gameplay_contract.py` records a count of `Error decompiling`). If one is
+pointed at a primary project directory, a stub can still reach it.
+
+- Game types: `analysis/character_contracts.py`,
+  `analysis/expression_contract.py`, `analysis/animation_playback_contract.py`,
+  `analysis/card_contract.py`, `analysis/gameplay_contract.py`,
+  `analysis/studio_scene_contract.py`, `analysis/studio_pose_contract.py`,
+  `analysis/studio_animation_contract.py`, `analysis/mod_catalog_contract.py`
+  (`ChaControl` and copied game types), `clothed_material_contract.py` and the
+  parity scripts `test_face_rig_parity.py`, `test_avatar_parity.py` and
+  `test_male_body_parity.py`.
+- Plugin and mod sources outside the five recovered assemblies:
+  `analysis/abmx_contract.py`, `analysis/resolver_contract.py`, the Sideloader
+  part of `analysis/mod_catalog_contract.py`,
+  `analysis/accessory_names_oracle.py`, `analysis/mute_plugin_oracle.py`, and the
+  ExtendedSave sources in `card_contract.py` and `studio_scene_contract.py`.
+
+Fifteen synthetic tests in `Tools/reverse/analysis/test_recovered_source.py`
+cover the resolver. They build each generation with the real
+`recover_managed.recover()` and a fake decompiler, then check:
+
+- the indexed project wins over another generation of the same assembly;
+- a clean fallback replaces only its failed type;
+- a primary stub is refused with or without a fallback;
+- unclean fallbacks never revert to the primary;
+- hash, missing, ambiguous and manifest errors fail by name.
+
+Three of these tests run real generators. `trigonometric_ik_contract.evidence`
+refuses a `// System.…Exception:` primary stub that its earlier check accepted.
+`card_roundtrip.managed_evidence` uses the indexed generation rather than a stale
+generation that sorts first. `studio_fullbody_oracle.copy_sources` copies nothing
+when one file is a stub. These tests use synthetic trees only; the private
+five-assembly generations have not been rerun through the moved consumers.
+
 ## Independent REA check — 2026-10-17
 
 At repository base `d671aee`, REA **6.5.0** independently inspected the five

@@ -11,6 +11,11 @@ import json
 from pathlib import Path
 import re
 
+try:  # Run as a script or from Tools/reverse/analysis.
+    from recovered_source import MAIN_GAME, MissingRecoveredSource, RecoveredAssembly, RecoveredErrorStub
+except ImportError:  # Imported as analysis.gameplay_execution_contract from Tools/reverse.
+    from analysis.recovered_source import MAIN_GAME, MissingRecoveredSource, RecoveredAssembly, RecoveredErrorStub
+
 PERIODS = ["起床", "朝", "登校", "朝ホームルーム", "授業1", "昼休み", "授業2", "帰りホームルーム", "部活時間", "放課後", "帰宅", "自宅"]
 WEEKS = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "休日"]
 WEEK_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Holiday"]
@@ -25,30 +30,17 @@ def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def recovered_project(index_path):
-    """Main-game Assembly-CSharp recovery directory, selected project and overrides."""
-    index = json.loads(Path(index_path).read_text())
-    assembly = next(a for a in index["assemblies"] if "Koikatu_Data/Managed/Assembly-CSharp.dll" in a["sourcePaths"])
-    directory = Path(assembly["directory"])
-    manifest = json.loads((directory / "manifest.json").read_text())
-    overrides = {item["type"]: item for item in manifest.get("typeOverrides", [])}
-    return dict(directory=directory, selectedProject=assembly["selectedProject"], overrides=overrides)
+    """Main-game Assembly-CSharp recovery, resolved through its index and manifest."""
+    return RecoveredAssembly(index_path, source_path=MAIN_GAME)
 
 
 def selected_source(index_path, type_name, project=None):
-    project = project or recovered_project(index_path)
-    directory, overrides = project["directory"], project["overrides"]
-    if type_name in overrides:
-        selected = directory / overrides[type_name]["file"]
-    else:
-        namespace, _, name = type_name.rpartition(".")
-        roots = [directory / project["selectedProject"] / namespace, directory / project["selectedProject"] / namespace.replace(".", "/")]
-        selected = next((root / (name + ".cs") for root in roots if (root / (name + ".cs")).is_file()), None)
-        if selected is None:
-            raise ValueError("Missing selected recovered type: " + type_name)
-    text = selected.read_text()
-    if "Error decompiling" in text or "throw new NotImplementedException" in text:
-        raise ValueError("Selected recovered source contains a decompiler stub: " + type_name)
-    return selected, text
+    source = (project or recovered_project(index_path)).source(type_name)
+    # Beyond the shared recovery stub markers, this consumer keeps its earlier
+    # refusal of explicit NotImplementedException bodies.
+    if "throw new NotImplementedException" in source.text:
+        raise RecoveredErrorStub("Selected recovered source contains a decompiler stub: " + type_name)
+    return source.path, source.text
 
 
 def source_evidence(index_path):

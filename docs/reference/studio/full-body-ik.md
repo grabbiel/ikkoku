@@ -104,12 +104,17 @@ customization followed by animation, iterations 0/1/4/8, relative effectors,
 partial global weight, asymmetric chain pull/reach/push, and inactive groups.
 The installed firstpass DLL failed to load directly under macOS .NET; the oracle
 therefore executes recovered C# instead of claiming original binary execution.
+Since E-T02 the files come from the firstpass generation's selected project or
+clean per-type fallback via
+[`recovered_source.py`](../managed-recovery.md#consuming-recovered-source);
+a stub, missing or changed file stops the run before anything is copied. The
+retained run below predates this change and used the project directory directly.
 
 ```sh
-# Supply the locally recovered project directory; it is never checked in.
+# Sources resolve through the local recovery index; they are never checked in.
 .local/reverse/unitypy-venv/bin/python Tools/reverse/analysis/studio_fullbody_oracle.py \
   --bundle .local/reverse/rigs/source/abdata/chara/oo_base.unity3d \
-  --recovered-project /path/to/private/recovered/project \
+  --recovery-index .local/reverse/managed-recovery/index.json \
   --output .local/reverse/studio-fullbody
 IKKOKU_FULLBODY_REFERENCE="$PWD/.local/reverse/studio-fullbody/reference.json" \
 IKKOKU_FULLBODY_REPORT="$PWD/.local/reverse/studio-fullbody/native-parity.json" \
