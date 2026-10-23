@@ -169,9 +169,13 @@ matrix with a negative determinant with
 singular one with `RigError`, and validates its result with
 `OrbitCamera.validate()`. `rotationQuaternion` divides by unsigned column
 lengths, so a mirrored basis would become a nonunit quaternion. The captured
-rotation is unaffected by a non-uniform parent scale (`item-nonuniform`), but
-no capture covers a mirrored parent, and a mirrored matrix does not say which
-axis carries the mirror. The case is therefore rejected rather than guessed.
+rotation is unaffected by a non-uniform parent scale (`item-nonuniform`). One
+mirrored parent has since been captured
+([Mirrored camera parent](#mirrored-camera-parent-original-capture-r4)): an
+item scaled (−1, 1, 1). The original does look through that camera, with a
+rotation that is not the plain parent-times-local composition. One mirror axis
+on one item is not a rule, and a mirrored matrix does not say which axis
+carries the mirror, so the case is still rejected rather than guessed.
 `SourceStudioWorldTransform.world` composes a child's rotation through the
 parent frame's unchecked `rotationQuaternion`, which turns a mirrored parent
 into a nonunit rotation that the composed matrix no longer shows. The preview
@@ -790,6 +794,100 @@ most one camera active. Cameras attached to character bones were not captured.
 A camera created in code needs `cameraSelector.Init()` before `ChangeCamera`,
 as `Studio.AddCamera` does, or `CameraSelector.SetCamera` throws on its
 uninitialized list. That is a probe detail, not a runtime difference.
+
+### Mirrored camera parent (original capture, R4)
+
+Recorded 2026-10-23. Before this, no scene had a camera under a mirrored
+parent. The original player authored one: `original_scene_reload_probe.py
+--author-scenes mirrored-camera` runs the `mirrored-camera` author scene of
+`Tools/reverse/fixtures/OriginalSceneReloadProbe.cs`. It needs no card, so
+`author-scenes.txt` alone starts author mode.
+
+The scene holds two copies of the first scalable catalog item without a named
+child root (the camera probe's rule, so the item is its own child root). Both
+items sit at rotation (0, 40, 15). Item key 0 is at (−0.6, 0.3, 0.6) with scale
+(−1, 1, 1), and item key 1 is at (0.6, 0.3, 0.6) with scale (1, 1, 1). Each
+item holds one camera object at local position (0.3, 0.6, −0.9) and Euler
+(10, 70, 25): key 2 `IKKOKU-MIRROR` under item 0 and key 3 `IKKOKU-CONTROL`
+under item 1. The scale goes through `ChangeAmount.scale`, the setter the
+Studio scale input (`GuideInput.OnEndEditScale`) and drag (`GuideScale.OnDrag`)
+call. Both of those clamp every component to at least 0.01 first, so the UI
+cannot make a mirrored item; it comes only from a scene file or code. Folders
+were not used because folder scale is never applied (the scale rule above).
+The saved view is a `CameraControl.Import` of pos (0.2, 1.1, 0.3), rotate
+(15, 200, 0), distance (0, 0, −3) and parse 35. `ChangeCamera` activated the
+mirrored camera before the save, so its `active` flag is saved true. The
+scene was then cleared with `InitScene(false)`, reloaded with
+`Studio.LoadScene` and traced in five phases of 8 end-of-frame snapshots:
+as loaded, control camera on, control off, mirrored camera on again, and
+mirrored camera off.
+
+What the original showed (Unity coordinates, quaternions as x, y, z, w):
+
+- Item 0's world scale (`lossyScale`) is (−1, 1, 1), and its world matrix
+  has determinant −1. The camera object under it is counter-scaled by
+  `GuideObject.LateUpdate` to a local scale of (−1, 1, 1). Its own world
+  matrix therefore has determinant +1 and world scale (1, 1, 1).
+- After the load the mirrored camera is the view camera (`IKKOKU-MIRROR`,
+  key 2) and `cameraCtrl` is disabled. FOV stays 35.
+- On the first end-of-frame snapshot after `LoadScene` returns, the render
+  camera is at (−1.0755, 0.9572, −0.1759) with rotation
+  (0.19302, 0.79716, 0.17677, 0.54409). That is the pose an unmirrored
+  parent gives: the control camera's rotation, at the control camera's
+  position shifted by the two items' −1.2 m x offset. The camera object's
+  world position read right after `LoadScene` is the same point.
+- From the second frame on, and in every later frame, the render camera is
+  at (−1.51945, 0.80191, 0.19664) with rotation
+  (0.23939, −0.20208, −0.10982, 0.94329). This equals the camera object's
+  own world pose. The position equals `parent.TransformPoint(localPosition)`
+  with the mirror included. The rotation equals the parent rotation times the
+  local Euler rotation reflected through the parent's mirrored x axis
+  (quaternion (x, y, z, w) → (x, −y, −z, w)); a recomputation from the
+  captured values agrees to 0.0°. It is 135.46° from the plain
+  parent-times-local rotation and 0.600 m from the first-frame position.
+- With the control camera active, the render camera is at
+  (0.12451, 0.95720, −0.17589) with rotation
+  (0.19302, 0.79716, 0.17677, 0.54409), parent rotation times local Euler.
+- Toggling either camera off returns the render camera exactly to the saved
+  view, (1.19110, 1.87646, 3.02302) with rotation
+  (−0.02267, 0.97638, −0.12854, −0.17216), with 0 deviation.
+- Re-activating the mirrored camera shows the steady mirrored pose from its
+  first frame, as does the activation before the save. Only the load has
+  the one-frame transient.
+
+This is one mirror axis on one item, captured once. Mirrors on y or z, two
+negative components, a mirrored character parent and a mirror further up the
+chain were not captured.
+
+Run: one isolated player copy `C:\Temp\IkkokuShaderProbe-d447de44…`, Unity
+5.6.2f1, plugin source SHA-256 `eaeacd48…a0e8`. `--collect` stopped the
+player. `status.json` has error `null` and `voiceRepair` "voiceInfoList
+already holds 44 voice entries: nothing to repair", and `unity.log` has no
+exception. `scene-mirrored-camera.png` is 3,696 bytes, SHA-256
+`ea8c4e08…e438cc`. The private capture is `.local/vm-mirrored-camera/probe/`
+(`reload-trace.json` `d72ed03e…f86b4`, `manifest.json`).
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_scene_reload_probe.py \
+  --author-scenes mirrored-camera --output .local/vm-mirrored-camera/probe
+# after the player reports done (about 2 minutes); collecting also stops it:
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_scene_reload_probe.py \
+  --output .local/vm-mirrored-camera/probe --collect
+```
+
+Our side still rejects the mirrored camera (R4 `reflectedFrame`). The lane
+check `studio-scenario-mirrored-camera` (`Tools/verification/scenarios/mirrored-camera.json`,
+environment key `IKKOKU_MIRRORED_CAMERA_SCENE`) loads this scene. It asserts
+through `StudioModel.viewCamera` that with camera 2 active the preview renders
+from exactly the saved camera and that the status line reads "Source camera 2
+view unresolved: Source camera object parent frame is mirrored, so its
+look-through rotation is undefined.; using the saved camera.". Toggling camera
+3 looks through it, and toggling camera 2 again falls back again; the same
+holds after export → reimport. Measured against the capture after the Unity
+→ engine z flip, our control view is within 1.7e-7 m and 7.3e-7° of the
+original's control render camera, and our fallback view is within 5.0e-7 m and
+2.8e-6° of the original's saved view. The original's mirrored pose is not
+reproduced.
 
 ## Extended Save and preservation
 

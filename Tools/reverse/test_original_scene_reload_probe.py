@@ -82,6 +82,19 @@ class AuthorStartTests(unittest.TestCase):
         self.assertEqual(events[3][2],b'route-children\nneck-target\n')
         self.assertEqual(run['authorScenes'],['route-children','neck-target']);self.assertEqual(recorded,run)
 
+    def test_card_free_author_scenes_upload_only_their_list(self):
+        events=[]
+        with tempfile.TemporaryDirectory() as tmp,\
+             patch('original_scene_reload_probe.player_root',return_value=ROOT_A),\
+             patch('original_scene_reload_probe.write_small',side_effect=lambda vm,path,data:events.append(('upload',path,data))),\
+             patch('original_scene_reload_probe.retry',side_effect=lambda vm,script,user=False:events.append(('launch' if user else 'compile',script)) or ('4321' if user else '')):
+            run=probe.start('vm',Path(tmp),scenes={},author_scenes=['mirrored-camera'])
+        self.assertEqual([e[0] for e in events],['upload','compile','upload','launch'])
+        self.assertEqual(events[2][1],ROOT_A+r'\BepInEx\plugins\author-scenes.txt') # the list alone starts author mode
+        self.assertEqual(events[2][2],b'mirrored-camera\n')
+        self.assertNotIn(ROOT_A+r'\BepInEx\plugins\author-card.png',[e[1] for e in events if e[0]=='upload'])
+        self.assertIsNone(run['authorCard']);self.assertEqual(run['authorScenes'],['mirrored-camera'])
+
     def test_plain_author_run_records_the_default_scene(self):
         with tempfile.TemporaryDirectory() as tmp,\
              patch('original_scene_reload_probe.player_root',return_value=ROOT_A),\
@@ -159,6 +172,24 @@ class CollectTests(unittest.TestCase):
         listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
         self.assertTrue({'scene-route-children.png','scene-neck-target.png'}<=listed)
 
+    def test_card_free_author_run_fetches_its_scene_without_a_card(self):
+        (self.output/'run.json').write_text(json.dumps(dict(vm='vm',root=ROOT_A,processID=77,stopped=False,
+            authorCard=None,authorScenes=['mirrored-camera'],sceneSHA256={})))
+        paths=[]
+        files={'status.json':json.dumps(dict(error=None)).encode(),'reload-trace.json':b'{}',
+               'scene-mirrored-camera.png':b'mirror','unity.log':b'log'}
+        def fetch(vm,path,limit=None):
+            name=path.rsplit('\\',1)[1];paths.append(path)
+            if name not in files:raise RuntimeError('missing '+name)
+            return files[name]
+        with patch('original_scene_reload_probe.fetch',side_effect=fetch),patch('original_scene_reload_probe.stop_probe'):
+            probe.collect('vm',self.output)
+        self.assertIn(ROOT_A+r'\BepInEx\plugins\reload\scene-mirrored-camera.png',paths)
+        self.assertEqual((self.output/'scene-mirrored-camera.png').read_bytes(),b'mirror')
+        self.assertFalse(any(p.endswith('scene-char.png') for p in paths))
+        listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
+        self.assertIn('scene-mirrored-camera.png',listed)
+
     def test_failed_probe_status_is_saved_before_raising(self):
         def fetch(vm,path,limit=None):
             if path.endswith('status.json'):return json.dumps(dict(error='hide-rename: boom')).encode()
@@ -222,6 +253,11 @@ class ArgumentTests(unittest.TestCase):
             card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
             with self.assertRaisesRegex(ValueError,'author-scenes needs --author-character'):
                 self.run_main(['--author-scenes','route-children'])
+            with self.assertRaisesRegex(ValueError,'author-scenes needs --author-character'): # one card scene in the list still needs the card
+                self.run_main(['--author-scenes','mirrored-camera,neck-target'])
+            start,collect=self.run_main(['--author-scenes','mirrored-camera']) # card-free: no card, no records
+            self.assertEqual(start.call_args.args[3],{});self.assertIsNone(start.call_args.args[4])
+            self.assertEqual(start.call_args.args[5],['mirrored-camera'])
             for bad in ('route-children,bogus','neck-target,neck-target',','):
                 with self.assertRaisesRegex(ValueError,'author-scenes takes distinct names'):
                     self.run_main(['--author-character',str(card),'--author-scenes',bad])
