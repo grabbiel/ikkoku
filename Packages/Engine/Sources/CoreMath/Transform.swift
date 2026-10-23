@@ -21,6 +21,9 @@ public enum MathContractError: Error, Equatable, CustomStringConvertible {
     case reflectedMatrix(String)
     /// The basis is sheared or the bottom row is not affine, which TRS cannot represent.
     case unsupportedMatrix(String)
+    /// A finite scalar is outside the helper's domain, such as a nonpositive
+    /// near plane or a field of view outside (0, π).
+    case outOfRange(String)
 
     public var description: String {
         switch self {
@@ -29,6 +32,7 @@ public enum MathContractError: Error, Equatable, CustomStringConvertible {
         case .singularMatrix(let name): return "\(name) is singular."
         case .reflectedMatrix(let name): return "\(name) contains a reflection."
         case .unsupportedMatrix(let name): return "\(name) is sheared or not affine, so rotation and scale cannot represent it."
+        case .outOfRange(let name): return "\(name) is outside its valid range."
         }
     }
 }
@@ -192,7 +196,8 @@ public extension float4x4 {
         return handedness < 0
     }
 
-    private var entriesAreFinite: Bool {
+    /// Whether all 16 entries are finite; shared by the checked CoreMath forms.
+    internal var entriesAreFinite: Bool {
         (0..<4).allSatisfy { column in (0..<4).allSatisfy { self[column][$0].isFinite } }
     }
     func transformPoint(_ p: Float3) -> Float3 {

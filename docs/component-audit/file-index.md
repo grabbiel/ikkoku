@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**803 files indexed; 803 assigned; 0 unassigned.**
+**807 files indexed; 807 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 73 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 77 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 302 |
@@ -37,12 +37,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 7 |
-| Conversion / recovery / verification tool | 163 |
+| Conversion / recovery / verification tool | 164 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 173 |
-| Test / validation | 159 |
+| Runtime / shared shader declaration | 174 |
+| Test / validation | 161 |
 
 ## App / gameplay / plugins
 
@@ -82,6 +82,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourceIRProgram.swift](../../Packages/Engine/Sources/Gameplay/SourceIRProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift](../../Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourcePluginLibraryIndex.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginLibraryIndex.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
@@ -94,6 +95,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
 | [Tools/reverse/analysis/accessory_names_oracle.py](../../Tools/reverse/analysis/accessory_names_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_command_coverage.py](../../Tools/reverse/analysis/adv_command_coverage.py) | Conversion / recovery / verification tool |
@@ -118,8 +120,10 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Tools/translation/frontend/UnitySurface.txt](../../Tools/translation/frontend/UnitySurface.txt) | Conversion / recovery / verification tool |
 | [Tools/translation/native_adapters.py](../../Tools/translation/native_adapters.py) | Conversion / recovery / verification tool |
 | [Tools/translation/plugin.py](../../Tools/translation/plugin.py) | Conversion / recovery / verification tool |
+| [Tools/translation/plugin_library.py](../../Tools/translation/plugin_library.py) | Conversion / recovery / verification tool |
 | [Tools/translation/studio_execution_probe.py](../../Tools/translation/studio_execution_probe.py) | Conversion / recovery / verification tool |
 | [Tools/translation/tests/test_native_adapters.py](../../Tools/translation/tests/test_native_adapters.py) | Test / validation |
+| [Tools/translation/tests/test_plugin_library.py](../../Tools/translation/tests/test_plugin_library.py) | Test / validation |
 | [Tools/translation/tests/test_studio_execution_probe.py](../../Tools/translation/tests/test_studio_execution_probe.py) | Test / validation |
 | [Tools/translation/tests/test_translation.py](../../Tools/translation/tests/test_translation.py) | Test / validation |
 | [Tools/translation/translate.py](../../Tools/translation/translate.py) | Conversion / recovery / verification tool |

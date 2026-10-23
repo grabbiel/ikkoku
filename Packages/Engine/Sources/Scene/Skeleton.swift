@@ -177,7 +177,29 @@ public struct Skeleton: Sendable {
     public func restWorldMatrices() -> [float4x4] { restPose.worldMatrices(skeleton: self) }
 }
 
+/// Defined failures where a `Pose` meets a `Skeleton` or another pose (R4).
+/// The unchecked `Pose`/`PoseDelta` functions index the arrays directly and
+/// trap on a mismatch; the `checked…` forms validate first and otherwise
+/// return exactly the unchecked result.
+public enum PoseError: Error, Equatable, CustomStringConvertible {
+    /// The named array has `count` entries instead of `expected` (one per bone).
+    case countMismatch(array: String, count: Int, expected: Int)
+    /// A bone index is outside a skeleton of `count` bones.
+    case boneOutOfRange(index: Int, count: Int)
+
+    public var description: String {
+        switch self {
+        case .countMismatch(let array, let count, let expected):
+            return "Pose \(array) has \(count) entries, but \(expected) are required (one per bone)."
+        case .boneOutOfRange(let index, let count): return "Bone index \(index) is outside the skeleton's \(count) bones."
+        }
+    }
+}
+
 /// Per-bone local overrides. Rotations are absolute local rotations (not deltas) so poses are stable.
+/// The unchecked functions require every array to have one entry per skeleton
+/// bone (as `init(skeleton:)` and `PoseDelta.apply` produce); validate a pose
+/// from elsewhere with `validate(for:)` or use the `checked…` forms (R4).
 public struct Pose: Sendable, Equatable {
     public var rotations: [simd_quatf]
     public var translations: [Float3]   // absolute local translation (rest by default)
@@ -247,6 +269,52 @@ public struct Pose: Sendable, Equatable {
         while let pi = p { q = rotations[pi] * q; p = skeleton.bones[pi].parent }
         return q.normalized
     }
+
+    // MARK: - Checked forms (R4)
+
+    /// Throws `PoseError.countMismatch` naming the first array that does not
+    /// have one entry per bone of `skeleton`.
+    public func validate(for skeleton: Skeleton) throws { try validate(count: skeleton.count, prefix: "") }
+
+    private func validate(count expected: Int, prefix: String) throws {
+        let arrays = [("rotations", rotations.count), ("translations", translations.count),
+                      ("scales", scales.count), ("skinScales", skinScales.count)]
+        for (array, count) in arrays where count != expected {
+            throw PoseError.countMismatch(array: prefix + array, count: count, expected: expected)
+        }
+    }
+
+    /// Checked `worldMatrices(skeleton:)`: validates the pose first.
+    public func checkedWorldMatrices(skeleton: Skeleton) throws -> [float4x4] {
+        try validate(for: skeleton)
+        return worldMatrices(skeleton: skeleton)
+    }
+
+    /// Checked `skinMatrices(skeleton:world:)`: validates the pose and, when
+    /// given, that `world` has one matrix per bone.
+    public func checkedSkinMatrices(skeleton: Skeleton, world: [float4x4]? = nil) throws -> [float4x4] {
+        try validate(for: skeleton)
+        if let world, world.count != skeleton.count {
+            throw PoseError.countMismatch(array: "world matrices", count: world.count, expected: skeleton.count)
+        }
+        return skinMatrices(skeleton: skeleton, world: world)
+    }
+
+    /// Checked `blended(with:t:)`: every array of both poses must have
+    /// `count` (this pose's rotation count) entries; `other`'s arrays are
+    /// named with an "other " prefix.
+    public func checkedBlended(with other: Pose, t: Float) throws -> Pose {
+        try validate(count: count, prefix: "")
+        try other.validate(count: count, prefix: "other ")
+        return blended(with: other, t: t)
+    }
+
+    /// Checked `worldRotation(_:skeleton:)`: validates the pose and the index.
+    public func checkedWorldRotation(_ i: Int, skeleton: Skeleton) throws -> simd_quatf {
+        try validate(for: skeleton)
+        guard skeleton.bones.indices.contains(i) else { throw PoseError.boneOutOfRange(index: i, count: skeleton.count) }
+        return worldRotation(i, skeleton: skeleton)
+    }
 }
 
 /// A pose expressed as deltas from rest, in degrees, which is how the UI and saved files see it.
@@ -281,6 +349,13 @@ public struct PoseDelta: Codable, Sendable, Equatable {
             pose.skinScales[i] *= s
         }
         return pose
+    }
+
+    /// Checked `apply(to:base:)` (R4): throws `PoseError` when `base` does
+    /// not have one entry per bone of `skeleton`.
+    public func checkedApply(to skeleton: Skeleton, base: Pose? = nil) throws -> Pose {
+        try base?.validate(for: skeleton)
+        return apply(to: skeleton, base: base)
     }
 
     public mutating func merge(_ other: PoseDelta) {
