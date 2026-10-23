@@ -325,6 +325,23 @@ func sourceStudioExpressionEditRendersWithoutRebuildingAndRejectsAtomically() th
     #expect(preview.expressionState == undrawn)
     try preview.setExpressionState(nil)
     #expect(preview.expressionState == saved && preview.expressionDiagnostics == diagnosticsBefore)
+
+    // This untouched character saves cha_eyeset row 30, outside the 28 FBS
+    // slots. Sending the row ID directly to FBS rejected the whole character
+    // before ST-C04; ChangeEyesPtn maps it to row 30's EyesPtn (21).
+    let special = try expressionPreview(key: 1299)
+    #expect(special.savedExpression.eyesPattern == 30)
+    let row = try #require(special.expressionControls.eyeRow(30))
+    #expect(row.pattern == 21 && !row.isOrdinary)
+    #expect(special.expressionInputs?.eyesPattern == 21)
+    #expect(special.expressionDiagnostics.contains { $0.hasPrefix("Eyes pattern 30") && $0.contains("not drawn") })
+    let specialWeights = try expressionFrameWeights(special)
+    #expect(!specialWeights.isEmpty)
+    try special.setExpressionState(nil)
+    #expect(try expressionFrameWeights(special) == specialWeights)
+    #expect(special.expressionState == special.savedExpression)
+    #expect(special.expressionState.statusEdit(from: special.savedExpression).isEmpty)
+    #expect(special.expressionState.mouthEdit(from: special.savedExpression) == nil)
 }
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(expressionPreviewVariables) && MTLCreateSystemDefaultDevice() != nil,
