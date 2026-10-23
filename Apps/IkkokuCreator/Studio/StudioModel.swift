@@ -896,6 +896,14 @@ final class StudioModel: ViewportInputHandler {
         let bytes = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
         guard bytes.count <= 256 * 1024 * 1024 else { throw RigError.invalid("Source scene exceeds 256 MiB.") }
         let source = try KoikatsuSceneReader.decodeDocument(bytes)
+        // A-T02: every character preview reads the bone catalog. Without it each
+        // one would be retained without rendering, and a save would keep the
+        // folders and drop every character, so the preview refuses the scene.
+        var directory: ObjCBool = false
+        if Self.containsCharacter(source.snapshot.roots),
+           !FileManager.default.fileExists(atPath: boneCatalogURL.path, isDirectory: &directory) || directory.boolValue {
+            throw RigError.invalid("The \(ResourceCompanion.studioPoseContract.label) is missing at \(boneCatalogURL.path): source scene characters need \(ResourceCompanion.studioPoseContract.conventionalPath) in the converted library, next to the original base's rigs/ folder.")
+        }
         let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         var imported = StudioDocument(), previews: [UUID: SourceStudioCharacterPreview] = [:]
         imported.sourceNativePlugins = doc.sourceNativePlugins
@@ -1083,6 +1091,21 @@ final class StudioModel: ViewportInputHandler {
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
+    }
+
+    /// Whether any record of the tree, an accessory child included, is a character.
+    private static func containsCharacter(_ records: [KoikatsuObjectRecord]) -> Bool {
+        records.contains { record in
+            record.character != nil || containsCharacter(record.children)
+        }
+    }
+
+    /// The source preview's characters (A-T02): how many have a rendered preview
+    /// (in place or on a route) and the diagnostic of each one retained without
+    /// rendering. An automated run fails when a scene's characters all failed.
+    func sourcePreviewCharacterOutcome() -> (built: Int, retained: [String]) {
+        let retained = (doc.sourcePreviewDiagnostics ?? []).filter { $0.hasPrefix("Character ") && $0.contains(" retained without rendering") }
+        return (built: sourceInstances.count + sourceRouteCharacterPreviews.count, retained: retained)
     }
 
     func importKoikatsuLayout(sceneURL: URL, catalogURL: URL) throws {

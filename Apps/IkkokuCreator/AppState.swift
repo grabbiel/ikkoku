@@ -80,6 +80,13 @@ final class AppState {
             if let path = env["IKKOKU_SOURCE_SCENE"] {
                 do { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
                 catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
+                // A-T02: an automated run must not capture or script a scene whose
+                // characters all failed to build (for example a converted library
+                // copied without its companion files).
+                if automated, let outcome = studio?.sourcePreviewCharacterOutcome(), outcome.built == 0, let first = outcome.retained.first {
+                    AppState.failCaptureInput("IKKOKU_SOURCE_SCENE", path,
+                        "none of the scene's characters was built (\(outcome.retained.count) retained without rendering); first: \(first)")
+                }
             }
             if let libraryPath = env["IKKOKU_MOD_LIBRARY"] {
                 do { try loadModLibrary(url: URL(fileURLWithPath: libraryPath)) }
@@ -274,8 +281,13 @@ final class AppState {
 
     private func importSourceScenePreview(url: URL) throws {
         guard let rig = try EngineHost.locateSourceAvatar() else { throw RigError.invalid("Export the original clothed avatar before previewing source scenes.") }
-        let catalog = rig.deletingLastPathComponent().appendingPathComponent("../studio-pose/contract.json").standardizedFileURL
+        let catalog = EngineHost.studioPoseContract(forRig: rig)
         try studio?.importSourceScenePreview(sceneURL: url, rigURL: rig, boneCatalogURL: catalog)
+        // A-T02: an object the preview could not build is otherwise only listed
+        // under Source compatibility details.
+        for line in (studio?.doc.sourcePreviewDiagnostics ?? []) where line.contains(" retained without rendering") {
+            print("[ikkoku] \(url.lastPathComponent): \(line)")
+        }
         mode = .studio
     }
 
@@ -1053,9 +1065,21 @@ final class AppState {
         do {
             let location = try EngineHost.selectConvertedLibrary(root: url)
             let kinds = location.libraries.map(\.kind.rawValue).joined(separator: ", ")
-            let message = "Converted library \(url.path) (\(kinds)). Scenes opened from now on relocate into it."
+            // A-T02: a layout copied without the companion files beside its bases
+            // (studio-pose/, animation-assets/) is selected, but says what it lacks
+            // instead of reporting success.
+            let problems = location.companionProblems()
+            for problem in problems { print("[ikkoku] converted library: \(problem)") }
+            let message = problems.isEmpty
+                ? "Converted library \(url.path) (\(kinds)). Scenes opened from now on relocate into it."
+                : "Converted library \(url.path) (\(kinds)) selected incomplete: \(problems.count) companion file\(problems.count == 1 ? "" : "s") missing or changed."
             studio?.status = message
             maker?.status = message
+            if !problems.isEmpty {
+                errorMessage = (["The converted library \(url.path) was selected, but it is incomplete:"]
+                    + problems.map { "• \($0)" }
+                    + ["Copy the missing folders from .local/reverse/ next to rigs/ and choose the library again."]).joined(separator: "\n")
+            }
         } catch { errorMessage = "Could not choose the converted library: \(error)" }
     }
 

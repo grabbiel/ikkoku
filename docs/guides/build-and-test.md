@@ -193,18 +193,47 @@ installer.
 Since A-T02 (2026-10-23; compiled by CI, not yet run), File → Choose Converted
 Library… selects the folder that holds `maker-library/library.json`,
 `rigs/source-avatar.json` and/or `male/source-male-avatar.json`. That is the
-`.local/reverse/` layout, copied or moved anywhere. The app records each
-manifest's SHA-256 and saves the selection in user defaults. The Maker library
-and original-base lookups then read it after their explicit variables and before
-the source-tree defaults. It does not change the asset root. Startup prints a
-`[ikkoku] converted library:` line for each selected manifest, and a
-`converted library changed since it was selected` line when its bytes differ. To
-inspect or clear the selection, use File → Forget Converted Library or:
+`.local/reverse/` layout, copied or moved anywhere. Copy these folders together:
+
+```text
+<library>/
+  maker-library/                  Maker library (library.json)
+  rigs/                           original female base (source-avatar.json)
+  male/                           original male base (source-male-avatar.json)
+  studio-pose/                    Studio bone catalog (contract.json, attachments.json, ik-bindings.json)
+  animation-assets/female-base/   Maker idle animation (animation.json)
+```
+
+The last two are companion files, not libraries: the app reads them beside the
+female base (`rigs/../studio-pose/contract.json` and
+`rigs/../animation-assets/female-base/animation.json`). Without `studio-pose/`,
+Preview CharaStudio Scene refuses a scene with characters. Without
+`animation-assets/`, the Maker shows the original base without its idle
+animation. The app records each manifest's and companion's SHA-256 and saves the
+selection in user defaults. The Maker library and original-base lookups then read
+it after their explicit variables and before the source-tree defaults. It does
+not change the asset root. A folder without a companion is still selected; the
+app then shows an alert and a status line naming each missing file, and prints
+it as a `[ikkoku] converted library:` line. Startup prints a
+`[ikkoku] converted library:` line for each selected manifest. It also prints a
+`converted library changed since it was selected` line when a manifest's bytes
+differ, and one line for each companion that is missing, changed or was not
+recorded. An explicit `IKKOKU_SOURCE_AVATAR` (or the source-tree default) without
+its companions prints a `[ikkoku] converted layout gap:` line for each missing
+one. To inspect or clear the selection, use File → Forget Converted Library or,
+with the app quit:
 
 ```sh
-defaults read com.grabbiel.IkkokuCreator ConvertedLibraryLocation
-defaults delete com.grabbiel.IkkokuCreator ConvertedLibraryLocation
+plutil -p ~/Library/Preferences/com.grabbiel.IkkokuCreator.plist
+defaults delete ~/Library/Preferences/com.grabbiel.IkkokuCreator ConvertedLibraryLocation
 ```
+
+The app is not sandboxed and writes `~/Library/Preferences/`. Do not use the
+bare domain (`defaults read com.grabbiel.IkkokuCreator`). When an old sandbox
+container `~/Library/Containers/com.grabbiel.IkkokuCreator` exists, the bare
+domain reads that container's plist instead; on the development Mac (container
+from August 2026) it showed only a window frame. `defaults read
+~/Library/Preferences/com.grabbiel.IkkokuCreator` also reads the app's file.
 
 Automated runs ignore a saved selection: any capture or scenario mode, and
 `IKKOKU_CAPTURE_UI`. Startup prints `the saved converted library selection is
@@ -220,8 +249,17 @@ and printed as `[ikkoku] <scene>: Unresolved …` lines; their objects are not
 loaded. The rules are in
 [Library location and relocation](../reference/native-assets.md#library-location-and-relocation-a-t02).
 
+Preview CharaStudio Scene… and `IKKOKU_SOURCE_SCENE` print each object they could
+not build as a `[ikkoku] <scene>: … retained without rendering: …` line. A scene
+with characters is refused when the Studio pose contract is missing (`The Studio
+pose contract is missing at …`), so a save can no longer keep the folders and
+drop every character. An automated run (capture or scenario) whose scene
+characters all failed to build exits 1 naming `IKKOKU_SOURCE_SCENE`, instead of
+capturing an empty scene.
+
 Acceptance, not run: preview a CharaStudio scene and save it with Save Scene….
-Copy or move the converted folder and choose the new location. Then launch the
+Copy or move the whole converted folder, including `studio-pose/` and
+`animation-assets/`, and choose the new location. Then launch the
 Release app outside the checkout with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and open
 the saved scene. Expect every reference to relocate, or one `Unresolved` line per
 missing or changed identity, with nothing else loaded in its place.

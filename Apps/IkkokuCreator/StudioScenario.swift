@@ -1360,8 +1360,7 @@ struct StudioScenario: Decodable {
                     guard let rig = try EngineHost.locateSourceAvatar() else {
                         throw RigError.invalid("Export the original clothed avatar before previewing source scenes.")
                     }
-                    let catalog = rig.deletingLastPathComponent()
-                        .appendingPathComponent("../studio-pose/contract.json").standardizedFileURL
+                    let catalog = EngineHost.studioPoseContract(forRig: rig)
                     try studio.importSourceScenePreview(sceneURL: url, rigURL: rig, boneCatalogURL: catalog)
                     record(step, true, "reimported \(path): \(studio.doc.objects.count) objects")
                 } catch {

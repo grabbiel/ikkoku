@@ -124,7 +124,30 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   rejected. Further cases cover ambiguous roots, format versions and documents
   saved before A-T02. Neither the Engine nor the app was compiled locally (no
   Swift toolchain in the authoring container). CI is the first compile and the
-  only test run. Still open: the moved-library launch in the
+  only test run.
+  **Companion files (2026-10-23, local-wave-verify).** The user's manual run
+  copied `maker-library/`, `rigs/` and `male/` to a new folder and chose it.
+  Preview CharaStudio Scene then built no characters, because each preview reads
+  `rigs/../studio-pose/contract.json`, and the copy had no `studio-pose/`. Choose
+  Converted Library had reported success, nothing reached the terminal, and the
+  saved scene held 32 folders and no character. Fix: `ResourceCompanion` names the
+  two files the app reads beside the female base: `studio-pose/contract.json`
+  and `animation-assets/female-base/animation.json`. These were the only `../`
+  lookups. Every lookup now goes through `ResourceCompanion.url(besideManifest:)`.
+  A selection records the SHA-256 of each companion present
+  (`ResourceLibraryLocation.companions`; older selections decode with none).
+  Choose Converted Library shows an alert naming each one missing, and startup
+  prints each one missing, changed or unrecorded. An explicit
+  `IKKOKU_SOURCE_AVATAR` without them prints `converted layout gap:` lines. The
+  source scene import refuses a scene with characters when the contract is
+  missing. It prints each "retained without rendering" diagnostic as an
+  `[ikkoku]` line. An automated run whose scene characters all failed exits 1
+  naming `IKKOKU_SOURCE_SCENE`. `ResourceRelocationTests` now has 9 cases; the new
+  `convertedSelectionRecordsAndReportsItsCompanionFiles` covers recording,
+  missing, unrecorded and changed companions, the copied-without-`studio-pose/`
+  layout, a Maker-only root, legacy decode and duplicate refusal. It failed 10
+  expectations when `convertedRoot` stopped recording companions (mutation
+  control). Still open: the moved-library launch in the
   [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout),
   relocation for documents saved before A-T02 (they lack library roots), the
   source-scene import's environment-variable conversion inputs, native card

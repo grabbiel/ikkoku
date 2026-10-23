@@ -258,10 +258,36 @@ The converted paths are the layout the `Tools/reverse` exporters write under
 `ResourceLibraryLocation` is a versioned (`version` 1) set of at most one record per
 kind. Another version is refused, not reinterpreted.
 
+**Companion files.** The app also reads two files beside the female base that no
+manifest lists (`ResourceCompanion`, added 2026-10-23 after the A-T02 manual run).
+Every lookup derives them from the female base manifest through
+`ResourceCompanion.url(besideManifest:)` (`EngineHost.studioPoseContract(forRig:)`).
+That covers an explicit `IKKOKU_SOURCE_AVATAR`, the selection and the source-tree
+default alike:
+
+| Companion | Path in the converted root | Read by | Without it |
+| --- | --- | --- | --- |
+| `studioPoseContract` | `studio-pose/contract.json` (its folder also holds `attachments.json` and `ik-bindings.json`) | the source scene import, rehydration and the Studio scenario `reimport` | a scene with characters is refused |
+| `femaleBaseAnimation` | `animation-assets/female-base/animation.json` | the Maker, when it opens `source-avatar.json` without `IKKOKU_SOURCE_ANIMATION` | the base shows no idle animation |
+
+These were the only `../` sibling lookups in the app. The other files read beside
+a manifest (`character-shape-contract.json`, `source-expression-contract.json`,
+`source-dynamics.json`, `*.appearance.json`) sit in the manifest's own folder, so
+copying that folder carries them.
+`convertedRoot` records the SHA-256 and path of each companion present as
+`ResourceLibraryLocation.companions`. A selection saved before this field decodes
+with none. `companionProblems()` lists each companion of a library in the location
+that is missing now, has other bytes than recorded, or is present but was not
+recorded.
+
 **Which libraries are in effect.** File → Choose Converted Library… records every
 converted manifest found in the chosen folder. It fails when a manifest present
-there is invalid, or when the folder holds none of them. The selection is saved
-in user defaults under `ConvertedLibraryLocation`, as a JSON string. Each converted
+there is invalid, or when the folder holds none of them. A missing companion does
+not fail it, because the Maker needs none. Instead, the selection shows an alert
+and a status line naming each problem, and prints each one as a
+`[ikkoku] converted library:` line. The selection is saved in user defaults under
+`ConvertedLibraryLocation`, as a JSON string, in
+`~/Library/Preferences/com.grabbiel.IkkokuCreator.plist`. Each converted
 lookup reads, in order: its explicit variable (`IKKOKU_MAKER_LIBRARY`,
 `IKKOKU_SOURCE_AVATAR`, `IKKOKU_SOURCE_MALE_AVATAR`), then the selection, then
 the source-tree default under the checkout's `.local/reverse/` (see
@@ -272,9 +298,22 @@ runs ignore the selection: any capture or scenario mode, and `IKKOKU_CAPTURE_UI`
 variable to the source-tree default, so lane results never depend on this
 machine's user defaults. The asset root
 keeps its own order: `IKKOKU_ASSETS`, then the bundle, then the source tree; the
-selection does not change it. At startup the app prints the selection and any
-selected manifest whose bytes changed since it was chosen. File → Forget
-Converted Library removes the selection.
+selection does not change it. At startup the app prints the selection, any
+selected manifest whose bytes changed since it was chosen and every companion
+problem. When the female base comes from an explicit `IKKOKU_SOURCE_AVATAR` or the
+source-tree default instead, startup prints a `converted layout gap:` line for
+each companion missing beside it. File → Forget Converted Library removes the
+selection.
+
+**Source scene previews.** `StudioModel.importSourceScenePreview` refuses a scene
+with at least one character record when the Studio pose contract is not a regular
+file. Before this check, each character was retained without rendering. In the
+2026-10-23 manual run, a save of `koikatu_cs0002591.png` previewed from a copy
+without `studio-pose/` kept 32 folders and no character. The app prints each "retained without
+rendering" diagnostic as `[ikkoku] <scene>: …`. An automated run whose scene
+characters all failed to build exits 1 through `AppState.failCaptureInput`,
+naming `IKKOKU_SOURCE_SCENE`. One that built some of them continues; the lines
+name the others.
 
 **What a saved scene records.** On save, `recordingResourceBinding` writes a
 `resourceBinding` into the Studio document card. The binding lists, for every
