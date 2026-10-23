@@ -116,6 +116,11 @@
           "optional": true
         },
         {
+          "env": "IKKOKU_ADV_CHARACTER_SAMPLE",
+          "kind": "file",
+          "optional": true
+        },
+        {
           "env": "IKKOKU_GAMEPLAY_REFERENCE",
           "kind": "file",
           "optional": true

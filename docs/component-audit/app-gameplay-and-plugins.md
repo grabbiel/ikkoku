@@ -19,7 +19,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
-| A01 · SwiftUI shell, Maker/Studio switching and shared engine | Mid-stage | Both editors share one `EngineHost` and renderer. Mode changes activate one model and refresh its frame. There is no interactive ActionGame/title/gameplay mode. Since A-T01's first slice, `IKKOKU_GAMEPLAY_SCENARIO` runs the native gameplay host headlessly and exits before the engine and both editors are created, so it shares no editor state; CI compiles this path but has not run it. | A-T01: run the `gameplay-scenarios` lane on the Mac; then an interactive gameplay mode with presentation on the same host, keeping editor isolation. |
+| A01 · SwiftUI shell, Maker/Studio switching and shared engine | Mid-stage | Both editors share one `EngineHost` and renderer. Mode changes activate one model and refresh its frame. There is no interactive ActionGame/title/gameplay mode. Since A-T01's first slice, `IKKOKU_GAMEPLAY_SCENARIO` runs the native gameplay host headlessly and exits before the engine and both editors are created, so it shares no editor state. The `gameplay-scenarios` lane passed on the Mac on 2026-10-23 (G-T02 branch, strict). | A-T01: an interactive gameplay mode with presentation on the same host, keeping editor isolation. |
 | A02 · Metal startup and asset discovery | Mid-stage | Explicit `IKKOKU_ASSETS`, bundle assets, then source-tree assets. Optional original male/female manifests and Maker library are separate private inputs. Explicit invalid source overrides fail instead of silently selecting another source. Development defaults depend on build-machine paths. Since 2026-10-23 (T-T02), each used source-tree default prints a `[ikkoku] source-tree fallback:` line, and `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables all three (assets root, Maker library, original bases); without it the defaults are unchanged. Compiled by CI only; no launch has exercised the switch. Since 2026-10-23 (A-T02 first slice), File → Choose Converted Library… saves a versioned `ResourceLibraryLocation`. It identifies each library by its manifest's SHA-256 and format version, and the Maker library and base lookups read it after their explicit variables and before those fallbacks. Saved Studio scenes record a resource binding. On load, a reference into a moved library relocates only to the file with the recorded digest, inside the library with the recorded content and under R5 containment. Every other reference is reported unresolved by identity, and its object is not loaded ([contract](../reference/native-assets.md#library-location-and-relocation-a-t02)). Synthetic Engine tests cover the resolver; the app path is compiled by CI only. | A-T02 (partial): run the moved-library acceptance in the [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout) on a Release app outside the checkout. Still missing: a first-run conversion flow, selection of the source-scene conversion inputs that still come from environment variables, and checks for native card catalog IDs and plugin paths. |
 | A03 · Viewport display and input | Mid-stage | `CAMetalDisplayLink` drives drawable presentation; Retina pixel conversion, orbit/pan/zoom, trackpad magnification, mouse and key delegation exist. Simulation uses editor timers, not this presentation timestamp. | A-T03: instrument displayed frames and simulation cadence together; validate resize, focus loss, mode switching and more than one window. |
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. Renderer problems (R6): a skipped frame (`Renderer.lastFrameError`) or unshaded lights beyond the eight-light limit appear in the Maker/Studio status line. The line is written once per new problem and restored one second after frames recover (`RenderStatusReporter`; debounce unit-tested, app compiled in CI, not run, 2026-10-23). | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
@@ -35,7 +35,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 ### Actionable app tasks
 
 - **A-T01 — Gameplay host (P1, after G-T01; first slice implemented 2026-10-23,
-  app run pending).** Add a session model owning saved
+  gameplay lane passed on the Mac 2026-10-23 with the G-T02 scenario).** Add a session model owning saved
   player/NPC state, period, active map and ADV barriers. Accept when a controlled
   non-media event can run from period selection to completion through the app,
   persist, reload and resume without caller-injected fake completion effects.
@@ -56,7 +56,9 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   completion flag. Operations that would release an effect the host cannot
   perform (MapMove, the night-menu tail) and presentation requests (text, voice,
   BGM, fades, characters) are rejected by name, never skipped. The whole host is
-  one `Codable` snapshot (format `ikkoku.native-gameplay-host`, schema 1). Decoding
+  one `Codable` snapshot (format `ikkoku.native-gameplay-host`, schema 2 since
+  G-T02, which adds the bound heroine and player parameters; schema 1 still
+  reads). Decoding
   rejects another format, version or catalog and any state no operation can
   produce (G12: native, not original `SaveData`). `IKKOKU_GAMEPLAY_SCENARIO` with
   `IKKOKU_GAMEPLAY_SCENARIO_REPORT` runs a JSON `SourceGameplayHostScenario`
@@ -65,22 +67,26 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   The report goes through the same writer, and the run exits 0 only when every
   step passed. `CaptureRequest` classifies both variables.
   `Tools/verification/scenarios/gameplay-controlled-event.json` (synthetic catalog,
-  one heroine, event 9001: VAR/Calc/IF/Wait/MapChange/Close) selects Morning,
-  reloads mid-map-load, requests HR1 during the event, reloads while that ADV
-  barrier is held and after completion, and checks that the next day's Morning
-  does not rerun the event. Verification: `SourceGameplayHostTests.swift` (8 tests;
-  they pass in the CI Engine suite, the only place they were compiled or run)
-  checks the exact trace from period selection to completion and both barrier
-  holds. It reloads through JSON before
-  each of the 25 steps of a four-operation trace, covering every barrier kind, the
+  one heroine, event 9001: VAR/Calc/IF/Wait/MapChange, then since G-T02 two
+  ParameterFiles, one inserting a synthetic Calc/Clamp/HeroineParam program and
+  one naming a missing asset, a HeroineParam `H_callID`, VAR and Close) selects
+  Morning, reloads mid-map-load, requests HR1 during the event, reloads while
+  that ADV barrier is held, right after the insertion and after completion, and
+  checks that the next day's Morning does not rerun the event. Verification:
+  `SourceGameplayHostTests.swift` (9 tests, Engine suite) checks the exact trace
+  from period selection to completion and both barrier holds. It reloads
+  through JSON before
+  each of the 30 steps of a four-operation trace, covering every barrier kind, the
   held ADV barrier, the map load and the ADV Wait, and requires an identical
   trace and final host. It also covers period/week/map state changes,
   rejected operations and requests, corrupted, mismatched and inconsistent
-  snapshots rejected by name, and the shipped scenario, whose three reloads
-  match its reload-free run. A corrupted reload stops the scenario with a named
-  error. The app path is compiled by CI only. Acceptance still needs the
-  `gameplay-scenarios` lane run on the Mac
-  (`python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json`).
+  snapshots rejected by name, schema-1 migration, and the shipped scenario,
+  whose four reloads match its reload-free run. A corrupted reload stops the
+  scenario with a named error. The `gameplay-scenarios` lane
+  (`python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json --strict`,
+  under the app lock) passed on 2026-10-23 with the G-T02 scenario: 20 of 20
+  steps, four nonempty snapshots, `completedEvents` `[9001]` once; a copy
+  expecting another `H_intimacy` fails exactly that step.
   Not covered: original save data (G12), NPC population and navigation (G11),
   MapMove, the night menu, presentation, `Cycle.ADVVariables` (not recovered;
   MapChange acknowledgements carry none), cancellation during a barrier, and an
@@ -148,6 +154,19 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   its adapter-report checks and produces identical reload pixels. Both installed-disabled and explicit-enabled runs passed; evidence is in
   `.local/reverse/plugin-execution/accepted-pr-2/`. See
   [native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
+  **2026-10-23, macOS 27 regression and fix (local-wave-verify L3):** the
+  rerun on macOS 27.0.1 / Xcode 27.0 (`native-adapter-capture-03`, main
+  `b0b8cb6`) failed the enabled configuration with "generated tone is silent
+  before focus events". SwiftUI now creates `NSApplication` before `AppState`,
+  so the `NSApp != nil` test sampled focus during `AppState.init` from an app
+  that was not yet active, and an enabled Mute zeroed the gain. The fix
+  (`claude/a-t04-launch-focus`) samples at once only after launching finished
+  and otherwise waits for `didFinishLaunching`. The adapter report gains
+  `launchFinished`, and the probe now rejects a sample taken before launching
+  finished. With the fix, `native-adapter-capture-04` passed both
+  configurations, and an independent comparison with `accepted-pr-2` passed
+  89/89 checks. See
+  [Local rerun on macOS 27](../reference/mods/native-adapters.md#local-rerun-on-macos-27-2026-10-23).
 - **A-T05 — Capture result integrity (P2; implemented 2026-10-23, local app
   acceptance pending).** Make UI/thumbnail output failures
   observable and return nonzero on any required missing output. Test a destination
@@ -208,9 +227,12 @@ Sources: [SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/Sour
 [SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift),
 [SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift),
 [SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift),
-[SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift).
+[SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift),
+[SourceADVCharacterParameters.swift](../../Packages/Engine/Sources/Gameplay/SourceADVCharacterParameters.swift),
+[SourceADVCharacterBinding.swift](../../Packages/Engine/Sources/Gameplay/SourceADVCharacterBinding.swift).
 Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
-`gameplay_execution_contract.py`, `adv_command_coverage.py` and `adv_host_requests.py`; CLI: `GameplayTrace.swift` and
+`gameplay_execution_contract.py`, `adv_command_coverage.py`, `adv_host_requests.py` and `adv_character_tables.py`;
+original-runtime probe: `Tools/reverse/original_adv_binding_probe.py`; CLI: `GameplayTrace.swift` and
 `GameplayExecutionInspection.swift`.
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
@@ -219,14 +241,14 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
 | G02 · MapMove timing/gates | Fully ported — bounded timer kernel | Cursor/game regulation controls advancement; ADV/talk/interaction flags control visibility separately. Frame increments may overshoot 500; finish forces display fraction 1 without clamping stored timer. | Supply real source flags from the gameplay host; current caller-supplied flags are not gameplay integration. The A-T01 host rejects `beginMapMove`/`finishMapMove` because NPC loading, the tutorial and MapMove camera/cut-in have no native host yet. |
 | G03 · Deferred scene/menu/NPC effects | Mid-stage — 9 of 19 effects performed by the A-T01 host | `SourceGameplaySession` classifies all 19 `SourceGameplayDeferredEffect` cases in an exhaustive switch: 11 synchronous, 8 completion barriers, of which `loadNPCs`, `prepareMapMoveCharactersAndCamera` and `startTimeZoneCutIn` are conservative because their source completion is not recovered. It releases effects in source order, requires an ID-and-effect acknowledgement per barrier, rejects unknown, duplicate, out-of-order and mismatched acknowledgements without mutation, and commits the cycle only after the operation's last barrier. Version-1 snapshots reload deterministically mid-barrier and reject other versions and inconsistent state. The session executes none of the effects itself. `SourceGameplayHost` (A-T01) performs the 7 synchronous period/week effects on native state and completes the 2 recorded barriers of period changes from its own state: `prepareNextPeriodSceneBarrier` once no map loads and no event runs, `replacePeriodAfterADVBarrier` once the running ADV event ends. It rejects operations that would release any of the other 10 effects. Verification is the synthetic Engine suite in CI ([session host](../reference/gameplay/cycle.md#session-host-and-effect-inventory-g-t01), [gameplay host](../reference/gameplay/cycle.md#gameplay-host-a-t01)). | Host the remaining effects (NPC loading, tutorial, MapMove camera/cut-in and exit, night-menu tail) from real scene/NPC completion, including cancellation. Replace a conservative barrier only with recovered completion evidence. |
 | G04 · Fixed-event table decode and eligibility | Fully ported — inspected selection rules | First unfinished event only; weekday/period/day/lesson conditions, map lookup and wait-point layer match. Failed eligibility does not search later unfinished events. Tested against 4,032 independent contexts for 48 source entries. | Extend catalog coverage independently; selected event still needs G-T02 dispatch. |
-| G05 · Fixed-event placement and execution | Infancy — synthetic event runs once in the native host | `Selection` contains asset, map and optional wait-point/layer identity. The A-T01 host checks fixed events on every period entry (native policy: heroines in saved order, first selection runs), runs the selected event's ADV program from a controlled catalog and persists its asset ID as completed, so the scheduler skips it afterwards, including across reload. No NPC entity spawn, movement or encounter dispatch exists, and which source period bodies check events is not translated. | G-T02: bind selection to recovered player/heroine data and a recovered scenario with exact completion flags. |
+| G05 · Fixed-event placement and execution | Infancy — synthetic event runs once in the native host with its heroine bound | `Selection` contains asset, map and optional wait-point/layer identity. The A-T01 host checks fixed events on every period entry (native policy: heroines in saved order, first selection runs), runs the selected event's ADV program from a controlled catalog and persists its asset ID as completed, so the scheduler skips it afterwards, including across reload. Since G-T02 the event's heroine is the saved typed heroine (original `H_` keys, new-game defaults) seeded as `SetADVParam(scenario)`; its HeroineParam and ParameterFile effects persist in the host snapshot, and the Mac lane ran the event once across four reloads. No NPC entity spawn, movement or encounter dispatch exists, which source period bodies check events is not translated, and the event and its tables are synthetic. | Seed the ADV start as the source's transfer list does (`Program.SetParam`: `Heroine.SetADVParam(list)` plus a `HeroineCallNameChange` command); recover the talk-event and completion flags (`CharaEvent`) and run an original fixed-event asset. |
 | G06 · ADV program decoding and batch/wait execution | Mid-stage | Bounded program/argument/variable sizes; `multi` batching, local jump recursion budget, cancelable Wait. Since G-T03b the frame follows `MessageWindowProc`: `UpdateRegulate` gates (pending MapChange, or SceneFade under `isSceneFadeRegulate`) suspend input, Waits and commands; a Text batch waits for Next; `ProcessEnd`/`CurrentCharaData.Clear` run where the source runs them. States: ready/frameBoundary/waiting/awaitingHost/awaitingNext/closed/exhausted/faulted. The whole interpreter is `Codable` and resumes identically mid-wait, mid-acknowledgement and mid-Next (validated on decode). A fault preserves earlier effects; this VM is not a transaction. | The A-T01 host now drives it one fixed frame per step and persists it inside the native host snapshot, accepting only MapChange without a fade. Next: a presentation host for the other requests, skip/auto and choice input, and the original campaign save (G12). |
 | G07 · ADV scalar and presentation commands | Mid-stage | Scalar IDs 0/1/3/4/12/14/15/22/23/25 (None, VAR, Calc, Clamp, Tag, IF, Switch, Close, local Jump, Wait): Int32 wrapping and source boxed conversion failures are deliberate; Calc is left-to-right. Presentation IDs 16–19, 35, 37, 44, 45, 88, 106, 112, 125, 128, 169 (Text, Voice, Motion, Expression, NullLoad, NullSet, SceneFade, SceneFadeRegulate, BGMPlay, CharaMotion, CharaExpression, CharaLookEyes, CharaLookNeck, MapChange) decode arguments exactly as the recovered `Do()` (defaults, `ReplaceVars`, Unity Mono `int`/`float`/`bool` parsing, swallowed vs uncaught exceptions) into typed host requests with per-handler blocking (none / acknowledge / Next); unmodelled culture or Unicode forms fault instead of guessing. 22 of these IDs occur in 239,612 of 294,393 installed records; 101 VAR random alternatives and 299 external IF branches still fault. | Expand RNG alternatives, unsupported literals and culture-sensitive comparisons only with source oracles. Add the next request families (Fade, BGLoad/BGRelease, Filter, CharaCoordinate, CharaMotionDefault, CharaVoicePlay/Wait) the same way; rerun `adv_command_coverage.py` after each change. |
-| G08 · ADV source data exercised | Infancy | All 10,463 `ScenarioData` assets in the 225 installed `adv/scenario` bundles were run with default inputs and a scripted host (auto-acknowledge, auto-Next): **2,633 run to completion** (2,559 non-empty, 25,892 records; before G-T03b: 87, 13 non-empty), 7,582 halt at the statically predicted index, ID and reason, 248 fault earlier on absent host variables, 0 unexplained. 51,953 host requests were issued and all match an independent Python decoding of the recovered handlers; 9,926 straight-line assets match the predicted request sequence exactly. 27.5% of records now precede a first unsupported command (was 0.46%). Scenario 301 still halts at pc 2 / 165 (`HeroineParam`). Nothing is presented: no host consumes the requests. | G-T02: `HeroineParam`/`ParameterFile` (now the top first blocker, 2,030 assets). G-T03: next families in the measured order ([ADV coverage](../reference/gameplay/adv.md#original-scenario-command-coverage-g-t03)). |
+| G08 · ADV source data exercised | Infancy | All 10,463 `ScenarioData` assets in the 225 installed `adv/scenario` bundles were run with default inputs, a scripted host (auto-acknowledge, auto-Next) and, since G-T02, the new-game heroine and the original parameter library bound: **4,370 run to completion** (4,296 non-empty; G-T03b: 2,633; before it: 87). 5,839 halt at the statically predicted index, ID and reason, 161 reach a different unsupported halt after a branch on a seeded variable, 92 take an external branch, 39 exhaust after a jump and 1 faults on an absent host variable; 0 unexplained. ParameterFile inserted 3,351 commands in 2,030 runs, all equal to the static expansion; final heroines equal an independent Python model (9,881/9,881). 52,146 host requests all match the independent decoding (0 request mismatches). 29.1% of the 303,552 expanded records precede a first unsupported command. Scenario 301 now finishes with values equal to the Python model and to the original runtime (VM probe, 388 cases, 0 differences). Nothing is presented: no host consumes the requests. | G-T03: next families in the measured order, Fade first (1,649 assets) ([ADV coverage](../reference/gameplay/adv.md#original-scenario-command-coverage-g-t03)). |
 | G09 · Dialogue, choices and UI flow | Infancy | Text (63,122 records) now issues `text` requests carrying the batch's voice/expression/motion bindings and blocks until Next; Voice/Expression/Motion records decode into those bindings. 15,692 Text requests were issued in the corpus run, all matching the independent model. No renderer, name-tag `ReplaceText`, backlog, display-completion click, skip/auto or choice exists; `requestNext` is supplied by tests/CLI. Choice (466 records) is unsupported. | A-T01/G-T01: a host that displays text and plays voices from the requests; G-T03: choices, skip/auto and save/load during dialogue. |
 | G10 · Cross-file ADV, tasks, animation/camera/audio actions | Pending | Character look/expression/motion, BGM, map change, ADV null positions and scene fades are typed requests (none executed natively: no host). External `file:tag` jumps and unknown commands fault with command index/reason, checked across the installed corpus. Top first blockers now: ParameterFile 2,030 assets, Fade 1,648, BGLoad 1,235, CharaVoicePlay 589, Filter 452, CharaMotionDefault 386, CharaCoordinate 296, Open 253. Open has 2,869 records; Task/TaskEnd 156/117. | G-T03: further request families in that order, an identity-preserving scenario resolver for Open/external branches, and cancellation barriers; a host must consume the requests. |
 | G11 · NPC population, navigation and decisions | Pending | No native NPC behavior-tree runner, source action/navigation tables, map topology, pathfinding or encounter loop is connected. | G-T04: recover one map and one neutral NPC route; implement decisions, movement and save-state continuity against numeric traces. |
-| G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. The G-T01 session snapshot persists only native cycle control state and pending barriers. The A-T01 host snapshot (`ikkoku.native-gameplay-host`, schema 1) adds explicit native placeholders: saved/displayed weekday, clock zone, sunlight, minimap/camera flag, active map, a player next flag, heroine IDs and day counters, completed fixed events and the running ADV interpreter. It is native state only and is not compatible with, or derived from, original saves. | G-T02: recover original load/save adapters and extend the native schema (with a version bump) before treating scalar variables as campaign state. |
+| G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. The G-T01 session snapshot persists only native cycle control state and pending barriers. The A-T01 host snapshot (`ikkoku.native-gameplay-host`) adds explicit native placeholders: saved/displayed weekday, clock zone, sunlight, minimap/camera flag, active map, a player next flag, heroine IDs and day counters, completed fixed events and the running ADV interpreter. Schema 2 (G-T02) replaces the heroine placeholders with the typed `SaveData.Heroine`/`Player` parameter model (every `Params` field under its original member name, new-game defaults) and adds the bound interpreter state; schema-1 snapshots migrate. It is native state only and is not compatible with, or derived from, original saves; the VM install has no game save to compare (`UserData\save\game` is empty). | Recover the original `SaveData` load/save adapters (`CharaData.Save`/`Load` and the heroine and player bodies) and compare against a real save once one exists. |
 | G13 · Full original game screens/modes | Pending | The app has Maker and Studio only. Original title/start/load, school/map interaction, menus and the remaining game modes are absent. | Build an explicit recovered mode inventory with dependencies and one vertical slice per mode; no overall completion percentage is defensible yet. |
 
 ### Actionable gameplay tasks
@@ -248,11 +270,37 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
   acknowledgements stay separate (G06); cancellation during a barrier is not
   modelled; the three conservative barriers need recovered completion rules; and
   timer operations are rejected while a barrier is outstanding.
-- **G-T02 — Character bindings and event completion (P1).** Recover original
-  player/heroine data access, event flags and `HeroineParam`; implement typed
-  bindings without renaming original IDs. Acceptance: the existing original
-  scenario 301 finishes with source-verified values and a fixed event executes
-  once across save/reload.
+- **G-T02 — Character bindings and event completion (P1; done 2026-10-23).**
+  Recover original player/heroine data access, event flags and `HeroineParam`;
+  implement typed bindings without renaming original IDs. Acceptance: the
+  existing original scenario 301 finishes with source-verified values and a
+  fixed event executes once across save/reload.
+  Done ([character bindings](../reference/gameplay/adv.md#character-bindings-g-t02)):
+  - the typed new-game heroine (58 `H_` keys, 29 writable) and player (31 `P_`
+    keys, 13 writable), with keys derived from the recovered `SaveData` source
+    and checked against the original runtime;
+  - the `SetADVParam(scenario)` seed;
+  - `HeroineParam` with the source's conversion, Replace refresh and
+    `H_callID` → `CallNameChange`;
+  - `ParameterFile` insertion after its own line, including nesting and the
+    unknown-asset no-op;
+  - private extraction of the call-name, voice and parameter-library tables;
+  - interpreter and host snapshot schema 2 with schema-1 migration.
+
+  Scenario 301 finishes with values equal to the Python model and to the
+  original runtime. The original-runtime probe (VM, read-only, new-game
+  heroine; no save exists) compared 388 cases with 0 differences. The bound
+  corpus rerun completes 4,370 assets with 0 unexplained and 0 request
+  mismatches. The Mac gameplay lane runs the synthetic fixed event once across
+  four reloads.
+
+  Remaining:
+  - the transfer-list seed (`Program.SetParam` and the `HeroineCallNameChange`
+    command);
+  - `PlayerParam`, `CharaChange` and `CharaEvent`;
+  - talk-event and completion flags from source;
+  - an original fixed-event asset in the host;
+  - real save data (G12).
 - **G-T03 — Expand ADV by command family (P1/P2).** First slice done:
   `adv_command_coverage.py` inventories all 225 installed scenario bundles
   (10,463 assets, 294,393 records, 120 ordinals) with recovered handler classes
@@ -264,8 +312,8 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
   on an absent host variable (0 unexplained), and all 51,953 issued requests
   match an independent Python model. The gated sample test
   (`IKKOKU_ADV_COVERAGE_SAMPLE`, 36 assets) checks halts and request sequences.
-  ParameterFile is deferred to G-T02 (it inserts library scenarios that use
-  HeroineParam). Next: Fade, BGLoad/BGRelease, Filter, CharaCoordinate,
+  ParameterFile and HeroineParam were bound in G-T02 (bound rerun: 4,370
+  assets complete, 0 unexplained, 0 request mismatches). Next: Fade, BGLoad/BGRelease, Filter, CharaCoordinate,
   CharaMotionDefault, CharaVoicePlay/Wait as requests; then file resolution
   (Open, external IF branches), choices and async tasks with cancellation/save
   rules. Acceptance per family: its records execute through a typed host

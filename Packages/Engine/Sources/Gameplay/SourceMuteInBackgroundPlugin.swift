@@ -69,7 +69,7 @@ public final class SourceMuteInBackgroundPlugin {
 
 /// Host side of Unity's OnApplicationFocus for the one mounted focus adapter.
 /// A host can mount before it can observe focus (SwiftUI builds app state before
-/// NSApplication exists), so the initial sample may arrive later. It is
+/// launching finishes), so the initial sample may arrive later. It is
 /// delivered at most once, and a real focus change supersedes it; a duplicate
 /// false sample would otherwise trigger the repeated-loss quirk and save zero.
 public final class SourceApplicationFocusHost {

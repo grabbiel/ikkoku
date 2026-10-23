@@ -15,6 +15,17 @@ classes constructed by CommandList.CommandGet, and writes:
 * sample.json: a deterministic stratified sample with static predictions for
   the gated Engine halting test.
 
+With `--parameter-library` and `--character-tables` (from
+`adv_character_tables.py`, G-T02) every trace case binds the new-game heroine
+and player and the parameter library. The static model then expands each
+ParameterFile whose asset name is literal (the library program goes after its
+line, as `CommandPacks.InsertRange(CurrentLine + 1)` does), treats the seeded
+`H_` variables as defined, and models HeroineParam's argument forms; the
+comparison rebuilds the native command list from the insertions the trace
+reports and maps every observed index through it. Without a binding,
+HeroineParam and ParameterFile are certain halts (the native faults without a
+heroine or a library).
+
 Presentation commands are modelled independently in `adv_host_requests.py`:
 an argument form that definitely throws (or is not modelled) under default
 inputs is a certain static halt, like an unsupported command.
@@ -37,11 +48,13 @@ from pathlib import Path
 import re
 
 try:  # Run as a script or from Tools/reverse/analysis.
-    from gameplay_execution_contract import SUPPORTED, MissingRecoveredSource, RecoveredErrorStub, command_enum, digest, mono_records, recovered_project, selected_source
+    from gameplay_execution_contract import BINDINGS, SUPPORTED, MissingRecoveredSource, RecoveredErrorStub, command_enum, digest, mono_records, recovered_project, selected_source
     import adv_host_requests as host
+    import adv_character_tables as character
 except ImportError:  # Imported as analysis.adv_command_coverage from Tools/reverse.
-    from analysis.gameplay_execution_contract import SUPPORTED, MissingRecoveredSource, RecoveredErrorStub, command_enum, digest, mono_records, recovered_project, selected_source
+    from analysis.gameplay_execution_contract import BINDINGS, SUPPORTED, MissingRecoveredSource, RecoveredErrorStub, command_enum, digest, mono_records, recovered_project, selected_source
     from analysis import adv_host_requests as host
+    from analysis import adv_character_tables as character
 
 CONTROL_FLOW = {14, 15, 22, 23}  # IF, Switch, Close, Jump
 VAR_TYPES = {"System.Int32", "System.Single", "System.Boolean", "System.String"}
@@ -50,10 +63,158 @@ TICK_SLACK = 4
 HANDLER = re.compile(r"Command\.(\w+)\s*=>\s*(?:\(CommandBase\)\s*)?new\s+([\w.]+)\s*\(\s*\)")
 FAULT_REASONS = {"unsupported-command": "ADV command ID {id} at pc {index}",
                  "var-random-alternatives": "VAR random alternatives",
-                 "external-file-jump": "External ADV file jump"} | {kind: text.replace("{site}", "<site>")
+                 "external-file-jump": "External ADV file jump",
+                 "unbound-character": "ADV command ID {id} at pc {index}"} | {kind: text.replace("{site}", "<site>")
                                                                      for kind, text in host.Fault.REASONS.items()}
 TERMINAL = {"faulted", "closed", "exhausted"}
 SCRIPTED_HOST = dict(autoAcknowledge=True, autoNext=True, mapVariables={}, sceneFadeRegulate=True)
+CALL_VARIABLES = {"callBundle", "callName0", "callName1", "callName2"}  # Set by Heroine.CallNameChange (H_callID writes).
+INSERTION_LIMIT = 10_000  # Static expansion bound (a self-inserting library program would grow without end).
+
+
+class Binding:
+    """G-T02 default character inputs: the new-game heroine and player bound
+    with the extracted tables, and `Manager.Game.scenarioParameterDic`."""
+
+    def __init__(self, heroine_keys, library, tables, heroine=None, player=None):
+        self.keys = {row["key"]: row["command"] for row in heroine_keys if row["command"] != "Replace"}
+        # Writable Int fields with their new-game values (the source field initializers).
+        self.fields = {row["key"]: row["default"] for row in heroine_keys if row["writable"] and row["command"] == "Int"}
+        self.library = library
+        self.tables = tables
+        self.heroine = dict(heroine or {})
+        self.player = dict(player or dict(callID=tables["callDefaultID"]))
+
+    def call_list(self):
+        """`SaveData.GetCallNameList(personality)` of the bound heroine."""
+        personality = int(self.heroine.get("parameter", {}).get("personality", 0))
+        return self.tables["callNames"].get("player" if personality < 0 else f"c{personality:02d}")
+
+    def call_my_id(self, call_id):
+        """`CharaData.callMyID`: own ID, else `Manager.Game.Player.callID`, else `callDefaultID`."""
+        for candidate in (call_id, int(self.player.get("callID", -1))):
+            if candidate != -1:
+                return candidate
+        return int(self.tables["callDefaultID"])
+
+
+BINDING = None  # Set by `scan` (and tests); None models no bound heroine or library.
+
+
+def assigned_names(commands):
+    """Variables ReplaceVars may substitute: scenario-assigned names, plus with a
+    binding every seeded heroine key and, when a HeroineParam writes H_callID,
+    the call-name voice variables."""
+    names = host.assigned_names(commands)
+    if BINDING is not None:
+        names |= set(BINDING.keys)
+        if any(c["id"] == 165 and c["args"][:1] == ["H_callID"] for c in commands):
+            names |= CALL_VARIABLES
+    return names
+
+
+def expand(commands):
+    """Static ParameterFile expansion in execution order.
+
+    Walks the list; a ParameterFile whose asset (after `Initialize` defaults)
+    is literal and in the library gets the library program inserted after its
+    own line, which the walk visits next (nested ParameterFiles expand too).
+    Returns the expanded commands, the insertions in the native trace's shape
+    (`pc` in the list as it was then, `asset`, `count`) and the origin key of
+    every expanded command: (program index,) or the inserting ParameterFile's
+    key plus (asset, offset)."""
+    expanded, origins, insertions = [dict(c) for c in commands], [(i,) for i in range(len(commands))], []
+    if BINDING is None:
+        return expanded, insertions, origins
+    dynamic = assigned_names(commands)
+    pc = 0
+    while pc < len(expanded):
+        command = expanded[pc]
+        if command["id"] == 201:
+            asset = host.initialize(command["args"], [""])[0]
+            if asset not in dynamic and asset in BINDING.library:
+                if len(insertions) >= INSERTION_LIMIT:
+                    raise ValueError("ParameterFile expansion exceeds the static bound")
+                count = insert(expanded, pc, asset, len(insertions))
+                origins[pc + 1:pc + 1] = [origins[pc] + (asset, offset) for offset in range(count)]
+                insertions.append(dict(pc=pc, asset=asset, count=count))
+        pc += 1
+    return expanded, insertions, origins
+
+
+def insert(commands, pc, asset, number):
+    """`CommandPacks.InsertRange(pc + 1, library[asset])`; inserted copies carry
+    `inserted` = [insertion number, asset] (never part of any trace input)."""
+    inserted = [dict(c, inserted=[number, asset]) for c in BINDING.library[asset]]
+    commands[pc + 1:pc + 1] = inserted
+    return len(inserted)
+
+
+def modelled(commands):
+    """Indexes of inserted library commands whose effect the independent model
+    (`adv_character_tables.library_effect`) evaluates exactly: Calc/Clamp/
+    HeroineParam on seeded Int keys that no program command assigns. These
+    cannot fault, so they are not value-dependent."""
+    program = [c for c in commands if "inserted" not in c]
+    program_targets = host.assigned_names(program) | {c["args"][0] for c in program if c["id"] == 165 and c["args"]}
+    groups = {}
+    for index, command in enumerate(commands):
+        if "inserted" in command:
+            groups.setdefault(command["inserted"][0], []).append(index)
+    result = set()
+    for indexes in groups.values():
+        group = [commands[i] for i in indexes]
+        targets = {c["args"][0] for c in group if c["args"]}
+        ints = dict(BINDING.fields if BINDING else {})
+        if targets & program_targets or not targets <= set(ints):
+            continue
+        try:
+            character.library_effect(group, ints)
+        except ValueError:
+            continue
+        result.update(indexes)
+    return result
+
+
+def binding_limit(index, command, assigned):
+    """HeroineParam/ParameterFile argument limits under the binding (None: no limit)."""
+    cid, args = command["id"], command["args"]
+    if BINDING is None:
+        return dict(index=index, id=cid, kind="unbound-character", certain=True)
+    if cid == 201:
+        asset = host.initialize(args, [""])[0]
+        return dict(index=index, id=cid, kind="value-dependent-argument", certain=False) if asset in assigned else None
+    # HeroineParam: ConvertBeforeArgsProc reads args[0] (no ArgsDefault), Do reads args[1].
+    for position in (0, 1):
+        if len(args) <= position:
+            return dict(index=index, id=cid, kind="character-source-exception", site=f"HeroineParam args[{position}]",
+                        reason=f"HeroineParam args[{position}] (IndexOutOfRangeException)", certain=True)
+    key, value = args[0], args[1]
+    kind = BINDING.keys.get(key)
+    if kind is None:
+        return None  # SetADVParam: an unknown key is a no-op.
+    if value in assigned:
+        return dict(index=index, id=cid, kind="value-dependent-argument", certain=False)
+    site = f"SaveData.Heroine.SetADVParam({key}) Convert.ChangeType " + {"Int": "Int32", "BOOL": "Boolean", "String": "String"}[kind]
+    if kind == "Int":
+        parsed = character.int32_parse(value)
+        if parsed is None:
+            return dict(index=index, id=cid, kind="invalid-argument", site=site, reason=site, certain=True)
+        if key == "H_callID":
+            call_id = BINDING.call_my_id(parsed)
+            entries = BINDING.call_list()
+            if entries is None or not any(int(e["id"]) == call_id for e in entries):
+                detail = f"SaveData.FindCallFileData: no call name {call_id}"
+                return dict(index=index, id=cid, kind="character-source-exception", site=detail, reason=detail, certain=True)
+    elif kind == "BOOL" and host_boolean(value) is None:
+        return dict(index=index, id=cid, kind="invalid-argument", site=site, reason=site, certain=True)
+    return None
+
+
+def host_boolean(text):
+    """`Boolean.Parse` (Mono): trimmed, case-insensitive True/False; None when it throws."""
+    stripped = text.strip(" \t\n\v\f\r\x00")
+    return {"true": True, "false": False}.get(stripped.lower())
 
 
 def command_handlers(text, exists):
@@ -129,6 +290,19 @@ def model_source_checks(index_path, project, names, handlers):
     for cid, handler in sorted(host.HANDLERS.items()):
         path, _ = selected_source(index_path, handler, project)
         evidence.append(dict(type=handler, path=str(path), sha256=digest(path)))
+    # The binding model's handler forms (binding_limit, expand).
+    for cid, handler, needles in ((165, "ADV.Commands.Game.HeroineParam",
+                                   ("ArgsDefault => null;", "variable = args[0];", "value = args[1];",
+                                    "scenario.currentHeroine.SetADVParam(scenario, variable, value);")),
+                                  (201, "ADV.Commands.Game.ParameterFile",
+                                   ("ArgsDefault => new string[1] { string.Empty };", "scenarioParameterDic.TryGetValue(args[0], out var value)",
+                                    "scenario.CommandPacks.InsertRange(scenario.CurrentLine + 1, value);"))):
+        if handlers.get(command_name(cid, names)) != handler:
+            raise ValueError(f"CommandGet maps {command_name(cid, names)} to {handlers.get(command_name(cid, names))}, model says {handler}")
+        path, text = selected_source(index_path, handler, project)
+        if not all(needle in text for needle in needles):
+            raise ValueError(handler + " differs from the binding model")
+        evidence.append(dict(type=handler, path=str(path), sha256=digest(path)))
     return evidence
 
 
@@ -171,10 +345,14 @@ def argument_limits(commands, supported=SUPPORTED):
     variable has a value-dependent (uncertain) limit: ReplaceVars may change
     its arguments at run time.
     """
-    limits, assigned = [], host.assigned_names(commands)
+    limits, assigned = [], assigned_names(commands)
     for index, command in enumerate(commands):
         cid, args = command["id"], command["args"]
-        if cid == 1 and len(args) > 3:
+        if cid in BINDINGS and cid in supported:
+            limit = binding_limit(index, command, assigned)
+            if limit:
+                limits.append(limit)
+        elif cid == 1 and len(args) > 3:
             limits.append(dict(index=index, id=cid, kind="var-random-alternatives", certain=True))
         elif cid == 23 and args and ":" in args[0]:
             limits.append(dict(index=index, id=cid, kind="external-file-jump", certain=True))
@@ -228,7 +406,7 @@ def family_of(command_id, names, handlers):
 
 
 def asset_record(bundle, asset, names, supported=SUPPORTED):
-    commands = asset["commands"]
+    commands, insertions, origins = expand(asset["commands"])
     ids = [c["id"] for c in commands]
     unsupported, halt = first_static_halt(commands, names, supported)
     halt_index = halt["index"] if halt else len(ids)
@@ -238,7 +416,9 @@ def asset_record(bundle, asset, names, supported=SUPPORTED):
                 firstUnsupported=unsupported, firstStaticHalt=halt, argumentLimits=argument_limits(commands, supported),
                 executableByID=unsupported is None, staticExecutable=halt is None,
                 controlFlowBeforeFirstUnsupported=any(i in CONTROL_FLOW for i in ids[:unsupported_index]),
-                controlFlowBeforeFirstStaticHalt=any(i in CONTROL_FLOW for i in ids[:halt_index]))
+                controlFlowBeforeFirstStaticHalt=any(i in CONTROL_FLOW for i in ids[:halt_index]),
+                programCommandCount=len(asset["commands"]), staticInsertions=insertions,
+                haltInProgram=halt is None or len(origins[halt["index"]]) == 1)
 
 
 def first_blocker(ids, implemented):
@@ -324,7 +504,12 @@ def analyse(bundles, names, handlers, supported=SUPPORTED, greedy_steps=15):
     total_commands = sum(r["commandCount"] for r in records)
     limit_kinds = Counter(l["kind"] for r in records for l in r["argumentLimits"])
     totals = dict(bundles=len(bundles), bundleBytes=sum(b["bytes"] for b in bundles), corpusSHA256=corpus_digest(bundles), assets=len(records),
-                  emptyAssets=sum(r["commandCount"] == 0 for r in records), commands=total_commands,
+                  emptyAssets=sum(r["programCommandCount"] == 0 for r in records),
+                  commands=sum(r["programCommandCount"] for r in records), expandedCommands=total_commands,
+                  staticInsertions=sum(len(r["staticInsertions"]) for r in records),
+                  staticInsertedCommands=sum(i["count"] for r in records for i in r["staticInsertions"]),
+                  assetsWithStaticInsertions=sum(bool(r["staticInsertions"]) for r in records),
+                  haltsInsideInsertedCommands=sum(not r["haltInProgram"] for r in records),
                   distinctCommandIDs=len(uses),
                   distinctImplementedIDsUsed=sum(c["native"] == "implemented" for c in commands),
                   distinctUnsupportedIDsUsed=sum(c["native"] != "implemented" for c in commands),
@@ -341,7 +526,7 @@ def analyse(bundles, names, handlers, supported=SUPPORTED, greedy_steps=15):
                   controlFlowBeforeFirstUnsupportedAssets=sum(r["controlFlowBeforeFirstUnsupported"] and r["firstUnsupported"] is not None for r in records),
                   argumentLimitUses=dict(sorted(limit_kinds.items())),
                   firstUnsupportedIndexHistogram=dict(Counter(prefix_bucket(r) for r in records)))
-    return dict(schemaVersion=2, supportedCommandIDs=sorted(supported), totals=totals, commands=commands, families=families,
+    return dict(schemaVersion=3, supportedCommandIDs=sorted(supported), bound=BINDING is not None, totals=totals, commands=commands, families=families,
                 firstBlockerRanking=sorted((c for c in commands if c["firstBlockerAssets"]), key=lambda c: (-c["firstBlockerAssets"], c["id"])),
                 greedyImplementationOrder=greedy_order(records, names, supported, greedy_steps),
                 directories=directory_rows, assets=records)
@@ -354,11 +539,16 @@ def case_name(bundle_path, asset):
 def trace_case(bundle_path, asset, frame=FRAME_SECONDS, slack=TICK_SLACK):
     """Default inputs: no host variables, one fixed frame per batch and a scripted
     host that acknowledges each blocking request after the frame that issued it
-    (MapChange with no ADV variables) and presses Next for every Text batch."""
-    return dict(name=case_name(bundle_path, asset),
+    (MapChange with no ADV variables) and presses Next for every Text batch.
+    With a binding the case binds the new-game heroine and player, reports
+    only changed variables and gets a frame per statically expanded command."""
+    case = dict(name=case_name(bundle_path, asset),
                 program=dict(schemaVersion=1, name=asset["name"], commands=asset["commands"]),
-                variables={}, ticks=[dict(deltaTime=frame)] * (len(asset["commands"]) + slack),
+                variables={}, ticks=[dict(deltaTime=frame)] * (len(expand(asset["commands"])[0]) + slack),
                 autoAcknowledge=True, autoNext=True, mapVariables={}, requestDetail="full")
+    if BINDING is not None:
+        case.update(variableDetail="changes", character=dict(heroine=BINDING.heroine, player=BINDING.player))
+    return case
 
 
 def chunk_cases(cases, max_cases=1000, max_ticks=100_000, max_bytes=12 * 1024 * 1024):
@@ -390,8 +580,32 @@ def value_dependent(commands, supported=SUPPORTED):
     """Indexes whose native outcome depends on runtime values (scalar casts or
     presentation arguments that name a scenario-assigned variable)."""
     found = {i for i, c in enumerate(commands) if may_fault(c)}
-    return found | {l["index"] for l in argument_limits(commands, supported) if l["kind"] == "value-dependent-argument" or
-                    (l["id"] in host.PRESENTATION and not l["certain"])}
+    found |= {l["index"] for l in argument_limits(commands, supported) if l["kind"] == "value-dependent-argument" or
+              (l["id"] in host.PRESENTATION | BINDINGS and not l["certain"])}
+    return found - modelled(commands)
+
+
+def expected_heroine(commands, end):
+    """Heroine Int fields the independent model predicts after the straight-line
+    prefix [0, end), as {member: value} for the changed ones; None without a
+    binding or when a heroine write in the prefix is not modelled."""
+    if BINDING is None:
+        return None
+    covered = modelled(commands)
+    if any(c["id"] == 165 and c["args"][:1] and c["args"][0] in BINDING.keys and i not in covered
+           for i, c in enumerate(commands[:end])):
+        return None
+    groups = {}
+    for index in sorted(covered):
+        groups.setdefault(commands[index]["inserted"][0], []).append(index)
+    fields = dict(BINDING.fields)
+    for indexes in sorted(groups.values()):
+        if indexes[0] >= end:
+            continue
+        if indexes[-1] >= end:
+            return None  # The prefix ends inside an inserted program.
+        fields = character.library_effect([commands[i] for i in indexes], fields)
+    return {key[2:]: value for key, value in fields.items() if value != BINDING.fields[key]}
 
 
 def reachable_outcomes(commands, supported=SUPPORTED):
@@ -402,8 +616,7 @@ def reachable_outcomes(commands, supported=SUPPORTED):
     any tag. Returns sorted outcome dicts, a loop flag and the reachable pcs
     with a non-sequential successor (statically possible control transfers).
     """
-    assigned = {c["args"][1] for c in commands if c["id"] == 1 and len(c["args"]) > 1}
-    assigned |= {c["args"][0] for c in commands if c["id"] in (3, 4) and c["args"]}
+    assigned = assigned_names(commands)
     tags, dynamic_tags = {}, []
     for index, command in enumerate(commands):
         if command["id"] == 12 and command["args"]:
@@ -418,7 +631,7 @@ def reachable_outcomes(commands, supported=SUPPORTED):
         found = tags.get(target)
         return sorted({found if found is not None else pc + 1} | set(dynamic_tags)), False
 
-    limits = {l["index"]: l for l in argument_limits(commands, supported) if l["id"] in host.PRESENTATION}
+    limits = {l["index"]: l for l in argument_limits(commands, supported) if l["id"] in host.PRESENTATION | BINDINGS}
     outcomes, successors = set(), {}
     stack, seen = [0], set()
     while stack:
@@ -514,6 +727,10 @@ def stratum(record, commands, supported=SUPPORTED):
     halt = record["firstStaticHalt"]
     if not commands:
         return "empty"
+    end = halt["index"] if halt else len(commands)
+    if (BINDING is not None and any(i["count"] and i["pc"] < end for i in record["staticInsertions"])
+            and straight_line(commands, halt, supported) and (halt is None or record["haltInProgram"])):
+        return "parameter-file"  # A straight-line prefix that runs a non-empty library program.
     if halt is None:
         return "request-sequence" if request_rich(commands, halt, supported) else "executable"
     if halt["kind"] != "unsupported-command":
@@ -534,24 +751,33 @@ def stratum(record, commands, supported=SUPPORTED):
     return "scalar-prefix"
 
 
-STRATA = {"first-command": 6, "scalar-prefix": 5, "wait-prefix": 3, "value-dependent-prefix": 3,
+STRATA = {"parameter-file": 8, "first-command": 6, "scalar-prefix": 5, "wait-prefix": 3, "value-dependent-prefix": 3,
           "branch-before": 6, "control-flow-before": 4, "close-before": 3, "argument-limit": 5, "executable": 4,
           "request-sequence": 3, "empty": 1}
 
 
 def sample_case(key, name, record, asset, names, supported=SUPPORTED):
-    commands, halt = asset["commands"], record["firstStaticHalt"]
+    """Indexes (halts, reachable outcomes, requests) refer to the expanded
+    command list, which a straight-line native run builds exactly; the
+    mutation replaces a program record (`replacedIndex`, program coordinates)."""
+    commands, _, origins = expand(asset["commands"])
+    halt = record["firstStaticHalt"]
     outcomes, loop, transfers = reachable_outcomes(commands, supported)
     mutation = None
-    if halt is not None:
-        mutated = mutate_halt(commands, halt["index"])
+    if halt is not None and len(origins[halt["index"]]) == 1:
+        program_index = origins[halt["index"]][0]
+        mutated = expand(mutate_halt(asset["commands"], program_index))[0]
         _, next_halt = first_static_halt(mutated, names, supported)
-        mutation = dict(replacedIndex=halt["index"], expectedHalt=next_halt, exactPrediction=straight_line(mutated, next_halt, supported))
+        mutation = dict(replacedIndex=program_index, replacedExpandedIndex=halt["index"], expectedHalt=next_halt,
+                        exactPrediction=straight_line(mutated, next_halt, supported))
     exact = straight_line(commands, halt, supported)
-    requests = host.predict_requests(commands, halt["index"] if halt else len(commands)) if exact else None
+    end = halt["index"] if halt else len(commands)
+    requests = host.predict_requests(commands, end) if exact else None
+    insertions = [i for i in record["staticInsertions"] if i["pc"] < end] if exact else None
     return dict(name=key, stratum=name, bundle=record["bundle"], bundleSHA256=record["bundleSHA256"],
-                pathID=record["pathID"], commandCount=record["commandCount"],
-                program=dict(schemaVersion=1, name=asset["name"], commands=commands),
+                pathID=record["pathID"], commandCount=record["commandCount"], programCommandCount=record["programCommandCount"],
+                predictedInsertions=insertions, expectedHeroine=expected_heroine(commands, end) if exact else None,
+                program=dict(schemaVersion=1, name=asset["name"], commands=asset["commands"]),
                 firstUnsupported=record["firstUnsupported"], firstStaticHalt=halt,
                 controlFlowBeforeFirstStaticHalt=record["controlFlowBeforeFirstStaticHalt"],
                 exactPrediction=exact, predictedRequests=requests, reachableOutcomes=outcomes, mayLoop=loop,
@@ -567,7 +793,7 @@ def select_sample(bundles, coverage, names, strata=STRATA, supported=SUPPORTED):
     by_stratum = defaultdict(list)
     for record in coverage["assets"]:
         key = f"{record['bundle']}#{record['pathID']}"
-        by_stratum[stratum(record, programs[key]["commands"], supported)].append((hashlib.sha256(key.encode()).hexdigest(), key, record))
+        by_stratum[stratum(record, expand(programs[key]["commands"])[0], supported)].append((hashlib.sha256(key.encode()).hexdigest(), key, record))
     cases = []
     for name, count in strata.items():
         candidates = sorted(by_stratum.get(name, []))
@@ -588,9 +814,28 @@ def select_sample(bundles, coverage, names, strata=STRATA, supported=SUPPORTED):
                 seen_directories.add(directory)
                 seen_halts.add(halt_id)
         cases += [sample_case(key, name, record, programs[key], names, supported) for key, record in picked]
-    return dict(schemaVersion=2, frameSeconds=FRAME_SECONDS, tickSlack=TICK_SLACK, scriptedHost=SCRIPTED_HOST, strata=strata,
-                strataPopulation={k: len(v) for k, v in sorted(by_stratum.items())}, caseCount=len(cases),
-                faultReasonPatterns=FAULT_REASONS, cases=cases)
+    sample = dict(schemaVersion=2, frameSeconds=FRAME_SECONDS, tickSlack=TICK_SLACK, scriptedHost=SCRIPTED_HOST, strata=strata,
+                  strataPopulation={k: len(v) for k, v in sorted(by_stratum.items())}, caseCount=len(cases),
+                  faultReasonPatterns=FAULT_REASONS, cases=cases)
+    if BINDING is not None:  # Paths relative to the sample file (main copies the inputs beside it).
+        sample.update(schemaVersion=3, parameterLibraryPath="parameter-library.json", characterTablesPath="character-tables.json",
+                      sourceKeysPath="source-keys.json", character=dict(heroine=BINDING.heroine, player=BINDING.player),
+                      libraryChecks=library_checks())
+    return sample
+
+
+def library_checks():
+    """Every non-empty library program the independent model evaluates, with
+    the heroine fields it changes on the new-game heroine (run directly)."""
+    checks = []
+    for asset, commands in sorted(BINDING.library.items()):
+        try:
+            fields = character.library_effect(commands, dict(BINDING.fields))
+        except ValueError:
+            continue
+        if commands:
+            checks.append(dict(asset=asset, expectedHeroine={k[2:]: v for k, v in fields.items() if v != BINDING.fields[k]}))
+    return checks
 
 
 # ---------------------------------------------------------------- comparison
@@ -658,7 +903,9 @@ def observe(commands, snapshots):
 def reason_kind(reason):
     if reason is None:
         return None
-    for needle, kind in (("ADV command ID", "unsupported-command"), ("argument parse throws", "invalid-argument"),
+    for needle, kind in (("ADV character source exception", "character-source-exception"),
+                         ("ADV character table not bound", "character-table"), ("ADV command ID", "unsupported-command"),
+                         ("ParameterFile insertion", "insertion-replay"), ("argument parse throws", "invalid-argument"),
                          ("ADV argument form", "unsupported-argument"), ("inside a Multi batch", "mapchange-multi"),
                          ("host request", "host-request"), ("VAR random alternatives", "var-random-alternatives"),
                          ("External ADV file jump", "external-file-jump"), ("Culture-sensitive", "string-ordering"),
@@ -726,7 +973,7 @@ def check_requests(commands, requests, exact_halt=None):
     `exact_halt` (a straight-line prefix end), the whole sequence must equal
     `adv_host_requests.predict_requests`.
     """
-    stats, mismatches, assigned = Counter(), [], host.assigned_names(commands)
+    stats, mismatches, assigned = Counter(), [], assigned_names(commands)
 
     def mismatch(kind, request, detail=""):
         stats["mismatches"] += 1
@@ -804,9 +1051,58 @@ def sample_results(sample, comparison):
                 strata=dict(Counter(r["stratum"] for r in rows)), cases=rows)
 
 
+def replay_observed(program, snapshots):
+    """Rebuild the native `CommandPacks` from the insertions the trace reports.
+
+    Each insertion must replay: a ParameterFile at its pc whose literal asset
+    names it, and the library program's length. Returns the final command
+    list, its origin keys (as `expand` builds them), the snapshots and requests
+    with every index mapped into the final list, the replayed insertions and
+    the number that did not replay."""
+    final, keys, events, failures = [dict(c) for c in program], [(i,) for i in range(len(program))], [], 0
+    dynamic = assigned_names(program)
+    for number, snapshot in enumerate(snapshots):
+        for item in snapshot.get("insertions") or []:
+            pc, asset = item["pc"], item["asset"]
+            literal = host.initialize(final[pc]["args"], [""])[0] if 0 <= pc < len(final) and final[pc]["id"] == 201 else None
+            if (BINDING is None or literal is None or asset not in BINDING.library or item["count"] != len(BINDING.library[asset])
+                    or (literal not in dynamic and literal != asset)):
+                failures += 1
+                continue
+            insert(final, pc, asset, len(events))
+            keys[pc + 1:pc + 1] = [keys[pc] + (asset, offset) for offset in range(item["count"])]
+            events.append((number, item))
+
+    def mapped(index, later):
+        for position, (number, item) in enumerate(events):
+            if later(number, item) and index is not None and index > item["pc"]:
+                index += item["count"]
+        return index
+
+    snapshots_out, requests_out = [], []
+    for number, snapshot in enumerate(snapshots):
+        later = lambda n, item, number=number: n > number
+        fault = snapshot.get("fault")
+        requests = [dict(r, pc=mapped(r["pc"], lambda n, item, r=r: item["nextRequestID"] > r["requestID"]))
+                    for r in snapshot.get("requests", [])]
+        snapshots_out.append(dict(snapshot, pc=mapped(snapshot["pc"], later), requests=requests,
+                                  fault=dict(fault, pc=mapped(fault["pc"], later)) if fault else fault))
+    return final, keys, snapshots_out, [item for _, item in events], failures
+
+
+def to_expanded(index, final_keys, expanded_index, expanded_count):
+    """An index of the final native list in the static expanded list (None when
+    the native ran a command the static expansion does not contain)."""
+    if index is None:
+        return None
+    if index >= len(final_keys):
+        return expanded_count
+    return expanded_index.get(final_keys[index])
+
+
 def compare(coverage, trace_pairs, supported=SUPPORTED):
     records = {f"{r['bundle']}#{r['pathID']}": r for r in coverage["assets"]}
-    results, seen, request_totals, kinds = [], set(), Counter(), Counter()
+    results, seen, request_totals, kinds, insertion_totals = [], set(), Counter(), Counter(), Counter()
     for trace, report in trace_pairs:
         programs = {case["name"]: case["program"]["commands"] for case in trace["cases"]}
         for case in report["cases"]:
@@ -814,16 +1110,57 @@ def compare(coverage, trace_pairs, supported=SUPPORTED):
             if name in seen:
                 raise ValueError("Duplicate trace case " + name)
             seen.add(name)
-            record, commands = records[name], programs[name]
-            outcome, requests = observe(commands, case["snapshots"])
+            record, program = records[name], programs[name]
+            commands, _, origins = expand(program)
+            expanded_index = {}
+            for index, key in enumerate(origins):
+                expanded_index.setdefault(key, index)
+            final, final_keys, snapshots, insertions, failures = replay_observed(program, case["snapshots"])
+            insertion_totals["observed"] += len(insertions) + failures
+            insertion_totals["replayFailures"] += failures
+            insertion_totals["insertedCommands"] += sum(i["count"] for i in insertions)
+            observed_final, requests = observe(final, snapshots)
+            outcome = dict(observed_final, pc=to_expanded(observed_final["pc"], final_keys, expanded_index, len(commands)),
+                           faultPC=to_expanded(observed_final["faultPC"], final_keys, expanded_index, len(commands)))
             reachable = is_reachable(outcome, *reachable_outcomes(commands, supported))
             category, explanation = classify(record, outcome, supported, reachable)
+            if failures:
+                category, explanation = "unexplained", f"{failures} ParameterFile insertion(s) do not replay"
+            elif observed_final["faultPC"] is not None and outcome["faultPC"] is None:
+                category, explanation = "unexplained", "fault inside a command the static expansion does not contain"
             halt = record["firstStaticHalt"]
             exact = straight_line(commands, halt, supported) and category in ("match", "match-no-halt")
-            stats, mismatches = check_requests(commands, requests, (halt["index"] if halt else len(commands)) if exact else None)
+            end_final = (observed_final["faultPC"] if halt else len(final)) if exact else None
+            stats, mismatches = check_requests(final, requests, end_final)
+            if exact and BINDING is not None:
+                end = halt["index"] if halt else len(commands)
+                expected = [i for i in record["staticInsertions"] if i["pc"] < end]
+                observed = [dict(pc=i["pc"], asset=i["asset"], count=i["count"]) for i in insertions]
+                insertion_totals["sequenceChecked"] += 1
+                insertion_totals["sequenceNonEmpty"] += bool(expected)
+                if observed == expected:
+                    insertion_totals["sequenceMatches"] += 1
+                else:
+                    mismatches.append(dict(kind="insertions", requestID=None, pc=None, detail=f"{len(observed)} observed, {len(expected)} predicted"))
+                    stats["mismatches"] += 1
+                    stats["mismatch:insertions"] += 1
+                heroine = expected_heroine(commands, end)
+                if heroine is not None and "heroine" in case:
+                    insertion_totals["heroineChecked"] += 1
+                    insertion_totals["heroineChanged"] += bool(heroine)
+                    native = {key[2:]: case["heroine"].get(key[2:]) for key in BINDING.fields}
+                    predicted = {key[2:]: heroine.get(key[2:], value) for key, value in BINDING.fields.items()}
+                    if native == predicted:
+                        insertion_totals["heroineMatches"] += 1
+                    else:
+                        mismatches.append(dict(kind="heroine", requestID=None, pc=None, detail="native heroine fields differ from the model"))
+                        stats["mismatches"] += 1
+                        stats["mismatch:heroine"] += 1
             request_totals.update(stats)
             kinds.update(r["command"]["kind"] for r in requests)
             results.append(dict(name=name, bundle=record["bundle"], pathID=record["pathID"], commandCount=record["commandCount"],
+                                programCommandCount=record["programCommandCount"], observedInsertions=len(insertions),
+                                finalCommandCount=len(final),
                                 predicted=halt, firstUnsupported=record["firstUnsupported"],
                                 controlFlowBeforeFirstStaticHalt=record["controlFlowBeforeFirstStaticHalt"],
                                 observed=outcome, category=category, explanation=explanation, observedReachable=reachable,
@@ -855,10 +1192,15 @@ def compare(coverage, trace_pairs, supported=SUPPORTED):
                    observedOutsideReachableOutcomes=sum(not r["observedReachable"] for r in results),
                    assetsWithRequests=sum(r["requests"].get("requests", 0) > 0 for r in results),
                    requests=dict(sorted(request_totals.items())), requestKinds=dict(kinds.most_common()),
-                   requestMismatchCases=sum(bool(r["requestMismatches"]) for r in results))
-    return dict(schemaVersion=2, scope="Native SourceADVInterpreter via ikkoku-inspect adv-trace; default inputs: no host variables, "
+                   requestMismatchCases=sum(bool(r["requestMismatches"]) for r in results),
+                   insertions=dict(sorted(insertion_totals.items())),
+                   completed=sum(r["observed"]["status"] in ("closed", "exhausted") for r in results),
+                   completedNonEmpty=sum(r["observed"]["status"] in ("closed", "exhausted") and r["programCommandCount"] > 0 for r in results))
+    return dict(schemaVersion=3, bound=BINDING is not None,
+                scope="Native SourceADVInterpreter via ikkoku-inspect adv-trace; default inputs: no host variables, "
                 f"{FRAME_SECONDS:g} s frames; scripted host acknowledges every blocking request (MapChange with no ADV variables) "
-                "after the frame that issued it and presses Next whenever a Text batch waits.",
+                "after the frame that issued it and presses Next whenever a Text batch waits"
+                + ("; the new-game heroine and player are bound with the extracted tables and parameter library." if BINDING else "."),
                 summary=summary, missing=missing[:50], results=results)
 
 
@@ -869,18 +1211,38 @@ def main():
     scan.add_argument("--recovery-index", type=Path, required=True)
     scan.add_argument("--scenario-root", type=Path, required=True, help="Directory searched recursively for *.unity3d")
     scan.add_argument("--output", type=Path, required=True)
+    scan.add_argument("--character-tables", type=Path, help="character-tables.json from adv_character_tables.py (binds the heroine)")
+    scan.add_argument("--parameter-library", type=Path, help="parameter-library.json from adv_character_tables.py")
     joined = commands.add_parser("compare", help="Classify adv-trace reports against coverage.json")
     joined.add_argument("--output", type=Path, required=True, help="Directory holding coverage.json and traces/")
     args = parser.parse_args()
+    global BINDING
     if args.command == "scan":
         names, handlers, evidence = command_tables(args.recovery_index)
+        binding = None
+        if (args.character_tables is None) != (args.parameter_library is None):
+            parser.error("--character-tables and --parameter-library go together")
+        if args.character_tables is not None:
+            savedata_path, savedata_text = selected_source(args.recovery_index, "SaveData")
+            evidence.append(dict(type="SaveData", path=str(savedata_path), sha256=digest(savedata_path)))
+            keys = character.source_keys(savedata_text)
+            tables_bytes, library_bytes = args.character_tables.read_bytes(), args.parameter_library.read_bytes()
+            BINDING = Binding(keys["heroine"], json.loads(library_bytes)["programs"], json.loads(tables_bytes))
+            binding = dict(characterTablesPath="character-tables.json", characterTablesSHA256=hashlib.sha256(tables_bytes).hexdigest(),
+                           parameterLibraryPath="parameter-library.json", parameterLibrarySHA256=hashlib.sha256(library_bytes).hexdigest(),
+                           sourceKeysPath="source-keys.json", heroine=BINDING.heroine, player=BINDING.player)
         root = args.scenario_root.resolve()
         paths = sorted(p for p in root.rglob("*.unity3d") if not p.name.startswith("._"))
         bundles = [scan_bundle(path, root) for path in paths]
         coverage = analyse(bundles, names, handlers)
-        coverage.update(sourceEvidence=evidence, scenarioRoot=str(root), commandNames=names,
+        coverage.update(sourceEvidence=evidence, scenarioRoot=str(root), commandNames=names, binding=binding,
                         bundles=[{k: v for k, v in b.items() if k != "assets"} | dict(assetCount=len(b["assets"])) for b in bundles])
         args.output.mkdir(parents=True, exist_ok=True)
+        if binding is not None:  # Copies beside coverage.json; trace inputs and the sample name them relatively.
+            (args.output / "character-tables.json").write_bytes(tables_bytes)
+            (args.output / "parameter-library.json").write_bytes(library_bytes)
+            (args.output / "source-keys.json").write_text(json.dumps(dict(schemaVersion=1, source=str(savedata_path), **keys),
+                                                                     ensure_ascii=False, indent=1) + "\n")
         traces = args.output / "traces"
         traces.mkdir(exist_ok=True)
         for stale in traces.glob("trace-*.json"):
@@ -888,7 +1250,10 @@ def main():
         cases = (trace_case(b["path"], a) for b in bundles for a in b["assets"])
         chunks = 0
         for number, chunk in enumerate(chunk_cases(cases)):
-            (traces / f"trace-{number:03d}.json").write_text(json.dumps(dict(cases=chunk), ensure_ascii=False) + "\n")
+            document = dict(cases=chunk)
+            if binding is not None:
+                document.update(parameterLibraryPath="../parameter-library.json", characterTablesPath="../character-tables.json")
+            (traces / f"trace-{number:03d}.json").write_text(json.dumps(document, ensure_ascii=False) + "\n")
             chunks += 1
         sample = select_sample(bundles, coverage, names)
         (args.output / "coverage.json").write_text(json.dumps(coverage, ensure_ascii=False, indent=1) + "\n")
@@ -896,6 +1261,16 @@ def main():
         print(json.dumps(dict(coverage.get("totals"), traceChunks=chunks, sampleCases=sample["caseCount"]), indent=2))
     else:
         coverage = json.loads((args.output / "coverage.json").read_text())
+        binding = coverage.get("binding")
+        if binding is not None:
+            keys = json.loads((args.output / binding["sourceKeysPath"]).read_text())
+            library_bytes = (args.output / binding["parameterLibraryPath"]).read_bytes()
+            tables_bytes = (args.output / binding["characterTablesPath"]).read_bytes()
+            if (hashlib.sha256(library_bytes).hexdigest(), hashlib.sha256(tables_bytes).hexdigest()) != (
+                    binding["parameterLibrarySHA256"], binding["characterTablesSHA256"]):
+                raise ValueError("The binding inputs changed since the scan")
+            BINDING = Binding(keys["heroine"], json.loads(library_bytes)["programs"], json.loads(tables_bytes),
+                              binding["heroine"], binding["player"])
         pairs = []
         for trace_path in sorted((args.output / "traces").glob("trace-*.json")):
             if trace_path.name.endswith(".report.json"):

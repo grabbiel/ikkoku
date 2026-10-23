@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**856 files indexed; 856 assigned; 0 unassigned.**
+**864 files indexed; 864 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 90 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 98 |
 | [Character / Maker / mods](character-and-mods.md) | 118 |
 | [Studio / IK / animation](studio.md) | 181 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 314 |
@@ -37,12 +37,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 179 |
+| Conversion / recovery / verification tool | 181 |
 | Documentation / historical evidence | 55 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 194 |
-| Test / validation | 172 |
+| Reference host / controlled fixture | 28 |
+| Runtime / shared shader declaration | 196 |
+| Test / validation | 175 |
 
 ## App / gameplay / plugins
 
@@ -80,6 +80,8 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceRelocation.swift](../../Packages/Engine/Sources/Assets/ResourceRelocation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVCharacterBinding.swift](../../Packages/Engine/Sources/Gameplay/SourceADVCharacterBinding.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVCharacterParameters.swift](../../Packages/Engine/Sources/Gameplay/SourceADVCharacterParameters.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift) | Runtime / shared shader declaration |
@@ -100,6 +102,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceADVCharacterBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVCharacterBindingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
@@ -111,21 +114,26 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
 | [Tools/reverse/analysis/accessory_names_oracle.py](../../Tools/reverse/analysis/accessory_names_oracle.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/adv_character_tables.py](../../Tools/reverse/analysis/adv_character_tables.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_command_coverage.py](../../Tools/reverse/analysis/adv_command_coverage.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_host_requests.py](../../Tools/reverse/analysis/adv_host_requests.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_contract.py](../../Tools/reverse/analysis/gameplay_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_execution_contract.py](../../Tools/reverse/analysis/gameplay_execution_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/mute_plugin_oracle.py](../../Tools/reverse/analysis/mute_plugin_oracle.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/test_adv_character_tables.py](../../Tools/reverse/analysis/test_adv_character_tables.py) | Test / validation |
 | [Tools/reverse/analysis/test_adv_command_coverage.py](../../Tools/reverse/analysis/test_adv_command_coverage.py) | Test / validation |
 | [Tools/reverse/analysis/test_adv_host_requests.py](../../Tools/reverse/analysis/test_adv_host_requests.py) | Test / validation |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Host.cs](../../Tools/reverse/fixtures/MutePluginOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Program.cs](../../Tools/reverse/fixtures/MutePluginOracle/Program.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalADVBindingProbe.cs](../../Tools/reverse/fixtures/OriginalADVBindingProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLifecycleProbe.cs](../../Tools/reverse/fixtures/OriginalLifecycleProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/original_adv_binding_probe.py](../../Tools/reverse/original_adv_binding_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_lifecycle_probe.py](../../Tools/reverse/original_lifecycle_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_gameplay_contract.py](../../Tools/reverse/test_gameplay_contract.py) | Test / validation |
 | [Tools/reverse/test_gameplay_execution_contract.py](../../Tools/reverse/test_gameplay_execution_contract.py) | Test / validation |
+| [Tools/reverse/test_original_adv_binding_probe.py](../../Tools/reverse/test_original_adv_binding_probe.py) | Test / validation |
 | [Tools/translation/fixtures/LifecycleFixture.cs](../../Tools/translation/fixtures/LifecycleFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/fixtures/StudioMotionFixture.cs](../../Tools/translation/fixtures/StudioMotionFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/frontend/Program.cs](../../Tools/translation/frontend/Program.cs) | Conversion / recovery / verification tool |
