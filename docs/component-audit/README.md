@@ -408,7 +408,7 @@ reruns, and branch cleanup) is handed off in
       uniquely": its profile binds source object key 10, and the check loads no
       source scene. See A-T05 in
       [app-gameplay-and-plugins](app-gameplay-and-plugins.md).)
-- [ ] R4 app paths (PR #110): give a native character a degenerate IK target. The
+- [x] R4 app paths (PR #110): give a native character a degenerate IK target. The
       status line names the unsolved chain and the pose is kept. A source camera
       under a mirrored parent falls back to the saved camera with a
       `reflectedFrame` message.
@@ -429,10 +429,20 @@ reruns, and branch cleanup) is handed off in
       2.3 cm away. After the target returns to a reachable X, the status line keeps
       the unsolved message; this is an open finding.
       [Native IK](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
-      In the user's manual run, the status line appeared; the user did not confirm
-      the pose and camera halves by hand. The visible status bar is not asserted
-      headlessly.)
-- [ ] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
+      The visible status bar is not asserted headlessly.
+      User, 2026-10-23, Debug build of main `c9df5df`: typing X =
+      100000000000000000000 on a native female's Left hand target showed the
+      unsolved status line and returned the arm to its pre-IK pose. Typing 0.3
+      solved it again, while the status line kept the unsolved message (the open
+      finding above). On `scene-mirrored-camera.png`, camera 2 was active with the
+      saved-camera fallback message. Look through on camera 3 switched the view,
+      and Look through on camera 2 restored the fallback. UI finding: the tree
+      names the cameras (`IKKOKU-MIRROR`, `IKKOKU-CONTROL`) under folders labelled
+      "Unrendered source item 0/1", while the status line names camera 2 by its
+      source key and adds "Viewing through source camera "IKKOKU-MIRROR"" during
+      the fallback, so it is hard to tell which camera is which and which view is
+      shown.)
+- [x] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
       follows it, and re-solving the same target leaves the pose unchanged.
       (User, 2026-10-23: the hand follows the handle. Automated re-solve half:
       `scenarios/reload-save-ik.json`, 20/20 steps on the Debug build. A
@@ -442,8 +452,9 @@ reruns, and branch cleanup) is handed off in
       save/load (`reload-load-ik.json`, 7/7). With the pre-#115 update patched back
       in, the reach asserts fail by 16–74 mm.
       [Native IK](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
-      Not ticked: the re-solve is driven through the Target row's setter, not a
-      handle drag.)
+      User, 2026-10-23, Debug build of main `c9df5df`: dragging the Left hand
+      handle in the viewport moved the hand with it, and one up and one down click
+      on the Target row's X stepper returned the arm to the same pose.)
 - [ ] A06 capture validation (PR #118): on a Debug build, run the commands in the
       build guide's "Capture request validation" section. Each of these exits 1
       naming its variables: two modes, an adapter report without a capture, and a
@@ -456,7 +467,7 @@ reruns, and branch cleanup) is handed off in
       `IKKOKU_CAPTURE_W`. The missing card and scene exited 1 with no PNG, and the
       Maker capture exited 0. Not ticked: `app-smoke` passed 6/7, with the same
       `startup-mute-capture` failure as A-T05.)
-- [ ] T-T02 packaged app (PR #120): copy the Release app outside the checkout and run
+- [x] T-T02 packaged app (PR #120): copy the Release app outside the checkout and run
       the build guide's thumbnail recipe with `IKKOKU_SOURCE_TREE_FALLBACKS=0`. It
       renders from the bundle alone and prints no `source-tree fallback` line. Also
       open the project in Xcode once: the navigator shows `Packages/` and the Engine
@@ -469,15 +480,16 @@ reruns, and branch cleanup) is handed off in
       208 files, arm64, 0 errors and 0 warnings. The user confirmed interactively
       that the fixed Release app no longer crashes. In Xcode, package resolution
       finished with no missing-package error and the project built. Its four
-      warnings are fixed in `ea5c791`. Not ticked: no one has confirmed that the
-      navigator shows `Packages/`.)
+      warnings are fixed in `ea5c791`. User, 2026-10-23, main checkout at `5e86b57`:
+      the navigator shows `Packages/`, and package resolution finished with no
+      error.)
 - [x] A-T01 gameplay lane (PR #121): on a Debug build,
       `python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json --strict`
       passes.
       (2026-10-23, local-wave-verify: 1/1 with 0 skipped on the Debug build of
       `2e732b9`, main `5e86b57` merged, Xcode 27.0, and earlier at `0501cf1`.
       The direct launch reported `gameplay scenario: 17 passed, 0 failed`.)
-- [ ] A-T02 relocation (PR #122): follow the build guide's moved-library acceptance.
+- [x] A-T02 relocation (PR #122): follow the build guide's moved-library acceptance.
       Every reference relocates, or one `Unresolved` line is printed per missing or
       changed identity, and nothing is loaded in its place.
       (2026-10-23, local-wave-verify. Automated variant: Release app of `f402483`
@@ -492,9 +504,16 @@ reruns, and branch cleanup) is handed off in
       The user's interactive run showed all 6 characters with no `Unresolved` or
       fallback line, but the scene was saved after the copy was chosen, so it
       tested the selection, not relocation. It first found the missing
-      `studio-pose/` companion, fixed in `f402483`. Not ticked: no run has yet
-      opened a scene saved against one location after choosing a moved copy
-      through the menu. See the
+      `studio-pose/` companion, fixed in `f402483`. Relocation, user,
+      2026-10-23, main `c9df5df`: in the Debug app, Choose Converted Library… →
+      `.local/reverse/`, preview of `koikatu_cs0002591.png` from inside it, and
+      Save Scene…. Then Choose Converted Library… → the moved copy (the three
+      libraries plus `studio-pose/`, `animation-assets/female-base/` and the scene
+      at the same relative path), with no incomplete alert. The Release app, copied
+      outside the checkout and run with `IKKOKU_SOURCE_TREE_FALLBACKS=0`, printed
+      three `converted library:` lines and `Resource check: 31 references: 0
+      resolved, 31 relocated, 0 unresolved.`, and showed all 6 characters with no
+      `Unresolved` or fallback line. See the
       [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout).)
 
 | Order | Tasks | Concrete result required |
