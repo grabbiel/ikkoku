@@ -1,6 +1,6 @@
 # Source gameplay control-state recovery
 
-Reviewed 2026-10-23 against the working tree (G-T01 session host). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract; the app still has no gameplay host and does not use the engine session described [below](#session-host-and-effect-inventory-g-t01).
+Reviewed 2026-10-23 against the working tree (G-T01 session host, A-T01 gameplay host first slice). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract. The [native gameplay host](#gameplay-host-a-t01) drives the [session](#session-host-and-effect-inventory-g-t01) and one fixed event, and the app runs it only as a headless scenario (`IKKOKU_GAMEPLAY_SCENARIO`). There is no interactive gameplay mode.
 
 The native `Gameplay` module translates the day/period and action-clock control
 state recovered from this installation's `ActionGame.Cycle`. It is an executable
@@ -139,7 +139,7 @@ untranslated period coroutine bodies.
 `Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift` wraps the cycle
 so that a platform-neutral host can drive it. It executes no scene, NPC, ADV,
 menu or save work itself; it orders what the host owes and refuses to commit
-early. No app host consumes it yet (A-T01).
+early. The [gameplay host](#gameplay-host-a-t01) (A-T01) consumes it.
 
 - `perform(_:)` takes one effect-producing operation (`SourceGameplayCycleOperation`
   mirrors the cycle methods) and stages it on a copy of the committed cycle. A
@@ -213,15 +213,15 @@ period before the ADV-gated coroutine replacement), while the session commits
 them only after the last barrier. Timer operations during an outstanding barrier
 are rejected because which side of the pending source wait they would apply to
 is not modelled. Cancellation (returning to title or ending the game during a
-barrier), executing the NPC/ADV/scene work and supplying real regulation flags
-remain app-host work (A-T01). This snapshot is native session state, not
+barrier), executing the NPC/scene work and supplying real regulation flags
+remain host work; the A-T01 host performs only the period/week effects. This snapshot is native session state, not
 original campaign `SaveData` (G12).
 
 ADV commands have a separate acknowledgement layer: a running
 `SourceADVInterpreter` issues its own host requests and accepts acknowledgements
 by request ID ([ADV](adv.md)). Those are not session barriers. The session neither
-owns nor persists an interpreter; a host saves both, and acknowledges
-`replacePeriodAfterADVBarrier` only after its ADV run has ended.
+owns nor persists an interpreter. The A-T01 host saves both in one snapshot and
+acknowledges `replacePeriodAfterADVBarrier` only after its ADV run has ended.
 
 ## Gameplay dependency map
 
@@ -309,9 +309,154 @@ or MapMove flag) must be rejected. These tests check the native ordering
 contract; there is no recorded original host trace to compare against, and the
 conservative barriers above remain unverified against the source.
 
-The engine slice of the session host (`G-T01`) is above. Next, an app host
-(`A-T01`) must execute each effect and acknowledge barriers from real scene,
-ADV and NPC completion, including cancellation. Then bind fixed events and
+The engine slice of the session host (`G-T01`) is above, and the first slice
+of the gameplay host (`A-T01`) [below](#gameplay-host-a-t01). Next, host the
+remaining effects (NPC loading, tutorial, MapMove, night menu) from real scene
+and NPC completion, including cancellation. Then bind fixed events and
 scenario 301 to real source player/heroine data (`G-T02`), expand ADV
 presentation/task families (`G-T03`) and build a measured neutral NPC navigation
 slice (`G-T04`). The audit supplies acceptance criteria.
+
+## Gameplay host (A-T01)
+
+`Packages/Engine/Sources/Gameplay/SourceGameplayHost.swift` is the native host
+that the session section above anticipates. It owns:
+
+- one `SourceGameplaySession`;
+- `SourceGameplayNativeState`, a versioned native save state. It holds the saved
+  and shown weekday, the clock zone, the last sunlight map and period, the
+  minimap/camera flag, the active map number, a player next flag, heroine
+  placeholders (`id`, `fixCharaID`, `classIndex`, `isTaked`, `eventAfterDay` and
+  a count of applied daily increments) and the completed fixed-event asset IDs;
+- at most one running fixed event (heroine, scheduler selection and its
+  `SourceADVInterpreter`) and at most one map load;
+- an immutable `SourceGameplayEventCatalog` (fixed-event table, ADV program per
+  event asset, map names and numbers, wait points). Every scheduled asset must
+  have exactly one program.
+
+None of the state is original campaign data (G12). Each field is a native
+placeholder that changes only when the host performs the matching effect, and
+the original counters behind `advanceCharacterDays` are not modelled.
+
+**Commands and steps.** A caller stages one cycle operation with `perform(_:)`
+and advances the host with `step()`, one unit of host work at a time; `run()`
+steps until idle or a stop condition holds. The caller cannot acknowledge
+anything, because `session` is read-only outside the host. `perform` is accepted
+only when no released work, staged operation or period entry is pending. A
+running event may continue meanwhile, which is how a period change requested
+during an event reaches its ADV barrier. Each step does the first applicable item:
+
+1. Take the released synchronous work and apply it to the native state in source
+   order. Report the staged operation's commit in the same step once its last
+   barrier and work are done.
+2. Report a commit that has no work left.
+3. Complete the outstanding barrier when the host has finished what it waits
+   for, then acknowledge it:
+   - `prepareNextPeriodSceneBarrier` once no map is loading and no event runs. The
+     host presents no fades and treats a running ADV event as an additive scene;
+     whether the source does is not recovered, and waiting is the conservative
+     choice.
+   - `replacePeriodAfterADVBarrier` once no ADV event runs. This replaces the
+     period routine, so the new period's fixed-event check is due.
+4. Advance the running event. That is also what a blocked barrier waits for:
+   - drain its requests. A MapChange without a fade starts a load to a catalog
+     map. Any other request, a fade or an unknown map throws `unsupportedRequest`
+     or `unknownMap`;
+   - finish a started load: set the active map, then acknowledge the request with
+     no ADV variables, because `Cycle.ADVVariables` is not recovered;
+   - complete the event on Close or exhaustion, appending its asset ID to
+     `completedEvents`;
+   - otherwise tick the interpreter one `frameDelta` frame without Next.
+5. Run the period routine's fixed-event check. Native policy: every period
+   checks, heroines in saved order, and the first `SourceFixedEventScheduler`
+   selection starts its program. Which source period bodies check events is not
+   translated (see the dependency map above). Completed events are skipped, so
+   an event runs once.
+
+A barrier that waits while no event runs throws `barrierBlocked`. Every throwing
+command or step leaves the host unchanged, so a failed step is repeated
+identically.
+
+**Supported effects.** `SourceGameplayHost.supports` is an exhaustive switch.
+The host performs `persistWeek`, `updateWeekDisplay`, `advanceCharacterDays`
+(the daily increment per heroine, plus `eventAfterDay` when
+`fixCharaID <= -5`), `updateTimeZone`, `updateMapSunlight` (on the active map),
+`setMiniMapAndCameraActive`, `clearPlayerNextFlag` and the two barriers above.
+Those are 9 of the 19 effects, enough for `changePeriod`, `nextPeriod`,
+`changeWeek`, `nextWeek` and `reloadNightMenuWeek`. `perform` replays the
+operation on a copy of the cycle and rejects it with
+`unsupportedOperation(operation, effect)` when it would release any of the other
+10. These are NPC loading, the tutorial, MapMove camera/cut-in and exit, game
+parameters, companions, player creation, the action count and the Saturday
+teachers, so `beginMapMove`, `finishMapMove` and `completeNightMenu` are rejected.
+
+**Persistence.** The whole host is `Codable`: format marker
+`ikkoku.native-gameplay-host`, `schemaVersion` 1, canonical sorted-key JSON
+from `snapshot()`, at most 16 MiB. `SourceGameplayHost.resume(_:catalog:)`
+rejects data by name:
+
+- `unrecognizedSnapshot` for a missing or other format, including a bare session
+  snapshot;
+- `unsupportedSchemaVersion` and `snapshotTooLarge`;
+- `catalogMismatch` when the snapshot carries other content than the caller's
+  catalog;
+- `invalidCatalog`;
+- `inconsistentState` for a state no operation can produce. Examples are an
+  active, sunlight or load map outside the catalog, duplicate heroines or
+  completed events, a running event that is not its heroine's catalog entry or
+  whose program differs from the catalog, an already completed or faulted running
+  event, a pending MapChange that is neither queued nor loading, a period entry
+  during an event, a staged operation that differs from the session's in-flight
+  one, a released effect the host does not support, or a frame duration that is
+  not positive.
+
+The nested session and interpreter reject their own corruption with their own
+errors.
+
+**Headless app mode.** `SourceGameplayHostScenario` runs a JSON scenario: a
+catalog, a start (weekday, opening flag, map, heroines, frame duration) and
+steps.
+
+- `perform` stages a named operation.
+- `run` steps until `idle`, `eventRunning`, `mapLoading` or `barrier` holds.
+- `reload` snapshots the host, stores the bytes and resumes from what the store
+  returns. The result must equal the persisted host and re-encode to the same
+  bytes.
+- `assert` checks period, weekday, saved weekday, active map, completed events,
+  running event or idle.
+
+The report lists each step, every reload, the full trace and the final state. The
+app runs it behind `IKKOKU_GAMEPLAY_SCENARIO` with the required
+`IKKOKU_GAMEPLAY_SCENARIO_REPORT`, before the engine and editors start. A reload
+with a `path` writes the snapshot through `CaptureOutput.writeJSON` and reads it
+back from disk; the report goes through the same checked writer. The process
+exits 0 only when every step passed.
+
+**Verification.** `SourceGameplayHostTests.swift` (8 tests) runs in the public
+CI lane, the only place it was compiled or run, over the synthetic catalog in
+`Tools/verification/scenarios/gameplay-controlled-event.json`. Event 9001 runs
+VAR, Calc, IF to a local tag, a 0.5 s Wait, MapChange to a second map and Close.
+The tests check:
+
+- the exact trace from WakeUp → Morning period selection to completion (16
+  entries, two barriers);
+- that a Change(Type) requested during the map load keeps Morning committed and
+  its ADV barrier outstanding until the event completes, and that a `_Next`
+  during the event applies its sunlight only after the map load;
+- a JSON reload before each of the 25 steps of a four-operation trace (period
+  selection, a mid-event HR1 change, a backward day change, `_Next`), covering
+  both barrier kinds, the held ADV barrier, the map load and the ADV Wait, each
+  reproducing the uninterrupted trace and final host exactly;
+- weekday, heroine counter, clock-zone, sunlight and minimap changes, and the
+  rejected MapMove and night-menu operations and busy commands without mutation;
+- text, unknown-map, faded MapChange and unported-command failures without
+  mutation;
+- each named snapshot rejection above;
+- the shipped scenario, whose three reloads leave its trace and final state
+  identical to a reload-free run, and whose corrupted reload stops it with a
+  named error.
+
+The `gameplay-scenarios` verification lane runs that scenario through the built
+app. It needs the Mac and has not run yet. No original data or host trace is
+compared: this verifies the native ordering and persistence contract, not source
+parity.
