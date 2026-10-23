@@ -48,6 +48,52 @@ public enum RenderFrameError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+/// Debounced status-line text for renderer problems an editor should show: a
+/// skipped frame (`Renderer.lastFrameError`) or unshaded lights
+/// (`RenderFrameStatistics.droppedLights`). The app polls it from its editor
+/// timer, not from the draw. A new problem shows at once, and the line is written
+/// again only when the problem text changes. Once frames have rendered without a
+/// problem for `clearDelay` seconds, the status it replaced comes back. If other
+/// code wrote the status line meanwhile, that text is kept, and the same problem
+/// is not written over it again.
+public struct RenderStatusReporter: Sendable {
+    public static let clearDelay: Double = 1
+    private var shown: String?
+    private var replaced = ""
+    private var lastProblem: String?
+    private var healthySince: Double?
+
+    public init() {}
+
+    /// The problem text for one frame's outcome, or nil when it rendered fully.
+    public static func message(error: RenderFrameError?, statistics: RenderFrameStatistics) -> String? {
+        if let error { return "Renderer skipped a frame: \(error)" }
+        let dropped = statistics.droppedLights
+        guard dropped > 0 else { return nil }
+        let lights = dropped == 1 ? "1 enabled light is" : "\(dropped) enabled lights are"
+        return "\(lights) not shaded: frames shade at most \(IK_MAX_LIGHTS) lights."
+    }
+
+    /// The new status-line text, or nil to leave `current` unchanged. `now` is in seconds.
+    public mutating func status(current: String, error: RenderFrameError?, statistics: RenderFrameStatistics,
+                                now: Double) -> String? {
+        if let shown, current != shown { self.shown = nil }
+        guard let problem = Self.message(error: error, statistics: statistics) else {
+            guard lastProblem != nil else { return nil }
+            guard let since = healthySince else { healthySince = now; return nil }
+            guard now - since >= Self.clearDelay else { return nil }
+            let restore = shown != nil ? replaced : nil
+            shown = nil; lastProblem = nil; healthySince = nil
+            return restore
+        }
+        healthySince = nil
+        guard problem != lastProblem else { return nil }
+        if shown == nil { replaced = current }
+        shown = problem; lastProblem = problem
+        return problem
+    }
+}
+
 /// Frame graph: deform → shadow → toon+outline → transparent → post → overlay.
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
@@ -105,6 +151,7 @@ public final class Renderer: @unchecked Sendable {
     public func submit(_ frame: RenderFrame) {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
+        snapshot.submitted = true
         frameLock.lock(); pendingFrame = snapshot; frameLock.unlock()
     }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
@@ -381,6 +428,9 @@ public final class Renderer: @unchecked Sendable {
     /// Prepares a frame and publishes its statistics and error. Throws only
     /// `RenderFrameError.uniformAllocation`; nothing has been encoded by then.
     private func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false) throws -> FrameContext {
+        // A submitted frame created after a retirement replaced every pending frame
+        // that could still name the retired resources (`ResourceStore.retire`).
+        if input.submitted { resources.completeRetirements(createdBefore: input.createdAt) }
         var statistics = RenderFrameStatistics()
         do {
             let context = try buildContext(frame: input, targets: targets, forPick: forPick, statistics: &statistics)
@@ -503,7 +553,7 @@ public final class Renderer: @unchecked Sendable {
             }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
-                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount) else {
+                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
                     lastDeformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
                     continue
                 }
