@@ -1677,7 +1677,10 @@ and 0.317 ms. With the native store (1 live draw): 2.36 / 0.323 ms against toon
 depth mode.
 
 **Regression (opt-in OFF).** The `IKKOKU_AUTOCAPTURE` images of three cases were
-byte-identical between `main` and this branch:
+byte-identical between Debug builds of `main` and this branch. The comparison was
+run twice: `4263de3` against the live build `e6ec395`, then `9caa3f3`
+(after #121–#124) against the merged branch `51b457e`. Each case was launched
+with only its own `IKKOKU_*` variables:
 
 - `koikatu_cs0002591.png`: `a0dc50f4…`;
 - the rig and fixture card: `9d973e21…`;
