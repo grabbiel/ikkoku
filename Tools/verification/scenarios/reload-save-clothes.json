@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "assert", "clothes": {"key": 65, "state": [0, 0, 0, 0, 0, 0, 0, 0, 0], "edited": false}},
+    {"op": "captureRender", "name": "base"},
+    {"op": "setClothesState", "key": 65, "index": 0, "state": 3},
+    {"op": "setClothesState", "key": 0, "index": 0, "state": 0},
+    {"op": "assert", "clothes": {"key": 65, "state": [3, 0, 0, 0, 0, 0, 0, 0, 0], "rendered": [1, 8], "edited": true}, "render": {"from": "base", "changedPixelsAtLeast": 10000}},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-clothes.png"},
+    {"op": "assert", "clothes": {"key": 0, "state": [0, 3, 3, 3, 3, 3, 3, 3, 3], "rendered": [0], "edited": true}}
+  ]
+}

@@ -218,7 +218,9 @@ func sourceCardEditingWritesIndependentOracleEvidence() throws {
 /// An EditingFixture-shaped card with three saved outfits and a Status block
 /// whose integers use the fixture's int64 encoding (so a changed outfit also
 /// resizes the block), a stale backCoordinateType and an unknown extension.
-func outfitCard(coordinateType: Int64 = 1, back: Int64 = 2, statusVersion: String = "0.0.0", png: Data = OriginalCardFixture.png, trailer: Data? = nil) throws -> Data {
+/// `status` replaces the Status block's bytes.
+func outfitCard(coordinateType: Int64 = 1, back: Int64 = 2, statusVersion: String = "0.0.0", png: Data = OriginalCardFixture.png, trailer: Data? = nil,
+                status statusData: Data? = nil) throws -> Data {
     typealias F = OriginalCardFixture
     let base = try SourceCharacterCard.decode(EditingFixture.card())
     let coordinates = try #require(base.block(named: "Coordinate"))
@@ -232,7 +234,7 @@ func outfitCard(coordinateType: Int64 = 1, back: Int64 = 2, statusVersion: Strin
     blocks[index].data = F.pack(.array(Array(repeating: .binary(entry), count: 3)))
     // Status sits before the plug-in block, so a resize moves its offsets.
     let plugins = try #require(blocks.firstIndex { $0.name == "KKEx" })
-    blocks.insert(.init(name: "Status", version: statusVersion, data: status), at: plugins)
+    blocks.insert(.init(name: "Status", version: statusVersion, data: statusData ?? status), at: plugins)
     return F.card(blocks: blocks, png: png, trailer: trailer ?? base.trailingData)
 }
 
@@ -287,4 +289,144 @@ func outfitCard(coordinateType: Int64 = 1, back: Int64 = 2, statusVersion: Strin
     #expect(try statusless.savedCoordinateType() == 0)
     #expect(try statusless.editedData(.init(coordinateType: 0)) == statusless.preservedData)
     #expect(throws: (any Error).self) { try statusless.editedData(.init(coordinateType: 1)) }
+}
+
+/// Compact MessagePack-CSharp spellings (fixmap / fixstr / fixint) for Status
+/// blocks the wide-token fixture packer cannot express.
+private func compactStatus(_ pairs: [(String, Data)]) -> Data {
+    pairs.reduce(into: Data([0x80 | UInt8(pairs.count)])) { result, pair in
+        result += Data([0xa0 | UInt8(pair.0.utf8.count)]) + Data(pair.0.utf8) + pair.1
+    }
+}
+private let compactVersion = Data([0xa5]) + Data("0.0.0".utf8)
+
+private func differingOffsets(_ a: Data, _ b: Data) -> [Int] {
+    precondition(a.count == b.count)
+    return a.indices.filter { a[$0] != b[$0] }
+}
+
+@Test func sourceCardEditingClothesStateAndAccessoryFlagsPatchOnlyTheirTokens() throws {
+    let bytes = try outfitCard(), original = try SourceCharacterCard.decode(bytes)
+    let saved = try original.savedStatusWear()
+    #expect(saved.clothesState == [0, 1, 2, 3, 0, 0, 0, 0, 0] && saved.shoesType == 0 && saved.showAccessory == Array(repeating: true, count: 20))
+    // Requesting the saved values (alone or together) changes no byte.
+    #expect(try original.editedData(.init(clothesState: saved.clothesState)) == bytes)
+    #expect(try original.editedData(.init(clothesState: saved.clothesState, showAccessory: saved.showAccessory)) == bytes)
+    #expect(try original.editedData(.init(coordinateType: 1, clothesState: saved.clothesState, showAccessory: saved.showAccessory)) == bytes)
+
+    let clothes: [UInt8] = [3, 1, 2, 0, 3, 0, 0, 3, 3]
+    var flags = saved.showAccessory; flags[0] = false; flags[19] = false
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(clothesState: clothes, showAccessory: flags)))
+    let reread = try edited.savedStatusWear()
+    #expect(reread.clothesState == clothes && reread.showAccessory == flags && reread.shoesType == 0)
+    #expect(try edited.savedCoordinateType() == 1)
+    // The bin payload and two bool tokens are patched in place: same block
+    // length, and only the changed values' bytes differ.
+    let before = try #require(original.block(named: "Status")).data, after = try #require(edited.block(named: "Status")).data
+    #expect(after.count == before.count)
+    let changed = differingOffsets(before, after)
+    // top 0->3, shorts 3->0, gloves 0->3, both shoes 0->3, and two flags.
+    #expect(changed.count == 7)
+    let decodedBefore = try SourceMessagePack.decode(before).stringKeyedMap(), decodedAfter = try SourceMessagePack.decode(after).stringKeyedMap()
+    #expect(decodedAfter.filter { !["clothesState", "showAccessory"].contains($0.key) } == decodedBefore.filter { !["clothesState", "showAccessory"].contains($0.key) })
+    for block in original.blocks where block.name != "Status" {
+        #expect(edited.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+    #expect(edited.trailingData == original.trailingData && edited.thumbnailData == original.thumbnailData)
+    // Writing the saved values back restores the original bytes exactly.
+    #expect(try edited.editedData(.init(clothesState: saved.clothesState, showAccessory: saved.showAccessory)) == bytes)
+    // One field at a time leaves the other as saved.
+    let onlyFlags = try SourceCharacterCard.decode(original.editedData(.init(showAccessory: flags)))
+    #expect(try onlyFlags.savedStatusWear().clothesState == saved.clothesState && onlyFlags.savedStatusWear().showAccessory == flags)
+    // Combined with an outfit change, all three fields land.
+    let combined = try SourceCharacterCard.decode(original.editedData(.init(coordinateType: 0, clothesState: clothes)))
+    #expect(try combined.savedCoordinateType() == 0 && combined.savedStatusWear().clothesState == clothes)
+}
+
+@Test func sourceCardEditingWearRejectsInvalidValuesAndUnreadableFields() throws {
+    let original = try SourceCharacterCard.decode(outfitCard())
+    for clothes: [UInt8] in [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [4, 0, 0, 0, 0, 0, 0, 0, 0]] {
+        #expect(throws: (any Error).self, Comment(rawValue: "\(clothes)")) { try original.editedData(.init(clothesState: clothes)) }
+    }
+    for count in [0, 19, 21] {
+        #expect(throws: (any Error).self, Comment(rawValue: "\(count)")) { try original.editedData(.init(showAccessory: Array(repeating: false, count: count))) }
+    }
+    // A newer Status version is never edited.
+    let newer = try SourceCharacterCard.decode(outfitCard(statusVersion: "0.0.1"))
+    #expect(throws: (any Error).self) { try newer.editedData(.init(clothesState: [3, 3, 3, 3, 3, 3, 3, 3, 3])) }
+    // Without a Status block the MemberInit defaults are kept (no-op) but
+    // nothing else can be written.
+    let statusless = try SourceCharacterCard.decode(EditingFixture.card())
+    #expect(try statusless.savedStatusWear() == .memberInit)
+    #expect(try statusless.editedData(.init(clothesState: Array(repeating: 0, count: 9), showAccessory: Array(repeating: true, count: 20))) == statusless.preservedData)
+    #expect(throws: (any Error).self) { try statusless.editedData(.init(clothesState: [3, 0, 0, 0, 0, 0, 0, 0, 0])) }
+    #expect(throws: (any Error).self) { try statusless.editedData(.init(showAccessory: [false] + Array(repeating: true, count: 19))) }
+    // Wrongly shaped saved fields are reported, never guessed or rewritten.
+    typealias F = OriginalCardFixture
+    let shapes: [(String, F.Value)] = [
+        ("clothesState", .binary(Data([0, 0, 0]))), ("clothesState", .binary(Data([0, 0, 0, 0, 9, 0, 0, 0, 0]))),
+        ("clothesState", .string("000000000")), ("showAccessory", .array(Array(repeating: .bool(true), count: 19))),
+        ("showAccessory", .array([.integer(1)] + Array(repeating: .bool(true), count: 19))), ("shoesType", .string("1")),
+    ]
+    for (key, value) in shapes {
+        let status = F.pack(F.map([("version", .string("0.0.0")), ("coordinateType", .integer(1)), (key, value)]))
+        let card = try SourceCharacterCard.decode(outfitCard(status: status))
+        #expect(throws: (any Error).self, Comment(rawValue: key)) { try card.savedStatusWear() }
+        #expect(throws: (any Error).self, Comment(rawValue: key)) { try card.editedData(.init(clothesState: [3, 3, 3, 3, 3, 3, 3, 3, 3])) }
+    }
+}
+
+@Test func sourceCardEditingWearReadsArraySpellingAndAppendsMissingFields() throws {
+    // The synthetic Studio fixture's spelling: a fixmap whose clothesState
+    // is an array of nine fixints and which saves no showAccessory.
+    let clothesArray = Data([0x99, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    let status = compactStatus([("version", compactVersion), ("coordinateType", Data([0x01])), ("clothesState", clothesArray)])
+    let bytes = try outfitCard(status: status), original = try SourceCharacterCard.decode(bytes)
+    let saved = try original.savedStatusWear()
+    #expect(saved.clothesState == Array(repeating: 0, count: 9) && saved.showAccessory == Array(repeating: true, count: 20))
+    #expect(try original.editedData(.init(clothesState: saved.clothesState, showAccessory: saved.showAccessory)) == bytes)
+
+    // Array members are patched as fixints in place.
+    let clothes: [UInt8] = [3, 0, 0, 0, 0, 0, 0, 1, 1]
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(clothesState: clothes)))
+    let after = try #require(edited.block(named: "Status")).data
+    #expect(after.count == status.count && differingOffsets(status, after).count == 3)
+    #expect(try edited.savedStatusWear().clothesState == clothes)
+    #expect(try edited.editedData(.init(clothesState: saved.clothesState)) == bytes)
+
+    // A missing showAccessory is appended in MessagePack-CSharp's form; only
+    // the map header changes among the existing bytes.
+    var flags = saved.showAccessory; flags[0] = false
+    let appended = try SourceCharacterCard.decode(original.editedData(.init(showAccessory: flags)))
+    let grown = try #require(appended.block(named: "Status")).data
+    let tail = Data([0xad]) + Data("showAccessory".utf8) + Data([0xdc, 0x00, 0x14, 0xc2]) + Data(repeating: 0xc3, count: 19)
+    #expect(grown == Data([0x84]) + status.dropFirst() + tail)
+    #expect(try appended.savedStatusWear().showAccessory == flags && appended.savedStatusWear().clothesState == saved.clothesState)
+    for block in original.blocks where block.name != "Status" {
+        #expect(appended.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+
+    // A map32 Status without either field grows its 4-byte count and
+    // appends the bin form; a fixmap of 15 entries becomes a map16.
+    typealias F = OriginalCardFixture
+    let wide = F.pack(F.map([("version", .string("0.0.0")), ("coordinateType", .integer(1))]))
+    let wideCard = try SourceCharacterCard.decode(outfitCard(status: wide))
+    let wideEdited = try #require(SourceCharacterCard.decode(wideCard.editedData(.init(clothesState: clothes))).block(named: "Status")).data
+    var wideExpected = Data([0xdf, 0, 0, 0, 3]) + wide.dropFirst(5)
+    wideExpected += Data([0xac]) + Data("clothesState".utf8)
+    wideExpected += Data([0xc4, 0x09]) + Data(clothes)
+    #expect(wideEdited == wideExpected)
+    let fifteen = compactStatus([("version", compactVersion), ("coordinateType", Data([0x01]))] + (0..<13).map { ("k\($0)", Data([0x00])) })
+    let fullCard = try SourceCharacterCard.decode(outfitCard(status: fifteen))
+    let fullEdited = try SourceCharacterCard.decode(fullCard.editedData(.init(clothesState: clothes, showAccessory: flags)))
+    let fullData = try #require(fullEdited.block(named: "Status")).data
+    #expect(fullData.prefix(3) == Data([0xde, 0x00, 0x11]) && fullData.dropFirst(3).prefix(fifteen.count - 1) == fifteen.dropFirst())
+    #expect(try fullEdited.savedStatusWear().clothesState == clothes && fullEdited.savedStatusWear().showAccessory == flags)
+    // A non-fixint array member is not rewritten.
+    let int64Zero: [UInt8] = [0xd3, 0, 0, 0, 0, 0, 0, 0, 0]
+    let members: [UInt8] = [0x99] + int64Zero + [UInt8](repeating: 0, count: 8)
+    let wideArray = compactStatus([("version", compactVersion), ("clothesState", Data(members))])
+    let wideArrayCard = try SourceCharacterCard.decode(outfitCard(status: wideArray))
+    #expect(try wideArrayCard.savedStatusWear().clothesState == Array(repeating: 0, count: 9))
+    #expect(throws: (any Error).self) { try wideArrayCard.editedData(.init(clothesState: clothes)) }
 }

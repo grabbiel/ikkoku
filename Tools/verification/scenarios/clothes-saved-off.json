@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {"op": "assert", "clothes": {"key": 0, "saved": [3, 3, 3, 3, 3, 3, 3, 3, 3], "state": [3, 3, 3, 3, 3, 3, 3, 3, 3], "rendered": [], "edited": false, "fallbacks": 0, "diagnosticContains": "Saved clothes state 3,3,3,3,3,3,3,3,3 (shoesType 1) loads as 3,3,3,3,3,3,3,3,3"}},
+    {"op": "assert", "clothes": {"key": 65, "saved": [0, 0, 0, 0, 0, 0, 0, 0, 0], "state": [0, 0, 0, 0, 0, 0, 0, 0, 0], "rendered": [0, 1, 8], "edited": false}},
+    {"op": "captureRender", "name": "saved", "path": ".local/verification/renders/clothes-saved-off.png"},
+    {"op": "setClothesState", "key": 0, "index": 0, "state": 0},
+    {"op": "setClothesState", "key": 0, "index": 1, "state": 0},
+    {"op": "setClothesState", "key": 0, "index": 7, "state": 0},
+    {"op": "assert", "clothes": {"key": 0, "state": [0, 0, 3, 3, 3, 3, 3, 0, 0], "rendered": [0, 1, 8], "edited": true}, "render": {"from": "saved", "changedPixelsAtLeast": 10000}},
+    {"op": "captureRender", "name": "forced", "path": ".local/verification/renders/clothes-forced-on.png"},
+    {"op": "assertRejected", "render": {"from": "forced", "changedPixelsAtLeast": 1}, "errorContains": "the frame did not visibly update"},
+    {"op": "undo"},
+    {"op": "undo"},
+    {"op": "undo"},
+    {"op": "assert", "clothes": {"key": 0, "state": [3, 3, 3, 3, 3, 3, 3, 3, 3], "rendered": [], "edited": false}, "render": {"from": "saved", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "export", "path": ".local/verification/scenario-exports/clothes-saved-off.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/clothes-saved-off.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/clothes-saved-off.png"},
+    {"op": "assert", "exportIdenticalToSource": ".local/verification/scenario-exports/clothes-saved-off.png"},
+    {"op": "assert", "clothes": {"key": 0, "saved": [3, 3, 3, 3, 3, 3, 3, 3, 3], "rendered": [], "edited": false}, "render": {"from": "saved", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}},
+    {"op": "setClothesState", "key": 0, "index": 0, "state": 0},
+    {"op": "export", "path": ".local/verification/scenario-exports/clothes-key0-top-on.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/clothes-key0-top-on.png"},
+    {"op": "assertRejected", "exportIdenticalToSource": ".local/verification/scenario-exports/clothes-key0-top-on.png", "errorContains": "differs from initial source SHA256"},
+    {"op": "assert", "clothes": {"key": 0, "saved": [0, 3, 3, 3, 3, 3, 3, 3, 3], "state": [0, 3, 3, 3, 3, 3, 3, 3, 3], "rendered": [0], "edited": false}},
+    {"op": "assert", "clothes": {"key": 65, "saved": [0, 0, 0, 0, 0, 0, 0, 0, 0], "rendered": [0, 1, 8], "edited": false}, "render": {"from": "saved", "changedPixelsAtLeast": 5000}}
+  ]
+}

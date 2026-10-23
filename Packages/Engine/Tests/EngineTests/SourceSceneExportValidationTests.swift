@@ -232,3 +232,37 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     #expect(legacy.objects.allSatisfy { $0.sourceOutfit == nil })
     try SourceSceneExportValidation.validate(legacy, against: source.snapshot)
 }
+
+@Test func sourceSceneExportValidationChecksWearShapesAndDocumentsRoundTripThem() throws {
+    let source = try KoikatsuSceneReader.decodeDocument(SceneDocumentBytes.scene().data)
+    let baseline = exportValidationDocument(source)
+    var document = baseline
+    document.objects[0].sourceClothesState = [3, 1, 2, 0, 3, 0, 0, 3, 3]
+    var flags = [Bool](repeating: true, count: 20); flags[4] = false
+    document.objects[0].sourceShowAccessory = flags
+    try SourceSceneExportValidation.validate(document, against: source.snapshot)
+    let invalid: [(String, (inout StudioObject) -> Void)] = [
+        ("short state", { $0.sourceClothesState = [0, 0, 0] }), ("state 4", { $0.sourceClothesState = [4, 0, 0, 0, 0, 0, 0, 0, 0] }),
+        ("19 flags", { $0.sourceShowAccessory = Array(repeating: true, count: 19) }),
+    ]
+    for (name, change) in invalid {
+        var edited = baseline; change(&edited.objects[0])
+        #expect(throws: (any Error).self, Comment(rawValue: name)) { try SourceSceneExportValidation.validate(edited, against: source.snapshot) }
+    }
+    // A placeholder has no card preview to carry wear edits.
+    for change: (inout StudioObject) -> Void in [{ $0.sourceClothesState = Array(repeating: 0, count: 9) }, { $0.sourceShowAccessory = Array(repeating: true, count: 20) }] {
+        var placeholder = baseline; change(&placeholder.objects[1])
+        #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(placeholder, against: source.snapshot) }
+    }
+    // Native save/load keeps both fields; documents written before them
+    // decode nil (the card's saved state).
+    let encoded = try CardIO.encode(document, keyword: CardIO.sceneKeyword, thumbnail: nil)
+    let decoded = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: encoded)
+    #expect(decoded == document && decoded.objects[0].sourceClothesState == [3, 1, 2, 0, 3, 0, 0, 3, 3] && decoded.objects[0].sourceShowAccessory == flags)
+    var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
+    var objects = try #require(json["objects"] as? [[String: Any]])
+    for i in objects.indices { objects[i].removeValue(forKey: "sourceClothesState"); objects[i].removeValue(forKey: "sourceShowAccessory") }
+    json["objects"] = objects
+    let legacy = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(legacy.objects.allSatisfy { $0.sourceClothesState == nil && $0.sourceShowAccessory == nil })
+}
