@@ -19,6 +19,9 @@ private func fixtureURL(_ name: String) -> URL {
     #expect(mesh.vertexCount == 425)
     #expect(mesh.isSkinned)
     #expect(mesh.morphTargets.map(\.name) == ["DisplaceY", "DisplaceX"])
+    // The fixture's second influence set is folded to four lanes; that loss is reported.
+    #expect(asset.diagnostics.map(\.code) == ["skin_influences_reduced"])
+    #expect(asset.diagnostics.first?.message.contains("88 of 425 vertices lost nonzero weight") == true)
     let skel = try #require(Skeleton.from(asset: asset))
     #expect(skel.count == 6)
     #expect(skel["spine_b"] != nil)
@@ -27,6 +30,23 @@ private func fixtureURL(_ name: String) -> URL {
     for m in rest {
         #expect(abs(m.columns.3.x) < 1e-3 && abs(m.columns.3.y) < 1e-3 && abs(m.columns.3.z) < 1e-3)
     }
+}
+
+@Test func bundledAssetsLoadUnchangedUnderInterchangeChecks() throws {
+    // Every checked-in GLB/glTF passes the stricter R5 validation, decodes no secondary UVs
+    // or texture-coordinate selections, and reports nothing except the fixtures' influence fold.
+    let assets = fixtureURL("").deletingLastPathComponent()
+    let files = try #require(FileManager.default.enumerator(at: assets, includingPropertiesForKeys: [.isRegularFileKey]))
+    var count = 0
+    for case let url as URL in files where ["glb", "gltf"].contains(url.pathExtension.lowercased()) {
+        let asset = try GLBLoader.load(url: url)
+        count += 1
+        let expected: [String] = url.deletingLastPathComponent().lastPathComponent == "fixtures" ? ["skin_influences_reduced"] : []
+        #expect(asset.diagnostics.map(\.code) == expected, "\(url.lastPathComponent): \(asset.diagnostics)")
+        #expect(asset.meshes.allSatisfy { $0.primitives.allSatisfy { $0.uvs1.isEmpty && $0.uvs2.isEmpty } }, "\(url.lastPathComponent)")
+        #expect(asset.materials.allSatisfy { $0.baseColorTexCoord == 0 && $0.normalTexCoord == 0 }, "\(url.lastPathComponent)")
+    }
+    #expect(count > 2)
 }
 
 @Test func poseDeltaRotatesBone() throws {

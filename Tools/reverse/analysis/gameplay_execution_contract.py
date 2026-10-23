@@ -15,7 +15,10 @@ PERIODS = ["起床", "朝", "登校", "朝ホームルーム", "授業1", "昼�
 WEEKS = ["月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "休日"]
 WEEK_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Holiday"]
 CLASSES = {"1-1": 0, "2-1": 1, "2-2": 2, "3-1": 3}
-SUPPORTED = {0, 1, 3, 4, 12, 14, 15, 22, 23, 25}
+SCALAR = {0, 1, 3, 4, 12, 14, 15, 22, 23, 25}
+# Presentation commands executed as typed host requests (see adv_host_requests.py).
+PRESENTATION = {16, 17, 18, 19, 35, 37, 44, 45, 88, 106, 112, 125, 128, 169}
+SUPPORTED = SCALAR | PRESENTATION
 
 
 def digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -52,13 +55,20 @@ def source_evidence(index_path):
     types = ["ActionGame.FixEventScheduler", "ActionGame.FixEventSchedule", "ActionGame.Cycle", "ActionGame.CycleExtensions",
              "ClassSchedule", "Manager.Game", "ADV.ScenarioData", "ADV.Command", "ADV.CommandBase", "ADV.CommandList",
              "ADV.TextScenario", "ADV.ValData", "Illusion.Utils"]
-    types += ["ADV.Commands.Base." + name for name in ["VAR", "Calc", "Clamp", "IF", "Switch", "Jump", "Tag", "Wait", "Close"]]
+    types += ["ADV.Commands.Base." + name for name in ["VAR", "Calc", "Clamp", "IF", "Switch", "Jump", "Tag", "Wait", "Close",
+                                                         "Text", "Voice", "Motion", "Expression", "NullLoad", "NullSet"]]
+    types += ["ADV.Commands.Chara.LookNeck", "ADV.Commands.Chara.LookEyes", "ADV.Commands.Chara.Expression", "ADV.Commands.Chara.Motion",
+              "ADV.Commands.Sound.BGM.Play", "ADV.Commands.Game.MapChange", "ADV.Commands.Effect.SceneFade",
+              "ADV.Commands.Effect.SceneFadeRegulate", "ADV.MainScenario", "Illusion.Game.BGM", "Illusion.Extensions.StringExtensions", "NullCheck"]
     result = []
     for name in types:
         path, _ = selected_source(index_path, name)
         result.append(dict(type=name, path=str(path), sha256=digest(path)))
     commands = command_enum(selected_source(index_path, "ADV.Command")[1])
-    expected = {0: "None", 1: "VAR", 3: "Calc", 4: "Clamp", 12: "Tag", 14: "IF", 15: "Switch", 22: "Close", 23: "Jump", 25: "Wait"}
+    expected = {0: "None", 1: "VAR", 3: "Calc", 4: "Clamp", 12: "Tag", 14: "IF", 15: "Switch", 22: "Close", 23: "Jump", 25: "Wait",
+                16: "Text", 17: "Voice", 18: "Motion", 19: "Expression", 35: "NullLoad", 37: "NullSet", 44: "SceneFade",
+                45: "SceneFadeRegulate", 88: "BGMPlay", 106: "CharaMotion", 112: "CharaExpression", 125: "CharaLookEyes",
+                128: "CharaLookNeck", 169: "MapChange"}
     if any(commands[index] != name for index, name in expected.items()):
         raise ValueError("Command ordinals differ from translated source contract")
     return result, commands

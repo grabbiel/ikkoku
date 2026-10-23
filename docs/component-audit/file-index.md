@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**790 files indexed; 790 assigned; 0 unassigned.**
+**797 files indexed; 797 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 63 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 70 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 301 |
@@ -37,12 +37,12 @@ may be discussed in more than one report; one primary owner is listed here.
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 6 |
-| Conversion / recovery / verification tool | 163 |
+| Conversion / recovery / verification tool | 164 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
-| Runtime / shared shader declaration | 169 |
-| Test / validation | 152 |
+| Runtime / shared shader declaration | 172 |
+| Test / validation | 155 |
 
 ## App / gameplay / plugins
 
@@ -73,26 +73,33 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceIRProgram.swift](../../Packages/Engine/Sources/Gameplay/SourceIRProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift](../../Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
 | [Tools/reverse/analysis/accessory_names_oracle.py](../../Tools/reverse/analysis/accessory_names_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_command_coverage.py](../../Tools/reverse/analysis/adv_command_coverage.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/adv_host_requests.py](../../Tools/reverse/analysis/adv_host_requests.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_contract.py](../../Tools/reverse/analysis/gameplay_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_execution_contract.py](../../Tools/reverse/analysis/gameplay_execution_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/mute_plugin_oracle.py](../../Tools/reverse/analysis/mute_plugin_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/test_adv_command_coverage.py](../../Tools/reverse/analysis/test_adv_command_coverage.py) | Test / validation |
+| [Tools/reverse/analysis/test_adv_host_requests.py](../../Tools/reverse/analysis/test_adv_host_requests.py) | Test / validation |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Host.cs](../../Tools/reverse/fixtures/MutePluginOracle/Host.cs) | Reference host / controlled fixture |

@@ -3,7 +3,7 @@
   "IKKOKU_ABMX_MODIFIERS": "/absolute/path/to/reverse/rigs/source-abmx-example.json",
   "IKKOKU_ABMX_REFERENCE": "/absolute/path/to/reverse/rigs/source-abmx-reference.json",
   "IKKOKU_ACCESSORY_NAMES_ORACLE": "/absolute/path/to/maker/accessory-names-oracle.json",
-  "IKKOKU_ADV_COVERAGE_SAMPLE": "/absolute/path/to/gt03-adv-coverage/sample.json",
+  "IKKOKU_ADV_COVERAGE_SAMPLE": "/absolute/path/to/gt03b-adv-host-requests/sample.json",
   "IKKOKU_ANIMATION_LIBRARY": "/absolute/path/to/animation-assets/female-base/animation.json",
   "IKKOKU_ANIMATION_PLAYBACK_REFERENCE": "/absolute/path/to/animation-playback/reference.json",
   "IKKOKU_ANIMATION_REFERENCE": "/absolute/path/to/animation-assets/female-base/sample-reference.json",

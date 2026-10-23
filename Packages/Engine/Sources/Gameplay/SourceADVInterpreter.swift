@@ -119,11 +119,34 @@ public struct SourceADVProgram: Codable, Sendable {
     }
 }
 
-/// Source command batching and a deliberately bounded scalar command subset.
-/// Unsupported commands stop with an exact source command index and reason.
-public struct SourceADVInterpreter: Sendable {
+/// Source command batching, the bounded scalar command subset, and typed host
+/// requests for the first presentation commands. Unsupported commands stop
+/// with an exact source command index and reason.
+///
+/// The state is `Codable`: a host may save it at any frame boundary, including
+/// while a Wait timer runs, a request awaits acknowledgement or a Text batch
+/// awaits Next, and resume with identical results.
+public struct SourceADVInterpreter: Codable, Sendable {
     public struct Wait: Codable, Sendable { public var pc: Int; public var duration: Float; public var elapsed: Float }
     public struct Fault: Codable, Sendable { public var pc: Int; public var commandID: Int; public var reason: String }
+    /// A blocking host request that has not been acknowledged.
+    public struct Pending: Codable, Equatable, Sendable {
+        public enum Gate: String, Codable, Sendable {
+            /// `TextScenario.UpdateRegulate` blocks while `advScene.Map.isMapLoading`
+            /// (MapChange): no command processing and no input until the host
+            /// finishes. It is outside the command list, so ProcessEnd keeps it.
+            case mapLoading
+            /// SceneFade stays in the command list while `Process()` returns
+            /// `fade.IsEnd == false`; ProcessEnd (`Result` -> `ForceEnd`) ends it.
+            /// With `isSceneFadeRegulate`, `UpdateRegulate` also blocks input.
+            case sceneFade
+        }
+        public var requestID: Int
+        public var pc: Int
+        public var commandID: Int
+        public var gate: Gate
+    }
+    public static let requestQueueLimit = 100_000
     public let program: SourceADVProgram
     public private(set) var variables: [String: SourceADVValue]
     public private(set) var pc = 0
@@ -132,37 +155,143 @@ public struct SourceADVInterpreter: Sendable {
     public private(set) var closed = false
     public private(set) var started = false
     public private(set) var fault: Fault?
-    public var exhausted: Bool { pc >= program.commands.count && waits.isEmpty && !closed && fault == nil }
-    public var status: String { fault != nil ? "faulted" : (closed ? "closed" : (!started ? "ready" : (exhausted ? "exhausted" : (!waits.isEmpty ? "waiting" : "frameBoundary")))) }
+    /// Emitted requests the host has not drained, in source execution order.
+    public private(set) var requests: [SourceADVHostRequest] = []
+    public private(set) var pending: [Pending] = []
+    /// The current batch ran a Text command (`textHash` is non-empty).
+    public private(set) var awaitingNext = false
+    /// Number of `RequestNextLine` calls (batches, including local jumps).
+    public private(set) var batch = 0
+    public private(set) var nextRequestID = 0
+    /// `TextScenario.isSceneFadeRegulate` (`MemberInit` default true).
+    public private(set) var sceneFadeRegulate: Bool
+    /// `TextScenario.CurrentCharaData` voice/expression/motion lists.
+    public private(set) var textBindings = SourceADVTextBindings()
     private var executingPC = 0
 
-    public init(program: SourceADVProgram, variables: [String: SourceADVValue] = [:]) throws {
+    public var exhausted: Bool {
+        pc >= program.commands.count && waits.isEmpty && pending.isEmpty && !awaitingNext && !closed && fault == nil
+    }
+    /// `UpdateRegulate` gates that suspend command processing and input.
+    public var hostGated: Bool { pending.contains { $0.gate == .mapLoading || ($0.gate == .sceneFade && sceneFadeRegulate) } }
+    public var status: String {
+        if fault != nil { return "faulted" }
+        if closed { return "closed" }
+        if !started { return "ready" }
+        if !pending.isEmpty { return "awaitingHost" }
+        if awaitingNext { return "awaitingNext" }
+        if !waits.isEmpty { return "waiting" }
+        return exhausted ? "exhausted" : "frameBoundary"
+    }
+
+    public init(program: SourceADVProgram, variables: [String: SourceADVValue] = [:], sceneFadeRegulate: Bool = true) throws {
         try program.validate()
+        try Self.validate(variables)
+        self.program = program; self.variables = variables; self.sceneFadeRegulate = sceneFadeRegulate
+    }
+    private static func validate(_ variables: [String: SourceADVValue]) throws {
         guard variables.count <= 10_000, variables.allSatisfy({ key, value in
             guard key.utf8.count <= 65536 else { return false }
             if case .float(let number) = value { return number.isFinite }
             return value.sourceString.utf8.count <= 65536
         }) else { throw SourceGameplayExecutionError.invalidData("ADV variable count/value limits") }
-        self.program = program; self.variables = variables
     }
+    private enum CodingKeys: String, CodingKey {
+        case program, variables, pc, executedInstructions, waits, closed, started, fault, requests, pending
+        case awaitingNext, batch, nextRequestID, sceneFadeRegulate, textBindings, executingPC
+    }
+    public init(from decoder: any Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        program = try box.decode(SourceADVProgram.self, forKey: .program)
+        variables = try box.decode([String: SourceADVValue].self, forKey: .variables)
+        pc = try box.decode(Int.self, forKey: .pc)
+        executedInstructions = try box.decode(Int.self, forKey: .executedInstructions)
+        waits = try box.decode([Wait].self, forKey: .waits)
+        closed = try box.decode(Bool.self, forKey: .closed)
+        started = try box.decode(Bool.self, forKey: .started)
+        fault = try box.decodeIfPresent(Fault.self, forKey: .fault)
+        requests = try box.decode([SourceADVHostRequest].self, forKey: .requests)
+        pending = try box.decode([Pending].self, forKey: .pending)
+        awaitingNext = try box.decode(Bool.self, forKey: .awaitingNext)
+        batch = try box.decode(Int.self, forKey: .batch)
+        nextRequestID = try box.decode(Int.self, forKey: .nextRequestID)
+        sceneFadeRegulate = try box.decode(Bool.self, forKey: .sceneFadeRegulate)
+        textBindings = try box.decode(SourceADVTextBindings.self, forKey: .textBindings)
+        executingPC = try box.decode(Int.self, forKey: .executingPC)
+        try program.validate()
+        try Self.validate(variables)
+        let lines = 0..<max(program.commands.count, 1)
+        guard (0...program.commands.count).contains(pc), lines.contains(executingPC), executedInstructions >= 0, batch >= 0,
+              nextRequestID >= 0, requests.count <= Self.requestQueueLimit, waits.count <= 100_000,
+              waits.allSatisfy({ lines.contains($0.pc) && $0.duration.isFinite && $0.elapsed.isFinite }),
+              pending.allSatisfy({ lines.contains($0.pc) && (0..<nextRequestID).contains($0.requestID) }),
+              requests.allSatisfy({ lines.contains($0.pc) && (0..<nextRequestID).contains($0.requestID) }) else {
+            throw SourceGameplayExecutionError.invalidData("ADV interpreter state limits")
+        }
+    }
+
     public mutating func start(instructionBudget: Int = 10_000) throws {
         guard !started else { return }
         started = true
         try runBatch(instructionBudget: instructionBudget)
     }
-    /// Ordinary Wait is cancelable by explicit Next input in the source. It is
-    /// not in CommandList.IsWait's hard-block list. No text/choice input is faked.
+    /// One source frame (`MessageWindowProc`). Explicit Next advances a batch
+    /// even while Wait timers or a SceneFade run (ProcessEnd ends them) and is
+    /// required after a Text batch; it is ignored while an `UpdateRegulate`
+    /// gate holds. The host forwards Next only once the text display is
+    /// complete (the source's first click on incomplete text only completes
+    /// it). No choice input is faked.
     public mutating func tick(deltaTime: Float, requestNext: Bool = false, instructionBudget: Int = 10_000) throws {
         guard deltaTime.isFinite, deltaTime >= 0 else { throw SourceGameplayExecutionError.invalidData("ADV frame delta") }
         guard started else { try start(instructionBudget: instructionBudget); return }
-        guard fault == nil, !closed else { return }
+        guard fault == nil, !closed, !hostGated else { return }
         for index in waits.indices {
             let value = waits[index].elapsed + deltaTime
             guard value.isFinite else { throw SourceGameplayExecutionError.invalidData("ADV wait elapsed overflow") }
             waits[index].elapsed = value
         }
         waits.removeAll { $0.elapsed >= $0.duration }
-        if waits.isEmpty || requestNext { try runBatch(instructionBudget: instructionBudget) }
+        let processing = !waits.isEmpty || !pending.isEmpty
+        if requestNext || (!awaitingNext && !processing) {
+            textBindings = .init() // CurrentCharaData.Clear() before RequestNextLine.
+            try runBatch(instructionBudget: instructionBudget)
+        }
+    }
+    /// Returns and removes the queued requests in emission order.
+    public mutating func drainRequests() -> [SourceADVHostRequest] {
+        defer { requests.removeAll() }
+        return requests
+    }
+    /// Completes a blocking request. MapChange acknowledgements carry the
+    /// action scene's `Cycle.ADVVariables` values, stored as String variables
+    /// as `MapChange.Do` does; the source writes them before any later command
+    /// runs because MapChange ends its batch and the map gate holds.
+    /// Acknowledging an issued request that no longer blocks is a no-op.
+    public mutating func acknowledge(_ requestID: Int, variables hostVariables: [String: String] = [:]) throws {
+        guard (0..<nextRequestID).contains(requestID) else { throw SourceGameplayExecutionError.invalidData("Unknown ADV request \(requestID)") }
+        guard let index = pending.firstIndex(where: { $0.requestID == requestID }) else {
+            guard hostVariables.isEmpty else { throw SourceGameplayExecutionError.invalidData("ADV request \(requestID) is not a pending MapChange") }
+            return
+        }
+        if pending[index].gate != .mapLoading, !hostVariables.isEmpty {
+            throw SourceGameplayExecutionError.invalidData("Only MapChange acknowledgements carry ADV variables")
+        }
+        let incoming = hostVariables.mapValues { SourceADVValue.string($0) }
+        try Self.validate(incoming)
+        guard variables.merging(incoming, uniquingKeysWith: { $1 }).count <= 10_000 else {
+            throw SourceGameplayExecutionError.invalidData("ADV variable count")
+        }
+        variables.merge(incoming) { $1 }
+        pending.remove(at: index)
+    }
+    /// The host could not perform an issued request (for example a missing
+    /// character): the source would throw inside the handler and stop.
+    public mutating func hostFailure(_ request: SourceADVHostRequest, reason: String) {
+        guard fault == nil, (0..<nextRequestID).contains(request.requestID), program.commands.indices.contains(request.pc),
+              program.commands[request.pc].id == request.commandID else { return }
+        fault = .init(pc: request.pc, commandID: request.commandID,
+                      reason: SourceGameplayExecutionError.hostFailure("request \(request.requestID) \(request.command.kind): \(reason)").errorDescription ?? reason)
+        waits.removeAll(); pending.removeAll(); awaitingNext = false
     }
     private mutating func runBatch(instructionBudget: Int) throws {
         var remaining = instructionBudget
@@ -175,7 +304,11 @@ public struct SourceADVInterpreter: Sendable {
     }
     private mutating func requestLine(remaining: inout Int, depth: Int) throws {
         guard depth <= 64 else { throw SourceGameplayExecutionError.budgetExceeded }
-        waits.removeAll() // CommandList.ProcessEnd on each RequestNextLine.
+        // CommandList.ProcessEnd and textHash.Clear() on each RequestNextLine.
+        waits.removeAll()
+        pending.removeAll { $0.gate == .sceneFade }
+        awaitingNext = false
+        batch += 1
         while pc < program.commands.count && !closed {
             guard remaining > 0 else { throw SourceGameplayExecutionError.budgetExceeded }
             remaining -= 1; executingPC = pc; executedInstructions += 1
@@ -186,13 +319,18 @@ public struct SourceADVInterpreter: Sendable {
         }
     }
     private func replace(_ text: String) -> String { variables[text]?.sourceString ?? text }
-    private func arguments(_ raw: [String], defaults: [String]) -> [String] {
-        var result = defaults
-        for (index, text) in raw.enumerated() {
-            if index >= result.count { result.append(text) }
-            else if !text.isEmpty { result[index] = text }
-        }
-        return result
+    private func arguments(_ raw: [String], defaults: [String]) -> [String] { SourceADVArgs.initialize(raw, defaults: defaults) }
+    /// `CommandList.Add`: `Initialize` defaults, then `ReplaceVars` on every
+    /// argument (none of the presentation handlers override `ConvertBeforeArgsProc`).
+    private func handlerArguments(_ command: SourceADVProgram.Command, defaults: [String]?) -> [String] {
+        SourceADVArgs.initialize(command.args, defaults: defaults).map(replace)
+    }
+    private mutating func emit(_ command: SourceADVProgram.Command, line: Int, _ blocking: SourceADVHostRequest.Blocking,
+                               _ payload: SourceADVHostRequest.Command, gate: Pending.Gate? = nil) throws {
+        guard requests.count < Self.requestQueueLimit else { throw SourceGameplayExecutionError.invalidData("ADV undrained host request limit") }
+        requests.append(.init(requestID: nextRequestID, pc: line, commandID: command.id, batch: batch, blocking: blocking, command: payload))
+        if let gate { pending.append(.init(requestID: nextRequestID, pc: line, commandID: command.id, gate: gate)) }
+        nextRequestID += 1
     }
     private mutating func jump(_ target: String, remaining: inout Int, depth: Int) throws {
         guard !target.contains(":") else { throw SourceGameplayExecutionError.unsupported("External ADV file jump: \(target)") }
@@ -206,6 +344,8 @@ public struct SourceADVInterpreter: Sendable {
         }
         // Missing tags return false in the original and continue the current batch.
     }
+    /// `CommandBase.currentCharaDefaultIndex` (`int.MaxValue`) as an argument default.
+    static let currentChara = String(Int32.max)
     private mutating func execute(_ command: SourceADVProgram.Command, line: Int, remaining: inout Int, depth: Int) throws {
         switch command.id {
         case 0, 12: break // None/Tag
@@ -253,7 +393,7 @@ public struct SourceADVInterpreter: Sendable {
             }
             guard let target = answers[value.sourceString] ?? answers["default"] else { throw SourceGameplayExecutionError.invalidData("Missing Switch default") }
             try jump(target, remaining: &remaining, depth: depth)
-        case 22: closed = true; waits.removeAll() // Host must still perform scene release/unload.
+        case 22: closed = true; waits.removeAll(); pending.removeAll() // Host must still perform scene release/unload.
         case 23:
             guard let target = command.args.first else { throw SourceGameplayExecutionError.invalidData("Jump argument") }
             try jump(replace(target), remaining: &remaining, depth: depth)
@@ -262,6 +402,51 @@ public struct SourceADVInterpreter: Sendable {
             let duration = Float(replace(a[0]).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
             guard duration.isFinite else { throw SourceGameplayExecutionError.invalidData("Nonfinite Wait duration") }
             waits.append(.init(pc: line, duration: duration, elapsed: 0))
+        case 16:
+            // Text.Do: Data(args) without defaults; ReplaceText runs on the host.
+            let a = handlerArguments(command, defaults: nil)
+            try emit(command, line: line, .next, .text(.init(name: a.first ?? "", text: a.count > 1 ? a[1] : "", voices: textBindings.voices,
+                                                             expressions: textBindings.expressions, motions: textBindings.motions)))
+            awaitingNext = true
+        case 17:
+            let entries = try SourceADVHandlerArguments.voices(handlerArguments(command, defaults: [Self.currentChara]))
+            textBindings.voices = (textBindings.voices ?? []) + [entries]
+        case 18:
+            let entries = try SourceADVHandlerArguments.motions(handlerArguments(command, defaults: [Self.currentChara]))
+            textBindings.motions = (textBindings.motions ?? []) + [entries]
+        case 19:
+            let entries = try SourceADVHandlerArguments.expressions(handlerArguments(command, defaults: [Self.currentChara]))
+            textBindings.expressions = (textBindings.expressions ?? []) + [entries]
+        case 35:
+            try emit(command, line: line, .none, .nullLoad(try SourceADVHandlerArguments.nullLoad(handlerArguments(command, defaults: ["0", ""]))))
+        case 37:
+            try emit(command, line: line, .none, .nullSet(try SourceADVHandlerArguments.nullSet(handlerArguments(command, defaults: ["", "Base"]))))
+        case 44:
+            let fade = try SourceADVHandlerArguments.sceneFade(handlerArguments(command, defaults: ["in", "", "", "", "none"]))
+            try emit(command, line: line, .acknowledge, .sceneFade(fade), gate: .sceneFade)
+        case 45:
+            sceneFadeRegulate = try SourceADVHandlerArguments.value(SourceCLR.boolean(handlerArguments(command, defaults: ["True"])[0]),
+                                                                   "Effect.SceneFadeRegulate.Do Flag")
+        case 88:
+            let defaults = ["", "", "0", "", "True", "", "", "", ""]
+            try emit(command, line: line, .none, .bgmPlay(try SourceADVHandlerArguments.bgmPlay(handlerArguments(command, defaults: defaults))))
+        case 106:
+            try emit(command, line: line, .none, .charaMotion(try SourceADVHandlerArguments.motions(handlerArguments(command, defaults: [Self.currentChara]))))
+        case 112:
+            try emit(command, line: line, .none,
+                     .charaExpression(try SourceADVHandlerArguments.expressions(handlerArguments(command, defaults: [Self.currentChara]))))
+        case 125:
+            try emit(command, line: line, .none, .charaLookEyes(try SourceADVHandlerArguments.lookEyes(handlerArguments(command, defaults: [Self.currentChara, "0"]))))
+        case 128:
+            let a = handlerArguments(command, defaults: [Self.currentChara, "0", "1"])
+            try emit(command, line: line, .none, .charaLookNeck(try SourceADVHandlerArguments.lookNeck(a)))
+        case 169:
+            // MapChange.Do writes Cycle.ADVVariables synchronously; that is
+            // only equivalent to writing them at acknowledgement when MapChange
+            // ends its batch (every installed record does).
+            guard !command.multi else { throw SourceGameplayExecutionError.unsupported("MapChange inside a Multi batch needs synchronous host variables") }
+            let change = try SourceADVHandlerArguments.mapChange(handlerArguments(command, defaults: ["0", "1"]))
+            try emit(command, line: line, .acknowledge, .mapChange(change), gate: .mapLoading)
         default: throw SourceGameplayExecutionError.unsupported("ADV command ID \(command.id) at pc \(line)")
         }
     }

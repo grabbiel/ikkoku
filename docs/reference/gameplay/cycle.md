@@ -1,6 +1,6 @@
 # Source gameplay control-state recovery
 
-Reviewed 2026-09-25 against the working tree. The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract; the app still has no gameplay session host.
+Reviewed 2026-10-23 against the working tree (G-T01 session host). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract; the app still has no gameplay host and does not use the engine session described [below](#session-host-and-effect-inventory-g-t01).
 
 The native `Gameplay` module translates the day/period and action-clock control
 state recovered from this installation's `ActionGame.Cycle`. It is an executable
@@ -113,8 +113,9 @@ daily changes.
 
 The API is a control-state projection. `nextPeriod`, `completeNightMenu`,
 `beginMapMove`, and `finishMapMove` commit at the corresponding source completion
-boundary; a future gameplay host must perform asynchronous waits and cancellation
-before committing them. Returned effects do not constitute an asynchronous
+boundary; a gameplay host must perform asynchronous waits and cancellation
+before committing them. `SourceGameplaySession` (next section) enforces that
+order for a host, but returned effects still do not constitute an asynchronous
 coroutine implementation. Map sunlight updates also require a valid current map;
 the native scalar model does not claim to have loaded one.
 
@@ -132,6 +133,95 @@ zero. Those are native host defaults, not recovered serialized Canvas/TimeUI
 prefab values. Source-equivalent display updates are established by MapMove
 entry/ticks/completion; WakeUp and MyHouse UI visibility still belongs to their
 untranslated period coroutine bodies.
+
+## Session host and effect inventory (G-T01)
+
+`Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift` wraps the cycle
+so that a platform-neutral host can drive it. It executes no scene, NPC, ADV,
+menu or save work itself; it orders what the host owes and refuses to commit
+early. No app host consumes it yet (A-T01).
+
+- `perform(_:)` takes one effect-producing operation (`SourceGameplayCycleOperation`
+  mirrors the cycle methods) and stages it on a copy of the committed cycle. A
+  rejected source operation throws its `SourceGameplayCycleError` and stages
+  nothing.
+- The returned effects are released strictly in source order. Synchronous work
+  is appended to `synchronousWork`, which the host drains with
+  `takeSynchronousWork()` and performs immediately. Release stops at the first
+  completion barrier, which becomes `outstandingBarrier` with a session-unique,
+  increasing ID. Later effects of the same operation stay unreleased until it is
+  acknowledged.
+- `acknowledge(_:)` accepts only the outstanding barrier's ID together with its
+  exact effect (`barrier.acknowledgement`). An unissued ID, an already
+  acknowledged ID, a later barrier of the same operation, a mismatched effect or
+  untaken synchronous work released before the barrier is rejected with a
+  `SourceGameplaySessionError` and leaves the whole session unchanged.
+- `cycle` is replaced by the staged target only after the operation's last
+  barrier. No period or weekday advance is committed while one of its
+  dependencies is outstanding, and every other cycle operation, including
+  `actionEnd`, `addTimer` and `tickMapMove`, is rejected meanwhile. The host can
+  read the staged target (`transition.target`) for presentation, for example the
+  forced display fraction during the MapMove exit barrier.
+- The whole session is `Codable` with `schemaVersion` 1; other versions are
+  rejected. Decoding replays the in-flight operation on the committed cycle and
+  rejects a snapshot whose effects, target, barrier IDs, release position or
+  queued work disagree with that replay. Cycle decoding rejects nonfinite or
+  negative clock values and an active MapMove outside an action period.
+
+Effect timing is an exhaustive `switch` (`SourceGameplayDeferredEffect.timing`):
+a new effect does not compile until it is classified. A step is synchronous only
+when the recovered contract places it inline with no wait. Only the four
+operations listed in [Native boundary](#native-boundary) commit at a coroutine
+completion boundary; the recovered `Change(Week)` and `Change(Type)` bodies are
+translated as plain calls, so their effects are inline unless named as a wait.
+Where completion of a source step has not been recovered, the effect is
+conservatively a barrier: an unneeded acknowledgement costs the host one round
+trip, while a missing wait would release later work before the source would.
+
+| Effect | Emitted by | Timing | Source basis |
+| --- | --- | --- | --- |
+| `persistWeek(week)` | `changeWeek` (also via backward `changePeriod`, `nextWeek`, `completeNightMenu`) | Synchronous | Inline in direct `Change(Week)`, which saves the weekday (the night-menu load path does not). |
+| `updateWeekDisplay(week)` | `changeWeek` paths; `reloadNightMenuWeek` | Synchronous | Inline in `Change(Week)` and in the NightMenu load callback. |
+| `advanceCharacterDays(n)` | `changeWeek` paths | Synchronous | Inline in `Change(Week)`: the per-heroine daily increment `n` times, plus `EventAfterDayAdd(n)` when `fixCharaID <= -5`. |
+| `updateTimeZone(zone)` | `changePeriod`, `nextPeriod`, `completeNightMenu` | Synchronous | Inline in direct `Change(Type)`. |
+| `updateMapSunlight(period)` | same | Synchronous | Inline in `Change(Type)`; the host must have a loaded current map. |
+| `replacePeriodAfterADVBarrier(period)` | same | Barrier (recorded) | `Change(Type)` replaces the running period coroutine only after ADV processing ends. Whether the source runs the following minimap/camera switch before that wait ends is not recorded; the session conservatively holds it. |
+| `setMiniMapAndCameraActive(isAction)` | same | Synchronous | Inline in `Change(Type)`. |
+| `prepareNextPeriodSceneBarrier` | `nextPeriod`, `completeNightMenu` | Barrier (recorded) | `_Next` waits for additive scenes, map loading and fade before its `Change(Type)`. |
+| `clearPlayerNextFlag` | same | Synchronous | Follows `Change(Type)` in `_Next`; no further wait is recorded. |
+| `loadNPCs(shuffle:)` | `beginMapMove` | Barrier (conservative) | NPC loading precedes the timed loop; its completion rule is not recovered. |
+| `openingTutorial` | `beginMapMove` while `isOpening` | Barrier (recorded) | The first MapMove iteration runs after the tutorial wait. |
+| `prepareMapMoveCharactersAndCamera` | `beginMapMove` | Barrier (conservative) | Completion rule not recovered. |
+| `startTimeZoneCutIn(period)` | `beginMapMove` | Barrier (conservative) | Completion rule not recovered. The first iteration also follows a fade wait that no effect is recorded as; barriers on every entry effect keep ticks from starting early. |
+| `finishMapMoveAndWaitForSceneBarrier` | `finishMapMove` | Barrier (recorded) | The loop exit waits for its scene barrier. |
+| `correctGameParameters` | `completeNightMenu` | Synchronous | MyHouse tail; its only recorded waits are the night menu (before the request) and player initialization. |
+| `clearCachedCompanions` | `completeNightMenu` | Synchronous | Same MyHouse tail. |
+| `ensurePlayerCreatedAndInitialized` | `completeNightMenu` | Barrier (recorded) | The player-initialization wait. |
+| `resetPlayerActionCount(5)` | `completeNightMenu` | Synchronous | Same MyHouse tail, before `NextWeek`. |
+| `clearSaturdayTeachers` | `completeNightMenu` | Synchronous | Same MyHouse tail, before `Next`. |
+
+That is 11 synchronous effects and 8 barriers, 3 of them conservative. A
+`nextPeriod` therefore needs two acknowledgements (scene, then ADV), a
+`completeNightMenu` three (player initialization, scene, ADV), a `changePeriod`
+one, a `beginMapMove` four while `isOpening` (tutorial) and three otherwise, and
+a `finishMapMove` one; `changeWeek`, `nextWeek` and `reloadNightMenuWeek` commit
+immediately.
+
+Native policies, not recovered behavior: the source assigns the new weekday and
+period partway through these sequences (`NextWeek` before `_Next`'s waits, the
+period before the ADV-gated coroutine replacement), while the session commits
+them only after the last barrier. Timer operations during an outstanding barrier
+are rejected because which side of the pending source wait they would apply to
+is not modelled. Cancellation (returning to title or ending the game during a
+barrier), executing the NPC/ADV/scene work and supplying real regulation flags
+remain app-host work (A-T01). This snapshot is native session state, not
+original campaign `SaveData` (G12).
+
+ADV commands have a separate acknowledgement layer: a running
+`SourceADVInterpreter` issues its own host requests and accepts acknowledgements
+by request ID ([ADV](adv.md)). Those are not session barriers. The session neither
+owns nor persists an interpreter; a host saves both, and acknowledges
+`replacePeriodAfterADVBarrier` only after its ADV run has ended.
 
 ## Gameplay dependency map
 
@@ -204,9 +294,24 @@ Native oracle comparison checks every generated state field and daily-effect cou
 including error outcomes. This evidence verifies the translated control logic;
 it does not establish end-to-end game, NPC, ADV, save, or mod compatibility.
 
-The next implementation is the session/deferred-effect host (`G-T01`), not another
-period enum. Inventory each effect, classify immediate work versus completion
-barriers, persist pending state and require acknowledgements before advancing.
-Then bind fixed events and scenario 301 to real source player/heroine data
-(`G-T02`), expand ADV presentation/task families (`G-T03`) and build a measured
-neutral NPC navigation slice (`G-T04`). The audit supplies acceptance criteria.
+`SourceGameplaySessionTests.swift` covers the session host with synthetic
+traces only; it needs no fixture and runs in the public CI lane (Engine
+`swift test`). It pins the timing inventory above, the release order and
+commit point of `nextPeriod`, `completeNightMenu`, `changePeriod` and both
+MapMove gates, and each rejected acknowledgement and blocked operation with a
+full before/after session comparison. A Friday-to-Wednesday host trace (37
+operations including rejected ones, 52 barriers covering scene, ADV, NPC,
+tutorial and player-initialization waits) is rerun with a JSON reload at each
+of the 52 barriers; every rerun must reproduce the uninterrupted observation
+log and final session exactly. Tampered snapshots (unknown version, moved
+position, wrong IDs, queued barrier, altered target or operation, invalid clock
+or MapMove flag) must be rejected. These tests check the native ordering
+contract; there is no recorded original host trace to compare against, and the
+conservative barriers above remain unverified against the source.
+
+The engine slice of the session host (`G-T01`) is above. Next, an app host
+(`A-T01`) must execute each effect and acknowledge barriers from real scene,
+ADV and NPC completion, including cancellation. Then bind fixed events and
+scenario 301 to real source player/heroine data (`G-T02`), expand ADV
+presentation/task families (`G-T03`) and build a measured neutral NPC navigation
+slice (`G-T04`). The audit supplies acceptance criteria.
