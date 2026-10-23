@@ -12,7 +12,11 @@ uploads author-scenes.txt, which makes the same run author the listed fixture sc
 that card instead: char (scene-char.png), route-children (scene-route-children.png, a
 playing route whose children are a folder and the female; ST-T11) and neck-target
 (scene-neck-target.png, two females with neck patterns TARGET and AWAY and eyes TARGET;
-ST-T07). No installed cards, saves or third-party plug-ins are read or copied.
+ST-T07). mirrored-camera (scene-mirrored-camera.png, R4/ST-A06: a camera object under a
+scalable item with scale (-1, 1, 1), saved active, and a control camera under an unmirrored
+copy of that item) uses no card, so --author-scenes listing only card-free scenes runs
+without --author-character and uploads author-scenes.txt alone. No installed cards, saves or
+third-party plug-ins are read or copied.
 """
 from __future__ import annotations
 import argparse, json
@@ -24,7 +28,9 @@ ROOT=Path(__file__).resolve().parents[2]
 LABELS=('hide-rename','camera-switch','route-stop','route-rename')
 FK_LABELS=('charastudio-fk-edit','charastudio-fk-source') # ST-T01: our FK export and the unedited load of its source scene
 SOURCE=Path(__file__).with_name('fixtures')/'OriginalSceneReloadProbe.cs'
-AUTHORED={'char':'scene-char.png','route-children':'scene-route-children.png','neck-target':'scene-neck-target.png'} # author scene -> the file the probe saves in its folder
+AUTHORED={'char':'scene-char.png','route-children':'scene-route-children.png','neck-target':'scene-neck-target.png',
+          'mirrored-camera':'scene-mirrored-camera.png'} # author scene -> the file the probe saves in its folder
+CARD_FREE={'mirrored-camera'} # author scenes the probe builds without the fixture card
 
 
 def start(vm,output,source=None,scenes=None,card=None,author_scenes=None):
@@ -38,8 +44,8 @@ def start(vm,output,source=None,scenes=None,card=None,author_scenes=None):
     hashes={}
     if card is not None: # the author-mode trigger, beside the plugin like the scene records
         write_small(vm,root+r'\BepInEx\plugins\author-card.png',card.read_bytes())
-        if author_scenes: # which fixture scenes the author mode saves; absent keeps scene-char.png only
-            write_small(vm,root+r'\BepInEx\plugins\author-scenes.txt',('\n'.join(author_scenes)+'\n').encode())
+    if author_scenes: # which fixture scenes the author mode saves; absent keeps scene-char.png only. Without a card it is the trigger itself.
+        write_small(vm,root+r'\BepInEx\plugins\author-scenes.txt',('\n'.join(author_scenes)+'\n').encode())
     for label,uploaded in upload_items(scenes): # beside the plugin, the same spot the route probe uploads its record to
         path=scenes[label]
         write_small(vm,root+'\\BepInEx\\plugins\\'+uploaded,path.read_bytes())
@@ -68,7 +74,7 @@ def collect(vm,output):
  # author-mode run also leaves the scenes it saved (scene-char.png by default, or one file per
  # --author-scenes entry) in the probe's folder.
  results=['reload-trace.json']+['reload-'+label+'.png' for label in sorted(run['sceneSHA256'])]
- authored=[AUTHORED[scene] for scene in run.get('authorScenes') or ['char']] if run.get('authorCard') else []
+ authored=[AUTHORED[scene] for scene in run.get('authorScenes') or (['char'] if run.get('authorCard') else [])]
  results+=authored
  for name in results: # trace and status live in the probe's folder, the records beside the plugin, authored scenes in the probe's folder
   try:(output/name).write_bytes(fetch(vm,(folder if name.endswith('.json') or name in authored else root+r'\BepInEx\plugins')+'\\'+name))
@@ -89,7 +95,7 @@ def main():
     for label in LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the "%s" acceptance case'%label)
     for label in FK_LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the ST-T01 "%s" acceptance case'%label)
     p.add_argument('--author-character',type=Path,help='Synthetic fixture card the probe authors scene-char.png from (FK disabled, default pose)')
-    p.add_argument('--author-scenes',help='Comma-separated fixture scenes to author from --author-character instead of scene-char.png alone: '+', '.join(AUTHORED))
+    p.add_argument('--author-scenes',help='Comma-separated fixture scenes to author from --author-character instead of scene-char.png alone: '+', '.join(AUTHORED)+' ('+', '.join(sorted(CARD_FREE))+' needs no card)')
     p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');a=p.parse_args()
     if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must remain in .local')
     a.output.mkdir(parents=True,exist_ok=True)
@@ -103,14 +109,14 @@ def main():
     if card is not None and not card.is_file():raise ValueError('--author-character requires an existing synthetic fixture card: '+str(card))
     author_scenes=None
     if a.author_scenes is not None:
-        if card is None:raise ValueError('--author-scenes needs --author-character')
         author_scenes=[name.strip() for name in a.author_scenes.split(',') if name.strip()]
         unknown=[name for name in author_scenes if name not in AUTHORED]
         if not author_scenes or unknown or len(set(author_scenes))!=len(author_scenes):
             raise ValueError('--author-scenes takes distinct names from '+', '.join(AUTHORED)+': '+a.author_scenes)
+        if card is None and not set(author_scenes)<=CARD_FREE:raise ValueError('--author-scenes needs --author-character unless it lists only '+', '.join(sorted(CARD_FREE)))
     fk=[label for label in FK_LABELS if getattr(a,label.replace('-','_'))is not None]
     if fk and len(fk)!=len(FK_LABELS):raise ValueError('the FK acceptance run needs both --charastudio-fk-edit and --charastudio-fk-source')
-    if card is not None:scenes={label:getattr(a,label.replace('-','_'))for label in LABELS+FK_LABELS if getattr(a,label.replace('-','_'))is not None} # author run: upload only what was given
+    if card is not None or author_scenes:scenes={label:getattr(a,label.replace('-','_'))for label in LABELS+FK_LABELS if getattr(a,label.replace('-','_'))is not None} # author run: upload only what was given
     elif fk:scenes={label:getattr(a,label.replace('-','_'))for label in FK_LABELS}
     else:scenes={label:getattr(a,label.replace('-','_'))for label in LABELS} # the ST-T03 run keeps requiring all four records
     for label,path in scenes.items():
