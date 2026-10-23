@@ -109,8 +109,7 @@ extension StudioModel {
         guard let rig = try EngineHost.locateSourceAvatar() else {
             throw RigError.invalid("Export the original clothed avatar before previewing source scenes.")
         }
-        return (rig, rig.deletingLastPathComponent()
-            .appendingPathComponent("../studio-pose/contract.json").standardizedFileURL)
+        return (rig, EngineHost.studioPoseContract(forRig: rig))
     }
 
     /// The cache-building half of `importSourceScenePreview`, aimed at an

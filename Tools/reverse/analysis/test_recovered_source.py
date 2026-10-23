@@ -16,6 +16,7 @@ import recover_managed as recovery
 import recovered_source as resolver
 from recovered_source import (AmbiguousRecoveredSource, MissingRecoveredSource, RecoveredAssembly, RecoveredErrorStub,
                               RecoveredHashMismatch, RecoveryManifestError)
+import studio_animation_contract
 import studio_fullbody_oracle
 import trigonometric_ik_contract
 
@@ -344,6 +345,27 @@ class ConsumerTests(RecoveryTree):
             # Copied byte for byte, including CRLF line ends.
             self.assertEqual((destination / (name + '.cs')).read_bytes(), source.read_bytes())
             self.assertIn({'path': str(source), 'sha256': sha(source.read_bytes())}, evidence)
+
+
+    def test_studio_animation_contract_hashes_the_indexed_studio_types_and_refuses_a_stub(self):
+        oci = ('namespace Studio { class OCIChar { void Apply() { charInfo.animBody.speed = value; '
+               'charInfo.setAnimatorParamFloat("motion", oiCharInfo.animePattern); charAnimeCtrl.Play(value3.clip, _normalizedTime); '
+               'charInfo.AnimPlay(value3.clip); oiCharInfo.animeNormalizedTime = currentAnimatorStateInfo.normalizedTime; } } }\r\n')
+        loop = ('namespace Studio { class CharAnimeCtrl { void LateUpdate() { if (!currentAnimatorStateInfo.loop && '
+                'currentAnimatorStateInfo.normalizedTime >= 1f) animator.Play(nameHadh, 0, 0f); } } }\n')
+        project = {'Studio/OCIChar.cs': oci, 'Studio/CharAnimeCtrl.cs': loop,
+                   'Studio/AddObjectFemale.cs': 'namespace Studio { class AddObjectFemale {} }\n',
+                   'Studio/AddObjectMale.cs': 'namespace Studio { class AddObjectMale {} }\n'}
+        studio = {'source_path': resolver.CHARA_STUDIO, 'name': 'Studio.dll'}
+        # The earlier generator hashed whatever files a --source directory held.
+        self.recover({**project, 'Studio/AddObjectMale.cs': 'namespace Studio { class AddObjectMale {\n' + STUB + '} }\n'}, **studio)
+        with self.assertRaises(RecoveredErrorStub):
+            studio_animation_contract.contract(self.index)
+        self.recover(project, tool='v2', **studio)
+        # Same keys as before the move, hashed over the recorded bytes (CRLF kept).
+        self.assertEqual(studio_animation_contract.contract(self.index)['sourceHashes'],
+                         {f'{name}.cs': sha(project[name.replace('.', '/') + '.cs'].encode())
+                          for name in studio_animation_contract.SOURCES})
 
 
 if __name__ == '__main__':

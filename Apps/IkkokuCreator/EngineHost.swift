@@ -34,14 +34,17 @@ final class EngineHost {
         print("[ikkoku] assets root: \(assetsRoot.path)")
         for line in library.log { print("[ikkoku] \(line)") }
         for line in Self.convertedLibraryReport() { print("[ikkoku] \(line)") }
+        for line in Self.companionGapReport() { print("[ikkoku] \(line)") }
     }
 
     // MARK: Converted library (A-T02)
 
     /// User-defaults key of the converted library the user chose with
     /// File → Choose Converted Library…: a `ResourceLibraryLocation` stored as a JSON
-    /// string, so `defaults read com.grabbiel.IkkokuCreator ConvertedLibraryLocation`
-    /// shows it. Each converted lookup reads it after its explicit variable and
+    /// string in `~/Library/Preferences/com.grabbiel.IkkokuCreator.plist`, so
+    /// `plutil -p ~/Library/Preferences/com.grabbiel.IkkokuCreator.plist` shows it
+    /// (`defaults read com.grabbiel.IkkokuCreator` reads a stale sandbox container's
+    /// plist instead when one exists). Each converted lookup reads it after its explicit variable and
     /// before its source-tree fallback.
     static let convertedLibraryDefaultsKey = "ConvertedLibraryLocation"
 
@@ -85,7 +88,30 @@ final class EngineHost {
             let now = change.current.map { "it is now \($0.identityDescription)" } ?? "its manifest is missing or invalid"
             lines.append("converted library changed since it was selected: \(change.recorded.identityDescription) at \(change.recorded.root); \(now)")
         }
+        lines += location.companionProblems().map { "converted library: \($0)" }
         return lines
+    }
+
+    /// The Studio bone catalog the source scene lookups read for the original base
+    /// manifest `rig`: the converted layout's `studio-pose/contract.json`
+    /// (`ResourceCompanion.studioPoseContract`, A-T02).
+    static func studioPoseContract(forRig rig: URL) -> URL { ResourceCompanion.studioPoseContract.url(besideManifest: rig) }
+
+    /// A startup line for each companion file missing beside the female base an
+    /// explicit `IKKOKU_SOURCE_AVATAR` or the source-tree default names, so a
+    /// copied layout without `studio-pose/` or `animation-assets/` is visible in
+    /// automated runs too. A selection in effect reports its own companions in
+    /// `convertedLibraryReport()`.
+    static func companionGapReport() -> [String] {
+        let override = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_AVATAR"]
+        guard override != nil || selectedManifest(.femaleBase) == nil,
+              let manifest = effectiveManifest(.femaleBase), FileManager.default.fileExists(atPath: manifest.path) else { return [] }
+        return ResourceCompanion.allCases.filter { $0.owner == .femaleBase }.compactMap { companion in
+            let url = companion.url(besideManifest: manifest)
+            var directory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), !directory.boolValue { return nil }
+            return "converted layout gap: no \(companion.label) at \(url.path) beside \(manifest.path): \(companion.consequence)"
+        }
     }
 
     /// The selected converted library's manifest of `kind`, when the selection has one.

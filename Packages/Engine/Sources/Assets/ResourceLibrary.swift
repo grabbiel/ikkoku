@@ -50,6 +50,93 @@ public enum ResourceLibraryKind: String, Codable, Sendable, CaseIterable {
     }
 }
 
+/// Files of the converted layout that the app reads beside a library manifest rather
+/// than through it (A-T02). The lookups derive both from the original female base's
+/// manifest (`rigs/source-avatar.json` → `../studio-pose/contract.json`), so a
+/// converted folder copied without them still selects and opens its bases, but its
+/// source scene characters are retained without rendering, or the Maker shows the
+/// base without its idle animation. A selection records the SHA-256 of each one
+/// present (`ResourceLibraryLocation.companions`), and
+/// `ResourceLibraryLocation.companionProblems()` names each one missing, changed or
+/// unrecorded. Contract: docs/reference/native-assets.md ("Library location and
+/// relocation").
+public enum ResourceCompanion: String, Codable, Sendable, CaseIterable {
+    /// The Studio bone catalog every source scene character preview reads. The
+    /// previews also read `attachments.json` and `ik-bindings.json` beside it.
+    case studioPoseContract
+    /// The female base's animation library; the Maker plays its single-motion `Idle`
+    /// state when it opens `source-avatar.json` (unless `IKKOKU_SOURCE_ANIMATION`).
+    case femaleBaseAnimation
+
+    /// The library whose manifest the companion is found beside.
+    public var owner: ResourceLibraryKind { .femaleBase }
+
+    /// The companion's path inside a converted root, as the exporters lay it out under
+    /// `.local/reverse/`.
+    public var conventionalPath: String {
+        switch self {
+        case .studioPoseContract: return "studio-pose/contract.json"
+        case .femaleBaseAnimation: return "animation-assets/female-base/animation.json"
+        }
+    }
+
+    /// Where the app reads the companion for the owner manifest `manifest` (from an
+    /// explicit variable, the selection or the source-tree default): `../` plus
+    /// `conventionalPath` from the manifest's folder. Every lookup of these files
+    /// goes through this, so the selection records exactly the file the app opens.
+    public func url(besideManifest manifest: URL) -> URL {
+        manifest.deletingLastPathComponent().appendingPathComponent("../" + conventionalPath).standardizedFileURL
+    }
+
+    public var label: String {
+        switch self {
+        case .studioPoseContract: return "Studio pose contract"
+        case .femaleBaseAnimation: return "female base animation"
+        }
+    }
+
+    /// What does not work without the file.
+    public var consequence: String {
+        switch self {
+        case .studioPoseContract: return "source scene characters cannot be previewed"
+        case .femaleBaseAnimation: return "the Maker shows the original female base without its idle animation"
+        }
+    }
+}
+
+/// One companion file a selection found, with the SHA-256 of its bytes then.
+public struct ResourceCompanionRecord: Codable, Sendable, Equatable, Hashable {
+    public var companion: ResourceCompanion
+    /// Absolute path the selection read (`ResourceCompanion.url(besideManifest:)`).
+    public var path: String
+    public var sha256: String
+
+    public init(companion: ResourceCompanion, path: String, sha256: String) {
+        self.companion = companion; self.path = path; self.sha256 = sha256
+    }
+}
+
+/// A companion of a library in a location that is missing now, whose bytes differ
+/// from the selection's record, or that is present but was not recorded.
+public struct ResourceCompanionProblem: Sendable, Equatable, CustomStringConvertible {
+    public let companion: ResourceCompanion
+    public let path: String
+    public let recordedSHA256: String?
+    /// The current SHA-256; nil when the file is missing or unreadable.
+    public let currentSHA256: String?
+
+    public var description: String {
+        let what = "The \(companion.label) \(companion.conventionalPath)"
+        guard let current = currentSHA256 else {
+            return "\(what) is missing at \(path): \(companion.consequence)."
+        }
+        guard let recorded = recordedSHA256 else {
+            return "\(what) at \(path) was not there when the library was selected; choose the library again to record it."
+        }
+        return "\(what) at \(path) changed since the library was selected: recorded \(recorded.prefix(12)), now \(current.prefix(12))."
+    }
+}
+
 /// Failures of the location model. Each names the kind and path involved; none is
 /// recovered by choosing another library.
 public enum ResourceLibraryError: Error, CustomStringConvertible, Equatable, Sendable {
@@ -182,10 +269,24 @@ public struct ResourceLibraryLocation: Codable, Sendable, Equatable {
     public static let currentVersion = 1
     public var version: Int
     public var libraries: [ResourceLibraryRecord]
+    /// The companion files a selection found (`convertedRoot`), in `ResourceCompanion`
+    /// order. A selection saved before companions were recorded decodes with none, so
+    /// `companionProblems()` reports its present companions as unrecorded.
+    public var companions: [ResourceCompanionRecord]
 
-    public init(libraries: [ResourceLibraryRecord]) {
+    public init(libraries: [ResourceLibraryRecord], companions: [ResourceCompanionRecord] = []) {
         version = Self.currentVersion
         self.libraries = libraries.sorted { $0.kind.rawValue < $1.kind.rawValue }
+        self.companions = companions
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, libraries, companions }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(Int.self, forKey: .version)
+        libraries = try c.decode([ResourceLibraryRecord].self, forKey: .libraries)
+        companions = try c.decodeIfPresent([ResourceCompanionRecord].self, forKey: .companions) ?? []
     }
 
     public func library(_ kind: ResourceLibraryKind) -> ResourceLibraryRecord? { libraries.first { $0.kind == kind } }
@@ -197,6 +298,42 @@ public struct ResourceLibraryLocation: Codable, Sendable, Equatable {
             guard kinds.insert(record.kind).inserted else { throw ResourceLibraryError.duplicateKind(record.kind) }
             try record.validate()
         }
+        var recorded = Set<ResourceCompanion>()
+        for companion in companions {
+            guard recorded.insert(companion.companion).inserted else {
+                throw ResourceLibraryError.invalidRecord("more than one \(companion.companion.label) record.")
+            }
+            guard companion.path.hasPrefix("/"), ResourceDigest.isSHA256(companion.sha256) else {
+                throw ResourceLibraryError.invalidRecord("\(companion.companion.label) record needs an absolute path and a lowercase SHA-256.")
+            }
+        }
+    }
+
+    /// Where the app reads `companion` for this location's owner library, or nil when
+    /// the location has no such library.
+    public func companionURL(_ companion: ResourceCompanion) -> URL? {
+        guard let owner = library(companion.owner) else { return nil }
+        return companion.url(besideManifest: URL(fileURLWithPath: owner.root).appendingPathComponent(owner.manifest))
+    }
+
+    /// Each companion of a library in this location that is missing now, changed
+    /// since `companions` recorded it, or present but not recorded. Empty for a
+    /// complete layout whose companions kept their bytes.
+    public func companionProblems() -> [ResourceCompanionProblem] {
+        ResourceCompanion.allCases.compactMap { companion in
+            guard let url = companionURL(companion) else { return nil }
+            let current = Self.digestOfRegularFile(url)
+            let recorded = companions.first { $0.companion == companion }?.sha256
+            guard current == nil || current != recorded else { return nil }
+            return ResourceCompanionProblem(companion: companion, path: url.path, recordedSHA256: recorded, currentSHA256: current)
+        }
+    }
+
+    /// The SHA-256 of a regular file, or nil when it is missing, a directory or unreadable.
+    static func digestOfRegularFile(_ url: URL) -> String? {
+        var directory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), !directory.boolValue else { return nil }
+        return try? ResourceDigest.sha256(contentsOf: url)
     }
 
     public static func decode(_ data: Data) throws -> ResourceLibraryLocation {
@@ -212,8 +349,10 @@ public struct ResourceLibraryLocation: Codable, Sendable, Equatable {
     }
 
     /// Records every converted library found at its conventional manifest under a
-    /// directory the user chose. A present but invalid manifest fails the selection;
-    /// a directory holding none of them is `noConvertedLibrary`.
+    /// directory the user chose, and the SHA-256 of each companion file present
+    /// beside them. A present but invalid manifest fails the selection; a directory
+    /// holding none of them is `noConvertedLibrary`. A missing companion does not
+    /// fail it (the Maker needs none); the caller reports `companionProblems()`.
     public static func convertedRoot(_ root: URL) throws -> ResourceLibraryLocation {
         var records: [ResourceLibraryRecord] = []
         for kind in ResourceLibraryKind.converted {
@@ -222,7 +361,12 @@ public struct ResourceLibraryLocation: Codable, Sendable, Equatable {
             records.append(try ResourceLibraryRecord.inspect(kind: kind, root: root))
         }
         guard !records.isEmpty else { throw ResourceLibraryError.noConvertedLibrary(root: root.standardizedFileURL.path) }
-        return ResourceLibraryLocation(libraries: records)
+        let location = ResourceLibraryLocation(libraries: records)
+        let companions = ResourceCompanion.allCases.compactMap { companion -> ResourceCompanionRecord? in
+            guard let url = location.companionURL(companion), let digest = digestOfRegularFile(url) else { return nil }
+            return ResourceCompanionRecord(companion: companion, path: url.path, sha256: digest)
+        }
+        return ResourceLibraryLocation(libraries: records, companions: companions)
     }
 
     /// Each record whose manifest no longer has the recorded identity at its root,

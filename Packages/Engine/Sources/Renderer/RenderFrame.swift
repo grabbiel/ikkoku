@@ -39,7 +39,7 @@ public struct MaterialState: Sendable, Equatable {
         [base, colorMask, detail, line, normal, overlay0, overlay1, overlay2, pattern, hairGloss, bodyMask].compactMap { $0 }
     }
 
-    public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) ?? MaterialKindItem }
+    public var kind: MaterialKind { MaterialKind(rawValue: Int32(uniforms.kind)) }
 
     public mutating func setFlag(_ f: MaterialFlags, _ on: Bool) {
         if on { uniforms.flags |= f.rawValue } else { uniforms.flags &= ~f.rawValue }

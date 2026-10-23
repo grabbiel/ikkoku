@@ -6,6 +6,14 @@ import json
 from pathlib import Path
 import struct
 
+try:  # Run as a script or from Tools/reverse/analysis.
+    from recovered_source import CHARA_STUDIO, RecoveredAssembly
+except ImportError:  # Imported as analysis.studio_animation_contract from Tools/reverse.
+    from analysis.recovered_source import CHARA_STUDIO, RecoveredAssembly
+
+REPO = Path(__file__).resolve().parents[3]
+SOURCES = ['Studio.OCIChar', 'Studio.CharAnimeCtrl', 'Studio.AddObjectFemale', 'Studio.AddObjectMale']
+
 
 def f32(x): return struct.unpack('<f', struct.pack('<f', x))[0]
 
@@ -20,8 +28,10 @@ def trace(initial, speed, state_speed, duration, loop, forced, deltas):
     return dict(initial=initial,speed=speed,stateSpeed=state_speed,duration=duration,loops=loop,forceLoop=forced,frames=records)
 
 
-def contract(source):
-    files={name:(source/name).read_bytes() for name in ['Studio.OCIChar.cs','Studio.CharAnimeCtrl.cs','Studio.AddObjectFemale.cs','Studio.AddObjectMale.cs']}
+def contract(recovery_index):
+    # The Studio types come from the indexed CharaStudio recovery, never a directory guess (E-T02).
+    recovery=RecoveredAssembly(recovery_index,source_path=CHARA_STUDIO)
+    files={name+'.cs':recovery.source(name).data for name in SOURCES}
     text=files['Studio.OCIChar.cs'].decode()
     required=['charInfo.animBody.speed = value;', 'charInfo.setAnimatorParamFloat("motion", oiCharInfo.animePattern);',
               'charAnimeCtrl.Play(value3.clip, _normalizedTime);','charInfo.AnimPlay(value3.clip);',
@@ -40,5 +50,8 @@ def contract(source):
 
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--source',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(contract(a.source),indent=2)+'\n')
+    p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--recovery-index',type=Path,default=REPO/'.local/reverse/managed-recovery/index.json',
+                   help='Managed recovery index; the Studio types resolve only through its manifest.')
+    p.add_argument('--output',type=Path,required=True)
+    a=p.parse_args();a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(contract(a.recovery_index),indent=2)+'\n')
