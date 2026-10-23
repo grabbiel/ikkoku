@@ -84,7 +84,8 @@ private func formerViewCamera(world: float4x4, base: OrbitCamera) -> OrbitCamera
     let local = Transform.trs(localPosition, localRotation, .one)
     // Non-mirrored parents give exactly the former result, through the full-TRS world matrix (uniform
     // scale only: a non-uniform parent shears it) and through the Studio-rule parent frame.
-    for scale in [SIMD3<Float>(repeating: 1), SIMD3(repeating: 2), SIMD3(1, 2, 0.5)] {
+    let scales: [SIMD3<Float>] = [SIMD3(repeating: 1), SIMD3(repeating: 2), SIMD3(1, 2, 0.5)]
+    for scale in scales {
         let parent = Transform.trs(parentPosition, parentRotation, scale)
         if scale.x == scale.y, scale.y == scale.z {
             #expect(try SourceStudioCameraObjects.viewCamera(world: parent * local, base: base)
@@ -99,7 +100,8 @@ private func formerViewCamera(world: float4x4, base: OrbitCamera) -> OrbitCamera
     }
     // A mirror on any one axis, or all three, is rejected by name in both forms. The Studio walk
     // folds a mirrored parent into a nonunit rotation, so only the parent frame still shows it.
-    for signs in [SIMD3<Float>(-1, 1, 1), SIMD3(1, -1, 1), SIMD3(1, 1, -1), SIMD3(-1, -1, -1)] {
+    let mirrors: [SIMD3<Float>] = [SIMD3(-1, 1, 1), SIMD3(1, -1, 1), SIMD3(1, 1, -1), SIMD3(-1, -1, -1)]
+    for signs in mirrors {
         let mirrored = Transform.trs(parentPosition, parentRotation, signs * 1.5)
         #expect(throws: SourceStudioCameraObjectError.reflectedFrame("world frame")) {
             try SourceStudioCameraObjects.viewCamera(world: mirrored * local, base: base)
