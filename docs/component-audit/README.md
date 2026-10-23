@@ -397,6 +397,14 @@ reruns, and branch cleanup) is handed off in
       unwritable or directory `IKKOKU_CAPTURE_UI` path and a tiny
       `IKKOKU_CAPTURE_UI_TIMEOUT` exit 1 without a "written" line; a normal UI capture
       and `IKKOKU_RENDER_THUMBS` exit 0; and the `app-smoke` lane passes.
+      (2026-10-23, local-wave-verify, Debug build of `2e732b9`, main `5e86b57`
+      merged. Every command behaved as listed: the three bad captures exited 1
+      with `ui snapshot failed` and no "written" line, and the normal capture and
+      63 thumbnails exited 0. Not ticked: `app-smoke --strict` passed 6/7.
+      `startup-mute-capture` fails with "Original plugin target does not bind
+      uniquely": its profile binds source object key 10, and the check loads no
+      source scene. See A-T05 in
+      [app-gameplay-and-plugins](app-gameplay-and-plugins.md).)
 - [ ] R4 app paths (PR #110): give a native character a degenerate IK target. The
       status line names the unsolved chain and the pose is kept. A source camera
       under a mirrored parent falls back to the saved camera with a
@@ -439,14 +447,33 @@ reruns, and branch cleanup) is handed off in
       capture option without a mode. A missing `IKKOKU_CARD` or `IKKOKU_LOAD_SCENE`
       exits 1 and writes no PNG. A plain Maker capture exits 0, and the `app-smoke`
       lane passes.
+      (2026-10-23, local-wave-verify, Debug build of `2e732b9`. Each command
+      behaved as listed. The three invalid requests named
+      `IKKOKU_CAPTURE_RIG, IKKOKU_CAPTURE_SCENE`, `IKKOKU_NATIVE_PLUGIN_REPORT` and
+      `IKKOKU_CAPTURE_W`. The missing card and scene exited 1 with no PNG, and the
+      Maker capture exited 0. Not ticked: `app-smoke` passed 6/7, with the same
+      `startup-mute-capture` failure as A-T05.)
 - [ ] T-T02 packaged app (PR #120): copy the Release app outside the checkout and run
       the build guide's thumbnail recipe with `IKKOKU_SOURCE_TREE_FALLBACKS=0`. It
       renders from the bundle alone and prints no `source-tree fallback` line. Also
       open the project in Xcode once: the navigator shows `Packages/` and the Engine
       package resolves.
-- [ ] A-T01 gameplay lane (PR #121): on a Debug build,
+      (2026-10-23. The Release app of main `87cf261` segfaulted on its first
+      frame, which #128 (R6) fixed. Local-wave-verify then cloned the Release app
+      of `2e732b9` outside the checkout. Run from there with
+      `IKKOKU_SOURCE_TREE_FALLBACKS=0`, it wrote 63 thumbnails, exited 0 and
+      printed no `source-tree fallback` line. `inspect_app_bundle.py` passed with
+      208 files, arm64, 0 errors and 0 warnings. The user confirmed interactively
+      that the fixed Release app no longer crashes. In Xcode, package resolution
+      finished with no missing-package error and the project built. Its four
+      warnings are fixed in `ea5c791`. Not ticked: no one has confirmed that the
+      navigator shows `Packages/`.)
+- [x] A-T01 gameplay lane (PR #121): on a Debug build,
       `python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json --strict`
       passes.
+      (2026-10-23, local-wave-verify: 1/1 with 0 skipped on the Debug build of
+      `2e732b9`, main `5e86b57` merged, Xcode 27.0, and earlier at `0501cf1`.
+      The direct launch reported `gameplay scenario: 17 passed, 0 failed`.)
 - [ ] A-T02 relocation (PR #122): follow the build guide's moved-library acceptance.
       Every reference relocates, or one `Unresolved` line is printed per missing or
       changed identity, and nothing is loaded in its place.
