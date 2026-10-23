@@ -468,8 +468,8 @@ runners (the app's deployment target is macOS 26, so it needs Xcode 26):
   uploads the JSON report as the `release-bundle-report` artifact. The job
   never launches the app. Its first dispatched run (2026-10-23) found the whole
   Engine package under `Contents/Resources/Engine/`, 247 files. Once the app
-  target stopped synchronizing `Packages/`, run 39888875495 passed with 207
-  files, 0 errors and 0 warnings.
+  target stopped synchronizing `Packages/`, runs 39888875495 and 39889709790
+  passed with 207 files, 0 errors and 0 warnings.
 - `reverse-tools` (`macos-26`, Python 3.12) installs only the pinned
   `Tools/reverse/requirements.txt` and runs the `Tools/reverse` and
   `Tools/reverse/analysis` unittest suites. Without `.local/` they skip or
