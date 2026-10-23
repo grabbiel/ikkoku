@@ -1,0 +1,28 @@
+{
+  "steps": [
+    {"op": "assert", "routePlaying": {"key": 0, "playing": true}},
+    {"op": "assert", "diagnosticContains": "Character 10 renders on its route"},
+    {"op": "captureObject", "key": 9, "name": "folder-start"},
+    {"op": "captureObject", "key": 10, "name": "character-start"},
+    {"op": "advance", "seconds": 2},
+    {"op": "assert", "position": {"key": 9, "from": "folder-start"}},
+    {"op": "assertRejected", "position": {"key": 9, "from": "folder-start", "within": 0.5}, "errorContains": "expected it held within 0.5"},
+    {"op": "assertRejected", "position": {"key": 10, "from": "character-start", "within": 0.5}, "errorContains": "expected it held within 0.5"},
+    {"op": "captureObject", "key": 9, "name": "folder-moving"},
+    {"op": "advance", "seconds": 0.5},
+    {"op": "assertRejected", "position": {"key": 9, "from": "folder-moving", "within": 0.1}, "errorContains": "expected it held within 0.1"},
+    {"op": "toggleRoute", "key": 0},
+    {"op": "assert", "routePlaying": {"key": 0, "playing": false}},
+    {"op": "assert", "position": {"key": 9, "from": "folder-start", "within": 0.00001}},
+    {"op": "assert", "position": {"key": 10, "from": "character-start", "within": 0.00001}},
+    {"op": "advance", "seconds": 2},
+    {"op": "assert", "position": {"key": 9, "from": "folder-start", "within": 0.00001}},
+    {"op": "assert", "position": {"key": 10, "from": "character-start", "within": 0.00001}},
+    {"op": "export", "path": ".local/verification/scenario-exports/route-children-motion.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/route-children-motion.png"},
+    {"op": "assert", "routePlaying": {"key": 0, "playing": false}},
+    {"op": "advance", "seconds": 2},
+    {"op": "assert", "position": {"key": 9, "from": "folder-start", "within": 0.00001}},
+    {"op": "assert", "position": {"key": 10, "from": "character-start", "within": 0.00001}}
+  ]
+}

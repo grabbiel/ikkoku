@@ -718,12 +718,29 @@ struct ClothesInspector: View {
     var body: some View {
         if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             VStack(alignment: .leading, spacing: 10) {
-                if let preview = model.sourceShapePreview(for: o.id) { sourceOutfit(o, preview: preview) }
+                if let preview = model.sourceShapePreview(for: o.id) {
+                    sourceOutfit(o, preview: preview)
+                    sourceClothesState(o, preview: preview)
+                }
                 SectionBox(title: "Accessories") {
                     let labels = model.sourceAccessoryLabels(for: o.id)
+                    let preview = model.sourceShapePreview(for: o.id)
                     ForEach(Array(labels.enumerated()), id: \.offset) { index, label in
-                        Text(label).font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                        // CharaStudio's accessory toggles (OnClickAccessories ->
+                        // OCIChar.ShowAccessory), interactable for loaded slots.
+                        if let preview, preview.savedAccessorySlots.contains(index) {
+                            Toggle(label, isOn: Binding(get: { preview.showAccessory[index] }, set: { visible in
+                                do {
+                                    try model.setSourceAccessoryVisible(o.id, slot: index, visible: visible)
+                                    model.status = "Accessory slot \(index + 1) \(visible ? "shown" : "hidden")"
+                                } catch { model.status = "Accessory: \(error)" }
+                            }))
+                            .font(.callout)
                             .accessibilityIdentifier("studio.source.accessory.\(index)")
+                        } else {
+                            Text(label).font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("studio.source.accessory.\(index)")
+                        }
                     }
                     if labels.isEmpty { Text("Source accessory selections are unavailable.").foregroundStyle(.secondary) }
                 }
@@ -807,6 +824,57 @@ extension ClothesInspector {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .accessibilityIdentifier("studio.source.outfitSection")
+    }
+
+    /// The source character's clothes state (ST-C03), the counterpart of
+    /// CharaStudio's clothing-detail rows and whole-outfit buttons. Every
+    /// choice goes through `StudioModel.setSourceClothesState` /
+    /// `setSourceClothesStateAll`, the path the scenario's `setClothesState`
+    /// op drives, so the recovered SetClothesState rules (next allowed state,
+    /// one-piece, no-shorts and shoe links) apply. A row offers the states its
+    /// garment's catalog allows (every state when the row is not converted)
+    /// and is disabled without a garment.
+    @ViewBuilder
+    func sourceClothesState(_ o: StudioObject, preview: SourceStudioCharacterPreview) -> some View {
+        let labels = ["Top", "Bottom", "Bra", "Shorts", "Gloves", "Pantyhose", "Socks", "Shoes"]
+        SectionBox(title: "Clothes state") {
+            ForEach(SourceStudioWear.studioKinds, id: \.self) { kind in
+                HStack {
+                    Text(labels[kind]).font(.callout).frame(width: 90, alignment: .leading)
+                    if let allowed = preview.wearRules.allowed[kind] {
+                        Picker(labels[kind], selection: Binding(get: { Int(preview.clothesState[kind]) }, set: { value in
+                            do {
+                                try model.setSourceClothesState(o.id, kind: kind, state: value)
+                                model.status = "\(labels[kind]) \(SourceStudioWear.stateNames[Int(preview.clothesState[kind])])"
+                            } catch { model.status = "Clothes state: \(error)" }
+                        })) {
+                            ForEach(allowed.sorted(), id: \.self) { state in
+                                Text(SourceStudioWear.stateNames[Int(state)].capitalized).tag(Int(state))
+                            }
+                        }
+                        .pickerStyle(.segmented).labelsHidden()
+                    } else {
+                        Text("No garment").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityIdentifier("studio.source.clothes.\(kind)")
+            }
+            HStack {
+                ForEach([(0, "All on"), (1, "All half"), (3, "All off")], id: \.0) { state, title in
+                    Button(title) {
+                        do { try model.setSourceClothesStateAll(o.id, state: state); model.status = title }
+                        catch { model.status = "Clothes state: \(error)" }
+                    }
+                }
+            }
+            Text("The shoes row follows the saved shoesType \(preview.savedWear.shoesType) (\(preview.savedWear.shoesType == 0 ? "indoor" : preview.savedWear.shoesType == 1 ? "outdoor" : "neither")). Export writes an edited state into the embedded card; the loaded state writes nothing.")
+                .font(.caption).foregroundStyle(.secondary)
+            let notes = preview.wearDiagnostics
+            if !notes.isEmpty {
+                Text(notes.joined(separator: "\n")).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
+        .accessibilityIdentifier("studio.source.clothesSection")
     }
 }
 

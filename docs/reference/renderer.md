@@ -1491,8 +1491,11 @@ draws depth-test against native draws. Builtins:
 **Assembly and fallbacks.** `SourceShaderLiveAssembly` (Character) derives the
 card's binding set once and resolves every slot. In the Studio, scene globals
 stay unresolved: CharaStudio's `SceneInfo` → `Shader.SetGlobal*` mapping is not
-recovered, so the harness constants must not stand in. Each frame, it marks the
-matching `RenderItem`s (`RenderItem.sourceShader`). Matching uses the source
+recovered, so the harness constants must not stand in. The binding set follows
+the card's saved wear. When a Studio document changes a character's clothes
+state or accessory visibility (ST-C03), that character stays toon and the reason
+is reported. Each frame, the assembly marks the matching `RenderItem`s
+(`RenderItem.sourceShader`). Matching uses the source
 renderer name and submesh in the native mesh name (`<part>/<renderer>/<submesh>`),
 and the n-th native pass of an item maps to the n-th visible material slot.
 Renderers the source disables, and ShadowCaster-only slots, are hidden. Every

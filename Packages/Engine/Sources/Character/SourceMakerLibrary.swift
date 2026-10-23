@@ -17,7 +17,9 @@ public struct SourceMakerLibrary: Sendable {
         public let category: Int, id: Int, name: String
         public let modGUID: String?, empty: Bool?
         public let rig: File?, appearance: File?, cardBindings: File?, bodyMask: File?
-        /// Converted prefab renderers and serialized materials (`materials.json`).
+        /// Converted prefab renderers and serialized materials (`materials.json`);
+        /// its `catalog` object is the original list row (ListInfoBase.dictInfo
+        /// by KeyType name) of this entry.
         public let materialEvidence: File?
         public let meshNames: [String]?, attachment: Attachment?
     }
@@ -103,11 +105,77 @@ public struct SourceMakerLibrary: Sendable {
         return Selection(property: property, category: category, savedID: savedID, sourceID: id, modGUID: guid,
             entry: entry, status: entry == nil ? "conversionMissing" : entry?.empty == true ? "empty" : "converted")
     }
+    /// What one saved clothing or accessory selection tells the source about
+    /// its catalog row (the ListInfoBase ChaControl reads StateType,
+    /// Coordinate, NotBra, HideShorts and HideHair from): the library's
+    /// explicit empty entry is the id-0 "none" row (StateType 3, so the kind
+    /// is not a clothes-state kind), a converted entry carries its row in the
+    /// verified material evidence, and anything else is unknown, never guessed.
+    public enum CatalogRow: Sendable, Equatable {
+        case none
+        case row([String: String])
+        case unknown(String)
+    }
+    public struct WearCatalog: Sendable, Equatable {
+        /// One row per ChaFileDefine.ClothesKind (top ... shoes_outer).
+        public let clothes: [CatalogRow]
+        /// The saved clothes IDs, and whether a resolver record names a mod.
+        public let clothesIDs: [Int], clothesModded: [Bool]
+        /// Rows of the saved accessory slots (type 121...130 only).
+        public let accessories: [Int: CatalogRow]
+        public init(clothes: [CatalogRow], clothesIDs: [Int], clothesModded: [Bool], accessories: [Int: CatalogRow]) {
+            self.clothes = clothes; self.clothesIDs = clothesIDs; self.clothesModded = clothesModded; self.accessories = accessories
+        }
+    }
+    /// The catalog rows of the outfit's nine clothes kinds and its saved
+    /// accessories. Shoes inner and outer both resolve in category 112.
+    public func wearCatalog(card: SourceCharacterCard, coordinate: Int) throws -> WearCatalog {
+        guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
+        let references = try card.modReferences()
+        func row(_ resolution: Selection) throws -> CatalogRow {
+            guard let entry = resolution.entry else { return .unknown(resolution.status) }
+            if entry.empty == true { return .none }
+            guard let evidence = try materialEvidenceData(for: entry) else { return .unknown("no catalog evidence") }
+            struct Evidence: Decodable { let catalog: [String: String]? }
+            let decoded = try JSONDecoder().decode(Evidence.self, from: evidence)
+            return decoded.catalog.map(CatalogRow.row) ?? .unknown("no catalog evidence")
+        }
+        let parts = try card.recordFields(.clothes(coordinate: coordinate))["parts"]?.arrayValue ?? []
+        guard parts.count <= 9 else { throw RigError.invalid("Unsupported clothes array.") }
+        var clothes: [CatalogRow] = [], ids: [Int] = [], modded: [Bool] = []
+        for slot in 0..<9 {
+            guard slot < parts.count else { clothes.append(.unknown("not saved")); ids.append(0); modded.append(false); continue }
+            guard let id = try parts[slot].stringKeyedMap()["id"]?.integerValue, Int32(exactly: id) != nil else {
+                throw RigError.invalid("Missing or invalid Maker selection id.")
+            }
+            let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
+            let resolution = selection(category: min(105 + slot, 112), savedID: id, property: property, references: references)
+            clothes.append(try row(resolution)); ids.append(id)
+            modded.append(resolution.modGUID != nil || resolution.status == "compatibilityRequired")
+        }
+        var accessories: [Int: CatalogRow] = [:]
+        let accessoryParts = try card.recordFields(.accessory(coordinate: coordinate))["parts"]?.arrayValue ?? []
+        guard accessoryParts.count <= 20 else { throw RigError.invalid("Accessory preview supports the original 20-slot array.") }
+        for (slot, part) in accessoryParts.enumerated() {
+            let fields = try part.stringKeyedMap()
+            guard let category = fields["type"]?.integerValue, (121...130).contains(category),
+                  let id = fields["id"]?.integerValue, Int32(exactly: id) != nil else { continue }
+            accessories[slot] = try row(selection(category: category, savedID: id,
+                property: "outfit\(coordinate).accessory\(slot).ChaFileAccessory.PartsInfo.id", references: references))
+        }
+        return WearCatalog(clothes: clothes, clothesIDs: ids, clothesModded: modded, accessories: accessories)
+    }
     fileprivate struct MaterialComponent: Sendable {
         let appearance: URL, bindings: URL?, meshNames: Set<String>, prefix: String, accessorySlot: Int?
     }
     public struct Prepared: Sendable {
         public let source: SourceRig, selections: [Selection], diagnostics: [String]
+        /// ClothesKind of each assembled clothing component, in the order the
+        /// assembly prefixes them ("clothes-0/", "clothes-1/", ...).
+        public let clothingSlots: [Int]
+        /// Clothing kinds rendered by the base avatar's reference geometry
+        /// because the card's selection has no conversion.
+        public let referenceClothingSlots: Set<Int>
         fileprivate let components: [MaterialComponent]
         fileprivate let bodyMask: URL?
         fileprivate let clearBodyMask: Bool
@@ -205,7 +273,7 @@ public struct SourceMakerLibrary: Sendable {
             if selections.last?.entry != nil { clothesBySlot[slot] = value }
             if slot == 0, selections.last?.entry?.empty == true { clearBodyMask = true }
         }
-        diagnostics.append("Maker previews outdoor shoes and fully-on clothes; saved wear state is preserved.")
+        diagnostics.append("Converted clothing assembles the outdoor shoes and only the fully-dressed meshes; the saved clothes state is preserved (Studio renders it on these meshes, the Maker preview does not).")
         let accessoryFields = try card.recordFields(.accessory(coordinate: coordinate))
         guard let parts = accessoryFields["parts"]?.arrayValue, parts.count <= 20 else { throw RigError.invalid("Accessory preview supports the original 20-slot array.") }
         var accessories: [SourceAvatar.Accessory] = []
@@ -222,11 +290,16 @@ public struct SourceMakerLibrary: Sendable {
                 overrides: try SourceAccessoryMove.overrides(fields: fields, rig: rig, attachment: attachment)))
         }
         let hair = hairBySlot.keys.sorted().compactMap { hairBySlot[$0] }, clothes = clothesBySlot.keys.sorted().compactMap { clothesBySlot[$0] }
+        let convertedSlots = Set(selections.filter { $0.entry != nil && $0.property.contains(".ChaFileClothes.Clothes") }.compactMap { selection in
+            ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"].firstIndex { selection.property.hasSuffix(".ChaFileClothes.Clothes" + $0) }
+        })
         let source = try SourceAvatar.assemble(name: manifest.name, bodySkeleton: base(manifest.bodySkeleton), headSkeleton: base(manifest.headSkeleton),
             body: base(manifest.body.file), head: base(manifest.head.file), clothes: clothes.map(\.0), hair: hair.map(\.0),
             bodyMeshNames: manifest.body.meshNames, headMeshNames: manifest.head.meshNames,
             clothingMeshNames: clothes.map(\.1), hairMeshNames: hair.map(\.1), accessories: accessories)
-        return Prepared(source: source, selections: selections, diagnostics: diagnostics, components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
+        return Prepared(source: source, selections: selections, diagnostics: diagnostics,
+            clothingSlots: clothesBySlot.keys.sorted(), referenceClothingSlots: Set(clothesBySlot.keys).subtracting(convertedSlots),
+            components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
     }
 }
 

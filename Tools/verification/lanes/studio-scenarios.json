@@ -426,6 +426,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-route-children-motion",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_CHILDREN_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-children-motion.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-children-motion.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T11 route children: on the CharaStudio-authored scene-route-children.png (route key 0, saved playing and looping over four points; its children are folder key 9 and the fixture female key 10, which renders on the route) both children's world positions, read through the same placement walk refresh() renders with, move more than 0.5 m in a 2 s advance and the folder more than 0.1 m in the next 0.5 s; stopping the route pins both back to point 0 (within 1e-5 of their start) and they hold there through a further 2 s advance, and after export+reimport the route reads back stopped and both children still hold. Speed parity with the original tween, the Play all / Replay all / Stop all buttons and rendered pixels are not asserted.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-route-children-motion.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/route-children-motion.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-charastudio-hide-rename",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -997,6 +1031,44 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-neck-target-orbit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_NECK_TARGET_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/neck-target-orbit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-neck-target-orbit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T07 neck look TARGET/AWAY: on the CharaStudio-authored scene-neck-target.png, character 0 (neck pattern 1, TARGET) and character 147 (neck pattern 2, AWAY), both eyes pattern 1 (TARGET), get the live gaze runtime. The turn is measured on the front-hair root bone 100 (cf_J_hairF_00, a head child; a pure neck/head yaw leaves the head bone's own position unmoved) in each character's rig frame: orbiting the camera 60 degrees to one side moves the TARGET hair more than 0.05 and the AWAY hair more than 0.15, and the two end more than 0.15 apart (opposite sides); orbiting to the other side moves the TARGET hair more than 0.1 again while the AWAY hair returns within 0.01 of its front-camera pose and is again more than 0.15 from TARGET's. After export+reimport the gaze is live again and both poses reproduce within 0.01. Exact turn angles against the original are recorded in docs, not asserted; the FK-neck half of ST-T07 neck look stays unautomated.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-neck-target-orbit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/neck-target-orbit.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-blink-toggle",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -1321,6 +1393,223 @@
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-reload-load-outfit.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-clothes-saved-off",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/clothes-saved-off.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-clothes-saved-off.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-C03 import defect control at a fixed clock/camera: source character key 0 saves Status.clothesState 3,3,3,3,3,3,3,3,3 (all off, shoesType 1) and must import with none of its assembled garments (reference top/bottom, converted outdoor shoes) drawn, while key 65 (all on) draws all three. Forcing key 0's top, bottom and shoes rows on through StudioModel.setSourceClothesState must change at least 10,000 pixels of the production 512x512 render by >2/255; three undos must restore the saved-state render exactly (maximum RGBA8 channel delta 0). The saved-state export must equal the initial source SHA256 before and after reimport; the top-on export must differ and reimport with Status.clothesState 0,3,3,3,3,3,3,3,3. Half states, the bra/shorts/socks garments (unconverted, never drawn) and source shader parity are not covered.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-clothes-saved-off.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/clothes-saved-off.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/clothes-key0-top-on.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/clothes-saved-off.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/clothes-forced-on.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-clothes-toggle",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/clothes-toggle.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-clothes-toggle.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Headless StudioModel.setSourceClothesState (the Clothes tab's row path) on source character key 65 at a fixed clock/camera: a state outside 0...3, row 8 and the gloves row (no garment, not a state kind) are refused with document and preview unchanged; top off must change at least 5,000 pixels by >2/255 and leave bottom and shoes drawn; top half on the unconverted (reference) top is drawn dressed with exactly one fallback diagnostic and an unchanged render; undo, redo and a return to on must restore the captured renders exactly (maximum RGBA8 channel delta 0) with no document edit left. The restored export must equal the initial source SHA256 before and after reimport; the top-off export must differ and reimport with Status.clothesState 3,0,0,0,0,0,0,0,0 rendering the top-off capture exactly. Native half-state meshes are not converted and not covered.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-clothes-toggle.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/clothes-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/clothes-changed.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/clothes-dressed.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/clothes-top-off.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-accessory-toggle",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_ACCESSORY_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/accessory-toggle.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-accessory-toggle.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Headless StudioModel.setSourceAccessoryVisible (the Clothes tab's accessory toggle path) on source character key 10 of the head-200 expansion scene (converted glasses in accessory slot 0, converted top 105-39, bottom 106-25 and shoes 112-1, saved shoesType 0): an empty slot is refused unchanged; hiding slot 0 must change at least 100 pixels by >2/255 (the glasses are small in this framing) and undo/redo restore the captures exactly. The recovered SetClothesState rules run on the converted garments: bottom half advances to off (StateType 1), top half (StateType 0) draws the dressed T-shirt with the n_top_b fallback diagnostic, the shoes row mirrors off to both shoe kinds, the gloves row is refused. The restored export must equal the initial source SHA256 before and after reimport; the slot-0-hidden export must differ and reimport with showAccessory[0] false rendering the hidden capture exactly.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-accessory-toggle.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/accessory-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/accessory-changed.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/accessory-shown.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/accessory-hidden.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-clothes",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-clothes.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-clothes.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Turns source character key 65's top off (render changes at least 10,000 pixels by >2/255) and key 0's top on, and saves the native document card. The next check loads it in a fresh process.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-clothes.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-clothes.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-clothes",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-clothes.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-clothes.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE: key 65 must render with its top off (clothes state 3,0,0,0,0,0,0,0,0 over saved all-on) and key 0 with only its top on (0,3,3,3,3,3,3,3,3 over saved all-off); turning key 65's top back on must change at least 5,000 pixels and undo must restore the loaded render exactly.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-clothes.json",
           "kind": "scenario-report"
         }
       ],

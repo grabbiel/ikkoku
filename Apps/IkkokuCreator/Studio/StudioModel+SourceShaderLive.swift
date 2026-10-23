@@ -27,6 +27,18 @@ extension StudioModel {
         case .failure(let reason):
             lines.append("\(label): toon — \(reason.text)")
         case .success(let assembly):
+            // The binding set follows the card's saved wear. When the document
+            // changes the clothes state or accessory visibility (ST-C03), the
+            // source would enable other renderers than the ones this frame
+            // draws, so the character stays toon and says why.
+            if preview.clothesState != preview.loadedClothesState || preview.showAccessory != preview.savedWear.showAccessory {
+                let reason = "the binding set covers the card's saved wear; this scene changes it (clothes state "
+                    + preview.clothesState.map(String.init).joined(separator: ",") + ", \(preview.showAccessory.filter { $0 }.count) of 20 accessories shown)"
+                liveSourceLastAttach[id] = nil; liveSourceWearChanged[id] = reason
+                lines.append("\(label): toon — \(reason)")
+                return
+            }
+            liveSourceWearChanged[id] = nil
             let report = assembly.attach(to: &frame, resources: host.renderer.resources, overrides: preview.liveIrisOverrides())
             liveSourceLastAttach[id] = report
             lines.append("\(label): \(report.live.count) live, \(report.fallbacks.count) toon, \(report.hidden.count) hidden")
@@ -84,6 +96,7 @@ extension StudioModel {
             case .success(let assembly):
                 row["textureProvider"] = assembly.textureProvider
                 row["resolution"] = assembly.resolution
+                if let reason = liveSourceWearChanged[id] { row["toon"] = reason }
                 if let attach = liveSourceLastAttach[id] {
                     row["live"] = attach.live; row["fallbacks"] = attach.fallbacks; row["hidden"] = attach.hidden; row["unmatched"] = attach.unmatched
                 }

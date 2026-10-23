@@ -18,9 +18,10 @@ struct StudioScenario: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
+        /// `"setClothesState"`, `"setAccessoryVisible"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
-        /// `"captureBone"`, `"captureRender"`, `"advance"`, `"orbit"`,
+        /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
@@ -86,6 +87,10 @@ struct StudioScenario: Decodable {
         /// assert only: the FK edit on one guide bone, optionally plus its
         /// world displacement from a `captureBone` position.
         let fk: FKValue?
+        /// assert only: one object's world displacement from a `captureObject`
+        /// position (the placement `refresh()` renders it at, so a route
+        /// child's position follows its route's `childRoot`).
+        let position: PositionValue?
         /// advance: how many seconds of live animation to run. The op walks
         /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
         /// scenario exercises the app's live tick, not a re-implementation.
@@ -121,6 +126,34 @@ struct StudioScenario: Decodable {
         /// assert only: the outfit the named character's live preview
         /// assembled, read from the rendered preview (not the document).
         let outfit: OutfitValue?
+        /// setClothesState: the clothes state 0...3 (on, half, half 2, off)
+        /// for the CharaStudio row in `index` (0 top ... 7 shoes).
+        let state: Int?
+        /// assert only: the named character's live wear readback (rendered
+        /// preview and document); only the fields present are compared.
+        let clothes: ClothesValue?
+
+        struct ClothesValue: Decodable {
+            let key: Int32
+            /// the nine clothes-state bytes the rendered preview holds.
+            let state: [Int]?
+            /// the embedded card's saved Status.clothesState as imported.
+            let saved: [Int]?
+            /// exactly the clothing kinds with at least one drawn renderer.
+            let rendered: [Int]?
+            /// exactly the accessory slots with at least one drawn renderer.
+            let accessories: [Int]?
+            /// exactly the slots whose rendered showAccessory flag is off.
+            let accessoriesOff: [Int]?
+            /// whether the document holds a wear edit (sourceClothesState or
+            /// sourceShowAccessory non-nil); false proves a return to saved.
+            let edited: Bool?
+            /// exact number of fallback lines (states drawn dressed instead).
+            let fallbacks: Int?
+            /// a substring one of the preview's wear diagnostics (current
+            /// fallbacks) or import diagnostics must contain.
+            let diagnosticContains: String?
+        }
 
         struct OutfitValue: Decodable {
             let key: Int32
@@ -206,6 +239,14 @@ struct StudioScenario: Decodable {
             /// angle is not known in advance and cannot be matched exactly.
             let nonZero: Bool?
         }
+        struct PositionValue: Decodable {
+            let key: Int32
+            /// the `captureObject` label to measure against: by default the
+            /// object must have moved beyond the numeric tolerance; `within`
+            /// flips the check to "it is still within that bound", like `fk`.
+            let from: String
+            let within: Float?
+        }
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
             let items: Int?
@@ -218,9 +259,9 @@ struct StudioScenario: Decodable {
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains,
-                 group, category, no, speed, on, bone, rotation, animation, fk,
+                 group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
-                 render, exportIdenticalToSource, errorContains, outfit
+                 render, exportIdenticalToSource, errorContains, outfit, state, clothes
         }
 
         init(from decoder: Decoder) throws {
@@ -263,6 +304,7 @@ struct StudioScenario: Decodable {
             rotation = try c.decodeIfPresent([Float].self, forKey: .rotation)
             animation = try c.decodeIfPresent(AnimationValue.self, forKey: .animation)
             fk = try c.decodeIfPresent(FKValue.self, forKey: .fk)
+            position = try c.decodeIfPresent(PositionValue.self, forKey: .position)
             seconds = try c.decodeIfPresent(Float.self, forKey: .seconds)
             dx = try c.decodeIfPresent(Float.self, forKey: .dx)
             dy = try c.decodeIfPresent(Float.self, forKey: .dy)
@@ -279,6 +321,8 @@ struct StudioScenario: Decodable {
             exportIdenticalToSource = try c.decodeIfPresent(String.self, forKey: .exportIdenticalToSource)
             errorContains = try c.decodeIfPresent(String.self, forKey: .errorContains)
             outfit = try c.decodeIfPresent(OutfitValue.self, forKey: .outfit)
+            state = try c.decodeIfPresent(Int.self, forKey: .state)
+            clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
             // setPoseMode / selectBone / dragGizmo parameters: like every
             // optional key above, an absent one stays `nil` and the op that
             // needs it reports the missing field itself.
@@ -404,6 +448,8 @@ struct StudioScenario: Decodable {
         }
         /// Positions recorded by `captureBone` steps, keyed by step name.
         var capturedBonePositions: [String: Float3] = [:]
+        /// World positions recorded by `captureObject` steps, keyed by step name.
+        var capturedObjectPositions: [String: Float3] = [:]
         /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
         var capturedRenders: [String: (width: Int, height: Int, bytes: [UInt8])] = [:]
         /// The single headless render size every `captureRender` uses, so a
@@ -613,6 +659,34 @@ struct StudioScenario: Decodable {
             return nil
         }
 
+        /// An object's world displacement from a `captureObject` position, read
+        /// through `StudioModel.sourceObjectWorldMatrix` (the placement walk
+        /// `refresh()` renders with), so it measures what the view shows.
+        func assertPosition(_ step: Step) -> String? {
+            guard let check = step.position else { return nil }
+            guard let id = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id else {
+                return "assert position: no object with source key \(check.key)"
+            }
+            guard let base = capturedObjectPositions[check.from] else {
+                return "assert position: no captureObject position recorded under \"\(check.from)\""
+            }
+            let now: Float3
+            do { now = try studio.sourceObjectWorldMatrix(id).translation }
+            catch { return "assert position: object \(check.key) world position unavailable: \(error)" }
+            let dx = now.x - base.x, dy = now.y - base.y, dz = now.z - base.z
+            let moved = (dx * dx + dy * dy + dz * dz).squareRoot()
+            if let bound = check.within {
+                guard moved <= bound else {
+                    return "assert position: object \(check.key) sits \(moved) from \"\(check.from)\" at (\(now.x), \(now.y), \(now.z)), expected it held within \(bound)"
+                }
+            } else {
+                guard moved > tolerance else {
+                    return "assert position: object \(check.key) moved only \(moved) from \"\(check.from)\" — it did not move"
+                }
+            }
+            return nil
+        }
+
         /// The rendered preview of the character a key-carrying assert names:
         /// the same live engine object the inspector's readouts use, so the
         /// eye look, blink and hand-pattern asserts read the app's own state.
@@ -725,6 +799,34 @@ struct StudioScenario: Decodable {
                 details.append("\(property): conversionMissing, source ID \(found.sourceID), diagnosed")
             }
             return nil
+        }
+
+        /// The live wear readback (ST-C03): the rendered preview's clothes
+        /// state, drawn garments/accessories and fallbacks, plus whether the
+        /// document holds a wear edit.
+        func assertClothes(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.clothes else { return nil }
+            guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key }),
+                  let preview = studio.sourceShapePreview(for: object.id) else {
+                return "assert clothes: source key \(check.key) is not a rendered character"
+            }
+            let evaluation = preview.wearEvaluation
+            let off = preview.showAccessory.indices.filter { !preview.showAccessory[$0] }
+            let edited = object.sourceClothesState != nil || object.sourceShowAccessory != nil
+            func list<T>(_ values: [T]) -> String { "[" + values.map { "\($0)" }.joined(separator: ",") + "]" }
+            details.append("clothes \(check.key): state \(list(preview.clothesState)), saved \(list(preview.savedWear.clothesState)), loaded \(list(preview.loadedClothesState)), shoesType \(preview.savedWear.shoesType); garments drawn \(list(evaluation.renderedClothing)) of \(list(preview.wearLayout.clothingKinds)); accessories drawn \(list(evaluation.renderedAccessories)), off \(list(off)); body alpha (\(evaluation.bodyAlpha.x), \(evaluation.bodyAlpha.y)); document edited \(edited); fallbacks \(evaluation.fallbacks)")
+            var problems: [String] = []
+            if let expected = check.state, preview.clothesState.map(Int.init) != expected { problems.append("state is \(list(preview.clothesState)), expected \(list(expected))") }
+            if let expected = check.saved, preview.savedWear.clothesState.map(Int.init) != expected { problems.append("saved state is \(list(preview.savedWear.clothesState)), expected \(list(expected))") }
+            if let expected = check.rendered, evaluation.renderedClothing != expected.sorted() { problems.append("drawn garments are \(list(evaluation.renderedClothing)), expected \(list(expected.sorted()))") }
+            if let expected = check.accessories, evaluation.renderedAccessories != expected.sorted() { problems.append("drawn accessories are \(list(evaluation.renderedAccessories)), expected \(list(expected.sorted()))") }
+            if let expected = check.accessoriesOff, off != expected.sorted() { problems.append("hidden accessory slots are \(list(off)), expected \(list(expected.sorted()))") }
+            if let expected = check.edited, edited != expected { problems.append("document wear edit is \(edited), expected \(expected)") }
+            if let expected = check.fallbacks, evaluation.fallbacks.count != expected { problems.append("\(evaluation.fallbacks.count) fallbacks, expected \(expected)") }
+            if let needle = check.diagnosticContains, !(preview.wearDiagnostics + preview.diagnostics).contains(where: { $0.contains(needle) }) {
+                problems.append("no wear or import diagnostic contains \"\(needle)\"")
+            }
+            return problems.isEmpty ? nil : "assert clothes: character \(check.key) " + problems.joined(separator: "; ")
         }
 
         scenarioLoop: for step in scenario.steps {
@@ -866,6 +968,35 @@ struct StudioScenario: Decodable {
                     let matched = String(describing: error).contains(expected)
                     record(step, matched && unchanged, matched && unchanged ? "refused as expected, document and preview unchanged: \(error)"
                         : "expected a refusal containing \"\(expected)\" that leaves the outfit unchanged; received \(error), unchanged=\(unchanged)")
+                }
+            case "setClothesState", "setAccessoryVisible":
+                let op = step.op
+                guard let id = object(step) else { record(step, false, "\(op): no object with source key \(step.key ?? -1)"); continue }
+                guard let index = step.index else { record(step, false, "\(op): index (the clothes row 0...7 or accessory slot 0...19) is required"); continue }
+                guard op == "setAccessoryVisible" ? step.on != nil : step.state != nil else {
+                    record(step, false, op == "setAccessoryVisible" ? "setAccessoryVisible: on is required" : "setClothesState: state (0...3) is required"); continue
+                }
+                // The Clothes tab's rows and accessory toggles call the same
+                // StudioModel methods, so the lane drives the app's path.
+                let before = (studio.doc.object(id)?.sourceClothesState, studio.doc.object(id)?.sourceShowAccessory,
+                              studio.sourceShapePreview(for: id).map { ($0.clothesState, $0.showAccessory, ObjectIdentifier($0)) })
+                do {
+                    if op == "setAccessoryVisible" { try studio.setSourceAccessoryVisible(id, slot: index, visible: step.on!) }
+                    else { try studio.setSourceClothesState(id, kind: index, state: step.state!) }
+                    if let expected = step.errorContains {
+                        record(step, false, "\(op): the edit was accepted, expected a refusal containing \"\(expected)\"")
+                    } else {
+                        let preview = studio.sourceShapePreview(for: id), object = studio.doc.object(id)
+                        record(step, true, "source key \(step.key!) \(op) \(index) -> \(step.state.map(String.init) ?? String(step.on!)); rendered state \(preview.map { $0.clothesState.map(String.init).joined(separator: ",") } ?? "none"), drawn garments \(preview.map { $0.wearEvaluation.renderedClothing.map(String.init).joined(separator: ",") } ?? "none"), drawn accessories \(preview.map { $0.wearEvaluation.renderedAccessories.map(String.init).joined(separator: ",") } ?? "none"), document edited \(object?.sourceClothesState != nil || object?.sourceShowAccessory != nil)")
+                    }
+                } catch {
+                    guard let expected = step.errorContains else { record(step, false, "\(op): \(error)"); continue }
+                    let after = studio.sourceShapePreview(for: id)
+                    let unchanged = studio.doc.object(id)?.sourceClothesState == before.0 && studio.doc.object(id)?.sourceShowAccessory == before.1
+                        && after.map(ObjectIdentifier.init) == before.2?.2 && after?.clothesState == before.2?.0 && after?.showAccessory == before.2?.1
+                    let matched = String(describing: error).contains(expected)
+                    record(step, matched && unchanged, matched && unchanged ? "refused as expected, document and preview unchanged: \(error)"
+                        : "expected a refusal containing \"\(expected)\" that leaves the wear unchanged; received \(error), unchanged=\(unchanged)")
                 }
             case "setAnimation":
                 guard let id = object(step) else { record(step, false, "setAnimation: no object with source key \(step.key ?? -1)"); continue }
@@ -1068,6 +1199,16 @@ struct StudioScenario: Decodable {
                     capturedBonePositions[label] = position
                     record(step, true, "captured bone \(boneID) at (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureBone: \(error)") }
+            case "captureObject":
+                guard let id = object(step) else { record(step, false, "captureObject: no object with source key \(step.key ?? -1)"); continue }
+                guard let label = step.name, !label.isEmpty else {
+                    record(step, false, "captureObject: name (the capture label) is required"); continue
+                }
+                do {
+                    let position = try studio.sourceObjectWorldMatrix(id).translation
+                    capturedObjectPositions[label] = position
+                    record(step, true, "captured object \(step.key!) world position (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
+                } catch { record(step, false, "captureObject: \(error)") }
             case "captureRender":
                 guard let label = step.name, !label.isEmpty else {
                     record(step, false, "captureRender: name (the capture label) is required"); continue
@@ -1252,6 +1393,7 @@ struct StudioScenario: Decodable {
                 // The eye look, blink and hand-pattern checks resolve their
                 // own character by the source key inside the check value,
                 // like `animation`/`fk`.
+                if let problem = assertPosition(step) { problems.append(problem) }
                 if let problem = assertEyeLook(step) { problems.append(problem) }
                 if let problem = assertBlink(step) { problems.append(problem) }
                 if let problem = assertHandPattern(step) { problems.append(problem) }
@@ -1261,6 +1403,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertRender(step, details: &details) { problems.append(problem) }
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
                 if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
+                if let problem = assertClothes(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
                     let diagnostics = studio.doc.sourcePreviewDiagnostics ?? []
                     if !diagnostics.contains(where: { $0.contains(needle) }) {
