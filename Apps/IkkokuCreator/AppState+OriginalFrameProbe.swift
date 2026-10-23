@@ -19,14 +19,29 @@ extension AppState {
                 try CaptureOutput.writePNG(probe.captureGeometry(resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, depthNormals: depth), to: output.appendingPathComponent(name))
             }
             let translatedProgram = output.appendingPathComponent("shaders/main_opaque/program.json")
+            let eyeProgram = output.appendingPathComponent("shaders/toon_eye_lod0/program.json")
+            let secondaryUVs = output.appendingPathComponent("mesh-0-uv3.bin")
+            // The translated renders are optional diagnostics, but IKKOKU_ORIGINAL_FRAME_FAMILIES=1
+            // requests the per-family ones: their inputs are then required instead of
+            // silently skipped (A06).
+            let familiesRequested = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_FAMILIES"] == "1"
+            if familiesRequested {
+                let required: [URL] = [translatedProgram, eyeProgram, secondaryUVs]
+                let missing = required.filter { !FileManager.default.fileExists(atPath: $0.path) }.map { $0.path }
+                guard missing.isEmpty else {
+                    throw OriginalFrameProbe.ProbeError.invalid("IKKOKU_ORIGINAL_FRAME_FAMILIES=1 needs \(missing.joined(separator: ", "))")
+                }
+            }
             if FileManager.default.fileExists(atPath: translatedProgram.path) {
                 try CaptureOutput.writePNG(probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue), to: output.appendingPathComponent("native-main_opaque.png"))
-                if FileManager.default.fileExists(atPath: output.appendingPathComponent("shaders/toon_eye_lod0/program.json").path) && FileManager.default.fileExists(atPath: output.appendingPathComponent("mesh-0-uv3.bin").path) {
+                if FileManager.default.fileExists(atPath: eyeProgram.path) && FileManager.default.fileExists(atPath: secondaryUVs.path) {
                     let all = try probe.captureTranslatedShader(frameURL: input, programURL: translatedProgram, resources: host.renderer.resources, queue: host.renderer.gpu.commandQueue, allFamilies: true)
                     try CaptureOutput.writePNG(all, to: output.appendingPathComponent("native-translated.png"))
-                    if ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_FAMILIES"] == "1",
-                       let source = try? JSONSerialization.jsonObject(with: Data(contentsOf: input)) as? [String: Any],
-                       let meshes = source["meshes"] as? [[String: Any]] {
+                    if familiesRequested {
+                        guard let source = try JSONSerialization.jsonObject(with: Data(contentsOf: input)) as? [String: Any],
+                              let meshes = source["meshes"] as? [[String: Any]] else {
+                            throw OriginalFrameProbe.ProbeError.invalid("IKKOKU_ORIGINAL_FRAME_FAMILIES=1 needs a meshes array in \(input.path)")
+                        }
                         let families = Set(meshes.flatMap { $0["materials"] as? [[String: Any]] ?? [] }.compactMap { ($0["shader"] as? String)?.components(separatedBy: "/").last }.filter { $0 != "shadowcast" })
                         for family in families.sorted() {
                             let program = output.appendingPathComponent("shaders/\(family)/program.json")

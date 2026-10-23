@@ -69,3 +69,86 @@ import simd
     #expect(a.rotations["head"] == Float3(15, 5, 0))
     #expect(a.scales["head"] == Float3(repeating: 1.2))
 }
+
+// MARK: - Prototype gaze contracts (R4)
+
+private func gazeSkeleton() throws -> Skeleton {
+    try Skeleton(bones: [
+        Skeleton.Bone(name: "root", parent: nil), Skeleton.Bone(name: "neck", parent: 0, restTranslation: Float3(0, 1.45, 0)),
+        Skeleton.Bone(name: "head", parent: 1, restTranslation: Float3(0, 0.08, 0.01)),
+        Skeleton.Bone(name: "eye_L", parent: 2, restTranslation: Float3(0.03, 0.06, 0.08)),
+        Skeleton.Bone(name: "eye_R", parent: 2, restTranslation: Float3(-0.03, 0.06, 0.08))])
+}
+
+/// The former `CharacterInstance.applyGaze` body, the unchecked reference.
+private func formerGaze(_ pose: Pose, _ skel: Skeleton, root rootMatrix: float4x4, target gazeTarget: Float3, headLook: Bool) -> Pose {
+    var target = gazeTarget
+    var p = pose
+    let rootInv = rootMatrix.inverse
+    if let hi = skel["head"] {
+        let headPos = (rootMatrix * p.worldMatrices(skeleton: skel)[hi]).translation
+        let d = target - headPos
+        let minDist: Float = 1.6
+        if length(d) < minDist, length_squared(d) > 1e-6 { target = headPos + normalize(d) * minDist }
+    }
+    let localTarget = rootInv.transformPoint(target)
+    if headLook, let hi = skel["head"] {
+        let m = p.worldMatrices(skeleton: skel)[hi]
+        let d = m.inverse.transformPoint(localTarget)
+        if length_squared(d) > 1e-6 {
+            let dn = normalize(d)
+            var yaw = atan2(dn.x, max(dn.z, 0.05)), pitch = atan2(-dn.y, max(dn.z, 0.05))
+            yaw = clamp(yaw, -0.6, 0.6); pitch = clamp(pitch, -0.35, 0.35)
+            let qh = simd_quatf(angle: yaw * 0.7, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch * 0.7, axis: Float3(1, 0, 0))
+            p.rotations[hi] = (p.rotations[hi] * qh).normalized
+            if let ni = skel["neck"] {
+                let qn = simd_quatf(angle: yaw * 0.3, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch * 0.3, axis: Float3(1, 0, 0))
+                p.rotations[ni] = (p.rotations[ni] * qn).normalized
+            }
+        }
+    }
+    let world = p.worldMatrices(skeleton: skel)
+    for name in ["eye_L", "eye_R"] {
+        guard let ei = skel[name], ei < world.count else { continue }
+        let dir = world[ei].inverse.transformPoint(localTarget)
+        guard length_squared(dir) > 1e-6 else { continue }
+        let d = normalize(dir)
+        var yaw = atan2(d.x, max(d.z, 0.05))
+        var pitch = atan2(-d.y, max(d.z, 0.05))
+        let limit: Float = 0.42
+        yaw = clamp(yaw, -limit, limit); pitch = clamp(pitch, -limit * 0.7, limit * 0.7)
+        let q = simd_quatf(angle: yaw, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch, axis: Float3(1, 0, 0))
+        p.rotations[ei] = (p.rotations[ei] * q).normalized
+    }
+    return p
+}
+
+@Test func characterGazeMatchesFormerGazeAndKeepsDegenerateFramesUnchanged() throws {
+    let skeleton = try gazeSkeleton()
+    var pose = skeleton.restPose
+    pose.rotations[1] = simd_quatf(angle: 0.2, axis: Float3(0, 1, 0))
+    let root = Transform.trs(Float3(0.5, 0, -1), simd_quatf(angle: 0.6, axis: Float3(0, 1, 0)), Float3(repeating: 1.05))
+    // Far, near (inside the convergence limit) and off-axis targets, with and without head look.
+    let targets = [Float3(2, 1.8, 3), Float3(0.6, 1.6, -0.6), Float3(-3, 0.5, -2)]
+    for target in targets {
+        for headLook in [false, true] {
+            let gazed = CharacterGaze.apply(to: pose, skeleton: skeleton, rootMatrix: root, target: target, headLook: headLook)
+            #expect(gazed == formerGaze(pose, skeleton, root: root, target: target, headLook: headLook))
+            #expect(gazed != pose)
+        }
+    }
+
+    let target = targets[0]
+    // A nonfinite target, a root without an inverse or a pose of another skeleton leaves the pose unchanged.
+    #expect(CharacterGaze.apply(to: pose, skeleton: skeleton, rootMatrix: root, target: Float3(.nan, 1, 1), headLook: true) == pose)
+    #expect(CharacterGaze.apply(to: pose, skeleton: skeleton, rootMatrix: Transform.scale(0), target: target, headLook: true) == pose)
+    let short = try Skeleton(bones: [Skeleton.Bone(name: "root", parent: nil)]).restPose
+    #expect(CharacterGaze.apply(to: short, skeleton: skeleton, rootMatrix: root, target: target, headLook: true) == short)
+    // A collapsed eye has no frame to aim: it keeps its rotation while the other eye still turns.
+    var collapsed = pose
+    collapsed.scales[3] = .zero
+    let gazed = CharacterGaze.apply(to: collapsed, skeleton: skeleton, rootMatrix: root, target: target, headLook: false)
+    #expect(gazed.rotations[3].vector == collapsed.rotations[3].vector)
+    #expect(gazed.rotations[4].vector != collapsed.rotations[4].vector)
+    #expect(gazed.rotations.allSatisfy { q in (0..<4).allSatisfy { q.vector[$0].isFinite } })
+}

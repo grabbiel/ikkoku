@@ -62,6 +62,23 @@ The retained 2026-09-25 evidence reports three native package tests and one
 original-fixture Python packaging test passing. This documentation revision did
 not rerun them. Missing fixture variables skip the original-assembly comparison.
 
+The [plugin library](plugin-execution.md#plugin-library) indexes adapter packages
+as `ikkoku-native-plugin-adapter` revisions. It is the P-T02 first slice and has
+synthetic tests only. Its scanner accepts an adapter manifest only when the
+source digest is in this registry and the adapter ID, type, identity and process
+list are identical. The scanner never runs the assembly.
+
+Adapter manifests declare no BepInEx dependencies or incompatibilities. In the
+shared graph, a translated package may depend on an adapter GUID with a minimum
+version, but an adapter itself requires nothing. If a registered plugin declares
+dependencies, the registry must record them first.
+
+Library selections verify adapter packages through `SourceNativePluginPackage.load`.
+Stand-in assembly bytes fail with a `revisionInvalid` error that names the
+revision. The app still mounts adapters from individual manifests and saves
+`sourceNativePlugins` references. Restoring adapters from a library selection is
+pending.
+
 ## Startup and acceptance
 
 SwiftUI constructs `AppState` before `NSApplication` exists. Environment and
@@ -88,7 +105,10 @@ records the mounted package references, whether `NSApplication` existed, the
 observer count and the pending initial sample. After each event it also records
 master and voice gain plus the RMS of a generated 440 Hz tone rendered offline
 through the app's voice and master mixers. Tone capture refuses running audio
-output and returns the bus to realtime mode with its gains unchanged.
+output and returns the bus to realtime mode with its gains unchanged. Startup
+rejects either variable without `IKKOKU_AUTOCAPTURE` (an app or native-scene
+capture), so a run that requests the report always exits, nonzero if the report
+fails (A06; see [capture request validation](../../guides/build-and-test.md#capture-request-validation)).
 
 ST-T02/A-T04 acceptance is the release probe with both packages and the IR fixture:
 

@@ -215,7 +215,9 @@ and garment on the body, and a morph-target contact sheet to
 * **Package containment.** Catalog entries are package loads:
   `AssetLibrary.asset(_:)` loads a relative catalog path with
   `GLBLoader.load(url:packageRoot:)` under the asset root (`IKKOKU_ASSETS`, the app
-  bundle's resources or the source tree's `Assets/`). The asset file must resolve inside
+  bundle's resources or the source tree's `Assets/`; `IKKOKU_SOURCE_TREE_FALLBACKS=0`
+  disables the source-tree root, see
+  [Release packaging](../guides/build-and-test.md#package-and-inspect-a-release-build)). The asset file must resolve inside
   that root after symlinks. Each external buffer/image URI must be a canonical
   relative path after percent-decoding (no scheme or drive, absolute path,
   backslash, NUL, or empty, `.` or `..` segment), and its `realpath` must stay inside

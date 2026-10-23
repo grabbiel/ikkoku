@@ -18,6 +18,19 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[3]
 VERSION = 4
+# ILSpy error-stub markers in recovered C#. Recovery status and every consumer
+# (analysis/recovered_source.py) share this one definition.
+ERROR_STUB = re.compile(r'DecompilerException|Error decompiling|//\s*System\.\w+Exception:')
+
+
+def has_error_stub(text: str) -> bool:
+    return bool(ERROR_STUB.search(text))
+
+
+def project_file(project: str, type_name: str) -> str:
+    """ILSpy project layout: one dotted namespace directory, arity-free type filename."""
+    namespace, _, name = type_name.rpartition('.')
+    return (Path(project) / namespace / (re.sub(r'`\d+', '', name) + '.cs')).as_posix()
 
 
 def sha(path: Path) -> str:
@@ -68,7 +81,7 @@ def inventory_tree(stage: Path) -> tuple[list[dict], list[dict]]:
         if path.suffix == '.cs':
             text = path.read_text(errors='replace')
             for number, line in enumerate(text.splitlines(), 1):
-                if 'DecompilerException' in line or 'Error decompiling' in line or re.search(r'//\s*System\.\w+Exception:', line):
+                if has_error_stub(line):
                     diagnostics.append({'file': relative, 'line': number, 'message': line.strip()[:512]})
     return files, diagnostics
 
@@ -131,7 +144,7 @@ def recover(assembly: Path, references: Path, tool: Path, output: Path, tool_ver
             file = directory / f'{index:04}.cs'
             metadata_name = metadata_type_name(name, definitions)
             result = run(fallback_tool, assembly, ['-r', str(references), '-t', metadata_name], file, timeout)
-            has_stub = bool(re.search(r'DecompilerException|Error decompiling|//\s*System\.\w+Exception:', file.read_text(errors='replace')))
+            has_stub = has_error_stub(file.read_text(errors='replace'))
             overrides.append({'type': metadata_name, 'file': file.relative_to(stage).as_posix(), **result, 'hasErrorStub': has_stub,
                 'failedTokens': sorted({e['token'] for e in primary_errors if e['member'].rsplit('.', 1)[0].rstrip('.') == name})})
         if all(entry['exitCode'] == 0 and not entry['hasErrorStub'] and (stage / entry['file']).stat().st_size > 0 for entry in overrides):
@@ -159,9 +172,7 @@ def recover(assembly: Path, references: Path, tool: Path, output: Path, tool_ver
     for override in overrides:
         if override['exitCode'] != 0 or override['hasErrorStub'] or not (stage / override['file']).stat().st_size:
             continue
-        namespace, _, name = override['type'].rpartition('.')
-        filename = re.sub(r'`\d+', '', name) + '.cs'
-        superseded_files.add((Path('project') / namespace / filename).as_posix())
+        superseded_files.add(project_file('project', override['type']))
     unresolved_diagnostics = [d for d in diagnostics if d['file'] not in superseded_files]
     core_ok = all(commands[name]['exitCode'] == 0 for name in ['il', 'TypeDef', 'MethodDef', 'AssemblyRef', 'TypeRef'])
     # Primary error stubs remain preserved as evidence; every reported failed

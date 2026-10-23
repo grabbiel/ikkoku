@@ -44,6 +44,9 @@ final class MakerModel: ViewportInputHandler {
     var status = ""
     var sourceRigPreview: SourceRigPreview?
     @ObservationIgnored private(set) var sourceRigURL: URL?
+    /// Why the last automatic original-base load fell back to the bundled character, or
+    /// nil. An automated run that named the base explicitly exits on it (A06).
+    @ObservationIgnored private(set) var sourceAvatarFailure: String?
     @ObservationIgnored private var sourceMakerLibrary: SourceMakerLibrary?
     @ObservationIgnored private var sourcePreparedAssets: SourceMakerLibrary.Prepared?
     var sourceAssetSelections: [SourceMakerLibrary.Selection] = []
@@ -232,11 +235,13 @@ final class MakerModel: ViewportInputHandler {
     }
 
     private func loadDefaultSourceAvatar(sex: Sex = .female) {
+        sourceAvatarFailure = nil
         do {
             guard let url = try EngineHost.locateSourceAvatar(sex: sex) else { return }
             try openSourceRig(url: url)
         } catch {
             status = "Could not load original base: \(error). Loaded bundled character."
+            sourceAvatarFailure = "\(error)"
             print("[ikkoku] \(status)")
         }
     }

@@ -6,6 +6,7 @@ Stdlib only. Run from the repository root with:
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -683,6 +684,71 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertTrue(capture["env"]["IKKOKU_CAPTURE_UI"].endswith(".png"))
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
+
+    def test_capture_only_plugin_evidence_runs_inside_a_capture(self):
+        # A06: the app rejects IKKOKU_NATIVE_PLUGIN_REPORT and IKKOKU_APPLICATION_FOCUS
+        # without IKKOKU_AUTOCAPTURE, the capture that ends the headless run; before,
+        # such a launch stayed open and the check could only time out.
+        checked = 0
+        for lane, check in self.app_smoke_checks():
+            env = check.get("env", {})
+            if "IKKOKU_NATIVE_PLUGIN_REPORT" in env or "IKKOKU_APPLICATION_FOCUS" in env:
+                checked += 1
+                self.assertIn("IKKOKU_AUTOCAPTURE", env, "%s/%s" % (lane, check["id"]))
+        self.assertGreater(checked, 0)
+
+    def test_each_app_check_selects_at_most_one_capture_mode(self):
+        with open(CAPTURE_REQUEST_SOURCE, encoding="utf-8") as handle:
+            selectors = re.findall(r'ModeSelector\("(IKKOKU_[A-Z0-9_]+)",', handle.read())
+        self.assertIn("IKKOKU_CAPTURE_RIG", selectors)
+        for lane, check in self.app_smoke_checks():
+            names = set(check.get("env", {})) | {fixture["env"] for fixture in check.get("fixtures", [])}
+            chosen = sorted(names.intersection(selectors))
+            self.assertLessEqual(len(chosen), 1, "%s/%s selects %s" % (lane, check["id"], chosen))
+
+
+CAPTURE_REQUEST_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sources", "Renderer",
+                                      "CaptureRequest.swift")
+CAPTURE_OUTPUT_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sources", "Renderer",
+                                     "CaptureOutput.swift")
+# Whole variable names; the capture prefixes such as "IKKOKU_CAPTURE_" end in "_".
+IKKOKU_LITERAL = re.compile(r'"(IKKOKU_[A-Z0-9_]*[A-Z0-9])"')
+
+
+def _ikkoku_literals(*paths):
+    names = set()
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            names.update(IKKOKU_LITERAL.findall(handle.read()))
+    return names
+
+
+class CaptureRequestInventoryTests(unittest.TestCase):
+    """A06: the startup capture check classifies every variable the app reads.
+
+    `CaptureRequest.validate` rejects a capture option outside the modes that
+    read it and an unknown `IKKOKU_CAPTURE_*` name, so an app variable missing
+    from its inventory would be rejected or go unchecked. The Swift tests cover
+    the rules; this keeps the inventory and the app's reads in step.
+    """
+
+    def app_variables(self):
+        sources = []
+        for root, _, files in os.walk(os.path.join(run.REPO_ROOT, "Apps", "IkkokuCreator")):
+            sources.extend(os.path.join(root, name) for name in files if name.endswith(".swift"))
+        self.assertTrue(sources)
+        return _ikkoku_literals(*sources)
+
+    def test_every_variable_the_app_reads_is_classified(self):
+        # IKKOKU_CAPTURE_UI_TIMEOUT is the UICaptureReadiness constant in CaptureOutput.swift.
+        inventory = _ikkoku_literals(CAPTURE_REQUEST_SOURCE, CAPTURE_OUTPUT_SOURCE)
+        missing = sorted(self.app_variables() - inventory)
+        self.assertEqual(missing, [], "add these to CaptureRequest's inventory: %s" % missing)
+
+    def test_inventory_names_only_variables_the_app_reads(self):
+        read = self.app_variables() | _ikkoku_literals(CAPTURE_OUTPUT_SOURCE)
+        stale = sorted(_ikkoku_literals(CAPTURE_REQUEST_SOURCE) - read)
+        self.assertEqual(stale, [], "the app no longer reads: %s" % stale)
 
 
 class StudioScenarioLaneTests(unittest.TestCase):
