@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**809 files indexed; 809 assigned; 0 unassigned.**
+**812 files indexed; 812 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,18 +31,18 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 302 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 136 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 139 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
-| Build / repository configuration | 7 |
-| Conversion / recovery / verification tool | 165 |
+| Build / repository configuration | 8 |
+| Conversion / recovery / verification tool | 166 |
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
 | Runtime / shared shader declaration | 174 |
-| Test / validation | 162 |
+| Test / validation | 163 |
 
 ## App / gameplay / plugins
 
@@ -783,11 +783,13 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/reverse/test_recover_managed.py](../../Tools/reverse/test_recover_managed.py) | Test / validation |
 | [Tools/reverse/vm_source.py](../../Tools/reverse/vm_source.py) | Conversion / recovery / verification tool |
 | [Tools/verification/README.md](../../Tools/verification/README.md) | Documentation / historical evidence |
+| [Tools/verification/app-bundle-rules.json](../../Tools/verification/app-bundle-rules.json) | Build / repository configuration |
 | [Tools/verification/checks/studio_inspector_report.py](../../Tools/verification/checks/studio_inspector_report.py) | Conversion / recovery / verification tool |
 | [Tools/verification/checks/test_studio_inspector_report.py](../../Tools/verification/checks/test_studio_inspector_report.py) | Test / validation |
 | [Tools/verification/doctor-samples.json](../../Tools/verification/doctor-samples.json) | Reference host / controlled fixture |
 | [Tools/verification/doctor.py](../../Tools/verification/doctor.py) | Conversion / recovery / verification tool |
 | [Tools/verification/environment.example.json](../../Tools/verification/environment.example.json) | Conversion / recovery / verification tool |
+| [Tools/verification/inspect_app_bundle.py](../../Tools/verification/inspect_app_bundle.py) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/app-smoke.json](../../Tools/verification/lanes/app-smoke.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/maker.json](../../Tools/verification/lanes/maker.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/maker-scenarios.json](../../Tools/verification/lanes/maker-scenarios.json) | Conversion / recovery / verification tool |
@@ -838,6 +840,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/undo-route.json](../../Tools/verification/scenarios/undo-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
+| [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |
 | [docs/README.md](../../docs/README.md) | Documentation / historical evidence |
 | [docs/architecture.md](../../docs/architecture.md) | Documentation / historical evidence |

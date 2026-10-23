@@ -21,7 +21,9 @@ Ikkoku JSON in an `iTXt` chunk. ⇧⌘T sends a bundled character to Studio. Cho
 
 Maker discovers `.local/reverse/rigs/source-avatar.json` and its appearance
 sidecar. `IKKOKU_SOURCE_AVATAR` overrides the path; missing default content falls
-back to bundled assets, while malformed content reports an error. **File → Open
+back to bundled assets, while malformed content reports an error. That default is
+inside the checkout the app was built from; `IKKOKU_SOURCE_TREE_FALLBACKS=0`
+turns it off (see [Release packaging](build-and-test.md#package-and-inspect-a-release-build)). **File → Open
 Source Rig…** opens an explicit converted rig. The
 [character references](../README.md#character-and-maker) document conversion inputs.
 

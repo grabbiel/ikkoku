@@ -399,10 +399,52 @@ run) or `format sample` (layout only, illustrative numbers). It also fails
 when the generated table, a restated version (`statedIn`) or the public tier
 drifts from the prerequisites file.
 
+## Release bundle inspector (T-T02)
+
+```sh
+python3 Tools/verification/inspect_app_bundle.py \
+  .local/build-release/Build/Products/Release/Ikkoku.app \
+  --report .local/verification/reports/release-bundle.json
+```
+
+`inspect_app_bundle.py` is stdlib-only and checks a built `.app` against
+`app-bundle-rules.json`, the reviewed list of what a Release bundle must and
+must not contain. Each rule states its reason. It reads the bundle, and runs
+`git ls-files`, `rev-parse` and `status` in `--checkout` (default: this
+repository). It never launches the app. Any error finding gives exit 1; no
+error gives 0, and invalid arguments or rules give 2.
+
+| Check | Fails when |
+| --- | --- |
+| Required resources | `IkkokuShaders.metallib` (with its `MTLB` signature), `catalog.json` or `Assets.car` is missing or empty, or a model, mask or texture that `catalog.json` references is not under `Contents/Resources` (bare texture names resolve under `Textures/`, as in `AssetLibrary.texture`) |
+| Identity and architecture | Info.plist's executable, identifier or package type differ from the rules, or any Mach-O file lacks an `arm64` slice (`arm64e` alone does not count) |
+| Provenance | A file is neither a declared build product nor a git-tracked `Assets/` file at the path Xcode copies it to (an `explicitFolders` subfolder keeps its path; anything else lands directly in `Resources`), a membership-exception fixture ships, a tracked asset is absent, or a symlink leaves the bundle. A tracked asset whose bytes differ from the checkout is only a warning |
+| Private content | A `.local`, build/cache or original-installation path component (`abdata`, `BepInEx`, `Managed`, `UserData`, `decompiled`, `reverse` and others); recovered source (`.cs`, `.il`, `.csproj`, `.shader`); a managed assembly by name or PE header; a Unity asset bundle by name or `UnityFS`-style signature; a mod archive; Python bytecode; a PNG with bytes after `IEND`; or a card/scene keyword |
+| Build-machine paths | `/Users/`, `/home/`, `/private/var/folders/`, `/Volumes/`, `.local/` or the checkout root appear in Info.plist, a text resource, a PNG text chunk or a GLB JSON chunk |
+
+Compiled build products (the executable, metallib and `Assets.car`) are not
+failed for path strings. Their counts are recorded under `pathReferences`. The
+Swift 5 app target's `#file`/`#filePath` strings embed the checkout path in the
+executable. Image data and GLB binary chunks are not scanned, because random
+bytes can contain any short sequence.
+
+The report records the tool and rules hashes, the checkout revision and dirty
+flag, a bundle tree hash, Info.plist version keys (including
+`LSMinimumSystemVersion`), executable architectures, each required file's
+hash, catalog reference counts, every file with its size, hash and class
+(`build-product`, `tracked-asset`, `excluded-asset`, `unexpected` or `symlink`),
+and the findings. The rules target the Release product. A Debug build fails as
+`unexpected-file` on its `Ikkoku.debug.dylib` and preview dylibs.
+
+`test_inspect_app_bundle.py` runs in the `runner-self-tests` check with synthetic
+bundles only. It also checks that `explicitFolders`, the excluded fixtures,
+the product name and the bundle identifier match `Ikkoku.xcodeproj`, and that
+every reference in the checked-in `Assets/catalog.json` is a tracked asset.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request to `main`, every push to
-`main` and on manual dispatch. It runs three jobs on GitHub-hosted `macos-26`
+`main` and on manual dispatch. It runs four jobs on GitHub-hosted `macos-26`
 runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 
 - `public-lane` first runs `doctor.py --require public --verbose`, so a missing
@@ -416,6 +458,13 @@ runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 - `app-build` builds `IkkokuCreator` Debug with code signing disabled
   (`CODE_SIGNING_ALLOWED=NO`), because the runner has no development-team
   identity. It checks that the app compiles and links, and nothing more.
+- `release-package` (T-T02) runs `doctor.py --require app-build`, then builds
+  `IkkokuCreator` in the Release configuration, unsigned and `ARCHS=arm64`,
+  from the clean checkout. It zips the app with `ditto` and extracts it into
+  `$RUNNER_TEMP`, outside the checkout. It then runs the
+  [release bundle inspector](#release-bundle-inspector-t-t02) on that copy and
+  uploads the JSON report as the `release-bundle-report` artifact. The job
+  never launches the app.
 - `reverse-tools` (`macos-26`, Python 3.12) installs only the pinned
   `Tools/reverse/requirements.txt` and runs the `Tools/reverse` and
   `Tools/reverse/analysis` unittest suites. Without `.local/` they skip or
