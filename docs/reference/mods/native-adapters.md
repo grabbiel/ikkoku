@@ -105,7 +105,10 @@ records the mounted package references, whether `NSApplication` existed, the
 observer count and the pending initial sample. After each event it also records
 master and voice gain plus the RMS of a generated 440 Hz tone rendered offline
 through the app's voice and master mixers. Tone capture refuses running audio
-output and returns the bus to realtime mode with its gains unchanged.
+output and returns the bus to realtime mode with its gains unchanged. Startup
+rejects either variable without `IKKOKU_AUTOCAPTURE` (an app or native-scene
+capture), so a run that requests the report always exits, nonzero if the report
+fails (A06; see [capture request validation](../../guides/build-and-test.md#capture-request-validation)).
 
 ST-T02/A-T04 acceptance is the release probe with both packages and the IR fixture:
 
