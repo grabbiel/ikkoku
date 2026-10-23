@@ -246,6 +246,8 @@ def profile(args):
     by_binary = collections.Counter()
     self_time = collections.Counter()
     inclusive = collections.Counter()
+    callees = collections.Counter()
+    focus_pattern = re.compile(args.focus) if args.focus else None
     thread_pattern = re.compile(args.thread) if args.thread else None
     binary_pattern = re.compile(args.binary) if args.binary else None
     resolve = Resolver()
@@ -277,6 +279,13 @@ def profile(args):
         frames = stacks[key]
         if not frames:
             continue
+        if focus_pattern:
+            # Frames run leaf first: the outermost match owns the sample and
+            # the frame just inside it is the callee it is charged to.
+            outer = max((i for i, (name, _) in enumerate(frames) if focus_pattern.search(name)), default=None)
+            if outer is None:
+                continue
+            callees[frames[outer - 1][0] if outer > 0 else "<self>"] += weight
         total += weight
         self_time[frames[0][0]] += weight
         by_binary[frames[0][1]] += weight
@@ -298,6 +307,8 @@ def profile(args):
     table("self time by binary:", by_binary)
     table("self time by function:", self_time)
     table("inclusive time by function%s:" % (" in binaries matching %r" % args.binary if args.binary else ""), inclusive)
+    if focus_pattern:
+        table("direct callees of the outermost frame matching %r:" % args.focus, callees)
     return 0
 
 
@@ -324,6 +335,7 @@ def main(argv=None):
     prof.add_argument("--top", type=int, default=30)
     prof.add_argument("--binary", help="regular expression limiting the inclusive table to these binaries (e.g. 'Ikkoku')")
     prof.add_argument("--whole", action="store_true", help="ignore the recording marks")
+    prof.add_argument("--focus", help="regular expression: keep samples inside a matching frame and list what it spends its time calling")
     guard = sub.add_parser("_exec", help=argparse.SUPPRESS)
     guard.add_argument("--timeout", type=int, required=True)
     guard.add_argument("argv", nargs=argparse.REMAINDER)
