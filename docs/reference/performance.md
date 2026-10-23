@@ -22,8 +22,8 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    in this change remove repeated work without changing a single output byte
    (a rig name walk per catalog bone, a pose solved several times per tick,
    and the animation bindings resolved through dictionaries on every call).
-   They bring the tick to TBD-AFTER2-TICK ms, and the idle scene to
-   TBD-AFTER2-FPS FPS.
+   They bring the tick to 6.34 ms at 30 ticks per second, and the idle
+   scene to 120.0 FPS with no hitches.
 2. **SwiftUI work on every interactive edit.** Each orbit event, Maker
    slider write or FK drag event costs 7–25 ms of SwiftUI graph update and
    layout, because the Studio and Maker views observe whole documents and
@@ -153,6 +153,45 @@ covers the launch environments, the summary row, the export reader and the
 launch guard with synthetic data (it runs in the `runner-self-tests` check of
 the public lane).
 
+### Measuring a change
+
+Any task that may change the app's speed measures it this way:
+
+1. **Build Release** for the commit before the change and for the change,
+   each with its own derived data path (`xcodebuild -project Ikkoku.xcodeproj
+   -scheme IkkokuCreator -configuration Release -derivedDataPath <dir>
+   -destination platform=macOS,arch=arm64 build`). Debug numbers do not rank
+   costs (B1). Delete the builds when the runs are done.
+2. **Run the workloads that exercise the change** on both builds with
+   `perf_trace.py run --wrap <app lock script>`, so every launch takes the
+   machine-wide app lock and is bounded by its own timeout. Keep the
+   defaults (3 s warmup, 10 s recording) unless the change needs longer.
+   Write reports to the task's private `.local/<task>/` folder.
+3. **Check validity.** `run` repeats a launch whose window was not composited
+   (`--retries`, default 2), and `summarize` prints a `WARNING` for any run it
+   still distrusts. Never cite a warned run. Compare runs only from the same
+   machine, display and refresh rate (the report's `display` and `machine`
+   blocks), with no build or other heavy job running.
+4. **Report** the cost as ms per occurrence × rate per second, and as a share
+   of the 8.33 ms (120 Hz) and 16.7 ms (60 Hz) frame. Use the main busy time
+   and the model phases rather than presented FPS for saturated workloads,
+   whose FPS varies from run to run.
+5. **Attribute** a cost with one short Time Profiler run (`--xctrace "Time
+   Profiler" --seconds 5`) and `profile --thread "Main Thread" --focus
+   REGEX`. Traces are large: delete each one unless it is cited, and archive
+   cited ones outside the repository.
+6. **Renderer cost without the window**: `IKKOKU_AUTOCAPTURE` with
+   `IKKOKU_BENCHMARK_OUTPUT`, `IKKOKU_CAPTURE_W`/`_H` and
+   `IKKOKU_BENCHMARK_FRAMES` renders the frame offscreen and records CPU
+   encode, GPU and completion times.
+7. **Speed never changes output silently.** A change that should not alter
+   pixels keeps byte-identical captures. A quality trade-off is opt-in and
+   reported separately.
+
+A new workload is added in three places: `PerfWorkload.swift`, the
+`perfWorkloads` values in `CaptureRequest.swift` and `WORKLOADS` in
+`perf_trace.py`.
+
 ## Measurement setup
 
 Reference machine: Mac Studio `Mac14,14`, Apple M2 Ultra (24 CPU cores
@@ -176,8 +215,13 @@ of `7af03d6`, which merged `main` at `7c0b884`, with no quick win.
 | Debug | `xcodebuild … -configuration Debug -derivedDataPath .local/build` | `-Onone` |
 | Engine -O | the Debug app with a temporary, uncommitted `.unsafeFlags(["-O"])` on every Engine target in `Packages/Engine/Package.swift` | `-O` |
 | Release | `xcodebuild … -configuration Release -derivedDataPath .local/build-release ARCHS=arm64` | `-O` (whole module) |
-| … + quick wins 1–2 | Debug and Release on `5b01c92` (`.local/build-qw`, `.local/build-qw-release`) | as above |
-| … + quick wins 1–3 | Debug and Release on `0a19718` (`.local/build-qw3`, `.local/build-qw3-release`) | as above |
+| … + quick wins 1–2 | Debug and Release on `5b01c92` | as above |
+| … + quick wins 1–3 | Debug and Release on `0a19718` | as above |
+| merged head | Debug and Release on `0d4548a`: quick wins 1–3 with `main` at `5e86b57` (#127) merged | as above |
+| `main` | Debug and Release on `5e86b57`, without the harness, for the byte-identity captures | as above |
+
+The quick-win builds were deleted after their runs; every build here can be
+rebuilt from its commit.
 
 Debug numbers are reported for completeness only: the Engine is unoptimized
 Swift there, so its costs are 10–50× the optimized ones and they rank costs
@@ -227,9 +271,9 @@ How to read the table:
 
 Startup, seconds since process start (`startup` workload):
 
-| Build | appStateInit | engineReady | makerReady | Source scene import ends | appStateReady | firstDraw | Peak MiB |
+| Build | appStateInit | engineReady | makerReady | Source scene import (duration) | appStateReady | firstDraw | Peak MiB |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Release | 0.08 | 0.09 | 1.01 | 4.70 | 5.81 | 6.29 | 936 |
+| Release | 0.08 | 0.09 | 1.01 | 4.71 | 5.81 | 6.29 | 936 |
 | Engine -O | 0.07 | 0.09 | 1.00 | 4.67 | 5.76 | 6.21 | 937 |
 | Debug | 0.08 | 0.09 | 4.20 | 11.71 | 16.03 | 19.97 | 889 |
 
@@ -262,7 +306,7 @@ which the "per second" column shows.
 
 | Rank | Cost | ms per occurrence | % of 120 Hz / 60 Hz frame | Per second | Location | Root cause | Fix | Gain | Risk |
 | ---: | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Studio live tick, 6 source characters | 43.4 | 521% / 260% | 651 ms/s at 15 ticks/s (target 30) | `StudioModel.tick` → `SourceStudioCharacterPreview.frame`/`editedPose` | repeated work per tick (quick wins 1–3) and all character work serial on the main thread (M1) | quick wins 1–3 (this change), then C2, C3, M1 | 43.4 → TBD-AFTER2-TICK ms measured in the app; 30 ticks/s restored | low for 1–3 (byte-identical); high for M1 |
+| 1 | Studio live tick, 6 source characters | 43.4 | 521% / 260% | 651 ms/s at 15 ticks/s (target 30) | `StudioModel.tick` → `SourceStudioCharacterPreview.frame`/`editedPose` | repeated work per tick (quick wins 1–3) and all character work serial on the main thread (M1) | quick wins 1–3 (this change), then C2, C3, M1 | 43.4 → 6.34 ms measured in the app; 30 ticks/s restored | low for 1–3 (byte-identical); high for M1 |
 | 2 | SwiftUI update and layout per FK drag event | 24.5 | 294% / 147% | 673 ms/s at 27.5 drag events/s | `GraphHost.flushTransactions` for `StudioView`; `StudioModel.doc` didSet | an FK edit mutates `doc`; `StudioView.body` and its inspector read `model.doc`, so the whole window's view graph is re-evaluated and laid out again; each drag event also triggers two `refresh()` calls (55/s) | M2 + M3: per-panel observation, FK and camera state outside the observed document | most of 673 ms/s; target < 2 ms per event (hypothesis) | medium |
 | 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state | most of 775 ms/s (hypothesis) | low |
 | 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2 | as rank 2 | medium |
@@ -270,7 +314,7 @@ which the "per second" column shows.
 | 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move | M5 | ~2 ms per move | low; renderer file |
 | 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis) | low |
 | 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3 | 0.9 ms per event | medium |
-| 9 | Source scene load at startup | 4,700 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
+| 9 | Source scene load at startup | 4,710 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
 | 10 | Engine compiled `-Onone` in Debug | 1,753 per tick | — | 0 presented frames | `Packages/Engine` build settings | an unoptimized generic-heavy Engine | B1 | Debug idle tick 1,753 → ~43 ms (measured with Engine -O) | see B1 |
 
 The ranking is backed by this evidence (base Release traces):
@@ -314,10 +358,10 @@ No run was made on an M1. These are estimates from the reference numbers
 
 - **CPU.** One M1 performance core is roughly 0.8× an M2 Ultra performance
   core, so every main-thread cost above grows by ~1.25×. After the quick wins,
-  that puts the 6-character tick at ~TBD-M1-TICK ms and a SwiftUI edit at
-  10–15 ms.
-- **The 4 extra performance cores of an M1 do not help today**, because
-  everything ranked is serial on the main thread.
+  that puts the 6-character tick at ~8 ms, which still fits the 33 ms timer
+  period, and a SwiftUI edit at 10–15 ms.
+- **The M1's other cores do not help today**, because everything ranked is
+  serial on the main thread.
 - **GPU.** A base M1 has 8 GPU cores against 76 and about 1/12 of the memory
   bandwidth. The idle frame takes 2.1 ms of GPU time at a 3.6 Mpx drawable. At
   a 13-inch M1's ~1.8 Mpx window, scaling with cores and pixels gives roughly
@@ -328,6 +372,41 @@ No run was made on an M1. These are estimates from the reference numbers
 - **Memory.** A 0.94 GB peak footprint, with 470 MB of Metal allocations,
   fits in 8 GB. Still, with other apps open it is the item most likely to
   cause memory-pressure stalls (R1, G7).
+
+### The live source-shader opt-in (#127)
+
+The [live path](renderer.md#live-source-shader-path-r1cmt-04-opt-in-2026-10-22)
+recorded one ON run of `koikatu_cs0002591` with a CPU encode time of 9.59 ms.
+That figure is the Debug encode time, and the live path adds almost nothing
+to it (**measured** on the merged-head builds, `.local/app-perf/live-on`).
+`IKKOKU_BENCHMARK_OUTPUT` renders the scene offscreen at 1200×1600, with 60
+measured frames, p50 per frame:
+
+| Build | Opt-in | Visible items | CPU encode ms | GPU ms | Completion ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Release | OFF | 130 | 0.63 | 1.228 | 2.22 |
+| Release | ON (6 live draws) | 124 | 0.67 | 1.274 | 2.32 |
+| Debug | OFF | 130 | 9.97 | 1.524 | 12.21 |
+| Debug | ON (6 live draws) | 124 | 10.00 | 1.586 | 12.42 |
+
+The opt-in adds about 0.04 ms of CPU and 0.05 ms of GPU time per frame in
+both builds. The 9.4 ms gap between Debug and Release is the Engine compiled
+`-Onone` (B1).
+
+In the app, a 5 s Time Profiler run of `studio-idle` with the opt-in ON
+(Release) splits the cost as follows:
+
+- **`SourceShaderLiveAssembly.attach` runs in every Studio `refresh()`.** It
+  takes 11.6 ms/s at 30 refreshes per second, about 0.39 ms each. The
+  materials themselves are resolved once per character and cached. `attach`
+  maps every frame item back to its source renderer again: it parses mesh
+  names, filters the binding set's renderers for each item, splits shader
+  names (`SourceShaderLiveMaterial.family(of:)`, 39% of it) and builds the
+  report strings. That is the inventory item L1.
+- **`Renderer.encodeLiveDraws`** takes 3.6 ms/s, about 0.06 ms per frame.
+
+That run's window was not composited, so its frame rate is not used. The
+trace is `.local/app-perf/live-on/release-tp/studio-idle.time-profiler.trace`.
 
 ## Quick wins in this change
 
@@ -404,27 +483,42 @@ In-app harness results, Release, before → after:
 
 | Workload | Presented FPS | Hitches/s | Tick ms × rate/s | Refresh ms | Main busy ms/s |
 | --- | --- | --- | --- | --- | --- |
-| studio-idle | 44.7 → 117.4 → TBD | 14.9 → 2.5 → TBD | 43.38 × 15 → 8.94 × 30 → TBD | 23.25 → 3.87 → TBD | 680 → 356 → TBD |
-| studio-hover | 44.9 → 87.5 → TBD | 15.0 → 29.9 → TBD | 41.77 × 15 → 9.15 × 30 → TBD | 22.69 → 4.07 → TBD | 758 → 657 → TBD |
-| studio-fk-drag | 24.6 → 25.1 → TBD | 24.1 → 24.9 → TBD | – | 4.12 → 1.64 → TBD | 991 → 999 → TBD |
-| studio-orbit | 40.0 → 37.6 → TBD | 32.2 → 28.2 → TBD | – | 0.89 → 0.91 → TBD | 996 → 998 → TBD |
-| maker-idle, maker-slider, studio-native | unchanged within run-to-run noise (118.4 → 118.1, 53.1 → 47.3, 118.6 → 118.0) | | | | |
-| startup (scene import ends / firstDraw, s) | 4.70 / 6.29 → 4.55 / 6.07 → TBD | | | | |
+| studio-idle | 44.7 → 117.4 → 120.0 | 14.9 → 2.5 → 0.0 | 43.38 × 15 → 8.94 × 30 → 6.34 × 30 | 23.25 → 3.87 → 4.06 | 680 → 356 → 286 |
+| studio-hover | 44.9 → 87.5 → 93.3 | 15.0 → 29.9 → 26.6 | 41.77 × 15 → 9.15 × 30 → 6.45 × 30 | 22.69 → 4.07 → 4.16 | 758 → 657 → 518 |
+| studio-fk-drag | 24.6 → 25.1 → 23.1 | 24.1 → 24.9 → 22.9 | – | 4.12 → 1.64 → 1.19 | 991 → 999 → 992 |
+| studio-orbit | 40.0 → 37.6 → 32.2 | 32.2 → 28.2 → 24.8 | – | 0.89 → 0.91 → 0.92 | 996 → 998 → 997 |
+| maker-idle | 118.4 → 118.1 → 118.2 | 1.6 → 1.9 → 0.4 | 2.02 × 30 → 2.32 × 30 → 1.20 × 29 | 0.36 → 0.37 → 0.30 | 136 → 184 → 124 |
+| maker-slider | 53.1 → 47.3 → 54.0 | 34.7 → 32.7 → 37.4 | 0.73 × 30 → 0.71 × 30 → 0.49 × 30 | 0.71 → 0.68 → 0.53 | 997 → 998 → 997 |
+| studio-native | 118.6 → 118.0 → 119.6 | 1.4 → 2.0 → 0.4 | 1.81 × 30 → 1.82 × 30 → 1.56 × 30 | 1.77 → 1.75 → 1.51 | 172 → 191 → 147 |
+| startup (scene import duration / firstDraw, s) | 4.71 / 6.29 → 4.55 / 6.07 → 4.66 / 6.27 | | | | |
 
 The columns read baseline → quick wins 1–2 (`.local/app-perf/after-1`) →
-quick wins 1–3 (`.local/app-perf/after-2`).
+quick wins 1–3 (`.local/app-perf/after-2`). Five quick-win-3 runs were
+repeated because the first attempt overlapped a build or its window was not
+composited; the rejected reports are kept in `after-2/qw3-release/invalid`.
 
-- **Idle tick.** The Studio idle tick now fits the 30 Hz timer again, so live
-  animation plays at its real speed. Most of the idle frames that were
-  dropped are recovered.
-- **Hover hitches did not improve.** They rose from 15 to 30 per second. With
-  the tick at 30/s instead of 15/s, the hover's synchronous pick and the tick
-  share the main thread twice as often (M5).
+- **Idle tick.** The Studio idle tick fits the 30 Hz timer again, so live
+  animation plays at its real speed, and the idle scene presents every
+  120 Hz frame.
+- **Quick win 3 also helps Maker and native scenes**, because they sample the
+  same animation clips: the Maker idle tick went from 2.02 to 1.20 ms, the
+  Maker slider tick from 0.73 to 0.49 ms and the native 6-character tick
+  from 1.81 to 1.56 ms.
+- **Hover hitches did not improve.** They rose from 15 to 27–30 per second.
+  With the tick at 30/s instead of 15/s, the hover's synchronous pick and the
+  tick share the main thread twice as often (M5).
 - **FK drag and orbit do not change**, because they are bound by SwiftUI
-  (ranks 2 and 4).
-- **Debug.** With quick wins 1–2 the Debug idle tick went from 1,753 ms to
-  662 ms, and the source scene import from 11.71 s to 10.15 s. Debug remains
-  unusable for source scenes without B1.
+  (ranks 2 and 4). The FK refresh itself fell from 4.12 to 1.19 ms. Their
+  frame rates move between 32 and 41 FPS from run to run because the main
+  thread is saturated (see the baseline notes).
+- **Startup does not change.** The scene import stays at about 4.6 s.
+- **Debug.** The Debug idle tick went from 1,753 ms to 662 ms with quick wins
+  1–2 and 667 ms with 1–3. The source scene import went from 11.71 s to
+  10.15 s and 10.36 s. Debug remains unusable for source scenes without B1.
+- **The merged head.** The PR head merges `main` at `5e86b57` and later
+  (`.local/app-perf/after-3`, Release on `0d4548a`). Its valid runs match quick
+  wins 1–3 within run-to-run variation: hover tick 6.39 ms × 30, orbit 41.2 FPS,
+  Maker slider 48.1 FPS, native 119.7 FPS, firstDraw 6.19 s. TBD-MERGED-RERUNS
 
 ## Optimization inventory
 
@@ -467,6 +561,7 @@ loaded machine, so only the shares are used).
 | C6 | `refresh()` rebuilds every character's `RenderFrame` (items, skin sets, bounds) for camera-only changes | `StudioModel.refresh` | measured | 0.89 ms per orbit event | see M3 | Medium |
 | C7 | Maker's live step evaluates the rig only to validate the pose, then the refresh evaluates it again | `MakerModel.advanceSourceMotion` | hypothesis | `makerTick` 2.0 ms p50 in `maker-idle` | reuse the validated evaluation in the refresh | Low |
 | C8 | Studio scene/character load decodes the same rig JSON once per character and component | `SourceMakerLibrary.prepare` → `SourceRig.load` | measured | probe load 6.1 s for 6 characters, 74% in `SourceRig.decode` (JSONDecoder) | cache decoded rigs by path, size and modification time; or a binary rig format | Low for the cache |
+| L1 | With the live source-shader opt-in ON, every `refresh()` maps each frame item back to its source renderer again (mesh-name parsing, a filter over all binding-set renderers per item, shader-name splits, report strings); the materials themselves are cached | `StudioModel+SourceShaderLive.swift` → `SourceShaderLiveAssembly.attach` | measured | 0.39 ms per refresh (11.6 ms/s at 30 Hz), 39% in `SourceShaderLiveMaterial.family(of:)` ([live opt-in](#the-live-source-shader-opt-in-127)) | cache the item-to-slot mapping per character while its meshes, visibility and wear are unchanged, and index the renderers by (mesh, submesh); most of the 0.39 ms (hypothesis until measured) | Low; the opt-in is OFF by default and its report must stay the same |
 
 ### Metal
 
@@ -530,13 +625,14 @@ How to read the expected gain column:
 | ---: | --- | --- | --- | --- | --- |
 | 1 | Narrow SwiftUI invalidation. Move the camera out of the observed `doc`, or into its own observed value. Split `StudioView` into child views that read only their own state. Make the Maker slider rows value-driven views with per-slot observation | M2, M3, M4, C6 | orbit, FK drag and slider edits go from 7–25 ms per event to a few ms; the main thread is no longer saturated during interaction; presented FPS for those workloads rises from 24–53 toward 120 | the same edits drop from ~10–30 ms to a few ms; the difference between usable and laggy | `IKKOKU_CAPTURE_UI` window captures identical; undo/redo scenarios (`undo-camera`) pass |
 | 2 | Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment | P1 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
-| 3 | Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3) | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
+| 3 | Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s) | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
 | 4 | Skip unchanged frames and run the display link at 30–60 Hz when nothing moves; leave the shadow map alone until casters or the light move | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
 | 5 | Asynchronous hover pick for the latest mouse position only | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
 | 6 | Startup: cache decoded rigs and load source characters concurrently off the main thread, with a progress state | C8, S1, S2, S4 | source scene ready in ~1.5 s instead of 4.7 s; first frame earlier | larger, since there is less memory bandwidth for repeated decoding | `startup` workload; scene import results identical |
 | 7 | An opt-in optimized-Engine Debug build for app work | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
 | 8 | Texture compression at conversion time; release staging data after upload | G7, R1 | smaller footprint and bandwidth | main memory-pressure relief on 8 GB | image comparison; this is a quality trade-off, so it stays opt-in until compared |
 | 9 | Instrument `StudioModel` directly: explicit tick, refresh and doc-change hooks in place of the inferred ones | harness | exact Studio attribution (the inferred hooks cannot separate a SwiftUI pass caused by a doc change from one caused by layout) | — | `test_perf_trace.py`, harness report schema |
+| 10 | With the live source-shader opt-in ON, cache the item-to-slot mapping between refreshes | L1 | ~0.3 ms of each 0.39 ms refresh attach, only with the opt-in ON | same share | the live report and ON captures identical |
 
 ## Validation of this change
 
@@ -578,10 +674,25 @@ All runs were on `0a19718` or later. The reports are under
   next to them. All app launches were serialized by the app lock, so the
   window being measured was the only Ikkoku window. Even so, a busy machine
   slows the CPU-heavy workloads.
-- **One run per workload and build.** The saturated workloads (orbit, FK
-  drag, slider) vary by tens of percent between runs (see [baseline](#baseline)).
-  The idle, hover, native and Maker idle numbers repeated within a few
-  percent between the baseline, Engine -O and the traced runs.
+- **One valid run per workload and build.** Runs were repeated only when
+  they were invalid. The saturated workloads (orbit, FK drag, slider) vary
+  by tens of percent between runs (see [baseline](#baseline)). The idle,
+  hover, native and Maker idle numbers repeated within a few percent between
+  the baseline, Engine -O and the traced runs.
+- **The desktop was in use.** A harness window is only measured while it is
+  composited. Several runs lost most of their drawables while someone used
+  the desktop, and some idle runs received mouse events. The validity check
+  under [running it](#running-it) was added for this, and every flagged run
+  was repeated or left out. Two Instruments-attached runs also trip it
+  (Metal System Trace and Allocations on `studio-idle`, 14% and 13% of
+  drawables never shown); they are cited only for GPU timings and
+  allocation counts, not frame rates.
+- **The display changed during the last runs.** At 13:04 on 2026-10-23 the
+  main display changed from the 4K panel at 120 Hz and scale 2 to
+  1920×1080 at 60 Hz and scale 1. The merged-head idle, FK drag and Maker
+  idle reruns and the live-ON harness runs fell after that change and were
+  not used for frame rates. The offscreen benchmarks and the Time Profiler
+  attribution do not depend on the display.
 - **Attached recording starts late.** xctrace attaches 1.35–1.36 s after the
   app starts (measured from the shared startup marks in the Time Profiler
   traces), so no trace covers early startup. The `startup` workload's own
@@ -598,7 +709,7 @@ All runs were on `0a19718` or later. The reports are under
   and its statistics cover the whole run. Allocation counts are therefore
   given for the whole run, not per tick.
 - **The Studio tick and refresh are inferred** from observed `StudioModel`
-  properties, because `StudioModel.swift` was frozen during this work.
+  properties, because `StudioModel.swift` was frozen for most of this work.
   Explicit hooks are phase 2, item 9.
 - **No M1 run.** The low-end column is an estimate from core counts,
   bandwidth and drawable size.
