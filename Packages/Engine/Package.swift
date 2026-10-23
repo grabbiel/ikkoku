@@ -11,7 +11,7 @@ let package = Package(
                            "Assets", "Scene", "Character", "Studio", "Gameplay"]),
     ],
     targets: [
-        .executableTarget(name: "IkkokuInspect", dependencies: ["Assets", "CoreMath", "Studio", "Character", "Scene", "Gameplay"]),
+        .executableTarget(name: "IkkokuInspect", dependencies: ["Assets", "CoreMath", "Studio", "Character", "Scene", "Gameplay", "Renderer"]),
         .target(name: "ShaderTypes"),
         .target(name: "CoreMath", dependencies: ["ShaderTypes"]),
         .target(name: "GPU", dependencies: ["CoreMath", "ShaderTypes"]),

@@ -171,15 +171,17 @@ func sourceADVOriginalParameterScenarioStopsAtUnportedBinding() throws {
     #expect(vm.fault?.commandID == 165)
 }
 
-/// G-T03 coverage slice: real scenario assets halt where the static inventory
-/// (`Tools/reverse/analysis/adv_command_coverage.py`) predicts. The expected
-/// values come from the Python tool, never from this interpreter.
+/// G-T03 coverage slices: real scenario assets halt where the static inventory
+/// (`Tools/reverse/analysis/adv_command_coverage.py`) predicts, and straight-line
+/// assets issue exactly the host requests that the independent Python model
+/// (`adv_host_requests.py`) predicts. Expected values come from the Python
+/// tools, never from this interpreter.
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_ADV_COVERAGE_SAMPLE"]),
                "Requires IKKOKU_ADV_COVERAGE_SAMPLE"))
 func sourceADVCoverageSampleHaltsAtPredictedSourceIndex() throws {
     let path = try SourceFixtureSupport.require("IKKOKU_ADV_COVERAGE_SAMPLE")
     struct Sample: Decodable {
-        struct Halt: Decodable { var index: Int; var id: Int; var kind: String }
+        struct Halt: Decodable { var index: Int; var id: Int; var kind: String; var reason: String }
         struct Outcome: Decodable, Equatable { var status: String; var pc: Int?; var id: Int? }
         struct Mutation: Decodable { var replacedIndex: Int; var expectedHalt: Halt?; var exactPrediction: Bool }
         struct Case: Decodable {
@@ -187,49 +189,89 @@ func sourceADVCoverageSampleHaltsAtPredictedSourceIndex() throws {
             var firstStaticHalt: Halt?; var exactPrediction: Bool
             var reachableOutcomes: [Outcome]; var mayLoop: Bool; var mutation: Mutation?
         }
-        var frameSeconds: Float; var tickSlack: Int; var cases: [Case]
+        var schemaVersion: Int; var frameSeconds: Float; var tickSlack: Int; var cases: [Case]
     }
-    let sample = try JSONDecoder().decode(Sample.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    let sample = try JSONDecoder().decode(Sample.self, from: data)
+    let raw = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let predicted = try #require(raw["cases"] as? [[String: Any]]).map { $0["predictedRequests"] as? [Any] }
+    #expect(sample.schemaVersion == 2)
     #expect(sample.cases.count >= 20)
-    #expect(Set(sample.cases.map(\.stratum)).isSuperset(of: ["first-command", "scalar-prefix", "branch-before", "argument-limit", "executable"]))
-    // Default inputs: no host variables, one fixed frame per batch, no Next input.
-    func run(_ program: SourceADVProgram) throws -> SourceADVInterpreter {
+    #expect(Set(sample.cases.map(\.stratum)).isSuperset(of: ["first-command", "scalar-prefix", "branch-before", "argument-limit",
+                                                             "executable", "request-sequence"]))
+    // Default inputs and the coverage tool's scripted host: no host variables,
+    // one fixed frame per batch, every blocking request acknowledged after the
+    // frame that issued it (MapChange with no ADV variables), Next pressed
+    // whenever a Text batch waits for it.
+    func run(_ program: SourceADVProgram) throws -> (vm: SourceADVInterpreter, requests: [SourceADVHostRequest]) {
         var vm = try SourceADVInterpreter(program: program)
+        var requests: [SourceADVHostRequest] = []
+        func service() throws {
+            requests += vm.drainRequests()
+            for pending in vm.pending { try vm.acknowledge(pending.requestID) }
+        }
         do { try vm.start() } catch { guard vm.fault != nil else { throw error } }
+        try service()
         var frames = 0
         while vm.fault == nil && !vm.closed && !vm.exhausted && frames < program.commands.count + sample.tickSlack {
-            do { try vm.tick(deltaTime: sample.frameSeconds) } catch { guard vm.fault != nil else { throw error } }
+            do { try vm.tick(deltaTime: sample.frameSeconds, requestNext: vm.awaitingNext) } catch { guard vm.fault != nil else { throw error } }
+            try service()
             frames += 1
         }
-        return vm
+        return (vm, requests)
     }
     func expectHalt(_ vm: SourceADVInterpreter, _ halt: Sample.Halt?, _ label: String) {
         guard let halt else { #expect(vm.closed || vm.exhausted, "\(label)"); return }
         #expect(vm.fault?.pc == halt.index, "\(label)")
         #expect(vm.fault?.commandID == halt.id, "\(label)")
-        if halt.kind == "unsupported-command" {
-            #expect(vm.fault?.reason.contains("ADV command ID \(halt.id) at pc \(halt.index)") == true, "\(label)")
+        #expect(vm.fault?.reason.contains(halt.reason) == true, "\(label)")
+    }
+    /// JSON equality with numbers compared after Float rounding (the model
+    /// rounds Mono `float.Parse` results to float32 as well).
+    func same(_ a: Any, _ b: Any) -> Bool {
+        switch (a, b) {
+        case let (x as [String: Any], y as [String: Any]):
+            return Set(x.keys) == Set(y.keys) && x.allSatisfy { key, value in y[key].map { same(value, $0) } ?? false }
+        case let (x as [Any], y as [Any]): return x.count == y.count && zip(x, y).allSatisfy { same($0, $1) }
+        case let (x as String, y as String): return x == y
+        case let (x as NSNumber, y as NSNumber):
+            let bools = (CFGetTypeID(x) == CFBooleanGetTypeID(), CFGetTypeID(y) == CFBooleanGetTypeID())
+            guard bools.0 == bools.1 else { return false }
+            return bools.0 ? x.boolValue == y.boolValue : Float(x.doubleValue) == Float(y.doubleValue)
+        default: return false
         }
     }
-    var exact = 0, mutations = 0
-    for item in sample.cases {
-        let vm = try run(item.program)
+    var exact = 0, mutations = 0, sequences = 0, richSequences = 0
+    for (item, expectedRequests) in zip(sample.cases, predicted) {
+        let (vm, requests) = try run(item.program)
         let observed = Sample.Outcome(status: vm.status, pc: vm.fault?.pc, id: vm.fault?.commandID)
-        let looping = item.mayLoop && (vm.fault?.reason.contains("budget") == true || ["waiting", "frameBoundary"].contains(vm.status))
+        let looping = item.mayLoop && (vm.fault?.reason.contains("budget") == true
+                                       || ["waiting", "frameBoundary", "awaitingNext", "awaitingHost"].contains(vm.status))
         #expect(looping || item.reachableOutcomes.contains(observed), "\(item.name): \(observed) is not statically reachable")
         guard item.exactPrediction else { continue }
         exact += 1
         expectHalt(vm, item.firstStaticHalt, item.name)
+        if let expectedRequests {
+            sequences += 1
+            let native = try JSONSerialization.jsonObject(with: JSONEncoder().encode(requests))
+            #expect(same(native, expectedRequests), "\(item.name): native host requests differ from the model")
+            let kinds = Set(requests.map(\.command.kind)), blocking = Set(requests.map(\.blocking))
+            if item.firstStaticHalt == nil, requests.count >= 10, kinds.contains("text"), blocking.contains(.acknowledge), blocking.contains(.none) {
+                richSequences += 1
+            }
+        }
         // Mutation control: replacing the halting record with None moves the halt.
         guard let mutation = item.mutation, mutation.exactPrediction else { continue }
         mutations += 1
         var commands = item.program.commands
         let original = commands[mutation.replacedIndex]
         commands[mutation.replacedIndex] = .init(id: 0, multi: original.multi, hash: original.hash, version: original.version)
-        let mutated = try run(SourceADVProgram(name: item.program.name, commands: commands))
+        let mutated = try run(SourceADVProgram(name: item.program.name, commands: commands)).vm
         expectHalt(mutated, mutation.expectedHalt, item.name + " mutation")
         #expect(mutated.fault?.pc != mutation.replacedIndex, "\(item.name) mutation")
     }
     #expect(exact >= 10)
     #expect(mutations >= 5)
+    #expect(sequences >= 10)
+    #expect(richSequences >= 1)
 }

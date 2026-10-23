@@ -217,6 +217,12 @@ barrier), executing the NPC/ADV/scene work and supplying real regulation flags
 remain app-host work (A-T01). This snapshot is native session state, not
 original campaign `SaveData` (G12).
 
+ADV commands have a separate acknowledgement layer: a running
+`SourceADVInterpreter` issues its own host requests and accepts acknowledgements
+by request ID ([ADV](adv.md)). Those are not session barriers. The session neither
+owns nor persists an interpreter; a host saves both, and acknowledges
+`replacePeriodAfterADVBarrier` only after its ADV run has ended.
+
 ## Gameplay dependency map
 
 | System | Recovered owner and data | Required native work |

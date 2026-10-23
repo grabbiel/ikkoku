@@ -703,6 +703,239 @@ Private evidence (inputs, outputs, logs, build and input hashes) is in
 `.local/r1-normal/codex-2026-10-17/`. No image threshold, shader program or
 texture changed.
 
+### Native shader binding set (R1/CMT-04, 2026-10-18)
+
+The translated probe binds every material input from the capture's material
+dump. This slice derives the same inputs from native data only — the card, the
+converted Maker library, the head material contract and an optional supplement
+— and compares them with the capture input by input. Nothing is rendered live
+yet; the comparison and the proof of concept below use the frozen R1 fixture.
+
+**Contract.** `SourceShaderProgramContract` reads each translated
+`program.json` and lists exactly the constant-buffer vectors and textures that
+`TranslatedSourceShaderProbe.encodeTranslatedShader` binds. Each input is
+classified by where the probe takes it from, using only the program's own
+`Properties` block: builtins (`_ScreenParams`, `_ProjectionParams`,
+`unity_WorldTransformParams`, `_WorldSpaceCameraPos`, `_WorldSpaceLightPos0`,
+`_LightColor0`; the probe computes them from the frozen camera/light); declared
+properties (material value, else the program default); `<texture>_ST` of a
+declared texture (material scale/offset, else `[1, 1, 0, 0]`); declared
+textures (material texture, else the Unity default `white`/`black`/`gray`/`bump`);
+and everything else as a `Shader.SetGlobal*` global, including `_Time`.
+Matrices are always computed by the probe and are not part of the contract.
+`SourceShaderProgramCatalog` groups the programs by original shader, outline
+first, as the probe draws them. For this fixture:
+
+| Family | Programs | Inputs | Material vectors | Material textures (each also reads `_ST`) | Globals |
+| --- | --- | ---: | --- | --- | --- |
+| `main_hair`, `main_hair_front` | outline + forward | 30 each | `_Color`, `_Color2`, `_Color3`, `_LineColor`, `_ShadowColor`, `_ShadowExtend`, `_SpeclarHeight`, `_rimV`, `_rimpower` | `_AlphaMask`, `_AnotherRamp`, `_ColorMask`, `_DetailMask`, `_HairGloss`, `_MainTex`, `_NormalMap` | `_RampG`, `_RampG_ST`, `_ambientshadowG`, `_linewidthG` |
+| `main_item` | outline + forward | 38 | `_AnotherRampFull`, `_Clock`, `_Color`, `_Color2`, `_Color3`, `_DetailBLineG`, `_DetailRLineR`, `_LineWidthS`, `_ShadowColor`, `_ShadowExtend`, `_ShadowExtendAnother`, `_SpeclarHeight`, `_SpecularPower`, `_notusetexspecular`, `_rimV`, `_rimpower` | `_AnotherRamp`, `_ColorMask`, `_DetailMask`, `_LineMask`, `_MainTex`, `_NormalMap` | `_LineColorG`, `_RampG`, `_RampG_ST`, `_Time`, `_TimeEditor`, `_ambientshadowG`, `_linewidthG` |
+| `main_opaque` | outline + forward | 46 | `_DetailBLineG`, `_DetailRLineR`, `_LiquidTiling`, `_ShadowColor`, `_ShadowExtend`, `_ShadowExtendAnother`, `_SpeclarHeight`, `_SpecularColor`, `_SpecularPower`, `_SpecularPowerNail`, `_alpha_a`, `_alpha_b`, `_liquidbbot`, `_liquidbtop`, `_liquidface`, `_liquidfbot`, `_liquidftop`, `_notusetexspecular`, `_rimV`, `_rimpower` | `_AlphaMask`, `_AnotherRamp`, `_DetailMask`, `_LineMask`, `_MainTex`, `_NormalMap`, `_Texture2`, `_Texture3`, `_liquidmask` | `_LineColorG`, `_RampG`, `_RampG_ST`, `_ambientshadowG`, `_linewidthG` |
+| `main_skin` | outline + forward | 61 | `_DetailNormalMapScale`, `_LiquidTiling`, `_ShadowExtend`, `_SpeclarHeight`, `_SpecularColor`, `_SpecularPower`, `_SpecularPowerNail`, `_alpha_a`, `_alpha_b`, `_linetexon`, `_liquidbbot`, `_liquidbtop`, `_liquidface`, `_liquidfbot`, `_liquidftop`, `_nip`, `_nip_specular`, `_nipsize`, `_notusetexspecular`, `_overcolor1`–`3`, `_rimV`, `_rimpower`, `_tex1mask` | `_AlphaMask`, `_DetailMask`, `_LineMask`, `_MainTex`, `_NormalMap`, `_NormalMapDetail`, `_NormalMask`, `_Texture2`, `_Texture3`, `_liquidmask`, `_overtex1`–`3` | `_FaceNormalG`, `_FaceShadowG`, `_LineColorG`, `_RampG`, `_RampG_ST`, `_ambientshadowG`, `_linewidthG` |
+| `toon_eye_lod0` | forward | 18 | `_exppower`, `_isHighLight`, `_overcolor1`, `_overcolor2`, `_rotation`, `_shadowcolor` | `_MainTex`, `_expression`, `_overtex1`, `_overtex2` | `_ambientshadowG` |
+| `toon_eyew_lod0` | forward | 9 | `_Color`, `_shadowcolor` | `_MainTex` | `_RampG`, `_RampG_ST`, `_ambientshadowG` |
+| `toon_nose_lod0` | forward | 3 | `_Color` | `_MainTex` | — |
+
+Every family except `toon_nose_lod0` also reads `_LightColor0` and
+`_WorldSpaceLightPos0`; all but `toon_eyew_lod0` and `toon_nose_lod0` read
+`_WorldSpaceCameraPos`. `toon_glasses_lod0` and `toon_textureanimation` have no
+translated program; only their shader, queue and keywords are compared.
+Summed over the drawn materials, the contract has 201 material-vector uses,
+107 texture and 107 transform uses, 60 global-vector, 16 global-texture and 49
+builtin uses. Beyond these inputs, each material also needs its shader
+identity, render queue, keywords (recorded, but not bound: every translated
+program is compiled for one variant) and pass state (from `program.json`; the
+capture records none).
+
+**Native recipe.** `SourceShaderBindingDerivation.derive` (Character) builds a
+`SourceShaderBindingSet` (Renderer) and never opens the capture. The data model,
+contract and comparison live in Renderer so the probe or live rendering can use
+them without importing Character. The derivation needs the card and Maker
+library types, so it lives in Character, which already depends on Renderer.
+Each renderer starts from its prefab material, as Unity does: a property that
+`m_SavedProperties` does not save keeps its shader default, and an unsaved
+texture slot is empty with transform `[1, 1, 0, 0]`. The queue is
+`m_CustomRenderQueue` when ≥0, else the shader `QUEUE` tag (Geometry 2000,
+AlphaTest 2450, Transparent 3000, with offset; no tag → 2000). The
+`SHADOWCASTER` pass is excluded. Keywords come from the Maker library's
+serialized material tree (`m_ShaderKeywords`) or the supplement; no
+`ChaControl` path toggles keywords. The `ChaControl` setters driven by the card
+and status record are then applied, each cited by method in the output:
+
+- hair colours (alpha raised to 1) and outline colour; the gloss mask from
+  `mt_hairgloss[hair.glossId]`;
+- the clothes `rendNormal01` composite; `siruLv` liquid levels; visibility
+  from `clothesState`, `shoesType` and the top's `Coordinate`;
+- the face composite, detail, lip, eyeshadow and cheek/lip gloss. The eyeshadow
+  alpha is 0 for gag eyes, and `ChangeHohoAkaRate` alpha is 0 for rate 0.
+- eyeline, eyebrow and nose textures and colours; eye highlights and colours;
+  eye tilt `_rotation`; `_isHighLight`; and `_expression`/`_exppower` with the
+  gag-eye visibility from `cha_eyeset[status.eyesPtn]` (unknown pattern → row 0);
+- canine, tear and tongue visibility;
+- the body draw material: nip, underhair, line and detail textures, nip size and
+  gloss, `lerp(skinGlossPower, 1, skinTuyaRate)`, nail gloss, the alpha-mask
+  table and the top's `OverBodyMask`.
+
+Catalog textures follow `ChaControl.GetTexture`: an asset of `"0"` means no
+texture, and `_low` is appended unless `hiPoly`. Head-specific variants for a
+head other than 0 are reported as unresolved. `CustomTextureCreate` render
+targets are recorded as runtime composites: their sizes, full mip chains
+(`useMipMap`) and Unity's `RenderTexture` sampler defaults (Bilinear, Clamp,
+aniso 1; the game sets none). Scene globals are not character data: the fixture
+uses the harness constants that `OriginalCharacterProbe.Capture` sets —
+`ChangeLineColor(1)`, `ChangeLineWidth(.307)`, `_ambientshadowG`
+(0.5, 0.5, 0.5, 0.74) and `mt_ramp` row 1. Globals that no recovered method sets
+read zero. Anything the native data cannot supply carries an `unresolved`
+reason instead of a value.
+
+**Supplement.** [source_binding_supplement.py](../../Tools/reverse/source_binding_supplement.py)
+exports source metadata that the existing contracts omit, without pixels:
+material keywords, `Texture2D` sampler/mip state, the `chara/mm_base.unity3d`
+`cf_m_body` draw material and catalog rows. The fixture run covered 13 bundles
+plus `mm_base` and categories 2 (`cha_eyeset`), 420, 423, 424, 432 and 433. It
+exported 431 materials, 1,603 textures, 1 draw material and 80 catalog rows to
+`.local/r1-live-bindings/supplement.json` (`ec8bcfc5…a05f6`).
+
+```sh
+cd Tools/reverse && ../../.local/reverse/unitypy-venv/bin/python source_binding_supplement.py \
+  --source ../../.local/reverse/rigs/source/abdata --output ../../.local/r1-live-bindings/supplement.json \
+  --bundle chara/bo_hair_b_00.unity3d --bundle chara/bo_hair_f_00.unity3d --bundle chara/co_top_00.unity3d \
+  --bundle chara/co_bot_00.unity3d --bundle chara/co_shoes_00.unity3d --bundle chara/bo_head_00.unity3d \
+  --bundle chara/mt_eyebrow_00.unity3d --bundle chara/mt_eyeline_up_00.unity3d --bundle chara/mt_eyeline_down_00.unity3d \
+  --bundle chara/mt_nose_00.unity3d --bundle chara/mt_eye_hi_up_00.unity3d --bundle chara/mt_eye_hi_down_00.unity3d \
+  --bundle chara/mt_mask_body_00.unity3d --draw-material chara/mm_base.unity3d:cf_m_body \
+  --category 2 --category 420 --category 423 --category 424 --category 432 --category 433
+```
+
+(In a worktree, use absolute paths to the main checkout's `.local`; the output
+path must contain a `.local` component.)
+
+**Comparison.** `SourceShaderBindingComparison` replays the probe's effective
+binding for each input. For example, an unrecorded property uses the program
+default and an unrecorded texture uses the Unity default. Each input then gets
+one status:
+
+- `exact`: every lane read by the program (`m_Dim`) equals the capture after
+  rounding the native float32 to the capture's 7-significant-digit .NET text.
+  For textures, every identity field on both sides matches: type, name, size,
+  path ID.
+- `withinTolerance`: each lane is within 1e-5. That is below 1/100 of an 8-bit
+  step and above float32 rounding after one or two operations. Runtime
+  composites matched on type and size are also counted here, because content is
+  not compared. So are transforms of textures that neither side binds.
+- `differs`: both values are reported.
+- `missingNatively`: the native reason is reported.
+- `extra`: the native side has a renderer or texture that the probe does not
+  bind.
+
+The capture's `authoredMipSource` bundle hash is attribution only:
+`original_texture_mips.py` keeps one of several byte-identical copies, so
+`liquid01_t`/`_n` name `bo_head_00` although the body binds `mm_base`'s copy.
+A mismatch is noted, not counted. Sampler state (filter, wrap, aniso, mip
+levels) is compared for every bound texture. Each finding names both sources,
+and gaps are grouped by cause.
+
+```sh
+swift build --package-path Packages/Engine --product ikkoku-inspect
+Packages/Engine/.build/debug/ikkoku-inspect shader-bindings .local/r1c/probe/fixture-card.png \
+  .local/reverse/maker-library/library.json .local/reverse/rigs/head-materials/contract.json \
+  .local/r1c/probe/shaders .local/r1c/probe/frame-mips.json \
+  --supplement .local/r1-live-bindings/supplement.json > .local/r1-live-bindings/shader-bindings.json
+```
+
+The gated Engine test `sourceShaderBindingsMatchTheControlledOriginalFrame`
+(private-source lane: `IKKOKU_SHADER_BINDING_PROBE=<.local/r1c/probe>`,
+`IKKOKU_MAKER_LIBRARY`, `IKKOKU_HEAD_MATERIAL_CONTRACT`,
+`IKKOKU_SHADER_BINDING_SUPPLEMENT`) pins the numbers below. It checks the
+`frame-mips.json` hash and adds two controls. In the capture-side mutation, one
+hair `_Color` lane +0.01 gives exactly 1 `differs`. Without the supplement, the
+derivation reports its gaps instead of guessing.
+
+Inputs: `frame-mips.json` `13bd11c2…66f039`, card `4b892fc4…ce53c65`, library
+`d898fea1…cbb609`, head contract `e77ca3f7…c39393` and supplement
+`ec8bcfc5…a05f6`. Native bindings against the authored-mip capture:
+
+| Family | Exact | Within tolerance | Differs | Missing natively | Extra | Total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| global | 7 | 0 | 0 | 3 | 0 | 10 |
+| main_hair | 28 | 3 | 0 | 1 | 0 | 32 |
+| main_hair_front | 84 | 9 | 0 | 3 | 0 | 96 |
+| main_item | 73 | 2 | 0 | 0 | 0 | 75 |
+| main_opaque | 147 | 3 | 0 | 0 | 0 | 150 |
+| main_skin | 125 | 3 | 0 | 3 | 0 | 131 |
+| toon_eye_lod0 | 34 | 4 | 0 | 6 | 0 | 44 |
+| toon_eyew_lod0 | 54 | 5 | 0 | 0 | 1 | 60 |
+| toon_glasses_lod0 / toon_textureanimation / toon_nose_lod0 | 3 / 3 / 9 | 0 | 0 | 0 | 0 | 3 / 3 / 9 |
+| **Overall** | **567** | **29** | **0** | **16** | **1** | **613** |
+
+By category, shader (20), queue (20), keywords (20) and pass state (31) are all
+exact. Vectors are 191 exact, 18 within tolerance and 2 missing, with the largest
+|Δ| 1.2e-7 from float32 colour rounding. Textures are 100 exact and 9
+within-tolerance composites. Texture transforms are 100 exact, 2 within
+tolerance and 6 missing; samplers are 58 exact and 8 missing. The generated-mip
+`frame.json` (`9aa4de39…bcc750`) gives the same totals. Without the supplement
+the same derivation reports 456 exact, 27 within tolerance, 2 differing, 114
+missing and 1 extra of 600 (fewer inputs, because the body shader is unknown).
+The step-4 fixes closed `cha_eyeset` (eye pattern, gag eyes, eyeshadow alpha), `mt_hairgloss`,
+`mt_nip`, `mt_underhair`, `mt_body_detail`, `mt_ramp`, the `cf_m_body` draw
+material (36 inputs), keywords (library material tree, then supplement),
+sampler state including render-target defaults, and the body alpha-mask
+identity. The 2 former `differs` were `_expression_ST` on the eyes: the probe's
+`[1, 1, 0, 0]` convention for an empty slot versus the prefab transform. They
+became within tolerance once the eye pattern established that `_expression` is
+empty on both sides.
+
+Remaining gaps by cause, none guessed:
+
+- 8 sampler states: `mt_hairgloss_00`, `mt_nip_00`, `mt_body_detail_00` and
+  `mt_ramp_00` (`_RampG`) are not in the local bundle set and need the VM to
+  fetch. Their identity still matches by name.
+- 6 `EyeLookMaterialControll` iris/highlight offsets: they depend on gaze, so
+  they need the Studio eye-look runtime rather than the card alone. The capture
+  shows x ±0.02.
+- `_Time`: the frame clock is a playback input.
+- `_RampG_ST`: an unset global transform, which the probe binds as
+  `[1, 1, 0, 0]` by convention; Unity's value is unverified.
+- 1 `extra`: `cf_O_eyeline` material slot 1. It is beyond the mesh's single
+  submesh, so Unity draws it over the last submesh, but the probe's
+  `materials.prefix(submeshes)` skips it. This is a probe gap, not a native one.
+
+**Proof of concept (step 5).** `--write-frame <file>` writes a copy of the
+capture frame next to it. In that copy, every resolved native value replaces
+the bound value: 201 vectors, 58 transforms, 19 queues, 49 samplers and 6
+globals. A slot that the native recipe leaves empty is removed. 98 texture
+slots are confirmed (matching asset identity, or empty on both sides), and the
+9 composites keep their captured content. Unresolved inputs keep the capture
+value and are counted (13). Geometry, camera, light and pixels stay the capture's.
+`SourceShaderBindingFrameSubstitution` implements this. A Debug build at
+`9c0be49` ran three cases on the source-normal frame
+`.local/r1-normal/rerun-2026-10-17/candidate-mips/frame-with-source-normals.json`
+(`1b0b0f21…f34e690`):
+
+| Case | Silhouette | Color (full character) | Result |
+| --- | --- | --- | --- |
+| Capture-bound (baseline) | 44 px, IoU 0.9995552051 | mean 0.20886, p99 4 | Both gates pass |
+| Native-bound (`frame-native-bindings.json`, `91c73484…732131e`) | 44 px, IoU 0.9995552051 | mean 0.20889, p99 4 | Both gates pass; per-family p99 unchanged |
+| Mutation control: native frame, `_linewidthG` ×2 | 915 px, IoU 0.9907607 | mean 0.27399, p99 5 | Both fail — the probe consumes the substituted file |
+
+24 substituted values differ from the parsed capture text, by at most 1.2e-7.
+All are colour properties (hair, face, eyebrow, eyeline, tooth, tongue, body
+and clothes) that the capture printed at 7 digits. The translated
+render differs from the baseline at 3 pixels by ≤3 bytes, inside the documented
+run-to-run variation (≤4 pixels, ≤4 bytes). Coverage, geometry and production
+toon images are identical. Per-family hair color still fails (p99 24/22) in both
+runs, and `passesAllGates` stays false because of the production toon path. No
+gate threshold changed.
+
+**Limits.** One controlled female character (coordinate 0, hiPoly, head 0) on
+one frozen frame. Body renderers other than `o_body_a` are not enumerated.
+`N_EyeBase`/`N_Hitomi` visibility for non-zero eye patterns is not modelled.
+`Config.EtcData.hohoAka` and a non-zero `hohoAkaRate` are reported as
+unresolved, and composite content is not compared. Other heads, hair, clothes
+and accessories, mods and male cards need their own converted evidence. Private
+evidence (both comparison runs, the frame.json run, the PoC folders, logs, frame
+and render diffs, and the scripts) is in `.local/r1-live-bindings/`.
+
 ### Native pose gate
 
 The R2 transform gate compares original-player local bone transforms composed into
