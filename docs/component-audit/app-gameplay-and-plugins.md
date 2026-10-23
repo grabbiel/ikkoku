@@ -13,12 +13,13 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 [ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift),
 [AppState+PluginExecution.swift](../../Apps/IkkokuCreator/AppState+PluginExecution.swift),
 [AppState+OriginalFrameProbe.swift](../../Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift),
+[AppState+GameplayScenario.swift](../../Apps/IkkokuCreator/AppState+GameplayScenario.swift),
 [CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift),
 [CaptureRequest.swift](../../Packages/Engine/Sources/Renderer/CaptureRequest.swift).
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
-| A01 · SwiftUI shell, Maker/Studio switching and shared engine | Mid-stage | Both editors share one `EngineHost` and renderer. Mode changes activate one model and refresh its frame. There is no ActionGame/title/gameplay mode. | A-T01: add an actual game session host; retain editor isolation. |
+| A01 · SwiftUI shell, Maker/Studio switching and shared engine | Mid-stage | Both editors share one `EngineHost` and renderer. Mode changes activate one model and refresh its frame. There is no interactive ActionGame/title/gameplay mode. Since A-T01's first slice, `IKKOKU_GAMEPLAY_SCENARIO` runs the native gameplay host headlessly and exits before the engine and both editors are created, so it shares no editor state; CI compiles this path but has not run it. | A-T01: run the `gameplay-scenarios` lane on the Mac; then an interactive gameplay mode with presentation on the same host, keeping editor isolation. |
 | A02 · Metal startup and asset discovery | Mid-stage | Explicit `IKKOKU_ASSETS`, bundle assets, then source-tree assets. Optional original male/female manifests and Maker library are separate private inputs. Explicit invalid source overrides fail instead of silently selecting another source. Development defaults depend on build-machine paths. Since 2026-10-23 (T-T02), each used source-tree default prints a `[ikkoku] source-tree fallback:` line, and `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables all three (assets root, Maker library, original bases); without it the defaults are unchanged. Compiled by CI only; no launch has exercised the switch. | A-T02: install/import workflow, portable paths and actionable missing-resource UI; test a moved release app. |
 | A03 · Viewport display and input | Mid-stage | `CAMetalDisplayLink` drives drawable presentation; Retina pixel conversion, orbit/pan/zoom, trackpad magnification, mouse and key delegation exist. Simulation uses editor timers, not this presentation timestamp. | A-T03: instrument displayed frames and simulation cadence together; validate resize, focus loss, mode switching and more than one window. |
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. Renderer problems (R6): a skipped frame (`Renderer.lastFrameError`) or unshaded lights beyond the eight-light limit appear in the Maker/Studio status line. The line is written once per new problem and restored one second after frames recover (`RenderStatusReporter`; debounce unit-tested, app compiled in CI, not run, 2026-10-23). | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
@@ -33,10 +34,57 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 
 ### Actionable app tasks
 
-- **A-T01 — Gameplay host (P1, after G-T01).** Add a session model owning saved
+- **A-T01 — Gameplay host (P1, after G-T01; first slice implemented 2026-10-23,
+  app run pending).** Add a session model owning saved
   player/NPC state, period, active map and ADV barriers. Accept when a controlled
   non-media event can run from period selection to completion through the app,
   persist, reload and resume without caller-injected fake completion effects.
+  First slice ([gameplay host](../reference/gameplay/cycle.md#gameplay-host-a-t01)):
+  `SourceGameplayHost` in the Gameplay module owns one `SourceGameplaySession`,
+  a versioned native state (`SourceGameplayNativeState`: saved and shown weekday,
+  clock zone, sunlight, minimap/camera flag, active map, player and heroine
+  placeholders, completed fixed events) and at most one running fixed event with
+  its `SourceADVInterpreter`. The caller only stages cycle operations and steps
+  the host; `session` is read-only, so it cannot acknowledge a barrier. The host
+  performs every effect of `changePeriod`, `nextPeriod`, `changeWeek`, `nextWeek`
+  and `reloadNightMenuWeek` on that state and completes their two barriers from
+  its own state: the `_Next` scene barrier once no map loads and no event runs,
+  and the ADV-gated period-routine replacement once the event has ended. The new
+  period routine selects a fixed event with `SourceFixedEventScheduler`. The
+  event's ADV program runs one fixed frame per step. A MapChange without a fade
+  loads a catalog map and then acknowledges the request, and Close persists the
+  completion flag. Operations that would release an effect the host cannot
+  perform (MapMove, the night-menu tail) and presentation requests (text, voice,
+  BGM, fades, characters) are rejected by name, never skipped. The whole host is
+  one `Codable` snapshot (format `ikkoku.native-gameplay-host`, schema 1). Decoding
+  rejects another format, version or catalog and any state no operation can
+  produce (G12: native, not original `SaveData`). `IKKOKU_GAMEPLAY_SCENARIO` with
+  `IKKOKU_GAMEPLAY_SCENARIO_REPORT` runs a JSON `SourceGameplayHostScenario`
+  headlessly before the engine and editors start. Reload steps write the snapshot
+  through the checked `CaptureOutput` writer and resume from the bytes read back.
+  The report goes through the same writer, and the run exits 0 only when every
+  step passed. `CaptureRequest` classifies both variables.
+  `Tools/verification/scenarios/gameplay-controlled-event.json` (synthetic catalog,
+  one heroine, event 9001: VAR/Calc/IF/Wait/MapChange/Close) selects Morning,
+  reloads mid-map-load, requests HR1 during the event, reloads while that ADV
+  barrier is held and after completion, and checks that the next day's Morning
+  does not rerun the event. Verification: `SourceGameplayHostTests.swift` (8 tests;
+  they pass in the CI Engine suite, the only place they were compiled or run)
+  checks the exact trace from period selection to completion and both barrier
+  holds. It reloads through JSON before
+  each of the 25 steps of a four-operation trace, covering every barrier kind, the
+  held ADV barrier, the map load and the ADV Wait, and requires an identical
+  trace and final host. It also covers period/week/map state changes,
+  rejected operations and requests, corrupted, mismatched and inconsistent
+  snapshots rejected by name, and the shipped scenario, whose three reloads
+  match its reload-free run. A corrupted reload stops the scenario with a named
+  error. The app path is compiled by CI only. Acceptance still needs the
+  `gameplay-scenarios` lane run on the Mac
+  (`python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json`).
+  Not covered: original save data (G12), NPC population and navigation (G11),
+  MapMove, the night menu, presentation, `Cycle.ADVVariables` (not recovered;
+  MapChange acknowledgements carry none), cancellation during a barrier, and an
+  interactive gameplay UI.
 - **A-T02 — Portable resource installation (P1).** Replace reliance on `#filePath`
   development defaults with a user-selected, versioned conversion library and
   relocation resolver. Accept when a release app launched outside this checkout
@@ -83,10 +131,11 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   Renderer module is pure (an environment dictionary in, a mode or a
   `CaptureRequestError` out). It lives in the engine so Swift Testing covers it in
   CI; it imports only Foundation and holds the variable names, as
-  `UICaptureReadiness` already does. Its inventory classifies all 86 variables the
-  app reads: 8 mode selectors including `IKKOKU_AUTOCAPTURE`, 44 mode-scoped options,
+  `UICaptureReadiness` already does. Its inventory classifies all 88 variables the
+  app reads: 9 mode selectors including `IKKOKU_AUTOCAPTURE`, 45 mode-scoped options,
   the window capture and its 5 options, 12 startup inputs and 16 data sources
-  (T-T02 added `IKKOKU_SOURCE_TREE_FALLBACKS`).
+  (T-T02 added `IKKOKU_SOURCE_TREE_FALLBACKS`; A-T01 added
+  `IKKOKU_GAMEPLAY_SCENARIO` and its report).
   `AppState.init` runs it first and prints the error and exits 1. The
   [build guide](../guides/build-and-test.md#capture-request-validation) lists the
   rules and every newly rejected combination; no documented recipe or lane uses one.
@@ -102,7 +151,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   assets), source body/face without a source contract, unknown slider, hair, pose,
   item and Maker tab IDs, an out-of-range outfit, an explicit missing
   `IKKOKU_SHAPE_CONTRACT`, the rig face preset without a face part and missing
-  per-family probe inputs. `CaptureRequestTests` (13 tests) keeps 29 documented and
+  per-family probe inputs. `CaptureRequestTests` (13 tests) keeps 31 documented and
   lane recipes valid and covers each rule; `test_run.py` checks that the inventory matches the
   app's reads, that app-smoke checks select one mode, and that adapter evidence
   runs inside a capture. Neither was compiled locally. Acceptance: run the build
@@ -114,6 +163,8 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 
 Sources: [SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift),
 [SourceGameplaySession.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift),
+[SourceGameplayHost.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayHost.swift),
+[SourceGameplayHostScenario.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayHostScenario.swift),
 [SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift),
 [SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift),
 [SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift),
@@ -125,17 +176,17 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
 | G01 · Period/week values and pure transitions | Fully ported — bounded control kernel | Twelve saved period ordinals, seven weekdays, backward-period day advance, same-week seven-day advance and night-menu completion rules are explicit. Negative invalid weekday arithmetic is deliberately rejected instead of reproducing a source nonterminating search. | Keep this scope distinct from scenes/menus; add regressions when more host callbacks are connected. |
-| G02 · MapMove timing/gates | Fully ported — bounded timer kernel | Cursor/game regulation controls advancement; ADV/talk/interaction flags control visibility separately. Frame increments may overshoot 500; finish forces display fraction 1 without clamping stored timer. | Supply real source flags from the gameplay host (A-T01, over the G-T01 session); current caller-supplied flags are not gameplay integration. |
-| G03 · Deferred scene/menu/NPC effects | Mid-stage — engine host, no app consumer | `SourceGameplaySession` classifies all 19 `SourceGameplayDeferredEffect` cases in an exhaustive switch: 11 synchronous, 8 completion barriers, of which `loadNPCs`, `prepareMapMoveCharactersAndCamera` and `startTimeZoneCutIn` are conservative because their source completion is not recovered. It releases effects in source order, requires an ID-and-effect acknowledgement per barrier, rejects unknown, duplicate, out-of-order and mismatched acknowledgements without mutation, and commits the cycle only after the operation's last barrier. Version-1 snapshots reload deterministically mid-barrier and reject other versions and inconsistent state. It still executes none of the effects; verification is the synthetic Engine suite in CI ([session host](../reference/gameplay/cycle.md#session-host-and-effect-inventory-g-t01)). | A-T01: an app host executes each effect and acknowledges barriers from real scene/ADV/NPC completion, including cancellation. Replace a conservative barrier only with recovered completion evidence. |
+| G02 · MapMove timing/gates | Fully ported — bounded timer kernel | Cursor/game regulation controls advancement; ADV/talk/interaction flags control visibility separately. Frame increments may overshoot 500; finish forces display fraction 1 without clamping stored timer. | Supply real source flags from the gameplay host; current caller-supplied flags are not gameplay integration. The A-T01 host rejects `beginMapMove`/`finishMapMove` because NPC loading, the tutorial and MapMove camera/cut-in have no native host yet. |
+| G03 · Deferred scene/menu/NPC effects | Mid-stage — 9 of 19 effects performed by the A-T01 host | `SourceGameplaySession` classifies all 19 `SourceGameplayDeferredEffect` cases in an exhaustive switch: 11 synchronous, 8 completion barriers, of which `loadNPCs`, `prepareMapMoveCharactersAndCamera` and `startTimeZoneCutIn` are conservative because their source completion is not recovered. It releases effects in source order, requires an ID-and-effect acknowledgement per barrier, rejects unknown, duplicate, out-of-order and mismatched acknowledgements without mutation, and commits the cycle only after the operation's last barrier. Version-1 snapshots reload deterministically mid-barrier and reject other versions and inconsistent state. The session executes none of the effects itself. `SourceGameplayHost` (A-T01) performs the 7 synchronous period/week effects on native state and completes the 2 recorded barriers of period changes from its own state: `prepareNextPeriodSceneBarrier` once no map loads and no event runs, `replacePeriodAfterADVBarrier` once the running ADV event ends. It rejects operations that would release any of the other 10 effects. Verification is the synthetic Engine suite in CI ([session host](../reference/gameplay/cycle.md#session-host-and-effect-inventory-g-t01), [gameplay host](../reference/gameplay/cycle.md#gameplay-host-a-t01)). | Host the remaining effects (NPC loading, tutorial, MapMove camera/cut-in and exit, night-menu tail) from real scene/NPC completion, including cancellation. Replace a conservative barrier only with recovered completion evidence. |
 | G04 · Fixed-event table decode and eligibility | Fully ported — inspected selection rules | First unfinished event only; weekday/period/day/lesson conditions, map lookup and wait-point layer match. Failed eligibility does not search later unfinished events. Tested against 4,032 independent contexts for 48 source entries. | Extend catalog coverage independently; selected event still needs G-T02 dispatch. |
-| G05 · Fixed-event placement and execution | Pending | `Selection` contains asset, map and optional wait-point/layer identity. No NPC entity spawn, movement, encounter dispatch or completion persistence consumes it in the app. | G-T02: bind selection to native state and a recovered scenario with exact completion flags. |
-| G06 · ADV program decoding and batch/wait execution | Mid-stage | Bounded program/argument/variable sizes; `multi` batching, local jump recursion budget, cancelable Wait. Since G-T03b the frame follows `MessageWindowProc`: `UpdateRegulate` gates (pending MapChange, or SceneFade under `isSceneFadeRegulate`) suspend input, Waits and commands; a Text batch waits for Next; `ProcessEnd`/`CurrentCharaData.Clear` run where the source runs them. States: ready/frameBoundary/waiting/awaitingHost/awaitingNext/closed/exhausted/faulted. The whole interpreter is `Codable` and resumes identically mid-wait, mid-acknowledgement and mid-Next (validated on decode). A fault preserves earlier effects; this VM is not a transaction. | G-T01: drive it from a real frame/session host that persists it inside the campaign save; add skip/auto and choice input. |
+| G05 · Fixed-event placement and execution | Infancy — synthetic event runs once in the native host | `Selection` contains asset, map and optional wait-point/layer identity. The A-T01 host checks fixed events on every period entry (native policy: heroines in saved order, first selection runs), runs the selected event's ADV program from a controlled catalog and persists its asset ID as completed, so the scheduler skips it afterwards, including across reload. No NPC entity spawn, movement or encounter dispatch exists, and which source period bodies check events is not translated. | G-T02: bind selection to recovered player/heroine data and a recovered scenario with exact completion flags. |
+| G06 · ADV program decoding and batch/wait execution | Mid-stage | Bounded program/argument/variable sizes; `multi` batching, local jump recursion budget, cancelable Wait. Since G-T03b the frame follows `MessageWindowProc`: `UpdateRegulate` gates (pending MapChange, or SceneFade under `isSceneFadeRegulate`) suspend input, Waits and commands; a Text batch waits for Next; `ProcessEnd`/`CurrentCharaData.Clear` run where the source runs them. States: ready/frameBoundary/waiting/awaitingHost/awaitingNext/closed/exhausted/faulted. The whole interpreter is `Codable` and resumes identically mid-wait, mid-acknowledgement and mid-Next (validated on decode). A fault preserves earlier effects; this VM is not a transaction. | The A-T01 host now drives it one fixed frame per step and persists it inside the native host snapshot, accepting only MapChange without a fade. Next: a presentation host for the other requests, skip/auto and choice input, and the original campaign save (G12). |
 | G07 · ADV scalar and presentation commands | Mid-stage | Scalar IDs 0/1/3/4/12/14/15/22/23/25 (None, VAR, Calc, Clamp, Tag, IF, Switch, Close, local Jump, Wait): Int32 wrapping and source boxed conversion failures are deliberate; Calc is left-to-right. Presentation IDs 16–19, 35, 37, 44, 45, 88, 106, 112, 125, 128, 169 (Text, Voice, Motion, Expression, NullLoad, NullSet, SceneFade, SceneFadeRegulate, BGMPlay, CharaMotion, CharaExpression, CharaLookEyes, CharaLookNeck, MapChange) decode arguments exactly as the recovered `Do()` (defaults, `ReplaceVars`, Unity Mono `int`/`float`/`bool` parsing, swallowed vs uncaught exceptions) into typed host requests with per-handler blocking (none / acknowledge / Next); unmodelled culture or Unicode forms fault instead of guessing. 22 of these IDs occur in 239,612 of 294,393 installed records; 101 VAR random alternatives and 299 external IF branches still fault. | Expand RNG alternatives, unsupported literals and culture-sensitive comparisons only with source oracles. Add the next request families (Fade, BGLoad/BGRelease, Filter, CharaCoordinate, CharaMotionDefault, CharaVoicePlay/Wait) the same way; rerun `adv_command_coverage.py` after each change. |
 | G08 · ADV source data exercised | Infancy | All 10,463 `ScenarioData` assets in the 225 installed `adv/scenario` bundles were run with default inputs and a scripted host (auto-acknowledge, auto-Next): **2,633 run to completion** (2,559 non-empty, 25,892 records; before G-T03b: 87, 13 non-empty), 7,582 halt at the statically predicted index, ID and reason, 248 fault earlier on absent host variables, 0 unexplained. 51,953 host requests were issued and all match an independent Python decoding of the recovered handlers; 9,926 straight-line assets match the predicted request sequence exactly. 27.5% of records now precede a first unsupported command (was 0.46%). Scenario 301 still halts at pc 2 / 165 (`HeroineParam`). Nothing is presented: no host consumes the requests. | G-T02: `HeroineParam`/`ParameterFile` (now the top first blocker, 2,030 assets). G-T03: next families in the measured order ([ADV coverage](../reference/gameplay/adv.md#original-scenario-command-coverage-g-t03)). |
 | G09 · Dialogue, choices and UI flow | Infancy | Text (63,122 records) now issues `text` requests carrying the batch's voice/expression/motion bindings and blocks until Next; Voice/Expression/Motion records decode into those bindings. 15,692 Text requests were issued in the corpus run, all matching the independent model. No renderer, name-tag `ReplaceText`, backlog, display-completion click, skip/auto or choice exists; `requestNext` is supplied by tests/CLI. Choice (466 records) is unsupported. | A-T01/G-T01: a host that displays text and plays voices from the requests; G-T03: choices, skip/auto and save/load during dialogue. |
 | G10 · Cross-file ADV, tasks, animation/camera/audio actions | Pending | Character look/expression/motion, BGM, map change, ADV null positions and scene fades are typed requests (none executed natively: no host). External `file:tag` jumps and unknown commands fault with command index/reason, checked across the installed corpus. Top first blockers now: ParameterFile 2,030 assets, Fade 1,648, BGLoad 1,235, CharaVoicePlay 589, Filter 452, CharaMotionDefault 386, CharaCoordinate 296, Open 253. Open has 2,869 records; Task/TaskEnd 156/117. | G-T03: further request families in that order, an identity-preserving scenario resolver for Open/external branches, and cancellation barriers; a host must consume the requests. |
 | G11 · NPC population, navigation and decisions | Pending | No native NPC behavior-tree runner, source action/navigation tables, map topology, pathfinding or encounter loop is connected. | G-T04: recover one map and one neutral NPC route; implement decisions, movement and save-state continuity against numeric traces. |
-| G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. The G-T01 session snapshot persists only native cycle control state and pending barriers. | G-T02: recover original load/save adapters and extend the native session schema before treating scalar variables as campaign state. |
+| G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. The G-T01 session snapshot persists only native cycle control state and pending barriers. The A-T01 host snapshot (`ikkoku.native-gameplay-host`, schema 1) adds explicit native placeholders: saved/displayed weekday, clock zone, sunlight, minimap/camera flag, active map, a player next flag, heroine IDs and day counters, completed fixed events and the running ADV interpreter. It is native state only and is not compatible with, or derived from, original saves. | G-T02: recover original load/save adapters and extend the native schema (with a version bump) before treating scalar variables as campaign state. |
 | G13 · Full original game screens/modes | Pending | The app has Maker and Studio only. Original title/start/load, school/map interaction, menus and the remaining game modes are absent. | Build an explicit recovered mode inventory with dependencies and one vertical slice per mode; no overall completion percentage is defensible yet. |
 
 ### Actionable gameplay tasks
@@ -151,8 +202,9 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
   `SourceGameplaySessionTests.swift` checks both acceptance criteria on synthetic
   traces, including a JSON reload at each of the 52 barriers of a
   Friday-to-Wednesday trace; this is the synthetic Engine suite in CI, not
-  original-host evidence. Remaining: no app host consumes it (A-T01); it
-  neither owns nor persists a running `SourceADVInterpreter`, whose request
+  original-host evidence. The A-T01 host consumes it and saves the running
+  `SourceADVInterpreter` beside it in its own snapshot. Remaining: the session
+  itself neither owns nor persists an interpreter, whose request
   acknowledgements stay separate (G06); cancellation during a barrier is not
   modelled; the three conservative barriers need recovered completion rules; and
   timer operations are rejected while a barrier is outstanding.
@@ -273,7 +325,7 @@ Concrete Studio integration is covered in [Studio](studio.md).
 ## Evidence and specific cautions
 
 - Gameplay tests: `SourceGameplayCycleTests.swift`,
-  `SourceGameplaySessionTests.swift`,
+  `SourceGameplaySessionTests.swift`, `SourceGameplayHostTests.swift`,
   `SourceGameplayExecutionTests.swift`, `test_gameplay_contract.py`,
   `test_gameplay_execution_contract.py`, `test_adv_command_coverage.py`. Their references are independent
   calculations/recovered-source fixtures, **not a complete running game**.

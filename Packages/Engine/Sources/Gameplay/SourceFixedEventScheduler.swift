@@ -1,6 +1,6 @@
 import Foundation
 
-public struct SourceFixedEventTable: Codable, Sendable {
+public struct SourceFixedEventTable: Codable, Sendable, Equatable {
     public struct Entry: Codable, Sendable, Equatable {
         public var asset: String
         public var bundle: String
@@ -17,12 +17,12 @@ public struct SourceFixedEventTable: Codable, Sendable {
             self.map = map; self.weeks = weeks; self.layerName = layerName; self.coordinate = coordinate; self.afterDay = afterDay
         }
     }
-    public struct Schedule: Codable, Sendable {
+    public struct Schedule: Codable, Sendable, Equatable {
         public var heroineID: Int
         public var entries: [Entry]
     }
-    public struct ClassSchedule: Codable, Sendable {
-        public struct Day: Codable, Sendable { public var week: SourceGameplayWeek; public var lessons: [String] }
+    public struct ClassSchedule: Codable, Sendable, Equatable {
+        public struct Day: Codable, Sendable, Equatable { public var week: SourceGameplayWeek; public var lessons: [String] }
         public var classIndex: Int
         public var days: [Day]
     }
@@ -33,13 +33,17 @@ public struct SourceFixedEventTable: Codable, Sendable {
     public static func decode(_ data: Data) throws -> Self {
         guard data.count <= 16 * 1024 * 1024 else { throw SourceGameplayExecutionError.invalidData("Fixed-event table exceeds 16 MiB") }
         let value = try JSONDecoder().decode(Self.self, from: data)
-        guard value.schemaVersion == 1, value.schedules.count <= 10_000,
-              value.schedules.reduce(0, { $0 + $1.entries.count }) <= 100_000,
-              value.classSchedules.count <= 1000,
-              value.classSchedules.allSatisfy({ $0.days.count <= 7 && $0.days.allSatisfy { $0.lessons.count == 2 } }) else {
+        try value.validate()
+        return value
+    }
+    /// The schema and limits `decode` enforces, for a table decoded inside another document.
+    func validate() throws {
+        guard schemaVersion == 1, schedules.count <= 10_000,
+              schedules.reduce(0, { $0 + $1.entries.count }) <= 100_000,
+              classSchedules.count <= 1000,
+              classSchedules.allSatisfy({ $0.days.count <= 7 && $0.days.allSatisfy { $0.lessons.count == 2 } }) else {
             throw SourceGameplayExecutionError.invalidData("Invalid fixed-event table schema or limits")
         }
-        return value
     }
     public func entries(for heroineID: Int) -> [Entry] { schedules.filter { $0.heroineID == heroineID }.flatMap(\.entries) }
     public func lessons(classIndex: Int, week: SourceGameplayWeek) -> [String]? {
@@ -69,7 +73,7 @@ public enum SourceGameplayExecutionError: Error, Equatable, LocalizedError {
 }
 
 public enum SourceFixedEventScheduler {
-    public struct WaitPoint: Codable, Sendable {
+    public struct WaitPoint: Codable, Sendable, Equatable {
         public var id: String
         public var mapNo: Int
         public var layers: [String]
