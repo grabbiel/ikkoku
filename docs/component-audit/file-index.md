@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**843 files indexed; 843 assigned; 0 unassigned.**
+**856 files indexed; 856 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 89 |
-| [Character / Maker / mods](character-and-mods.md) | 116 |
-| [Studio / IK / animation](studio.md) | 180 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 305 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 90 |
+| [Character / Maker / mods](character-and-mods.md) | 118 |
+| [Studio / IK / animation](studio.md) | 181 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 314 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 153 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 177 |
+| Conversion / recovery / verification tool | 179 |
 | Documentation / historical evidence | 55 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 185 |
-| Test / validation | 170 |
+| Runtime / shared shader declaration | 194 |
+| Test / validation | 172 |
 
 ## App / gameplay / plugins
 
@@ -56,6 +56,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/AppState+GameplayScenario.swift](../../Apps/IkkokuCreator/AppState+GameplayScenario.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift](../../Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/AppState+PluginExecution.swift](../../Apps/IkkokuCreator/AppState+PluginExecution.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/AppState+SourceShaderLiveProbe.swift](../../Apps/IkkokuCreator/AppState+SourceShaderLiveProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/AppState.swift](../../Apps/IkkokuCreator/AppState.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Assets.xcassets/AccentColor.colorset/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/AccentColor.colorset/Contents.json) | App resource metadata / icon |
 | [Apps/IkkokuCreator/Assets.xcassets/AppIcon.appiconset/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/AppIcon.appiconset/Contents.json) | App resource metadata / icon |
@@ -192,6 +193,8 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceRigCustomization.swift](../../Packages/Engine/Sources/Character/SourceRigCustomization.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceRigPreview.swift](../../Packages/Engine/Sources/Character/SourceRigPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShaderBindingDerivation.swift](../../Packages/Engine/Sources/Character/SourceShaderBindingDerivation.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceShaderLiveAssembly.swift](../../Packages/Engine/Sources/Character/SourceShaderLiveAssembly.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceShaderLiveConfiguration.swift](../../Packages/Engine/Sources/Character/SourceShaderLiveConfiguration.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapeChannels.swift](../../Packages/Engine/Sources/Character/SourceShapeChannels.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift](../../Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift) | Runtime / shared shader declaration |
@@ -272,6 +275,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
@@ -680,12 +684,16 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Renderer/RenderBenchmark.swift](../../Packages/Engine/Sources/Renderer/RenderBenchmark.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/RenderFrame.swift](../../Packages/Engine/Sources/Renderer/RenderFrame.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/RenderTargets.swift](../../Packages/Engine/Sources/Renderer/RenderTargets.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift](../../Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/Renderer.swift](../../Packages/Engine/Sources/Renderer/Renderer.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/ResourceStore.swift](../../Packages/Engine/Sources/Renderer/ResourceStore.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingFrameSubstitution.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingFrameSubstitution.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingSet.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingSet.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/SourceShaderLiveEncoder.swift](../../Packages/Engine/Sources/Renderer/SourceShaderLiveEncoder.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/SourceShaderLiveMaterial.swift](../../Packages/Engine/Sources/Renderer/SourceShaderLiveMaterial.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderProgramContract.swift](../../Packages/Engine/Sources/Renderer/SourceShaderProgramContract.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/TranslatedSourceProgram.swift](../../Packages/Engine/Sources/Renderer/TranslatedSourceProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/TranslatedSourceShaderProbe.swift](../../Packages/Engine/Sources/Renderer/TranslatedSourceShaderProbe.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/Camera.swift](../../Packages/Engine/Sources/Scene/Camera.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/Light.swift](../../Packages/Engine/Sources/Scene/Light.swift) | Runtime / shared shader declaration |
@@ -696,6 +704,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Scene/SourceRigBounds.swift](../../Packages/Engine/Sources/Scene/SourceRigBounds.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h](../../Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/ShaderTypes/shim.c](../../Packages/Engine/Sources/ShaderTypes/shim.c) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceShaderLiveFixtureProbe.swift](../../Packages/Engine/Sources/Studio/SourceShaderLiveFixtureProbe.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift](../../Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift) | Test / validation |
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
@@ -712,6 +721,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceRigBoundsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigBoundsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift) | Test / validation |
 | [Shaders/Common.h](../../Shaders/Common.h) | Runtime / shared shader declaration |
 | [Shaders/Deform.metal](../../Shaders/Deform.metal) | Runtime / shared shader declaration |
 | [Shaders/Outline.metal](../../Shaders/Outline.metal) | Runtime / shared shader declaration |
@@ -748,6 +758,8 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/rig_inventory.py](../../Tools/reverse/rig_inventory.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/source_binding_supplement.py](../../Tools/reverse/source_binding_supplement.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/source_shader_translation.py](../../Tools/reverse/source_shader_translation.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/source_texture_store.py](../../Tools/reverse/source_texture_store.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/source_vertex_streams.py](../../Tools/reverse/source_vertex_streams.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_avatar_parity.py](../../Tools/reverse/test_avatar_parity.py) | Test / validation |
 | [Tools/reverse/test_compare_draw_overlays.py](../../Tools/reverse/test_compare_draw_overlays.py) | Test / validation |
 | [Tools/reverse/test_compare_original_frame.py](../../Tools/reverse/test_compare_original_frame.py) | Test / validation |
@@ -760,6 +772,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |
 | [Tools/reverse/test_rig_parity.py](../../Tools/reverse/test_rig_parity.py) | Test / validation |
 | [Tools/reverse/test_source_binding_supplement.py](../../Tools/reverse/test_source_binding_supplement.py) | Test / validation |
+| [Tools/reverse/test_source_live_inputs.py](../../Tools/reverse/test_source_live_inputs.py) | Test / validation |
 | [Tools/reverse/test_source_shader_translation.py](../../Tools/reverse/test_source_shader_translation.py) | Test / validation |
 
 ## Toolchain / verification / historical docs

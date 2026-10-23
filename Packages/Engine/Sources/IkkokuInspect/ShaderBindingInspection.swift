@@ -3,13 +3,14 @@ import CryptoKit
 import Character
 import Renderer
 import Scene
+import Studio
 
 /// `ikkoku-inspect shader-bindings`: derives the native shader binding set for
 /// a card and, when an original-player capture is given, compares it with the
 /// inputs the translated probe binds from that capture. The capture is read
 /// only after the derivation has finished, and only by the comparison.
 func inspectShaderBindings(cardURL: URL, libraryURL: URL, headContractURL: URL, programsURL: URL, frameURL: URL?, supplementURL: URL? = nil,
-                           substitutedFrameURL: URL? = nil) throws -> [String: Any] {
+                           substitutedFrameURL: URL? = nil, eyeLookURL: URL? = nil, eyeLookRates: String? = nil) throws -> [String: Any] {
     func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     let card = try SourceCharacterCard.load(url: cardURL)
     let library = try SourceMakerLibrary.load(url: libraryURL)
@@ -20,8 +21,23 @@ func inspectShaderBindings(cardURL: URL, libraryURL: URL, headContractURL: URL, 
     var provenance = ["card": cardURL.path, "cardSHA256": sha256(try Data(contentsOf: cardURL)), "makerLibrarySHA256": sha256(libraryData),
                       "headContract": headContractURL.path, "headContractSHA256": sha256(headContract), "programs": programsURL.path]
     if let supplementURL { provenance["supplement"] = supplementURL.path }
+    // Optional look state: the Studio eye-look settings document (eyeMaterial
+    // block) plus the frame's iris-shift rates, default the resting (0, 0).
+    var eyeLook: SourceShaderBindingDerivation.EyeLook?
+    if let eyeLookURL {
+        var rates: (horizontal: [Double], vertical: Double)?
+        if let eyeLookRates {
+            let values = eyeLookRates.split(separator: ",").compactMap { Double($0) }
+            guard values.count == 3, values.allSatisfy(\.isFinite) else { throw RigError.invalid("--eye-look-rates takes <left-h>,<right-h>,<v>.") }
+            rates = ([values[0], values[1]], values[2])
+        }
+        eyeLook = try SourceStudioIrisRendering.bindingEyeLook(card: card, settings: eyeLookURL, rates: rates)
+        provenance["eyeLook"] = eyeLookURL.path
+    } else if eyeLookRates != nil {
+        throw RigError.invalid("--eye-look-rates needs --eye-look.")
+    }
     let bindings = try SourceShaderBindingDerivation.derive(card: card, library: library, headContract: headContract, catalog: catalog,
-        supplement: supplement, provenance: provenance)
+        supplement: supplement, eyeLook: eyeLook, provenance: provenance)
     let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
     var report: [String: Any] = [
         "bindings": try JSONSerialization.jsonObject(with: encoder.encode(bindings)),

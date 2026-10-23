@@ -572,18 +572,9 @@ public final class SourceStudioCharacterPreview {
         // fallback is not recovered) instead of inventing a constructor default.
         var irisCardValues: SourceStudioIrisRendering.CardValues?
         if !irisEyes.isEmpty {
-            let paths = ["face.pupilX", "face.pupilY", "face.pupilWidth", "face.pupilHeight",
-                         "face.hlUpY", "face.hlDownY"]
-            let unprefixed = ["pupil X", "pupil Y", "pupil width", "pupil height", "highlight up Y", "highlight down Y"]
-            var fields: [Double] = [], missing: [String] = []
-            for (path, label) in zip(paths, unprefixed) {
-                guard let value = draft?.number(path) else { missing.append(label); continue }
-                fields.append(Double(value))
-            }
-            if fields.count == paths.count {
-                irisCardValues = SourceStudioIrisRendering.cardOverrides(
-                    pupilX: fields[0], pupilY: fields[1], pupilWidth: fields[2], pupilHeight: fields[3],
-                    hlUpY: fields[4], hlDownY: fields[5], sex: identity.sex, exType: identity.exType)
+            let (values, missing) = SourceStudioIrisRendering.cardValues(appearance: draft, sex: identity.sex, exType: identity.exType)
+            if missing.isEmpty {
+                irisCardValues = values
                 if irisCardValues != nil {
                     messages.append("Iris rendering applies the card pupil offset/scale and highlight offsets over the bo_head_00 prefab snapshot.")
                 } else {
@@ -682,6 +673,35 @@ public final class SourceStudioCharacterPreview {
             frame.items[i].material.uniforms.irisST1 = st[1]
             frame.items[i].material.uniforms.irisST2 = st[2]
         }
+    }
+
+    /// The iris transforms as the shader binding set's eye-look input
+    /// (R1/CMT-04 live source shaders): the resting (0, 0) rates, or with
+    /// `current` the live eye look's rates when it runs. Nil without the
+    /// Studio eye material settings (the iris `_ST` then stay unresolved).
+    public func shaderBindingEyeLook(current: Bool = false) throws -> SourceShaderBindingDerivation.EyeLook? {
+        guard !irisEyes.isEmpty else { return nil }
+        let live = current ? eyeLookRates : nil
+        let rates = live.map { (horizontal: $0.horizontal, vertical: $0.vertical) }
+        let rateText = live.map { "rates L \($0.horizontal.first ?? 0) R \($0.horizontal.last ?? 0) V \($0.vertical)" } ?? "resting rates (0, 0)"
+        return try SourceStudioIrisRendering.bindingEyeLook(eyes: irisEyes, card: irisCardValues, rates: rates,
+            source: "Studio eye look \((reference.lookSettingsFile as NSString?)?.lastPathComponent ?? "settings"), \(rateText), "
+                + (irisCardValues != nil ? "card pupil/highlight values" : "prefab snapshot"))
+    }
+
+    /// This frame's iris `_ST` values for the live source-shader draws, by
+    /// source renderer name (`cf_Ohitomi_L02` → `_MainTex_ST` …), Unity
+    /// layout `[scale.x, scale.y, offset.x, offset.y]`. Yure states are left
+    /// out (their binding stays unresolved, so that material is toon).
+    public func liveIrisOverrides() -> [String: [String: [Float]]] {
+        guard let look = try? shaderBindingEyeLook(current: true) else { return [:] }
+        var result: [String: [String: [Float]]] = [:]
+        for (node, properties) in look.transforms {
+            for (name, transform) in properties where !transform.yure && transform.scale.count == 2 && transform.offset.count == 2 {
+                result[node, default: [:]][name + "_ST"] = transform.scale + transform.offset
+            }
+        }
+        return result
     }
 
     /// Applies the document's wear (ST-C03). `clothesState` nil renders the

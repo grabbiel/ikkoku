@@ -4,6 +4,7 @@ import CryptoKit
 import Assets
 import Character
 import Renderer
+import Studio
 
 /// Synthetic translated-program descriptors, binding sets, capture frames and
 /// Maker-library evidence. Nothing here reads original data.
@@ -186,8 +187,10 @@ private enum ShaderBindingFixture {
     let maskTexture = try #require(F.finding(comparison, "o_a", 0, .texture, "_Mask"))
     #expect(maskTexture.status == .differs && maskTexture.cause?.contains("name tex_wrong vs tex_m") == true)
     #expect(status("o_a", 0, .texture, "_Unbound") == .exact)
-    // Slot 1 is beyond the mesh's single submesh; the probe never draws it.
-    #expect(status("o_a", 1, .renderer, "renderer") == .extra)
+    // Slot 1 is beyond the mesh's single submesh: Unity and the probe draw it
+    // over the last submesh, so it is compared like any drawn slot.
+    let extraSlot = try #require(F.finding(comparison, "o_a", 1, .renderer, "renderer"))
+    #expect(extraSlot.status == .exact && extraSlot.note?.contains("draw it over the last submesh") == true)
     #expect(status("o_extra", 0, .renderer, "renderer") == .extra && status("o_hidden", 0, .renderer, "renderer") == .exact)
     #expect(status(nil, nil, .vector, "_LineColorG") == .exact && status(nil, nil, .vector, "_Time") == .missingNatively)
     #expect(status(nil, nil, .texture, "_RampG") == .exact)
@@ -222,11 +225,13 @@ private enum ShaderBindingFixture {
     let catalog = SourceShaderProgramCatalog(programs: [F.testShader: [contract]])
     let (data, report) = try SourceShaderBindingFrameSubstitution.substitute(bindings: F.bindings(contract: contract),
         frame: JSONSerialization.data(withJSONObject: F.frame()), catalog: catalog)
-    #expect(report.substituted == ["queue": 1, "vector": 2, "textureTransform": 2, "texture": 2, "sampler": 1, "globalVector": 1, "globalTexture": 1])
-    #expect(report.keptCapture == ["synthetic unresolved reason": 1, "clock": 1, "global not derived": 1, "sampler state not derived": 1,
-                                   "native texture pixels are not available to the probe (identity differs from the capture)": 1])
-    // Only the near-equal `_Cutoff` and the prefab `_Mask` scale change value.
-    #expect(report.changedValues == 2)
+    // Both slots are drawn (slot 1 over the last submesh), so both substitute.
+    // Sampler state lives on the shared texture row, so each file counts once.
+    #expect(report.substituted == ["queue": 2, "vector": 4, "textureTransform": 4, "texture": 4, "sampler": 1, "globalVector": 1, "globalTexture": 1])
+    #expect(report.keptCapture == ["synthetic unresolved reason": 2, "clock": 1, "global not derived": 1, "sampler state not derived": 1,
+                                   "native texture pixels are not available to the probe (identity differs from the capture)": 2])
+    // Only the near-equal `_Cutoff` and the prefab `_Mask` scale change value, per slot.
+    #expect(report.changedValues == 4)
     let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let materials = try #require((frame["meshes"] as? [[String: Any]])?.first?["materials"] as? [[String: Any]])
     let properties = try #require(materials[0]["properties"] as? [String: Any])
@@ -234,8 +239,9 @@ private enum ShaderBindingFixture {
     #expect(((properties["_Mask"] as? [String: Any])?["scale"] as? [NSNumber])?.map(\.floatValue) == [2, 2])
     #expect((properties["_Mask"] as? [String: Any])?["file"] as? String == "m.bin")
     #expect(properties["_Spec"] == nil && properties["_Unbound"] == nil)
-    // Slot 1 is beyond the submesh count, so the probe never binds it.
-    #expect((materials[1]["properties"] as? [String: Any])?["_Cutoff"] as? Double == 0.5)
+    // Slot 1 is beyond the submesh count; the probe draws it over the last
+    // submesh, so it is substituted too.
+    #expect(((materials[1]["properties"] as? [String: Any])?["_Cutoff"] as? NSNumber)?.floatValue == 0.500004)
     #expect(frame["nativeBindingSubstitution"] != nil && (frame["globals"] as? [String: Any])?["_Time"] as? [Int] == [0, 1, 2, 3])
 }
 
@@ -382,17 +388,34 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
     let samplerEvidence = samplerBundles.allSatisfy(bundles.contains)
     #expect(samplerEvidence || !samplerBundles.contains(where: bundles.contains))
     let samplers = comparison.findings.filter { $0.category == .sampler }
+    // The `cf_O_eyeline` slot beyond its single submesh is drawn and compared
+    // (it was the one `extra` while the probe drew materials.prefix(submeshes)).
     if samplerEvidence {
-        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (575, 29, 8, 1, 613))
+        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (576, 29, 8, 0, 613))
         #expect(samplers.count == 66 && samplers.allSatisfy { $0.status == .exact })
     } else {
-        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (567, 29, 16, 1, 613))
+        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (568, 29, 16, 0, 613))
         #expect(samplers.filter { $0.status == .missingNatively }.count == 8)
     }
     // Every remaining gap is one of the named, unresolvable causes.
     let causes = Set(comparison.gaps.map(\.cause))
     #expect(causes.allSatisfy { (!samplerEvidence && $0.hasPrefix("sampler state")) || $0.hasPrefix("EyeLookMaterialControll") || $0.hasPrefix("frame clock")
-        || $0.hasPrefix("Unity value of an unset global") || $0 == "probe draws only materials.prefix(submeshes)" })
+        || $0.hasPrefix("Unity value of an unset global") })
+
+    // With a Studio eye-look state (the exported bo_head_00 settings at the
+    // resting rates and the card's pupil/highlight values) the six iris
+    // transforms resolve within tolerance of the capture's ±0.02.
+    if let lookPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"] {
+        let identity = try card.customization()
+        let values = SourceStudioIrisRendering.cardValues(appearance: try SourceCardAppearance(card: card, coordinate: 0),
+                                                          sex: identity.sex, exType: identity.exType)
+        let look = try SourceStudioIrisRendering.bindingEyeLook(eyes: SourceStudioEyeMaterialSettings.document(json: Data(contentsOf: URL(fileURLWithPath: lookPath))),
+                                                                card: values.values, rates: nil, source: "fixture look settings")
+        let looked = try SourceShaderBindingComparison.compare(bindings: SourceShaderBindingDerivation.derive(card: card, library: library,
+            headContract: head, catalog: catalog, supplement: supplement, eyeLook: look), frame: frameData, catalog: catalog).overall
+        #expect((looked.exact, looked.withinTolerance, looked.differs, looked.missingNatively, looked.extra, looked.total)
+                == (samplerEvidence ? (576, 35, 0, 2, 0, 613) : (568, 35, 0, 10, 0, 613)))
+    }
 
     // Mutation control on the capture side: one hair colour lane changed.
     var frame = try #require(JSONSerialization.jsonObject(with: frameData) as? [String: Any])
@@ -409,5 +432,5 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
     // Without the supplement the same derivation reports, not guesses, the gaps.
     let bare = try SourceShaderBindingComparison.compare(bindings: SourceShaderBindingDerivation.derive(card: card, library: library,
         headContract: head, catalog: catalog), frame: frameData, catalog: catalog)
-    #expect((bare.overall.exact, bare.overall.withinTolerance, bare.overall.differs, bare.overall.missingNatively, bare.overall.extra) == (456, 27, 2, 114, 1))
+    #expect((bare.overall.exact, bare.overall.withinTolerance, bare.overall.differs, bare.overall.missingNatively, bare.overall.extra) == (457, 27, 2, 114, 0))
 }
