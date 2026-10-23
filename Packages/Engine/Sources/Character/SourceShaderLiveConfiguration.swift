@@ -11,7 +11,7 @@ import Renderer
 /// | `IKKOKU_LIVE_SOURCE_SHADERS=1` | start with the opt-in on (View ▸ Live Source Shaders toggles it) |
 /// | `IKKOKU_LIVE_SOURCE_PROGRAMS` | translated original programs (`<family>[_outline]/program.json`) |
 /// | `IKKOKU_LIVE_SOURCE_TEXTURES` | native texture store `manifest.json` (`Tools/reverse/source_texture_store.py`) |
-/// | `IKKOKU_LIVE_SOURCE_STREAMS` | source UV3/colour `manifest.json` (`Tools/reverse/source_vertex_streams.py`) |
+/// | `IKKOKU_LIVE_SOURCE_STREAMS` | source UV1/UV2/UV3/colour `manifest.json` (`Tools/reverse/source_vertex_streams.py`) |
 /// | `IKKOKU_SHADER_BINDING_SUPPLEMENT` | source binding supplement (keywords, sampler state, body draw material) |
 /// | `IKKOKU_HEAD_MATERIAL_CONTRACT` | head material contract; default `head-materials/contract.json` beside the source avatar |
 /// | `IKKOKU_MAKER_LIBRARY` | Maker library (the app's own lookup when unset) |
@@ -71,7 +71,7 @@ public struct SourceShaderLiveConfiguration: Sendable, Equatable {
         var notes: [String] = []
         let streams: [String: [SourceVertexStreams]]
         if let url = self.streams { streams = try SourceVertexStreams.load(manifest: url, device: device) }
-        else { streams = [:]; notes.append("IKKOKU_LIVE_SOURCE_STREAMS is not set: programs reading TEXCOORD3 or COLOR (main_skin) stay toon") }
+        else { streams = [:]; notes.append("IKKOKU_LIVE_SOURCE_STREAMS is not set: programs reading TEXCOORD3 or COLOR (main_skin), or a TEXCOORD1/2 the converted mesh lacks (main_hair), stay toon") }
         return Shared(textures: provider, streams: streams, notes: notes)
     }
 
