@@ -102,6 +102,10 @@ public struct SourceGameplayNativeState: Codable, Sendable, Equatable {
     public struct MapSunlight: Codable, Sendable, Equatable {
         public var map: Int
         public var period: SourceGameplayPeriod
+        public init(map: Int, period: SourceGameplayPeriod) {
+            self.map = map
+            self.period = period
+        }
     }
 
     /// The weekday `persistWeek` saved.
