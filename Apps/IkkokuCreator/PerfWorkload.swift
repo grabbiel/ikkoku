@@ -14,7 +14,8 @@ import Studio
 /// selection, pose-mode and scene commands. Nothing is re-implemented.
 ///
 /// Timeline: the window is sized to `IKKOKU_PERF_WINDOW_W`×`_H` points (default
-/// 1600×1000, never saved as the user's window frame), the workload is set up,
+/// 1600×1000, never saved as the user's window frame) and floats above other
+/// apps' windows so it is never occluded (`configureWindow`), the workload is set up,
 /// `IKKOKU_PERF_WARMUP_SECONDS` (default 3) pass so pipeline creation and
 /// first-use uploads settle, then `IKKOKU_PERF_SECONDS` (default 10) are
 /// recorded while input, if any, is injected at `IKKOKU_PERF_INPUT_HZ`
