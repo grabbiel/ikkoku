@@ -34,6 +34,7 @@ public final class LoadedAsset: @unchecked Sendable {
     private let lock = NSLock()
 
     init(url: URL, asset: GLTFAsset, resources: ResourceStore, targetSkeleton: Skeleton? = nil, namePrefix: String? = nil) throws {
+        try LoadedAsset.requirePrimaryTextureCoordinates(asset)
         self.url = url
         self.asset = asset
         self.resources = resources
@@ -80,6 +81,24 @@ public final class LoadedAsset: @unchecked Sendable {
             }
         }
         self.parts = parts
+    }
+
+    /// Native toon materials sample imported base-color and normal textures with UV0
+    /// (`Toon.metal` `in.uv`). A drawn glTF texture that selects TEXCOORD_1/2 is rejected
+    /// before any GPU registration rather than drawn with the wrong coordinates. The decoded
+    /// `GLTFAsset` still retains the selection and the secondary UV streams.
+    static func requirePrimaryTextureCoordinates(_ asset: GLTFAsset) throws {
+        for (_, mesh) in asset.meshNodes {
+            for primitive in asset.meshes[mesh].primitives {
+                guard let index = primitive.materialIndex, asset.materials.indices.contains(index) else { continue }
+                let material = asset.materials[index]
+                let bindings = [("baseColorTexture", material.baseColorImage, material.baseColorTexCoord),
+                                ("normalTexture", material.normalImage, material.normalTexCoord)]
+                for (slot, image, texCoord) in bindings where image != nil && texCoord != 0 {
+                    throw GLTFError.io("Material '\(material.name)' samples \(slot) from TEXCOORD_\(texCoord); native materials sample TEXCOORD_0 only.")
+                }
+            }
+        }
     }
 
     public var bounds: AABB {
@@ -141,6 +160,7 @@ public final class AssetLibrary: @unchecked Sendable {
         assets[source.path] = loaded
         failed.remove(source.path)
         log.append("Imported \(source.lastPathComponent): \(loaded.parts.count) static parts")
+        log += gltf.diagnostics.map { "\(source.lastPathComponent): \($0)" }
         return loaded
     }
 
@@ -156,6 +176,7 @@ public final class AssetLibrary: @unchecked Sendable {
             let loaded = try LoadedAsset(url: u, asset: gltf, resources: resources, targetSkeleton: skeleton, namePrefix: namePrefix)
             assets[key] = loaded
             log.append("Loaded \(relativePath): \(loaded.parts.count) parts, \(loaded.skeleton?.count ?? 0) bones")
+            log += gltf.diagnostics.map { "\(relativePath): \($0)" }
             return loaded
         } catch {
             failed.insert(key)

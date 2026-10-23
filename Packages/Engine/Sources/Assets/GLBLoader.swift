@@ -8,6 +8,7 @@ public enum GLTFError: Error, CustomStringConvertible {
     case missingBuffer(Int)
     case unsupportedAccessor(String)
     case missingAttribute(String)
+    case unsupportedExtensions([String])
     case io(String)
 
     public var description: String {
@@ -17,13 +18,28 @@ public enum GLTFError: Error, CustomStringConvertible {
         case .missingBuffer(let i): return "glTF buffer \(i) is missing."
         case .unsupportedAccessor(let s): return "Unsupported accessor: \(s)"
         case .missingAttribute(let s): return "Primitive lacks attribute \(s)."
+        case .unsupportedExtensions(let names):
+            return "glTF requires unsupported extension(s): \(names.joined(separator: ", "))."
         case .io(let s): return s
         }
     }
 }
 
 /// Loads `.glb` (binary) and `.gltf` (JSON + external/base64 buffers).
+///
+/// Unsupported data that would change an asset's meaning is rejected (`GLTFError`).
+/// Data the native pipeline reduces or ignores is reported in `GLTFAsset.diagnostics`.
 public enum GLBLoader {
+    /// glTF extensions this loader implements. Any other `extensionsRequired` entry is
+    /// rejected; any other `extensionsUsed` entry is reported as `unsupported_extension`.
+    public static let supportedExtensions: Set<String> = []
+
+    /// Native materials sample imported base-color/normal textures with `linearRepeat`
+    /// (`Shaders/Common.h`): linear magnification, trilinear minification, REPEAT wrap.
+    static func samplerMatchesNative(_ sampler: GLTFRoot.Sampler) -> Bool {
+        (sampler.wrapS ?? 10497) == 10497 && (sampler.wrapT ?? 10497) == 10497
+            && (sampler.magFilter ?? 9729) == 9729 && [9729, 9987].contains(sampler.minFilter ?? 9987)
+    }
 
     public static func load(url: URL) throws -> GLTFAsset {
         let data = try Data(contentsOf: url)
@@ -74,6 +90,11 @@ public enum GLBLoader {
         let root: GLTFRoot
         var buffers: [Data]
         let baseURL: URL?
+        var diagnostics: [GLTFDiagnostic] = []
+
+        func report(_ code: String, _ message: String) {
+            diagnostics.append(GLTFDiagnostic(code: code, message: message))
+        }
 
         init(root: GLTFRoot, bin: Data?, baseURL: URL?) throws {
             self.root = root
@@ -314,6 +335,13 @@ public enum GLBLoader {
         }
 
         func build() throws -> GLTFAsset {
+            // Required extensions were rejected during validation; used ones are only ignored.
+            var reportedExtensions = Set<String>()
+            for name in root.extensionsUsed ?? [] where !GLBLoader.supportedExtensions.contains(name) {
+                guard reportedExtensions.insert(name).inserted else { continue }
+                report("unsupported_extension", "Extension \(name) is declared in extensionsUsed but not supported; its data is ignored.")
+            }
+
             // Nodes
             var nodes: [NodeData] = []
             for n in root.nodes ?? [] {
@@ -330,7 +358,7 @@ public enum GLBLoader {
                     if let rr = n.rotation, rr.count == 4 { r = simd_quatf(ix: rr[0], iy: rr[1], iz: rr[2], r: rr[3]) }
                 }
                 nodes.append(NodeData(name: n.name ?? "", children: n.children ?? [], parent: nil, mesh: n.mesh, skin: n.skin,
-                                      translation: t, rotation: r, scale: s, extras: n.extras, authoredMatrix: authored))
+                                      translation: t, rotation: r, scale: s, extras: n.extras, authoredMatrix: authored, weights: n.weights))
             }
             for (i, n) in nodes.enumerated() { for c in n.children where c < nodes.count { nodes[c].parent = i } }
             let sceneIndex = root.scene ?? 0
@@ -338,7 +366,7 @@ public enum GLBLoader {
 
             // Materials
             var materials: [MaterialData] = []
-            for m in root.materials ?? [] {
+            for (mi, m) in (root.materials ?? []).enumerated() {
                 let pbr = m.pbrMetallicRoughness
                 let bc = pbr?.baseColorFactor ?? [1, 1, 1, 1]
                 let ef = m.emissiveFactor ?? [0, 0, 0]
@@ -349,7 +377,20 @@ public enum GLBLoader {
                     normalImage: m.normalTexture.flatMap { root.textures?[$0.index].source },
                     emissiveFactor: Float3(ef[0], ef[1], ef[2]),
                     alphaMode: m.alphaMode ?? "OPAQUE", alphaCutoff: m.alphaCutoff ?? 0.5,
-                    doubleSided: m.doubleSided ?? false, extras: m.extras))
+                    doubleSided: m.doubleSided ?? false, extras: m.extras,
+                    baseColorTexCoord: pbr?.baseColorTexture?.texCoord ?? 0, normalTexCoord: m.normalTexture?.texCoord ?? 0))
+                let label = m.name.map { "'\($0)'" } ?? "\(mi)"
+                let ignoredSlots = [("metallicRoughnessTexture", pbr?.metallicRoughnessTexture), ("occlusionTexture", m.occlusionTexture),
+                                    ("emissiveTexture", m.emissiveTexture)].filter { $0.1 != nil }.map { $0.0 }
+                if !ignoredSlots.isEmpty {
+                    report("unsupported_texture_slot", "Material \(label) \(ignoredSlots.joined(separator: ", ")) is not sampled by native materials.")
+                }
+                for (slot, binding) in [("baseColorTexture", pbr?.baseColorTexture), ("normalTexture", m.normalTexture)] {
+                    guard let info = binding, let samplerIndex = root.textures?[info.index].sampler,
+                          let sampler = root.samplers?[samplerIndex], !GLBLoader.samplerMatchesNative(sampler) else { continue }
+                    report("unsupported_sampler", "Material \(label) \(slot) sampler (mag \(sampler.magFilter ?? 9729), min \(sampler.minFilter ?? 9987), "
+                        + "wrap \(sampler.wrapS ?? 10497)/\(sampler.wrapT ?? 10497)) is sampled with linear mipmapped REPEAT by native materials.")
+                }
             }
 
             // Images
@@ -383,16 +424,22 @@ public enum GLBLoader {
 
             // Meshes
             var meshes: [MeshGroup] = []
+            var ignoredAttributes = Set<String>(), ignoredTargetAttributes = Set<String>()
             for m in root.meshes ?? [] {
                 let targetNames = m.extras?["targetNames"]?.stringArray ?? []
                 var prims: [MeshData] = []
                 for (pi, p) in m.primitives.enumerated() {
                     guard (p.mode ?? 4) == 4 else { continue } // triangles only
+                    let name = m.primitives.count > 1 ? "\(m.name ?? "mesh")#\(pi)" : (m.name ?? "mesh")
                     guard let posAcc = p.attributes["POSITION"] else { throw GLTFError.missingAttribute("POSITION") }
                     let positions = try readFloat3(posAcc)
                     var normals = try p.attributes["NORMAL"].map { try readFloat3($0) } ?? []
                     let tangents = try p.attributes["TANGENT"].map { try readFloat4($0) } ?? []
                     let uvs = try p.attributes["TEXCOORD_0"].map { try readFloat2($0) } ?? []
+                    // Secondary sets are independent streams (for example iris or lightmap UVs);
+                    // an absent set stays empty and the GPU upload aliases UV0 for it.
+                    let uvs1 = try p.attributes["TEXCOORD_1"].map { try readFloat2($0) } ?? []
+                    let uvs2 = try p.attributes["TEXCOORD_2"].map { try readFloat2($0) } ?? []
                     let colors = try p.attributes["COLOR_0"].map { try readFloat4($0, defaultW: 1) } ?? []
                     var joints: [SIMD4<UInt16>] = []
                     var weights: [Float4] = []
@@ -401,19 +448,40 @@ public enum GLBLoader {
                         let wv = try readFloat4(w)
                         joints = (0..<(jv.count / jc)).map { SIMD4<UInt16>(UInt16(jv[$0*jc]), UInt16(jv[$0*jc+1]), UInt16(jv[$0*jc+2]), UInt16(jv[$0*jc+3])) }
                         weights = wv
-                        // Fold a second influence set into the first four by keeping the largest weights.
-                        if let j1 = p.attributes["JOINTS_1"], let w1 = p.attributes["WEIGHTS_1"] {
+                        // The GPU skin layout has four lanes. Further sets (JOINTS_1/WEIGHTS_1, ...;
+                        // validated contiguous) are folded in by keeping the largest four weights
+                        // and renormalizing. That is lossy, so it is always reported.
+                        var extraSets: [(joints: [UInt32], components: Int, weights: [Float4])] = []
+                        while let j1 = p.attributes["JOINTS_\(extraSets.count + 1)"], let w1 = p.attributes["WEIGHTS_\(extraSets.count + 1)"] {
                             let (jv1, jc1) = try readUInts(j1)
                             let wv1 = try readFloat4(w1)
+                            extraSets.append((joints: jv1, components: jc1, weights: wv1))
+                        }
+                        if !extraSets.isEmpty {
+                            var lossy = 0
                             for v in 0..<joints.count {
                                 var pairs: [(UInt16, Float)] = (0..<4).map { (joints[v][$0], weights[v][$0]) }
-                                pairs += (0..<4).map { (UInt16(jv1[v*jc1+$0]), wv1[v][$0]) }
+                                for extra in extraSets {
+                                    pairs += (0..<4).map { (UInt16(extra.joints[v * extra.components + $0]), extra.weights[v][$0]) }
+                                }
                                 pairs.sort { $0.1 > $1.1 }
+                                if pairs[4...].contains(where: { $0.1 != 0 }) { lossy += 1 }
                                 let sum = max(pairs[0].1 + pairs[1].1 + pairs[2].1 + pairs[3].1, 1e-6)
                                 joints[v] = SIMD4<UInt16>(pairs[0].0, pairs[1].0, pairs[2].0, pairs[3].0)
                                 weights[v] = Float4(pairs[0].1, pairs[1].1, pairs[2].1, pairs[3].1) / sum
                             }
+                            report("skin_influences_reduced", "Primitive \(name) declares \(4 * (extraSets.count + 1)) skin influences per vertex "
+                                + "(JOINTS_0...JOINTS_\(extraSets.count)); kept the largest 4 and renormalized. "
+                                + "\(lossy) of \(joints.count) vertices lost nonzero weight.")
                         }
+                    }
+                    let consumed: Set<String> = ["POSITION", "NORMAL", "TANGENT", "TEXCOORD_0", "TEXCOORD_1", "TEXCOORD_2", "COLOR_0", "_REGION"]
+                    for semantic in p.attributes.keys where !consumed.contains(semantic)
+                        && GLTFRoot.attributeSet(semantic, prefix: "JOINTS_") == nil && GLTFRoot.attributeSet(semantic, prefix: "WEIGHTS_") == nil {
+                        ignoredAttributes.insert(semantic)
+                    }
+                    for target in p.targets ?? [] {
+                        for semantic in target.keys where semantic != "POSITION" && semantic != "NORMAL" { ignoredTargetAttributes.insert(semantic) }
                     }
                     var regions: [UInt8] = []
                     if let r = p.attributes["_REGION"] {
@@ -440,16 +508,33 @@ public enum GLBLoader {
                         let name = ti < targetNames.count ? targetNames[ti] : "target\(ti)"
                         targets.append(.init(name: name, positionDeltas: pd, normalDeltas: nd))
                     }
-                    let name = m.primitives.count > 1 ? "\(m.name ?? "mesh")#\(pi)" : (m.name ?? "mesh")
-                    prims.append(MeshData(name: name, positions: positions, normals: normals, tangents: tangents, uvs: uvs, colors: colors,
+                    prims.append(MeshData(name: name, positions: positions, normals: normals, tangents: tangents, uvs: uvs,
+                                          uvs1: uvs1, uvs2: uvs2, colors: colors,
                                           joints: joints, weights: weights, indices: indices, morphTargets: targets,
                                           materialIndex: p.material, regions: regions, extras: p.extras))
                 }
-                meshes.append(MeshGroup(name: m.name ?? "", primitives: prims, extras: m.extras))
+                meshes.append(MeshGroup(name: m.name ?? "", primitives: prims, extras: m.extras, weights: m.weights))
+            }
+            if !ignoredAttributes.isEmpty {
+                report("ignored_attribute", "Vertex attributes \(ignoredAttributes.sorted().joined(separator: ", ")) are not decoded.")
+            }
+            if !ignoredTargetAttributes.isEmpty {
+                report("ignored_morph_attribute", "Morph target attributes \(ignoredTargetAttributes.sorted().joined(separator: ", ")) are not decoded; "
+                    + "only POSITION and NORMAL deltas are applied.")
             }
 
-            return GLTFAsset(url: nil, nodes: nodes, rootNodes: roots, meshes: meshes, materials: materials,
-                             images: images, skins: skins, extras: root.extras)
+            var asset = GLTFAsset(url: nil, nodes: nodes, rootNodes: roots, meshes: meshes, materials: materials,
+                                  images: images, skins: skins, extras: root.extras)
+            // Initial weights are retained (`GLTFAsset.initialMorphWeights(ofNode:)`), but no
+            // native render path consumes them yet: morphs start at zero there.
+            for (node, mesh) in asset.meshNodes {
+                let initial = asset.initialMorphWeights(ofNode: node)
+                guard initial.contains(where: { $0 != 0 }) else { continue }
+                report("initial_morph_weights_not_applied", "Node '\(asset.nodes[node].name)' (mesh '\(asset.meshes[mesh].name)') authors nonzero "
+                    + "initial morph weights \(initial); native render paths start every morph target at zero.")
+            }
+            asset.diagnostics = diagnostics
+            return asset
         }
     }
 }

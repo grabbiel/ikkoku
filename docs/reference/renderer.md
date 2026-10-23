@@ -1066,8 +1066,10 @@ outfit and standard bone type; other animated states remain untested.
 
 The live renderer supports four skin influences and a single morph frame per
 target. More than 64 active morphs can be silently truncated; the light budget is
-eight and the uniform ring preconditions on exceeding its 8 MiB region. glTF UV1/2,
-initial morph weights and tangent morphs are not fully consumed. There is no
+eight and the uniform ring preconditions on exceeding its 8 MiB region. glTF UV1/2
+are decoded, but native materials sample imported glTF textures on UV0 and
+`LoadedAsset` rejects other selections. Initial morph weights are retained but not
+applied, and tangent morphs are ignored; the loader reports both. There is no
 complete LOD, streaming or frustum-culling system. R3/R5/R6 define fixes and checks.
 
 A recorded Release fixture on M2 Ultra at 600×800 rendered 28 items, 60,761 triangles
