@@ -166,28 +166,41 @@ hair remains static in Maker, consistent with the existing dynamics limitation.
 See the [card transaction contract](cards.md#transactional-vanilla-maker-selections-cmt-02-2026-10-23)
 for serialization, preservation and failure behavior.
 
-Recorded Release evidence on 2026-10-23: three interleaved runs of the final
-implementation and three control runs each passed all 46 scenario checks. The
-control retained the redundant exact CPU bounds scan and repeated immediate pose
-solve. Changed-selection medians (15 changes per run) were 873.45/874.78/873.92 ms
-for the control and 870.24/868.88/863.47 ms for the final implementation. Individual
-selection ranges overlapped; this small difference does not establish a material
-speedup. No-op requests took 0.063–0.069 ms. Synchronous file/asset preparation and
-validation still take roughly 0.83–0.90 seconds per changed selection and remain a
-performance limitation. No per-frame work is added by the selection controls.
+Release stage profiling on 2026-10-23 attributed about 748 ms of a changed
+selection to library preparation and 107 ms to card appearance; card editing,
+pose validation and immediate refresh were each below 2 ms. Preparation now
+validates all reference hair/clothing paths and slots but parses their geometry
+only when an unresolved selection needs that fallback. Converted and explicit-empty
+selections skip reference rigs they replace. Every selected asset still passes
+its path, size and hash checks on every preparation; there is no asset cache.
 
-Warmed back-hair 2 → 9 → 2 cycles settled at 36 store-owned meshes and 55 textures;
-warmed top 39 → 38 → 39 cycles settled at 34 meshes and 56 textures. Both retained
-mesh bytes and deform counts. Repeated candidate previews rejected by an invalid
-pending shape preserved all counted resources (34 meshes/57 textures/0 deform
-buffers), including on the first rejection. A separate deliberately mismatched
-asset hash passed 4/4 failure checks with 36 meshes/35 textures unchanged. Store
-counts include reported retired resources and exclude render targets/pipelines
-and resources owned only by submitted frames.
+A quiet Release comparison on Mac14,14 with Xcode 27.0 (27A266a) used three
+interleaved runs per implementation, each with 15 actual changed selections.
+Eager-reference run medians were 841.13/845.83/847.45 ms; deferred-reference medians
+were 646.05/645.93/648.42 ms. The median of run medians fell from 845.83 to 646.05 ms,
+a 23.62% reduction. Individual ranges were 802.78–873.80 ms and 610.36–672.43 ms,
+respectively; no-op requests took 0.058–0.070 ms. These measurements include
+synchronous file/asset preparation and validation, not UI throughput or frame
+rate. Changed selection still blocks for roughly 0.61–0.67 seconds and remains a
+responsiveness limitation. No per-frame work is added by the selection controls.
 
-All six exported cards were byte-identical, including thumbnails. Build/input
-hashes, per-step resource/timing records, controlled source variants and independent
-byte audits are retained in the private
-`.local/codex-renderer-maker-models-2026-10-23/` evidence directory. The earlier
-34-step Debug scenario also passed, but its 1.75–1.89 second selection timings were
-not a quiet Release measurement and are not used for the comparison above.
+All six runs passed 46/46 scenario checks. Warmed back-hair 2 → 9 → 2 cycles
+settled at 36 store-owned meshes and 55 textures; warmed top 39 → 38 → 39 cycles
+settled at 34 meshes and 56 textures. Mesh bytes and deform counts stayed equal.
+Repeated candidate previews rejected by an invalid pending shape preserved all
+counted resources (34 meshes/57 textures/0 deform buffers), including on the first
+rejection. A deliberately mismatched selected-asset hash passed 4/4 failure checks
+with 36 meshes/35 textures unchanged. Store counts include reported retired
+resources and exclude render targets/pipelines and resources owned only by
+submitted frames.
+
+All six exported cards were byte-identical to each other and to the earlier eager
+implementation, including thumbnails. Seven focused Maker-library tests executed
+with strict private fixtures, covering exact assembled geometry/palette/identity
+preservation, unused malformed-path rejection, selected-asset hash rejection,
+and required hair/clothing fallback failures. Build/input hashes, per-step
+resource/timing records, controlled source variants and independent byte audits
+are retained in the private `.local/codex-renderer-maker-models-2026-10-23/`
+evidence directory. The earlier 34-step Debug run and the smaller bounds/pose
+optimization comparison also passed; their timings are not used for the deferred
+reference-loading result above.

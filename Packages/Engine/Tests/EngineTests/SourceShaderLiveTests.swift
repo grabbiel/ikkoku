@@ -601,6 +601,168 @@ private func colorMetrics(_ a: [UInt8], _ b: [UInt8], mask: [Bool]) -> (pixels: 
     return (mask.filter { $0 }.count, Double(errors.reduce(0, +)) / Double(errors.count), p99)
 }
 
+private func nativeTextureStoreFixture(overrides: [String: Any] = [:], truncateLevel: Int? = nil) throws -> URL {
+    let folder = try LiveProgramFixture.temporaryDirectory()
+    try FileManager.default.createDirectory(at: folder.appendingPathComponent("asset"), withIntermediateDirectories: true)
+    let levels: [[Float16]] = [Array(repeating: Float16(0.25), count: 8) + Array(repeating: Float16(0.5), count: 8),
+                             Array(repeating: Float16(0.75), count: 4)]
+    var files: [String] = [], hashes: [String] = []
+    for (level, pixels) in levels.enumerated() {
+        let data = pixels.withUnsafeBytes { Data($0) }, name = "level-\(level).rgba16f"
+        try (truncateLevel == level ? data.dropLast() : data).write(to: folder.appendingPathComponent("asset/" + name))
+        files.append(name); hashes.append(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined())
+    }
+    var entry: [String: Any] = ["bundle": "chara/ramp.unity3d", "bundleSHA256": "source-hash", "name": "ramp", "pathID": "7",
+                              "serializedFile": "CAB-source", "width": 2, "height": 2, "mipLevels": 2,
+                              "colorSpace": "linear", "textureFormat": 4, "filter": "Bilinear", "wrap": "Clamp", "aniso": 1,
+                              "directory": "asset", "files": files, "sha256": hashes]
+    entry.merge(overrides) { _, new in new }
+    let url = folder.appendingPathComponent("manifest.json")
+    try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "encoding": "linear-rgba16f-little-endian-bottom-up", "entries": [entry]])
+        .write(to: url)
+    return url
+}
+
+private var nativeTextureIdentity: BindingSet.TextureIdentity {
+    .init(kind: .asset, name: "ramp", bundle: "chara/ramp.unity3d", bundleSHA256: "source-hash", serializedFile: "CAB-source", pathID: "7",
+          width: 2, height: 2, mipLevels: 2)
+}
+
+@Test func liveSourceTextureStoreRejectsMalformedMipManifests() throws {
+    for overrides: [String: Any] in [["mipLevels": 0, "files": [], "sha256": []], ["width": 0], ["height": 8192],
+                                   ["mipLevels": 3], ["files": ["level-0.rgba16f"]], ["sha256": []],
+                                   ["sha256": ["short", String(repeating: "0", count: 64)]],
+                                   ["sha256": [String(repeating: "A", count: 64), String(repeating: "0", count: 64)]],
+                                   ["mipLevels": 1, "files": ["level-0.rgba16f"],
+                                    "sha256": [String(repeating: "0", count: 64) + "#" + String(repeating: "1", count: 64)]],
+                                   ["directory": "../outside"], ["files": ["../outside", "level-1.rgba16f"]],
+                                   ["files": ["level-0.rgba16f", "level-0.rgba16f"]]] {
+        let url = try nativeTextureStoreFixture(overrides: overrides)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        #expect(throws: SourceShaderLiveReason.self) { _ = try SourceShaderTextureStore(url: url) }
+    }
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    var manifest = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    let entries = try #require(manifest["entries"] as? [[String: Any]])
+    var alias = try #require(entries.first)
+    alias["name"] = "other"; alias["pathID"] = "8"; alias["width"] = 1
+    manifest["entries"] = entries + [alias]
+    try JSONSerialization.data(withJSONObject: manifest).write(to: url)
+    #expect(throws: SourceShaderLiveReason.self) { _ = try SourceShaderTextureStore(url: url) }
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceTextureStoreRejectsWrongIdentityAndDamagedMipBeforeUpload() throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try SourceShaderTextureStore(url: url)
+    var changes: [BindingSet.TextureIdentity] = []
+    var wrong = nativeTextureIdentity; wrong.name = "other"; changes.append(wrong)
+    wrong = nativeTextureIdentity; wrong.serializedFile = "CAB-other"; changes.append(wrong)
+    wrong = nativeTextureIdentity; wrong.bundleSHA256 = "other"; changes.append(wrong)
+    wrong = nativeTextureIdentity; wrong.width = 1; changes.append(wrong)
+    wrong = nativeTextureIdentity; wrong.height = 1; changes.append(wrong)
+    wrong = nativeTextureIdentity; wrong.mipLevels = 1; changes.append(wrong)
+    for identity in changes {
+        #expect(throws: SourceShaderLiveReason.self) { try store.texture(.init(identity: identity, property: "_RampG", mesh: nil, slot: nil), resources: resources).get() }
+    }
+    #expect(resources.statistics().textures == 0)
+    // Even a correctly hashed manifest cannot upload a truncated mip.
+    let shortURL = try nativeTextureStoreFixture(truncateLevel: 1)
+    defer { try? FileManager.default.removeItem(at: shortURL.deletingLastPathComponent()) }
+    let short = try SourceShaderTextureStore(url: shortURL)
+    #expect(throws: SourceShaderLiveReason.self) { try short.texture(.init(identity: nativeTextureIdentity, property: "_RampG", mesh: nil, slot: nil), resources: resources).get() }
+    #expect(resources.statistics().textures == 0)
+    // Same byte count with modified pixels must also fail the SHA-256 check.
+    try Data(repeating: 0, count: 8).write(to: url.deletingLastPathComponent().appendingPathComponent("asset/level-1.rgba16f"))
+    #expect(throws: SourceShaderLiveReason.self) { try store.texture(.init(identity: nativeTextureIdentity, property: "_RampG", mesh: nil, slot: nil), resources: resources).get() }
+    #expect(resources.statistics().textures == 0)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceTextureStoreUploadsAuthoredMipsOnceForConcurrentUsersWithoutRetainingOwner() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let store = try SourceShaderTextureStore(url: url)
+    let request = SourceShaderLiveTextureRequest(identity: nativeTextureIdentity, property: "_RampG", mesh: nil, slot: nil)
+    var owner: ResourceStore? = ResourceStore(device: device)
+    weak var oldOwner = owner
+    let texture: any MTLTexture = try {
+        let resources = try #require(owner)
+        DispatchQueue.concurrentPerform(iterations: 16) { _ in
+            do { _ = try store.texture(request, resources: resources).get() }
+            catch { Issue.record(error) }
+        }
+        let first = try store.texture(request, resources: resources).get()
+        #expect(resources.statistics().textures == 1)
+        #expect(first.filter == "Bilinear" && first.wrap == "Clamp" && first.aniso == 1)
+        #expect(first.texture.mipmapLevelCount == 2 && first.texture.pixelFormat == .rgba16Float)
+        // Source rows are bottom-up, and authored mip 1 is not regenerated
+        // from the 0.25 / 0.5 base rows (whose mean would be 0.375).
+        var base = [Float16](repeating: 0, count: 16), mip = [Float16](repeating: 0, count: 4)
+        base.withUnsafeMutableBytes { first.texture.getBytes($0.baseAddress!, bytesPerRow: 16, from: MTLRegionMake2D(0, 0, 2, 2), mipmapLevel: 0) }
+        mip.withUnsafeMutableBytes { first.texture.getBytes($0.baseAddress!, bytesPerRow: 8, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 1) }
+        #expect(base == Array(repeating: Float16(0.5), count: 8) + Array(repeating: Float16(0.25), count: 8))
+        #expect(mip == Array(repeating: Float16(0.75), count: 4))
+        return first.texture
+    }()
+    owner = nil
+    #expect(oldOwner == nil)
+    let nextOwner = ResourceStore(device: device)
+    let next = try store.texture(request, resources: nextOwner).get()
+    #expect(next.texture !== texture && nextOwner.statistics().textures == 1)
+    #expect(try store.texture(request, resources: nextOwner).get().texture === next.texture)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceTextureStoreKeysUploadsByEveryMipAndUsesVerifiedBuffers() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
+    let url = try nativeTextureStoreFixture()
+    defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+    let request = SourceShaderLiveTextureRequest(identity: nativeTextureIdentity, property: "_RampG", mesh: nil, slot: nil)
+    let originalStore = try SourceShaderTextureStore(url: url)
+    let original = try originalStore.texture(request, resources: resources).get().texture
+    let mipURL = url.deletingLastPathComponent().appendingPathComponent("asset/level-1.rgba16f")
+    let replacement = [Float16](repeating: 0.875, count: 4).withUnsafeBytes { Data($0) }
+    try replacement.write(to: mipURL)
+    // A different resource owner cannot rely on another owner's earlier
+    // verification after the files change underneath the old manifest.
+    #expect(throws: SourceShaderLiveReason.self) {
+        try originalStore.texture(request, resources: ResourceStore(device: device)).get()
+    }
+    var manifest = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+    var entries = try #require(manifest["entries"] as? [[String: Any]])
+    var hashes = try #require(entries[0]["sha256"] as? [String])
+    hashes[1] = SHA256.hash(data: replacement).map { String(format: "%02x", $0) }.joined()
+    entries[0]["sha256"] = hashes; manifest["entries"] = entries
+    try JSONSerialization.data(withJSONObject: manifest).write(to: url)
+    let rebuilt = try SourceShaderTextureStore(url: url)
+    let updated = try rebuilt.texture(request, resources: resources).get().texture
+    #expect(updated !== original && resources.statistics().textures == 2)
+    func mip(_ texture: any MTLTexture) -> [Float16] {
+        var values = [Float16](repeating: 0, count: 4)
+        values.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: 8, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 1) }
+        return values
+    }
+    #expect(mip(original) == Array(repeating: Float16(0.75), count: 4))
+    #expect(mip(updated) == Array(repeating: Float16(0.875), count: 4))
+    let equivalent = try SourceShaderTextureStore(url: url)
+    #expect(try equivalent.texture(request, resources: resources).get().texture === updated)
+    #expect(resources.statistics().textures == 2)
+    // The upload helper has no file path: deleting the input after retaining
+    // its verified bytes cannot cause it to reopen different pixels.
+    try FileManager.default.removeItem(at: mipURL)
+    let direct = try uploadOriginalProbeTexture(levels: [replacement], width: 1, height: 1, mipLevels: 1,
+                                               generateMips: false, cacheKey: "verified-buffer-test", resources: resources)
+    let directTexture = try #require(resources.texture(direct))
+    var pixel = [Float16](repeating: 0, count: 4)
+    pixel.withUnsafeMutableBytes { directTexture.getBytes($0.baseAddress!, bytesPerRow: 8, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0) }
+    #expect(pixel == Array(repeating: Float16(0.875), count: 4))
+}
+
 /// Renders the controlled original fixture live (the `IKKOKU_LIVE_SOURCE_PROBE`
 /// path: live rig, card pose, CharaStudio hand pose, default expression, the
 /// capture's view) and checks it with the comparator's gates. Capture pixels
@@ -669,12 +831,58 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
         #expect(metrics.pixels > 3000 && metrics.mean <= 1.1 && metrics.p99 <= bound + 2, "\(family): \(metrics)")
     }
 
-    // Native texture store only: the slots whose pixels are runtime composites
-    // or live in bundles that are not local stay toon, each with its reason.
+    // Native texture store only: all asset-backed slots resolve, including
+    // the six ramp users and four hair-gloss users. Composites stay explicit.
+    let storeURL = try #require(configuration.textures)
+    let storeData = try Data(contentsOf: storeURL)
+    let storeManifest = try #require(JSONSerialization.jsonObject(with: storeData) as? [String: Any])
+    #expect((storeManifest["entries"] as? [[String: Any]])?.count == 47)
+    #expect((storeManifest["unavailable"] as? [[String: Any]])?.isEmpty == true)
+    // Exclude machine-specific roots/source.file while pinning every asset,
+    // mip hash, sampler and the source binding report's hash.
+    var content = storeManifest.filter { ["schemaVersion", "encoding", "entries", "unavailable"].contains($0.key) }
+    content["sourceBindingsSHA256"] = try #require((storeManifest["source"] as? [String: Any])?["sha256"] as? String)
+    let contentData = try JSONSerialization.data(withJSONObject: content, options: [.sortedKeys, .withoutEscapingSlashes])
+    #expect(SHA256.hash(data: contentData).map { String(format: "%02x", $0) }.joined()
+            == "b41ca6246aebee64f9892f1986caf6d83c6c4a2119dc3d152ba533c1422f73b4")
     request.textureProvider = "store"
     let store = try SourceShaderLiveFixtureProbe(request, renderer: renderer)
-    #expect(store.attach.live == ["cf_O_noseline slot 0 (toon_nose_lod0)"])
-    #expect(store.attach.fallbacks.count == 19)
-    #expect(store.attach.fallbacks.allSatisfy { $0.contains("is not composed natively for the live path") || $0.contains("is not in the native texture store") },
+    #expect(Set(store.attach.live) == Set([
+        "cf_O_noseline slot 0 (toon_nose_lod0)", "cf_O_mayuge slot 0 (toon_eyew_lod0)", "cf_O_tooth slot 0 (main_item)",
+        "cf_O_eyeline slot 0 (toon_eyew_lod0)", "cf_O_eyeline slot 1 (toon_eyew_lod0)", "cf_O_eyeline_low slot 0 (toon_eyew_lod0)",
+        "o_tang slot 0 (main_item)", "cf_hair_b_03_00 slot 0 (main_hair); TEXCOORD1 from the source stream",
+        "cf_hair_idol_hair_f_00 slot 0 (main_hair_front); TEXCOORD1 from the source stream",
+        "cf_hair_idol_hair_f_01 slot 0 (main_hair_front); TEXCOORD1 from the source stream",
+        "cf_hair_idol_hair_f_02 slot 0 (main_hair_front); TEXCOORD1 from the source stream"]))
+    #expect(store.attach.fallbacks.count == 9 && store.attach.unmatched.isEmpty)
+    #expect(store.attach.fallbacks.allSatisfy { $0.contains("is not composed natively for the live path") },
             "\(store.attach.fallbacks)")
+    let resolvedTextureCount = renderer.resources.statistics().textures
+    let nativeImages = Dictionary(uniqueKeysWithValues: try store.translatedImages(renderer: renderer).map { ($0.name, try straightRGBA($0.image)) })
+    #expect(renderer.resources.statistics().textures == resolvedTextureCount, "Live draws must reuse assembly textures")
+    #expect(renderer.lastSourceShaderLive.fallbacks.isEmpty)
+    let nativeFull = try #require(nativeImages["native-translated.png"])
+    for (family, bound) in [("toon_eyew_lod0", 4.0), ("main_hair", 24.0), ("main_hair_front", 22.0)] {
+        let name = "native-translated-\(family).png"
+        let only = try #require(nativeImages[name]), capturedOnly = try #require(images[name])
+        // The nine missing composites change occlusion. Compare only pixels
+        // frontmost in both the complete capture-provider frame and this
+        // native subset; do not claim a whole-character colour comparison.
+        let mask = (0..<count).map { pixel in
+            originalAlpha[pixel] && only[pixel * 4 + 3] > 0 && capturedOnly[pixel * 4 + 3] > 0 && (0..<3).allSatisfy {
+                nativeFull[pixel * 4 + $0] == only[pixel * 4 + $0] && full[pixel * 4 + $0] == capturedOnly[pixel * 4 + $0]
+            }
+        }
+        let metrics = colorMetrics(original, only, mask: mask)
+        print("[native texture fixture] \(family): \(metrics.pixels) px mean \(metrics.mean) p99 \(metrics.p99)")
+        let isHair = family.hasPrefix("main_hair")
+        #expect(metrics.pixels > (isHair ? 3000 : 250) && metrics.mean <= (isHair ? 1.1 : 1) && metrics.p99 <= bound + (isHair ? 2 : 0),
+                "\(family): \(metrics)")
+    }
+    // Tooth/tongue and nose resolve but are never frontmost in the complete
+    // controlled view. Their colour has no independently observed pixels.
+    for family in ["main_item", "toon_nose_lod0"] {
+        #expect(try #require(families[family]).pixels == 0)
+        print("[native texture fixture] \(family): resolution checked; no frontmost reference pixels for colour")
+    }
 }

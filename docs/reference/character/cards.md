@@ -548,12 +548,14 @@ isolation and invalid requests. The 46-step `maker-selection-roundtrip.json`
 scenario exercises the shared model API, pending colors, shape edits, unavailable
 selection rejection, GPU identity on no-op, warmed hair/clothing resource counts,
 late candidate rejection from an invalid pending shape, and
-export/reimport of hair and two outfits. Six interleaved Release runs passed 46/46
-checks each; every late rejection reported the intended `invalidRate` from pose
+export/reimport of hair and two outfits. The final deferred-reference-loading comparison passed 46/46 checks in each of
+six interleaved Release runs; every late rejection reported the intended `invalidRate` from pose
 validation, with unchanged resources even on the first failure. A separate
 copied-library hash-mismatch case passed 4/4 with unchanged preview, card, pending
-colors and resources. The 30 targeted Engine checks all executed and passed with
-strict private fixtures enabled, including the ten-card selection fixture set.
+colors and resources. The 30 targeted card-editing/selection checks and seven Maker-library checks
+all executed and passed with strict private fixtures enabled, including the
+ten-card selection fixture set. Required reference geometry still fails when
+unreadable; unused geometry is skipped only after validating its path and slot.
 
 Independent original-format token audits verified the scripted export's 13 allowed
 scalar leaves and the visible UI export's two intended ID leaves (back hair 2 → 9,
