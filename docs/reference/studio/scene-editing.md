@@ -451,8 +451,9 @@ builds for macOS arm64 Debug. The reverse reload tooling passes 38 tests and the
 verification runner passes 80. The initial app run passed the native save/load
 pair (5/5 and 8/8); two mouth-only pixel checks exposed fixture framing: key 65's
 mouth is outside the saved camera, so the corrected checks use fully visible key
-0. The corrected strict run and original-host capture are pending at this
-implementation commit; no full visual parity is claimed.
+0. The corrected strict run was interrupted after its exports completed, so the
+combined build can exercise its two slow live-blink advances with the R7 pose
+cache. Its completion is pending at this point; no full visual parity is claimed.
 
 An independent byte audit of the corrected eleven-field export found 13 changed
 bytes in the unchanged-length 534,166-byte scene body. Only the nine requested
@@ -460,6 +461,41 @@ Status fields and the mouth-open/lip-sync spans changed; all six other character
 cards, the target card's other blocks, unknown data, scene settings and trailer
 are identical. The outer thumbnail was regenerated. Reset export is identical
 to the complete source file (SHA-256 `029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`).
+
+**Original-player reload, 2026-10-23.** One isolated CharaStudio run loaded the
+corrected edited export and the unedited source. The read-only
+`OriginalSceneReloadProbe.ExpressionRecord` captured all eleven serialized
+expression fields for every character immediately after `LoadScene` and four
+frames later. `compare_scene_reload.py` independently decoded both PNGs with the
+Python scene/card reader: 308/308 claims pass (7 characters × 11 fields × 2
+snapshots × 2 scenes). Key 65 reads eyebrow 3, eyes 2, mouth 6, eyes-open 0.5,
+blink true, mouth-open 0.75, lip-sync false, eye-look 4, neck-look 0, tears 2 and
+cheek 0.5 in both edited snapshots. All eleven differ from this character's
+source values. The observed mouth controller `FixedRate` is 0.75 as well; it is
+recorded separately from the serialized-field claims.
+
+Both guest-side input hashes matched the host exports: edited
+`188c7a5357ed62d4caec1443b1bc0885f7852e925e1a86bafcdf0104ee8c265f`, source
+`029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`.
+The player was Unity 5.6.2f1, `Assembly-CSharp.dll` SHA-256
+`902b9a237337b17a64514bdb0d857b460ece4fb6a57c658375dd32c5fa504c45`, probe
+source SHA-256 `2000ab5f20b4720a9410f0fa27b33fc5793efe03c32378f8796e8e9c5a0ca178`.
+The voice table already contained 44 entries, so `RepairVoice` did nothing.
+`status.json` reports no error and the Unity log contains no exception. The
+temporary player root was removed after collection, with no remaining game
+processes; Parallels `errno: 24` occurrences stayed at the pre-run count of 5.
+
+Private evidence is under `.local/codex-resume-2026-10-23/expression/` in the
+primary checkout: `byte-audit.json`, `expression-original-comparison.json` and
+`vm/{run.json,status.json,reload-trace.json,unity.log,SceneReloadProbe.cs}`.
+The task-local batched transport (`vm-batch.py`) used a temporary host-only HTTP
+endpoint because this VM's shared-folder paths were unavailable; the first
+launch attempt exceeded the Parallels command-length limit before starting any
+process, then the shorter compressed command succeeded. No installed binaries,
+plugins, settings, saves or fixture files were changed. This verifies serialized
+field acceptance, including currently unrendered tears/cheek/lip-sync fields;
+it does not establish original rendered pixels, blending transitions, or
+voice-driven mouth parity.
 
 Historical Release evidence from Claude's engine step (`89dd836`, before main
 integration), same fixture/key 65, 20 warmups and 300 frame calls: pre-edit frame
