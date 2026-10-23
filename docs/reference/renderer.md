@@ -426,11 +426,98 @@ pivot, Z-X-Y Euler rotation, distance vector and vertical field of view. An
 edited export therefore re-imports to the same view and field of view, but
 native-only `near` returns to its default. The viewport camera is always an
 infinite reverse-Z perspective; orthographic cameras are not represented.
-Camera-object look-through (`SourceStudioCameraObjects.viewCamera`) still uses
-unchecked `rotationQuaternion`. A reflected parent therefore remains unsupported
-there.
 
-`swift test --package-path Packages/Engine --filter 'checked|legacySkeleton|importedCamera|DegenerateDecodedCameras'`
+### Runtime callers (second slice)
+
+The second R4 slice (2026-10-23) moved the runtime callers that receive user
+edits or imported data onto checked forms. Accepted input still gives exactly
+the former result. Each test compares the new path with a copy of the former
+formula.
+
+- **Two-bone IK.** `IKSolver.checkedTwoBone` throws `MathContractError` for:
+  a nonfinite joint, target or pole; an upper (`b - a`) or lower (`c - b`)
+  bone no longer than `Float3.minimumDirectionLength`; a reach with no
+  direction (target and end both on the root); any other nonfinite solution.
+  `IKSolver.solveTwoBone` is the former per-chain update of
+  `CharacterInstance.applyIK`, applied to a pose. It also throws `PoseError`
+  for a pose or bone index that does not fit the skeleton.
+  `CharacterInstance.solveIK` leaves a failed chain's rotations unchanged and
+  returns its error. `applyIK` keeps its signature, and `ikFailures()` reports
+  the reasons; the Studio status line shows the first one.
+- **Prototype gaze.** `CharacterGaze.apply` is the former
+  `CharacterInstance.applyGaze`. These leave the pose unchanged:
+  a nonfinite target; a character root with no finite inverse; a target the
+  root maps to a nonfinite point; a pose that does not fit the skeleton. A head
+  or eye whose frame has no finite inverse, or whose direction to the target is
+  nonfinite, keeps its rotation. The source eye and neck look controllers
+  already reject such input with `RigError` and are unchanged.
+- **Poses.** `Pose.validate(for:)` throws `PoseError.countMismatch`, naming the
+  first array that lacks one entry per bone. These checked forms validate
+  first:
+  - `checkedWorldMatrices`;
+  - `checkedSkinMatrices`, which also checks a supplied world array;
+  - `checkedBlended`, which checks both poses;
+  - `checkedWorldRotation`, which throws `PoseError.boneOutOfRange` for a bad
+    index;
+  - `PoseDelta.checkedApply`, which checks a supplied base.
+
+  The unchecked forms still trap on a mismatch. `CharacterInstance.jointPosition`
+  now returns nil instead.
+- **Rays.** A ray whose origin or direction is not finite hits nothing: every
+  intersection returns nil and `closest`/`distance` return infinity. NaN slab
+  distances used to leave the slab test's initial interval in place, so it
+  reported a hit at distance 0 for every box. A zero direction produces such a
+  ray, as does `OrbitCamera.ray(atPixel:viewport:)` with a zero-size viewport.
+  `Ray.checked(origin:direction:)` and `checkedTransformed(by:)` throw instead.
+  `OrbitCamera.project` returns nil for a nonfinite pixel.
+- **Projections.** `checkedPerspectiveReverseZ`,
+  `checkedPerspectiveReverseZInfinite`, `checkedOrthographicReverseZ` and
+  `checkedLookAt` throw `MathContractError` for a nonfinite argument or result.
+  The new `outOfRange` case covers a field of view outside (0, π), a
+  nonpositive aspect or near plane, a far plane not beyond near, and coincident
+  orthographic bounds. `checkedLookAt` also rejects an eye at the center, a zero
+  up, and a view along ±Z with a parallel up, whose +Z fallback is parallel too.
+  `OrbitCamera` keeps the unchecked builders behind `validate()`.
+- **Camera-object look-through.**
+  `SourceStudioCameraObjects.viewCamera(world:base:)` rejects a mirrored world
+  matrix (negative determinant) with
+  `SourceStudioCameraObjectError.reflectedFrame`. It rejects a singular one with
+  `RigError`, and validates its result with `OrbitCamera.validate()`. The
+  original copies the camera's `transform.rotation`. The ST-A06 capture shows
+  that rotation unaffected by a non-uniform parent scale. A mirrored matrix,
+  however, does not say which axis carries the mirror, and no capture covers a
+  mirrored parent, so the case is rejected rather than guessed. The Studio walk
+  (`SourceStudioWorldTransform.world`) composes a child's rotation with the
+  parent frame's unchecked `rotationQuaternion`. That turns a mirror into a
+  nonunit rotation, which the composed matrix no longer shows. The app
+  therefore builds the camera from the parent frame with
+  `viewCamera(parentFrame:localPosition:localRotation:base:)`, which rejects a
+  mirrored parent by name.
+
+Remaining R4 work found in this slice:
+
+- A mirror further up a camera's chain still reaches the camera through
+  `SourceStudioWorldTransform.world`. So does a parent with two negative scale
+  components, which as a matrix is a proper rotation. Every other child of a
+  mirrored source parent gets the same nonunit rotation. Supporting these needs
+  the walk to carry Unity's product of local rotations, and an original
+  capture.
+- `CharacterInstance.applyIK` applies the upper delta to the lower bone twice,
+  because `p.worldRotation(li)` already includes it. The hand or foot therefore
+  misses its target. A local float64 replay of a 0.30 m + 0.28 m arm missed
+  targets 0.49 m and 0.51 m from the shoulder by 0.13 m and 0.23 m. R4 kept the
+  formula, because a fix changes valid results; it needs its own task.
+- These remain unchecked: `IKSolver.ccd`, which has no runtime caller; the
+  renderer's shadow light frame (unchecked `lookAt`/`orthographicReverseZ`,
+  degenerate only for a nonfinite light direction or scene bounds); and the
+  unused `StudioModel.applyGaze()`.
+- DynamicBone and hair numerics are unchanged, because their original-parity
+  tests need private fixtures that CI lacks. `HairDynamics.step` decomposes the
+  character root with unchecked `rotationQuaternion`, and it keeps a NaN spring
+  state until `reset()`. `SourceDynamicBone` already skips near-zero arcs and
+  rejects nonfinite particles.
+
+`swift test --package-path Packages/Engine --filter 'checked|legacySkeleton|legacyPose|solveTwoBone|nonfiniteRays|characterGaze|sourceCameraObject|sourceWorldTransform|importedCamera|DegenerateDecodedCameras'`
 runs the synthetic tests for these contracts.
 
 ## Verification and remaining limits
