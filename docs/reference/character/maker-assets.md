@@ -36,12 +36,13 @@ expression table, face and eyeline inputs. `SourceMakerAssemblyOptions` applies
 the original correction table for nonzero Int32 body-bone types on the shared
 skeleton. Special `exType` assemblies and resolver-backed mod heads fail explicitly.
 
-Maker invokes the library when importing an original card and when changing its
+Maker invokes the library when importing an original card, committing a converted
+vanilla hair/clothing selection, and when changing its
 saved outfit. Four hair slots, supported clothes and up to 20 accessory slots are
 resolved from preserved source IDs and exact resolver properties. A missing entry
 can retain reference hair/clothes with a diagnostic; an unresolved accessory is
-omitted. The imported card's selected IDs and plugin bytes stay unchanged. The UI
-reports selected assets but does not yet edit those identities.
+omitted. Import and outfit viewing retain the card's selected IDs and plugin bytes.
+The selection editor below changes only explicitly chosen vanilla destinations.
 
 ## Reproducible extraction
 
@@ -142,3 +143,64 @@ Selected-hair dynamics extraction is available, but Maker currently disables the
 base dynamics document when prepared geometry changes instead of rebinding it.
 Studio has a separate selected-component binding path. Recovering more geometry
 therefore does not, by itself, enable its Maker animation or physics.
+
+
+## Source selection editor (CMT-02 first slice)
+
+The source panel's **Hair and clothing** pickers use the loaded library's exact
+vanilla category/ID entries. Four hair slots and eight clothing slots are editable;
+inner shoes are excluded because `prepare` assembles only outer shoes. Explicit
+empty entries work through the same identity checks. Unavailable or modded current
+identities are displayed as unavailable; a supported vanilla replacement removes
+only that destination's saved UAR records. Malformed resolver metadata disables
+replacement. Missing assembly appearance data or an unreadable appearance draft
+also disables the pickers with a reason. Other saved part fields and their resolver
+records are retained; original Maker default-reset semantics are not claimed.
+No native prototype catalog IDs or display names are written.
+
+The app prepares the candidate assembly once per actual selection and commits it
+only after appearance and pose validation. Picker rows are cached on import,
+outfit switch and selection commit; no menu rebuilding or resource loading is
+added to animation ticks. No-op selections preserve the preview. Current selected
+hair remains static in Maker, consistent with the existing dynamics limitation.
+See the [card transaction contract](cards.md#transactional-vanilla-maker-selections-cmt-02-2026-10-23)
+for serialization, preservation and failure behavior.
+
+Release stage profiling on 2026-10-23 attributed about 748 ms of a changed
+selection to library preparation and 107 ms to card appearance; card editing,
+pose validation and immediate refresh were each below 2 ms. Preparation now
+validates all reference hair/clothing paths and slots but parses their geometry
+only when an unresolved selection needs that fallback. Converted and explicit-empty
+selections skip reference rigs they replace. Every selected asset still passes
+its path, size and hash checks on every preparation; there is no asset cache.
+
+A quiet Release comparison on Mac14,14 with Xcode 27.0 (27A266a) used three
+interleaved runs per implementation, each with 15 actual changed selections.
+Eager-reference run medians were 841.13/845.83/847.45 ms; deferred-reference medians
+were 646.05/645.93/648.42 ms. The median of run medians fell from 845.83 to 646.05 ms,
+a 23.62% reduction. Individual ranges were 802.78–873.80 ms and 610.36–672.43 ms,
+respectively; no-op requests took 0.058–0.070 ms. These measurements include
+synchronous file/asset preparation and validation, not UI throughput or frame
+rate. Changed selection still blocks for roughly 0.61–0.67 seconds and remains a
+responsiveness limitation. No per-frame work is added by the selection controls.
+
+All six runs passed 46/46 scenario checks. Warmed back-hair 2 → 9 → 2 cycles
+settled at 36 store-owned meshes and 55 textures; warmed top 39 → 38 → 39 cycles
+settled at 34 meshes and 56 textures. Mesh bytes and deform counts stayed equal.
+Repeated candidate previews rejected by an invalid pending shape preserved all
+counted resources (34 meshes/57 textures/0 deform buffers), including on the first
+rejection. A deliberately mismatched selected-asset hash passed 4/4 failure checks
+with 36 meshes/35 textures unchanged. Store counts include reported retired
+resources and exclude render targets/pipelines and resources owned only by
+submitted frames.
+
+All six exported cards were byte-identical to each other and to the earlier eager
+implementation, including thumbnails. Seven focused Maker-library tests executed
+with strict private fixtures, covering exact assembled geometry/palette/identity
+preservation, unused malformed-path rejection, selected-asset hash rejection,
+and required hair/clothing fallback failures. Build/input hashes, per-step
+resource/timing records, controlled source variants and independent byte audits
+are retained in the private `.local/codex-renderer-maker-models-2026-10-23/`
+evidence directory. The earlier 34-step Debug run and the smaller bounds/pose
+optimization comparison also passed; their timings are not used for the deferred
+reference-loading result above.

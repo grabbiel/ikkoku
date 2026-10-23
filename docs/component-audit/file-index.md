@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**875 files indexed; 875 assigned; 0 unassigned.**
+**878 files indexed; 878 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 98 |
-| [Character / Maker / mods](character-and-mods.md) | 118 |
+| [Character / Maker / mods](character-and-mods.md) | 120 |
 | [Studio / IK / animation](studio.md) | 185 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 314 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 160 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 161 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 188 |
+| Conversion / recovery / verification tool | 189 |
 | Documentation / historical evidence | 55 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 198 |
-| Test / validation | 177 |
+| Runtime / shared shader declaration | 199 |
+| Test / validation | 178 |
 
 ## App / gameplay / plugins
 
@@ -273,6 +273,8 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/reverse/test_male_avatar.py](../../Tools/reverse/test_male_avatar.py) | Test / validation |
 | [Tools/reverse/test_male_body_parity.py](../../Tools/reverse/test_male_body_parity.py) | Test / validation |
 | [Tools/reverse/test_resolver_contract.py](../../Tools/reverse/test_resolver_contract.py) | Test / validation |
+| [Packages/Engine/Sources/Character/SourceCharacterCardSelections.swift](../../Packages/Engine/Sources/Character/SourceCharacterCardSelections.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/SourceCharacterCardSelectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceCharacterCardSelectionTests.swift) | Test / validation |
 
 ## Studio / IK / animation
 
@@ -953,6 +955,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [docs/reference/studio/scene-editing.md](../../docs/reference/studio/scene-editing.md) | Documentation / historical evidence |
 | [docs/reference/studio/scene-records.md](../../docs/reference/studio/scene-records.md) | Documentation / historical evidence |
 | [docs/reference/studio/voice.md](../../docs/reference/studio/voice.md) | Documentation / historical evidence |
+| [Tools/verification/scenarios/maker-selection-roundtrip.json](../../Tools/verification/scenarios/maker-selection-roundtrip.json) | Conversion / recovery / verification tool |
 
 ## Audit deliverables
 

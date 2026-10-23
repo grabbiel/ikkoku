@@ -76,6 +76,44 @@
         {"path": ".local/verification/maker-scenario-exports/maker-reset-shapes.png", "kind": "exported-card"}
       ],
       "timeout": 600
+    },
+    {
+      "id": "maker-scenario-selection-roundtrip",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_CARD",
+          "kind": "file",
+          "from": "IKKOKU_MAKER_SCENARIO_CARD"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-selection-roundtrip.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-selection-roundtrip.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Uses transactional source selection for converted back/front hair and outfit-specific tops/bottoms. Asserts unavailable-ID rejection preserves pending colors, shape values and preview identity; a same-identity no-op preserves GPU counts; repeated warmed hair/clothing selections do not grow mesh/texture/deform counts. Repeated candidate previews rejected by an out-of-range pending shape leave editor state and warmed resources intact. Exports and reimports hair, both outfits, pending supported colors and shape edits with existing 1e-5 shape/1/255 color bounds. Per-selection wall time and resource counts are recorded. These are scripted API checks, not UI or original-player rendering parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/maker-scenario-selection-roundtrip.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-selection-roundtrip.png",
+          "kind": "exported-card"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

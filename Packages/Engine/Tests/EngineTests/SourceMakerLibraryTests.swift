@@ -97,6 +97,39 @@ private enum MakerLibraryFixture {
     try SourceMakerLibrary.validateAssemblyIdentity(card: AppearanceTestFixture.card(modProperty: "ChaFileFace.HeadId"))
 }
 
+@Test func sourceMakerLibraryValidatesUnusedReferencePathsAndSelectedAssetHashes() throws {
+    let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try AppearanceTestFixture.card()
+    let manifest = directory.appendingPathComponent("source-avatar.json")
+    func writeManifest(hair: String) throws {
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "kind": "koikatsu-female-avatar", "name": "fixture",
+            "sex": 1, "headID": 0, "bodySkeleton": "body-master.json", "headSkeleton": "head-master.json",
+            "body": ["file": "body.json", "meshNames": ["body"]], "head": ["file": "head.json"],
+            "hair": [["file": hair, "slot": 0]], "clothes": []] as [String: Any]).write(to: manifest)
+    }
+    let library = try MakerLibraryFixture.library([MakerLibraryFixture.empty(101, 2)], directory: directory)
+    let outside = directory.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+    try Data().write(to: outside); defer { try? FileManager.default.removeItem(at: outside) }
+    try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("escape.json"), withDestinationURL: outside)
+    for path in ["../escape.json", "/absolute.json", "", "escape.json"] {
+        try writeManifest(hair: path)
+        do {
+            _ = try library.prepare(card: card, coordinate: 0, baseURL: manifest)
+            Issue.record("An unused reference path escaped validation")
+        } catch RigError.invalid(let reason) { #expect(reason == "Base component escapes its folder.") }
+    }
+    // The missing reference is unused, but a selected converted rig must still
+    // pass its original byte hash before any geometry is accepted.
+    try writeManifest(hair: "unused-missing.json")
+    try Data("{}".utf8).write(to: directory.appendingPathComponent("selected.json"))
+    let changed = try MakerLibraryFixture.library([["category": 101, "id": 2, "name": "selected", "meshNames": ["part"],
+        "rig": ["file": "selected.json", "sha256": String(repeating: "0", count: 64)]]], directory: directory)
+    do {
+        _ = try changed.prepare(card: card, coordinate: 0, baseURL: manifest)
+        Issue.record("A selected asset with changed bytes was accepted")
+    } catch RigError.invalid(let reason) { #expect(reason == "Changed or oversized converted Maker asset: selected.json.") }
+}
+
 private struct MakerSelectionCases: Decodable {
     struct Case: Decodable {
         let file: String, sha256: String, sex: Int, headID: Int, boneType: Int
@@ -138,6 +171,71 @@ func sourceMakerLibraryRejectsInvalidOrDuplicateBaseComponentSlots() throws {
             _ = try library.prepare(card: card, coordinate: 0, baseURL: url)
             Issue.record("Invalid base component slots were accepted")
         } catch RigError.invalid(let reason) { #expect(reason.contains("Invalid or duplicate base")) }
+    }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+func sourceMakerLibraryLoadsOnlyRequiredReferenceGeometry() throws {
+    let (fixtures, fixtureDirectory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    let base = URL(fileURLWithPath: fixtures.femaleBase), directory = try MakerLibraryFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try SourceCharacterCard.load(url: fixtureDirectory.appendingPathComponent("female-head0-bone0.png"))
+    let original = try library.prepare(card: card, coordinate: 0, baseURL: base)
+    var manifest = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: base)) as? [String: Any])
+    var paths = [try #require(manifest["bodySkeleton"] as? String), try #require(manifest["headSkeleton"] as? String)]
+    for key in ["body", "head"] { paths.append(try #require((manifest[key] as? [String: Any])?["file"] as? String)) }
+    for path in Set(paths) {
+        let target = directory.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.linkItem(at: base.deletingLastPathComponent().appendingPathComponent(path), to: target)
+    }
+    for kind in ["hair", "clothes"] {
+        var components = try #require(manifest[kind] as? [[String: Any]])
+        for index in components.indices {
+            let path = "unused-\(kind)-\(index).json"
+            components[index]["file"] = path
+            try Data("invalid unused geometry".utf8).write(to: directory.appendingPathComponent(path))
+        }
+        manifest[kind] = components
+    }
+    let changedBase = directory.appendingPathComponent("source-avatar.json")
+    try JSONSerialization.data(withJSONObject: manifest).write(to: changedBase)
+    let prepared = try library.prepare(card: card, coordinate: 0, baseURL: changedBase)
+    #expect(prepared.clothingSlots == original.clothingSlots && prepared.referenceClothingSlots == original.referenceClothingSlots)
+    #expect(prepared.selections.map(\.property) == original.selections.map(\.property))
+    #expect(prepared.selections.map(\.sourceID) == original.selections.map(\.sourceID))
+    #expect(prepared.selections.map(\.modGUID) == original.selections.map(\.modGUID))
+    #expect(prepared.diagnostics == original.diagnostics)
+    let a = original.source, b = prepared.source
+    #expect(a.sourcePrefab == b.sourcePrefab && a.morphChannelCount == b.morphChannelCount)
+    #expect(a.rig.nodes.count == b.rig.nodes.count && a.rig.skins.count == b.rig.skins.count && a.parts.count == b.parts.count)
+    #expect(a.rig.order == b.rig.order && a.rig.activeNodes == b.rig.activeNodes)
+    for (left, right) in zip(a.rig.nodes, b.rig.nodes) {
+        #expect(left.name == right.name && left.sourceID == right.sourceID && left.parent == right.parent)
+        #expect(left.localMatrix == right.localMatrix && left.active == right.active)
+    }
+    for (left, right) in zip(a.rig.skins, b.rig.skins) {
+        #expect(left.name == right.name && left.meshNode == right.meshNode && left.rootJoint == right.rootJoint)
+        #expect(left.joints == right.joints && left.inverseBindMatrices == right.inverseBindMatrices)
+    }
+    for (left, right) in zip(a.parts, b.parts) {
+        #expect(left.node == right.node && left.skin == right.skin && left.rendererEnabled == right.rendererEnabled && left.hasCloth == right.hasCloth)
+        let x = left.mesh, y = right.mesh
+        #expect(x.name == y.name && x.positions == y.positions && x.normals == y.normals && x.tangents == y.tangents)
+        #expect(x.uvs == y.uvs && x.uvs1 == y.uvs1 && x.uvs2 == y.uvs2 && x.colors == y.colors)
+        #expect(x.joints == y.joints && x.weights == y.weights && x.indices == y.indices)
+        #expect(x.materialIndex == y.materialIndex && x.regions == y.regions && x.extras == y.extras)
+        #expect(x.morphTargets.count == y.morphTargets.count)
+        for (m, n) in zip(x.morphTargets, y.morphTargets) {
+            #expect(m.name == n.name && m.positionDeltas == n.positionDeltas && m.normalDeltas == n.normalDeltas)
+        }
+    }
+    // An unresolved selection really needs its reference, so its malformed
+    // geometry must fail rather than silently dropping that part.
+    for slot: SourceMakerSelectionSlot in [.hair(0), .clothes(coordinate: 0, slot: 0)] {
+        let fallback = try SourceCharacterCard.decode(card.selectingVanillaAsset(Int(Int32.max), at: slot))
+        #expect(throws: DecodingError.self) { try library.prepare(card: fallback, coordinate: 0, baseURL: changedBase) }
     }
 }
 

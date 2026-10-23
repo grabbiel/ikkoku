@@ -640,7 +640,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
 IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
-                      "setColor", "resetShapes", "export", "reimport", "assert"}
+                      "setColor", "setColorDraft", "selectAsset", "captureResources", "resetShapes", "export", "reimport", "assert"}
 
 # App settings that name a file the app is asked to write (A-T05).
 APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
@@ -1130,7 +1130,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_maker_scenario(self):
-        self.assertEqual(len(self.checks), 4)
+        self.assertEqual(len(self.checks), 5)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_MAKER_SCENARIO"]
@@ -1172,17 +1172,27 @@ class MakerScenarioLaneTests(unittest.TestCase):
                 if op in ("setFace", "setBody"):
                     self.assertIsInstance(step["index"], int)
                     self.assertIsInstance(step["value"], float)
-                if op == "setColor":
+                if op in ("setColor", "setColorDraft"):
                     self.assertIsInstance(step["id"], str)
                     rgba = step["rgba"]
                     self.assertEqual(len(rgba), 4)
                     self.assertTrue(all(0 <= c <= 1 for c in rgba))
+                if op == "captureResources":
+                    self.assertIsInstance(step["id"], str)
+                if op == "selectAsset" or "selection" in step:
+                    selection = step["selection"]
+                    self.assertIn(selection["kind"], ("hair", "clothes"))
+                    self.assertIsInstance(selection["slot"], int)
+                    self.assertIsInstance(selection["sourceID"], int)
+                    for flag in ("unchanged", "expectFailure"):
+                        if flag in step:
+                            self.assertIsInstance(step[flag], bool)
                 if op in ("export", "reimport"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "card writes must stay under .local/: %s" % step["path"])
                 if op == "assert":
                     declared = [k for k in ("coordinate", "face", "body", "color",
-                                            "colorApplied",
+                                            "colorApplied", "selection", "resourcesAtMost",
                                             "diagnosticContains") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if "coordinate" in step:
