@@ -247,9 +247,11 @@ IKKOKU_AUTOCAPTURE="$PWD/.local/scene.png" \
   .local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku
 ```
 
-`IKKOKU_CAPTURE_W`, `IKKOKU_CAPTURE_H` and `IKKOKU_CAPTURE_YAW` control dimensions
-and framing where supported. `IKKOKU_CAPTURE_MIRROR=1` exercises mirrored static
-model rendering. The static-model/native-scene capture paths report nonzero status
+`IKKOKU_CAPTURE_W` and `IKKOKU_CAPTURE_H` set the size of rig, model, native-scene
+and app captures. `IKKOKU_CAPTURE_YAW` sets the framing of rig, model and app captures,
+not native scenes. `IKKOKU_CAPTURE_MIRROR=1` exercises mirrored static
+model rendering. Startup rejects an option the requested mode does not read; see
+[capture request validation](#capture-request-validation). The static-model/native-scene capture paths report nonzero status
 on handled import/render failures. A static-model capture isolates
 asset loading and rendering from Maker assembly.
 
@@ -297,8 +299,117 @@ Source-rig, card, scene, plugin and matched-player capture recipes live with the
 before `NSApplication` finishes launching. The Mute native adapter therefore defers
 its initial focus sample instead of reading `NSApp`; this fixes the recorded
 startup trap. `IKKOKU_APPLICATION_FOCUS` and `IKKOKU_NATIVE_PLUGIN_REPORT` supply
-and record focus for captures. The Release adapter captures closing A-T04/ST-T02 passed in PR #2; see
+and record focus for captures; both require `IKKOKU_AUTOCAPTURE`. The Release adapter captures closing A-T04/ST-T02 passed in PR #2; see
 [native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
+
+### Capture request validation
+
+Before the engine starts, the app checks the whole `IKKOKU_*` environment with
+`CaptureRequest.validate`
+([CaptureRequest.swift](../../Packages/Engine/Sources/Renderer/CaptureRequest.swift),
+A06/A-T06). If anything is wrong it prints one `invalid capture request` message
+listing every offending variable, one line per problem, and exits 1. At most one
+mode runs per launch:
+
+| Mode | Selected by | Also needs | Capture options it reads |
+| --- | --- | --- | --- |
+| Original-frame probe | `IKKOKU_ORIGINAL_FRAME_PROBE` | — | `IKKOKU_ORIGINAL_FRAME_FAMILIES`; with `…_FAMILIES=1` also `…_FAMILY_SETS`, `…_TRACE_PIXELS`, `…_DEPTH24` |
+| Source rig capture | `IKKOKU_CAPTURE_RIG` | `IKKOKU_AUTOCAPTURE` | `IKKOKU_SOURCE_EXPRESSION`, `IKKOKU_SOURCE_HEIGHT`, `IKKOKU_SOURCE_BODY`, `IKKOKU_SOURCE_FACE`, `IKKOKU_CAPTURE_SHADOWS`, `IKKOKU_RIG_BONES`, `IKKOKU_CAPTURE_PRESET=face`, `…_W`, `…_H`, `…_YAW` |
+| Static model capture | `IKKOKU_CAPTURE_MODEL` | `IKKOKU_AUTOCAPTURE` | `IKKOKU_CAPTURE_MIRROR`, `…_W`, `…_H`, `…_YAW` |
+| Native scene capture | `IKKOKU_CAPTURE_SCENE` | `IKKOKU_AUTOCAPTURE` | `…_W`, `…_H`, `IKKOKU_SAVE_SCENE`, `IKKOKU_CAPTURE_GRID=0`, `IKKOKU_CAPTURE_GIZMOS=0`, `IKKOKU_NATIVE_PLUGIN_REPORT`, `IKKOKU_APPLICATION_FOCUS` |
+| Maker / Studio scenario | `IKKOKU_MAKER_SCENARIO` / `IKKOKU_STUDIO_SCENARIO` | its `…_SCENARIO_REPORT` | — |
+| Catalog thumbnails | `IKKOKU_RENDER_THUMBS` | — | — |
+| Maker/Studio app capture | `IKKOKU_AUTOCAPTURE` without the rig, model or scene capture | — | every other capture option (below) |
+| Window capture | `IKKOKU_CAPTURE_UI`, alone or after an app capture | — | `IKKOKU_CAPTURE_UI_TAB`, `…_MODE`, `…_STUDIO_TAB` (needs `…_MODE=studio`), `…_REPORT`, `…_TIMEOUT` |
+
+The app capture also reads `IKKOKU_CARD`, `IKKOKU_CAPTURE_SEX`,
+`IKKOKU_SOURCE_COORDINATE`, `IKKOKU_SOURCE_COLOR_EDITS`,
+`IKKOKU_SOURCE_PLAYBACK_SECONDS`, `IKKOKU_CAPTURE_SLIDERS`, `…_EXPR`, `…_OUTFIT`,
+`…_HAIR`, `…_PRESET`, `…_TICKS`, `…_GRID` and `…_GIZMOS`. It also reads
+`IKKOKU_CAPTURE_STUDIO` and, only with it, `…_POSE`, `…_ITEMS` and `…_TIMELINE`.
+`IKKOKU_SOURCE_SCENE_EDITS` needs `IKKOKU_SOURCE_SCENE`. Card, scene and
+original-scene outputs are `IKKOKU_EXPORT_SOURCE_CARD`, `IKKOKU_SAVE_CARD`,
+`IKKOKU_SAVE_SCENE`, `IKKOKU_LOAD_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE`.
+`IKKOKU_BENCHMARK_OUTPUT` takes `…_FRAMES` and `…_SIMULATION_FRAMES`; the latter
+also needs `IKKOKU_SOURCE_SCENE`. Plugin evidence is `IKKOKU_NATIVE_PLUGIN_REPORT`
+and `IKKOKU_APPLICATION_FOCUS`.
+
+Startup inputs (`IKKOKU_SOURCE_SCENE`, `IKKOKU_SOURCE_CARD`, `IKKOKU_OPEN_RIG`,
+`IKKOKU_BONE_MODIFIERS`, `IKKOKU_MOD_LIBRARY` and the Studio plugin, step and
+animation-time inputs) and data sources (`IKKOKU_ASSETS`, avatars, the Maker
+library, contracts, Studio catalogs and `IKKOKU_SOURCE_TREE_FALLBACKS`) also
+apply to an interactive launch.
+One environment file often supplies them to several modes, so a mode that does
+not read them ignores them; only an empty value is rejected. Other tools' fixture
+variables are ignored. `IKKOKU_SOURCE_PLUGIN_DELTA` still needs
+`IKKOKU_SOURCE_PLUGIN_STEPS`.
+
+After validation, a run with any mode or `IKKOKU_CAPTURE_UI` is automated. A
+startup or capture input that fails then exits 1 as `capture input failed:
+IKKOKU_X=value: error` instead of becoming an alert or being skipped. Examples:
+an unreadable `IKKOKU_CARD`, a scene in `IKKOKU_LOAD_SCENE` or one of its items
+that does not load, source body or face values without a source contract, and an
+unknown slider, hair, pose, catalog item or Maker tab. An out-of-range outfit, an
+explicit `IKKOKU_SHAPE_CONTRACT` that is missing, and an explicit
+`IKKOKU_SOURCE_AVATAR` or `IKKOKU_SOURCE_MALE_AVATAR` that falls back to the
+bundled character also exit. The probe exits when `IKKOKU_ORIGINAL_FRAME_FAMILIES=1`
+lacks its translated shaders. An interactive launch keeps the alert.
+
+These combinations used to run and now exit 1 at startup:
+
+- Two modes, such as `IKKOKU_CAPTURE_RIG` with `IKKOKU_CAPTURE_SCENE` (only the
+  first ran). Also `IKKOKU_AUTOCAPTURE` with thumbnails, a scenario or the probe
+  (the PNG was never written), and `IKKOKU_CAPTURE_UI` with any mode except the
+  app capture (the window never opened).
+- `IKKOKU_NATIVE_PLUGIN_REPORT` or `IKKOKU_APPLICATION_FOCUS` without
+  `IKKOKU_AUTOCAPTURE`. The editor stayed open, and a failed report was only an alert.
+- A capture option that no requested mode reads. Examples: `IKKOKU_CAPTURE_W`
+  without a mode, `IKKOKU_CAPTURE_MIRROR` outside model capture, and
+  `IKKOKU_CAPTURE_YAW`, `…_PRESET` or `IKKOKU_LOAD_SCENE` in native scene capture.
+  Others are rig-only options elsewhere, window options without
+  `IKKOKU_CAPTURE_UI` and a scenario report without its scenario.
+- An option without its partner, listed with each mode above. `IKKOKU_ORIGINAL_FRAME_DEPTH24=1`
+  needs `…_FAMILIES=1`.
+- In the app capture, `IKKOKU_CARD` with `IKKOKU_SOURCE_CARD`, `IKKOKU_OPEN_RIG`,
+  `IKKOKU_BONE_MODIFIERS` or a source-preview edit (body, face, coordinate,
+  colors, playback or source-card export). Loading the native card discarded
+  that preview. `IKKOKU_CAPTURE_SEX` with `IKKOKU_CARD`, `IKKOKU_SOURCE_CARD`,
+  `IKKOKU_OPEN_RIG` or `IKKOKU_BONE_MODIFIERS` either replaced that character or
+  was ignored. Rig capture's existing source-card rule now also runs up front.
+- Values a mode replaced with its default or ignored. Sizes must be integers in
+  1–8192; ticks, outfit and coordinate must be integers of at least 0. Yaw and
+  timeline must be finite numbers, and presets one of face, upper or full (rig
+  capture: only `face`). Flags must be 0 or 1, `IKKOKU_CAPTURE_SEX` m or f and
+  `IKKOKU_CAPTURE_UI_MODE` maker or studio. Expression keys must be eyes, mouth,
+  brows, head or gaze, with well-formed `key=value` lists. Focus events must be
+  0/1 lists of at most 64. Native scene capture rejects `GRID=1` and `GIZMOS=1`.
+- Empty values and unknown `IKKOKU_CAPTURE_*`, `IKKOKU_ORIGINAL_FRAME_*` or
+  `IKKOKU_BENCHMARK_*` names.
+
+No recipe in this guide, the [technical references](../README.md#technical-references),
+`Tools/reverse/README.md` or `Tools/translation/studio_execution_probe.py` uses
+one of these. Of the verification lanes, only the `app-smoke`
+`startup-mute-capture` check did: it set the adapter report without a capture,
+so the app would have stayed open. It now also writes a Maker PNG. `CaptureRequestTests` keeps 29 such recipes valid in CI,
+and `Tools/verification/test_run.py` checks that the inventory matches the
+variables the app reads. CI compiles the app but does not run it. Confirm on the Mac:
+
+```sh
+APP=.local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku
+# Two modes: exit 1 naming both, before "assets root" is printed.
+IKKOKU_CAPTURE_RIG=/nonexistent/rig.json IKKOKU_CAPTURE_SCENE=/nonexistent/scene.png \
+  IKKOKU_AUTOCAPTURE="$PWD/.local/a-t06.png" "$APP"; echo "exit $?"
+# Adapter report without a capture: exit 1 at once; no window opens.
+IKKOKU_NATIVE_PLUGIN_REPORT="$PWD/.local/a-t06-report.json" "$APP"; echo "exit $?"
+# A capture option without a mode: exit 1.
+IKKOKU_CAPTURE_W=900 "$APP"; echo "exit $?"
+# Missing native card or scene: exit 1 naming IKKOKU_CARD / IKKOKU_LOAD_SCENE; no PNG.
+IKKOKU_CARD="$PWD/.local/a-t06-missing.png" IKKOKU_AUTOCAPTURE="$PWD/.local/a-t06-card.png" "$APP"; echo "exit $?"
+IKKOKU_LOAD_SCENE="$PWD/.local/a-t06-missing.png" IKKOKU_AUTOCAPTURE="$PWD/.local/a-t06-scene.png" "$APP"; echo "exit $?"
+ls .local/a-t06-card.png .local/a-t06-scene.png  # both absent
+# A plain Maker capture still exits 0.
+IKKOKU_AUTOCAPTURE="$PWD/.local/a-t06-maker.png" "$APP"; echo "exit $?"
+```
 
 ## Inspect without the GUI
 

@@ -13,7 +13,8 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 [ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift),
 [AppState+PluginExecution.swift](../../Apps/IkkokuCreator/AppState+PluginExecution.swift),
 [AppState+OriginalFrameProbe.swift](../../Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift),
-[CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift).
+[CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift),
+[CaptureRequest.swift](../../Packages/Engine/Sources/Renderer/CaptureRequest.swift).
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
@@ -22,7 +23,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 | A03 · Viewport display and input | Mid-stage | `CAMetalDisplayLink` drives drawable presentation; Retina pixel conversion, orbit/pan/zoom, trackpad magnification, mouse and key delegation exist. Simulation uses editor timers, not this presentation timestamp. | A-T03: instrument displayed frames and simulation cadence together; validate resize, focus loss, mode switching and more than one window. |
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
 | A05 · Source Maker → Studio transfer | Pending | `Send to Studio` is explicitly disabled while a source rig is active. The enabled command sends the bundled `CharacterCard`. Original cards can instead enter through source scene preview. | Preserve edited source card bytes, selection, outfit, resolver GUIDs and source rig references when adding a source character; compare Maker and Studio posed appearance. |
-| A06 · Headless capture orchestration | Mid-stage | Environment switches cover rigs, models, source/native cards/scenes, shape/color edits, fixed animation time, scripted plugin steps, focus events, adapter reports, screenshots and benchmarks. Startup calls capture paths synchronously and exits before `NSApplication` finishes launching. Native adapter mounts no longer read `NSApp` there. Input errors are generally explicit. | A-T04: verify the adapter fix through the release probe. Then cover the remaining startup phases, output errors and invalid combinations. |
+| A06 · Headless capture orchestration | Mid-stage — request validated up front; app runs not yet accepted | Environment switches cover rigs, models, source/native cards/scenes, shape/color edits, fixed animation time, scripted plugin steps, focus events, adapter reports, screenshots and benchmarks. Startup calls capture paths synchronously and exits before `NSApplication` finishes launching. Native adapter mounts no longer read `NSApp` there (A-T04, accepted in PR #2). Before any work, the engine `CaptureRequest` check classifies every `IKKOKU_*` variable the app reads. It exits 1, naming each offending variable in one message, for two modes, a mode without its output, a capture option no requested mode reads or one missing the option it acts with, a combination that captures other content, an empty value, a misspelled capture name or an ignored value (A-T06). `IKKOKU_NATIVE_PLUGIN_REPORT` and `IKKOKU_APPLICATION_FOCUS` need `IKKOKU_AUTOCAPTURE`. In every automated run a failed startup or capture input exits 1 naming the variable, value and error; `IKKOKU_CARD` and `IKKOKU_LOAD_SCENE` are no longer skipped. Startup inputs and data sources are not rejected by mode. CI runs the validator tests and an inventory drift check; the app path is only compiled there. | A-T06: run the [validation commands](../guides/build-and-test.md#capture-request-validation) and the `app-smoke` lane on the Mac and record the results. |
 | A07 · Window UI capture and thumbnail generation | Mid-stage — checked outputs; app runs not yet accepted | Capture outputs go through the engine `CaptureOutput` writer: the `IKKOKU_CAPTURE_UI` PNG and report, every `IKKOKU_RENDER_THUMBS` thumbnail, offscreen and original-frame PNGs, and benchmark, scenario and plugin reports. It throws on a failed write and reads the file back; the file must be nonempty and byte-identical, and a PNG must be complete and decode at the captured size. A failure names the path and exits nonzero, and "written" prints only after verification. UI capture no longer sleeps 2.5 s. It polls until `onAppear` has run and a visible window's laid-out bounds are nonzero and stable for five 0.1 s polls, failing after `IKKOKU_CAPTURE_UI_TIMEOUT` (default 30 s). Thumbnails attempt every entry, report each failed load, render or write, and exit nonzero. `cacheDisplay` still omits most SwiftUI content (ST-D07). CI runs the engine tests; the app path is only compiled there. | A-T05: run the [local acceptance commands](../guides/build-and-test.md#offscreen-and-ui-captures) and the `app-smoke` lane on the Mac and record the results. |
 | A08 · Original-frame probe entry point | Mid-stage | Produces generic-renderer, geometry/depth-normal and optional translated-shader diagnostic captures. Its own report correctly says frozen original geometry does not validate native rigs or scene loading. | Keep probe evidence separate from actual Maker/Studio frames; see renderer tasks R1/R2. |
 | A09 · Mod library commands/UI | Mid-stage | Explicit load/reload with dependency reporting. Scanning/conversion happens in CLI tools; the app does not automatically discover newly installed Windows mods. | Connect conversion job status, compatibility results and explicit version selection to app workflow; see Character/mod audit. |
@@ -74,8 +75,40 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   and Mute report as artifacts. Acceptance still needs the app run on the Mac:
   unwritable destination, forced timeout, normal capture and thumbnails, as
   listed in the [build guide](../guides/build-and-test.md#offscreen-and-ui-captures).
-  Swallowed autocapture input errors (`IKKOKU_CARD`, `IKKOKU_LOAD_SCENE`) remain
-  A06 work.
+  The swallowed autocapture input errors (`IKKOKU_CARD`, `IKKOKU_LOAD_SCENE`) noted
+  here are handled by A-T06.
+- **A-T06 — Capture request validation (P2; implemented 2026-10-23, local app
+  acceptance pending).** Reject invalid capture combinations before any work and
+  stop an automated run on a failed input. `CaptureRequest.validate` in the
+  Renderer module is pure (an environment dictionary in, a mode or a
+  `CaptureRequestError` out). It lives in the engine so Swift Testing covers it in
+  CI; it imports only Foundation and holds the variable names, as
+  `UICaptureReadiness` already does. Its inventory classifies all 86 variables the
+  app reads: 8 mode selectors including `IKKOKU_AUTOCAPTURE`, 44 mode-scoped options,
+  the window capture and its 5 options, 12 startup inputs and 16 data sources
+  (T-T02 added `IKKOKU_SOURCE_TREE_FALLBACKS`).
+  `AppState.init` runs it first and prints the error and exits 1. The
+  [build guide](../guides/build-and-test.md#capture-request-validation) lists the
+  rules and every newly rejected combination; no documented recipe or lane uses one.
+  The adapter report and focus events are capture-only, so they are rejected
+  without `IKKOKU_AUTOCAPTURE`. The `app-smoke` Mute check, which had no capture and
+  would have stayed open, now writes a Maker PNG and declares it. In an automated
+  run (any mode or `IKKOKU_CAPTURE_UI`) a failed startup input exits 1 as
+  `IKKOKU_X=value: error` instead of becoming an alert. This covers source scene,
+  mod library, rig, bone modifiers, source card, Studio execution, an explicit
+  `IKKOKU_SOURCE_AVATAR`/`_MALE_AVATAR` that falls back to the bundled character,
+  and an engine that fails to start. Failed capture inputs that were skipped or
+  clamped now exit too: `IKKOKU_CARD`, `IKKOKU_LOAD_SCENE` (including its item
+  assets), source body/face without a source contract, unknown slider, hair, pose,
+  item and Maker tab IDs, an out-of-range outfit, an explicit missing
+  `IKKOKU_SHAPE_CONTRACT`, the rig face preset without a face part and missing
+  per-family probe inputs. `CaptureRequestTests` (13 tests) keeps 29 documented and
+  lane recipes valid and covers each rule; `test_run.py` checks that the inventory matches the
+  app's reads, that app-smoke checks select one mode, and that adapter evidence
+  runs inside a capture. Neither was compiled locally. Acceptance: run the build
+  guide's A-T06 commands and the `app-smoke` lane on the Mac. Not covered:
+  `IKKOKU_ASSETS` still falls back silently when its path is missing (A02), and
+  an automatically discovered avatar still falls back without an override.
 
 ## G. Gameplay cycle, event selection and ADV
 
