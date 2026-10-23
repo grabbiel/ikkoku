@@ -528,6 +528,20 @@ parallel suite, however, its two tests stalled together in their first
 exceeded the lane's 600 s timeout. The cause was not isolated further. The GPU
 tests now also run one at a time (`@Suite(.serialized)`).
 
+The stall did not reproduce on the reference Mac (24 cores; Xcode 27.0, Swift
+6.4; 2026-10-23). That run used the textured version from `dbb62d2^`, unchanged
+except for timestamped progress lines, with the rest of the suite at
+`claude/local-wave-verify` `5c24bb9`. `swift test --package-path
+Packages/Engine` passed six times:
+- four parallel runs: all 654 tests passed in 10.0–10.5 s, and the
+  create–remove test took about 10 s;
+- one `--no-parallel` run: 17.2 s;
+- one parallel run with `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1`, which limits
+  the cooperative pool to one thread: 17.0 s.
+
+No texture-loader deadlock was isolated, so nothing was changed. The CI runner
+that stalled differs: 3 vCPUs and Xcode 26.6 / Swift 6.3.3.
+
 - `characterCreateRemoveCyclesReturnTheResourceStoreToBaseline` runs four
   create–draw–remove cycles, alternating five and two garments. It alternates
   the explicit release with `deinit`. After each removal, the pending frame still renders with
