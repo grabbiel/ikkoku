@@ -1171,7 +1171,7 @@ final class StudioModel: ViewportInputHandler {
         if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
-            edits.thumbnailData = try ImageIO.pngData(image)
+            edits.thumbnailData = try CaptureOutput.pngData(image)
         }
         try source.editedData(edits).write(to: url, options: .atomic)
         status = "Exported edited original scene to \(url.lastPathComponent)"
