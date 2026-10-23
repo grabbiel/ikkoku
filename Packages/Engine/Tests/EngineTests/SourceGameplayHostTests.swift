@@ -74,7 +74,14 @@ private func hostError(_ body: () throws -> Void) -> SourceGameplayHostError? {
         // MapChange: the host loads the map, then acknowledges the request.
         .mapLoadStarted(requestID: 0, from: 1, to: 2),
         .mapLoaded(requestID: 0, map: 2),
-        .advFrame(assetID: 9001, batch: 4, pc: 10, status: "closed"),
+        // ParameterFile inserts the library's Calc, Clamp and HeroineParam after itself.
+        .advFrame(assetID: 9001, batch: 4, pc: 9, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 5, pc: 11, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 6, pc: 12, status: "frameBoundary"),
+        // An unknown asset inserts nothing; HeroineParam H_callID runs CallNameChange.
+        .advFrame(assetID: 9001, batch: 7, pc: 13, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 8, pc: 14, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 9, pc: 16, status: "closed"),
         .eventCompleted(heroineID: 1, assetID: 9001),
     ]
     #expect(log == expected)
@@ -112,7 +119,14 @@ private func hostError(_ body: () throws -> Void) -> SourceGameplayHostError? {
     let duringEvent: [Entry] = [
         .performed(.updateTimeZone(0)), .performed(.updateMapSunlight(.hr1)),
         .mapLoaded(requestID: 0, map: 2),
-        .advFrame(assetID: 9001, batch: 4, pc: 10, status: "closed"),
+        // ParameterFile inserts the library's Calc, Clamp and HeroineParam after itself.
+        .advFrame(assetID: 9001, batch: 4, pc: 9, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 5, pc: 11, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 6, pc: 12, status: "frameBoundary"),
+        // An unknown asset inserts nothing; HeroineParam H_callID runs CallNameChange.
+        .advFrame(assetID: 9001, batch: 7, pc: 13, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 8, pc: 14, status: "frameBoundary"),
+        .advFrame(assetID: 9001, batch: 9, pc: 16, status: "closed"),
         .eventCompleted(heroineID: 1, assetID: 9001),
     ]
     #expect(log == duringEvent)
@@ -213,8 +227,8 @@ private func drive(_ start: SourceGameplayHost, _ script: [Drive], reloadBefore:
         return false
     }
     #expect(selections.count == 1) // Tuesday Morning does not rerun the completed event.
-    // 9 steps to the map load, 7 to idle after HR1, 4 after the day change, 5 after _Next.
-    #expect(reference.steps == 25)
+    // 9 steps to the map load, 12 to idle after HR1, 4 after the day change, 5 after _Next.
+    #expect(reference.steps == 30)
 
     var points: [ReloadPoint] = []
     for index in 0..<reference.steps {
@@ -286,7 +300,8 @@ private func drive(_ start: SourceGameplayHost, _ script: [Drive], reloadBefore:
     ]
     #expect(log == week)
     #expect(host.state.heroines.map(\.dailyIncrements) == [8, 8])
-    #expect(host.state.heroines.map(\.eventAfterDay) == [8, 3])
+    // Completing event 9001 reset heroine 1's eventAfterDay (Cycle.FixCharaEventStart).
+    #expect(host.state.heroines.map(\.eventAfterDay) == [7, 3])
 
     // Sunlight follows the active map; the night-menu tail is unsupported.
     _ = try host.perform(.changePeriod(.myHouse))
@@ -336,11 +351,11 @@ private func drive(_ start: SourceGameplayHost, _ script: [Drive], reloadBefore:
     }
 
     // An unported ADV command faults the frame; the host keeps its last state.
-    var host = try controlledHost(commands: [.init(id: 165)])
+    var host = try controlledHost(commands: [.init(id: 31)])
     _ = try host.perform(.nextPeriod())
     _ = try host.run(until: { $0.event != nil })
     let before = host
-    #expect(throws: SourceGameplayExecutionError.unsupported("ADV command ID 165 at pc 0")) { try host.step() }
+    #expect(throws: SourceGameplayExecutionError.unsupported("ADV command ID 31 at pc 0")) { try host.step() }
     #expect(host == before)
 }
 
@@ -397,8 +412,11 @@ private func isInconsistentState(_ data: Data, _ catalog: SourceGameplayEventCat
     #expect(root["schemaVersion"] as? Int == SourceGameplayHost.schemaVersion)
 
     // Not a host snapshot, another version, too large, or saved with other content.
-    #expect(throws: SourceGameplayHostError.unsupportedSchemaVersion(2)) {
-        try SourceGameplayHost.resume(edited(data, "schemaVersion", 2), catalog: catalog)
+    #expect(throws: SourceGameplayHostError.unsupportedSchemaVersion(3)) {
+        try SourceGameplayHost.resume(edited(data, "schemaVersion", 3), catalog: catalog)
+    }
+    #expect(throws: SourceGameplayHostError.unsupportedSchemaVersion(0)) {
+        try SourceGameplayHost.resume(edited(data, "schemaVersion", 0), catalog: catalog)
     }
     #expect(throws: SourceGameplayHostError.unrecognizedSnapshot("other")) {
         try SourceGameplayHost.resume(edited(data, "format", "other"), catalog: catalog)
@@ -473,7 +491,7 @@ private func isInconsistentState(_ data: Data, _ catalog: SourceGameplayEventCat
     let failures = report.steps.filter { !$0.ok }.map { "\($0.op): \($0.detail)" }.joined(separator: "; ")
     #expect(report.failed == 0, Comment(rawValue: failures))
     #expect(report.passed == scenario.steps.count + 1)
-    #expect(report.reloads.map(\.step) == [5, 8, 12])
+    #expect(report.reloads.map(\.step) == [5, 8, 12, 15])
     #expect(Set(stored.keys) == Set(scenario.steps.compactMap(\.path)))
     #expect(stored.keys.allSatisfy { $0.hasPrefix(".local/verification/") })
     #expect(report.saveFormat.contains("not original SaveData"))
@@ -522,4 +540,62 @@ private func isInconsistentState(_ data: Data, _ catalog: SourceGameplayEventCat
     #expect(report.steps[10...].allSatisfy { !$0.ok && $0.detail.hasPrefix("not run") })
     #expect(report.failed == report.steps.count - 9)
     #expect(report.reloads.map(\.step) == [5])
+}
+
+@Test func sourceGameplayHostMigratesSchemaOneSnapshots() throws {
+    // A schema-1 host: no character tables, parameter library, player
+    // parameters or bound commands, and placeholder heroines.
+    var scenario = try shippedScenario()
+    scenario.catalog.parameterLibrary = nil
+    scenario.catalog.characterTables = nil
+    var program = scenario.catalog.programs[0].program
+    program.commands.removeAll { $0.id == 165 || $0.id == 201 }
+    scenario.catalog.programs[0].program = program
+    var host = try scenario.makeHost()
+    #expect(host.state.player.parameters == nil)
+    _ = try host.perform(.nextPeriod())
+    _ = try host.run(until: { $0.mapLoad != nil })
+    let catalog = host.catalog
+    let current = try jsonObject(host.snapshot())
+    var legacy = current
+    legacy["schemaVersion"] = 1
+    var state = try #require(legacy["state"] as? [String: Any])
+    let heroines = try #require(state["heroines"] as? [[String: Any]])
+    state["heroines"] = try heroines.map { heroine -> [String: Any] in
+        var item = heroine
+        let parameters = try #require(item.removeValue(forKey: "parameters") as? [String: Any])
+        for key in ["fixCharaID", "isTaked", "eventAfterDay"] { item[key] = parameters[key] }
+        return item
+    }
+    legacy["state"] = state
+    var event = try #require(legacy["event"] as? [String: Any])
+    var interpreter = try #require(event["interpreter"] as? [String: Any])
+    for key in ["insertions", "replaces", "character", "parameterLibrary"] { interpreter[key] = nil }
+    event["interpreter"] = interpreter
+    legacy["event"] = event
+    let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+
+    // Placeholders become the new-game heroine with the three fields copied.
+    var migrated = try SourceGameplayHost.resume(legacyData, catalog: catalog)
+    #expect(migrated == host)
+    #expect(migrated.state.heroines[0].parameters.fixCharaID == -5)
+    #expect(migrated.state.heroines[0].parameters.callID == -1)
+    #expect(try jsonObject(migrated.snapshot())["schemaVersion"] as? Int == 2)
+    // The migrated host runs on exactly as the original.
+    let original = try host.run()
+    #expect(try migrated.run() == original)
+    #expect(migrated == host)
+
+    // Either shape in the wrong version, or both in one heroine, is rejected.
+    #expect(isInconsistentState(try edited(legacyData, "schemaVersion", 2), catalog))
+    var mixed = heroines[0]
+    mixed["fixCharaID"] = -5
+    #expect(isInconsistentState(try edited(JSONSerialization.data(withJSONObject: current), "state.heroines", [mixed]), catalog))
+    var withPlayer = legacy
+    var legacyState = try #require(withPlayer["state"] as? [String: Any])
+    var player = try #require(legacyState["player"] as? [String: Any])
+    player["parameters"] = try encodedJSON(SourcePlayerParameters(callDefaultID: 7))
+    legacyState["player"] = player
+    withPlayer["state"] = legacyState
+    #expect(isInconsistentState(try JSONSerialization.data(withJSONObject: withPlayer), catalog))
 }

@@ -366,5 +366,152 @@ class ScanTests(unittest.TestCase):
                 coverage.scan_bundle(path, root)
 
 
+
+# G-T02 bindings: synthetic heroine keys, call-name tables and parameter library.
+KEYS = [dict(key="H_intimacy", command="Int", writable=True, default=0), dict(key="H_callID", command="Int", writable=True, default=-1),
+        dict(key="H_isKiss", command="BOOL", writable=True, default=False), dict(key="H_Name", command="String", writable=False),
+        dict(key="H", command="Replace", writable=False)]
+TABLES = dict(schemaVersion=1, callDefaultID=7, voiceNumbers=[0],
+              callNames={"c00": [dict(name="A", id=1, category=2, bundle="b"), dict(name="S", id=5, category=0, bundle="b"),
+                                 dict(name="D", id=7, category=2, bundle="b")],
+                         "player": [dict(name="D", id=7, category=2, bundle="b")]})
+TRIPLE = [cmd(3, "H_intimacy", "1", "4", multi=True), cmd(4, "H_intimacy", "H_intimacy", "0", "100"), cmd(165, "H_intimacy", "H_intimacy")]
+LIBRARY = {"lib": TRIPLE, "empty": [], "nest": [cmd(201, "lib")], "bad": [cmd(ICON)]}
+
+
+def bound():
+    return patch.object(coverage, "BINDING", coverage.Binding(KEYS, LIBRARY, TABLES))
+
+
+def strip(commands):
+    return [{k: v for k, v in c.items() if k != "inserted"} for c in commands]
+
+
+class BindingTests(unittest.TestCase):
+    def test_parameter_file_expands_after_its_line_in_execution_order(self):
+        program = [cmd(201, "nest"), cmd(201, "missing"), cmd(201, "empty"), cmd(16, "n", "t"), cmd(22)]
+        with bound():
+            expanded, insertions, origins = coverage.expand(program)
+        self.assertEqual([c["id"] for c in expanded], [201, 201, 3, 4, 165, 201, 201, 16, 22])
+        self.assertEqual(insertions, [dict(pc=0, asset="nest", count=1), dict(pc=1, asset="lib", count=3), dict(pc=6, asset="empty", count=0)])
+        self.assertEqual(origins[:3], [(0,), (0, "nest", 0), (0, "nest", 0, "lib", 0)])
+        self.assertEqual(origins[5:], [(1,), (2,), (3,), (4,)])
+        self.assertEqual(strip(expanded[2:5]), TRIPLE)
+        self.assertEqual(coverage.expand(program)[1], [])  # No binding: nothing is inserted.
+
+    def test_unbound_commands_are_certain_halts(self):
+        unsupported, halt = coverage.first_static_halt([cmd(1, "System.Int32", "a", "1", multi=True), cmd(165, "H_intimacy", "1")], NAMES)
+        self.assertIsNone(unsupported)
+        self.assertEqual((halt["index"], halt["kind"], halt["reason"]), (1, "unbound-character", "ADV command ID 165 at pc 1"))
+        self.assertEqual(coverage.first_static_halt([cmd(201, "lib")], NAMES)[1]["reason"], "ADV command ID 201 at pc 0")
+
+    def test_heroine_param_forms(self):
+        def limit(*args):
+            with bound():
+                limits = coverage.argument_limits([cmd(165, *args)])
+            return (limits[0]["kind"], limits[0]["certain"], limits[0].get("reason")) if limits else None
+        self.assertEqual(limit(), ("character-source-exception", True, "HeroineParam args[0] (IndexOutOfRangeException)"))
+        self.assertEqual(limit("H_intimacy"), ("character-source-exception", True, "HeroineParam args[1] (IndexOutOfRangeException)"))
+        self.assertIsNone(limit("H_unknown", "x"))  # SetADVParam ignores an unknown key.
+        self.assertIsNone(limit("H_intimacy", " -3 "))
+        self.assertEqual(limit("H_intimacy", "6.5"), ("invalid-argument", True, "SaveData.Heroine.SetADVParam(H_intimacy) Convert.ChangeType Int32"))
+        self.assertIsNone(limit("H_isKiss", " TRUE "))
+        self.assertEqual(limit("H_isKiss", "1")[0], "invalid-argument")
+        self.assertIsNone(limit("H_Name", "anything"))
+        self.assertIsNone(limit("H_callID", "5"))
+        self.assertIsNone(limit("H_callID", "-1"))  # The player's ID 7 is in the list.
+        self.assertEqual(limit("H_callID", "4"), ("character-source-exception", True, "SaveData.FindCallFileData: no call name 4"))
+        self.assertEqual(limit("H_intimacy", "H_callID"), ("value-dependent-argument", False, None))  # A seeded key.
+
+    def test_seeded_and_call_variables_make_arguments_value_dependent(self):
+        voice = cmd(17, "0", "callBundle", "callName0", multi=True)
+        with bound():
+            self.assertNotIn("callBundle", coverage.assigned_names([voice, cmd(22)]))
+            self.assertIn("callBundle", coverage.assigned_names([cmd(165, "H_callID", "5"), voice, cmd(22)]))
+            self.assertIn("H_isKiss", coverage.assigned_names([cmd(22)]))
+            program = [cmd(1, "System.String", "which", "lib", multi=True), cmd(201, "which"), cmd(22)]
+            self.assertEqual(coverage.expand(program)[1], [])
+            self.assertEqual([(l["index"], l["kind"], l["certain"]) for l in coverage.argument_limits(program)],
+                             [(1, "value-dependent-argument", False)])
+            jump = [cmd(23, "H_Name"), cmd(12, "x", multi=True), cmd(22)]
+            outcomes, _, _ = coverage.reachable_outcomes(jump)
+            self.assertIn(dict(status="faulted", pc=0, id=23), outcomes)
+
+    def test_modelled_library_is_straight_line_and_predicts_the_heroine(self):
+        program = [cmd(201, "lib"), cmd(201, "lib"), cmd(16, "n", "t"), cmd(22)]
+        with bound():
+            expanded = coverage.expand(program)[0]
+            self.assertEqual(coverage.modelled(expanded), {1, 2, 3, 5, 6, 7})
+            self.assertTrue(coverage.straight_line(expanded, None))
+            self.assertEqual(coverage.expected_heroine(expanded, len(expanded)), {"intimacy": 8})
+            self.assertEqual(coverage.expected_heroine(expanded, 4), {"intimacy": 4})
+            self.assertIsNone(coverage.expected_heroine(expanded, 3))  # Ends inside an inserted program.
+            # A program write to the same key: the inserted Calc is value-dependent again.
+            mixed = coverage.expand([cmd(1, "System.String", "H_intimacy", "x", multi=True), cmd(201, "lib"), cmd(22)])[0]
+            self.assertEqual(coverage.modelled(mixed), set())
+            self.assertFalse(coverage.straight_line(mixed, None))
+            self.assertIsNone(coverage.expected_heroine([cmd(165, "H_intimacy", "4"), cmd(22)], 2))
+            halt = coverage.first_static_halt(coverage.expand([cmd(201, "bad"), cmd(22)])[0], NAMES)[1]
+            self.assertEqual((halt["index"], halt["id"]), (1, ICON))
+
+    def test_replay_maps_indexes_through_later_insertions(self):
+        program = [cmd(12, "t", multi=True), cmd(201, "lib"), cmd(16, "n", "x"), cmd(23, "t")]
+        first = dict(pc=1, asset="lib", count=3, nextRequestID=0, batch=1)
+        text = dict(requestID=0, pc=5, commandID=16, batch=3, blocking="next", command=dict(kind="text", arguments={}))
+        snapshots = [dict(snapshot(2, "frameBoundary"), insertions=[first]),
+                     dict(snapshot(6, "awaitingNext", batch=3, requests=[text]), insertions=[]),
+                     dict(snapshot(2, "frameBoundary", batch=4), insertions=[dict(first, nextRequestID=1, batch=4)])]
+        with bound():
+            final, keys, mapped, insertions, failures = coverage.replay_observed(program, snapshots)
+            self.assertEqual(failures, 0)
+            self.assertEqual([c["id"] for c in final], [12, 201, 3, 4, 165, 3, 4, 165, 16, 23])
+            self.assertEqual([s["pc"] for s in mapped], [5, 9, 2])  # Later insertions at pc 1 shift these.
+            self.assertEqual(mapped[1]["requests"][0]["pc"], 8)
+            self.assertEqual(final[8]["id"], 16)
+            self.assertEqual(keys[2], keys[5])  # Both copies have the static origin.
+            tampered = [dict(snapshots[0], insertions=[dict(first, count=2)])] + snapshots[1:]
+            self.assertEqual(coverage.replay_observed(program, tampered)[4], 1)
+            renamed = [dict(snapshots[0], insertions=[dict(first, asset="empty", count=0)])]
+            self.assertEqual(coverage.replay_observed(program, renamed)[4], 1)  # Not the literal asset.
+
+    def native_run(self):
+        return [dict(snapshot(1, "frameBoundary"), insertions=[dict(pc=0, asset="lib", count=3, nextRequestID=0, batch=1)]),
+                dict(snapshot(3, "frameBoundary", batch=2), insertions=[]), dict(snapshot(4, "frameBoundary", batch=3), insertions=[]),
+                dict(snapshot(5, "closed", batch=4), insertions=[])]
+
+    def test_compare_checks_insertions_and_the_heroine(self):
+        program = [cmd(201, "lib"), cmd(22)]
+        with bound():
+            result = coverage.analyse([bundle("c00/00.unity3d", program)], NAMES, HANDLERS)
+            self.assertEqual((result["totals"]["commands"], result["totals"]["expandedCommands"]), (2, 5))
+            case = coverage.trace_case("c00/00.unity3d", dict(name="0", pathID=1, commands=program))
+            self.assertEqual((case["variableDetail"], case["character"]["player"], len(case["ticks"])), ("changes", dict(callID=7), 9))
+            trace = dict(cases=[case])
+            def run(snapshots, intimacy):
+                report = dict(cases=[dict(name="c00/00.unity3d#1", snapshots=snapshots, heroine=dict(intimacy=intimacy, callID=-1))])
+                return coverage.compare(result, [(trace, report)])["summary"]
+            summary = run(self.native_run(), 4)
+            self.assertEqual(summary["categories"], {"match-no-halt": 1})
+            self.assertEqual({k: summary["insertions"][k] for k in ("sequenceMatches", "heroineMatches", "heroineChanged")},
+                             dict(sequenceMatches=1, heroineMatches=1, heroineChanged=1))
+            self.assertEqual(summary["requestMismatchCases"], 0)
+            self.assertEqual(run(self.native_run(), 5)["requests"]["mismatch:heroine"], 1)
+            tampered = self.native_run()
+            tampered[0] = dict(tampered[0], insertions=[dict(tampered[0]["insertions"][0], count=4)])
+            self.assertEqual(run(tampered, 4)["categories"], {"unexplained": 1})
+
+    def test_sample_carries_the_binding_and_library_checks(self):
+        program = [cmd(201, "lib"), cmd(16, "n", "t"), cmd(22)]
+        with bound():
+            result = coverage.analyse([bundle("c00/00.unity3d", program)], NAMES, HANDLERS)
+            sample = coverage.select_sample([bundle("c00/00.unity3d", program)], result, NAMES, {"parameter-file": 1})
+        self.assertEqual((sample["schemaVersion"], sample["parameterLibraryPath"], sample["characterTablesPath"]),
+                         (3, "parameter-library.json", "character-tables.json"))
+        case = sample["cases"][0]
+        self.assertEqual((case["stratum"], case["exactPrediction"], case["expectedHeroine"]), ("parameter-file", True, {"intimacy": 4}))
+        self.assertEqual(case["predictedInsertions"], [dict(pc=0, asset="lib", count=3)])
+        self.assertEqual(case["program"]["commands"], program)  # The native run inserts the library itself.
+        self.assertEqual(sample["libraryChecks"], [dict(asset="lib", expectedHeroine={"intimacy": 4})])
+
 if __name__ == "__main__":
     unittest.main()
