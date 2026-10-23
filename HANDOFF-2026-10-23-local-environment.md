@@ -189,10 +189,10 @@ This needs push rights; the cloud session's proxy refused branch deletion.
 
 | Task | Status |
 | --- | --- |
-| L1 app checks | open |
-| L2 lanes | open |
-| L3 A-T04 probe rerun | open |
-| L4 T-T01 versions | open |
-| L5 E-T02 rerun | open |
-| L6 texture-loader stall | open |
+| L1 app checks | claimed (claude/local-wave-verify) |
+| L2 lanes | claimed (claude/local-wave-verify) |
+| L3 A-T04 probe rerun | claimed (claude/local-wave-verify) |
+| L4 T-T01 versions | claimed (claude/local-wave-verify) |
+| L5 E-T02 rerun | claimed (claude/local-wave-verify) |
+| L6 texture-loader stall | claimed (claude/local-wave-verify) |
 | L7 branch cleanup | open |
