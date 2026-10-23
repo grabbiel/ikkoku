@@ -1,7 +1,8 @@
 # Build, test and capture
 
 Reviewed 2026-09-25; setup path and prerequisites reviewed 2026-10-23 (T-T01);
-Release packaging added 2026-10-23 (T-T02).
+Release packaging added 2026-10-23 (T-T02); converted library selection added
+2026-10-23 (A-T02).
 Commands run from the repository root unless stated otherwise.
 See the [documentation index](../README.md) and
 [verification audit](../component-audit/toolchain-and-verification.md) for scope.
@@ -164,8 +165,9 @@ the git-ignored Maker library and original male/female bases under
 elsewhere on that machine still finds them. Every use prints a
 `[ikkoku] source-tree fallback:` line. `IKKOKU_SOURCE_TREE_FALLBACKS=0`
 disables all three. Explicit `IKKOKU_ASSETS`, `IKKOKU_MAKER_LIBRARY` and
-`IKKOKU_SOURCE_AVATAR`/`IKKOKU_SOURCE_MALE_AVATAR` still apply. Unset or any
-other value keeps the development defaults in both configurations.
+`IKKOKU_SOURCE_AVATAR`/`IKKOKU_SOURCE_MALE_AVATAR` still apply, and so does a
+selected converted library (below). Unset or any other value keeps the
+development defaults in both configurations.
 
 To check that the bundle alone supplies the app's resources, launch a copy
 outside the checkout with the fallbacks off. The thumbnail mode loads the
@@ -185,6 +187,44 @@ Expect an `[ikkoku] assets root:` line naming the copy's
 has not been run** (T-T02). CI only builds and inspects the bundle. The
 launch also does not cover a clean user profile, signing, notarization or an
 installer.
+
+### Use a converted library outside the checkout
+
+Since A-T02 (2026-10-23; compiled by CI, not yet run), File → Choose Converted
+Library… selects the folder that holds `maker-library/library.json`,
+`rigs/source-avatar.json` and/or `male/source-male-avatar.json`. That is the
+`.local/reverse/` layout, copied or moved anywhere. The app records each
+manifest's SHA-256 and saves the selection in user defaults. The Maker library
+and original-base lookups then read it after their explicit variables and before
+the source-tree defaults. It does not change the asset root. Startup prints a
+`[ikkoku] converted library:` line for each selected manifest, and a
+`converted library changed since it was selected` line when its bytes differ. To
+inspect or clear the selection, use File → Forget Converted Library or:
+
+```sh
+defaults read com.grabbiel.IkkokuCreator ConvertedLibraryLocation
+defaults delete com.grabbiel.IkkokuCreator ConvertedLibraryLocation
+```
+
+Automated runs ignore a saved selection: any capture or scenario mode, and
+`IKKOKU_CAPTURE_UI`. Startup prints `the saved converted library selection is
+ignored in an automated run` instead, so a lane's inputs come only from its
+environment. Pass the explicit variables to point an automated run at a moved
+library.
+
+Scenes saved since A-T02 record each referenced file's SHA-256 and its path
+inside the library it came from. Opening such a scene after the library moved
+relocates its references into the selected library when the identities match.
+Missing, changed or escaping files are listed under Source compatibility details
+and printed as `[ikkoku] <scene>: Unresolved …` lines; their objects are not
+loaded. The rules are in
+[Library location and relocation](../reference/native-assets.md#library-location-and-relocation-a-t02).
+
+Acceptance, not run: preview a CharaStudio scene and save it with Save Scene….
+Copy or move the converted folder and choose the new location. Then launch the
+Release app outside the checkout with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and open
+the saved scene. Expect every reference to relocate, or one `Unresolved` line per
+missing or changed identity, with nothing else loaded in its place.
 
 ## Test layers
 

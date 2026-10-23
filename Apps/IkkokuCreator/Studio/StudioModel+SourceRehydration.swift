@@ -97,9 +97,10 @@ extension StudioModel {
     /// The rig and bone catalog for previews the document cannot carry a
     /// reference for (route characters stay placeholders): the first
     /// character's own `sourceCharacter` paths when the file is still there,
-    /// else the same locate calls the import used.
+    /// else the same locate calls the import used. A character whose references
+    /// failed the load's resource check (A-T02) is not a source for them.
     private func sourceRigInputs() throws -> (rigURL: URL, boneCatalogURL: URL) {
-        if let reference = doc.objects.first(where: { $0.sourceCharacter != nil })?.sourceCharacter {
+        if let reference = doc.objects.first(where: { $0.sourceCharacter != nil && !resourceBlockedObjects.contains($0.id) })?.sourceCharacter {
             let rig = URL(fileURLWithPath: reference.rigFile)
             if FileManager.default.fileExists(atPath: rig.path) {
                 return (rig, URL(fileURLWithPath: reference.boneCatalogFile))
