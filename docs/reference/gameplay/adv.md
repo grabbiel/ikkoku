@@ -1,6 +1,6 @@
 # Fixed-event selection and bounded ADV execution
 
-Reviewed 2026-10-22 against the working tree (G-T03 host-request slice). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract; the app still has no gameplay session host.
+Reviewed 2026-10-23 against the working tree (G-T03 host-request slice; A-T01 gameplay host first slice). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract. The native [gameplay host](cycle.md#gameplay-host-a-t01) runs one selected fixed event's program and consumes only MapChange requests; the app runs it headlessly only.
 
 The native `Gameplay` module can select original fixed-character events and
 execute a bounded subset of the original ADV commands: the scalar commands
@@ -8,9 +8,10 @@ execute a bounded subset of the original ADV commands: the scalar commands
 host-request slice, fourteen presentation commands whose effects are issued as
 typed, saveable host requests. NPC navigation, character-state bindings, the
 remaining presentation commands and complete ADV execution remain unported.
-These kernels run in tests and CLI traces. The app has Maker and Studio only; no
-NPC entity, campaign save or presentation host consumes the requests yet, so
-nothing is displayed, played or loaded.
+These kernels run in tests, CLI traces and the headless gameplay host. The app
+has Maker and Studio only. No NPC entity, campaign save or presentation host
+consumes the requests, so nothing is displayed or played. The gameplay host's
+MapChange only changes its native active-map number; no map asset loads.
 
 ## Source recovery and original data
 
@@ -490,11 +491,14 @@ the reference expectations embedded in the input file.
 ## Pending integration
 
 1. The engine session host (`G-T01`, [effect inventory](cycle.md#session-host-and-effect-inventory-g-t01))
-   now holds cycle transitions on acknowledged barriers and persists in-flight
-   cycle state. An app host (`A-T01`) must acknowledge them on actual completion
-   rather than test-injected flags, and save a running `SourceADVInterpreter`
-   next to the session snapshot: the session neither owns nor persists one, and
-   ADV request acknowledgements stay on the interpreter.
+   holds cycle transitions on acknowledged barriers and persists in-flight
+   cycle state. The first slice of the [gameplay host](cycle.md#gameplay-host-a-t01)
+   (`A-T01`) acknowledges period barriers from its own state, runs the selected
+   fixed event's `SourceADVInterpreter` one frame per step and saves it with the
+   session in one snapshot. It performs MapChange without a fade (a catalog map
+   load, acknowledged with no `Cycle.ADVVariables`) and rejects every other
+   request, because nothing is presented. A presentation host for the other
+   requests remains.
 2. Bind source player/heroine data and implement `HeroineParam` (`G-T02`). Accept
    when original scenario 301 completes with source-verified values and a fixed
    event runs once across save/reload with its original ID.

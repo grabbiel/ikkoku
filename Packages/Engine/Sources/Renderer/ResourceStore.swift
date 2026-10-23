@@ -133,6 +133,9 @@ public final class ResourceStore: @unchecked Sendable {
     public struct Statistics: Encodable, Sendable {
         public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
         public let meshBufferBytes: Int, deformBufferBytes: Int, hiddenBufferBytes: Int
+        /// Retired meshes and keys still waiting for a later submitted frame (`retire`).
+        /// They are included in the counts above until then.
+        public let retiring: Int
     }
 
     /// Counts store-owned resources; device allocation also includes render
@@ -149,7 +152,8 @@ public final class ResourceStore: @unchecked Sendable {
         return Statistics(meshes: meshes.count, textures: textures.count, deformBuffers: deformBuffers.count,
             hiddenBuffers: hiddenBuffers.count, meshBufferBytes: buffers.values.reduce(0) { $0 + $1.length },
             deformBufferBytes: deformBuffers.values.reduce(0) { $0 + $1.length },
-            hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length })
+            hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length },
+            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count)
     }
 
     @discardableResult
@@ -245,43 +249,114 @@ public final class ResourceStore: @unchecked Sendable {
         return h
     }
 
-    public func unregister(mesh h: MeshHandle) { lock.lock(); meshes[h.id] = nil; lock.unlock() }
+    /// Drops a mesh at once. A queued handle-only frame then skips it; owners whose
+    /// frames may still be pending use `retire(meshes:)`.
+    public func unregister(mesh h: MeshHandle) { lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; lock.unlock() }
 
     /// The persistent deformation output for `key`, reallocated when a mesh needs
     /// more vertices. Nil when Metal refuses the allocation; the renderer reports it
-    /// as a deformation error instead of terminating.
-    func deformBuffer(for key: UInt64, vertexCount: Int) -> (any MTLBuffer)? {
+    /// as a deformation error instead of terminating. `frameCreatedAt` is the
+    /// requesting frame's `RenderFrame.createdAt`; nil means a frame created now.
+    func deformBuffer(for key: UInt64, vertexCount: Int, frameCreatedAt created: UInt64? = nil) -> (any MTLBuffer)? {
         lock.lock(); defer { lock.unlock() }
         let needed = MemoryLayout<DeformedVertex>.stride * max(vertexCount, 1)
         if let b = deformBuffers[key], b.length >= needed { return b }
         guard let b = device.makeBuffer(length: needed, options: .storageModePrivate) else { return nil }
+        // A frame created before a completed retirement may still name a key that
+        // retirement released. Its buffer stays transient (the frame's own deform
+        // pass fills it), so preparing such a frame cannot re-create the key.
+        if let created, created < newestCompletedRetirement {
+            b.label = "deform.\(key).transient"
+            return b
+        }
         b.label = "deform.\(key)"
         deformBuffers[key] = b
         return b
     }
 
-    public func releaseDeformBuffers(keys: [UInt64]) { lock.lock(); for k in keys { deformBuffers[k] = nil }; lock.unlock() }
+    /// Drops deformation buffers at once; see `retire` for owners with pending frames.
+    public func releaseDeformBuffers(keys: [UInt64]) {
+        lock.lock(); for k in keys { deformBuffers[k] = nil; retiringDeformKeys[k] = nil }; lock.unlock()
+    }
 
     private var hiddenBuffers: [UInt64: any MTLBuffer] = [:]
 
     /// Uploads (or replaces) a per-vertex hidden mask for `key`. A replacement is a
     /// new buffer, so frames already submitted keep the mask they were encoded with.
     /// Returns false, and drops the key's previous mask, when Metal refuses the buffer.
+    /// Uploading a retired key cancels its retirement: the caller owns it again.
     @discardableResult
     public func setHiddenBuffer(key: UInt64, bytes: [UInt8]) -> Bool {
         let buffer = bytes.isEmpty ? device.makeBuffer(length: 1, options: .storageModeShared)
             : device.makeBuffer(bytes: bytes, length: bytes.count, options: .storageModeShared)
         lock.lock(); defer { lock.unlock() }
+        retiringHiddenKeys[key] = nil
         guard let buffer else { hiddenBuffers[key] = nil; return false }
         buffer.label = "hidden.\(key)"
         hiddenBuffers[key] = buffer
         return true
     }
 
-    /// Drops hidden masks, like `releaseDeformBuffers`; submitted frames keep theirs.
-    public func releaseHiddenBuffers(keys: [UInt64]) { lock.lock(); for k in keys { hiddenBuffers[k] = nil }; lock.unlock() }
+    /// Drops hidden masks at once, like `releaseDeformBuffers`. Encoded frames keep
+    /// theirs; owners whose frames may still be pending use `retire(hiddenKeys:)`.
+    public func releaseHiddenBuffers(keys: [UInt64]) {
+        lock.lock(); for k in keys { hiddenBuffers[k] = nil; retiringHiddenKeys[k] = nil }; lock.unlock()
+    }
 
     func hiddenBuffer(key: UInt64) -> (any MTLBuffer)? { lock.lock(); defer { lock.unlock() }; return hiddenBuffers[key] }
+
+    // MARK: Deferred release (R6)
+
+    // A frame names meshes, deformation keys and hidden-mask keys, not buffers,
+    // until it is prepared, and it may be prepared after an owner gives them back:
+    // the renderer's pending frame, or a copy of it from `Renderer.currentFrame()`.
+    // Releasing at once would drop the mask and meshes that frame draws, and its
+    // preparation would re-create (and then keep forever) the owner's deformation
+    // buffers. `retire` therefore takes a `ResourceClock` stamp and leaves the
+    // resources in place. The release completes when the renderer prepares a
+    // submitted frame created after that stamp: the pending frame was replaced by
+    // one built without them. Encoded command buffers and prepared frames hold
+    // their own references, so completion never touches GPU work in flight.
+    private var retiringMeshes: [UInt32: UInt64] = [:]
+    private var retiringDeformKeys: [UInt64: UInt64] = [:]
+    private var retiringHiddenKeys: [UInt64: UInt64] = [:]
+    /// Stamp of the newest completed retirement. A frame created before it gets
+    /// transient deformation buffers (see `deformBuffer`).
+    private var newestCompletedRetirement: UInt64 = 0
+
+    /// Gives an owner's resources back once no pending frame can name them (see
+    /// above). Meshes must belong to the caller, not to a shared library asset.
+    /// Retire after the owner's last frame was created: a frame created later is
+    /// treated as current, so it would re-create the deformation keys it names.
+    /// `setHiddenBuffer` on a retired key, and the immediate `unregister`/`release`
+    /// calls, cancel that key's retirement.
+    public func retire(meshes handles: [MeshHandle] = [], deformKeys: [UInt64] = [], hiddenKeys: [UInt64] = []) {
+        let stamp = ResourceClock.tick()
+        lock.lock(); defer { lock.unlock() }
+        for handle in handles where meshes[handle.id] != nil { retiringMeshes[handle.id] = stamp }
+        // A deformation key may not have a buffer yet: a pending frame that names
+        // it allocates one when prepared, and completion drops that one too.
+        for key in deformKeys { retiringDeformKeys[key] = stamp }
+        for key in hiddenKeys where hiddenBuffers[key] != nil { retiringHiddenKeys[key] = stamp }
+    }
+
+    /// Called while the renderer prepares a submitted frame created at `stamp`:
+    /// releases everything retired before that frame existed.
+    func completeRetirements(createdBefore stamp: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty else { return }
+        var newest = newestCompletedRetirement
+        for (id, retired) in retiringMeshes where retired < stamp {
+            meshes[id] = nil; retiringMeshes[id] = nil; newest = max(newest, retired)
+        }
+        for (key, retired) in retiringDeformKeys where retired < stamp {
+            deformBuffers[key] = nil; retiringDeformKeys[key] = nil; newest = max(newest, retired)
+        }
+        for (key, retired) in retiringHiddenKeys where retired < stamp {
+            hiddenBuffers[key] = nil; retiringHiddenKeys[key] = nil; newest = max(newest, retired)
+        }
+        newestCompletedRetirement = newest
+    }
 
     // MARK: Textures
 

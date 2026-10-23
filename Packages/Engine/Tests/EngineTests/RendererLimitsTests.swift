@@ -23,7 +23,8 @@ private func eventually(_ condition: () -> Bool) -> Bool {
 }
 
 /// The production pass graph built from `Shaders/`; the test bundle has no metallib.
-private func makeSourceShaderRenderer() throws -> Renderer {
+/// Shared with `CharacterLifetimeTests`.
+func makeSourceShaderRenderer() throws -> Renderer {
     let gpu = try #require(GPUContext())
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()

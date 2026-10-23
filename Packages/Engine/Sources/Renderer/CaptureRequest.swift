@@ -50,6 +50,9 @@ public struct CaptureRequest: Sendable, Equatable {
         case makerScenario
         /// `IKKOKU_STUDIO_SCENARIO` with `IKKOKU_STUDIO_SCENARIO_REPORT`.
         case studioScenario
+        /// `IKKOKU_GAMEPLAY_SCENARIO` with `IKKOKU_GAMEPLAY_SCENARIO_REPORT`: the
+        /// native gameplay host (A-T01), run before the engine and editors start.
+        case gameplayScenario
         /// `IKKOKU_RENDER_THUMBS`: one preview per catalog entry.
         case thumbnails
         /// `IKKOKU_AUTOCAPTURE` without a rig, model or scene capture: the Maker
@@ -68,6 +71,7 @@ public struct CaptureRequest: Sendable, Equatable {
             case .sceneCapture: return "native scene capture (IKKOKU_CAPTURE_SCENE)"
             case .makerScenario: return "the Maker scenario (IKKOKU_MAKER_SCENARIO)"
             case .studioScenario: return "the Studio scenario (IKKOKU_STUDIO_SCENARIO)"
+            case .gameplayScenario: return "the gameplay scenario (IKKOKU_GAMEPLAY_SCENARIO)"
             case .thumbnails: return "catalog thumbnails (IKKOKU_RENDER_THUMBS)"
             case .appCapture: return "the Maker/Studio app capture (IKKOKU_AUTOCAPTURE without a rig, model or scene capture)"
             }
@@ -154,6 +158,10 @@ public struct CaptureRequest: Sendable, Equatable {
             case .liveSourceShaderProbe:
                 if !isSet("IKKOKU_LIVE_SOURCE_OUTPUT") {
                     report([selector.variable], "writes its renders to IKKOKU_LIVE_SOURCE_OUTPUT, which is not set")
+                }
+            case .gameplayScenario:
+                if !isSet("IKKOKU_GAMEPLAY_SCENARIO_REPORT") {
+                    report([selector.variable], "writes its report to IKKOKU_GAMEPLAY_SCENARIO_REPORT, which is not set")
                 }
             default:
                 break
@@ -338,6 +346,7 @@ extension CaptureRequest {
 
     /// The variables that select a mode, in the order startup reaches them.
     static let modeSelectors: [ModeSelector] = [
+        ModeSelector("IKKOKU_GAMEPLAY_SCENARIO", .gameplayScenario),
         ModeSelector("IKKOKU_ORIGINAL_FRAME_PROBE", .originalFrameProbe),
         ModeSelector("IKKOKU_LIVE_SOURCE_PROBE", .liveSourceShaderProbe),
         ModeSelector("IKKOKU_CAPTURE_RIG", .rigCapture),
@@ -356,6 +365,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS", [.originalFrameProbe]),
         ScopedOption("IKKOKU_MAKER_SCENARIO_REPORT", [.makerScenario]),
         ScopedOption("IKKOKU_STUDIO_SCENARIO_REPORT", [.studioScenario]),
+        ScopedOption("IKKOKU_GAMEPLAY_SCENARIO_REPORT", [.gameplayScenario]),
         ScopedOption("IKKOKU_SOURCE_EXPRESSION", [.rigCapture, .liveSourceShaderProbe]),
         ScopedOption("IKKOKU_LIVE_SOURCE_OUTPUT", [.liveSourceShaderProbe]),
         ScopedOption("IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER", [.liveSourceShaderProbe]),

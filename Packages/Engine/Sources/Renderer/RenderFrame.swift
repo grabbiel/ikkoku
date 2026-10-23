@@ -149,6 +149,25 @@ public struct SceneEffects: Sendable, Equatable, Codable {
     public init() {}
 }
 
+/// Orders frame creation against resource retirement (R6). Each `RenderFrame`
+/// takes a stamp when it is created and each `ResourceStore.retire` call takes one,
+/// so the renderer can tell a frame built before a retirement, which may still name
+/// the retired handles and keys, from one built after it.
+enum ResourceClock {
+    private final class Storage: @unchecked Sendable {
+        let lock = NSLock()
+        var value: UInt64 = 0
+    }
+    private static let storage = Storage()
+
+    /// A stamp larger than every earlier one, on any thread.
+    static func tick() -> UInt64 {
+        storage.lock.lock(); defer { storage.lock.unlock() }
+        storage.value &+= 1
+        return storage.value
+    }
+}
+
 /// Immutable per-frame snapshot handed from the UI to the render thread.
 public struct RenderFrame: Sendable {
     public var camera: OrbitCamera
@@ -164,6 +183,12 @@ public struct RenderFrame: Sendable {
     // mutates texture contents and its dictionary is copied with this frame value.
     private struct RetainedTexture: @unchecked Sendable { let texture: any MTLTexture }
     private var retainedTextures: [TextureHandle: RetainedTexture] = [:]
+    /// `ResourceClock` stamp taken when this value was created; copies keep it.
+    /// Orders the frame against `ResourceStore.retire` (R6).
+    var createdAt: UInt64 = ResourceClock.tick()
+    /// Set by `Renderer.submit`. Only a submitted frame completes retirements: it
+    /// replaced the pending frame the interactive draw would otherwise prepare.
+    var submitted = false
 
     /// Freeze explicit texture resources while their appearance still owns them.
     /// Later unregistering a handle cannot change this frame's sampled materials.

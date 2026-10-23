@@ -42,7 +42,13 @@ final class MakerModel: ViewportInputHandler {
     var viewportSize = SIMD2<Float>(1600, 1200)
     var lastLoadedURL: URL?
     var status = ""
-    var sourceRigPreview: SourceRigPreview?
+    /// While an original rig preview is shown, the bundled character is not drawn,
+    /// so its per-instance GPU buffers go back to the store (R6). It rebuilds them
+    /// when it is drawn again.
+    var sourceRigPreview: SourceRigPreview? {
+        didSet { if oldValue == nil, sourceRigPreview != nil { character.releaseGPUResources() } }
+    }
+    @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private(set) var sourceRigURL: URL?
     /// Why the last automatic original-base load fell back to the bundled character, or
     /// nil. An automated run that named the base explicitly exits on it (A06).
@@ -116,6 +122,10 @@ final class MakerModel: ViewportInputHandler {
     private func tick() {
         let now = ProcessInfo.processInfo.systemUptime
         let delta = Float(now - sourceLastTick); sourceLastTick = now
+        if isActiveMode, let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
+                                                        statistics: host.renderer.lastFrameStatistics, now: now) {
+            status = text
+        }
         guard liveAnimation, isActiveMode else { return }
         if let preview = sourceRigPreview {
             do {

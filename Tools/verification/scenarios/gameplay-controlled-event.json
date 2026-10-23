@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "name": "gameplay-controlled-event",
+  "start": {
+    "week": "Monday",
+    "isOpening": true,
+    "map": "SyntheticRoom",
+    "frameDelta": 0.25,
+    "heroines": [
+      {
+        "id": 1,
+        "fixCharaID": -5,
+        "classIndex": 0,
+        "isTaked": false,
+        "eventAfterDay": 0,
+        "dailyIncrements": 0
+      }
+    ]
+  },
+  "catalog": {
+    "schemaVersion": 1,
+    "name": "synthetic-controlled-event",
+    "mapNumbers": {
+      "SyntheticRoom": 1,
+      "SyntheticHall": 2
+    },
+    "waitPoints": [],
+    "fixedEvents": {
+      "schemaVersion": 1,
+      "classSchedules": [],
+      "schedules": [
+        {
+          "heroineID": 1,
+          "entries": [
+            {
+              "asset": "9001",
+              "bundle": "",
+              "isVisible": false,
+              "cycles": [
+                "朝"
+              ],
+              "map": "SyntheticRoom",
+              "weeks": [],
+              "layerName": "",
+              "coordinate": "",
+              "afterDay": 0
+            }
+          ]
+        }
+      ]
+    },
+    "programs": [
+      {
+        "assetID": 9001,
+        "program": {
+          "schemaVersion": 1,
+          "name": "synthetic-event-9001",
+          "commands": [
+            {
+              "id": 1,
+              "args": [
+                "System.Int32",
+                "visits",
+                "0"
+              ],
+              "multi": true,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 3,
+              "args": [
+                "visits",
+                "1",
+                "1"
+              ],
+              "multi": true,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 14,
+              "args": [
+                "visits",
+                "0",
+                "1",
+                "met",
+                "skip"
+              ],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 12,
+              "args": [
+                "skip"
+              ],
+              "multi": true,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 22,
+              "args": [],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 12,
+              "args": [
+                "met"
+              ],
+              "multi": true,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 25,
+              "args": [
+                "0.5"
+              ],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 169,
+              "args": [
+                "SyntheticHall",
+                "None"
+              ],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 1,
+              "args": [
+                "System.Boolean",
+                "visited",
+                "True"
+              ],
+              "multi": true,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 22,
+              "args": [],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "assert",
+      "period": "WakeUp",
+      "week": "Monday",
+      "savedWeek": "Monday",
+      "activeMap": "SyntheticRoom",
+      "completedEvents": [],
+      "idle": true
+    },
+    {
+      "op": "perform",
+      "operation": "nextPeriod"
+    },
+    {
+      "op": "run",
+      "until": "eventRunning"
+    },
+    {
+      "op": "assert",
+      "period": "Morning",
+      "runningEvent": 9001,
+      "activeMap": "SyntheticRoom"
+    },
+    {
+      "op": "run",
+      "until": "mapLoading"
+    },
+    {
+      "op": "reload",
+      "path": ".local/verification/gameplay/controlled-event-map-loading.json"
+    },
+    {
+      "op": "perform",
+      "operation": "changePeriod",
+      "period": "HR1"
+    },
+    {
+      "op": "run",
+      "until": "barrier"
+    },
+    {
+      "op": "reload",
+      "path": ".local/verification/gameplay/controlled-event-adv-barrier.json"
+    },
+    {
+      "op": "assert",
+      "period": "Morning",
+      "runningEvent": 9001,
+      "idle": false
+    },
+    {
+      "op": "run"
+    },
+    {
+      "op": "assert",
+      "period": "HR1",
+      "week": "Monday",
+      "activeMap": "SyntheticHall",
+      "completedEvents": [
+        9001
+      ],
+      "idle": true
+    },
+    {
+      "op": "reload",
+      "path": ".local/verification/gameplay/controlled-event-complete.json"
+    },
+    {
+      "op": "perform",
+      "operation": "changePeriod",
+      "period": "Morning"
+    },
+    {
+      "op": "run"
+    },
+    {
+      "op": "assert",
+      "period": "Morning",
+      "week": "Tuesday",
+      "savedWeek": "Tuesday",
+      "activeMap": "SyntheticHall",
+      "completedEvents": [
+        9001
+      ],
+      "idle": true
+    }
+  ]
+}

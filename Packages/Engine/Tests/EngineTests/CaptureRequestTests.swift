@@ -155,6 +155,15 @@ private struct CaptureRecipe {
                       environment: ["IKKOKU_MAKER_SCENARIO": "/scenarios/m.json", "IKKOKU_MAKER_SCENARIO_REPORT": "/captures/m.json",
                                     "IKKOKU_SOURCE_CARD": "/cards/card.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"],
                       mode: .makerScenario),
+        CaptureRecipe(source: "gameplay-scenarios lane",
+                      environment: ["IKKOKU_GAMEPLAY_SCENARIO": "/scenarios/g.json",
+                                    "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/captures/g.json"],
+                      mode: .gameplayScenario),
+        CaptureRecipe(source: "gameplay scenario with a shared environment file",
+                      environment: ["IKKOKU_GAMEPLAY_SCENARIO": "/scenarios/g.json",
+                                    "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/captures/g.json",
+                                    "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json", "IKKOKU_SOURCE_SCENE": "/scenes/scene.png"],
+                      mode: .gameplayScenario),
         CaptureRecipe(source: "ST-T04 item catalog preview and export",
                       environment: ["IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_STUDIO_ITEM_CATALOG": "/catalog/items.json",
                                     "IKKOKU_BENCHMARK_OUTPUT": "/captures/benchmark.json",
@@ -220,6 +229,20 @@ private struct CaptureRecipe {
     let windowAndScenario: [[String]] = [["IKKOKU_CAPTURE_UI", "IKKOKU_STUDIO_SCENARIO"]]
     #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_STUDIO_SCENARIO": "/s.json",
                                     "IKKOKU_STUDIO_SCENARIO_REPORT": "/s-report.json"]) == windowAndScenario)
+
+    // A-T01: the gameplay scenario is a mode of its own and exits before any window opens.
+    let gameplayAndStudio: [[String]] = [["IKKOKU_GAMEPLAY_SCENARIO", "IKKOKU_STUDIO_SCENARIO"]]
+    #expect(captureRequestProblems(["IKKOKU_GAMEPLAY_SCENARIO": "/g.json", "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/g-report.json",
+                                    "IKKOKU_STUDIO_SCENARIO": "/s.json",
+                                    "IKKOKU_STUDIO_SCENARIO_REPORT": "/s-report.json"]) == gameplayAndStudio)
+    let gameplayAndCapture: [[String]] = [["IKKOKU_GAMEPLAY_SCENARIO", "IKKOKU_AUTOCAPTURE"]]
+    #expect(captureRequestProblems(["IKKOKU_GAMEPLAY_SCENARIO": "/g.json", "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/g-report.json",
+                                    "IKKOKU_AUTOCAPTURE": "/out.png"]) == gameplayAndCapture)
+    let windowAndGameplay: [[String]] = [["IKKOKU_CAPTURE_UI", "IKKOKU_GAMEPLAY_SCENARIO"]]
+    #expect(captureRequestProblems(["IKKOKU_CAPTURE_UI": "/ui.png", "IKKOKU_GAMEPLAY_SCENARIO": "/g.json",
+                                    "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/g-report.json"]) == windowAndGameplay)
+    #expect(captureRequestMessage(["IKKOKU_GAMEPLAY_SCENARIO": "/g.json", "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/g-report.json",
+                                   "IKKOKU_AUTOCAPTURE": "/out.png"]).contains("the gameplay scenario (IKKOKU_GAMEPLAY_SCENARIO)"))
 }
 
 @Test func captureRequestRejectsAModeWithoutItsOutput() {
@@ -232,9 +255,19 @@ private struct CaptureRecipe {
     #expect(captureRequestProblems(["IKKOKU_MAKER_SCENARIO": "/m.json"]) == makerScenario)
     let studioScenario: [[String]] = [["IKKOKU_STUDIO_SCENARIO"]]
     #expect(captureRequestProblems(["IKKOKU_STUDIO_SCENARIO": "/s.json"]) == studioScenario)
+    let gameplayScenario: [[String]] = [["IKKOKU_GAMEPLAY_SCENARIO"]]
+    #expect(captureRequestProblems(["IKKOKU_GAMEPLAY_SCENARIO": "/g.json"]) == gameplayScenario)
+    #expect(captureRequestMessage(["IKKOKU_GAMEPLAY_SCENARIO": "/g.json"])
+        .contains("writes its report to IKKOKU_GAMEPLAY_SCENARIO_REPORT, which is not set"))
     // A report without its scenario reaches no mode that writes it.
     let reportOnly: [[String]] = [["IKKOKU_STUDIO_SCENARIO_REPORT"]]
     #expect(captureRequestProblems(["IKKOKU_STUDIO_SCENARIO_REPORT": "/s.json"]) == reportOnly)
+    let gameplayReportOnly: [[String]] = [["IKKOKU_GAMEPLAY_SCENARIO_REPORT"]]
+    #expect(captureRequestProblems(["IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/g.json"]) == gameplayReportOnly)
+    // A capture option inside the gameplay scenario has no effect there.
+    let widthInGameplay: [[String]] = [["IKKOKU_CAPTURE_W"]]
+    #expect(captureRequestProblems(["IKKOKU_GAMEPLAY_SCENARIO": "/g.json", "IKKOKU_GAMEPLAY_SCENARIO_REPORT": "/g-report.json",
+                                    "IKKOKU_CAPTURE_W": "900"]) == widthInGameplay)
 }
 
 /// A06 decision: the native plugin report and focus events are capture-only
@@ -420,7 +453,8 @@ private struct CaptureRecipe {
     #expect(Set(names).count == names.count)
     #expect(names.allSatisfy { $0.hasPrefix("IKKOKU_") })
     for name in ["IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CARD", "IKKOKU_LOAD_SCENE", "IKKOKU_NATIVE_PLUGIN_REPORT",
-                 "IKKOKU_CAPTURE_UI_TIMEOUT", "IKKOKU_SOURCE_AVATAR"] {
+                 "IKKOKU_CAPTURE_UI_TIMEOUT", "IKKOKU_SOURCE_AVATAR", "IKKOKU_GAMEPLAY_SCENARIO",
+                 "IKKOKU_GAMEPLAY_SCENARIO_REPORT"] {
         #expect(names.contains(name), Comment(rawValue: name))
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import simd
 import CoreMath
+import Assets
 import Scene
 import Renderer
 import Character
@@ -133,6 +134,12 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     /// generation, never a newer one. Documents saved before this field existed
     /// decode it as nil; their profile state and adapter references are unchanged.
     public var sourcePluginLibrary: SourcePluginLibrarySelection?
+    /// The libraries and file digests this document's paths were saved against
+    /// (A-T02). `resolvingResources(current:catalog:)` relocates the paths of a
+    /// moved library from it and reports every reference it cannot verify.
+    /// Documents saved before this field existed, and documents with no file
+    /// reference, decode it as nil; see `StudioResourceReferences.swift`.
+    public var resourceBinding: ResourceBinding?
 
     public init() {
         camera.target = Float3(0, 0.9, 0); camera.distance = 3.4; camera.yaw = 0.35; camera.pitch = 0.12

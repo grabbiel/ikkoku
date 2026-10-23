@@ -43,6 +43,35 @@ public final class CharacterInstance: Identifiable {
         resolve()
     }
 
+    deinit { releaseGPUResources() }
+
+    // MARK: - GPU resource lifetime (R6)
+
+    /// Deformation keys `instanceID << 16 | part` handed out by any `build` since the
+    /// last release. Card changes reuse them, so the count is the largest part list.
+    private var deformKeyCount: UInt64 = 0
+    private var coverageUploaded = false
+    private var coverageBufferKey: UInt64 { (instanceID << 8) | 0x77 }
+
+    /// Hands back what this instance owns in the resource store: its deformation
+    /// buffers and its body coverage mask. Meshes and textures belong to the shared
+    /// `AssetLibrary` cache and stay. Owners call this when the character is removed
+    /// or stops being drawn, before building their next frame; `deinit` calls it as
+    /// a safety net. The store keeps the buffers until the renderer prepares a frame
+    /// submitted after this call (`ResourceStore.retire`), so a frame submitted
+    /// earlier still draws with them. The instance stays usable: the next `build`
+    /// uploads its mask again and the renderer re-creates its deformation buffers.
+    public func releaseGPUResources() {
+        let deformKeys = (0..<deformKeyCount).map { (instanceID << 16) | $0 }
+        let hiddenKeys = coverageUploaded ? [coverageBufferKey] : []
+        deformKeyCount = 0
+        coverageUploaded = false
+        coverageSignature = ""
+        coverageKey = nil
+        guard !deformKeys.isEmpty || !hiddenKeys.isEmpty else { return }
+        library.resources.retire(deformKeys: deformKeys, hiddenKeys: hiddenKeys)
+    }
+
     private static func assetsChanged(_ a: CharacterCard, _ b: CharacterCard) -> Bool {
         a.body.bodyID != b.body.bodyID || a.hair.parts != b.hair.parts || a.currentOutfit != b.currentOutfit
             || a.outfit.items.mapValues(\.itemID) != b.outfit.items.mapValues(\.itemID)
@@ -380,6 +409,7 @@ public final class CharacterInstance: Identifiable {
             }
         }
         if bounds.isEmpty { bounds = AABB(min: Float3(-0.5, 0, -0.5), max: Float3(0.5, 1.8, 0.5)).transformed(by: root) }
+        deformKeyCount = max(deformKeyCount, partIndex)
         return BuildResult(items: items, skinSet: skin, bounds: bounds, pose: pose, worldMatrices: world)
     }
 
@@ -394,12 +424,18 @@ public final class CharacterInstance: Identifiable {
         if sig == coverageSignature { return coverageKey }
         coverageSignature = sig
         guard !garments.isEmpty, let body,
-              let bodyMesh = body.asset.meshes.first(where: { $0.name == "body" })?.primitives.first else { coverageKey = nil; return nil }
+              let bodyMesh = body.asset.meshes.first(where: { $0.name == "body" })?.primitives.first else {
+            // Nothing is covered now; the previous mask is no longer drawn (R6).
+            if coverageUploaded { library.resources.retire(hiddenKeys: [coverageBufferKey]); coverageUploaded = false }
+            coverageKey = nil
+            return nil
+        }
         var gs: [BodyCoverage.Garment] = []
         for g in garments { for group in g.asset.asset.meshes { for prim in group.primitives { gs.append(BodyCoverage.Garment(mesh: prim)) } } }
         let bytes = BodyCoverage.hiddenVertices(body: bodyMesh, garments: gs)
-        let key = (instanceID << 8) | 0x77
+        let key = coverageBufferKey
         library.resources.setHiddenBuffer(key: key, bytes: bytes)
+        coverageUploaded = true
         coverageKey = key
         return key
     }
