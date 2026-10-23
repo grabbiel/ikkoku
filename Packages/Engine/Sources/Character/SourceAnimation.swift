@@ -79,6 +79,73 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
     }
     public let schemaVersion: Int, converterVersion: String, kind: String, coordinateSpace: String, scope: String
     public let source: Source, parameters: [Parameter], states: [State], clips: [Clip], diagnostics: [String]
+    /// Clip bindings already resolved to rig nodes (R7); not part of the file.
+    private let resolutions = ClipResolutions()
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, converterVersion, kind, coordinateSpace, scope, source, parameters, states, clips, diagnostics
+    }
+
+    /// One clip's bindings resolved against a rig: the node of every binding
+    /// (nil when unbound), and one channel entry per animated node, in the order
+    /// the bindings first name it, with the curve offsets of its translation,
+    /// rotation and scale. A sample then needs neither the source-ID dictionary
+    /// over every rig node nor nested per-node channel dictionaries; the per-node
+    /// arithmetic is the same.
+    fileprivate struct ResolvedClip: Sendable {
+        struct Channel: Sendable { let node: Int; var translation: Int?, rotation: Int?, scale: Int? }
+        let nodes: [Int?]
+        let channels: [Channel]
+
+        /// Whether every binding still names the same node of `rig`. Source IDs
+        /// are unique in a rig (`RigDefinition.init`), so a node carrying the
+        /// binding's source ID is exactly the one the dictionary lookup returns.
+        func matches(_ clip: Clip, rig: RigDefinition) -> Bool {
+            guard nodes.count == clip.bindings.count else { return false }
+            for (binding, node) in zip(clip.bindings, nodes) {
+                guard let node else {
+                    if binding.targetSourceID != nil { return false }
+                    continue
+                }
+                guard node < rig.nodes.count, rig.nodes[node].sourceID == binding.targetSourceID,
+                      rig.nodes[node].name == binding.targetName else { return false }
+            }
+            return true
+        }
+    }
+
+    fileprivate final class ClipResolutions: @unchecked Sendable {
+        private let lock = NSLock()
+        private var clips: [String: ResolvedClip] = [:]
+        func get(_ id: String) -> ResolvedClip? { lock.lock(); defer { lock.unlock() }; return clips[id] }
+        func set(_ id: String, _ value: ResolvedClip) { lock.lock(); clips[id] = value; lock.unlock() }
+    }
+
+    /// The resolution of `clip` for `rig`, cached per clip and revalidated on
+    /// every use; nil when a binding does not resolve, so the caller takes the
+    /// dictionary path that reports the error.
+    private func resolved(_ clip: Clip, rig: RigDefinition) -> ResolvedClip? {
+        if let cached = resolutions.get(clip.id), cached.matches(clip, rig: rig) { return cached }
+        let nodeIndices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) })
+        var nodes: [Int?] = [], channels: [ResolvedClip.Channel] = [], slots: [Int: Int] = [:]
+        for binding in clip.bindings {
+            guard let target = binding.targetSourceID else { nodes.append(nil); continue }
+            guard let node = nodeIndices[target], rig.nodes[node].name == binding.targetName,
+                  (1...3).contains(binding.attribute), binding.curveOffset >= 0,
+                  binding.curveOffset + binding.dimension <= clip.curves.count else { return nil }
+            nodes.append(node)
+            let slot = slots[node] ?? channels.count
+            if slot == channels.count { slots[node] = slot; channels.append(.init(node: node)) }
+            switch binding.attribute {
+            case 1: channels[slot].translation = binding.curveOffset
+            case 2: channels[slot].rotation = binding.curveOffset
+            default: channels[slot].scale = binding.curveOffset
+            }
+        }
+        let value = ResolvedClip(nodes: nodes, channels: channels)
+        resolutions.set(clip.id, value)
+        return value
+    }
 
     public static func load(url: URL) throws -> Self {
         let properties = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
@@ -156,21 +223,35 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
         guard normalizedTime.isFinite else { throw RigError.invalid("Animation normalized time must be finite.") }
         let motions = try motions(stateID: stateID, floatParameters: floatParameters)
         var poses: [RigPose] = []
-        var rotatedOrScaled = Set<Int>(), changed = Set<Int>()
-        let indices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) })
         for motion in motions {
             let clip = try clip(id: motion.clipID)
             var phase = normalizedTime + motion.cycleOffset + (clip.cycleOffset ?? 0)
             phase = clip.loop ? phase - floor(phase) : min(max(phase, 0), 1)
             poses.append(try applying(clipID: clip.id, time: clip.startTime + phase * clip.duration,
                 to: rig, baseline: baseline, allowingUnbound: allowingUnbound))
+        }
+        guard poses.count == 2 else { return poses[0] }
+        // Only a blend reads the animated-node sets. Every bound binding resolved
+        // in `applying(clipID:)` above, so the cached channels list the same
+        // nodes, inserted in the same order, as a walk over the bindings.
+        var rotatedOrScaled = Set<Int>(), changed = Set<Int>()
+        var indices: [String: Int]?
+        for motion in motions {
+            let clip = try clip(id: motion.clipID)
+            if let resolution = resolved(clip, rig: rig) {
+                for channel in resolution.channels {
+                    changed.insert(channel.node)
+                    if channel.rotation != nil || channel.scale != nil { rotatedOrScaled.insert(channel.node) }
+                }
+                continue
+            }
+            if indices == nil { indices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) }) }
             for binding in clip.bindings {
-                guard let id = binding.targetSourceID, let index = indices[id] else { continue }
+                guard let id = binding.targetSourceID, let index = indices?[id] else { continue }
                 changed.insert(index)
                 if binding.attribute != 1 { rotatedOrScaled.insert(index) }
             }
         }
-        guard poses.count == 2 else { return poses[0] }
         var result = poses[0]
         let t = motions[1].weight
         for node in changed {
@@ -200,6 +281,37 @@ public struct SourceAnimationLibrary: Decodable, Sendable {
             throw RigError.invalid("Clip '\(clip.name)' has \(clip.unboundPathHashes.count) unbound source paths; partial playback must be explicit.")
         }
         let values = try clip.sample(time: time, looping: looping)
+        guard let resolution = resolved(clip, rig: rig) else {
+            return try applyingUnresolved(clip, values: values, to: rig, baseline: baseline)
+        }
+        var result = baseline ?? rig.restPose
+        guard result.localMatrices.count == rig.nodes.count else { throw RigError.invalid("Animation baseline differs from rig size.") }
+        for channel in resolution.channels {
+            let index = channel.node
+            let matrix = result.localMatrices[index]
+            var translation = matrix.translation
+            if let o = channel.translation { translation = UnityCoordinates.position(Float3(values[o], values[o + 1], values[o + 2])) }
+            // A position-only channel preserves arbitrary valid baseline axes.
+            if channel.rotation == nil && channel.scale == nil {
+                result.localMatrices[index].columns.3 = Float4(translation, 1)
+                continue
+            }
+            let components = try Self.decompose(matrix)
+            var rotation = components.0, scale = components.1
+            if let o = channel.rotation {
+                let q = Float4(values[o], values[o + 1], values[o + 2], values[o + 3]), length = simd_length(q)
+                guard length.isFinite, length > 1e-6 else { throw RigError.invalid("Animation generated a zero quaternion.") }
+                rotation = UnityCoordinates.rotation(simd_quatf(vector: q / length))
+            }
+            if let o = channel.scale { scale = Float3(values[o], values[o + 1], values[o + 2]) }
+            result.localMatrices[index] = Transform.trs(translation, rotation, scale)
+        }
+        return result
+    }
+
+    /// The dictionary path for bindings that do not resolve against `rig`; it
+    /// reports which target is missing or changed.
+    private func applyingUnresolved(_ clip: Clip, values: [Float], to rig: RigDefinition, baseline: RigPose?) throws -> RigPose {
         let nodeIndices = Dictionary(uniqueKeysWithValues: rig.nodes.enumerated().map { ($0.element.sourceID, $0.offset) })
         var result = baseline ?? rig.restPose
         guard result.localMatrices.count == rig.nodes.count else { throw RigError.invalid("Animation baseline differs from rig size.") }
