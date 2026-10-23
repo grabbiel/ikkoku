@@ -40,44 +40,59 @@ final class AppState {
     @ObservationIgnored private var uiCaptureTracker: UICaptureReadiness.Tracker?
 
     init() {
+        let env = ProcessInfo.processInfo.environment
+        // A06: classify the whole capture request before any work. Conflicting
+        // modes, options no requested mode reads and values a mode would ignore
+        // exit 1 here with one message naming every offending variable.
+        let request: CaptureRequest
+        do { request = try CaptureRequest.validate(env) }
+        catch { print("[ikkoku] \(error)"); exit(1) }
+        // In an automated run (any capture mode or IKKOKU_CAPTURE_UI) a startup
+        // input that fails exits 1 naming it, instead of capturing other content.
+        let automated = request.isAutomated
         do {
             let host = try EngineHost()
             self.host = host
-            if let probePath = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_PROBE"] {
+            if let probePath = env["IKKOKU_ORIGINAL_FRAME_PROBE"] {
                 AppState.captureOriginalFrameProbe(host: host, path: probePath)
             }
-            if let rigPath = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_RIG"] {
+            if let rigPath = env["IKKOKU_CAPTURE_RIG"] {
                 AppState.captureRig(host: host, path: rigPath)
             }
-            if ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_MODEL"] != nil {
+            if env["IKKOKU_CAPTURE_MODEL"] != nil {
                 AppState.captureModelIfRequested(host: host)
             }
-            if let scenePath = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_SCENE"] {
+            if let scenePath = env["IKKOKU_CAPTURE_SCENE"] {
                 AppState.captureScene(host: host, path: scenePath)
             }
             self.maker = MakerModel(host: host)
-            self.studio = StudioModel(host: host)
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_SCENE"] {
-                do { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
-                catch { self.errorMessage = "Could not preview source scene: \(error)" }
+            // The Maker falls back to the bundled character when the original base does not
+            // open; with an explicit IKKOKU_SOURCE_AVATAR an automated run must not capture that.
+            if automated, let avatar = env["IKKOKU_SOURCE_AVATAR"], let failure = maker?.sourceAvatarFailure {
+                AppState.failCaptureInput("IKKOKU_SOURCE_AVATAR", avatar, failure)
             }
-            if let libraryPath = ProcessInfo.processInfo.environment["IKKOKU_MOD_LIBRARY"] {
+            self.studio = StudioModel(host: host)
+            if let path = env["IKKOKU_SOURCE_SCENE"] {
+                do { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
+                catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
+            }
+            if let libraryPath = env["IKKOKU_MOD_LIBRARY"] {
                 do { try loadModLibrary(url: URL(fileURLWithPath: libraryPath)) }
-                catch { self.errorMessage = "Could not load mod library: \(error)" }
+                catch { startupInputFailed("IKKOKU_MOD_LIBRARY", libraryPath, "Could not load mod library", error, automated: automated) }
             }
             maker?.refresh()
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_OPEN_RIG"] {
+            if let path = env["IKKOKU_OPEN_RIG"] {
                 do { try maker?.openSourceRig(url: URL(fileURLWithPath: path)) }
-                catch { self.errorMessage = "Could not open source rig: \(error)" }
+                catch { startupInputFailed("IKKOKU_OPEN_RIG", path, "Could not open source rig", error, automated: automated) }
             }
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_BONE_MODIFIERS"] {
+            if let path = env["IKKOKU_BONE_MODIFIERS"] {
                 do { try maker?.loadBoneModifiers(url: URL(fileURLWithPath: path)) }
-                catch { self.errorMessage = "Could not load bone modifiers: \(error)" }
+                catch { startupInputFailed("IKKOKU_BONE_MODIFIERS", path, "Could not load bone modifiers", error, automated: automated) }
             }
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD"] {
+            if let path = env["IKKOKU_SOURCE_CARD"] {
                 do { try maker?.importSourceCardSettings(url: URL(fileURLWithPath: path)) }
                 catch {
-                    self.errorMessage = "Could not import source card settings: \(error)"
+                    startupInputFailed("IKKOKU_SOURCE_CARD", path, "Could not import source card settings", error, automated: automated)
                 }
             }
             // The Maker scenario hook is its own headless mode (the mirror of
@@ -86,9 +101,9 @@ final class AppState {
             // the required IKKOKU_MAKER_SCENARIO_REPORT and exits (0 when
             // every step passed, 1 otherwise) even when IKKOKU_AUTOCAPTURE is
             // unset — no capture is requested.
-            if let scenarioPath = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SCENARIO"] {
+            if let scenarioPath = env["IKKOKU_MAKER_SCENARIO"] {
                 do {
-                    guard let maker, let reportPath = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SCENARIO_REPORT"] else {
+                    guard let maker, let reportPath = env["IKKOKU_MAKER_SCENARIO_REPORT"] else {
                         throw RigError.invalid("IKKOKU_MAKER_SCENARIO needs the Maker and IKKOKU_MAKER_SCENARIO_REPORT.")
                     }
                     let scenario = try JSONDecoder().decode(MakerScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
@@ -100,22 +115,25 @@ final class AppState {
                     exit(report.failed == 0 ? 0 : 1)
                 } catch { print("[ikkoku] maker scenario failed: \(error)"); exit(1) }
             }
-            if let errorMessage, ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil {
-                print("[ikkoku] requested capture input failed: \(errorMessage)")
-                exit(1)
-            }
+            // Plugin mounts, deterministic steps and focus evidence. The adapter
+            // report (IKKOKU_NATIVE_PLUGIN_REPORT) and focus events are capture-only:
+            // validation accepts them only with IKKOKU_AUTOCAPTURE, so a failure here
+            // always exits 1 instead of leaving the app open after a missing report.
             if let studio {
                 do { try AppState.configureStudioExecution(studio) }
-                catch { self.errorMessage = "Studio execution: \(error)"; if ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil { print("[ikkoku] \(error)"); exit(1) } }
+                catch {
+                    if automated { print("[ikkoku] studio execution failed: \(error)"); exit(1) }
+                    self.errorMessage = "Studio execution: \(error)"
+                }
             }
             // The scenario hook is its own headless mode: it runs the JSON
             // checklist scenario over the imported source scene, writes the
             // report to the required IKKOKU_STUDIO_SCENARIO_REPORT and exits
             // (0 when every step passed, 1 otherwise) even when
             // IKKOKU_AUTOCAPTURE is unset — no capture is requested.
-            if let scenarioPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENARIO"] {
+            if let scenarioPath = env["IKKOKU_STUDIO_SCENARIO"] {
                 do {
-                    guard let studio, let reportPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENARIO_REPORT"] else {
+                    guard let studio, let reportPath = env["IKKOKU_STUDIO_SCENARIO_REPORT"] else {
                         throw RigError.invalid("IKKOKU_STUDIO_SCENARIO needs the Studio and IKKOKU_STUDIO_SCENARIO_REPORT.")
                     }
                     let scenario = try JSONDecoder().decode(StudioScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
@@ -133,8 +151,24 @@ final class AppState {
         } catch {
             self.host = nil
             self.errorMessage = "\(error)"
+            // Without an engine no capture can run; do not snapshot the error window.
+            if automated { print("[ikkoku] startup failed: \(error)"); exit(1) }
         }
         startUICaptureIfRequested()
+    }
+
+    /// A startup input failed (A06). An automated run exits 1 naming the variable, its
+    /// value and the error; an interactive launch shows the alert and keeps running.
+    private func startupInputFailed(_ variable: String, _ value: String, _ summary: String, _ error: Error, automated: Bool) {
+        if automated { AppState.failCaptureInput(variable, value, "\(summary): \(error)") }
+        errorMessage = "\(summary): \(error)"
+    }
+
+    /// Ends an automated run whose capture input could not be used, naming the
+    /// variable, its value and why (A06), instead of capturing other content.
+    static func failCaptureInput(_ variable: String, _ value: String, _ reason: String) -> Never {
+        print("[ikkoku] capture input failed: \(CaptureInputError(variable: variable, value: value, reason: reason))")
+        exit(1)
     }
 
     static func captureRig(host: EngineHost, path: String) {
@@ -143,9 +177,11 @@ final class AppState {
             guard let output = env["IKKOKU_AUTOCAPTURE"] else { throw RigError.invalid("Rig capture requires IKKOKU_AUTOCAPTURE.") }
             let sourceURL = URL(fileURLWithPath: path)
             let source = try SourceRig.loadModel(url: sourceURL)
-            let contractURL = env["IKKOKU_SHAPE_CONTRACT"].map { URL(fileURLWithPath: $0) }
+            let explicitContract = env["IKKOKU_SHAPE_CONTRACT"]
+            let contractURL = explicitContract.map { URL(fileURLWithPath: $0) }
                 ?? sourceURL.deletingLastPathComponent().appendingPathComponent("character-shape-contract.json")
-            let contract = FileManager.default.fileExists(atPath: contractURL.path)
+            // An explicit contract must load (A06); only the sidecar beside the rig is optional.
+            let contract = explicitContract != nil || FileManager.default.fileExists(atPath: contractURL.path)
                 ? try SourceShapeContract.decode(Data(contentsOf: contractURL)) : nil
             let appearanceURL = sourceURL.deletingPathExtension().appendingPathExtension("appearance.json")
             let modLibrary = try env["IKKOKU_MOD_LIBRARY"].map {
@@ -196,8 +232,10 @@ final class AppState {
             camera.yaw = (Float(env["IKKOKU_CAPTURE_YAW"] ?? "") ?? 180).degreesToRadians
             camera.pitch = 0.05
             camera.distance = max(bounds.radius, 0.1) / sin(camera.fovDegrees.degreesToRadians * 0.5) * 1.15
-            if env["IKKOKU_CAPTURE_PRESET"] == "face",
-               let face = source.parts.first(where: { $0.mesh.name == "cf_O_face/0" }) {
+            if env["IKKOKU_CAPTURE_PRESET"] == "face" {
+                guard let face = source.parts.first(where: { $0.mesh.name == "cf_O_face/0" }) else {
+                    throw RigError.invalid("IKKOKU_CAPTURE_PRESET=face needs the rig's cf_O_face/0 part; this rig has none.")
+                }
                 let pose = try preview.evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers)
                 let faceBounds = AABB.of(points: try source.deformedPositions(part: face, evaluation: pose,
                     morphWeights: preview.expressionWeights(expression)[face.mesh.name] ?? []))
@@ -332,18 +370,7 @@ final class AppState {
             try studio.loadScene(from: URL(fileURLWithPath: path))
             try configureStudioExecution(studio)
             if let save = env["IKKOKU_SAVE_SCENE"] { try studio.saveScene(to: URL(fileURLWithPath: save)) }
-            for object in studio.doc.objects where object.kind == .item && studio.doc.isVisible(object.id) {
-                guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
-                    throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
-                }
-                // A catalog item is a library package load; an absolute `assetFile` was
-                // recorded from an explicit user import and keeps the trusted-file policy.
-                if file.hasPrefix("/") {
-                    _ = try host.library.importTrustedStaticAsset(url: URL(fileURLWithPath: file))
-                } else {
-                    _ = try host.library.importStaticAsset(url: host.library.url(file), packageRoot: host.library.root)
-                }
-            }
+            try loadSceneItemAssets(studio, host: host)
             studio.doc.effects.showGrid = false
             let width = Int(env["IKKOKU_CAPTURE_W"] ?? "") ?? 960
             let height = Int(env["IKKOKU_CAPTURE_H"] ?? "") ?? 720
@@ -357,6 +384,23 @@ final class AppState {
         } catch {
             print("[ikkoku] scene capture failed: \(error)")
             exit(1)
+        }
+    }
+
+    /// Loads the asset of every visible item in a native scene, so a capture fails naming
+    /// the item instead of rendering without it (`IKKOKU_CAPTURE_SCENE`, `IKKOKU_LOAD_SCENE`).
+    static func loadSceneItemAssets(_ studio: StudioModel, host: EngineHost) throws {
+        for object in studio.doc.objects where object.kind == .item && studio.doc.isVisible(object.id) {
+            guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
+                throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
+            }
+            // A catalog item is a library package load; an absolute `assetFile` was
+            // recorded from an explicit user import and keeps the trusted-file policy.
+            if file.hasPrefix("/") {
+                _ = try host.library.importTrustedStaticAsset(url: URL(fileURLWithPath: file))
+            } else {
+                _ = try host.library.importStaticAsset(url: host.library.url(file), packageRoot: host.library.root)
+            }
         }
     }
 
@@ -407,24 +451,45 @@ final class AppState {
 
     /// Development aid: IKKOKU_AUTOCAPTURE=<png path> renders the maker scene offscreen and exits.
     /// IKKOKU_CAPTURE_PRESET=face|upper|full picks the camera; IKKOKU_CARD=<png> loads a card first.
+    /// `CaptureRequest.validate` has already checked the option combination and value syntax
+    /// (A06); here an input that cannot be applied exits 1 naming it instead of being skipped.
     static func runAutoCapture(host: EngineHost, maker: MakerModel?) {
         let env = ProcessInfo.processInfo.environment
         if let dir = env["IKKOKU_RENDER_THUMBS"], let maker {
             exit(renderThumbnails(host: host, maker: maker, dir: URL(fileURLWithPath: dir)) ? 0 : 1)
         }
         guard let out = env["IKKOKU_AUTOCAPTURE"], let maker else { return }
-        if let cardPath = env["IKKOKU_CARD"], let data = try? Data(contentsOf: URL(fileURLWithPath: cardPath)),
-           let card = try? CardIO.decode(CharacterCard.self, keyword: CardIO.cardKeyword, from: data) { maker.load(card: card) }
-        if env["IKKOKU_CAPTURE_SEX"] == "m", maker.importedSourceCard == nil { maker.newCharacter(sex: .male) }
+        if let cardPath = env["IKKOKU_CARD"] {
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: cardPath))
+                let card = try CardIO.decode(CharacterCard.self, keyword: CardIO.cardKeyword, from: data)
+                maker.load(card: card)
+            } catch { failCaptureInput("IKKOKU_CARD", cardPath, "not a readable Ikkoku card: \(error)") }
+        }
+        if env["IKKOKU_CAPTURE_SEX"] == "m", maker.importedSourceCard == nil {
+            maker.newCharacter(sex: .male)
+            if let avatar = env["IKKOKU_SOURCE_MALE_AVATAR"], let failure = maker.sourceAvatarFailure {
+                failCaptureInput("IKKOKU_SOURCE_MALE_AVATAR", avatar, failure)
+            }
+        }
         do {
-            if let expression = env["IKKOKU_SOURCE_BODY"], let domain = maker.sourceRigPreview?.contract?.domain("body") {
+            if let expression = env["IKKOKU_SOURCE_BODY"] {
+                guard let domain = maker.sourceRigPreview?.contract?.domain("body") else {
+                    throw RigError.invalid("IKKOKU_SOURCE_BODY needs a source rig preview with the recovered body shape contract.")
+                }
                 maker.sourceBodyValues = try domain.values(overrides: expression)
                 if maker.sourceSex == 0 { maker.sourceBodyValues[0] = 0.6 }
             }
-            if let expression = env["IKKOKU_SOURCE_FACE"], let domain = maker.sourceRigPreview?.contract?.domain("face") {
+            if let expression = env["IKKOKU_SOURCE_FACE"] {
+                guard let domain = maker.sourceRigPreview?.contract?.domain("face") else {
+                    throw RigError.invalid("IKKOKU_SOURCE_FACE needs a source rig preview with the recovered face shape contract.")
+                }
                 maker.sourceFaceValues = try domain.values(overrides: expression)
             }
-            if let outfit = env["IKKOKU_SOURCE_COORDINATE"].flatMap(Int.init) { try maker.selectSourceCoordinate(outfit) }
+            if let text = env["IKKOKU_SOURCE_COORDINATE"] {
+                guard let outfit = Int(text) else { throw RigError.invalid("IKKOKU_SOURCE_COORDINATE must be an integer.") }
+                try maker.selectSourceCoordinate(outfit)
+            }
             if let path = env["IKKOKU_SOURCE_COLOR_EDITS"] {
                 let edits = try JSONDecoder().decode([String: [Float]].self, from: Data(contentsOf: URL(fileURLWithPath: path)))
                 for (id, rgba) in edits {
@@ -437,7 +502,11 @@ final class AppState {
         if let sl = env["IKKOKU_CAPTURE_SLIDERS"] {          // "eye.size=80,body.height=-50"
             var c = maker.card
             for pair in sl.split(separator: ",") {
-                let kv = pair.split(separator: "="); if kv.count == 2, let v = Float(kv[1]) { c.setSlider(String(kv[0]), v) }
+                let kv = pair.split(separator: "=")
+                guard kv.count == 2, let v = Float(kv[1]), SliderRegistry.shared.slider(String(kv[0])) != nil else {
+                    failCaptureInput("IKKOKU_CAPTURE_SLIDERS", sl, "'\(pair)' does not name a registered slider and a value")
+                }
+                c.setSlider(String(kv[0]), v)
             }
             maker.card = c
         }
@@ -450,8 +519,19 @@ final class AppState {
             }
             maker.card = c
         }
-        if let o = env["IKKOKU_CAPTURE_OUTFIT"], let i = Int(o) { maker.card.currentOutfit = i }
-        if let hair = env["IKKOKU_CAPTURE_HAIR"] { maker.card.hair.parts[.back] = HairPart(styleID: hair) }
+        if let o = env["IKKOKU_CAPTURE_OUTFIT"] {
+            // The card clamps an out-of-range outfit to another one; refuse it instead.
+            guard let i = Int(o), maker.card.outfits.indices.contains(i) else {
+                failCaptureInput("IKKOKU_CAPTURE_OUTFIT", o, "the card has \(maker.card.outfits.count) outfits")
+            }
+            maker.card.currentOutfit = i
+        }
+        if let hair = env["IKKOKU_CAPTURE_HAIR"] {
+            guard host.library.catalog.hair.contains(where: { $0.id == hair }) else {
+                failCaptureInput("IKKOKU_CAPTURE_HAIR", hair, "no hair style with this ID in the asset catalog")
+            }
+            maker.card.hair.parts[.back] = HairPart(styleID: hair)
+        }
         if let duration = env["IKKOKU_SOURCE_PLAYBACK_SECONDS"] {
             do {
                 guard let seconds = Float(duration), seconds.isFinite, (0...30).contains(seconds) else {
@@ -491,9 +571,18 @@ final class AppState {
         }
         if env["IKKOKU_CAPTURE_STUDIO"] != nil, let studio = AppState.sharedStudio {
             studio.addCharacter(maker.card)
-            if let pose = env["IKKOKU_CAPTURE_POSE"], let id = studio.selection { studio.update(id) { $0.animationPreset = pose; $0.handGestureL = 4; $0.handGestureR = 2 } }
+            if let pose = env["IKKOKU_CAPTURE_POSE"] {
+                guard PosePresets.preset(pose) != nil else {
+                    failCaptureInput("IKKOKU_CAPTURE_POSE", pose, "no built-in pose preset with this ID")
+                }
+                if let id = studio.selection { studio.update(id) { $0.animationPreset = pose; $0.handGestureL = 4; $0.handGestureR = 2 } }
+            }
             if let items = env["IKKOKU_CAPTURE_ITEMS"] {           // "chair,room_classroom"
                 for (k, id) in items.split(separator: ",").enumerated() {
+                    // `addItem` skips an unknown ID silently; a capture must not.
+                    guard host.library.catalog.item(String(id)) != nil else {
+                        failCaptureInput("IKKOKU_CAPTURE_ITEMS", items, "no catalog item '\(id)'")
+                    }
                     studio.addItem(id: String(id))
                     if let sel = studio.selection, !String(id).hasPrefix("room"), !String(id).hasPrefix("sky") {
                         studio.update(sel) { $0.transform.position = Float3(0.9 + Float(k) * 0.8, 0, -0.3) }
@@ -537,8 +626,14 @@ final class AppState {
             } catch { print("[ikkoku] scene save failed: \(error)"); exit(1) }
         }
         if let scenePath = env["IKKOKU_LOAD_SCENE"], let studio = AppState.sharedStudio {
-            do { try studio.loadScene(from: URL(fileURLWithPath: scenePath)); frame = studio.frame; print("[ikkoku] scene loaded: \(studio.doc.objects.count) objects") }
-            catch { print("[ikkoku] scene load failed: \(error)") }
+            // A06: a scene that does not load, or whose items do not, ends the run
+            // instead of capturing the previous frame.
+            do {
+                try studio.loadScene(from: URL(fileURLWithPath: scenePath))
+                try loadSceneItemAssets(studio, host: host)
+                frame = studio.frame
+                print("[ikkoku] scene loaded: \(studio.doc.objects.count) objects")
+            } catch { failCaptureInput("IKKOKU_LOAD_SCENE", scenePath, "\(error)") }
         }
         if let path = env["IKKOKU_EXPORT_SOURCE_SCENE"], let studio = AppState.sharedStudio {
             do {
@@ -698,7 +793,13 @@ final class AppState {
     func snapshotWindowIfRequested() {
         let env = ProcessInfo.processInfo.environment
         guard env["IKKOKU_CAPTURE_UI"] != nil, !uiCaptureContentAppeared else { return }
-        if let tab = env["IKKOKU_CAPTURE_UI_TAB"].flatMap({ MakerTab(rawValue: $0.capitalized) }) { maker?.tab = tab }
+        if let tabText = env["IKKOKU_CAPTURE_UI_TAB"] {
+            guard let tab = MakerTab(rawValue: tabText.capitalized) else {
+                print("[ikkoku] unknown IKKOKU_CAPTURE_UI_TAB '\(tabText)'")
+                exit(1)
+            }
+            maker?.tab = tab
+        }
         if env["IKKOKU_CAPTURE_UI_MODE"] == "studio" {
             mode = .studio
             if let studio {
