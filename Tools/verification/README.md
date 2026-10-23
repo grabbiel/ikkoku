@@ -387,9 +387,11 @@ within 1e-5. The neck scenario passed 28/28. Front to +60°, TARGET's bone moved
 0.1940 m. Recorded 2026-10-22, after merging main (`a596fcf`): the complete
 39-check lane passed 39/39 with `--strict` and 0 skipped on the clean merge
 commit `e650c5a`. Both new checks reproduced every number above, with 24/24 and
-28/28 steps. They did so again in every later full run, through the final
-merge `a44e6c2`. The external SIGTERM kills in two of those runs are recorded
-in the lane row above. These are headless model and live-tick checks. The visible route
+28/28 steps. They did so again in every later full run, through merge
+`a44e6c2` (main `4263de3`). The external SIGTERM kills in two of those runs are
+recorded in the lane row above. After the later main merges `29a3bfb`,
+`9ee757a` and `735105f`, the two new checks were rerun on their own and reproduced
+the same numbers. Attempts cut short by the same outside kill were retried. These are headless model and live-tick checks. The visible route
 buttons, the rendered pixels and the FK-owned neck case remain separate gates.
 
 ## Maker scenario hook (T-T04)
