@@ -430,3 +430,127 @@ private func differingOffsets(_ a: Data, _ b: Data) -> [Int] {
     #expect(try wideArrayCard.savedStatusWear().clothesState == Array(repeating: 0, count: 9))
     #expect(throws: (any Error).self) { try wideArrayCard.editedData(.init(clothesState: clothes)) }
 }
+
+/// A MessagePack-CSharp Status block with every face-state field the
+/// CharaStudio State panel edits, in the compact spellings it writes
+/// (fixint, float32, bool), around unrelated wear and extension tokens.
+private func faceStatus(eyesLookPtn: UInt8 = 1, neckLookPtn: UInt8 = 3) -> Data {
+    func float32(_ value: Float) -> Data { Data([0xca]) + Data(withUnsafeBytes(of: value.bitPattern.bigEndian) { Array($0) }) }
+    return compactStatus([("version", compactVersion), ("coordinateType", Data([0x01])),
+        ("clothesState", Data([0xc4, 0x09, 0, 1, 2, 3, 0, 0, 0, 0, 0])),
+        ("eyebrowPtn", Data([0x00])), ("eyebrowOpenMax", float32(1)), ("eyesPtn", Data([0x00])), ("eyesOpenMax", float32(1)),
+        ("eyesBlink", Data([0xc3])), ("mouthPtn", Data([0x00])), ("eyesLookPtn", Data([eyesLookPtn])), ("neckLookPtn", Data([neckLookPtn])),
+        ("hohoAkaRate", float32(0)), ("tearsLv", Data([0x00])), ("hideEyesHighlight", Data([0xc2]))])
+}
+
+@Test func sourceCardEditingFaceStatePatchesOnlyChangedTokensAndReverses() throws {
+    let status = faceStatus(), bytes = try outfitCard(status: status), original = try SourceCharacterCard.decode(bytes)
+    let saved = try original.savedStatusFace()
+    #expect(saved == .init(eyebrowPtn: 0, eyesPtn: 0, mouthPtn: 0, eyesOpenMax: 1, eyesBlink: true, eyesLookPtn: 1,
+                           neckLookPtn: 3, tearsLv: 0, hohoAkaRate: 0))
+    // Requesting every saved value writes nothing: the card is byte-identical.
+    let same = SourceCharacterCard.StatusFaceEdit(eyebrowPtn: 0, eyesPtn: 0, mouthPtn: 0, eyesOpenMax: 1, eyesBlink: true,
+                                                  eyesLookPtn: 1, neckLookPtn: 3, tearsLv: 0, hohoAkaRate: 0)
+    #expect(try original.editedData(.init(faceState: same)) == bytes)
+    // Every field changes at once: each token is rewritten in place.
+    let edit = SourceCharacterCard.StatusFaceEdit(eyebrowPtn: 5, eyesPtn: 24, mouthPtn: 21, eyesOpenMax: 0.5, eyesBlink: false,
+                                                  eyesLookPtn: 4, neckLookPtn: 0, tearsLv: 2, hohoAkaRate: 0.75)
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(faceState: edit)))
+    #expect(try edited.savedStatusFace() == .init(eyebrowPtn: 5, eyesPtn: 24, mouthPtn: 21, eyesOpenMax: 0.5, eyesBlink: false,
+                                                   eyesLookPtn: 4, neckLookPtn: 0, tearsLv: 2, hohoAkaRate: 0.75))
+    let after = try #require(edited.block(named: "Status")).data
+    #expect(after.count == status.count)
+    // Seven one-byte tokens, eyesOpenMax 0x3f800000 -> 0x3f000000 (one byte)
+    // and hohoAkaRate 0 -> 0x3f400000 (two bytes): ten bytes in total.
+    #expect(differingOffsets(status, after).count == 10)
+    let decodedBefore = try SourceMessagePack.decode(status).stringKeyedMap(), decodedAfter = try SourceMessagePack.decode(after).stringKeyedMap()
+    let faceKeys = edit.editedKeys
+    #expect(faceKeys.count == 9)
+    #expect(decodedAfter.filter { !faceKeys.contains($0.key) } == decodedBefore.filter { !faceKeys.contains($0.key) })
+    #expect(try edited.savedStatusWear() == original.savedStatusWear() && edited.savedCoordinateType() == 1)
+    for block in original.blocks where block.name != "Status" {
+        #expect(edited.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+    #expect(edited.trailingData == original.trailingData && edited.thumbnailData == original.thumbnailData)
+    #expect(try edited.extensions().plugins.keys.sorted() == original.extensions().plugins.keys.sorted())
+    // Back to the saved values restores every byte.
+    #expect(try edited.editedData(.init(faceState: same)) == bytes)
+    // One field alone moves only its token, and combines with wear edits.
+    let tears = try SourceCharacterCard.decode(original.editedData(.init(clothesState: [3, 0, 0, 0, 0, 0, 0, 0, 0],
+                                                                         faceState: .init(tearsLv: 3))))
+    #expect(try tears.savedStatusFace().tearsLv == 3 && tears.savedStatusFace().eyesLookPtn == 1)
+    #expect(try tears.savedStatusWear().clothesState == [3, 0, 0, 0, 0, 0, 0, 0, 0])
+    // tearsLv plus the four clothes bytes that moved (top, bottom, bra, shorts).
+    #expect(differingOffsets(status, try #require(tears.block(named: "Status")).data).count == 5)
+}
+
+@Test func sourceCardEditingFaceStateKeepsWideSpellingsOfTheSameValue() throws {
+    // The wide fixture packer spells ints as int64 and floats as float64.
+    typealias F = OriginalCardFixture
+    let status = F.pack(F.map([("version", .string("0.0.0")), ("coordinateType", .integer(1)), ("eyebrowPtn", .integer(2)),
+                               ("eyesOpenMax", .float(0.5)), ("hohoAkaRate", .integer(0)), ("eyesBlink", .bool(true))]))
+    let bytes = try outfitCard(status: status), original = try SourceCharacterCard.decode(bytes)
+    #expect(try original.savedStatusFace().eyesOpenMax == 0.5 && original.savedStatusFace().eyebrowPtn == 2)
+    // A float64 0.5 and an int 0 are the same float32 values: kept as written.
+    #expect(try original.editedData(.init(faceState: .init(eyebrowPtn: 2, eyesOpenMax: 0.5, eyesBlink: true, hohoAkaRate: 0))) == bytes)
+    // A changed int64 becomes a fixint and a changed float64 a float32.
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(faceState: .init(eyebrowPtn: 7, eyesOpenMax: 0.25))))
+    let after = try #require(edited.block(named: "Status")).data
+    #expect(after.count == status.count - 8 - 4)
+    #expect(try edited.savedStatusFace().eyebrowPtn == 7 && edited.savedStatusFace().eyesOpenMax == 0.25)
+}
+
+@Test func sourceCardEditingFaceStateAppendsOnlyFieldsMovedOffMemberInit() throws {
+    let status = compactStatus([("version", compactVersion), ("coordinateType", Data([0x01]))])
+    let bytes = try outfitCard(status: status), original = try SourceCharacterCard.decode(bytes)
+    #expect(try original.savedStatusFace() == .memberInit)
+    // MemberInit values for fields the card does not save write nothing.
+    let defaults = SourceCharacterCard.StatusFaceEdit(eyebrowPtn: 0, eyesPtn: 0, mouthPtn: 0, eyesOpenMax: 1, eyesBlink: true,
+                                                      eyesLookPtn: 0, neckLookPtn: 0, tearsLv: 0, hohoAkaRate: 0)
+    #expect(try original.editedData(.init(faceState: defaults)) == bytes)
+    // tearsLv 2 and hohoAkaRate 0.5 are appended in MessagePack-CSharp form
+    // after the existing entries; only the fixmap count changes among them.
+    var mixed = defaults; mixed.tearsLv = 2; mixed.hohoAkaRate = 0.5
+    let edited = try SourceCharacterCard.decode(original.editedData(.init(faceState: mixed)))
+    let grown = try #require(edited.block(named: "Status")).data
+    var expected = Data([0x84]) + status.dropFirst()
+    expected += Data([0xab]) + Data("hohoAkaRate".utf8)
+    expected += Data([0xca, 0x3f, 0x00, 0x00, 0x00])
+    expected += Data([0xa7]) + Data("tearsLv".utf8)
+    expected += Data([0x02])
+    #expect(grown == expected)
+    #expect(try edited.savedStatusFace().tearsLv == 2 && edited.savedStatusFace().hohoAkaRate == 0.5)
+    #expect(try edited.savedStatusFace().eyesOpenMax == 1 && edited.savedStatusFace().eyesBlink)
+    for block in original.blocks where block.name != "Status" {
+        #expect(edited.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+}
+
+@Test func sourceCardEditingFaceStateRejectsInvalidValuesAndUnreadableTokens() throws {
+    let original = try SourceCharacterCard.decode(outfitCard(status: faceStatus()))
+    let invalid: [SourceCharacterCard.StatusFaceEdit] = [
+        .init(eyebrowPtn: -1), .init(eyesPtn: -2), .init(mouthPtn: Int(Int32.max) + 1), .init(eyesLookPtn: -1), .init(neckLookPtn: -1),
+        .init(tearsLv: 4), .init(tearsLv: -1), .init(eyesOpenMax: 1.5), .init(eyesOpenMax: .nan), .init(hohoAkaRate: -0.25),
+        .init(hohoAkaRate: .infinity),
+    ]
+    for edit in invalid {
+        #expect(throws: (any Error).self, Comment(rawValue: "\(edit)")) { try original.editedData(.init(faceState: edit)) }
+    }
+    // A saved token of another type is reported and never rewritten.
+    typealias F = OriginalCardFixture
+    for (key, value) in [("eyesBlink", F.Value.integer(1)), ("eyesPtn", .string("3")), ("eyesOpenMax", .bool(true)), ("tearsLv", .integer(300))] {
+        let status = F.pack(F.map([("version", .string("0.0.0")), ("coordinateType", .integer(1)), (key, value)]))
+        let card = try SourceCharacterCard.decode(outfitCard(status: status))
+        #expect(throws: (any Error).self, Comment(rawValue: key)) { try card.savedStatusFace() }
+    }
+    let badBlink = try SourceCharacterCard.decode(outfitCard(status: F.pack(F.map([("version", .string("0.0.0")), ("eyesBlink", .integer(1))]))))
+    #expect(throws: (any Error).self) { try badBlink.editedData(.init(faceState: .init(eyesBlink: false))) }
+    // No Status block: MemberInit requests are a no-op, anything else fails.
+    let statusless = try SourceCharacterCard.decode(EditingFixture.card())
+    #expect(try statusless.savedStatusFace() == .memberInit)
+    #expect(try statusless.editedData(.init(faceState: .init(eyesOpenMax: 1, eyesBlink: true, tearsLv: 0))) == statusless.preservedData)
+    #expect(throws: (any Error).self) { try statusless.editedData(.init(faceState: .init(tearsLv: 1))) }
+    // A newer Status version is never edited.
+    let newer = try SourceCharacterCard.decode(outfitCard(statusVersion: "0.0.1", status: faceStatus()))
+    #expect(throws: (any Error).self) { try newer.editedData(.init(faceState: .init(mouthPtn: 3))) }
+}

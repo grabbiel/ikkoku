@@ -19,7 +19,7 @@ struct StudioScenario: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
-        /// `"setClothesState"`, `"setAccessoryVisible"`,
+        /// `"setClothesState"`, `"setAccessoryVisible"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
@@ -143,6 +143,35 @@ struct StudioScenario: Decodable {
         /// assert only: the named character's live wear readback (rendered
         /// preview and document); only the fields present are compared.
         let clothes: ClothesValue?
+        /// setExpression and assert share a partial face-state object.
+        let expression: ExpressionValue?
+
+        struct ExpressionValue: Decodable {
+            let eyebrowPattern, eyesPattern, mouthPattern: Int?
+            let eyesOpen, mouthOpen: Float?
+            let blink, lipSync: Bool?
+            let eyesLookPattern, neckLookPattern, tears: Int?
+            let cheek, heldEyesOpenRate: Float?
+            let edited, followsGuide: Bool?
+            let diagnosticContains: String?
+
+            func applying(to state: SourceStudioExpressionState) -> SourceStudioExpressionState {
+                var next = state
+                if let eyebrowPattern { next.eyebrowPattern = eyebrowPattern }
+                if let eyesPattern { next.eyesPattern = eyesPattern }
+                if let mouthPattern { next.mouthPattern = mouthPattern }
+                if let eyesOpen { next.eyesOpen = eyesOpen }
+                if let mouthOpen { next.mouthOpen = mouthOpen }
+                if let blink { next.blink = blink }
+                if let lipSync { next.lipSync = lipSync }
+                if let eyesLookPattern { next.eyesLookPattern = eyesLookPattern }
+                if let neckLookPattern { next.neckLookPattern = neckLookPattern }
+                if let tears { next.tears = tears }
+                if let cheek { next.cheek = cheek }
+                if let heldEyesOpenRate { next.heldEyesOpenRate = heldEyesOpenRate }
+                return next
+            }
+        }
         /// addCharacter: the Add ▸ Character choice, `"female"` or `"male"`.
         let sex: String?
         /// setIKEnabled / setIKTarget / captureIKPose: the NATIVE character's
@@ -317,7 +346,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
-                 render, exportIdenticalToSource, errorContains, outfit, state, clothes,
+                 render, exportIdenticalToSource, errorContains, outfit, state, clothes, expression,
                  sex, character, chain, delta, ik
         }
 
@@ -382,6 +411,7 @@ struct StudioScenario: Decodable {
             outfit = try c.decodeIfPresent(OutfitValue.self, forKey: .outfit)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
+            expression = try c.decodeIfPresent(ExpressionValue.self, forKey: .expression)
             // Native IK parameters: absent keys stay `nil` like every optional
             // above, and the op that needs one reports it missing.
             sex = try c.decodeIfPresent(String.self, forKey: .sex)
@@ -1047,6 +1077,23 @@ struct StudioScenario: Decodable {
             return problems.isEmpty ? nil : "assert clothes: character \(check.key) " + problems.joined(separator: "; ")
         }
 
+        func assertExpression(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.expression else { return nil }
+            guard let id = object(step), let preview = studio.sourceShapePreview(for: id), let object = studio.doc.object(id) else {
+                return "assert expression: key needs a loaded source character"
+            }
+            let state = preview.expressionState
+            details.append("expression \(step.key!): \(state); document edited \(object.sourceExpression != nil); diagnostics \(preview.expressionDiagnostics)")
+            if check.applying(to: state) != state { return "assert expression: rendered fields differ from requested values" }
+            if let edited = check.edited, (object.sourceExpression != nil) != edited { return "assert expression: document edited mismatch" }
+            if (object.sourceExpression ?? preview.savedExpression) != state { return "assert expression: document and rendered state differ" }
+            if let followsGuide = check.followsGuide, preview.eyeLookFollowsGuide != followsGuide { return "assert expression: eye target mismatch" }
+            if let needle = check.diagnosticContains, !preview.expressionDiagnostics.contains(where: { $0.contains(needle) }) {
+                return "assert expression: no diagnostic contains \(needle)"
+            }
+            return nil
+        }
+
         scenarioLoop: for step in scenario.steps {
             // Steps run microseconds apart, inside the editor's 0.4 s
             // edit-coalescing window (startup's import opens it too), so an
@@ -1215,6 +1262,31 @@ struct StudioScenario: Decodable {
                     let matched = String(describing: error).contains(expected)
                     record(step, matched && unchanged, matched && unchanged ? "refused as expected, document and preview unchanged: \(error)"
                         : "expected a refusal containing \"\(expected)\" that leaves the wear unchanged; received \(error), unchanged=\(unchanged)")
+                }
+            case "setExpression", "resetExpression":
+                guard let id = object(step), let preview = studio.sourceShapePreview(for: id) else {
+                    record(step, false, "expression: key needs a loaded source character"); continue
+                }
+                guard step.op == "resetExpression" || step.expression != nil else {
+                    record(step, false, "setExpression: expression fields are required"); continue
+                }
+                let before = (studio.doc.object(id)?.sourceExpression, preview.expressionState,
+                              ObjectIdentifier(preview), studio.undoStack.count)
+                do {
+                    let next = step.op == "resetExpression" ? nil : step.expression!.applying(to: preview.expressionState)
+                    try studio.setSourceExpression(id, next)
+                    if let expected = step.errorContains {
+                        record(step, false, "expression: edit accepted, expected refusal containing \(expected)")
+                    } else {
+                        record(step, true, "source key \(step.key!) expression \(preview.expressionState)")
+                    }
+                } catch {
+                    guard let expected = step.errorContains else { record(step, false, "expression: \(error)"); continue }
+                    let after = studio.sourceShapePreview(for: id)
+                    let unchanged = studio.doc.object(id)?.sourceExpression == before.0 && after?.expressionState == before.1
+                        && after.map(ObjectIdentifier.init) == before.2 && studio.undoStack.count == before.3
+                    let matched = String(describing: error).contains(expected)
+                    record(step, matched && unchanged, "expression refusal: \(error); document, preview and undo unchanged=\(unchanged)")
                 }
             case "setAnimation":
                 guard let id = object(step) else { record(step, false, "setAnimation: no object with source key \(step.key ?? -1)"); continue }
@@ -1675,6 +1747,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
                 if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
+                if let problem = assertExpression(step, details: &details) { problems.append(problem) }
                 if let problem = assertIK(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
                     let diagnostics = studio.doc.sourcePreviewDiagnostics ?? []

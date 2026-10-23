@@ -67,6 +67,12 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Edited accessory visibility (ChaFileStatus.showAccessory, 20 slots);
     /// nil keeps the card's saved flags. Older documents decode nil.
     public var sourceShowAccessory: [Bool]?
+    /// Edited face state (ST-C04, the CharaStudio State panel's expression,
+    /// look, tears and cheek controls); nil keeps the values the scene load
+    /// leaves. Export writes the changed Status fields into the embedded card
+    /// and mouthOpen/lipSync into the character record. Older documents
+    /// decode nil.
+    public var sourceExpression: SourceStudioExpressionState?
     public var sourceKinematics: SourceStudioKinematicState?
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState?

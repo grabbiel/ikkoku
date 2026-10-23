@@ -54,7 +54,7 @@ public enum SourceSceneExportValidation {
                 }
                 fallbackName = "Source character \(key)"
             } else {
-                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceClothesState == nil, object.sourceShowAccessory == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
+                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceClothesState == nil, object.sourceShowAccessory == nil, object.sourceExpression == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
                     throw RigError.invalid("Retained source placeholders cannot contain character references or FK edits.")
                 }
                 // Routes like folders: their saved name is the baseline the

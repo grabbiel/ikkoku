@@ -417,7 +417,16 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 "worldPosition",target==null?null:(object)V(target.position),
                 "worldRotation",target==null?null:(object)Q(target.rotation)));
         }
-        return K("dicKey",info.dicKey,"enableFK",info.enableFK,"enableIK",info.enableIK,"activeFK",groups,"bones",bones,"look",LookRecord(ctrl));
+        return K("dicKey",info.dicKey,"enableFK",info.enableFK,"enableIK",info.enableIK,"activeFK",groups,"bones",bones,"look",LookRecord(ctrl),"expression",ExpressionRecord(ctrl,info));
+    }
+    // ST-C04: the original player's loaded Status and OICharInfo face values.
+    // Captured only; the probe does not call any expression setters.
+    static Dictionary<string,object> ExpressionRecord(OCIChar ctrl,OICharInfo info) {
+        var status=ctrl.charFileStatus;
+        return K("eyebrowPattern",status.eyebrowPtn,"eyesPattern",status.eyesPtn,"mouthPattern",status.mouthPtn,
+            "eyesOpen",status.eyesOpenMax,"blink",status.eyesBlink,"mouthOpen",info.mouthOpen,"lipSync",info.lipSync,
+            "eyesLookPattern",status.eyesLookPtn,"neckLookPattern",status.neckLookPtn,"tears",status.tearsLv,"cheek",status.hohoAkaRate,
+            "mouthFixedRate",ctrl.charInfo.mouthCtrl==null?null:(object)ctrl.charInfo.mouthCtrl.FixedRate);
     }
     // The saved/live look patterns and the neck/head the look controllers drive, with the signed yaw (degrees,
     // about world up, positive = +Y right-hand turn) of the head's forward and of the head-to-camera

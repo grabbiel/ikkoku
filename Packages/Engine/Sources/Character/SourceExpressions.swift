@@ -34,12 +34,46 @@ public struct SourceExpressionContract: Decodable, Sendable {
     public struct Preset: Decodable, Sendable {
         public let id: String, label: String, inputs: SourceExpressionInputs
     }
+    /// One row of the original cha_eyeset list (ChaListDefine.CategoryNo.
+    /// cha_eyeset): ChaFileStatus.eyesPtn saves the row `id`, and
+    /// ChaControl.ChangeEyesPtn hands the row's EyesPtn (`pattern`) to the
+    /// eyes FBS controller, toggles N_EyeBase/N_Hitomi by `eyeBase`/
+    /// `eyeHitomi`, shows gag-eye object `eyeObjectNumber` (0 = none) with
+    /// `mainTexture`, and binds `expressionTexture` ("0" = none) on the eyes.
+    public struct EyeRow: Decodable, Sendable, Equatable {
+        public let id: Int, name: String, pattern: Int
+        public let eyeBase: Int, eyeHitomi: Int, eyeObjectNumber: Int
+        public let mainTexture: String, expressionTexture: String
+        public init(id: Int, name: String, pattern: Int, eyeBase: Int, eyeHitomi: Int, eyeObjectNumber: Int,
+                    mainTexture: String, expressionTexture: String) {
+            self.id = id; self.name = name; self.pattern = pattern; self.eyeBase = eyeBase; self.eyeHitomi = eyeHitomi
+            self.eyeObjectNumber = eyeObjectNumber; self.mainTexture = mainTexture; self.expressionTexture = expressionTexture
+        }
+        /// True when the row only selects an FBS pattern: both eye objects
+        /// shown, no gag-eye object and no expression texture.
+        public var isOrdinary: Bool {
+            eyeBase == 1 && eyeHitomi == 1 && eyeObjectNumber == 0 && mainTexture == "0" && expressionTexture == "0"
+        }
+    }
+    /// The converted cha_eyeset table. `rows` (every row, in list order) is
+    /// absent from contracts produced before the Studio expression slice;
+    /// those carry only the seven `ordinaryRows`.
+    public struct EyeCatalog: Decodable, Sendable {
+        public let table: String
+        public let ordinaryRows: [EyeRow]
+        public let rows: [EyeRow]?
+    }
     public let schemaVersion: Int, weightUnit: String, transitionSeconds: Float
     public let updateOrder: [String], controllers: [Controller]
     public let defaults: SourceExpressionInputs, presets: [Preset]
     /// Source FaceBlendShape neutral-gaze limit: 1 - EyeLookUpCorrect.
     /// Older head-00 contracts omitted this field and used 0.92.
     public let eyesOpenMaxCap: Float?
+    public let eyeCatalog: EyeCatalog?
+
+    /// The pattern count of one FBS controller (`eyebrow`, `eyes`, `mouth`):
+    /// FBSBase.GetMaxPtn, the range ChangePtn accepts.
+    public func patternCount(_ id: String) -> Int? { controllers.first { $0.id == id }?.sourcePatternCount }
 
     public static func decode(_ data: Data) throws -> Self {
         let result = try JSONDecoder().decode(Self.self, from: data)
@@ -90,6 +124,15 @@ public struct SourceExpressionContract: Decodable, Sendable {
         }
         try validate(inputs: defaults)
         for preset in presets { try validate(inputs: preset.inputs) }
+        if let eyeCatalog {
+            let eyes = patternCount("eyes") ?? 0
+            for rows in [eyeCatalog.ordinaryRows, eyeCatalog.rows ?? []] {
+                guard Set(rows.map(\.id)).count == rows.count, rows.count <= 4096,
+                      rows.allSatisfy({ $0.id >= 0 && (0..<eyes).contains($0.pattern) }) else {
+                    throw RigError.invalid("Invalid cha_eyeset catalog in the source expression contract.")
+                }
+            }
+        }
     }
 
     private func validate(inputs: SourceExpressionInputs) throws {

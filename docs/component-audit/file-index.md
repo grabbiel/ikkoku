@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**866 files indexed; 866 assigned; 0 unassigned.**
+**873 files indexed; 873 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 98 |
 | [Character / Maker / mods](character-and-mods.md) | 118 |
-| [Studio / IK / animation](studio.md) | 181 |
+| [Studio / IK / animation](studio.md) | 185 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 314 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 155 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 158 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 183 |
+| Conversion / recovery / verification tool | 186 |
 | Documentation / historical evidence | 55 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 196 |
-| Test / validation | 175 |
+| Runtime / shared shader declaration | 198 |
+| Test / validation | 177 |
 
 ## App / gameplay / plugins
 
@@ -286,6 +286,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift](../../Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/StudioScenario.swift](../../Apps/IkkokuCreator/StudioScenario.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/IK.swift](../../Packages/Engine/Sources/Scene/IK.swift) | Runtime / shared shader declaration |
@@ -308,6 +309,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift](../../Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioExpression.swift](../../Packages/Engine/Sources/Studio/SourceStudioExpression.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioGuide.swift](../../Packages/Engine/Sources/Studio/SourceStudioGuide.swift) | Runtime / shared shader declaration |
@@ -357,6 +359,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioExpressionPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpressionPerformanceTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioExpressionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpressionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |
@@ -871,6 +875,9 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/neck-target-orbit.json](../../Tools/verification/scenarios/neck-target-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/outfit-select.json](../../Tools/verification/scenarios/outfit-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/expression-edit.json](../../Tools/verification/scenarios/expression-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-expression.json](../../Tools/verification/scenarios/reload-save-expression.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-expression.json](../../Tools/verification/scenarios/reload-load-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-clothes.json](../../Tools/verification/scenarios/reload-load-clothes.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-ik.json](../../Tools/verification/scenarios/reload-load-ik.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-outfit.json](../../Tools/verification/scenarios/reload-load-outfit.json) | Conversion / recovery / verification tool |

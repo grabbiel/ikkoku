@@ -26,6 +26,7 @@ from original_shader_probe import write_small, stop_probe, fetch, dump, digest
 from vm_source import powershell, ps_quote
 ROOT=Path(__file__).resolve().parents[2]
 LABELS=('hide-rename','camera-switch','route-stop','route-rename')
+EXPRESSION_LABELS=('expression-edit','expression-source') # ST-C04 face-state export and its source
 FK_LABELS=('charastudio-fk-edit','charastudio-fk-source') # ST-T01: our FK export and the unedited load of its source scene
 SOURCE=Path(__file__).with_name('fixtures')/'OriginalSceneReloadProbe.cs'
 AUTHORED={'char':'scene-char.png','route-children':'scene-route-children.png','neck-target':'scene-neck-target.png',
@@ -60,7 +61,7 @@ def start(vm,output,source=None,scenes=None,card=None,author_scenes=None):
 def upload_items(scenes):
     """(trace label, uploaded file name) per given scene. The FK source scene loads under
     its own label, so one run can compare our FK edit against the unedited load."""
-    return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS if label in (scenes or {})]
+    return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS if label in (scenes or {})]
 
 
 def collect(vm,output):
@@ -94,6 +95,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/stt03e/probe');p.add_argument('--source',type=Path)
     for label in LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the "%s" acceptance case'%label)
     for label in FK_LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the ST-T01 "%s" acceptance case'%label)
+    for label in EXPRESSION_LABELS:p.add_argument('--'+label,type=Path,help='ST-C04 edited face state or its unedited source scene')
     p.add_argument('--author-character',type=Path,help='Synthetic fixture card the probe authors scene-char.png from (FK disabled, default pose)')
     p.add_argument('--author-scenes',help='Comma-separated fixture scenes to author from --author-character instead of scene-char.png alone: '+', '.join(AUTHORED)+' ('+', '.join(sorted(CARD_FREE))+' needs no card)')
     p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');a=p.parse_args()
@@ -101,7 +103,7 @@ def main():
     a.output.mkdir(parents=True,exist_ok=True)
     if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
     if a.collect:
-        for label in LABELS+FK_LABELS:
+        for label in LABELS+FK_LABELS+EXPRESSION_LABELS:
             if getattr(a,label.replace('-','_'))is not None:raise ValueError('--collect does not take scene inputs')
         if a.author_character is not None or a.author_scenes is not None:raise ValueError('--collect does not take scene inputs')
         print(json.dumps(collect(a.vm,a.output),indent=2));return
@@ -115,8 +117,12 @@ def main():
             raise ValueError('--author-scenes takes distinct names from '+', '.join(AUTHORED)+': '+a.author_scenes)
         if card is None and not set(author_scenes)<=CARD_FREE:raise ValueError('--author-scenes needs --author-character unless it lists only '+', '.join(sorted(CARD_FREE)))
     fk=[label for label in FK_LABELS if getattr(a,label.replace('-','_'))is not None]
+    expression=[label for label in EXPRESSION_LABELS if getattr(a,label.replace('-','_'))is not None]
+    if expression and len(expression)!=len(EXPRESSION_LABELS):raise ValueError('the face-state acceptance run needs both --expression-edit and --expression-source')
+    if expression and fk:raise ValueError('select either FK or expression acceptance inputs')
     if fk and len(fk)!=len(FK_LABELS):raise ValueError('the FK acceptance run needs both --charastudio-fk-edit and --charastudio-fk-source')
-    if card is not None or author_scenes:scenes={label:getattr(a,label.replace('-','_'))for label in LABELS+FK_LABELS if getattr(a,label.replace('-','_'))is not None} # author run: upload only what was given
+    if card is not None or author_scenes:scenes={label:getattr(a,label.replace('-','_'))for label in LABELS+FK_LABELS+EXPRESSION_LABELS if getattr(a,label.replace('-','_'))is not None} # author run: upload only what was given
+    elif expression:scenes={label:getattr(a,label.replace('-','_'))for label in EXPRESSION_LABELS}
     elif fk:scenes={label:getattr(a,label.replace('-','_'))for label in FK_LABELS}
     else:scenes={label:getattr(a,label.replace('-','_'))for label in LABELS} # the ST-T03 run keeps requiring all four records
     for label,path in scenes.items():
