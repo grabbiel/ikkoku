@@ -205,7 +205,7 @@ private func rgba(_ image: CGImage) throws -> [UInt8] {
     try #require(image.bitsPerComponent == 8 && image.bitsPerPixel == 32)
     let data = try #require(image.dataProvider?.data) as Data
     var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
-    data.withUnsafeBytes { raw in
+    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         for row in 0..<image.height {
             for column in 0..<(image.width * 4) { bytes[row * image.width * 4 + column] = raw[row * image.bytesPerRow + column] }
         }
