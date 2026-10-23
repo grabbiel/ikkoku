@@ -354,10 +354,12 @@ def compare(args):
         elif label.startswith("library-pf:"): programs[label] = [command(201, label[11:])]
     missing = sorted(set(programs) - set(probe))
     issues += [dict(case=label, kind="not-run-by-probe") for label in missing]
+    # One batch per frame at most: enough frames for every final CommandPacks line.
+    def frames(label): return [dict(deltaTime=1000.0)] * (len(probe[label].get("commands", [])) + 4)
     trace = dict(parameterLibraryPath=str((coverage_dir / "parameter-library.json").resolve()),
                  characterTablesPath=str((coverage_dir / "character-tables.json").resolve()),
                  cases=[dict(name=label, program=dict(schemaVersion=1, name=label, commands=programs[label]), variables={},
-                             ticks=[dict(deltaTime=1000.0)] * 4, autoAcknowledge=True, autoNext=True, mapVariables={},
+                             ticks=frames(label), autoAcknowledge=True, autoNext=True, mapVariables={},
                              character=dict(heroine={}, player=dict(callID=tables["callDefaultID"])))
                         for label in sorted(probe) if label in programs])
     dump(output / "native-trace.json", trace)
@@ -393,7 +395,8 @@ def compare(args):
         if (p["exception"] is None) != (fault is None) or fault is not None and fault["pc"] != p["exception"]["line"]:
             issue("exception", json.dumps([p["exception"], fault], ensure_ascii=False))
         totals["exceptions"] += p["exception"] is not None
-        if fault is None and last["status"] != "finished": issue("status", last["status"])
+        # The probe runs every CommandPacks line once; none of these programs closes.
+        if fault is None and last["status"] != "exhausted": issue("status", last["status"])
     fields_only_in_probe = sorted(set(seed_fields) - set(native["seed"]["heroine"]))
     summary = dict(schemaVersion=1, probeTSVSHA256=digest((output / "adv-binding.tsv").read_bytes()),
                    casesSHA256=digest((output / "cases.tsv").read_bytes()),
