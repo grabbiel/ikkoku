@@ -47,6 +47,11 @@ final class AppState {
         let request: CaptureRequest
         do { request = try CaptureRequest.validate(env) }
         catch { print("[ikkoku] \(error)"); exit(1) }
+        // A-T01: the gameplay host scenario is its own headless mode. It needs
+        // no renderer, so it runs and exits before the engine and editors exist.
+        if let scenarioPath = env["IKKOKU_GAMEPLAY_SCENARIO"] {
+            AppState.runGameplayScenario(path: scenarioPath, reportPath: env["IKKOKU_GAMEPLAY_SCENARIO_REPORT"])
+        }
         // In an automated run (any capture mode or IKKOKU_CAPTURE_UI) a startup
         // input that fails exits 1 naming it, instead of capturing other content.
         let automated = request.isAutomated

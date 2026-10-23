@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "checks": [
+    {
+      "id": "gameplay-scenario-controlled-event",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "env": {
+        "IKKOKU_GAMEPLAY_SCENARIO": "Tools/verification/scenarios/gameplay-controlled-event.json",
+        "IKKOKU_GAMEPLAY_SCENARIO_REPORT": ".local/verification/reports/gameplay-scenario-controlled-event.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "A-T01: the Debug app runs the native gameplay host over the synthetic catalog before the engine and editors start. Period selection (WakeUp to Morning) starts fixed event 9001; its ADV program waits, changes the active map and closes; a Change(Type) requested during the map load is held at its ADV barrier until the event completes. The host is persisted to disk through the checked writer mid-load, mid-barrier and after completion, read back and resumed; the next day's Morning does not rerun the completed event. Every step must pass and the report and the three snapshots must be nonempty. The snapshots are native host state, not original SaveData; no scene, NPC, text, audio or fade is presented.",
+      "artifacts": [
+        {"path": ".local/verification/reports/gameplay-scenario-controlled-event.json", "kind": "scenario-report"},
+        {"path": ".local/verification/gameplay/controlled-event-map-loading.json", "kind": "gameplay-snapshot"},
+        {"path": ".local/verification/gameplay/controlled-event-adv-barrier.json", "kind": "gameplay-snapshot"},
+        {"path": ".local/verification/gameplay/controlled-event-complete.json", "kind": "gameplay-snapshot"}
+      ],
+      "timeout": 300
+    }
+  ]
+}

@@ -356,6 +356,7 @@ mode runs per launch:
 | Static model capture | `IKKOKU_CAPTURE_MODEL` | `IKKOKU_AUTOCAPTURE` | `IKKOKU_CAPTURE_MIRROR`, `…_W`, `…_H`, `…_YAW` |
 | Native scene capture | `IKKOKU_CAPTURE_SCENE` | `IKKOKU_AUTOCAPTURE` | `…_W`, `…_H`, `IKKOKU_SAVE_SCENE`, `IKKOKU_CAPTURE_GRID=0`, `IKKOKU_CAPTURE_GIZMOS=0`, `IKKOKU_NATIVE_PLUGIN_REPORT`, `IKKOKU_APPLICATION_FOCUS` |
 | Maker / Studio scenario | `IKKOKU_MAKER_SCENARIO` / `IKKOKU_STUDIO_SCENARIO` | its `…_SCENARIO_REPORT` | — |
+| Gameplay scenario (A-T01) | `IKKOKU_GAMEPLAY_SCENARIO` | `IKKOKU_GAMEPLAY_SCENARIO_REPORT` | — (runs before the engine and editors start; startup inputs are ignored) |
 | Catalog thumbnails | `IKKOKU_RENDER_THUMBS` | — | — |
 | Maker/Studio app capture | `IKKOKU_AUTOCAPTURE` without the rig, model or scene capture | — | every other capture option (below) |
 | Window capture | `IKKOKU_CAPTURE_UI`, alone or after an app capture | — | `IKKOKU_CAPTURE_UI_TAB`, `…_MODE`, `…_STUDIO_TAB` (needs `…_MODE=studio`), `…_REPORT`, `…_TIMEOUT` |
@@ -428,7 +429,7 @@ No recipe in this guide, the [technical references](../README.md#technical-refer
 `Tools/reverse/README.md` or `Tools/translation/studio_execution_probe.py` uses
 one of these. Of the verification lanes, only the `app-smoke`
 `startup-mute-capture` check did: it set the adapter report without a capture,
-so the app would have stayed open. It now also writes a Maker PNG. `CaptureRequestTests` keeps 29 such recipes valid in CI,
+so the app would have stayed open. It now also writes a Maker PNG. `CaptureRequestTests` keeps 31 such recipes valid in CI,
 and `Tools/verification/test_run.py` checks that the inventory matches the
 variables the app reads. CI compiles the app but does not run it. Confirm on the Mac:
 
@@ -448,6 +449,30 @@ ls .local/a-t06-card.png .local/a-t06-scene.png  # both absent
 # A plain Maker capture still exits 0.
 IKKOKU_AUTOCAPTURE="$PWD/.local/a-t06-maker.png" "$APP"; echo "exit $?"
 ```
+
+### Gameplay host scenario
+
+`IKKOKU_GAMEPLAY_SCENARIO` runs a JSON `SourceGameplayHostScenario` through the
+native [gameplay host](../reference/gameplay/cycle.md#gameplay-host-a-t01)
+(A-T01) before the engine and editors start, so it needs no Metal device or
+converted assets. Reload steps with a `path` write the host snapshot there and
+resume from the file read back. The report at `IKKOKU_GAMEPLAY_SCENARIO_REPORT`
+lists every step, reload and host trace entry. The app exits 0 only when every
+step passed. The Engine suite runs the same shipped scenario in CI; the app run
+is the `gameplay-scenarios` lane (not yet run on the Mac):
+
+```sh
+python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json
+# or directly, after the Debug build:
+IKKOKU_GAMEPLAY_SCENARIO=Tools/verification/scenarios/gameplay-controlled-event.json \
+  IKKOKU_GAMEPLAY_SCENARIO_REPORT="$PWD/.local/verification/reports/gameplay-scenario-controlled-event.json" \
+  "$APP"; echo "exit $?"   # expect 0 and "17 passed, 0 failed"
+# Without the report: exit 1 naming IKKOKU_GAMEPLAY_SCENARIO.
+IKKOKU_GAMEPLAY_SCENARIO=Tools/verification/scenarios/gameplay-controlled-event.json "$APP"; echo "exit $?"
+```
+
+Run it from the repository root: the scenario's snapshot paths are relative
+(`.local/verification/gameplay/`).
 
 ## Inspect without the GUI
 
