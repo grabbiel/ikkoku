@@ -73,9 +73,9 @@ singular scale and local shear on required transforms fail explicitly. A failed 
 commit simulation state.
 
 The current exporter/runtime supports direct real-transform particle trees with
-positive local TRS. Virtual end particles, exclusions, `notRolls`, distance disabling,
+positive local TRS. Virtual end particles, exclusions, general `notRolls` reparenting, distance disabling,
 signed local scales and the separate `DynamicBone_Ver01`/`Ver02` systems are
-unimplemented. Full-body and motion IK are separate from this hair simulation. Actual-player
+unimplemented. The schema-2 garment path below additionally supports non-reparenting notRoll chain truncation. Full-body and motion IK are separate from this simulation. Actual-player
 parameter/curve comparisons now exist, but exact running-Unity particle trajectory
 parity and source frame-time parity are not established.
 
@@ -125,7 +125,12 @@ skirt bindings use group index 6. Re-enabling resets particles to the new upstre
 pose. Backwards seeks and edits at a paused frame discard particle history. A
 failed component frame commits no component state. Preview checkpoints include
 particles, the pending dynamics tick, evaluated pose and animation clock so a
-failed plug-in callback can roll back the whole pose consumer state.
+failed plug-in callback can roll back their state. Checkpoints do not rewind
+expression edits or gaze: the evaluated pose is reused only when clothing
+activity and the neck-pose revision still match. Pattern changes, gaze updates
+and gaze resets invalidate that checkpoint cache without discarding the cached
+animation/FK/IK solve. A checkpoint from before a shape rebuild is rejected
+before any state changes, because its simulation carries the old rest geometry.
 
 Binding uses exact source CAB/path identities; only the assembled hair namespace
 may change when empty slots compact the assembly. It never matches a different
@@ -452,3 +457,145 @@ motion inertia and additional topologies/variants. Extend Maker rebinding to
 selected converted hair without changing card identities. Preserve exact source
 component/collider order and test rollback, seek and FK-disable behavior for every
 new binding; a parameter match alone cannot validate a simulated trajectory.
+
+## Selected skirt and garment-root dynamics (ST-T08e)
+
+Schema 2 extends the hair contract with explicit `hair`, `skirt` and `clothes`
+groups and a `clothesKind` for garment components. Schema 1 remains hair-only.
+The strict exporter follows `ChaControl.LoadCharaFbxData`'s `copyDynamicBone`
+remap: prefab root/notRoll names resolve to body-master transforms during
+conversion, and non-null prefab collider lists are replaced by the body's
+ordered 24 colliders. Runtime binding uses only those exact CAB/path identities.
+Compacted assembly slots may change a hair/clothes prefix; the source identity
+and actual clothing kind must still match. Rejected selected components produce
+named diagnostics rather than attaching a similarly named component.
+
+The native consumer accepts the recovered `DynamicBone` real-transform topology.
+A notRoll suffix that truncates a chain without reparenting particles is supported.
+Virtual end particles, exclusions, reparenting notRolls, distance disable,
+nonfinite configuration, inactive/disabled prefabs and owners below the garment
+root are rejected. `DynamicBone_Ver01` and `DynamicBone_Ver02` are separate,
+unsupported systems. No such versions were observed in this selected library;
+that is not coverage of all installed clothing.
+
+The retained conversion covers these original top/bottom assets. Particle counts
+are summed per asset; each accepted component has the same 24 ordered body
+colliders (192 collider references in an eight-component garment).
+
+| Category | Catalog IDs | Accepted components per asset | Particles per asset | Rejected components |
+| --- | --- | ---: | ---: | --- |
+| Top 105 | 3, 13, 38, 39 | 0 | 0 | 0 |
+| Top 105 | 12 | 9 (8 skirt, 1 other clothes) | 42 | 0 |
+| Top 105 | 18, 30 | 8 | 56 | 0 |
+| Top 105 | 24 | 7 | 49 | 0 |
+| Top 105 | 31 | 8 | 48 | 0 |
+| Top 105 | 48, 49 | 8 | 32 | 0 |
+| Top 105 | 20 | 0 | 0 | 8 virtual ends |
+| Bottom 106 | 3, 25 | 0 | 0 | 0 |
+| Bottom 106 | 4, 5, 6, 7, 8, 11, 19, 30 | 8 | 32 | 0 |
+| Bottom 106 | 10, 14 | 8 | 56 | 0 |
+| Bottom 106 | 31 | 8 | 24 | 0 |
+| Bottom 106 | 15 | 0 | 0 | 8 virtual ends |
+
+Together with the unchanged 15 hair components, this is 159 accepted components,
+769 particles, 24 distinct body colliders and 16 explicit rejections. Components
+retain exported source order. `AddObjectFemale.GetSkirtDynamic` classifies a
+component whose remapped root subtree contains Studio bone group 13 as skirt;
+FK activation index 6 disables it. The top/bottom root activity from
+`SourceStudioWear.visible` also gates simulation. Off garments stop; a root that
+becomes active again resets particles on the current upstream pose. Supported
+half states leave the root active even when different renderer switches are
+selected. The current half-mesh rendering limitation remains explicit.
+
+`setWear` invalidates the evaluated pose when clothing changes and updates a
+cached activity mask. Outfit changes already rebuild the complete preview and
+therefore its selected dynamics bindings. Checkpoints retain skirt particles,
+clock and evaluated pose; restoring across a wear change invalidates a cached
+pose whose activity mask no longer matches. Identity lookup, slot remapping and
+child adjacency construction happen during binding, outside the frame loop.
+
+Reproduction uses the existing converted top/bottom Maker library:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/dynamics_contract.py \
+  --maker-library .local/stt08e-skirt-dynamics/maker-library/library.json \
+  --output .local/stt08e-skirt-dynamics/skirt-dynamics.json
+.local/reverse/unitypy-venv/bin/python Tools/reverse/studio_dynamics_fixture.py \
+  --bottom 4 --output .local/stt08e-skirt-dynamics
+.local/reverse/unitypy-venv/bin/python Tools/reverse/analysis/dynamics_reference.py \
+  --original-rigs .local/reverse/rigs \
+  --skirt-contract .local/stt08e-skirt-dynamics/skirt-dynamics.json \
+  --maker-library .local/stt08e-skirt-dynamics/maker-library/library.json \
+  --output .local/stt08e-skirt-dynamics/skirt-reference.json
+```
+
+The oracle independently assembles raw body locals and the garment root, reflects
+Z once, and drives a scripted left-thigh rotation for 60 frames. It compares all
+eight bottom-4 chains with colliders on and off (960 component frames). Minimum
+signed clearance, including particle radius and excluding fixed root particles,
+is −0.00178650 m with colliders and −0.0808190 m without them. The source applies
+bone-length projection after collision; the result does not guarantee zero final
+penetration. This is recovered-code numerical evidence, not a running-original
+skirt capture or a complete cloth/mesh collision solution.
+
+For the app, set `IKKOKU_STUDIO_DYNAMICS` to the schema-2 export and
+`IKKOKU_MAKER_LIBRARY` to the matching expanded library. Existing hair-only
+configurations remain supported and do not gain skirt data implicitly.
+
+Set the four `IKKOKU_SKIRT_*` fixture keys in the verification environment, then
+run `swift test --package-path Packages/Engine --filter 'source.*Dynamics'`.
+For timing, use Release and additionally set `IKKOKU_SKIRT_PERF_OUTPUT` and
+`IKKOKU_SKIRT_PERF_BUILD`, running the
+`sourceStudioDynamicsActualSkirtWearOutfitAndRollbackWhenSupplied` test alone.
+The opt-in report measures 120 samples after 20 warmups on the complete skirt
+fixture and every character in `IKKOKU_STUDIO_SCENARIO_SCENE`, comparing hair-only
+with hair-and-clothes execution. It states the exact activity/FK configuration
+and input hashes; it does not measure end-to-end rendering or original-player
+frame time.
+
+Focused native verification on 2026-10-23 ran 24/24 dynamics tests with strict
+fixtures and zero skips. The skirt oracle's maximum particle and applied world
+error was `1.78814e-7 m` against the `4e-5 m` gate. The source preview verified
+8 hair + 8 skirt bindings, garment off/half, skirt FK disable, checkpoint replay
+and outfit rebuilds of 16 → 8 → 16 components without changing card bytes.
+Exporter tests passed 10/10, numerical reference tests 8/8, and the expanded
+Maker-library audit 8/8 with its private input supplied.
+
+Combined Release acceptance (runtime `dffc9df`, scenario setup `83cb84b`): the
+save and fresh-process load scenarios pass 31/31 and 6/6 steps. They exercise
+live ticks, FK gating, garment-off and outfit changes, bone/pixel displacement
+and native persistence. The initial fixture saved unavailable animation
+`[2,3,4]`; the scenario now explicitly selects converted T-pose `[0,0,0]`,
+freezes speed to zero and asserts both after save/load. Both checks declare the
+animation catalog. This fixes setup without weakening motion or pixel gates.
+The complete Studio lane first passed 51/52, and the corrected pair then passed
+2/2; together all 52 unique combined-branch scenarios have passing evidence.
+This is automated production-render acceptance, not a visible skirt-control
+interaction test or original-player skirt comparison.
+
+Quiet Release timing on the M2 Ultra, macOS 27.0.1 / Xcode 27.0, records the
+complete rigs with FK disabled, all garment roots active, static upstream poses
+and 1/60 delta. Each mode has 20 warmups and 120 samples:
+
+| Input | Hair-only components | Hair + clothes components | Hair-only p50/p95, ms | Hair + clothes p50/p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Bottom-4 fixture, one character | 8 | 16 | 0.453 / 0.508 | 0.904 / 0.978 |
+| Source scene, seven characters | 5 each | 13 each | 2.000 / 2.201 | 4.962 / 5.214 |
+
+These measure isolated dynamics execution, not render time or interactive
+throughput. Existing hair-only environment maps remain hair-only. The full
+combined Release Engine/CoreMath suite passes 736 executed tests with three
+named optional skips. Final private timing and setup-failure evidence are in
+`.local/codex-resume-2026-10-23/integration/skirt-performance.json` and
+`integration/skirt-initial/`; the corrected app report is
+`.local/verification/reports/codex-integrated-skirt-corrected.json`.
+
+Retained derived-input SHA-256 values:
+
+- Schema-2 contract: `5f53bc3ce607a59d9faf5eef29257a107f270298d1837ca258a501e80fa1ff66`
+- Independent skirt oracle: `fbf0b74991d6f72030d92dc3d38e5ca32b2e77182a41cdc0bc84f49ab27f6a1c`
+- Authored bottom-4 scene: `373f7c1fe6565304fefde5352bcc592e10a05708bfdd29190f99d8f15e0de14f`
+
+The contract and oracle retain the original source/rig/bundle hashes. Private
+inputs and outputs remain in ignored `.local/codex-resume-2026-10-23/skirt/`;
+the selected geometry library remains in `.local/stt08e-skirt-dynamics/`.

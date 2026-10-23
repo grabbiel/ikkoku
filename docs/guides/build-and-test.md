@@ -442,6 +442,7 @@ mode runs per launch:
 | Maker / Studio scenario | `IKKOKU_MAKER_SCENARIO` / `IKKOKU_STUDIO_SCENARIO` | its `…_SCENARIO_REPORT` | — |
 | Gameplay scenario (A-T01) | `IKKOKU_GAMEPLAY_SCENARIO` | `IKKOKU_GAMEPLAY_SCENARIO_REPORT` | — (runs before the engine and editors start; startup inputs are ignored) |
 | Catalog thumbnails | `IKKOKU_RENDER_THUMBS` | — | — |
+| Performance trace (R7) | `IKKOKU_PERF_TRACE=<report.json>` | — | `IKKOKU_PERF_WORKLOAD`, `…_SECONDS`, `…_WARMUP_SECONDS`, `…_WINDOW_W`, `…_WINDOW_H`, `…_INPUT_HZ`, `…_CHARACTERS` ([performance.md](../reference/performance.md#harness)) |
 | Maker/Studio app capture | `IKKOKU_AUTOCAPTURE` without the rig, model or scene capture | — | every other capture option (below) |
 | Window capture | `IKKOKU_CAPTURE_UI`, alone or after an app capture | — | `IKKOKU_CAPTURE_UI_TAB`, `…_MODE`, `…_STUDIO_TAB` (needs `…_MODE=studio`), `…_REPORT`, `…_TIMEOUT` |
 
@@ -503,11 +504,12 @@ These combinations used to run and now exit 1 at startup:
   1–8192; ticks, outfit and coordinate must be integers of at least 0. Yaw and
   timeline must be finite numbers, and presets one of face, upper or full (rig
   capture: only `face`). Flags must be 0 or 1, `IKKOKU_CAPTURE_SEX` m or f and
-  `IKKOKU_CAPTURE_UI_MODE` maker or studio. Expression keys must be eyes, mouth,
+  `IKKOKU_CAPTURE_UI_MODE` maker or studio. `IKKOKU_PERF_WORKLOAD` must be a
+  documented workload and the other `IKKOKU_PERF_*` values integers in range. Expression keys must be eyes, mouth,
   brows, head or gaze, with well-formed `key=value` lists. Focus events must be
   0/1 lists of at most 64. Native scene capture rejects `GRID=1` and `GIZMOS=1`.
-- Empty values and unknown `IKKOKU_CAPTURE_*`, `IKKOKU_ORIGINAL_FRAME_*` or
-  `IKKOKU_BENCHMARK_*` names.
+- Empty values and unknown `IKKOKU_CAPTURE_*`, `IKKOKU_ORIGINAL_FRAME_*`,
+  `IKKOKU_BENCHMARK_*` or `IKKOKU_PERF_*` names.
 
 No recipe in this guide, the [technical references](../README.md#technical-references),
 `Tools/reverse/README.md` or `Tools/translation/studio_execution_probe.py` uses

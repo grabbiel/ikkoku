@@ -1,0 +1,126 @@
+{
+  "steps": [
+    {
+      "op": "loadDocument",
+      "path": ".local/verification/scenario-exports/reload-save-expression.png"
+    },
+    {
+      "op": "assert",
+      "key": 65,
+      "visible": false
+    },
+    {
+      "op": "export",
+      "path": ".local/verification/scenario-exports/reload-hidden-expression-original.png"
+    },
+    {
+      "op": "reimport",
+      "path": ".local/verification/scenario-exports/reload-hidden-expression-original.png"
+    },
+    {
+      "op": "assert",
+      "key": 65,
+      "visible": false
+    },
+    {
+      "op": "setVisible",
+      "key": 65,
+      "visible": true
+    },
+    {
+      "op": "assert",
+      "key": 65,
+      "visible": true,
+      "expression": {
+        "eyebrowPattern": 3,
+        "eyesPattern": 2,
+        "mouthPattern": 6,
+        "eyesOpen": 0.5,
+        "blink": true,
+        "mouthOpen": 0.75,
+        "lipSync": false,
+        "tears": 2,
+        "cheek": 0.5,
+        "edited": false,
+        "eyesLookPattern": 4,
+        "neckLookPattern": 0
+      }
+    },
+    {
+      "op": "loadDocument",
+      "path": ".local/verification/scenario-exports/reload-save-expression.png"
+    },
+    {
+      "op": "setVisible",
+      "key": 65,
+      "visible": true
+    },
+    {
+      "op": "setAutomaticBlink",
+      "on": false
+    },
+    {
+      "op": "assert",
+      "key": 65,
+      "expression": {
+        "eyebrowPattern": 3,
+        "eyesPattern": 2,
+        "mouthPattern": 6,
+        "eyesOpen": 0.5,
+        "blink": true,
+        "mouthOpen": 0.75,
+        "lipSync": false,
+        "tears": 2,
+        "cheek": 0.5,
+        "edited": true,
+        "eyesLookPattern": 4,
+        "neckLookPattern": 0
+      }
+    },
+    {
+      "op": "captureRender",
+      "name": "loaded"
+    },
+    {
+      "op": "resetExpression",
+      "key": 65
+    },
+    {
+      "op": "assert",
+      "key": 65,
+      "expression": {
+        "edited": false
+      },
+      "render": {
+        "from": "loaded",
+        "changedPixelsAtLeast": 1
+      }
+    },
+    {
+      "op": "undo"
+    },
+    {
+      "op": "assert",
+      "key": 65,
+      "expression": {
+        "eyebrowPattern": 3,
+        "eyesPattern": 2,
+        "mouthPattern": 6,
+        "eyesOpen": 0.5,
+        "blink": true,
+        "mouthOpen": 0.75,
+        "lipSync": false,
+        "tears": 2,
+        "cheek": 0.5,
+        "edited": true,
+        "eyesLookPattern": 4,
+        "neckLookPattern": 0
+      },
+      "render": {
+        "from": "loaded",
+        "changedPixelsAtMost": 0,
+        "maxChannelDeltaAtMost": 0
+      }
+    }
+  ]
+}

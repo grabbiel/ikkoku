@@ -195,6 +195,10 @@ reruns, and branch cleanup) is handed off in
       (automated in part: `scenarios/animation-select.json` — selecting catalog clip
       [0,2,0] at speed 1.5 with forceLoop on reads back live and after export →
       reimport; passed 2026-09-30).
+- [ ] ST-C04: source Face Expression controls edit through the shared model and restore
+      through undo/redo/reset/native reload; check the visible controls and diagnostics.
+      Headless scenarios: `expression-edit`, `reload-save-expression`,
+      `reload-load-expression`; see [bounded contract](../reference/studio/scene-editing.md#source-face-state-editing-st-c04).
 - [ ] ST-T07 hands and blink: saved hand patterns replay on both hands; cards with
       `eyesBlink` blink automatically and the Studio toggle stops it (PRs #18–#23).
       (automated in part: `scenarios/blink-toggle.json` — a live 7 s advance renders a

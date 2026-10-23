@@ -113,15 +113,25 @@ def eye_catalog(path: Path) -> dict:
     reader = next(o for o in env.objects if o.type.name == "TextAsset" and o.peek_name() == "cha_eyeset_00")
     raw = reader.read().m_Script.encode("utf8", "surrogateescape")
     table = msgpack.unpackb(raw, strict_map_key=False)
-    rows = []
-    for index in range(7):
-        row = dict(zip(table["lstKey"], table["dictList"][index]))
-        rows.append({"id": index, "name": row["Name"], "pattern": int(row["EyesPtn"]),
-                     "eyeBase": int(row["EyeBase"]), "eyeHitomi": int(row["EyeHitomi"]),
-                     "eyeObjectNumber": int(row["EyeObjNo"]),
-                     "mainTexture": row["MainTex"], "expressionTexture": row["EpsTex"]})
     return {"path": str(path.relative_to(REPO)), "sha256": digest(path),
-            "table": "cha_eyeset_00", "sourceID": source_id(reader), "ordinaryRows": rows}
+            "table": "cha_eyeset_00", "sourceID": source_id(reader), **eye_rows(table)}
+
+
+def eye_rows(table: dict) -> dict:
+    """The cha_eyeset rows keyed by list ID, as ChaControl.ChangeEyesPtn reads them.
+
+    `ordinaryRows` keeps the first seven rows (IDs 0-6, which only select an FBS
+    pattern); `rows` lists every row in list order for the Studio State panel,
+    whose eyes pattern buttons save the row ID (ChaFileStatus.eyesPtn).
+    """
+    def row(key) -> dict:
+        fields = dict(zip(table["lstKey"], table["dictList"][key]))
+        return {"id": int(fields["ID"]), "name": fields["Name"], "pattern": int(fields["EyesPtn"]),
+                "eyeBase": int(fields["EyeBase"]), "eyeHitomi": int(fields["EyeHitomi"]),
+                "eyeObjectNumber": int(fields["EyeObjNo"]),
+                "mainTexture": fields["MainTex"], "expressionTexture": fields["EpsTex"]}
+    rows = [row(key) for key in table["dictList"]]
+    return {"ordinaryRows": rows[:7], "rows": rows}
 
 
 def max_active_channels(originals: dict, meshes: dict) -> dict:

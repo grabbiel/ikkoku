@@ -102,16 +102,42 @@ public struct SourceStudioPose: Sendable {
         }
         var children = [[Int]](repeating: [], count: rig.nodes.count)
         for (index, node) in rig.nodes.enumerated() { if let parent = node.parent { children[parent].append(index) } }
-        func first(named name: String, below root: Int?) -> Int? {
-            guard let root else { return nil }
+        // The first node named `name` in the depth-first, children-in-order
+        // walk of the subtree under `root`. The recovered catalog has ASCII
+        // transform names; names compare by their UTF-8 bytes, so
+        // culture-sensitive aliases are refused instead of approximating .NET
+        // collation.
+        func walk(named name: String, below root: Int) -> Int? {
             var pending = [root]
             while let node = pending.popLast() {
-                // The recovered catalog has ASCII transform names. Refuse
-                // culture-sensitive aliases instead of approximating .NET collation.
                 if rig.nodes[node].name.utf8.elementsEqual(name.utf8) { return node }
                 pending.append(contentsOf: children[node].reversed())
             }
             return nil
+        }
+        func isInSubtree(_ node: Int, of root: Int) -> Bool {
+            var current: Int? = node
+            while let index = current {
+                if index == root { return true }
+                current = rig.nodes[index].parent
+            }
+            return false
+        }
+        // R7: walking the subtree for every catalog bone was most of a Studio
+        // tick. The rig's name index holds every node whose name is equal as a
+        // String, a superset of the byte-equal ones. When exactly one
+        // byte-equal node lies under `root` the walk would return it; with
+        // none it returns nil; only several byte-equal names under one root
+        // need the walk's order.
+        func first(named name: String, below root: Int?) -> Int? {
+            guard let root else { return nil }
+            var match: Int?
+            for node in rig.nodes(named: name)
+            where rig.nodes[node].name.utf8.elementsEqual(name.utf8) && isInSubtree(node, of: root) {
+                guard match == nil else { return walk(named: name, below: root) }
+                match = node
+            }
+            return match
         }
         targets = bones.compactMap { bone in
             let isHair = (7...9).contains(bone.group)

@@ -630,7 +630,7 @@ class CheckExecutionTests(unittest.TestCase):
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
                 "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
-                "setClothesState", "setAccessoryVisible", "setAnimation", "setAnimationSpeed",
+                "setClothesState", "setAccessoryVisible", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink",
@@ -804,7 +804,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 47)
+        self.assertEqual(len(self.checks), 52)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -945,7 +945,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "statusContains", "view", "render",
-                                            "exportIdenticalToSource", "outfit", "clothes", "ik") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -1031,7 +1031,26 @@ class StudioScenarioLaneTests(unittest.TestCase):
             # for all ST-T03/T04/T15 scenarios, or the native document-card
             # pair (saveDocument → loadDocument) for the ST-T01 reload
             # scenarios, whose load side is a SEPARATE load-first check.
-            if "saveDocument" in ops or "loadDocument" in ops:
+            if check["id"] == "studio-scenario-reload-load-expression":
+                # This one load-first regression exports a hidden expression
+                # edit before any live preview can be built. It then reloads
+                # the same native file for the usual Reset/Undo assertions.
+                # Keep both format boundaries ordered and prohibit a same-
+                # process native save from replacing the fresh-process input.
+                self.assertEqual(os.path.basename(path), "reload-load-expression.json")
+                self.assertEqual(ops[0], "loadDocument")
+                self.assertNotIn("saveDocument", ops)
+                self.assertEqual(ops.count("loadDocument"), 2)
+                self.assertEqual(ops.count("export"), 1)
+                self.assertEqual(ops.count("reimport"), 1)
+                exported, imported = ops.index("export"), ops.index("reimport")
+                reloaded = ops.index("loadDocument", 1)
+                self.assertLess(exported, imported)
+                self.assertLess(imported, reloaded)
+                self.assertEqual(steps[exported]["path"], steps[imported]["path"])
+                self.assertEqual(steps[0]["path"], steps[reloaded]["path"])
+                self.assertNotIn("setVisible", ops[:exported])
+            elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "
                                  "original-format round trip: %s" % path)
@@ -1044,7 +1063,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "ik")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "ik", "expression", "skirt-dynamics")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]

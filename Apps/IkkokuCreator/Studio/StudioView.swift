@@ -576,6 +576,7 @@ struct FaceInspector: View {
     var body: some View {
         if let o = model.selectedObject, o.kind == .character, let preview = model.sourceShapePreview(for: o.id) {
             VStack(alignment: .leading, spacing: 10) {
+                SourceExpressionInspector(model: model, object: o, preview: preview)
                 if preview.preview.supportsBodyCustomization, let body = preview.preview.contract?.domain("body") {
                     SectionBox(title: "Body shape") {
                         ForEach(body.slots, id: \.index) { slot in

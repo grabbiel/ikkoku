@@ -144,6 +144,28 @@ private func studioPoseNear(_ actual: float4x4, _ expected: float4x4, tolerance:
     #expect(male.targets.count == 1 && male.targets[0].hasGuide)
 }
 
+@Test func sourceStudioPoseIndexedSearchPreservesByteEqualityAndSubtreeOrder() throws {
+    // Swift String's index groups canonically equivalent names. Source lookup
+    // compares bytes, and a valid duplicate inside the subtree must still use
+    // depth-first order instead of its position in the rig's node array.
+    let rig = try RigDefinition(nodes: [
+        .init(name: "root", sourceID: "0", parent: nil),
+        .init(name: "é", sourceID: "1", parent: 0),
+        .init(name: "scope", sourceID: "2", parent: 0),
+        .init(name: "branch", sourceID: "3", parent: 2),
+        .init(name: "e\u{301}", sourceID: "4", parent: 2),
+        .init(name: "é", sourceID: "5", parent: 2),
+        .init(name: "é", sourceID: "6", parent: 3),
+    ], skins: [])
+    let bones: [SourceStudioPose.Bone] = [
+        .init(id: 0, name: "é", group: 0, level: 0),
+        .init(id: 1, name: "e\u{301}", group: 0, level: 0),
+        .init(id: 2, name: "scope", group: 0, level: 0),
+    ]
+    let controller = try SourceStudioPose(rig: rig, bones: bones, characterRoot: 2, sex: 1)
+    #expect(controller.targets.map(\.node) == [6, 4, 2])
+}
+
 @Test func sourceStudioPoseSameNodeUsesCatalogOrder() throws {
     let rig = try studioPoseRig()
     var controller = try SourceStudioPose(rig: rig, bones: [

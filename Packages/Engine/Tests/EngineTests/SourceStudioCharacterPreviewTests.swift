@@ -72,6 +72,52 @@ func sourceStudioCharacterPreviewBuildsSupportedSyntheticPoseAndFiniteWorldBound
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
                "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
+func sourceStudioCharacterPreviewCachesKeepExplicitAnimationRequirementWhenSupplied() throws {
+    let input = try sourceStudioPreviewInputs(), data = try Data(contentsOf: input.scene)
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let preview = try SourceStudioCharacterPreview(
+        reference: sourceStudioReference(scene: input.scene, data: data, rig: input.rig, catalog: input.catalog), resources: resources)
+    // The reference has no animation catalog: a saved unconverted animation
+    // may retain its rest pose, but an explicit edit must still report failure.
+    let implicit = try preview.editedPose(animationElapsed: 0.5)
+    let explicit = SourceStudioAnimationState(record: preview.record)
+    #expect(throws: RigError.self) { try preview.editedPose(animationState: explicit, animationElapsed: 0.5) }
+    // This invalidates only the evaluated result, exercising the solved cache.
+    let checkpoint = preview.captureDynamicsCheckpoint()
+    try preview.setDynamicsStep(elapsed: 0.5, deltaTime: 0)
+    #expect(throws: RigError.self) { try preview.editedPose(animationState: explicit, animationElapsed: 0.5) }
+    try preview.restoreDynamicsCheckpoint(checkpoint)
+    #expect(try preview.editedPose(animationElapsed: 0.5).localMatrices == implicit.localMatrices)
+    #expect(throws: RigError.self) { try preview.editedPose(animationState: explicit, animationElapsed: 0.5) }
+    preview.resetAnimationPlayback()
+    #expect(throws: RigError.self) { try preview.editedPose(animationState: explicit, animationElapsed: 0.5) }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
+func sourceStudioCharacterPreviewShapeChangesInvalidateCachedPoseAtSameTimeWhenSupplied() throws {
+    let input = try sourceStudioPreviewInputs(), data = try Data(contentsOf: input.scene)
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    func fresh() throws -> SourceStudioCharacterPreview {
+        try .init(reference: sourceStudioReference(scene: input.scene, data: data, rig: input.rig, catalog: input.catalog), resources: resources)
+    }
+    let preview = try fresh()
+    let initial = try preview.editedPose(animationElapsed: 0.5)
+    let checkpoint = preview.captureDynamicsCheckpoint()
+    var body = preview.savedBodyValues
+    body[0] = body[0] < 0.5 ? 0.9 : 0.1
+    let edited = try preview.editedPose(bodyValues: body, animationElapsed: 0.5)
+    #expect(edited.localMatrices != initial.localMatrices)
+    #expect(edited.localMatrices == (try fresh().editedPose(bodyValues: body, animationElapsed: 0.5)).localMatrices)
+    // A shape rebuild replaces the simulation's rest geometry as well as the
+    // pose baseline. Reject the old checkpoint before replacing either one.
+    #expect(throws: RigError.self) { try preview.restoreDynamicsCheckpoint(checkpoint) }
+    #expect(try preview.editedPose(bodyValues: body, animationElapsed: 0.5).localMatrices == edited.localMatrices)
+    #expect(try preview.editedPose(animationElapsed: 0.5).localMatrices == initial.localMatrices)
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioCharacterPreviewRejectsChangedSceneBeforeAssetRegistrationWhenSupplied() throws {
     let input = try sourceStudioPreviewInputs()
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))

@@ -24,7 +24,10 @@ struct ContentView: View {
                 .frame(width: 220)
             }
         }
-        .onAppear { app.snapshotWindowIfRequested() }
+        .onAppear {
+            app.snapshotWindowIfRequested()
+            PerfWorkloadDriver.startIfRequested(app: app)
+        }
         .alert("Ikkoku", isPresented: Binding(get: { app.errorMessage != nil }, set: { if !$0 { app.errorMessage = nil } })) {
             Button("OK") { app.errorMessage = nil }
         } message: { Text(app.errorMessage ?? "") }

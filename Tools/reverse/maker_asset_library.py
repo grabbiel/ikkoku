@@ -202,7 +202,9 @@ class Builder:
         directory = self.output / 'assets' / f'{category}-{item_id}'
         directory.mkdir(parents=True, exist_ok=True)
         path, environment = self.environment(row['MainAB']); source['bundleSHA256'] = digest(path)
-        prefabs = [k for k in environment.container if k.endswith('/' + row['MainData'] + '.prefab')]
+        # Unity lowercases AssetBundle container paths and LoadAsset matches names
+        # case-insensitively (catalog rows such as p_o_bot_mankenSK are mixed case).
+        prefabs = [k for k in environment.container if k.lower().endswith('/' + row['MainData'].lower() + '.prefab')]
         if len(prefabs) != 1:
             raise ValueError('Missing or ambiguous catalog prefab: ' + row['MainData'])
         inspector = Inspector(environment)

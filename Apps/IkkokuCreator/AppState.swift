@@ -47,6 +47,8 @@ final class AppState {
         let request: CaptureRequest
         do { request = try CaptureRequest.validate(env) }
         catch { print("[ikkoku] \(error)"); exit(1) }
+        // R7: the performance trace records startup marks from here on.
+        PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs
         // no renderer, so it runs and exits before the engine and editors exist.
         if let scenarioPath = env["IKKOKU_GAMEPLAY_SCENARIO"] {
@@ -58,6 +60,7 @@ final class AppState {
         do {
             let host = try EngineHost()
             self.host = host
+            PerfTrace.mark("engineReady")
             if let probePath = env["IKKOKU_ORIGINAL_FRAME_PROBE"] {
                 AppState.captureOriginalFrameProbe(host: host, path: probePath)
             }
@@ -74,14 +77,16 @@ final class AppState {
                 AppState.captureScene(host: host, path: scenePath)
             }
             self.maker = MakerModel(host: host)
+            PerfTrace.mark("makerReady")
             // The Maker falls back to the bundled character when the original base does not
             // open; with an explicit IKKOKU_SOURCE_AVATAR an automated run must not capture that.
             if automated, let avatar = env["IKKOKU_SOURCE_AVATAR"], let failure = maker?.sourceAvatarFailure {
                 AppState.failCaptureInput("IKKOKU_SOURCE_AVATAR", avatar, failure)
             }
             self.studio = StudioModel(host: host)
+            PerfTrace.mark("studioReady")
             if let path = env["IKKOKU_SOURCE_SCENE"] {
-                do { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
+                do { try PerfTrace.step("sourceSceneImport") { try importSourceScenePreview(url: URL(fileURLWithPath: path)) } }
                 catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
                 // A-T02: an automated run must not capture or script a scene whose
                 // characters all failed to build (for example a converted library
@@ -105,7 +110,7 @@ final class AppState {
                 catch { startupInputFailed("IKKOKU_BONE_MODIFIERS", path, "Could not load bone modifiers", error, automated: automated) }
             }
             if let path = env["IKKOKU_SOURCE_CARD"] {
-                do { try maker?.importSourceCardSettings(url: URL(fileURLWithPath: path)) }
+                do { try PerfTrace.step("sourceCardImport") { try maker?.importSourceCardSettings(url: URL(fileURLWithPath: path)) } }
                 catch {
                     startupInputFailed("IKKOKU_SOURCE_CARD", path, "Could not import source card settings", error, automated: automated)
                 }
@@ -162,6 +167,7 @@ final class AppState {
             }
             AppState.sharedStudio = studio
             AppState.uiCaptureState = self
+            PerfTrace.mark("appStateReady")
             AppState.runAutoCapture(host: host, maker: maker)
         } catch {
             self.host = nil

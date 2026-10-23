@@ -196,3 +196,67 @@ This needs push rights; the cloud session's proxy refused branch deletion.
 | L5 E-T02 rerun | done (#133) |
 | L6 texture-loader stall | done (#133): not reproduced in six local runs |
 | L7 branch cleanup | done (orchestrator, 2026-10-23: rechecked against origin/main and each branch's merged PR, then deleted the 32 listed merged claude/* branches and the unmerged claude/r6-character-lifetime-diag; its two TEMP commits are kept privately as patches) |
+
+## Local continuation: three-task integration (2026-10-23)
+
+Claude's performance, source-expression and selected-skirt work is continued on
+local branch `codex/continue-claude-2026-10-23`, based on `main` `2f29e27`.
+The original Claude worktrees and their changes were preserved; work used three
+separate managed checkouts. `main` was unchanged during implementation; the
+user has authorized publishing and merging this integration through a PR.
+No additional system permissions were needed for builds, tests or visible app
+interaction.
+
+- **Performance phase 1:** cached rig/path/animation bindings and pose evaluation
+  avoid repeated solves. Integration fixes preserve current neck/gaze state on
+  checkpoint restore, reject obsolete shape baselines and retain explicit
+  animation-error semantics. A fresh equivalent-output control reduces source
+  simulation p50 from 22.502 ms to 5.353 ms (76.2%, 4.2×), with native, Maker
+  and Studio PNGs byte-identical. The full integration measures 5.123 ms while
+  rendering seven rather than six characters because of a corrected eye-row
+  mapping. [Evidence and limits](docs/reference/performance.md#combined-integration-acceptance-2026-10-23).
+- **ST-C04 expressions:** all eleven face-state fields are editable, validated
+  and preserved through undo/reset, native load and original export. Actual
+  inspector interaction and 83/6/8 scenario steps pass; the original player
+  accepts 308/308 serialized-field claims. Unsupported tears, cheek, gag-eye
+  side effects, transitions and voice-driven mouth behavior remain explicit.
+  [Contract](docs/reference/studio/scene-editing.md#source-face-state-editing-st-c04).
+- **ST-T08e selected skirts:** schema-2 garment identity binding, activity/FK
+  gating, outfit rebuilds and checkpoints pass the independent 960-frame oracle
+  and 31/6 save/load scenario steps. This supports selected converted garments;
+  virtual ends, broader cloth coverage and original-player skirt parity remain
+  open. [Scope and timing](docs/reference/animation/dynamics.md#selected-skirt-and-garment-root-dynamics-st-t08e).
+
+Measurement runtime `dffc9df` builds in Debug and Release. Scenario-only `83cb84b`
+corrects the skirt fixture's unavailable clip by selecting converted T-pose
+`[0,0,0]` and freezing speed to zero; test-only `c5822a8` checks eye row 30 →
+FBS 21 and the gag-eye diagnostic. Full Release Engine/CoreMath results are
+736 executed passes, 0 failures and 3 named optional skips. Python verification
+and focused reverse-tool suites pass 180 + 56 tests. Studio has passing evidence
+for all 52 unique scenarios: 51/52 in the full run, then 2/2 for the corrected
+skirt pair, with thresholds unchanged. Maker passes 4/4 and gameplay 1/1.
+[Lane details](Tools/verification/README.md#combined-local-continuation-2026-10-23).
+
+[Integration PR #135](https://github.com/grabbiel/ikkoku/pull/135) also fixes a
+review finding: expression-edited hidden characters can export after native
+reload. It constructs a temporary export preview with the same resource and
+identity guards, without adding live simulation work. The old binary fails the
+regression; the fixed Debug/Release builds and expression scenarios pass.
+Benchmark hashes above refer to the earlier measured runtime; Engine code is
+unchanged by this export-only correction.
+
+**Next performance work:** interactive main-thread/SwiftUI scheduling. Final
+source idle presents 119.8 FPS; orbit presents 48.1 FPS with 30.4 hitches/s and
+866 ms/s spent outside measured model/draw work. The existing phase-2 plan in
+the performance reference remains open. **L1 remains open:** startup-Mute's
+fixture profile binds object 10 while its check loads no scene. The isolated
+Release-build retry passed after a DerivedData contention failure; app-smoke
+therefore retains only that known fixture failure. Missing optional appearance
+and managed-recovery fixtures are not fixed by this continuation.
+
+Private evidence is centralized under `.local/codex-resume-2026-10-23/` in the
+primary checkout, with lane reports under `.local/verification/reports/`.
+The correct reverse-tool Python is `.local/reverse/unitypy-venv/bin/python`;
+`.local/reverse/venv/bin/python` lacks NumPy. Keep app launches serialized under
+the existing machine app lock, and pause other task builds/tests/VM work for
+performance measurements. Do not terminate another session's processes.

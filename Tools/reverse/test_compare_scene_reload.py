@@ -1,6 +1,6 @@
 """Synthetic CharaStudio reload records exercise the acceptance comparison; no VM data is read."""
 import math, unittest
-from compare_scene_reload import compare
+from compare_scene_reload import compare, compare_expression
 
 
 def obj(key,kind,**over):
@@ -241,3 +241,26 @@ class CompareTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+class ExpressionTests(unittest.TestCase):
+    def inputs(self):
+        labels=('expression-edit','expression-source')
+        state=dict(eyebrowPattern=3,eyesPattern=2,mouthPattern=6,eyesOpen=.5,blink=True,
+                   mouthOpen=.75,lipSync=False,eyesLookPattern=4,neckLookPattern=0,tears=2,cheek=.5)
+        expected={label:{65:dict(state)} for label in labels}
+        trace=dict(schemaVersion=1,cases={label:case(label,[obj(65,0,character={'expression':dict(state)})]) for label in labels})
+        return trace,expected
+
+    def test_every_field_matches_at_load_and_settled(self):
+        trace,expected=self.inputs();report=compare_expression(trace,expected)
+        self.assertTrue(report['passed'])
+        self.assertEqual(sum(len(c['claims']) for c in report['cases'].values()),44)
+
+    def test_wrong_missing_and_nonfinite_fields_fail(self):
+        for value in (None,True,float('nan'),.25):
+            trace,expected=self.inputs()
+            trace['cases']['expression-edit']['settled']['objects'][0]['character']['expression']['mouthOpen']=value
+            self.assertFalse(compare_expression(trace,expected)['passed'])
+        trace,expected=self.inputs();del trace['cases']['expression-source']
+        self.assertFalse(compare_expression(trace,expected)['passed'])

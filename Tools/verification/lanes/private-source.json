@@ -16,6 +16,11 @@
           "optional": true
         },
         {
+          "env": "IKKOKU_STUDIO_SCENARIO_SCENE",
+          "kind": "file",
+          "optional": true
+        },
+        {
           "env": "IKKOKU_STUDIO_POSE_CONTRACT",
           "kind": "file",
           "optional": true
@@ -67,6 +72,26 @@
         },
         {
           "env": "IKKOKU_STUDIO_MAKER_DYNAMICS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SKIRT_DYNAMICS_FIXTURE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SKIRT_DYNAMICS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SKIRT_MAKER_LIBRARY",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_SKIRT_DYNAMICS_REFERENCE",
           "kind": "file",
           "optional": true
         },

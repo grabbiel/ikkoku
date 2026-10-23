@@ -69,6 +69,15 @@ public struct SourceSceneEdits: Sendable {
     public var kinematics: [Int32: KinematicEdit]
     public var animations: [Int32: SourceStudioAnimationState]
     public var voices: [Int32: SourceStudioVoiceState]
+    /// A character record's own OICharInfo.mouthOpen float (CharaStudio's
+    /// mouth openness slider, OCIChar.ChangeMouthOpen) and lipSync bool
+    /// (OCIChar.ChangeLipSync): 4- and 1-byte in-place patches. Keys are
+    /// character source IDs, including nested accessory children.
+    public var mouth: [Int32: MouthEdit]
+    public struct MouthEdit: Sendable, Equatable {
+        public var mouthOpen: Float?, lipSync: Bool?
+        public init(mouthOpen: Float? = nil, lipSync: Bool? = nil) { self.mouthOpen = mouthOpen; self.lipSync = lipSync }
+    }
     public var currentCamera: KoikatsuCameraRecord?
     public var cameraSlots: [Int: KoikatsuCameraRecord]
     /// nil keeps the original PNG verbatim. Replacement must be one CRC-valid
@@ -79,13 +88,15 @@ public struct SourceSceneEdits: Sendable {
                 voices: [Int32: SourceStudioVoiceState] = [:], currentCamera: KoikatsuCameraRecord? = nil,
                 cameraSlots: [Int: KoikatsuCameraRecord] = [:], thumbnailData: Data? = nil,
                 visibility: [Int32: Bool] = [:], names: [Int32: String] = [:],
-                cameraActive: [Int32: Bool] = [:], routeActive: [Int32: Bool] = [:]) {
+                cameraActive: [Int32: Bool] = [:], routeActive: [Int32: Bool] = [:],
+                mouth: [Int32: MouthEdit] = [:]) {
         self.transforms = transforms; self.cards = cards; self.kinematics = kinematics; self.thumbnailData = thumbnailData
         self.visibility = visibility; self.names = names
         self.cameraActive = cameraActive; self.routeActive = routeActive
         self.currentCamera = currentCamera; self.cameraSlots = cameraSlots
         self.animations = animations
         self.voices = voices
+        self.mouth = mouth
     }
 }
 
@@ -105,6 +116,8 @@ struct SourceSceneEditSpans {
     var kinematics: [Int32: Kinematics] = [:]
     var animations: [Int32: Animation] = [:]
     var voices: [Int32: Range<Int>] = [:]
+    struct Mouth { let mouthOpen: Range<Int>, lipSync: Range<Int> }
+    var mouth: [Int32: Mouth] = [:]
     var currentCamera: Range<Int>?, cameraSlots: [Int: Range<Int>] = [:]
 }
 
@@ -113,8 +126,8 @@ public extension KoikatsuSceneDocument {
     /// Any unsupported/missing destination or invalid input rejects the whole
     /// edit before bytes are returned; source data is never mutated.
     func editedData(_ edits: SourceSceneEdits) throws -> Data {
-        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty else { return preservedData }
-        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
+        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty else { return preservedData }
+        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         let thumbnailRange = 0..<reader.offset
@@ -230,6 +243,21 @@ public extension KoikatsuSceneDocument {
             integer(Int32(edit.playlist.count))
             for selection in edit.playlist { integer(selection.group); integer(selection.category); integer(selection.no) }
             integer(edit.repeatMode); add(span, bytes)
+        }
+        for key in edits.mouth.keys.sorted() {
+            let edit = edits.mouth[key]!
+            guard objects[key]?.character != nil, let spans = reader.editSpans.mouth[key], spans.mouthOpen.count == 4,
+                  spans.lipSync.count == 1, (0...1).contains(preservedData[preservedData.startIndex + spans.lipSync.lowerBound]) else {
+                throw reader.invalid("unavailable character mouth destination")
+            }
+            if let open = edit.mouthOpen {
+                // The State panel slider's range; ChangeMouthOpen stores it
+                // unclamped as FBS FixedRate, so the native edit keeps 0...1.
+                guard open.isFinite, (0...1).contains(open) else { throw reader.invalid("mouth openness must be finite and in 0...1") }
+                var bits = open.bitPattern.littleEndian
+                add(spans.mouthOpen, withUnsafeBytes(of: &bits) { Data($0) })
+            }
+            if let lipSync = edit.lipSync { add(spans.lipSync, Data([lipSync ? 1 : 0])) }
         }
         func cameraBytes(_ value: KoikatsuCameraRecord) throws -> Data {
             guard value.fieldOfView > 0, value.fieldOfView < 180 else { throw reader.invalid("edited camera field of view must be between 0 and 180 degrees") }

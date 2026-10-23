@@ -1,0 +1,218 @@
+{
+  "steps": [
+    {
+      "op": "setAutomaticBlink",
+      "on": false
+    },
+    {
+      "op": "setAnimation",
+      "key": 10,
+      "group": 0,
+      "category": 0,
+      "no": 0
+    },
+    {
+      "op": "setAnimationSpeed",
+      "key": 10,
+      "speed": 0.0
+    },
+    {
+      "op": "assert",
+      "outfit": {
+        "key": 10,
+        "coordinate": 0,
+        "saved": 0,
+        "resolved": "outfit0.ChaFileClothes.ClothesBot"
+      },
+      "diagnosticContains": "16 source hair/clothes DynamicBone components",
+      "animation": {
+        "key": 10,
+        "group": 0,
+        "category": 0,
+        "no": 0,
+        "speed": 0.0
+      }
+    },
+    {
+      "op": "setFK",
+      "key": 10,
+      "bone": 219,
+      "rotation": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 222,
+      "name": "fk-frozen"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.3
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 222,
+        "from": "fk-frozen",
+        "within": 1e-05
+      }
+    },
+    {
+      "op": "setFKEnabled",
+      "key": 10,
+      "on": false
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 222,
+      "name": "dynamics-seed"
+    },
+    {
+      "op": "captureRender",
+      "name": "dynamics-seed",
+      "path": ".local/verification/renders/skirt-dynamics-seed.png"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.3
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 222,
+        "from": "dynamics-seed"
+      },
+      "render": {
+        "from": "dynamics-seed",
+        "changedPixelsAtLeast": 1
+      }
+    },
+    {
+      "op": "captureRender",
+      "name": "dynamics-moving",
+      "path": ".local/verification/renders/skirt-dynamics-moving.png"
+    },
+    {
+      "op": "setClothesState",
+      "key": 10,
+      "index": 1,
+      "state": 3
+    },
+    {
+      "op": "assert",
+      "clothes": {
+        "key": 10,
+        "state": [
+          0,
+          3,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 222,
+      "name": "garment-off"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.3
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 222,
+        "from": "garment-off",
+        "within": 1e-05
+      }
+    },
+    {
+      "op": "setClothesState",
+      "key": 10,
+      "index": 1,
+      "state": 0
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 222,
+      "name": "garment-reenabled"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.3
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 222,
+        "from": "garment-reenabled"
+      }
+    },
+    {
+      "op": "setOutfit",
+      "key": 10,
+      "index": 1
+    },
+    {
+      "op": "assert",
+      "outfit": {
+        "key": 10,
+        "coordinate": 1,
+        "resolved": "outfit1.ChaFileClothes.ClothesBot"
+      }
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 222,
+      "name": "plain-outfit"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.3
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 222,
+        "from": "plain-outfit",
+        "within": 1e-05
+      }
+    },
+    {
+      "op": "setOutfit",
+      "key": 10,
+      "index": 0
+    },
+    {
+      "op": "saveDocument",
+      "path": ".local/verification/scenario-exports/skirt-dynamics.png"
+    },
+    {
+      "op": "assert",
+      "outfit": {
+        "key": 10,
+        "coordinate": 0,
+        "saved": 0
+      }
+    }
+  ]
+}

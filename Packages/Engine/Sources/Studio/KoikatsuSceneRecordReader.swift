@@ -66,7 +66,9 @@ extension KoikatsuBinaryReader {
             children[key] = entries
         }
         let mode = try int32(), animationStart = offset, anime = try animation(), hands = [try int32(), try int32()]
-        let nipple = try float(), fluids = try take(5), mouth = try float(), lip = try bool(), look = try bone(destination: .lookAt(object: objectKey))
+        let nipple = try float(), fluids = try take(5), mouthStart = offset, mouth = try float(), lip = try bool()
+        editSpans.mouth[objectKey] = .init(mouthOpen: mouthStart..<(mouthStart + 4), lipSync: (mouthStart + 4)..<(mouthStart + 5))
+        let look = try bone(destination: .lookAt(object: objectKey))
         let kinematicStart = offset
         let enabledIK = try bool(), activeIK = try flags(5), enabledFK = try bool(), activeFK = try flags(7)
         editSpans.kinematics[objectKey] = .init(enableIK: kinematicStart..<(kinematicStart + 1),

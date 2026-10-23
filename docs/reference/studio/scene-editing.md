@@ -376,6 +376,189 @@ the document fields and the rule tables.
 - CharaStudio reload of a changed export, mouse-driven use of the new
   controls, and original-player appearance parity.
 
+## Source face-state editing (ST-C04)
+
+The source Face tab now exposes an Expression section. Its controls, Reset to
+card, and `StudioScenario`'s `setExpression`/`resetExpression` operations share
+`StudioModel.setSourceExpression`. The model validates an edit before recording
+undo or changing the document. `StudioObject.sourceExpression` stores the settled
+state; nil means the loaded card and scene values, including on legacy decode.
+Undo, redo, native load and outfit changes reapply it to the preview.
+
+**Recovered control contract.** The source is `Studio.MPCharCtrl`'s `EtcInfo`,
+`LookAtInfo`, `NeckInfo` and `OtherInfo`, `Studio.OCIChar`, `ChaControl` and
+`FBSCtrl*` from the local managed recovery of source hash `902b9a237337b17a…`.
+The pattern limits come from FBS `GetMaxPtn` and the `cha_eyeset` table, not UI
+labels. The current converted contract has 17 eyebrow patterns, 28 eye FBS
+patterns, 39 eye catalog rows and 43 mouth patterns; assemblies supply their own
+counts. Native rate controls accept finite 0…1 values, continuously; original
+pattern arrows advance by one. A saved out-of-range value is preserved so an
+unchanged field and Reset remain representable.
+
+| Control | Original call chain | Saved destination | Native consumer |
+| --- | --- | --- | --- |
+| Eyebrows, 0…16 on this contract | `EtcInfo.ChangeEyebrowsPtn` → `ChaControl.ChangeEyebrowPtn` | Card `Status.eyebrowPtn` | FBS morph weights |
+| Eyes, 39 `cha_eyeset` row IDs | `EtcInfo.ChangeEyesPtn` → `ChaControl.ChangeEyesPtn` | Card `Status.eyesPtn` | Row's FBS pattern; special visibility, gag objects and expression textures diagnostic-only |
+| Mouth, 0…42 on this contract | `EtcInfo.ChangeMouthPtn` → `ChaControl.ChangeMouthPtn` | Card `Status.mouthPtn` | FBS morph weights; tongue/width side effects of patterns 21/22 diagnostic-only |
+| Eyes open, 0…1 | `OCIChar.ChangeEyesOpen` → `ChangeEyesOpenMax` | Card `Status.eyesOpenMax` | Clamped eyes openness |
+| Blink, Boolean | `OCIChar.ChangeBlink` → `ChangeEyesBlinkFlag` | Card `Status.eyesBlink` | Existing blink clock; off fixes eyes/eyebrow rates open |
+| Mouth open, 0…1 | `OCIChar.ChangeMouthOpen` | Scene `OICharInfo.mouthOpen` | Mouth `FixedRate` |
+| Lip sync, Boolean | `OCIChar.ChangeLipSync` | Scene `OICharInfo.lipSync` | Saved/exported; voice-driven mouth is diagnostic-only |
+| Eye look, 0…4 | `LookAtInfo.OnClick` → `OCIChar.ChangeLookEyesPtn` | Card `Status.eyesLookPtn` | Existing eye/iris runtime, pattern 4 uses the look-at guide |
+| Neck look, {0,1,3,4} | `NeckInfo.OnClick` → `OCIChar.ChangeLookNeckPtn` | Card `Status.neckLookPtn` | Existing neck runtime; editing disabled while FK neck group owns it |
+| Tears, 0…3 | `OtherInfo.tears` → `OCIChar.SetTearsLv` → `ChangeTearsLv` | Card `Status.tearsLv` | Saved/exported; missing tear meshes diagnosed |
+| Cheek, 0…1 | `OtherInfo.cheek` → `OCIChar.SetHohoAkaRate` → `ChangeHohoAkaRate` | Card `Status.hohoAkaRate` | Saved/exported; no default-toon blush consumer, diagnosed |
+
+The recovered panel also has eye/brow foreground dropdowns (configuration,
+normal, foreground) and a look-at guide-size slider. Those remain outside this
+face-state slice. `hideEyesHighlight` is not exposed by this recovered panel;
+its saved material behavior remains unchanged. The opt-in source-shader path's
+load-time cheek binding does not establish live edited-cheek support.
+
+**Runtime and limits.** An edit replaces expression inputs; it does not reload
+geometry/materials or rebuild the pose baseline. The Face section reads document
+state and edit-time diagnostics, never the per-frame clock/output. Reapplying an
+identical state returns before validation or allocation. Neck changes clear only
+the evaluated pose/look runtime; eye pattern changes retain an active eye runtime
+and switch its target, as `OCIChar.ChangeLookEyesPtn` does. Native pattern changes
+are immediate: the original FBS blend transition (0.15 s in this contract) and
+in-place neck type-change interpolation are not reproduced by this slice.
+
+Blink-off forces the runtime eyes rate to 1. A later eyes-open slider edit while
+blink is off resets that held rate to the clamped slider value. The optional
+`heldEyesOpenRate` records this transient distinction for native undo/save/load.
+It is not an original serialized field: original load replays Blink then EyesOpen
+and uses the saved openness. Mouth openness is the fixed rate without voice
+lip-sync. Tears, cheek, lip-sync and special eye/mouth behavior use per-character
+messages and never substitute an invented visual.
+
+**Persistence.** Changed Status fields merge into the same card edit as shape,
+color and outfit, preserving untouched tokens, unknown blocks, KKEx and trailers.
+A missing Status field is appended only when the edit differs from its MemberInit
+default. Mouth openness and lip-sync patch their existing four-byte float and
+one-byte Boolean scene spans. Returning to saved state generates no card or scene
+patch and no replacement thumbnail. Edited exports regenerate only the outer
+scene thumbnail in addition to the explicitly changed card/scene fields.
+
+**Verification (2026-10-23).** The fixture-backed Engine run reports 705 Engine
+cases (703 executed, 2 skipped: optional timing probe and missing appearance image
+oracle) and 21 CoreMath cases, with no failures. Focused tests cover every field's
+validation, mutable preview/geometry identity, blink side effects, mouth fixed
+rate, guide targeting, document/legacy decode, token preservation and scene
+write/reread. Synthetic scene mouth edits touch exactly the two changed float
+bytes and adjacent lip-sync byte and reverse to every original byte. The app
+builds for macOS arm64 Debug. The reverse reload tooling passes 38 tests and the
+verification runner passes 80. The initial app run passed the native save/load
+pair (5/5 and 8/8); two mouth-only pixel checks exposed fixture framing: key 65's
+mouth is outside the saved camera, so the corrected checks use fully visible key
+0. That corrected task-local run was interrupted after its exports completed;
+the final combined Release run below completes its two live-blink advances with
+the R7 pose cache. No full visual parity is claimed.
+
+An independent byte audit of the corrected eleven-field export found 13 changed
+bytes in the unchanged-length 534,166-byte scene body. Only the nine requested
+Status fields and the mouth-open/lip-sync spans changed; all six other character
+cards, the target card's other blocks, unknown data, scene settings and trailer
+are identical. The outer thumbnail was regenerated. Reset export is identical
+to the complete source file (SHA-256 `029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`).
+
+**Original-player reload, 2026-10-23.** One isolated CharaStudio run loaded the
+corrected edited export and the unedited source. The read-only
+`OriginalSceneReloadProbe.ExpressionRecord` captured all eleven serialized
+expression fields for every character immediately after `LoadScene` and four
+frames later. `compare_scene_reload.py` independently decoded both PNGs with the
+Python scene/card reader: 308/308 claims pass (7 characters × 11 fields × 2
+snapshots × 2 scenes). Key 65 reads eyebrow 3, eyes 2, mouth 6, eyes-open 0.5,
+blink true, mouth-open 0.75, lip-sync false, eye-look 4, neck-look 0, tears 2 and
+cheek 0.5 in both edited snapshots. All eleven differ from this character's
+source values. The observed mouth controller `FixedRate` is 0.75 as well; it is
+recorded separately from the serialized-field claims.
+
+Both guest-side input hashes matched the host exports: edited
+`188c7a5357ed62d4caec1443b1bc0885f7852e925e1a86bafcdf0104ee8c265f`, source
+`029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`.
+The player was Unity 5.6.2f1, `Assembly-CSharp.dll` SHA-256
+`902b9a237337b17a64514bdb0d857b460ece4fb6a57c658375dd32c5fa504c45`, probe
+source SHA-256 `2000ab5f20b4720a9410f0fa27b33fc5793efe03c32378f8796e8e9c5a0ca178`.
+The voice table already contained 44 entries, so `RepairVoice` did nothing.
+`status.json` reports no error and the Unity log contains no exception. The
+temporary player root was removed after collection, with no remaining game
+processes; Parallels `errno: 24` occurrences stayed at the pre-run count of 5.
+
+Private evidence is under `.local/codex-resume-2026-10-23/expression/` in the
+primary checkout: `byte-audit.json`, `expression-original-comparison.json` and
+`vm/{run.json,status.json,reload-trace.json,unity.log,SceneReloadProbe.cs}`.
+The task-local batched transport (`vm-batch.py`) used a temporary host-only HTTP
+endpoint because this VM's shared-folder paths were unavailable; the first
+launch attempt exceeded the Parallels command-length limit before starting any
+process, then the shorter compressed command succeeded. No installed binaries,
+plugins, settings, saves or fixture files were changed. This verifies serialized
+field acceptance, including currently unrendered tears/cheek/lip-sync fields;
+it does not establish original rendered pixels, blending transitions, or
+voice-driven mouth parity.
+
+Historical Release evidence from Claude's engine step (`89dd836`, before main
+integration), same fixture/key 65, 20 warmups and 300 frame calls: pre-edit frame
+medians 94.250/95.250/94.708 µs; after 94.500/95.208/94.042 µs. Expression edit
+medians 1.333/1.333/1.416 µs, neck-pattern edits 2.166/2.042/2.167 µs, edited
+frames 94.375/94.916/93.917 µs. These are dated local CPU timings, not a current
+integrated-build result. `sourceStudioExpressionPerformanceProbe` reproduces the
+measurements with `IKKOKU_EXPRESSION_PERF=1` and the scenario fixture environment,
+`swift test -c release -Xswiftc -enable-testing --filter sourceStudioExpressionPerformanceProbe`.
+
+**Combined acceptance (2026-10-23).** With final runtime `dffc9df`, the Release
+app scenarios pass 83/83 edit steps, 6/6 native-save steps and 8/8 fresh-process
+load steps. Visible Face-inspector acceptance on the earlier integrated Release
+build `9737631` showed all eleven controls, mouth openness 1 → 0.5, Undo → 1,
+Redo → 0.5 and Reset → 1, the FK-owned neck control disabled, and the lip-sync
+limitation displayed. The later checkpoint correction retains current neck
+pattern/live gaze on dynamics restore and atomically rejects old shape baselines;
+its regressions failed before the fix and pass afterward. Full combined Release
+Engine/CoreMath verification passes 736 executed tests, with three named optional
+skips; Debug and Release app builds both succeed.
+
+A fresh byte audit reproduces the 13 changed scene-body bytes and exact reset.
+Its edited PNG differs from the VM input only in its regenerated thumbnail;
+both scene bodies have SHA-256
+`c5aeff049c8ef13028f9c0a255bc5621232c929feb1379b025386c83565a82fd`.
+The 308 original-player serialized-field claims therefore cover the final
+exported body, without claiming a second VM run or rendered-image parity.
+
+The same input scene now renders seven characters instead of six. Key 1299's
+saved eye catalog row 30 maps to FBS 21; before this change the importer used
+30 directly against 28 FBS patterns and retained that whole character unrendered.
+The original-player trace confirms saved row 30 after load and after settling.
+The fixture regression in `c5822a8` verifies the mapped pattern, nonempty frame,
+unchanged reset and explicit unsupported gag-eye diagnostic. The character is
+now visible, but row 30's special eye visibility/object/texture behavior remains
+unrendered. This intentional coverage change explains the integrated Studio
+image difference; the separate performance-only build preserves baseline pixels.
+
+Three final Release probes give steady-frame medians
+96.416/94.500/100.167 µs, edited-frame medians 97.250/94.333/98.167 µs,
+expression-edit medians 1.458/1.416/1.459 µs and neck-pattern-edit medians
+2.250/2.042/2.250 µs. These fixture measurements show no material steady-frame
+penalty. See [combined performance](../performance.md#combined-integration-acceptance-2026-10-23)
+for conditions, scene coverage and the unresolved interaction stalls.
+Private final evidence is in `.local/codex-resume-2026-10-23/integration/`:
+`face-ui-verification.json`, `face-window.png`, `byte-audit.json`,
+`original-player-body-match.json` and `expression-perf-{1,2,3}.log`; the eye-row
+diagnosis and focused regression log are in the sibling `expression/` directory.
+
+**Hidden-character export follow-up (PR #135).** Final review reproduced a
+missing-preview error after editing a character, hiding it and reloading the
+native scene. Export now prepares a temporary preview only when an
+expression-edited character has no live preview; it preserves resource-block,
+reference and outfit validation and applies combined shape/color/wear/face
+edits. The temporary preview never enters the live cache, so hidden characters
+add no frame-loop work. The regression fails at export on the old Release app
+and passes on the fix; Debug and Release builds succeed. The paired scenarios
+now save key 65 hidden, export in a fresh process, reimport and verify visibility
+and all eleven fields, then reload the native file again for the existing
+Reset/Undo and exact-pixel checks: **7/7 save and 16/16 load steps pass**; the
+83-step edit scenario also passes again. This does not generalize support to hidden
+characters carrying only older shape/wear edits.
+
 ## CharaStudio reload acceptance
 
 Reviewed 2026-09-30. This closes the "reload in the original CharaStudio" half of the ST-T03 edit destinations: our app's own exported scene records are loaded into the real CharaStudio player, and the state the player shows is recorded and compared claim by claim.
