@@ -52,7 +52,7 @@ public struct SourceGameplayHostScenario: Codable, Sendable {
         /// assert: the saved heroine whose `heroineParameters` are checked.
         public var heroine: Int?
         /// assert: original keys (`H_intimacy`, `H名`, …) to `"<type>:<value>"`
-        /// as the key's getter reads them, for example `"System.Int32:6"`.
+        /// as the key's getter reads them, for example `"System.Int32:4"`.
         public var heroineParameters: [String: String]?
         /// assert: the running event's ADV variables, `"<type>:<value>"`.
         public var eventVariables: [String: String]?

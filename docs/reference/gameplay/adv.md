@@ -923,10 +923,12 @@ scripted host options (`autoAcknowledge`, `autoNext`, `mapVariables`,
 `sceneFadeRegulate`, `requestDetail`). Since G-T02 a case may add a
 `character` (`heroine`, optional `player`; missing members keep the new-game
 defaults) and the collection a `characterTablesPath` and
-`parameterLibraryPath`. Report schema 2 added per-frame `batch`,
-`awaitingNext`, `pending`, the requests drained in that frame and the IDs
-acknowledged after it. Schema 3 adds per-frame `insertions` and per-case
-`replaces` and `heroine` for bound cases. Reports show computed selections or state snapshots, not
+`parameterLibraryPath` (relative to the input file), and `variableDetail`
+`changes` reports only variables that changed since the previous frame.
+Report schema 2 added per-frame `batch`, `awaitingNext`, `pending`, the
+requests drained in that frame and the IDs acknowledged after it. Schema 3
+adds per-frame `commandCount` and new `insertions`, and per-case `replaces`
+and `heroine` for bound cases. Reports show computed selections or state snapshots, not
 the reference expectations embedded in the input file.
 
 ## Pending integration
