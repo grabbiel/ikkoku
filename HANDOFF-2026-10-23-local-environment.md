@@ -5,7 +5,7 @@ For an agent or developer working in a local checkout on the reference Mac: Xcod
 file after merging PRs #104–#110 and #112–#124. That session had no Swift
 toolchain, Mac or private data. GitHub Actions on macOS runners was the only
 compile and test run for all of that work: **nothing in it has been compiled
-locally or run in the app.** `main` was at `9caa3f3` when this was written.
+locally or run in the app.** `main` was at `235b41c` when this was written.
 
 The work below needs this machine. The audit README's
 [2026-10-23 wave summary](docs/component-audit/README.md) says what each PR
@@ -32,10 +32,8 @@ changed.
    [docs/component-audit/file-index.md](docs/component-audit/file-index.md) and
    the pointer in the audit README.
 
-Leave other sessions' open work alone:
-- PR #111 (`claude/vm-fixture-scenes`): issue #101 says do not merge it.
-- PR #125 (`claude/stc03b-clothes-state`).
-- The unmerged branch `claude/r1-live-b`.
+Leave other sessions' open work alone: PR #125 (`claude/stc03b-clothes-state`)
+and PR #127 (`claude/r1-live-b`).
 
 ## Setup
 
@@ -179,7 +177,7 @@ This needs push rights; the cloud session's proxy refused branch deletion.
   claude/r4-ik-lower-bone-fix claude/r4-math-contracts claude/r4-runtime-callers
   claude/r5-gltf-interchange claude/r5-package-containment claude/r6-character-lifetime
   claude/r6-renderer-limits claude/stc03-outfit-select claude/tt01-dev-environment
-  claude/tt02-release-packaging
+  claude/tt02-release-packaging claude/vm-fixture-scenes
   ```
 
   Recheck each one first with `git branch -r --merged origin/main`, or for the

@@ -54,5 +54,7 @@
   "IKKOKU_STUDIO_ORIGINAL_SCENES": "/absolute/path/to/reverse/studio-scenes/source",
   "IKKOKU_STUDIO_POSE_CONTRACT": "/absolute/path/to/reverse/studio-pose/contract.json",
   "IKKOKU_STUDIO_SCENE_FIXTURES": "/absolute/path/to/reverse/studio-scenes",
-  "IKKOKU_TRIGONOMETRIC_IK_REFERENCE": "/absolute/path/to/trigonometric-ik/reference.json"
+  "IKKOKU_TRIGONOMETRIC_IK_REFERENCE": "/absolute/path/to/trigonometric-ik/reference.json",
+  "IKKOKU_ROUTE_CHILDREN_SCENE": "/absolute/path/to/scene-route-children.png",
+  "IKKOKU_NECK_TARGET_SCENE": "/absolute/path/to/scene-neck-target.png"
 }

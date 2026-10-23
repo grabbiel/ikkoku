@@ -631,7 +631,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
                 "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
-                "dragGizmo", "captureBone", "captureRender",
+                "dragGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink",
                 "export", "reimport", "assert", "assertRejected"}
 
@@ -774,7 +774,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 37)
+        self.assertEqual(len(self.checks), 39)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -872,13 +872,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "captureBone":
                     self.assertTrue(step["name"],
                                     "a captured bone needs a label to compare against: %s" % path)
+                if op == "captureObject":
+                    self.assertIsInstance(step["key"], int)
+                    self.assertTrue(step["name"],
+                                    "a captured object needs a label to compare against: %s" % path)
                 if op in ("export", "reimport", "saveDocument", "loadDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
                 if op in ("assert", "assertRejected"):
                     declared = [k for k in ("name", "visible", "face", "body", "color",
                                             "activeCamera", "routePlaying",
-                                            "sourceRuntime", "animation", "fk",
+                                            "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "render",
                                             "exportIdenticalToSource", "outfit") if k in step]
@@ -914,6 +918,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         for index in ("coordinate", "saved"):
                             if index in outfit:
                                 self.assertIn(outfit[index], range(7))
+                    if "position" in step:
+                        self.assertIsInstance(step["position"]["key"], int)
+                        self.assertTrue(step["position"]["from"])
                     for slot in ("face", "body"):
                         if slot in step:
                             self.assertIsInstance(step[slot]["index"], int)
