@@ -167,7 +167,7 @@ data is deliberately not copied into the documentation or distribution.
   the environment file (`passedEnvironment`), values only for the check's own
   settings (`env`), `suppliedFixtures`/`missingFixtures` with paths and hashes,
   declared reference tier, tolerance text, and artifacts hashed **after** the
-  run — a missing artifact fails the check. Still remaining (CI now runs the
+  run — a missing or (since A-T05) empty artifact fails the check. Still remaining (CI now runs the
   public lane, see T-T04): the
   `original-managed-dll` / `original-player-probe` tiers have no checks that
   execute them yet — no claim of source parity is made from resemblance.

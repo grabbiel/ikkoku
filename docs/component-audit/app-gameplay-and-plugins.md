@@ -12,7 +12,8 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 [EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift),
 [ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift),
 [AppState+PluginExecution.swift](../../Apps/IkkokuCreator/AppState+PluginExecution.swift),
-[AppState+OriginalFrameProbe.swift](../../Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift).
+[AppState+OriginalFrameProbe.swift](../../Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift),
+[CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift).
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
@@ -22,7 +23,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
 | A05 · Source Maker → Studio transfer | Pending | `Send to Studio` is explicitly disabled while a source rig is active. The enabled command sends the bundled `CharacterCard`. Original cards can instead enter through source scene preview. | Preserve edited source card bytes, selection, outfit, resolver GUIDs and source rig references when adding a source character; compare Maker and Studio posed appearance. |
 | A06 · Headless capture orchestration | Mid-stage | Environment switches cover rigs, models, source/native cards/scenes, shape/color edits, fixed animation time, scripted plugin steps, focus events, adapter reports, screenshots and benchmarks. Startup calls capture paths synchronously and exits before `NSApplication` finishes launching. Native adapter mounts no longer read `NSApp` there. Input errors are generally explicit. | A-T04: verify the adapter fix through the release probe. Then cover the remaining startup phases, output errors and invalid combinations. |
-| A07 · Window UI capture and thumbnail generation | Infancy | UI capture runs after a fixed 2.5-second delay and uses `try?` for PNG writing; it can exit successfully without a valid output. Thumbnail generation similarly ignores individual write failures. | A-T05: wait for explicit readiness, propagate errors and verify expected nonempty image files before exit 0. |
+| A07 · Window UI capture and thumbnail generation | Mid-stage — checked outputs; app runs not yet accepted | Capture outputs go through the engine `CaptureOutput` writer: the `IKKOKU_CAPTURE_UI` PNG and report, every `IKKOKU_RENDER_THUMBS` thumbnail, offscreen and original-frame PNGs, and benchmark, scenario and plugin reports. It throws on a failed write and reads the file back; the file must be nonempty and byte-identical, and a PNG must be complete and decode at the captured size. A failure names the path and exits nonzero, and "written" prints only after verification. UI capture no longer sleeps 2.5 s. It polls until `onAppear` has run and a visible window's laid-out bounds are nonzero and stable for five 0.1 s polls, failing after `IKKOKU_CAPTURE_UI_TIMEOUT` (default 30 s). Thumbnails attempt every entry, report each failed load, render or write, and exit nonzero. `cacheDisplay` still omits most SwiftUI content (ST-D07). CI runs the engine tests; the app path is only compiled there. | A-T05: run the [local acceptance commands](../guides/build-and-test.md#offscreen-and-ui-captures) and the `app-smoke` lane on the Mac and record the results. |
 | A08 · Original-frame probe entry point | Mid-stage | Produces generic-renderer, geometry/depth-normal and optional translated-shader diagnostic captures. Its own report correctly says frozen original geometry does not validate native rigs or scene loading. | Keep probe evidence separate from actual Maker/Studio frames; see renderer tasks R1/R2. |
 | A09 · Mod library commands/UI | Mid-stage | Explicit load/reload with dependency reporting. Scanning/conversion happens in CLI tools; the app does not automatically discover newly installed Windows mods. | Connect conversion job status, compatibility results and explicit version selection to app workflow; see Character/mod audit. |
 | A10 · Translated plugin commands | Mid-stage | Profile load plus run/pause are available in Mods. Converted original adapters have a separate manifest picker. Typed IR profiles require externally prepared object bindings. | Add inspectable package/binding/error UI, unload, replacement rules and original-plugin startup tests; P-T02/P-T03. |
@@ -58,9 +59,23 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   its adapter-report checks and produces identical reload pixels. Both installed-disabled and explicit-enabled runs passed; evidence is in
   `.local/reverse/plugin-execution/accepted-pr-2/`. See
   [native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
-- **A-T05 — Capture result integrity (P2).** Make UI/thumbnail output failures
+- **A-T05 — Capture result integrity (P2; implemented 2026-10-23, local app
+  acceptance pending).** Make UI/thumbnail output failures
   observable and return nonzero on any required missing output. Test a destination
   that cannot be written and readiness timeout; no false “written” message.
+  `CaptureOutput`, `CaptureOutputBatch` and `UICaptureReadiness` in the Renderer
+  module hold the checked write, the per-item thumbnail accounting and the
+  readiness/timeout policy. `CaptureOutputTests` cover a missing parent directory,
+  a directory at the destination, missing, empty, garbage and truncated files,
+  a pixel-size mismatch, PNG/JSON round trips, batch failures and timeout parsing
+  and expiry; CI runs them. Requested autocapture card/scene saves and exports
+  now also exit nonzero when they fail or leave an empty file. The verification
+  runner fails a 0-byte artifact, and `app-smoke` declares the UI PNG, UI report
+  and Mute report as artifacts. Acceptance still needs the app run on the Mac:
+  unwritable destination, forced timeout, normal capture and thumbnails, as
+  listed in the [build guide](../guides/build-and-test.md#offscreen-and-ui-captures).
+  Swallowed autocapture input errors (`IKKOKU_CARD`, `IKKOKU_LOAD_SCENE`) remain
+  A06 work.
 
 ## G. Gameplay cycle, event selection and ADV
 

@@ -38,8 +38,8 @@ revision, the dirty flag and hash of `git diff HEAD`, the runner and
 manifest hashes, captured tool versions, and per check: argv, cwd, the
 check's own env settings, passedEnvironment (IKKOKU_* names only),
 suppliedFixtures/missingFixtures with paths and hashes, reference tier,
-tolerance, artifact hashes (taken after the run; a missing artifact
-fails the check), exit code, elapsed time and the log path/hash.
+tolerance, artifact hashes (taken after the run; a missing or empty
+artifact fails the check), exit code, elapsed time and the log path/hash.
 """
 import argparse
 import hashlib
@@ -460,12 +460,16 @@ def run_check(check, env_map, strict, default_timeout, log_dir):
                 return record
 
     # Artifacts are hashed after the run (built binaries, produced reports).
+    # A zero-byte file is not a produced output (A-T05): an exit-0 run that
+    # left an empty capture or report fails like one that left nothing.
     for artifact in check.get("artifacts", []):
         entry = {"path": artifact["path"], "kind": artifact["kind"], "sha256": None}
         try:
             path = artifact_path(artifact["path"])
             if not os.path.isfile(path) or os.path.getsize(path) > MAX_FILE_BYTES:
                 raise RunnerError("artifact missing or oversized")
+            if os.path.getsize(path) == 0:
+                raise RunnerError("artifact is empty")
             entry["sha256"] = sha256_file(path)
         except (OSError, RunnerError) as exc:
             entry["error"] = str(exc)

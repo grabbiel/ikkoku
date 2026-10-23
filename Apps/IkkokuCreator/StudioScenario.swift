@@ -1081,7 +1081,7 @@ struct StudioScenario: Decodable {
                     }
                     do {
                         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                        try ImageIO.pngData(image).write(to: url, options: .atomic)
+                        try CaptureOutput.writePNG(image, to: url)
                     } catch { record(step, false, "captureRender: \(error)"); continue }
                 }
                 capturedRenders[label] = (image.width, image.height, bytes)

@@ -150,7 +150,7 @@ private func legacyBone(_ name: String, _ parent: Int?, translation: Float3 = Fl
 private func skinnedGLTF(_ nodes: [[String: Any]], joints: [Int]) throws -> GLTFAsset {
     let root: [String: Any] = ["asset": ["version": "2.0"], "nodes": nodes, "skins": [["joints": joints]],
                                "scenes": [["nodes": [0]]], "scene": 0]
-    return try GLBLoader.load(data: JSONSerialization.data(withJSONObject: root), baseURL: nil)
+    return try GLBLoader.load(data: JSONSerialization.data(withJSONObject: root))
 }
 
 @Test func legacySkeletonRejectsInvalidGraphsAndRestDataNamingTheBone() throws {
@@ -245,4 +245,140 @@ private func skinnedGLTF(_ nodes: [[String: Any]], joints: [Int]) throws -> GLTF
     var missingBinds = asset
     missingBinds.skins[0].inverseBindMatrices = []
     #expect(throws: SkeletonError.self) { try Skeleton.from(asset: missingBinds) }
+}
+
+// MARK: - Pose sizes and two-bone IK (R4)
+
+/// root → upperarm_L → forearm_L → hand_L, an arm hanging along -Y with a slight elbow bend.
+private func armSkeleton() throws -> Skeleton {
+    try Skeleton(bones: [
+        legacyBone("root", nil, translation: Float3(0, 1.4, 0)), legacyBone("upperarm_L", 0, translation: Float3(0.2, 0, 0)),
+        legacyBone("forearm_L", 1, translation: Float3(0, -0.3, 0.02)), legacyBone("hand_L", 2, translation: Float3(0, -0.28, 0))])
+}
+
+@Test func legacyPoseChecksArraySizesWhereItMeetsASkeleton() throws {
+    let skeleton = try armSkeleton()
+    var pose = skeleton.restPose
+    pose.rotations[1] = simd_quatf(angle: 0.4, axis: normalize(Float3(0, 1, 1)))
+    pose.skinScales[2] = Float3(1.2, 1, 1)
+    try pose.validate(for: skeleton)
+    // Accepted poses give exactly the unchecked results.
+    let world = try pose.checkedWorldMatrices(skeleton: skeleton)
+    #expect(world == pose.worldMatrices(skeleton: skeleton))
+    #expect(try pose.checkedSkinMatrices(skeleton: skeleton) == pose.skinMatrices(skeleton: skeleton))
+    #expect(try pose.checkedSkinMatrices(skeleton: skeleton, world: world) == pose.skinMatrices(skeleton: skeleton, world: world))
+    #expect(try pose.checkedWorldRotation(3, skeleton: skeleton).vector == pose.worldRotation(3, skeleton: skeleton).vector)
+    let other = PoseDelta(rotations: ["forearm_L": Float3(0, 0, 40)], translations: ["hand_L": Float3(0, 0.01, 0)]).apply(to: skeleton)
+    #expect(try pose.checkedBlended(with: other, t: 0.3) == pose.blended(with: other, t: 0.3))
+    let delta = PoseDelta(rotations: ["upperarm_L": Float3(10, 0, 0)], scales: ["root": Float3(repeating: 1.1)])
+    #expect(try delta.checkedApply(to: skeleton, base: pose) == delta.apply(to: skeleton, base: pose))
+    #expect(try delta.checkedApply(to: skeleton) == delta.apply(to: skeleton))
+
+    // A pose of another skeleton, or one with a short array, fails by name instead of trapping.
+    let short = try Skeleton(bones: [legacyBone("root", nil)]).restPose
+    #expect(throws: PoseError.countMismatch(array: "rotations", count: 1, expected: 4)) {
+        try short.checkedWorldMatrices(skeleton: skeleton)
+    }
+    var missingSkinScale = pose
+    missingSkinScale.skinScales.removeLast()
+    #expect(throws: PoseError.countMismatch(array: "skinScales", count: 3, expected: 4)) {
+        try missingSkinScale.checkedSkinMatrices(skeleton: skeleton)
+    }
+    #expect(throws: PoseError.countMismatch(array: "world matrices", count: 2, expected: 4)) {
+        try pose.checkedSkinMatrices(skeleton: skeleton, world: Array(world.prefix(2)))
+    }
+    #expect(throws: PoseError.countMismatch(array: "other rotations", count: 1, expected: 4)) {
+        try pose.checkedBlended(with: short, t: 0.5)
+    }
+    #expect(throws: PoseError.countMismatch(array: "skinScales", count: 3, expected: 4)) {
+        try missingSkinScale.checkedBlended(with: pose, t: 0.5)
+    }
+    #expect(throws: PoseError.boneOutOfRange(index: 4, count: 4)) { try pose.checkedWorldRotation(4, skeleton: skeleton) }
+    #expect(throws: PoseError.boneOutOfRange(index: -1, count: 4)) { try pose.checkedWorldRotation(-1, skeleton: skeleton) }
+    #expect(throws: PoseError.countMismatch(array: "rotations", count: 1, expected: 4)) {
+        try delta.checkedApply(to: skeleton, base: short)
+    }
+}
+
+@Test func checkedTwoBoneMatchesTwoBoneAndRejectsDegenerateChains() throws {
+    let a = Float3(0, 1, 0), b = Float3(0, 0.5, 0.05), c = Float3(0, 0, 0)
+    let cases: [(target: Float3, pole: Float3?)] = [
+        (Float3(0.3, 0.4, 0.2), Float3(0, 0.5, 1)),
+        (Float3(0, -3, 0), nil),                 // out of reach: the chain straightens
+        (a, Float3(1, 0.5, 0)),                  // target on the root: aims along the current chain
+        (Float3(0.1, 0.9, 0.4), b)]              // pole on the mid joint: keeps the current bend plane
+    for (target, pole) in cases {
+        let checked = try IKSolver.checkedTwoBone(a: a, b: b, c: c, target: target, pole: pole)
+        let plain = IKSolver.twoBone(a: a, b: b, c: c, target: target, pole: pole)
+        #expect(checked.upper.vector == plain.upper.vector && checked.lower.vector == plain.lower.vector)
+    }
+    let target = Float3(0.3, 0.4, 0.2)
+    #expect(throws: MathContractError.nonfinite("IK target")) {
+        try IKSolver.checkedTwoBone(a: a, b: b, c: c, target: Float3(.nan, 0, 0), pole: nil)
+    }
+    #expect(throws: MathContractError.nonfinite("IK pole")) {
+        try IKSolver.checkedTwoBone(a: a, b: b, c: c, target: target, pole: Float3(0, .infinity, 0))
+    }
+    #expect(throws: MathContractError.nonfinite("IK root joint")) {
+        try IKSolver.checkedTwoBone(a: Float3(0, .nan, 0), b: b, c: c, target: target, pole: nil)
+    }
+    #expect(throws: MathContractError.degenerateDirection("IK upper bone")) {
+        try IKSolver.checkedTwoBone(a: a, b: a, c: c, target: target, pole: nil)
+    }
+    #expect(throws: MathContractError.degenerateDirection("IK lower bone")) {
+        try IKSolver.checkedTwoBone(a: a, b: b, c: b, target: target, pole: nil)
+    }
+    // The target on the root and the end folded back onto the root: no direction to reach along.
+    #expect(throws: MathContractError.degenerateDirection("IK reach")) {
+        try IKSolver.checkedTwoBone(a: a, b: b, c: a, target: a, pole: nil)
+    }
+    // The unchecked solve returns NaN for the coincident joints the checked form rejects.
+    let collapsed = IKSolver.twoBone(a: a, b: a, c: c, target: target, pole: nil)
+    #expect(!collapsed.upper.vector.x.isFinite)
+}
+
+/// The former per-chain body of `CharacterInstance.applyIK`, the unchecked reference.
+private func formerTwoBoneUpdate(_ pose: Pose, _ skeleton: Skeleton, upper ui: Int, lower li: Int, end ei: Int,
+                                 target: Float3, pole: Float3?, offset: Float3) -> Pose {
+    var p = pose
+    let world = p.worldMatrices(skeleton: skeleton)
+    let a = world[ui].translation, b = world[li].translation, c = world[ei].translation
+    let r = IKSolver.twoBone(a: a, b: b, c: c, target: target, pole: pole ?? (b + offset))
+    let upperWorldRot = p.worldRotation(ui, skeleton: skeleton)
+    let parentRot = skeleton.bones[ui].parent.map { p.worldRotation($0, skeleton: skeleton) } ?? .identity
+    p.rotations[ui] = (parentRot.inverse * (r.upper * upperWorldRot)).normalized
+    let lowerWorldRot = r.upper * p.worldRotation(li, skeleton: skeleton)
+    let newUpperWorld = p.worldRotation(ui, skeleton: skeleton)
+    p.rotations[li] = (newUpperWorld.inverse * (r.lower * lowerWorldRot)).normalized
+    return p
+}
+
+@Test func solveTwoBoneMatchesFormerUpdateAndRejectsDegeneratePoses() throws {
+    let skeleton = try armSkeleton()
+    let pose = PoseDelta(rotations: ["upperarm_L": Float3(0, 20, 10)]).apply(to: skeleton)
+    let offset = Float3(0, -0.3, -0.5)
+    let cases: [(target: Float3, pole: Float3?)] = [(Float3(0.45, 1.1, 0.3), nil), (Float3(0.1, 1.0, 0.3), Float3(0.6, 1.2, -0.4))]
+    for (target, pole) in cases {
+        let solved = try IKSolver.solveTwoBone(pose, skeleton: skeleton, upper: 1, lower: 2, end: 3, target: target,
+                                               pole: pole, defaultPoleOffset: offset)
+        #expect(solved == formerTwoBoneUpdate(pose, skeleton, upper: 1, lower: 2, end: 3, target: target, pole: pole, offset: offset))
+        #expect(solved != pose)
+    }
+    let target = Float3(0.45, 1.1, 0.3)
+    // The forearm on the shoulder leaves no upper bone; the caller keeps its pose.
+    var folded = pose
+    folded.translations[2] = .zero
+    #expect(throws: MathContractError.degenerateDirection("IK upper bone")) {
+        try IKSolver.solveTwoBone(folded, skeleton: skeleton, upper: 1, lower: 2, end: 3, target: target, pole: nil)
+    }
+    #expect(throws: MathContractError.nonfinite("IK target")) {
+        try IKSolver.solveTwoBone(pose, skeleton: skeleton, upper: 1, lower: 2, end: 3, target: Float3(0, .nan, 0), pole: nil)
+    }
+    #expect(throws: PoseError.boneOutOfRange(index: 7, count: 4)) {
+        try IKSolver.solveTwoBone(pose, skeleton: skeleton, upper: 1, lower: 2, end: 7, target: target, pole: nil)
+    }
+    let short = try Skeleton(bones: [legacyBone("root", nil)]).restPose
+    #expect(throws: PoseError.countMismatch(array: "rotations", count: 1, expected: 4)) {
+        try IKSolver.solveTwoBone(short, skeleton: skeleton, upper: 1, lower: 2, end: 3, target: target, pole: nil)
+    }
 }
