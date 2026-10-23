@@ -68,12 +68,20 @@ public enum IKSolver {
     /// One chain of `pose` solved toward `target` (both in the skeleton's
     /// root space): `checkedTwoBone` on the current world joint positions of
     /// `upper`, `lower` and `end`, with its world deltas converted back to
-    /// local rotations of `upper` and `lower`. A nil `pole` bends toward the
-    /// current mid joint plus `defaultPoleOffset`. This is the per-chain update
-    /// of `CharacterInstance.applyIK`. Throws `PoseError` for a pose that does
-    /// not match `skeleton` or an index outside it, and `MathContractError` for
-    /// a degenerate solve; nothing is written then, so the caller's pose stays
-    /// unchanged.
+    /// local rotations of `upper` and `lower`; no other bone is written. A nil
+    /// `pole` bends toward the current mid joint plus `defaultPoleOffset`.
+    /// This is the per-chain update of `CharacterInstance.applyIK`. Throws
+    /// `PoseError` for a pose that does not match `skeleton` or an index
+    /// outside it, and `MathContractError` for a degenerate solve; nothing is
+    /// written then, so the caller's pose stays unchanged.
+    ///
+    /// A reachable target is reached to float rounding, except that
+    /// `rotation(from:to:)` skips a correction under about 1.4 mrad. A target
+    /// beyond reach puts the end on the line toward it, short of full length
+    /// by `twoBone`'s 1e-4 margin, with the small remaining bend on the pole's
+    /// side. Both hold when the upper bone and its ancestors have uniform
+    /// scale, as the bundled sliders give. `worldRotation` ignores scale, so a
+    /// non-uniform scale there tilts the result.
     public static func solveTwoBone(_ pose: Pose, skeleton: Skeleton, upper ui: Int, lower li: Int, end ei: Int,
                                     target: Float3, pole: Float3?, defaultPoleOffset: Float3 = .zero) throws -> Pose {
         try pose.validate(for: skeleton)
@@ -84,17 +92,21 @@ public enum IKSolver {
         let world = p.worldMatrices(skeleton: skeleton)
         let a = world[ui].translation, b = world[li].translation, c = world[ei].translation
         let r = try checkedTwoBone(a: a, b: b, c: c, target: target, pole: pole ?? (b + defaultPoleOffset))
-        // Upper: world delta → local
+        // Both deltas act on the pose's world rotations from before the solve
+        // (`twoBone`: new world = delta * old world), so read both first.
         let upperWorldRot = p.worldRotation(ui, skeleton: skeleton)
+        let lowerWorldRot = p.worldRotation(li, skeleton: skeleton)
+        // Upper: world delta → local
         let parentRot = skeleton.bones[ui].parent.map { p.worldRotation($0, skeleton: skeleton) } ?? .identity
         p.rotations[ui] = (parentRot.inverse * (r.upper * upperWorldRot)).normalized
-        // Lower: kept exactly as before (R4 adds guards only). `p` already
-        // holds the new upper rotation, so this applies the upper delta to the
-        // lower bone a second time and the end can miss the target; see the
-        // R4 remaining work in docs/reference/renderer.md.
-        let lowerWorldRot = r.upper * p.worldRotation(li, skeleton: skeleton)
-        let newUpperWorld = p.worldRotation(ui, skeleton: skeleton)
-        p.rotations[li] = (newUpperWorld.inverse * (r.lower * lowerWorldRot)).normalized
+        // Lower: `lower * oldLowerWorld`, made local to its parent (the upper
+        // bone in every bundled chain) as just written. R4 found that the
+        // former update read the lower world rotation after the write above
+        // and multiplied it by the upper delta again. The lower bone therefore
+        // turned by the upper delta twice more, and the end missed reachable
+        // targets (by 0.13-0.16 m on a 0.58 m arm).
+        let lowerParentRot = skeleton.bones[li].parent.map { p.worldRotation($0, skeleton: skeleton) } ?? .identity
+        p.rotations[li] = (lowerParentRot.inverse * (r.lower * lowerWorldRot)).normalized
         return p
     }
 

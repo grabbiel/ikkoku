@@ -432,14 +432,16 @@ infinite reverse-Z perspective; orthographic cameras are not represented.
 The second R4 slice (2026-10-23) moved the runtime callers that receive user
 edits or imported data onto checked forms. Accepted input still gives exactly
 the former result. Each test compares the new path with a copy of the former
-formula.
+formula. The exception is two-bone IK. A later fix changed its results on
+purpose ([lower-bone fix](#legacy-two-bone-ik-lower-bone-fix)).
 
 - **Two-bone IK.** `IKSolver.checkedTwoBone` throws `MathContractError` for:
   a nonfinite joint, target or pole; an upper (`b - a`) or lower (`c - b`)
   bone no longer than `Float3.minimumDirectionLength`; a reach with no
   direction (target and end both on the root); any other nonfinite solution.
-  `IKSolver.solveTwoBone` is the former per-chain update of
-  `CharacterInstance.applyIK`, applied to a pose. It also throws `PoseError`
+  `IKSolver.solveTwoBone` is the per-chain update of
+  `CharacterInstance.applyIK`, applied to a pose. This slice kept the former
+  formula, which the lower-bone fix below corrects. It also throws `PoseError`
   for a pose or bone index that does not fit the skeleton.
   `CharacterInstance.solveIK` leaves a failed chain's rotations unchanged and
   returns its error. `applyIK` keeps its signature, and `ikFailures()` reports
@@ -502,11 +504,12 @@ Remaining R4 work found in this slice:
   mirrored source parent gets the same nonunit rotation. Supporting these needs
   the walk to carry Unity's product of local rotations, and an original
   capture.
-- `CharacterInstance.applyIK` applies the upper delta to the lower bone twice,
+- `CharacterInstance.applyIK` applied the upper delta to the lower bone twice,
   because `p.worldRotation(li)` already includes it. The hand or foot therefore
-  misses its target. A local float64 replay of a 0.30 m + 0.28 m arm missed
+  missed its target. A local float64 replay of a 0.30 m + 0.28 m arm missed
   targets 0.49 m and 0.51 m from the shoulder by 0.13 m and 0.23 m. R4 kept the
-  formula, because a fix changes valid results; it needs its own task.
+  formula, because a fix changes valid results. The
+  [lower-bone fix](#legacy-two-bone-ik-lower-bone-fix) has since corrected it.
 - These remain unchecked: `IKSolver.ccd`, which has no runtime caller; the
   renderer's shadow light frame (unchecked `lookAt`/`orthographicReverseZ`,
   degenerate only for a nonfinite light direction or scene bounds); and the
@@ -519,6 +522,71 @@ Remaining R4 work found in this slice:
 
 `swift test --package-path Packages/Engine --filter 'checked|legacySkeleton|legacyPose|solveTwoBone|nonfiniteRays|characterGaze|sourceCameraObject|sourceWorldTransform|importedCamera|DegenerateDecodedCameras'`
 runs the synthetic tests for these contracts.
+
+### Legacy two-bone IK lower-bone fix
+
+`IKSolver.twoBone` returns world-space deltas for the bones' rotations from
+before the solve: the new upper world rotation is `upper * oldUpperWorld`, and
+the new lower one `lower * oldLowerWorld`. The second slice's `solveTwoBone`
+read the lower bone's world rotation only after writing the upper bone. That
+rotation already carried the upper delta, and the update then multiplied by
+the delta again. The lower bone therefore ended at
+`lower * upper * upper * oldLowerWorld`, and the hand or foot missed reachable
+targets. The fix (2026-10-23) reads both world rotations before writing
+either. It then makes `lower * oldLowerWorld` local to the lower bone's parent,
+the upper bone as just written. `twoBone`, `checkedTwoBone` and their
+`MathContractError`/`PoseError` cases are unchanged, so degenerate chains are
+rejected exactly as before.
+
+Results change for every enabled prototype IK chain, which only native
+Studio characters have; Maker sets no targets. Native scenes and timeline keys
+store targets and poles, not solved rotations. They need no migration, and
+they now render with each end on its target.
+
+A local, uncommitted plain-Python replay of the solver checked the fix in
+float64, and in float32 with rounding after every operation (close to, but not
+exactly, simd arithmetic):
+
+| Case | Former update | Fixed update |
+| --- | --- | --- |
+| The R4 test's two targets (0.30 m + 0.28 m arm, upper arm FK (0, 20, 10)°) | missed by 0.156 m and 0.127 m | within 6e-17 m (float64), 1.6e-7 m (float32) |
+| The same targets from the rest pose | missed by 0.239 m and 0.137 m | within 6e-17 m |
+| 144 reachable targets: 4 poses, arm and leg, 3 directions, 35/70/95 % of reach, default and explicit pole | missed every one, by 0.046 m to 1.14 m | within 5.7e-16 m (float64), 2.5e-7 m (float32) |
+| 96 targets at 102 % and 150 % of reach | — | end on the line to the target, 1e-4 m short of full reach; elbow or knee at most 7.7 mm off the line, at least 4.9 mm toward the pole |
+| Re-solve from the solved pose, explicit pole | — | rotations change by at most 2.2e-7, joints move at most 2.5e-7 m (float32) |
+
+The second slice's figures (0.13 m and 0.23 m) are closest to the rest-pose
+case; that replay is not in the repository. The poses include root
+rotations, uniform root scales of 0.85 and 1.3, a 1.1 upper-bone scale, and a
+non-uniform lower-bone scale. The lower-bone scale applies after that bone's
+rotation, so it only resizes the bone.
+
+`RigTests.swift` replaces the second slice's former-formula comparison with
+these cases in Float. Reachable ends must lie within 1e-4 m of the target,
+and unreachable ones within 2e-4 m of full reach. It also keeps a copy of the
+former update, to show it missing the R4 targets by more than 0.1 m. Further
+tests check the bend side for opposite poles, a re-solve with an explicit
+pole, and arm-then-leg solving in `IKChain` order. The degenerate-pose
+rejections now also cover a zero-length lower bone and a nonfinite pole.
+`swift test --package-path Packages/Engine --filter solveTwoBone` runs them.
+Swift was not compiled locally, so the CI Engine suite is the only test run.
+Studio's IK handles, drag and status line were not run interactively.
+
+Remaining limits:
+
+- The result is exact only when the upper bone and its ancestors have uniform
+  scale, because `Pose.worldRotation` ignores scale. The replay's arm missed by
+  0.078 m under a (1, 1.3, 0.8) root scale. The bundled sliders scale only the
+  head, eyes, bust, hands and feet, and always uniformly.
+- `simd_quatf.rotation(from:to:)` returns identity below about 1.4 mrad
+  (`dot > 0.999999`), so a correction that small is skipped. An end can then
+  sit up to about 1.4e-3 × the chain length (0.8 mm on the 0.58 m arm) from
+  its target.
+- A target closer than the difference of the two bone lengths folds the
+  chain, and the end stops at that distance from the root.
+- The default pole follows the current mid joint, so a re-solve from a solved
+  pose can turn the bend plane. `CharacterInstance` always solves from the FK
+  pose.
 
 ## Verification and remaining limits
 
