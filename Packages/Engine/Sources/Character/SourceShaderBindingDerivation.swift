@@ -43,6 +43,26 @@ public enum SourceShaderBindingDerivation {
             source: "OriginalCharacterProbe.Capture harness constants")
     }
 
+    /// One frame's `EyeLookMaterialControll` texture transforms, as the Studio
+    /// eye-look code computes them (`SourceStudioIrisRendering.bindingEyeLook`):
+    /// renderer node name (`cf_Ohitomi_L02`) → texture property (`_MainTex`,
+    /// `_overtex1`, `_overtex2`) → Unity scale/offset. It is a look state, not
+    /// card data, so the caller supplies it; without it the iris transforms stay
+    /// unresolved.
+    public struct EyeLook: Sendable, Equatable {
+        public struct Transform: Sendable, Equatable {
+            public var scale: [Float]
+            public var offset: [Float]
+            /// A `isYure` texState: the original re-rolls a random jitter that
+            /// is not modelled, so the value is reported unresolved.
+            public var yure: Bool
+            public init(scale: [Float], offset: [Float], yure: Bool) { self.scale = scale; self.offset = offset; self.yure = yure }
+        }
+        public var transforms: [String: [String: Transform]]
+        public var source: String
+        public init(transforms: [String: [String: Transform]], source: String) { self.transforms = transforms; self.source = source }
+    }
+
     public enum DerivationError: Error, CustomStringConvertible, Equatable {
         case invalid(String)
         public var description: String { switch self { case .invalid(let message): message } }
@@ -260,6 +280,12 @@ public enum SourceShaderBindingDerivation {
             texture.identity = nil; texture.identitySource = "unresolved"; texture.identityUnresolved = reason
             material.textures[name] = texture
         }
+        /// `Material.SetTextureOffset`/`SetTextureScale` on an existing slot.
+        mutating func setTransform(_ name: String, scale: [Float], offset: [Float], source: String) {
+            guard var texture = material.textures[name] else { return }
+            texture.scale = scale; texture.offset = offset; texture.transformSource = source; texture.transformUnresolved = nil
+            material.textures[name] = texture
+        }
         mutating func unresolveTransform(_ name: String, _ reason: String) {
             guard var texture = material.textures[name] else { return }
             texture.scale = nil; texture.offset = nil; texture.transformSource = "unresolved"; texture.transformUnresolved = reason
@@ -310,7 +336,7 @@ public enum SourceShaderBindingDerivation {
     public static func derive(card source: SourceCharacterCard, library: SourceMakerLibrary, headContract: Data,
                               catalog: SourceShaderProgramCatalog, supplement supplementData: Data? = nil,
                               scene: SceneGlobals = .originalCharacterProbeHarness,
-                              hiPoly: Bool = true, provenance: [String: String] = [:]) throws -> SourceShaderBindingSet {
+                              hiPoly: Bool = true, eyeLook: EyeLook? = nil, provenance: [String: String] = [:]) throws -> SourceShaderBindingSet {
         var status: [String: SourceMessagePackValue]?, statusError: String?
         if let block = source.block(named: "Status") {
             do { status = try SourceMessagePack.decode(block.data).stringKeyedMap() } catch { statusError = "\(error)" }
@@ -327,6 +353,7 @@ public enum SourceShaderBindingDerivation {
         result.provenance["makerLibrary"] = library.sourceURL.path
         result.provenance["headContractSHA256"] = SHA256.hash(data: headContract).map { String(format: "%02x", $0) }.joined()
         result.provenance["sceneGlobals"] = scene.source
+        if let eyeLook { result.provenance["eyeLook"] = eyeLook.source }
         if let supplementData { result.provenance["supplementSHA256"] = SHA256.hash(data: supplementData).map { String(format: "%02x", $0) }.joined() }
         else { result.diagnostics.append("No source binding supplement: keywords, sampler state, the body draw material and non-ID0 catalog rows stay unresolved.") }
         result.provenance["hiPoly"] = String(hiPoly)
@@ -617,7 +644,19 @@ public enum SourceShaderBindingDerivation {
                             builder.unresolve("_exppower", "eye-pattern row (EpsTex for status.eyesPtn): \(gagNote)")
                         }
                         for name in ["_MainTex", "_overtex1", "_overtex2"] {
-                            builder.unresolveTransform(name, "EyeLookMaterialControll texture offsets (gaze, pupil and highlight position) are not evaluated by this card-only derivation")
+                            // EyeLookMaterialControll.Update writes SetTextureOffset/
+                            // SetTextureScale every frame from the look state.
+                            if let eyeLook, let transform = eyeLook.transforms[renderer.nodeName]?[name] {
+                                if transform.yure {
+                                    builder.unresolveTransform(name, "EyeLookMaterialControll Yure texState: the random YureAddScale/YureAddVec jitter is not modelled (\(eyeLook.source))")
+                                } else {
+                                    builder.setTransform(name, scale: transform.scale, offset: transform.offset, source: "\(eyeLook.source) via EyeLookMaterialControll.Update")
+                                }
+                            } else {
+                                builder.unresolveTransform(name, eyeLook == nil
+                                    ? "EyeLookMaterialControll texture offsets (gaze, pupil and highlight position) are not evaluated by this card-only derivation"
+                                    : "the supplied eye-look state has no \(name) transform for \(renderer.nodeName)")
+                            }
                         }
                     case "cf_O_canine":
                         if let flag = card.bool("face.doubleTooth") { visible = visible && flag; rule = "ChaControl.VisibleDoubleTooth: face.doubleTooth" }

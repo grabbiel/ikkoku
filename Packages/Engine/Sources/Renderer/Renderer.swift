@@ -112,6 +112,11 @@ public final class Renderer: @unchecked Sendable {
     public private(set) var lastFrameGPUTime: Double = 0
     /// Invalid skin bindings are skipped during interactive rendering; captures fail.
     public private(set) var lastDeformationErrors: [String] = []
+    /// Live source-shader draws encoded by the last prepared frame, and any
+    /// item that fell back to its native toon draw at render time (with why).
+    public internal(set) var lastSourceShaderLive = SourceShaderLiveFrameReport()
+    var liveEncoder: SourceShaderLiveEncoder?
+    var liveEncoderError: String?
 
     private let statusLock = NSLock()
     private var publishedStatistics = RenderFrameStatistics()
@@ -195,6 +200,12 @@ public final class Renderer: @unchecked Sendable {
         cb.commit()
     }
 
+    /// Runs `body` under the render lock (live validation captures).
+    func renderLockedLive(_ body: () -> Void) { renderLock.lock(); body(); renderLock.unlock() }
+    /// Opens a frame-ring frame for an offscreen frame; close it with
+    /// `frameRing.endFrame(retainedUntilCompletionOf:)` or `abandonFrame()`.
+    func frameRingBegin() { frameRing.beginFrame(frameIndex); frameIndex &+= 1 }
+
     private func ensureTargets(width: Int, height: Int) -> RenderTargets? {
         if let t = targets, t.width == width, t.height == height { return t }
         targets = try? RenderTargets(device: gpu.device, width: width, height: height)
@@ -237,6 +248,12 @@ public final class Renderer: @unchecked Sendable {
     // MARK: - Offscreen capture
 
     public func capture(frame: RenderFrame, width: Int, height: Int) -> CGImage? {
+        capture(frame: frame, width: width, height: height, configureTargets: nil)
+    }
+
+    /// `capture` with a hook on the fresh render targets before encoding
+    /// (tests inject target failures through it).
+    func capture(frame: RenderFrame, width: Int, height: Int, configureTargets: ((RenderTargets) -> Void)?) -> CGImage? {
         guard width > 0, height > 0, width <= 16384, height <= 16384 else { return nil }
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
@@ -251,6 +268,7 @@ public final class Renderer: @unchecked Sendable {
         guard let targets = try? RenderTargets(device: gpu.device, width: width, height: height) else {
             renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: width, height: height)); return nil
         }
+        configureTargets?(targets)
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
         var encoded = true
         do { try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb) } catch { encoded = false }
@@ -376,6 +394,20 @@ public final class Renderer: @unchecked Sendable {
         let gizmos: [GizmoRecord]
         let width: Int
         let height: Int
+        /// Live source-shader draws in source queue order; empty unless an
+        /// item carries `sourceShader`.
+        var live: [LiveRecord] = []
+        /// The stencil-capable main pass, set exactly when `live` is non-empty.
+        var liveMainPass: LiveMainPass? = nil
+    }
+
+    /// What a main pass with live source-shader draws needs beyond the
+    /// depth-only pass: stencil-capable pipelines and the MSAA depth-stencil
+    /// target. Both are resolved in `prepare`, so a failure returns the live
+    /// items to their toon draws with a reported reason instead of dropping them.
+    struct LiveMainPass {
+        let pipelines: Pipelines.MainPass
+        let depthStencil: any MTLTexture
     }
 
     /// Enabled lights in list order. Only the first `IK_MAX_LIGHTS` fit
@@ -427,7 +459,7 @@ public final class Renderer: @unchecked Sendable {
 
     /// Prepares a frame and publishes its statistics and error. Throws only
     /// `RenderFrameError.uniformAllocation`; nothing has been encoded by then.
-    private func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false) throws -> FrameContext {
+    func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false) throws -> FrameContext {
         // A submitted frame created after a retirement replaced every pending frame
         // that could still name the retired resources (`ResourceStore.retire`).
         if input.submitted { resources.completeRetirements(createdBefore: input.createdAt) }
@@ -536,6 +568,7 @@ public final class Renderer: @unchecked Sendable {
         var casters: [DrawRecord] = []
         var deforms: [DeformRecord] = []
         var deformSeen = Set<UInt64>()
+        var liveCandidates: [DrawRecord] = []
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
@@ -589,19 +622,30 @@ public final class Renderer: @unchecked Sendable {
             let c = item.model.transformPoint(mesh.bounds.center)
             let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
                                  material: materialUniforms, distance: length(c - cp))
-            if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
+            if item.sourceShader != nil { liveCandidates.append(rec) }
+            else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
             if item.castsShadow && !item.material.transparent { casters.append(rec) }
         }
-        opaque.sort { a, b in
-            if a.item.order != b.item.order { return a.item.order < b.item.order }
-            if a.item.material.uniforms.kind != b.item.material.uniforms.kind { return a.item.material.uniforms.kind < b.item.material.uniforms.kind }
-            return a.item.mesh.id < b.item.mesh.id
+        var liveReport = SourceShaderLiveFrameReport()
+        var live = liveCandidates.isEmpty ? [] : prepareLive(liveCandidates, deforms: deforms, report: &liveReport, opaque: &opaque, transparent: &transparent)
+        var liveMainPass: LiveMainPass?
+        if !live.isEmpty {
+            do { liveMainPass = LiveMainPass(pipelines: try pipelines.stencilMainPass(), depthStencil: try targets.msaaDepthStencil()) }
+            catch {
+                // Without the stencil pipelines or the depth-stencil target
+                // nothing can draw live: every live item returns to its
+                // native draw, reported.
+                liveReport.fallbacks += live.map { "\($0.draw.material.label): stencil main pass unavailable (\(error)); drawn toon" }
+                liveReport.draws = 0
+                for record in live.map(\.record) {
+                    if record.item.material.transparent { transparent.append(record) } else { opaque.append(record) }
+                }
+                live = []
+            }
         }
-        transparent.sort {
-            if $0.distance != $1.distance { return $0.distance > $1.distance }
-            if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
-            return $0.item.mesh.id < $1.item.mesh.id
-        }
+        lastSourceShaderLive = liveReport
+        opaque = Self.sortedOpaque(opaque)
+        transparent = Self.sortedTransparent(transparent)
         // Display frames draw every non-empty batch once (main pass when depth
         // tested, overlay otherwise); pick frames draw only pickable batches.
         var gizmos: [GizmoRecord] = []
@@ -616,7 +660,23 @@ public final class Renderer: @unchecked Sendable {
         }
         return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
                             opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms,
-                            gizmos: gizmos, width: W, height: H)
+                            gizmos: gizmos, width: W, height: H, live: live, liveMainPass: liveMainPass)
+    }
+
+    static func sortedOpaque(_ records: [DrawRecord]) -> [DrawRecord] {
+        records.sorted { a, b in
+            if a.item.order != b.item.order { return a.item.order < b.item.order }
+            if a.item.material.uniforms.kind != b.item.material.uniforms.kind { return a.item.material.uniforms.kind < b.item.material.uniforms.kind }
+            return a.item.mesh.id < b.item.mesh.id
+        }
+    }
+
+    static func sortedTransparent(_ records: [DrawRecord]) -> [DrawRecord] {
+        records.sorted {
+            if $0.distance != $1.distance { return $0.distance > $1.distance }
+            if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
+            return $0.item.mesh.id < $1.item.mesh.id
+        }
     }
 
     // MARK: - Encoding
@@ -624,13 +684,14 @@ public final class Renderer: @unchecked Sendable {
     private func encode(frame: RenderFrame, target: any MTLTexture, targets: RenderTargets, commandBuffer cb: any MTLCommandBuffer) throws {
         let ctx = try prepare(frame: frame, targets: targets)
         encodeDeform(ctx, cb)
+        if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
         encodeShadow(ctx, cb)
         encodeMain(ctx, targets: targets, cb)
         encodePost(ctx, targets: targets, target: target, cb)
         encodeOverlay(ctx, targets: targets, target: target, cb)
     }
 
-    private func encodeDeform(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
+    func encodeDeform(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
         guard !ctx.deforms.isEmpty, let enc = cb.makeComputeCommandEncoder() else { return }
         enc.label = "Deform"
         enc.setComputePipelineState(pipelines.deform)
@@ -654,7 +715,7 @@ public final class Renderer: @unchecked Sendable {
         enc.endEncoding()
     }
 
-    private func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
+    func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
         enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
         enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
         enc.setFragmentBuffer(ctx.lights.buffer, offset: ctx.lights.offset, index: Int(BufferIndexLights.rawValue))
@@ -734,13 +795,24 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.loadAction = .clear
         pass.depthAttachment.storeAction = .dontCare
         pass.depthAttachment.clearDepth = 0
+        // Live source-shader draws need stencil; frames without them keep the
+        // depth-only attachment and pipelines unchanged.
+        var main = pipelines.depthOnlyMainPass
+        if let liveMain = ctx.liveMainPass {
+            main = liveMain.pipelines
+            pass.depthAttachment.texture = liveMain.depthStencil
+            pass.stencilAttachment.texture = liveMain.depthStencil
+            pass.stencilAttachment.loadAction = .clear
+            pass.stencilAttachment.storeAction = .dontCare
+            pass.stencilAttachment.clearStencil = 0
+        }
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Main"
         bindCommon(enc, ctx)
 
         if !fx.transparentBackground, let background = ctx.background {
             enc.pushDebugGroup("Background")
-            enc.setRenderPipelineState(pipelines.background)
+            enc.setRenderPipelineState(main.background)
             enc.setDepthStencilState(pipelines.depthNone)
             enc.setCullMode(.none)
             enc.setFragmentBuffer(background.buffer, offset: background.offset, index: Int(BufferIndexFrameUniforms.rawValue))
@@ -751,7 +823,7 @@ public final class Renderer: @unchecked Sendable {
         }
         if fx.showGrid {
             enc.pushDebugGroup("Grid")
-            enc.setRenderPipelineState(pipelines.grid)
+            enc.setRenderPipelineState(main.grid)
             enc.setDepthStencilState(pipelines.depthTest)
             enc.setCullMode(.none)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
@@ -765,18 +837,27 @@ public final class Renderer: @unchecked Sendable {
             bindDraw(enc, rec)
             bindTextures(enc, m, frame: ctx.frame)
             if outlinesOn && rec.item.outline && (m.uniforms.flags & MaterialFlagNoOutline.rawValue) == 0 {
-                enc.setRenderPipelineState(pipelines.outline)
+                enc.setRenderPipelineState(main.outline)
                 enc.setDepthStencilState(pipelines.depthWrite)
                 enc.setCullMode(.front)
                 drawIndexed(enc, rec.mesh)
             }
             let nativeEye = m.uniforms.kind == UInt32(MaterialKindEye.rawValue) && (m.uniforms.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-            enc.setRenderPipelineState(nativeEye ? pipelines.eye : pipelines.toonOpaque)
+            enc.setRenderPipelineState(nativeEye ? main.eye : main.toonOpaque)
             enc.setDepthStencilState(pipelines.depthWrite)
             enc.setCullMode((m.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
             drawIndexed(enc, rec.mesh)
         }
         enc.popDebugGroup()
+
+        if !ctx.live.isEmpty, ctx.liveMainPass != nil {
+            enc.pushDebugGroup("SourceShaderLive")
+            encodeLiveDraws(enc, ctx, target: TranslatedSourceTarget(color: Pipelines.hdrFormat, depthStencil: Pipelines.depthStencilFormat, sampleCount: Pipelines.sampleCount))
+            // Translated programs bind buffers 0 and 8…, textures 0…; restore
+            // the native frame bindings for the passes that follow.
+            bindCommon(enc, ctx)
+            enc.popDebugGroup()
+        }
 
         if !ctx.transparent.isEmpty {
             enc.pushDebugGroup("Transparent")
@@ -784,7 +865,7 @@ public final class Renderer: @unchecked Sendable {
             for rec in ctx.transparent {
                 let material = rec.item.material.uniforms
                 let nativeEye = material.kind == UInt32(MaterialKindEye.rawValue) && (material.flags & MaterialFlagSourceIrisHighlights.rawValue) == 0
-                enc.setRenderPipelineState(nativeEye ? pipelines.eyeBlend : pipelines.toonBlend)
+                enc.setRenderPipelineState(nativeEye ? main.eyeBlend : main.toonBlend)
                 bindDraw(enc, rec)
                 bindTextures(enc, rec.item.material, frame: ctx.frame)
                 enc.setCullMode((rec.item.material.uniforms.flags & MaterialFlagDoubleSided.rawValue) != 0 ? .none : .back)
@@ -796,7 +877,7 @@ public final class Renderer: @unchecked Sendable {
         let depthGizmos = ctx.gizmos.filter { $0.batch.depthTest }
         if !depthGizmos.isEmpty {
             enc.pushDebugGroup("GizmosDepth")
-            enc.setRenderPipelineState(pipelines.gizmoHDR)
+            enc.setRenderPipelineState(main.gizmoHDR)
             enc.setDepthStencilState(pipelines.depthTest)
             enc.setCullMode(.none)
             encodeGizmos(enc, depthGizmos)
@@ -888,7 +969,7 @@ public final class Renderer: @unchecked Sendable {
         enc.setRenderPipelineState(pipelines.pick)
         enc.setDepthStencilState(pipelines.depthWrite)
         enc.setCullMode(.none)
-        for rec in ctx.opaque + ctx.transparent where rec.item.objectID != 0 {
+        for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 {
             bindDraw(enc, rec)
             bindTextures(enc, rec.item.material, frame: ctx.frame)
             enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))

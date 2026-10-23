@@ -61,6 +61,9 @@ final class AppState {
             if let probePath = env["IKKOKU_ORIGINAL_FRAME_PROBE"] {
                 AppState.captureOriginalFrameProbe(host: host, path: probePath)
             }
+            if let probePath = env["IKKOKU_LIVE_SOURCE_PROBE"] {
+                AppState.captureLiveSourceShaderProbe(host: host, path: probePath)
+            }
             if let rigPath = env["IKKOKU_CAPTURE_RIG"] {
                 AppState.captureRig(host: host, path: rigPath)
             }
@@ -686,6 +689,7 @@ final class AppState {
                 if env["IKKOKU_SOURCE_SCENE"] != nil, let studio = AppState.sharedStudio {
                     for key in ["sourceCardSHA256", "assembly", "coordinate", "appearanceFieldCount", "assetSelections", "diagnostics"] { document.removeValue(forKey: key) }
                     document["studio"] = studio.sourceBenchmarkMetadata()
+                    if studio.liveSourceShaders { document["liveSourceShaders"] = studio.liveSourceShaderReport() }
                     if let text = env["IKKOKU_BENCHMARK_SIMULATION_FRAMES"] {
                         guard let frames = Int(text) else { throw GLTFError.io("Invalid Studio simulation benchmark frame count.") }
                         document["simulation"] = try studio.benchmarkSourceEvaluation(measuredFrames: frames)
@@ -702,6 +706,15 @@ final class AppState {
             catch { print("[ikkoku] autocapture write failed: \(error)"); exit(1) }
             print("[ikkoku] autocapture written to \(out) (\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms, \(frame.items.count) items)")
         } else { print("[ikkoku] autocapture failed: the renderer returned no image for \(out)"); exit(1) }
+        // The live source-shader status of the captured frame (R1/CMT-04): a required output.
+        if let reportPath = env["IKKOKU_LIVE_SOURCE_REPORT"] {
+            guard let studio = AppState.sharedStudio else { print("[ikkoku] IKKOKU_LIVE_SOURCE_REPORT needs the Studio"); exit(1) }
+            do {
+                try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: studio.liveSourceShaderReport(), options: [.prettyPrinted, .sortedKeys]),
+                                            to: URL(fileURLWithPath: reportPath))
+                print("[ikkoku] live source-shader report written to \(reportPath)")
+            } catch { print("[ikkoku] live source-shader report failed: \(error)"); exit(1) }
+        }
         if env["IKKOKU_CAPTURE_UI"] != nil {
             // Real window snapshot once the window is ready; handled by the readiness poll
             // that `startUICaptureIfRequested` arms at the end of `init`.

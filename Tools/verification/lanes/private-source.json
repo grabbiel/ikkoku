@@ -264,6 +264,26 @@
           "env": "IKKOKU_SHADER_BINDING_SUPPLEMENT",
           "kind": "file",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_HAND_POSE",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_STREAMS",
+          "kind": "file",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_LIVE_SOURCE_TEXTURES",
+          "kind": "file",
+          "optional": true
         }
       ],
       "env": {},

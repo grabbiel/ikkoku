@@ -66,6 +66,11 @@ public struct RenderItem: Sendable {
     public var hiddenKey: UInt64? = nil
     /// Draw ordering within a pass (lower first). Eyebrows/eyelashes use a high order.
     public var order: Int = 0
+    /// Opt-in live source-shader draw (`IKKOKU_LIVE_SOURCE_SHADERS`): when set,
+    /// the main pass draws this item with the translated original programs
+    /// instead of the native toon shader. Shadow and pick passes keep the
+    /// native draw. nil (the default) renders exactly as before.
+    public var sourceShader: SourceShaderLiveDraw? = nil
 
     public init(mesh: MeshHandle, material: MaterialState, model: float4x4, objectID: UInt32,
                 deformKey: UInt64? = nil, skinSet: UInt64? = nil, morphWeights: [(index: Int, weight: Float)] = []) {
