@@ -37,6 +37,9 @@ public struct CaptureRequest: Sendable, Equatable {
         case interactive
         /// `IKKOKU_ORIGINAL_FRAME_PROBE`: diagnostic renders beside the frame file.
         case originalFrameProbe
+        /// `IKKOKU_LIVE_SOURCE_PROBE`: the live source-shader measurement renders,
+        /// written to `IKKOKU_LIVE_SOURCE_OUTPUT` (R1/CMT-04).
+        case liveSourceShaderProbe
         /// `IKKOKU_CAPTURE_RIG`: a converted source rig, written to `IKKOKU_AUTOCAPTURE`.
         case rigCapture
         /// `IKKOKU_CAPTURE_MODEL`: one static model, written to `IKKOKU_AUTOCAPTURE`.
@@ -59,6 +62,7 @@ public struct CaptureRequest: Sendable, Equatable {
             switch self {
             case .interactive: return "the interactive editor"
             case .originalFrameProbe: return "the original-frame probe (IKKOKU_ORIGINAL_FRAME_PROBE)"
+            case .liveSourceShaderProbe: return "the live source-shader probe (IKKOKU_LIVE_SOURCE_PROBE)"
             case .rigCapture: return "source rig capture (IKKOKU_CAPTURE_RIG)"
             case .modelCapture: return "static model capture (IKKOKU_CAPTURE_MODEL)"
             case .sceneCapture: return "native scene capture (IKKOKU_CAPTURE_SCENE)"
@@ -146,6 +150,10 @@ public struct CaptureRequest: Sendable, Equatable {
             case .studioScenario:
                 if !isSet("IKKOKU_STUDIO_SCENARIO_REPORT") {
                     report([selector.variable], "writes its report to IKKOKU_STUDIO_SCENARIO_REPORT, which is not set")
+                }
+            case .liveSourceShaderProbe:
+                if !isSet("IKKOKU_LIVE_SOURCE_OUTPUT") {
+                    report([selector.variable], "writes its renders to IKKOKU_LIVE_SOURCE_OUTPUT, which is not set")
                 }
             default:
                 break
@@ -331,6 +339,7 @@ extension CaptureRequest {
     /// The variables that select a mode, in the order startup reaches them.
     static let modeSelectors: [ModeSelector] = [
         ModeSelector("IKKOKU_ORIGINAL_FRAME_PROBE", .originalFrameProbe),
+        ModeSelector("IKKOKU_LIVE_SOURCE_PROBE", .liveSourceShaderProbe),
         ModeSelector("IKKOKU_CAPTURE_RIG", .rigCapture),
         ModeSelector("IKKOKU_CAPTURE_MODEL", .modelCapture),
         ModeSelector("IKKOKU_CAPTURE_SCENE", .sceneCapture),
@@ -347,7 +356,12 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_ORIGINAL_FRAME_TRACE_PIXELS", [.originalFrameProbe]),
         ScopedOption("IKKOKU_MAKER_SCENARIO_REPORT", [.makerScenario]),
         ScopedOption("IKKOKU_STUDIO_SCENARIO_REPORT", [.studioScenario]),
-        ScopedOption("IKKOKU_SOURCE_EXPRESSION", [.rigCapture]),
+        ScopedOption("IKKOKU_SOURCE_EXPRESSION", [.rigCapture, .liveSourceShaderProbe]),
+        ScopedOption("IKKOKU_LIVE_SOURCE_OUTPUT", [.liveSourceShaderProbe]),
+        ScopedOption("IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER", [.liveSourceShaderProbe]),
+        ScopedOption("IKKOKU_STUDIO_HAND_POSE", [.liveSourceShaderProbe]),
+        // The Studio app capture's live source-shader status (R1/CMT-04).
+        ScopedOption("IKKOKU_LIVE_SOURCE_REPORT", [.appCapture]),
         ScopedOption("IKKOKU_SOURCE_HEIGHT", [.rigCapture]),
         ScopedOption("IKKOKU_CAPTURE_SHADOWS", [.rigCapture]),
         ScopedOption("IKKOKU_RIG_BONES", [.rigCapture]),
@@ -405,6 +419,8 @@ extension CaptureRequest {
         "IKKOKU_SOURCE_CARD", "IKKOKU_STUDIO_ANIMATION_TIME", "IKKOKU_SOURCE_PLUGIN_PROFILE",
         "IKKOKU_NATIVE_PLUGIN_MANIFEST", "IKKOKU_NATIVE_PLUGIN_MANIFESTS", "IKKOKU_MUTE_BACKGROUND_CONFIG",
         "IKKOKU_SOURCE_PLUGIN_STEPS", "IKKOKU_SOURCE_PLUGIN_DELTA",
+        // The Studio's live source-shader opt-in at launch (View ▸ Live Source Shaders).
+        "IKKOKU_LIVE_SOURCE_SHADERS",
     ]
 
     /// Where original or converted data and settings come from; consulted wherever
@@ -415,13 +431,16 @@ extension CaptureRequest {
         "IKKOKU_STUDIO_ANIMATION_CATALOG", "IKKOKU_STUDIO_ATTACHMENT_CATALOG", "IKKOKU_STUDIO_ITEM_CATALOG",
         "IKKOKU_STUDIO_DYNAMICS", "IKKOKU_STUDIO_HAND_PATTERNS", "IKKOKU_STUDIO_LOOK_SETTINGS",
         "IKKOKU_STUDIO_VOICE_CATALOG",
+        // Live source-shader inputs (`SourceShaderLiveConfiguration`).
+        "IKKOKU_LIVE_SOURCE_PROGRAMS", "IKKOKU_LIVE_SOURCE_TEXTURES", "IKKOKU_LIVE_SOURCE_STREAMS",
+        "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_HEAD_MATERIAL_CONTRACT",
         // `0` turns off the build checkout's development defaults (EngineHost, T-T02).
         "IKKOKU_SOURCE_TREE_FALLBACKS",
     ]
 
     /// Name prefixes used only by capture variables: an unknown name with one of
     /// these is a misspelling, not some other tool's fixture.
-    static let capturePrefixes: [String] = ["IKKOKU_CAPTURE_", "IKKOKU_ORIGINAL_FRAME_", "IKKOKU_BENCHMARK_"]
+    static let capturePrefixes: [String] = ["IKKOKU_CAPTURE_", "IKKOKU_ORIGINAL_FRAME_", "IKKOKU_BENCHMARK_", "IKKOKU_LIVE_SOURCE_"]
 
     static let dependencies: [Dependency] = [
         Dependency("IKKOKU_CAPTURE_POSE", requires: "IKKOKU_CAPTURE_STUDIO"),
@@ -467,6 +486,8 @@ extension CaptureRequest {
         ValueRule("IKKOKU_CAPTURE_GIZMOS", .oneOf(["0", "1"])),
         ValueRule("IKKOKU_ORIGINAL_FRAME_FAMILIES", .oneOf(["0", "1"])),
         ValueRule("IKKOKU_ORIGINAL_FRAME_DEPTH24", .oneOf(["0", "1"])),
+        ValueRule("IKKOKU_LIVE_SOURCE_SHADERS", .oneOf(["0", "1"])),
+        ValueRule("IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER", .oneOf(["store", "capture"])),
         ValueRule("IKKOKU_CAPTURE_SEX", .oneOf(["m", "f"])),
         ValueRule("IKKOKU_CAPTURE_UI_MODE", .oneOf(["maker", "studio"])),
         ValueRule("IKKOKU_CAPTURE_TICKS", .integer(0...Int.max)),

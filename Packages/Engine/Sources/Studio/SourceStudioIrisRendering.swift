@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import simd
 import CoreMath
 import Character
@@ -125,6 +126,23 @@ public enum SourceStudioIrisRendering {
             }
         }
         return .init(transforms: transforms, source: source)
+    }
+
+    /// `bindingEyeLook` for a card read outside a Studio scene (the shader
+    /// binding inspection and the live source-shader probe): the eyeMaterial
+    /// block of the Studio look settings document `settings`, the card's
+    /// pupil/highlight values on its saved outfit, and `rates` (nil: resting).
+    public static func bindingEyeLook(card: SourceCharacterCard, settings: URL,
+                                      rates: (horizontal: [Double], vertical: Double)? = nil) throws -> SourceShaderBindingDerivation.EyeLook {
+        let lookData = try Data(contentsOf: settings)
+        let eyes = try SourceStudioEyeMaterialSettings.document(json: lookData)
+        let identity = try card.customization()
+        let (cardValues, missing) = cardValues(appearance: try SourceCardAppearance(card: card, coordinate: 0), sex: identity.sex, exType: identity.exType)
+        let digest = SHA256.hash(data: lookData).map { String(format: "%02x", $0) }.joined().prefix(12)
+        let rateText = rates.map { "rates L \($0.horizontal[0]) R \($0.horizontal[1]) V \($0.vertical)" } ?? "resting rates (0, 0)"
+        let cardText = cardValues != nil ? "card pupil/highlight values" : (missing.isEmpty ? "prefab snapshot (special-male skip)" : "prefab snapshot (card lacks \(missing.joined(separator: ", ")))")
+        return try bindingEyeLook(eyes: eyes, card: cardValues, rates: rates,
+                                  source: "Studio eye look \(settings.lastPathComponent) (\(digest)), \(rateText), \(cardText)")
     }
 
     /// Converts a Unity `_ST` (uv' = uv·scale + offset, Unity V) to the shader

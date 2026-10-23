@@ -25,21 +25,13 @@ func inspectShaderBindings(cardURL: URL, libraryURL: URL, headContractURL: URL, 
     // block) plus the frame's iris-shift rates, default the resting (0, 0).
     var eyeLook: SourceShaderBindingDerivation.EyeLook?
     if let eyeLookURL {
-        let lookData = try Data(contentsOf: eyeLookURL)
-        let eyes = try SourceStudioEyeMaterialSettings.document(json: lookData)
         var rates: (horizontal: [Double], vertical: Double)?
         if let eyeLookRates {
             let values = eyeLookRates.split(separator: ",").compactMap { Double($0) }
             guard values.count == 3, values.allSatisfy(\.isFinite) else { throw RigError.invalid("--eye-look-rates takes <left-h>,<right-h>,<v>.") }
             rates = ([values[0], values[1]], values[2])
         }
-        let identity = try card.customization()
-        let (cardValues, missing) = SourceStudioIrisRendering.cardValues(appearance: try SourceCardAppearance(card: card, coordinate: 0),
-                                                                          sex: identity.sex, exType: identity.exType)
-        let rateText = rates.map { "rates L \($0.horizontal[0]) R \($0.horizontal[1]) V \($0.vertical)" } ?? "resting rates (0, 0)"
-        let cardText = cardValues != nil ? "card pupil/highlight values" : (missing.isEmpty ? "prefab snapshot (special-male skip)" : "prefab snapshot (card lacks \(missing.joined(separator: ", ")))")
-        eyeLook = try SourceStudioIrisRendering.bindingEyeLook(eyes: eyes, card: cardValues, rates: rates,
-            source: "Studio eye look \(eyeLookURL.lastPathComponent) (\(sha256(lookData).prefix(12))), \(rateText), \(cardText)")
+        eyeLook = try SourceStudioIrisRendering.bindingEyeLook(card: card, settings: eyeLookURL, rates: rates)
         provenance["eyeLook"] = eyeLookURL.path
     } else if eyeLookRates != nil {
         throw RigError.invalid("--eye-look-rates needs --eye-look.")

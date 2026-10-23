@@ -64,6 +64,14 @@ struct IkkokuApp: App {
                 Button("Studio") { app.mode = .studio }.keyboardShortcut("2", modifiers: [.command])
                 Divider()
                 Button("Reset Camera") { app.resetCamera() }.keyboardShortcut("r", modifiers: [.command, .shift])
+                Divider()
+                // R1/CMT-04 opt-in: converted source characters draw with the translated
+                // original shader programs; unresolved materials stay toon and are listed
+                // in the Studio inspector. Off by default.
+                Toggle("Live Source Shaders (Experimental)", isOn: Binding(
+                    get: { app.studio?.liveSourceShaders ?? false },
+                    set: { app.studio?.liveSourceShaders = $0 }))
+                    .disabled(app.studio == nil)
             }
         }
     }

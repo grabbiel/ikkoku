@@ -119,6 +119,11 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         }
         if let width = identity.width, width != entry.width { return .failure(.init("\(entry.name) store width differs")) }
         if let height = identity.height, height != entry.height { return .failure(.init("\(entry.name) store height differs")) }
+        // One upload per store entry and resource store: several characters
+        // (or a rebuilt assembly) share the GPU texture.
+        let cacheKey = "\(ObjectIdentifier(resources).hashValue)#\(entry.bundle)#\(entry.pathID)"
+        lock.lock(); let cached = uploaded[cacheKey]; lock.unlock()
+        if let cached { return .success(cached) }
         do {
             let folder = url.deletingLastPathComponent().appendingPathComponent(entry.directory)
             guard entry.files.count == entry.mipLevels, entry.sha256.count == entry.files.count,
@@ -143,12 +148,15 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
                 "exportEncoding": "linear-rgba16f-little-endian-bottom-up", "width": entry.width, "height": entry.height,
                 "mipLevels": entry.mipLevels, "mipFiles": entry.files], resources: resources)
             guard let texture = resources.texture(handle) else { return .failure(.init("\(entry.name) texture upload failed")) }
-            return .success(SourceShaderLiveTexture(texture: texture, filter: entry.filter, wrap: entry.wrap, aniso: entry.aniso,
-                                                    provenance: "\(entry.bundle)#\(entry.pathID) (\(entry.colorSpace))"))
+            let result = SourceShaderLiveTexture(texture: texture, filter: entry.filter, wrap: entry.wrap, aniso: entry.aniso,
+                                                 provenance: "\(entry.bundle)#\(entry.pathID) (\(entry.colorSpace))")
+            lock.lock(); uploaded[cacheKey] = result; lock.unlock()
+            return .success(result)
         } catch { return .failure(.init("\(entry.name) store load failed: \(error)")) }
     }
     private let lock = NSLock()
     private var verified = Set<String>()
+    private var uploaded: [String: SourceShaderLiveTexture] = [:]
 }
 
 /// VALIDATION ONLY. Takes pixels from an original-player capture
