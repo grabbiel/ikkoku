@@ -136,6 +136,34 @@
               "version": 0
             },
             {
+              "id": 201,
+              "args": [
+                "synthetic-intimacy"
+              ],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 201,
+              "args": [
+                "synthetic-missing"
+              ],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
+              "id": 165,
+              "args": [
+                "H_callID",
+                "3"
+              ],
+              "multi": false,
+              "hash": 0,
+              "version": 0
+            },
+            {
               "id": 1,
               "args": [
                 "System.Boolean",
@@ -156,7 +184,91 @@
           ]
         }
       }
-    ]
+    ],
+    "parameterLibrary": {
+      "schemaVersion": 1,
+      "programs": {
+        "synthetic-intimacy": [
+          {
+            "id": 3,
+            "args": [
+              "H_intimacy",
+              "1",
+              "6"
+            ],
+            "multi": true,
+            "hash": 0,
+            "version": 0
+          },
+          {
+            "id": 4,
+            "args": [
+              "H_intimacy",
+              "H_intimacy",
+              "0",
+              "100"
+            ],
+            "multi": false,
+            "hash": 0,
+            "version": 0
+          },
+          {
+            "id": 165,
+            "args": [
+              "H_intimacy",
+              "H_intimacy"
+            ],
+            "multi": false,
+            "hash": 0,
+            "version": 0
+          }
+        ]
+      }
+    },
+    "characterTables": {
+      "schemaVersion": 1,
+      "callDefaultID": 7,
+      "voiceNumbers": [
+        0,
+        -100
+      ],
+      "callNames": {
+        "c00": [
+          {
+            "name": "SyntheticCallA",
+            "id": 1,
+            "category": 2,
+            "bundle": "synthetic/callname.unity3d"
+          },
+          {
+            "name": "SyntheticCallC",
+            "id": 3,
+            "category": 0,
+            "bundle": "synthetic/callname.unity3d"
+          },
+          {
+            "name": "SyntheticCallE",
+            "id": 5,
+            "category": 0,
+            "bundle": "synthetic/callname.unity3d"
+          },
+          {
+            "name": "SyntheticDefault",
+            "id": 7,
+            "category": 2,
+            "bundle": "synthetic/callname.unity3d"
+          }
+        ],
+        "player": [
+          {
+            "name": "SyntheticDefault",
+            "id": 7,
+            "category": 2,
+            "bundle": "synthetic/callname.unity3d"
+          }
+        ]
+      }
+    }
   },
   "steps": [
     {
@@ -207,7 +319,35 @@
       "op": "assert",
       "period": "Morning",
       "runningEvent": 9001,
-      "idle": false
+      "idle": false,
+      "heroine": 1,
+      "heroineParameters": {
+        "H_intimacy": "System.Int32:0",
+        "H_callID": "System.Int32:-1"
+      },
+      "insertions": 0
+    },
+    {
+      "op": "run",
+      "until": "parameterInserted"
+    },
+    {
+      "op": "assert",
+      "runningEvent": 9001,
+      "insertions": 1,
+      "heroine": 1,
+      "heroineParameters": {
+        "H_intimacy": "System.Int32:0"
+      },
+      "eventVariables": {
+        "H_intimacy": "System.Int32:0",
+        "H_callMyID": "System.Int32:7",
+        "H_isNickNameNormal": "System.Boolean:True"
+      }
+    },
+    {
+      "op": "reload",
+      "path": ".local/verification/gameplay/controlled-event-parameter-file.json"
     },
     {
       "op": "run"
@@ -220,7 +360,15 @@
       "completedEvents": [
         9001
       ],
-      "idle": true
+      "idle": true,
+      "heroine": 1,
+      "heroineParameters": {
+        "H_intimacy": "System.Int32:6",
+        "H_callID": "System.Int32:3",
+        "H_callName": "System.String:SyntheticCallC",
+        "H_eventAfterDay": "System.Int32:0",
+        "H_isNickNameNormal": "System.Boolean:False"
+      }
     },
     {
       "op": "reload",
@@ -243,7 +391,12 @@
       "completedEvents": [
         9001
       ],
-      "idle": true
+      "idle": true,
+      "heroine": 1,
+      "heroineParameters": {
+        "H_intimacy": "System.Int32:6",
+        "H_eventAfterDay": "System.Int32:1"
+      }
     }
   ]
 }

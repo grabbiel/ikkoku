@@ -7,9 +7,10 @@ import Foundation
 // completions. Contract: docs/reference/gameplay/cycle.md ("Gameplay host").
 
 /// Controlled content a `SourceGameplayHost` plays: fixed-event schedules, the
-/// ADV program of each event, map names and wait points. The verification
-/// scenario supplies a synthetic catalog; no original table or scenario is
-/// bundled.
+/// ADV program of each event, map names and wait points, and optionally the
+/// parameter library (`ParameterFile`) and the character tables the event
+/// heroine's binding reads. The verification scenario supplies a synthetic
+/// catalog; no original table or scenario is bundled.
 public struct SourceGameplayEventCatalog: Codable, Sendable, Equatable {
     public static let schemaVersion = 1
 
@@ -33,6 +34,12 @@ public struct SourceGameplayEventCatalog: Codable, Sendable, Equatable {
     public var mapNumbers: [String: Int]
     public var waitPoints: [SourceFixedEventScheduler.WaitPoint]
     public var programs: [EventProgram]
+    /// `Manager.Game.scenarioParameterDic`; without it ParameterFile faults.
+    public var parameterLibrary: SourceADVParameterLibrary?
+    /// With tables the host binds each event's heroine and the player
+    /// (`SetADVParam(scenario)` seed); without them events run unbound and
+    /// HeroineParam faults.
+    public var characterTables: SourceCharacterTables?
 
     public func program(for assetID: Int) -> SourceADVProgram? {
         programs.first { $0.assetID == assetID }?.program
@@ -52,6 +59,8 @@ public struct SourceGameplayEventCatalog: Codable, Sendable, Equatable {
         for item in programs {
             do { try item.program.validate() } catch { throw invalid("event \(item.assetID) ADV program schema or limits") }
         }
+        do { try parameterLibrary?.validate() } catch { throw invalid("parameter library schema or limits") }
+        do { try characterTables?.validate() } catch { throw invalid("character table schema or limits") }
         for schedule in fixedEvents.schedules {
             for entry in schedule.entries {
                 guard let id = Int32(entry.asset.trimmingCharacters(in: .whitespacesAndNewlines)) else {
@@ -64,37 +73,82 @@ public struct SourceGameplayEventCatalog: Codable, Sendable, Equatable {
 }
 
 /// Native, versioned save state the host owns (A-T01). This is **not** the
-/// original `SaveData` layout and holds no recovered campaign state (G12):
-/// each field is a native placeholder for the source value its comment names,
-/// changed only by the host operation that performs the matching effect.
+/// original `SaveData` file layout (G12): the heroine and player carry the
+/// typed `SaveData.Heroine`/`SaveData.Player` parameters the ADV bindings read
+/// and write (G-T02); the other fields are native placeholders for the source
+/// value their comments name, changed only by the host operation that
+/// performs the matching effect.
 public struct SourceGameplayNativeState: Codable, Sendable, Equatable {
     public struct Player: Codable, Sendable, Equatable {
         /// Placeholder for the source player's next flag. `clearPlayerNextFlag`
         /// clears it; no native code sets it yet.
         public var nextFlag: Bool
-        public init(nextFlag: Bool = false) { self.nextFlag = nextFlag }
+        /// `Manager.Game.Player`'s parameters. A host whose catalog carries
+        /// character tables creates the new-game player when this is nil.
+        public var parameters: SourcePlayerParameters?
+        public init(nextFlag: Bool = false, parameters: SourcePlayerParameters? = nil) {
+            self.nextFlag = nextFlag
+            self.parameters = parameters
+        }
     }
 
-    /// Placeholder for one saved heroine. `id` is the fixed-event schedule's
-    /// heroine ID; no original character data is bound (G-T02).
+    /// One saved heroine. `id` is the fixed-event schedule's heroine ID;
+    /// `parameters` is the `SaveData.Heroine` data the event binding reads and
+    /// writes (schema 2). The scheduler fields read it.
     public struct Heroine: Codable, Sendable, Equatable {
         public var id: Int
-        public var fixCharaID: Int
         public var classIndex: Int
-        public var isTaked: Bool
-        public var eventAfterDay: Int
         /// How many times the host applied the source per-heroine daily
         /// increment (`advanceCharacterDays`); the original counters it would
         /// change are not modelled.
         public var dailyIncrements: Int
-        public init(id: Int, fixCharaID: Int = 0, classIndex: Int = 0, isTaked: Bool = false,
-                    eventAfterDay: Int = 0, dailyIncrements: Int = 0) {
+        public var parameters: SourceHeroineParameters
+        public var fixCharaID: Int { Int(parameters.fixCharaID) }
+        public var isTaked: Bool { parameters.isTaked }
+        public var eventAfterDay: Int { Int(parameters.eventAfterDay) }
+
+        public init(id: Int, fixCharaID: Int32 = 0, classIndex: Int = 0, isTaked: Bool = false,
+                    eventAfterDay: Int32 = 0, dailyIncrements: Int = 0, parameters: SourceHeroineParameters? = nil) {
             self.id = id
-            self.fixCharaID = fixCharaID
             self.classIndex = classIndex
-            self.isTaked = isTaked
-            self.eventAfterDay = eventAfterDay
             self.dailyIncrements = dailyIncrements
+            var data = parameters ?? SourceHeroineParameters()
+            if parameters == nil {
+                data.fixCharaID = fixCharaID
+                data.isTaked = isTaked
+                data.eventAfterDay = eventAfterDay
+            }
+            self.parameters = data
+        }
+
+        private enum CodingKeys: String, CodingKey { case id, classIndex, dailyIncrements, parameters, fixCharaID, isTaked, eventAfterDay }
+        /// Schema 2 stores `parameters`; a schema-1 heroine (`fixCharaID`,
+        /// `isTaked`, `eventAfterDay` placeholders) migrates to the new-game
+        /// heroine with those three fields copied.
+        public init(from decoder: any Decoder) throws {
+            let box = try decoder.container(keyedBy: CodingKeys.self)
+            id = try box.decode(Int.self, forKey: .id)
+            classIndex = try box.decode(Int.self, forKey: .classIndex)
+            dailyIncrements = try box.decode(Int.self, forKey: .dailyIncrements)
+            if let parameters = try box.decodeIfPresent(SourceHeroineParameters.self, forKey: .parameters) {
+                guard !box.contains(.fixCharaID), !box.contains(.isTaked), !box.contains(.eventAfterDay) else {
+                    throw SourceGameplayHostError.inconsistentState("a heroine has both parameters and schema-1 placeholders")
+                }
+                self.parameters = parameters
+            } else {
+                var data = SourceHeroineParameters()
+                data.fixCharaID = try box.decode(Int32.self, forKey: .fixCharaID)
+                data.isTaked = try box.decode(Bool.self, forKey: .isTaked)
+                data.eventAfterDay = try box.decode(Int32.self, forKey: .eventAfterDay)
+                self.parameters = data
+            }
+        }
+        public func encode(to encoder: any Encoder) throws {
+            var box = encoder.container(keyedBy: CodingKeys.self)
+            try box.encode(id, forKey: .id)
+            try box.encode(classIndex, forKey: .classIndex)
+            try box.encode(dailyIncrements, forKey: .dailyIncrements)
+            try box.encode(parameters, forKey: .parameters)
         }
     }
 
@@ -152,6 +206,9 @@ public struct SourceGameplayNativeState: Codable, Sendable, Equatable {
         }
         guard heroines.allSatisfy({ $0.eventAfterDay >= 0 && $0.dailyIncrements >= 0 }) else {
             throw inconsistent("heroine day counters must be nonnegative")
+        }
+        for heroine in heroines {
+            do { try heroine.parameters.validate() } catch { throw inconsistent("heroine \(heroine.id) parameter limits") }
         }
         guard completedEvents.count <= 100_000, Set(completedEvents).count == completedEvents.count else {
             throw inconsistent("completed events must be unique")
@@ -235,11 +292,21 @@ public enum SourceGameplayHostError: Error, Equatable, LocalizedError {
 /// with `unsupportedRequest` instead of being skipped. A throwing step or
 /// command leaves the host unchanged.
 ///
-/// The whole host is `Codable` (schema version 1, format marker
+/// When the catalog carries character tables, the event's ADV interpreter is
+/// bound to its heroine and the player (`SetADVParam(scenario)` seed) and the
+/// catalog's parameter library; after every step the binding's heroine and
+/// player are written back to the native state (the source mutates the saved
+/// `SaveData.Heroine` in place). A completed fixed event sets the heroine's
+/// `eventAfterDay` to 0 (`Cycle.FixCharaEventStart`).
+///
+/// The whole host is `Codable` (schema version 2, format marker
 /// `ikkoku.native-gameplay-host`) and resumes identically from any step
-/// boundary. It is native state, not an original campaign save (G12).
+/// boundary. Schema 1 snapshots (placeholder heroines, unbound events) migrate
+/// on decode. It is native state, not an original campaign save (G12).
 public struct SourceGameplayHost: Codable, Sendable, Equatable {
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
+    /// Snapshot versions `resume` reads; older ones migrate.
+    public static let readableSchemaVersions = 1...2
     public static let format = "ikkoku.native-gameplay-host"
     public static let snapshotLimit = 16 * 1024 * 1024
 
@@ -272,7 +339,8 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
         case advFrame(assetID: Int, batch: Int, pc: Int, status: String)
         case mapLoadStarted(requestID: Int, from: Int, to: Int)
         case mapLoaded(requestID: Int, map: Int)
-        /// The completion flag was persisted in `state.completedEvents`.
+        /// The completion flag was persisted in `state.completedEvents` and
+        /// the heroine's `eventAfterDay` was reset.
         case eventCompleted(heroineID: Int, assetID: Int)
     }
 
@@ -294,7 +362,15 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
         self.frameDelta = frameDelta
         self.session = SourceGameplaySession(cycle: cycle)
         self.state = state
+        Self.createPlayer(&self.state, catalog)
         try validate()
+    }
+
+    /// `Manager.Game.NewGame`'s player when the catalog can bind characters.
+    private static func createPlayer(_ state: inout SourceGameplayNativeState, _ catalog: SourceGameplayEventCatalog) {
+        if state.player.parameters == nil, let tables = catalog.characterTables {
+            state.player.parameters = SourcePlayerParameters(callDefaultID: tables.callDefaultID)
+        }
     }
 
     /// No work is pending that must finish before another cycle operation.
@@ -450,9 +526,9 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
                 guard !countOverflow else { throw SourceGameplayHostError.counterOverflow("heroine \(heroine.id) daily increments") }
                 state.heroines[index].dailyIncrements = count
                 if heroine.fixCharaID <= -5 {
-                    let (after, afterOverflow) = heroine.eventAfterDay.addingReportingOverflow(days)
-                    guard !afterOverflow else { throw SourceGameplayHostError.counterOverflow("heroine \(heroine.id) event-after days") }
-                    state.heroines[index].eventAfterDay = after
+                    let (after, afterOverflow) = heroine.parameters.eventAfterDay.addingReportingOverflow(Int32(truncatingIfNeeded: days))
+                    guard !afterOverflow, Int32(exactly: days) != nil else { throw SourceGameplayHostError.counterOverflow("heroine \(heroine.id) event-after days") }
+                    state.heroines[index].parameters.eventAfterDay = after
                 }
             }
         case .updateTimeZone(let zone): state.timeZone = zone
@@ -502,12 +578,21 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
             event = running
             return [.mapLoaded(requestID: load.requestID, map: load.to)]
         }
+        guard let heroineIndex = state.heroines.firstIndex(where: { $0.id == running.heroineID }) else {
+            throw SourceGameplayHostError.inconsistentState("the running event's heroine is not saved")
+        }
         if running.interpreter.closed || running.interpreter.exhausted {
             state.completedEvents.append(assetID)
+            state.heroines[heroineIndex].parameters.eventAfterDay = 0 // Cycle.FixCharaEventStart after the ADV.
             event = nil
             return [.eventCompleted(heroineID: running.heroineID, assetID: assetID)]
         }
         try running.interpreter.tick(deltaTime: frameDelta)
+        // The source binds the saved SaveData.Heroine itself: write back.
+        if let character = running.interpreter.character {
+            state.heroines[heroineIndex].parameters = character.heroine
+            state.player.parameters = character.player
+        }
         event = running
         return [.advFrame(assetID: assetID, batch: running.interpreter.batch, pc: running.interpreter.pc,
                           status: running.interpreter.status)]
@@ -530,8 +615,11 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
         periodEntryPending = false
         let cycle = session.cycle
         for heroine in state.heroines {
+            // FixEventScheduler.Check skips assets in heroine.talkEvent; the
+            // host's completion record stands in until CharaEvent runs natively.
+            let completed = state.completedEvents + heroine.parameters.talkEvent.map { Int($0) }.filter { !state.completedEvents.contains($0) }
             let context = SourceFixedEventScheduler.Context(
-                isTaked: heroine.isTaked, eventAfterDay: heroine.eventAfterDay, completedEvents: state.completedEvents,
+                isTaked: heroine.isTaked, eventAfterDay: heroine.eventAfterDay, completedEvents: completed,
                 week: cycle.week, period: cycle.period, mapNumbers: catalog.mapNumbers, waitPoints: catalog.waitPoints,
                 lessons: catalog.fixedEvents.lessons(classIndex: heroine.classIndex, week: cycle.week))
             guard let selection = try SourceFixedEventScheduler.select(entries: catalog.fixedEvents.entries(for: heroine.id),
@@ -539,7 +627,15 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
             guard let program = catalog.program(for: selection.assetID) else {
                 throw SourceGameplayHostError.missingEventProgram(selection.assetID)
             }
-            let interpreter = try SourceADVInterpreter(program: program)
+            let binding = catalog.characterTables.map {
+                SourceADVCharacterBinding(heroine: heroine.parameters, player: state.player.parameters, tables: $0)
+            }
+            let interpreter = try SourceADVInterpreter(program: program, character: binding, parameterLibrary: catalog.parameterLibrary)
+            // Seeding runs getters with side effects (HExperience, voiceNo cache).
+            if let index = state.heroines.firstIndex(where: { $0.id == heroine.id }), let character = interpreter.character {
+                state.heroines[index].parameters = character.heroine
+                state.player.parameters = character.player
+            }
             event = ActiveEvent(heroineID: heroine.id, selection: selection, interpreter: interpreter)
             return .eventSelected(heroineID: heroine.id, assetID: selection.assetID, mapNo: selection.mapNo)
         }
@@ -557,16 +653,43 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
         let format = try box.decodeIfPresent(String.self, forKey: .format)
         guard format == Self.format else { throw SourceGameplayHostError.unrecognizedSnapshot(format) }
         let version = try box.decode(Int.self, forKey: .schemaVersion)
-        guard version == Self.schemaVersion else { throw SourceGameplayHostError.unsupportedSchemaVersion(version) }
+        guard Self.readableSchemaVersions.contains(version) else { throw SourceGameplayHostError.unsupportedSchemaVersion(version) }
         catalog = try box.decode(SourceGameplayEventCatalog.self, forKey: .catalog)
         frameDelta = try box.decode(Float.self, forKey: .frameDelta)
         session = try box.decode(SourceGameplaySession.self, forKey: .session)
         state = try box.decode(SourceGameplayNativeState.self, forKey: .state)
+        if version == 1 {
+            // Schema 1 had placeholder heroines (migrated by Heroine's decoder)
+            // and no player parameters or bindings.
+            guard state.player.parameters == nil, catalog.parameterLibrary == nil, catalog.characterTables == nil else {
+                throw SourceGameplayHostError.inconsistentState("a schema-1 snapshot carries schema-2 data")
+            }
+        } else {
+            guard state.heroines.isEmpty || !Self.hasPlaceholderHeroines(box) else {
+                throw SourceGameplayHostError.inconsistentState("a schema-2 snapshot carries schema-1 heroines")
+            }
+        }
         event = try box.decodeIfPresent(ActiveEvent.self, forKey: .event)
         mapLoad = try box.decodeIfPresent(MapLoad.self, forKey: .mapLoad)
         stagedOperation = try box.decodeIfPresent(SourceGameplayCycleOperation.self, forKey: .stagedOperation)
         periodEntryPending = try box.decode(Bool.self, forKey: .periodEntryPending)
+        if version == 1 {
+            guard event?.interpreter.character == nil, event?.interpreter.parameterLibrary == nil else {
+                throw SourceGameplayHostError.inconsistentState("a schema-1 snapshot carries schema-2 data")
+            }
+        }
         try validate()
+    }
+
+    /// Whether the encoded state's heroines use the schema-1 placeholder shape.
+    private static func hasPlaceholderHeroines(_ box: KeyedDecodingContainer<CodingKeys>) -> Bool {
+        struct Probe: Decodable {
+            struct State: Decodable { var heroines: [Item] }
+            struct Item: Decodable { var parameters: SourceHeroineParameters? }
+            var state: State
+        }
+        guard let state = try? box.decode(Probe.State.self, forKey: .state) else { return false }
+        return state.heroines.contains { $0.parameters == nil }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -613,6 +736,16 @@ public struct SourceGameplayHost: Codable, Sendable, Equatable {
             }
             guard catalog.program(for: selection.assetID) == event.interpreter.program else {
                 throw inconsistent("the running event's ADV program differs from the catalog")
+            }
+            guard event.interpreter.parameterLibrary == catalog.parameterLibrary || event.interpreter.parameterLibrary == nil else {
+                throw inconsistent("the running event's parameter library differs from the catalog")
+            }
+            if let character = event.interpreter.character {
+                guard character.tables == catalog.characterTables,
+                      character.heroine == state.heroines.first(where: { $0.id == event.heroineID })?.parameters,
+                      character.player == state.player.parameters else {
+                    throw inconsistent("the running event's character binding differs from the saved heroine, player or tables")
+                }
             }
             guard !state.completedEvents.contains(selection.assetID) else {
                 throw inconsistent("the running event is already completed")
