@@ -14,6 +14,13 @@
         "key": 10,
         "coordinate": 0,
         "saved": 0
+      },
+      "animation": {
+        "key": 10,
+        "group": 0,
+        "category": 0,
+        "no": 0,
+        "speed": 0.0
       }
     },
     {

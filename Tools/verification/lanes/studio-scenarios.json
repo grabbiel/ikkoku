@@ -1865,6 +1865,10 @@
         {
           "env": "IKKOKU_STUDIO_POSE_CONTRACT",
           "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
         }
       ],
       "env": {
@@ -1915,6 +1919,10 @@
         },
         {
           "env": "IKKOKU_STUDIO_POSE_CONTRACT",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
           "kind": "file"
         }
       ],
