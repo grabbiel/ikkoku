@@ -19,7 +19,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
 | A01 · SwiftUI shell, Maker/Studio switching and shared engine | Mid-stage | Both editors share one `EngineHost` and renderer. Mode changes activate one model and refresh its frame. There is no ActionGame/title/gameplay mode. | A-T01: add an actual game session host; retain editor isolation. |
-| A02 · Metal startup and asset discovery | Mid-stage | Explicit `IKKOKU_ASSETS`, bundle assets, then source-tree assets. Optional original male/female manifests and Maker library are separate private inputs. Explicit invalid source overrides fail instead of silently selecting another source. Development defaults depend on build-machine paths. Since 2026-10-23 (T-T02), each used source-tree default prints a `[ikkoku] source-tree fallback:` line, and `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables all three (assets root, Maker library, original bases); without it the defaults are unchanged. Compiled by CI only; no launch has exercised the switch. | A-T02: install/import workflow, portable paths and actionable missing-resource UI; test a moved release app. |
+| A02 · Metal startup and asset discovery | Mid-stage | Explicit `IKKOKU_ASSETS`, bundle assets, then source-tree assets. Optional original male/female manifests and Maker library are separate private inputs. Explicit invalid source overrides fail instead of silently selecting another source. Development defaults depend on build-machine paths. Since 2026-10-23 (T-T02), each used source-tree default prints a `[ikkoku] source-tree fallback:` line, and `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables all three (assets root, Maker library, original bases); without it the defaults are unchanged. Compiled by CI only; no launch has exercised the switch. Since 2026-10-23 (A-T02 first slice), File → Choose Converted Library… saves a versioned `ResourceLibraryLocation`. It identifies each library by its manifest's SHA-256 and format version, and the Maker library and base lookups read it after their explicit variables and before those fallbacks. Saved Studio scenes record a resource binding. On load, a reference into a moved library relocates only to the file with the recorded digest, inside the library with the recorded content and under R5 containment. Every other reference is reported unresolved by identity, and its object is not loaded ([contract](../reference/native-assets.md#library-location-and-relocation-a-t02)). Synthetic Engine tests cover the resolver; the app path is compiled by CI only. | A-T02 (partial): run the moved-library acceptance in the [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout) on a Release app outside the checkout. Still missing: a first-run conversion flow, selection of the source-scene conversion inputs that still come from environment variables, and checks for native card catalog IDs and plugin paths. |
 | A03 · Viewport display and input | Mid-stage | `CAMetalDisplayLink` drives drawable presentation; Retina pixel conversion, orbit/pan/zoom, trackpad magnification, mouse and key delegation exist. Simulation uses editor timers, not this presentation timestamp. | A-T03: instrument displayed frames and simulation cadence together; validate resize, focus loss, mode switching and more than one window. |
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
 | A05 · Source Maker → Studio transfer | Pending | `Send to Studio` is explicitly disabled while a source rig is active. The enabled command sends the bundled `CharacterCard`. Original cards can instead enter through source scene preview. | Preserve edited source card bytes, selection, outfit, resolver GUIDs and source rig references when adding a source character; compare Maker and Studio posed appearance. |
@@ -37,11 +37,51 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   player/NPC state, period, active map and ADV barriers. Accept when a controlled
   non-media event can run from period selection to completion through the app,
   persist, reload and resume without caller-injected fake completion effects.
-- **A-T02 — Portable resource installation (P1).** Replace reliance on `#filePath`
+- **A-T02 — Portable resource installation (P1, partial; first slice 2026-10-23,
+  app acceptance pending).** Replace reliance on `#filePath`
   development defaults with a user-selected, versioned conversion library and
   relocation resolver. Accept when a release app launched outside this checkout
   opens a saved scene after relocating its library, or reports each unresolved
   identity without substituting another asset.
+  The first slice is engine-first. In the Assets module, a `ResourceLibraryRecord`
+  names a library by kind, root, manifest path, manifest SHA-256 and the
+  manifest's format version. The kinds are the asset catalog, the Maker library
+  and the female and male bases. `ResourceLibraryLocation` (version 1) is the
+  persisted selection and the set of libraries in effect.
+  `ResourceBinding`, saved in a Studio document as `resourceBinding`, records the
+  SHA-256 of each referenced file. When the file lay inside a library, it also
+  records that library's realpath root and the file's relative path.
+  `ResourceRelocation.resolve` reports each reference as resolved, relocated or
+  unresolved, with a named failure. A file resolves only inside the one library
+  in effect that has the recorded content, under R5's realpath containment, and
+  only when its bytes have the recorded digest. Otherwise it is checked in place
+  against the same digest. A changed, missing, escaping or ambiguous file is
+  never replaced, and a re-save keeps its saved identity.
+  `StudioResourceReferences.swift` maps the document's paths onto it: scene,
+  voice catalog, `assetFile`, catalog `itemID` and every source character path.
+  In the app, File → Choose/Forget Converted Library writes the selection to user
+  defaults, and `EngineHost` reads it before the source-tree fallbacks. Saving
+  records the binding. Opening a scene relocates its references and blocks
+  objects with unresolved ones from rendering, previews, item captures and voice
+  playback. The unresolved references are listed in the status line, under
+  Source compatibility details and in `[ikkoku]` lines. Import Scene refuses
+  unresolved objects. No new `IKKOKU_*` variable.
+  `ResourceRelocationTests` (8 Swift Testing cases) build synthetic libraries in a
+  temp directory, save and reload a scene card, and move the library. They check
+  that every reference relocates with matching digests and that a re-save
+  records the new root. Edited and replaced files must be reported and not used,
+  and must keep their saved identity on re-save. Missing files and unselected
+  libraries must be reported with their recorded SHA-256 and library. Symlinks
+  out of the root, crafted `..` paths and escaping catalog entries must be
+  rejected. Further cases cover ambiguous roots, format versions and documents
+  saved before A-T02. Neither the Engine nor the app was compiled locally (no
+  Swift toolchain in the authoring container). CI is the first compile and the
+  only test run. Still open: the moved-library launch in the
+  [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout),
+  relocation for documents saved before A-T02 (they lack library roots), the
+  source-scene import's environment-variable conversion inputs, native card
+  catalog IDs, plugin paths and derived sibling files. See the
+  [contract](../reference/native-assets.md#library-location-and-relocation-a-t02).
 - **A-T03 — App lifecycle and scheduling (P2).** Define one owner for active
   simulation and display scheduling, cancel timers/observers on teardown, and
   specify multiwindow behavior. Accept with mode/focus/resize/window-close tests
