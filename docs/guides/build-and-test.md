@@ -143,7 +143,10 @@ python3 Tools/verification/inspect_app_bundle.py \
 
 The app target copies its `Assets/` folder as a file-system synchronized
 group. Untracked or git-ignored files there, such as regenerated `.gltf`/`.bin`
-intermediates, are copied too. The
+intermediates, are copied too. Until 2026-10-23 the target also listed
+`Packages/`, which copied the whole Engine package, tests and fixtures
+included, into `Contents/Resources/Engine/`. Any folder added to the app
+target's synchronized groups ships its non-source files as resources. The
 [inspector](../../Tools/verification/README.md#release-bundle-inspector-t-t02)
 fails on any file that is neither a declared build product nor a tracked
 asset, so build releases from a clean tree. It also requires the metallib, the

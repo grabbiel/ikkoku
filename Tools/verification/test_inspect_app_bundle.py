@@ -353,6 +353,19 @@ class ForbiddenContentTests(InspectorTestCase):
     def test_mz_without_pe_signature_is_not_an_assembly(self):
         self.assertFalse(iab.is_pe(b"MZ" + b"\0" * 100))
 
+    def test_engine_package_sources_are_named(self):
+        # The leak the first CI Release build found: Packages/ copied as a resource folder.
+        for rel in ("Contents/Resources/Engine/Package.swift",
+                    "Contents/Resources/Engine/Sources/ShaderTypes/include/ShaderTypes.h",
+                    "Contents/Resources/Engine/Sources/ShaderTypes/shim.c"):
+            self.fixture.bundle(rel, b"// source")
+        fixture = "Contents/Resources/Engine/Tests/EngineTests/Fixtures/route-reference.json"
+        self.fixture.bundle(fixture, b"{}")
+        report = self.fixture.inspect()
+        self.assertEqual(len(self.findings(report, "source-code")), 3)
+        self.assertEqual(len(self.findings(report, "unexpected-file")), 4)
+        self.assertFinding(report, "unexpected-file", fixture)
+
     def test_recovered_source_and_archives(self):
         for rel, rule in (("Contents/Resources/ChaControl.cs", "recovered-source"),
                           ("Contents/Resources/Toon.shader", "recovered-source"),
@@ -472,6 +485,17 @@ class RepositoryConsistencyTests(unittest.TestCase):
 
     def test_excluded_assets_match_the_membership_exceptions(self):
         self.assertEqual(self.block(self.project(), "membershipExceptions"), sorted(RULES["assets"]["excluded"]))
+
+    def test_app_target_synchronizes_only_apps_and_assets(self):
+        # A synchronized group copies every non-source file as a resource: listing
+        # Packages/ shipped the whole Engine package (sources, tests, fixtures).
+        target = re.search(r"/\* IkkokuCreator \*/ = \{\s*isa = PBXNativeTarget;(.*?)\n\t\t\};",
+                           self.project(), re.S)
+        self.assertIsNotNone(target)
+        listing = re.search(r"fileSystemSynchronizedGroups = \((.*?)\);", target.group(1), re.S)
+        self.assertIsNotNone(listing)
+        self.assertEqual(sorted(re.findall(r"/\* (\w+) \*/", listing.group(1))), ["Apps", "Assets"])
+        self.assertEqual(RULES["assets"]["source"], "Assets")
 
     def test_metallib_is_a_copied_resource(self):
         self.assertIn("IkkokuShaders.metallib in Resources", self.project())

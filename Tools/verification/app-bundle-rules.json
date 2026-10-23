@@ -84,6 +84,11 @@
       "why": "Directory names of the original installation, its mods and the .local/reverse recovery tree."
     },
     {
+      "id": "source-code",
+      "extensions": [".swift", ".c", ".h", ".m", ".mm", ".metal", ".py", ".sh"],
+      "why": "Repository source, including the Engine package's tests and their fixtures, is compiled or used by tools, never read from the bundle. The first CI Release build (2026-10-23) found all 247 Packages/ files under Contents/Resources/Engine/ because the app target listed Packages/ as a synchronized group."
+    },
+    {
       "id": "recovered-source",
       "extensions": [".cs", ".il", ".csproj", ".sln", ".shader", ".cginc"],
       "why": "Recovered or decompiled C#/IL and original Unity shader source belong to isolated analysis tooling."
