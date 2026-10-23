@@ -20,6 +20,7 @@ percentage or general mod compatibility is claimed.
 | Scan/mount a local mod library | [Mod library guide](guides/mod-library.md) |
 | Locate code and understand data boundaries | [Architecture](architecture.md) |
 | Resume implementation | [Audit and prioritized backlog](component-audit/README.md) |
+| Continue the latest local work in Claude | [2026-10-23 Renderer / Maker / model handoff](../HANDOFF-2026-10-23-renderer-maker-models.md) |
 | Recover/convert original data | [Source pipeline runbook](../Tools/reverse/README.md) |
 | Regenerate bundled prototype assets | [Bundled asset runbook](../Tools/assets/README.md) |
 | Run or extend reproducible verification lanes | [Verification lane runner](../Tools/verification/README.md) |

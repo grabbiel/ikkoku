@@ -1,5 +1,11 @@
 # Handoff: local-environment verification (2026-10-23)
 
+**Latest continuation:** read the
+[Renderer, Character Maker and base-model handoff](HANDOFF-2026-10-23-renderer-maker-models.md)
+for merged PRs #139–#141, current `main`, final local evidence and next work.
+The initial state and task sequence below are historical; later sections record
+the subsequent local verification and PR #135 integration.
+
 For an agent or developer working in a local checkout on the reference Mac: Xcode
 26, the private `.local/` data and the Parallels VM. A cloud session wrote this
 file after merging PRs #104–#110 and #112–#124. That session had no Swift
