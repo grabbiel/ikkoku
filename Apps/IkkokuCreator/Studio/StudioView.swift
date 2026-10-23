@@ -428,7 +428,7 @@ struct PoseInspector: View {
                                     if t.enabled { Button("Select") { model.selectedIK = chain; model.poseMode = .ik }.controlSize(.small) }
                                 }
                                 if t.enabled {
-                                    VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.update(o.id) { $0.ikTargets[chain]?.position = v } }), step: 0.02, format: "%.3f")
+                                    VectorRow(label: "Target", value: Binding(get: { t.position }, set: { v in model.setIKTarget(o.id, chain, position: v) }), step: 0.02, format: "%.3f")
                                 }
                             }
                         }

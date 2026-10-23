@@ -1648,6 +1648,73 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-ik",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-ik.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-ik.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R4 (#115, #110) native IK through the Pose tab's own methods (StudioModel.addCharacter, enableIK, setIKTarget), read from the rendered instance (currentPose, ikFailures): a native female's Left hand IK reaches its target within 1 mm; a +0.02 then -0.02 Stepper round trip on X reproduces the solved arm within 1e-6 (quaternion components and joint metres; the Float32 round trip may move the target by one ulp), while the +0.02 pose is rejected against it; X = 1e20 leaves the chain unsolved with the status 'Left hand IK left unsolved: ' and the arm at its pre-IK pose within 1e-6; X = 0.3 solves again within 1 mm. Saves the native document card; the next check loads it.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-ik.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-ik.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-ik",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-ik.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-ik.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE: the native female's Left hand IK is on with target X 0.3 and solves to within 1 mm of it, with no unsolved status; turning IK off leaves the hand away from the target (rejected within 1 mm) and undo restores the reach.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-ik.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

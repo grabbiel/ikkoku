@@ -2567,6 +2567,13 @@ final class StudioModel: ViewportInputHandler {
         if on { selectedIK = chain } else if selectedIK == chain { selectedIK = nil }
     }
 
+    /// The Pose tab's IK "Target" row (R4): moves an enabled chain's target, in the
+    /// character's root space; a chain without a target is left alone. The
+    /// Studio scenario's `setIKTarget` calls this same setter.
+    func setIKTarget(_ id: UUID, _ chain: IKChain, position: Float3) {
+        update(id) { $0.ikTargets[chain]?.position = position }
+    }
+
     func resetPose() { updateSelected { $0.poseDelta = PoseDelta(); $0.ikTargets = [:]; $0.animationPreset = nil } }
 
     func boneRotation(_ name: String) -> Float3 { selectedObject?.poseDelta.rotations[name] ?? .zero }

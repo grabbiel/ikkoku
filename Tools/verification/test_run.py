@@ -634,7 +634,10 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink",
+                "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected"}
+
+IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "resetShapes", "export", "reimport", "assert"}
@@ -797,7 +800,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 45)
+        self.assertEqual(len(self.checks), 47)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -912,6 +915,23 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIsInstance(step["key"], int)
                     self.assertTrue(step["name"],
                                     "a captured object needs a label to compare against: %s" % path)
+                if op == "addCharacter":
+                    self.assertIn(step["sex"], ("female", "male"))
+                if op in ("setIKEnabled", "setIKTarget", "captureIKPose"):
+                    self.assertTrue(step["character"], "native IK ops name the character: %s" % path)
+                    self.assertIn(step["chain"], IK_CHAINS)
+                if op == "setIKEnabled":
+                    self.assertIsInstance(step["on"], bool)
+                if op == "setIKTarget":
+                    self.assertIn(step["axis"], ("x", "y", "z"))
+                    self.assertEqual(("delta" in step) + ("value" in step), 1,
+                                     "a target edit is one Stepper click (delta) or one typed value: %s" % path)
+                    for name in ("delta", "value"):
+                        if name in step:
+                            self.assertIsInstance(step[name], float)
+                if op == "captureIKPose":
+                    self.assertTrue(step["name"],
+                                    "a captured IK pose needs a label to compare against: %s" % path)
                 if op in ("export", "reimport", "saveDocument", "loadDocument"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
@@ -921,7 +941,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "statusContains", "view", "render",
-                                            "exportIdenticalToSource", "outfit", "clothes") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes", "ik") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -985,6 +1005,16 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     for slot in ("face", "body"):
                         if slot in step:
                             self.assertIsInstance(step[slot]["index"], int)
+                    if "ik" in step:
+                        ik = step["ik"]
+                        self.assertTrue(ik["character"])
+                        self.assertIn(ik["chain"], IK_CHAINS)
+                        self.assertTrue({"enabled", "target", "solved", "reachesTarget", "from"} & set(ik),
+                                        "an ik assert must name what it checks: %s" % path)
+                        if "within" in ik:
+                            self.assertIn("from", ik, "within bounds a compare against a captureIKPose label")
+                        if "target" in ik:
+                            self.assertEqual(len(ik["target"]), 3)
 
     def test_every_scenario_round_trips_through_export_and_reimport(self):
         for check in self.checks:
@@ -1010,7 +1040,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "ik")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]

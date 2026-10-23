@@ -23,7 +23,8 @@ struct StudioScenario: Decodable {
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
-        /// `"setAutomaticBlink"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
+        /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
+        /// `"captureIKPose"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         let visible: Bool?
@@ -142,6 +143,43 @@ struct StudioScenario: Decodable {
         /// assert only: the named character's live wear readback (rendered
         /// preview and document); only the fields present are compared.
         let clothes: ClothesValue?
+        /// addCharacter: the Add ▸ Character choice, `"female"` or `"male"`.
+        let sex: String?
+        /// setIKEnabled / setIKTarget / captureIKPose: the NATIVE character's
+        /// object name. A character the scenario added has no source key; a
+        /// name that is not exactly one native character fails the step.
+        let character: String?
+        /// setIKEnabled / setIKTarget / captureIKPose: the `IKChain` raw value
+        /// ("hand_L", "hand_R", "foot_L", "foot_R").
+        let chain: String?
+        /// setIKTarget: one click of the Target row's Stepper on `axis`
+        /// (`advanced(by:)`; the row's step is 0.02). `value` instead types
+        /// the component into the row's text field.
+        let delta: Float?
+        /// assert only: one native IK chain, read from the rendered character.
+        let ik: IKValue?
+
+        struct IKValue: Decodable {
+            let character: String
+            let chain: String
+            /// the document target's enabled flag (the Pose tab's toggle).
+            let enabled: Bool?
+            /// the document target the Target row shows (root space); a null
+            /// component is not asserted. Compared within `tolerance`.
+            let target: [Float?]?
+            /// whether the frame builder's check (`CharacterInstance.ikFailures()`)
+            /// solves the chain: false is the "IK left unsolved" case.
+            let solved: Bool?
+            /// the chain end's root-space distance to the document target must
+            /// be at most this many metres.
+            let reachesTarget: Float?
+            /// a `captureIKPose` label. By default the chain must have moved
+            /// beyond `tolerance`; with `within`, both the largest quaternion
+            /// component difference of the three chain bones and the largest
+            /// joint displacement (metres) must be at most `within`.
+            let from: String?
+            let within: Float?
+        }
 
         struct ClothesValue: Decodable {
             let key: Int32
@@ -279,7 +317,8 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
-                 render, exportIdenticalToSource, errorContains, outfit, state, clothes
+                 render, exportIdenticalToSource, errorContains, outfit, state, clothes,
+                 sex, character, chain, delta, ik
         }
 
         init(from decoder: Decoder) throws {
@@ -343,6 +382,13 @@ struct StudioScenario: Decodable {
             outfit = try c.decodeIfPresent(OutfitValue.self, forKey: .outfit)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
+            // Native IK parameters: absent keys stay `nil` like every optional
+            // above, and the op that needs one reports it missing.
+            sex = try c.decodeIfPresent(String.self, forKey: .sex)
+            character = try c.decodeIfPresent(String.self, forKey: .character)
+            chain = try c.decodeIfPresent(String.self, forKey: .chain)
+            delta = try c.decodeIfPresent(Float.self, forKey: .delta)
+            ik = try c.decodeIfPresent(IKValue.self, forKey: .ik)
             // setPoseMode / selectBone / dragGizmo parameters: like every
             // optional key above, an absent one stays `nil` and the op that
             // needs it reports the missing field itself.
@@ -381,6 +427,13 @@ struct StudioScenario: Decodable {
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             return try encoder.encode(self)
         }
+    }
+
+    /// One native IK chain as rendered: the local rotations of its upper,
+    /// lower and end bones and their root-space joint positions.
+    struct IKPoseCapture {
+        let rotations: [simd_quatf]
+        let joints: [Float3]
     }
 
     /// Numeric compares (shape rates, color components) match within this bound.
@@ -468,6 +521,8 @@ struct StudioScenario: Decodable {
         }
         /// Positions recorded by `captureBone` steps, keyed by step name.
         var capturedBonePositions: [String: Float3] = [:]
+        /// Native IK chain poses recorded by `captureIKPose` steps, keyed by label.
+        var capturedIKPoses: [String: IKPoseCapture] = [:]
         /// World positions recorded by `captureObject` steps, keyed by step name.
         var capturedObjectPositions: [String: Float3] = [:]
         /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
@@ -628,6 +683,113 @@ struct StudioScenario: Decodable {
             let pose = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: studio.sourceAnimationTime)
             let evaluated = try rig.evaluate(pose)
             return evaluated.worldMatrices[target.node].translation
+        }
+        /// The one native (non-source) character named `name`: a character the
+        /// scenario added (Add ▸ Character) has no source key to address it by.
+        func nativeCharacter(_ name: String?) throws -> UUID {
+            guard let name else { throw RigError.invalid("character (the native character's name) is required") }
+            let matches = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter == nil && $0.name == name }
+            guard matches.count == 1 else {
+                throw RigError.invalid("\(matches.count) native characters are named \"\(name)\", expected exactly one")
+            }
+            return matches[0].id
+        }
+        func ikChain(_ raw: String?) throws -> IKChain {
+            guard let raw, let chain = IKChain(rawValue: raw) else {
+                throw RigError.invalid("chain must be one of \(IKChain.allCases.map(\.rawValue)), got \(raw ?? "nothing")")
+            }
+            return chain
+        }
+        /// The chain as the preview draws it. The Pose tab works on the
+        /// selection, so the character is selected first; the pose is
+        /// `CharacterInstance.currentPose()` of the app's own instance — the
+        /// pose `build` renders — after `refresh()` handed it the document's
+        /// targets, and the failures are the frame builder's `ikFailures()`.
+        func renderedIKPose(_ id: UUID, _ chain: IKChain) throws -> (pose: IKPoseCapture, failures: [IKChain: MathContractError]) {
+            studio.selection = id
+            guard let instance = studio.selectedInstance, let skeleton = instance.skeleton else {
+                throw RigError.invalid("the character has no rendered instance with a skeleton")
+            }
+            let names = [chain.bones.upper, chain.bones.lower, chain.bones.end]
+            let indices = names.compactMap { skeleton[$0] }
+            guard indices.count == 3 else { throw RigError.invalid("the skeleton lacks one of \(names)") }
+            let pose = instance.currentPose()
+            let world = pose.worldMatrices(skeleton: skeleton)
+            return (IKPoseCapture(rotations: indices.map { pose.rotations[$0] }, joints: indices.map { world[$0].translation }),
+                    instance.ikFailures())
+        }
+        /// Largest quaternion component difference (q and -q are one rotation)
+        /// and largest joint displacement between two chain poses, and whether
+        /// every number is bit-identical.
+        func ikDifference(_ a: IKPoseCapture, _ b: IKPoseCapture) -> (rotation: Float, joint: Float, identical: Bool) {
+            var rotation: Float = 0, joint: Float = 0
+            for (p, q) in zip(a.rotations, b.rotations) {
+                rotation = max(rotation, min(simd_reduce_max(simd_abs(p.vector - q.vector)), simd_reduce_max(simd_abs(p.vector + q.vector))))
+            }
+            for (p, q) in zip(a.joints, b.joints) { joint = max(joint, simd_length(p - q)) }
+            let identical = zip(a.rotations, b.rotations).allSatisfy { $0.vector == $1.vector }
+                && zip(a.joints, b.joints).allSatisfy { $0 == $1 }
+            return (rotation, joint, identical)
+        }
+        func describe(_ v: Float3) -> String { "(\(v.x), \(v.y), \(v.z))" }
+        /// The native IK readback: the document target the Pose tab shows,
+        /// and the rendered chain (`renderedIKPose`) against a capture.
+        func assertIK(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.ik else { return nil }
+            let id: UUID, chain: IKChain
+            do { id = try nativeCharacter(check.character); chain = try ikChain(check.chain) }
+            catch { return "assert ik: \(error)" }
+            let target = studio.doc.object(id)?.ikTargets[chain]
+            if let expected = check.enabled, (target?.enabled ?? false) != expected {
+                return "assert ik: \(chain.label) IK is \((target?.enabled ?? false) ? "on" : "off"), expected \(expected ? "on" : "off")"
+            }
+            if let expected = check.target {
+                guard expected.count == 3, let position = target?.position else {
+                    return "assert ik: target needs three components (null skips one) and the chain needs a target"
+                }
+                for (axis, value) in expected.enumerated() {
+                    if let value, !floatEqual(position[axis], value) {
+                        return "assert ik: target \(describe(position)) differs from \(expected) on axis \(axis)"
+                    }
+                }
+            }
+            let rendered: (pose: IKPoseCapture, failures: [IKChain: MathContractError])
+            do { rendered = try renderedIKPose(id, chain) } catch { return "assert ik: \(error)" }
+            let end = rendered.pose.joints[2]
+            var line = "\(chain.label): end \(describe(end))"
+            if let position = target?.position { line += ", target \(describe(position)), distance \(simd_length(end - position))" }
+            line += rendered.failures[chain].map { ", unsolved: \($0)" } ?? ", solved"
+            if let expected = check.solved, (rendered.failures[chain] == nil) != expected {
+                details.append(line)
+                return expected ? "assert ik: \(chain.label) IK left unsolved: \(rendered.failures[chain]!)"
+                                : "assert ik: \(chain.label) IK solved, expected it unsolved"
+            }
+            if let bound = check.reachesTarget {
+                guard let position = target?.position else { return "assert ik: \(chain.label) has no target to reach" }
+                let distance = simd_length(end - position)
+                guard distance <= bound else {
+                    details.append(line)
+                    return "assert ik: \(chain.label) end sits \(distance) m from its target, expected at most \(bound)"
+                }
+            }
+            if let label = check.from {
+                guard let base = capturedIKPoses[label] else { return "assert ik: no captureIKPose recorded under \"\(label)\"" }
+                let difference = ikDifference(base, rendered.pose)
+                line += "; against \"\(label)\": rotation \(difference.rotation), joints \(difference.joint) m, bit-identical \(difference.identical)"
+                if let bound = check.within {
+                    guard difference.rotation <= bound, difference.joint <= bound else {
+                        details.append(line)
+                        return "assert ik: \(chain.label) differs from \"\(label)\" by rotation \(difference.rotation), joints \(difference.joint) m, expected within \(bound)"
+                    }
+                } else {
+                    guard difference.rotation > tolerance || difference.joint > tolerance else {
+                        details.append(line)
+                        return "assert ik: \(chain.label) moved only rotation \(difference.rotation), joints \(difference.joint) m from \"\(label)\""
+                    }
+                }
+            }
+            details.append(line)
+            return nil
         }
         /// FK edits are exported as the document's own degree values, so the
         /// live check compares the numbers the scenario wrote; the world
@@ -1245,6 +1407,60 @@ struct StudioScenario: Decodable {
                     record(step, false, "dragGizmo: the drag left no FK rotation on bone \(boneID) — mouseDragged never reached setSourceFKRotation"); continue
                 }
                 record(step, true, "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees")
+            case "addCharacter":
+                // The Studio toolbar's Add ▸ Character ▸ Female/Male button.
+                guard let sex = ["female": Sex.female, "male": Sex.male][step.sex ?? ""] else {
+                    record(step, false, "addCharacter: sex must be \"female\" or \"male\""); continue
+                }
+                let before = Set(studio.doc.objects.map(\.id))
+                studio.addCharacter(sex: sex)
+                guard let added = studio.doc.objects.first(where: { !before.contains($0.id) }), added.kind == .character,
+                      added.sourceCharacter == nil, studio.selection == added.id else {
+                    record(step, false, "addCharacter: no new selected native character: \(studio.status)"); continue
+                }
+                record(step, true, "added native \(step.sex!) character \"\(added.name)\": \(studio.status)")
+            case "setIKEnabled":
+                do {
+                    let id = try nativeCharacter(step.character), chain = try ikChain(step.chain)
+                    guard let on = step.on else { record(step, false, "setIKEnabled: on is required"); continue }
+                    // The Pose tab's IK row toggle works on the selection.
+                    studio.selection = id
+                    studio.enableIK(chain, on: on)
+                    guard let target = studio.doc.object(id)?.ikTargets[chain], target.enabled == on else {
+                        record(step, false, "setIKEnabled: \(chain.label) IK did not turn \(on ? "on" : "off")"); continue
+                    }
+                    record(step, true, "\(chain.label) IK \(on ? "on" : "off"), target \(describe(target.position)); status \"\(studio.status)\"")
+                } catch { record(step, false, "setIKEnabled: \(error)") }
+            case "setIKTarget":
+                do {
+                    let id = try nativeCharacter(step.character), chain = try ikChain(step.chain)
+                    guard let axis = ["x": 0, "y": 1, "z": 2][step.axis ?? ""], (step.delta == nil) != (step.value == nil) else {
+                        record(step, false, "setIKTarget: axis (\"x\", \"y\" or \"z\") and exactly one of delta or value are required"); continue
+                    }
+                    // The Target row is shown only for an enabled chain.
+                    guard let target = studio.doc.object(id)?.ikTargets[chain], target.enabled else {
+                        record(step, false, "setIKTarget: \(chain.label) IK is off; run setIKEnabled first"); continue
+                    }
+                    var position = target.position
+                    if let delta = step.delta { position[axis] = position[axis].advanced(by: delta) }
+                    else { position[axis] = step.value! }
+                    studio.selection = id
+                    studio.setIKTarget(id, chain, position: position)
+                    let now = studio.doc.object(id)?.ikTargets[chain]?.position ?? .zero
+                    record(step, true, "\(chain.label) target \(describe(target.position)) → \(describe(now)); status \"\(studio.status)\"")
+                } catch { record(step, false, "setIKTarget: \(error)") }
+            case "captureIKPose":
+                do {
+                    let id = try nativeCharacter(step.character), chain = try ikChain(step.chain)
+                    guard let label = step.name, !label.isEmpty else {
+                        record(step, false, "captureIKPose: name (the capture label) is required"); continue
+                    }
+                    let rendered = try renderedIKPose(id, chain)
+                    capturedIKPoses[label] = rendered.pose
+                    let joints = rendered.pose.joints.map(describe).joined(separator: ", ")
+                    let rotations = rendered.pose.rotations.map { "(\($0.vector.x), \($0.vector.y), \($0.vector.z), \($0.vector.w))" }.joined(separator: ", ")
+                    record(step, true, "captured \(chain.label) as \"\(label)\": joints \(joints); rotations \(rotations); \(rendered.failures[chain].map { "unsolved: \($0)" } ?? "no IK failure")")
+                } catch { record(step, false, "captureIKPose: \(error)") }
             case "captureBone":
                 guard let id = object(step) else { record(step, false, "captureBone: no object with source key \(step.key ?? -1)"); continue }
                 guard let boneID = step.bone, let label = step.name, !label.isEmpty else {
@@ -1459,6 +1675,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
                 if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
+                if let problem = assertIK(step, details: &details) { problems.append(problem) }
                 if let needle = step.diagnosticContains {
                     let diagnostics = studio.doc.sourcePreviewDiagnostics ?? []
                     if !diagnostics.contains(where: { $0.contains(needle) }) {

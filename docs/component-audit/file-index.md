@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**837 files indexed; 837 assigned; 0 unassigned.**
+**839 files indexed; 839 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 180 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 304 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 150 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 152 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 176 |
+| Conversion / recovery / verification tool | 178 |
 | Documentation / historical evidence | 54 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
@@ -847,11 +847,13 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/outfit-select.json](../../Tools/verification/scenarios/outfit-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-clothes.json](../../Tools/verification/scenarios/reload-load-clothes.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-ik.json](../../Tools/verification/scenarios/reload-load-ik.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-outfit.json](../../Tools/verification/scenarios/reload-load-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-props.json](../../Tools/verification/scenarios/reload-load-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-route.json](../../Tools/verification/scenarios/reload-load-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-camera.json](../../Tools/verification/scenarios/reload-save-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-clothes.json](../../Tools/verification/scenarios/reload-save-clothes.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-ik.json](../../Tools/verification/scenarios/reload-save-ik.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-outfit.json](../../Tools/verification/scenarios/reload-save-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-props.json](../../Tools/verification/scenarios/reload-save-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
