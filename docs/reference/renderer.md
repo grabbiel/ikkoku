@@ -354,6 +354,104 @@ pre-skin values because a unique transformed normal is unavailable. Position and
 usable tangent transforms still apply, allowing intentional zero-scale geometry;
 nonfinite transformed positions retain their pre-skin position.
 
+### Renderer limits and resource lifetime (R6, first slice)
+
+**Uniform ring.** `FrameRing` keeps three 8 MiB regions in one shared buffer.
+It no longer calls `precondition` when a region fills. An allocation that does
+not fit goes to an overflow buffer of at least one region size (larger for
+larger requests). Every allocation returns its own buffer and offset
+(`FrameAllocation`), and the renderer binds that pair. The ring tracks each
+region as in flight from `endFrame(retainedUntilCompletionOf:)` until that
+command buffer's completion handler runs. A frame never writes into a region
+still in flight. If its preferred region (`frameIndex % 3`) is busy, it takes
+another free region; if every region is busy, the whole frame goes into
+overflow buffers. This holds in any commit order. Before this change, the
+region was chosen by frame index alone, and interactive draws commit outside
+the render lock. A capture or pick completing in between could therefore let a
+new frame reuse the region of an older frame that had not completed. Overflow
+buffers go back to a pool of at most six only after completion (or at once
+when a frame is abandoned unsubmitted). Steady large scenes therefore reuse
+them instead of allocating every frame. When the device refuses an overflow
+buffer, the ring throws `FrameRingError.allocationFailed(bytes:)` and never
+terminates. All ring allocations now happen while the frame is being prepared,
+before any encoder exists. This includes the background frame uniforms and
+gizmo vertices and draw uniforms, which were previously allocated mid-pass. A
+failed allocation therefore leaves the command buffer empty. Interactive
+`draw` skips the frame and keeps the previously presented image; `pick`
+returns 0; `capture` returns nil; `benchmark` throws
+`RenderBenchmarkError.frame`. The reason appears in `Renderer.lastFrameError`
+as `RenderFrameError.uniformAllocation`. Command-buffer, render-target and
+pick-readback allocation failures are reported there too; the pick readback
+buffer is no longer force-unwrapped.
+
+**Frame statistics.** `Renderer.lastFrameStatistics` describes the most
+recently prepared frame: the last draw, pick, capture or benchmark sample.
+It reports enabled and shaded lights, `droppedLights`, deform dispatches,
+active morph entries, the largest morph set, and the frame's ring region,
+region bytes, overflow bytes and overflow buffer count.
+
+**Lights.** Selection is unchanged: the first `IK_MAX_LIGHTS` (8) enabled
+`RenderFrame.lights`, in list order, are shaded. Enabled lights beyond that are
+no longer silent. They are counted in `lastFrameStatistics.droppedLights`.
+
+**Active morphs.** The `prefix(IK_MAX_ACTIVE_MORPHS)` truncation is removed.
+`deform_vertices` already loops over `activeMorphCount` entries read from an
+unbounded device buffer, so one dispatch accumulates every meaningful target.
+A meaningful target has an index inside the mesh's targets and a finite weight
+whose magnitude exceeds 1e-4. The kernel, `ShaderTypes.h` and every struct
+layout are unchanged. For 64 or fewer entries, the entry list, its order and
+the per-vertex summation order are the same as before, so output does not
+change. GPU cost grows linearly with the entry count. Source expressions still
+reject sets above 64 in `SourceRigPreview.expressionWeights`; that is now a
+stricter source-path validation, not a renderer capacity.
+
+**Resource store.** `deformBuffer(for:vertexCount:)` returns nil instead of
+force-unwrapping a refused allocation. The renderer records that as a
+deformation error, so interactive draws skip the item and captures fail. Mesh
+registration now throws `ResourceError.bufferAllocation` when the
+vertex-color, morph-delta or morph-normal buffer is refused. Before, a missing
+morph-delta buffer left the kernel indexing the 256-byte dummy buffer.
+`setHiddenBuffer` always uploads a new buffer, so a frame already submitted
+keeps the mask it was encoded with. It returns false and drops the old mask
+when Metal refuses the buffer. `releaseHiddenBuffers(keys:)` mirrors
+`releaseDeformBuffers(keys:)`. `CharacterInstance` still releases neither when
+a character is removed.
+
+**Tests.** `RendererLimitsTests.swift` builds the production pipelines from
+`Shaders/` with `Renderer(gpu:shaderLibrary:)`, because the test bundle has no
+metallib:
+
+- `frameRingSpillsPastItsRegionWithIntactDataAndTypedErrors` covers overflow
+  placement, data read-back and the typed errors.
+- `frameRingNeverReusesARegionStillInFlight` holds regions with uncommitted
+  command buffers.
+- `frameRingRecyclesOverflowBuffersOnlyAfterCompletion` runs 24 frames that
+  use one overflow buffer.
+- `lightPackingKeepsTheFirstEightEnabledLightsAndCountsTheRest` and
+  `activeMorphEntriesKeepEveryMeaningfulTargetInCallerOrder` check selection
+  without a GPU.
+- `rendererCaptureCrossesTheUniformRegionAndReportsItsLimits` runs a real
+  32×32 capture that includes a 9.6 MB gizmo batch. Only its last triangle
+  covers the view, in red, and the test asserts the red center pixel. The same
+  capture has 12 lights (2 disabled, so 2 dropped) and a 100-target morph. Its
+  deformation buffer is read back and compared with a CPU sum to 1e-4; the
+  64-target truncation differs by more than 1e-2.
+- `resourceStoreAddRemoveCyclesKeepResourceCountsBounded` runs 40
+  mesh/texture/deform/hidden add-remove cycles.
+
+Run them with
+`swift test --package-path Packages/Engine --filter 'frameRing|lightPacking|activeMorphEntries|rendererCapture|resourceStoreAddRemove'`.
+Swift was not compiled locally, so the CI Engine suite is the only test run.
+Nothing here was run in the app.
+
+Remaining R6 work:
+
+- An interactive draw, pick and capture stress run that submits concurrently.
+- Bounded counts across real character, scene and import/delete cycles.
+  `CharacterInstance` does not release its deform or hidden buffers.
+- Allocation-failure injection beyond the oversized overflow request.
+- App-level reporting of `lastFrameError`.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,
@@ -1220,8 +1318,11 @@ outfit and standard bone type; other animated states remain untested.
 ## Resource and measurement boundaries
 
 The live renderer supports four skin influences and a single morph frame per
-target. More than 64 active morphs can be silently truncated; the light budget is
-eight and the uniform ring preconditions on exceeding its 8 MiB region. glTF UV1/2
+target. Every meaningful active morph is accumulated (there is no 64-entry cap).
+The light budget is eight, and enabled lights beyond it are counted in
+`Renderer.lastFrameStatistics.droppedLights`. Uniforms beyond the ring's 8 MiB
+region go to overflow buffers; a refused buffer becomes `lastFrameError`
+([R6](#renderer-limits-and-resource-lifetime-r6-first-slice)). glTF UV1/2
 are decoded, but native materials sample imported glTF textures on UV0 and
 `LoadedAsset` rejects other selections. Initial morph weights are retained but not
 applied, and tangent morphs are ignored; the loader reports both. There is no
