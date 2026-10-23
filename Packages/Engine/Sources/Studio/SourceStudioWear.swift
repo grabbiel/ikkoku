@@ -49,6 +49,10 @@ public struct SourceStudioWear: Equatable, Sendable {
     /// garment, or a StateType outside 0...2).
     public let allowed: [Set<UInt8>?]
     public let notBot: Bool, notBra: Bool, notShorts: Bool, hideShortsBot: Bool
+    /// A sailor (Kind 1) or jacket (Kind 2) top: ChangeClothesTopParts loads
+    /// sub-parts whose NotBra rows can override notBra; they are not
+    /// converted, so the bra/shorts rules are unknown.
+    public let compositeTop: Bool
     /// Kinds whose rules could not be recovered from a converted row.
     public let unknownKinds: [Int]
 
@@ -92,6 +96,7 @@ public struct SourceStudioWear: Equatable, Sendable {
         notBra = info(0, "NotBra").flatMap { Int($0) } == 1
         // ChangeClothesBra: notShorts = Coordinate == "2".
         notShorts = info(2, "Coordinate") == "2"
+        compositeTop = ["1", "2"].contains(info(0, "Kind"))
         if case .row(let row) = catalog[1] {
             if let flag = row["HideShorts"] { hideShortsBot = flag == "1" } else { hideShortsBot = Self.hideShortsBottomIDs.contains(ids[1]) }
         } else if case .unknown = catalog[1], !modded[1] {
@@ -106,9 +111,10 @@ public struct SourceStudioWear: Equatable, Sendable {
         } else {
             allowed[0] = all; allowed[1] = all; unknown.formUnion([0, 1])
         }
-        // AddClothesStateKind(bra/shorts): notBra comes from the top's row,
-        // notShorts from the bra's, so all three rows must be known.
-        if known(0), known(2), known(3) {
+        // AddClothesStateKind(bra/shorts): notBra comes from the top's row
+        // (or its sub-parts), notShorts from the bra's, so all three rows must
+        // be known and the top must not be composite.
+        if known(0), known(2), known(3), !compositeTop {
             var b = 3, b2 = 3
             if !notBra { b = stateType(2) ?? 3 }
             if !notBra || !notShorts { b2 = stateType(3) ?? 3 }

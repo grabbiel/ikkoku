@@ -41,6 +41,10 @@ private let on = [UInt8](repeating: 0, count: 9)
     #expect(notBra.notBra && notBra.allowed[2] == nil && notBra.allowed[3] == [0, 1, 3])
     let notShorts = rules([0: row(0, ["NotBra": "1"]), 2: row(0, ["Coordinate": "2"]), 3: row(1)])
     #expect(notShorts.notShorts && notShorts.allowed[2] == nil && notShorts.allowed[3] == nil)
+    // A sailor/jacket composite top's sub-parts can override notBra.
+    let composite = rules([0: row(0, ["Kind": "1"])])
+    #expect(composite.compositeTop && composite.unknownKinds == [2, 3] && composite.allowed[2] == [0, 1, 2, 3])
+    #expect(!rules([0: row(0, ["Kind": "4"])]).compositeTop)
     // HideShorts: the row's flag, or the fallback bottom-ID list when the
     // column is absent ("0" from GetInfo is not "1").
     #expect(rules([1: row(0, ["HideShorts": "1"])]).hideShortsBot)

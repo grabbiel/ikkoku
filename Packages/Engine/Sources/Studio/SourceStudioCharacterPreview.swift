@@ -336,6 +336,9 @@ public final class SourceStudioCharacterPreview {
         if !unknownKinds.isEmpty {
             wearMessages.append("Clothes-state rules for \(names(unknownKinds)) are unknown (no converted catalog row): every state is selectable, the saved bytes are kept, and their one-piece links read false.")
         }
+        if wearRules.compositeTop {
+            wearMessages.append("The top is a sailor/jacket composite whose unconverted sub-parts (ChaControl.ChangeClothesTopParts) can set notBra, so the bra and shorts clothes-state rules are unknown: every state is selectable and the saved bytes are kept.")
+        }
         if wearLayout.clothingKinds.contains(8) {
             if savedWear.shoesType == 0 {
                 wearMessages.append("shoesType 0 shows the indoor shoes, which are not assembled; the outdoor shoe geometry stands in and follows the indoor shoes' state.")
