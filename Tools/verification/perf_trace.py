@@ -20,11 +20,19 @@ beyond reading the report's summary block.
 launches each workload under `xcrun xctrace record` instead, writing
 `<workload>.<template>.trace` next to the report. The app still writes its own
 report and exits; xctrace stops recording when it does.
+
+    python3 Tools/verification/perf_trace.py profile <workload>.time-profiler.trace [--thread "Main Thread"]
+
+aggregates a Time Profiler trace's samples between the app's `recordingBegin`
+and `recordingEnd` marks: time per binary, the heaviest functions by self
+time and by inclusive time.
 """
 
 import argparse
+import collections
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -185,6 +193,114 @@ def summarize(directories):
     return 0
 
 
+def export_table(trace, schema, extra=""):
+    xpath = '/trace-toc/run[@number="1"]/data/table[@schema="%s"%s]' % (schema, extra)
+    return subprocess.run(["xcrun", "xctrace", "export", "--input", trace, "--xpath", xpath],
+                          check=True, capture_output=True).stdout
+
+
+class Resolver:
+    """xctrace export writes each value once with an `id` and later as a `ref`."""
+
+    def __init__(self):
+        self.seen = {}
+
+    def __call__(self, element):
+        if "ref" in element.attrib:
+            return self.seen[element.attrib["ref"]]
+        if "id" in element.attrib:
+            self.seen[element.attrib["id"]] = element
+        for child in element:
+            self(child)
+        return element
+
+
+def xml_rows(data, resolve=None):
+    """Yields each exported row as a list of (tag, element) with refs resolved."""
+    import xml.etree.ElementTree as ElementTree
+    root = ElementTree.fromstring(data)
+    resolve = resolve or Resolver()
+    for row in root.iter("row"):
+        yield [(child.tag, resolve(child)) for child in row]
+
+
+def recording_window(trace):
+    """The app's recordingBegin/recordingEnd mark times (ns), when present."""
+    data = export_table(trace, "os-signpost", ' and @category="PointsOfInterest"')
+    begin = end = None
+    for row in xml_rows(data):
+        texts = " ".join(element.attrib.get("fmt", "") for _, element in row)
+        if "recordingBegin" in texts:
+            begin = int(row[0][1].text)
+        elif "recordingEnd" in texts:
+            end = int(row[0][1].text)
+    return begin, end
+
+
+def profile(args):
+    begin, end = (None, None) if args.whole else recording_window(args.trace)
+    data = export_table(args.trace, "time-profile")
+    stacks = {}
+    total = 0
+    by_thread = collections.Counter()
+    by_binary = collections.Counter()
+    self_time = collections.Counter()
+    inclusive = collections.Counter()
+    thread_pattern = re.compile(args.thread) if args.thread else None
+    binary_pattern = re.compile(args.binary) if args.binary else None
+    resolve = Resolver()
+    for row in xml_rows(data, resolve):
+        fields = dict(row)
+        time = int(fields["sample-time"].text)
+        if (begin is not None and time < begin) or (end is not None and time > end):
+            continue
+        thread = fields["thread"].attrib.get("fmt", "")
+        weight = int(fields["weight"].text) / 1e6 if "weight" in fields else 1.0
+        by_thread[re.sub(r" \(0x[0-9a-f]+\)", "", thread)] += weight
+        if thread_pattern and not thread_pattern.search(thread):
+            continue
+        backtrace = fields.get("tagged-backtrace")
+        if backtrace is None:
+            backtrace = fields.get("backtrace")
+        if backtrace is None:
+            continue
+        key = id(backtrace)
+        if key not in stacks:
+            frames = []
+            for frame in backtrace.findall("frame"):
+                frame = resolve(frame)
+                binary = frame.find("binary")
+                binary = resolve(binary) if binary is not None else None
+                frames.append((frame.attrib.get("name", frame.attrib.get("addr", "?")),
+                               binary.attrib.get("name", "?") if binary is not None else "?"))
+            stacks[key] = frames
+        frames = stacks[key]
+        if not frames:
+            continue
+        total += weight
+        self_time[frames[0][0]] += weight
+        by_binary[frames[0][1]] += weight
+        for name, binary in set(frames):
+            if binary_pattern is None or binary_pattern.search(binary):
+                inclusive[name] += weight
+    seconds = (end - begin) / 1e9 if begin is not None and end is not None else None
+    print("window: %s" % ("%.2f s (recordingBegin..recordingEnd)" % seconds if seconds else "whole trace"))
+    print("samples ms by thread (all threads):")
+    for name, value in by_thread.most_common(8):
+        print("  %8.1f  %s" % (value, name))
+    print("selected samples: %.1f ms%s" % (total, " (%.1f ms/s)" % (total / seconds) if seconds else ""))
+
+    def table(title, counter):
+        print(title)
+        for name, value in counter.most_common(args.top):
+            rate = " %7.2f ms/s" % (value / seconds) if seconds else ""
+            print("  %8.1f ms %5.1f%%%s  %s" % (value, 100 * value / max(total, 1e-9), rate, name[:160]))
+    table("self time by binary:", by_binary)
+    table("self time by function:", self_time)
+    table("inclusive time by function%s:" % (" in binaries matching %r" % args.binary if args.binary else ""), inclusive)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -202,12 +318,20 @@ def main(argv=None):
     runner.add_argument("--xctrace", metavar="TEMPLATE", help="record each launch with this xctrace template")
     summary = sub.add_parser("summarize", help="print a table for report directories")
     summary.add_argument("directories", nargs="+")
+    prof = sub.add_parser("profile", help="aggregate a Time Profiler trace over the recording window")
+    prof.add_argument("trace")
+    prof.add_argument("--thread", help="regular expression a thread name must match (e.g. 'Main Thread')")
+    prof.add_argument("--top", type=int, default=30)
+    prof.add_argument("--binary", help="regular expression limiting the inclusive table to these binaries (e.g. 'Ikkoku')")
+    prof.add_argument("--whole", action="store_true", help="ignore the recording marks")
     guard = sub.add_parser("_exec", help=argparse.SUPPRESS)
     guard.add_argument("--timeout", type=int, required=True)
     guard.add_argument("argv", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command == "run":
         return run(args)
+    if args.command == "profile":
+        return profile(args)
     if args.command == "_exec":
         if args.argv[:1] == ["--"]:
             args.argv = args.argv[1:]
