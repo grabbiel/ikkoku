@@ -73,7 +73,12 @@ public final class LoadedAsset: @unchecked Sendable {
                         SIMD4<UInt16>(remap[min(Int(j.x), remap.count - 1)], remap[min(Int(j.y), remap.count - 1)], remap[min(Int(j.z), remap.count - 1)], remap[min(Int(j.w), remap.count - 1)])
                     }
                 }
-                let h = try resources.register(mesh: prim)
+                let h: MeshHandle
+                do { h = try resources.register(mesh: prim) } catch {
+                    // A refused or invalid primitive fails the import; drop the parts already registered.
+                    for part in parts { resources.unregister(mesh: part.mesh) }
+                    throw error
+                }
                 let mat = prim.materialIndex.flatMap { $0 < asset.materials.count ? asset.materials[$0] : nil } ?? MaterialData(name: "")
                 parts.append(Part(mesh: h, meshName: group.name, materialName: mat.name, material: mat, morphNames: prim.morphTargets.map(\.name),
                                   nodeIndex: ni, worldMatrix: world, skinned: prim.isSkinned && asset.nodes[ni].skin != nil,
@@ -169,7 +174,15 @@ public final class AssetLibrary: @unchecked Sendable {
         }
         let loaded = try LoadedAsset(url: source, asset: gltf, resources: resources)
         guard !loaded.parts.isEmpty, !loaded.bounds.isEmpty else {
+            // The rejected asset's meshes were registered; nothing draws them.
+            for part in loaded.parts { resources.unregister(mesh: part.mesh) }
             throw GLTFError.io("The model contains no drawable triangle meshes.")
+        }
+        // A repeated import of the same file replaces the cached asset. Every frame
+        // built from now on resolves the new one, so the old meshes are retired: a
+        // frame submitted earlier still draws them (R6). Shared texture keys stay.
+        if let previous = assets[source.path], previous !== loaded {
+            resources.retire(meshes: previous.parts.map(\.mesh))
         }
         assets[source.path] = loaded
         failed.remove(source.path)
