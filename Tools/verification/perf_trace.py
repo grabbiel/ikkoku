@@ -15,11 +15,17 @@ beyond reading the report's summary block.
         [--workloads studio-idle,studio-orbit] [--seconds 10] [--wrap /path/to/lock.sh]
 
     python3 Tools/verification/perf_trace.py summarize .local/perf/debug [.local/perf/release ...]
+
+`--xctrace TEMPLATE` (for example "Time Profiler" or "Metal System Trace")
+launches each workload under `xcrun xctrace record` instead, writing
+`<workload>.<template>.trace` next to the report. The app still writes its own
+report and exits; xctrace stops recording when it does.
 """
 
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 
@@ -96,8 +102,18 @@ def run(args):
             env = launch_environment(workload, fixtures, output, seconds, warmup, extra)
             # The timeout bounds the app run only, not the wait for the lock, so
             # the wrapper runs this script's own `_exec` guard around the app.
+            target = [os.path.abspath(args.app)]
+            if args.xctrace:
+                slug = args.xctrace.lower().replace(" ", "-")
+                trace = output[:-5] + "." + slug + ".trace"
+                # xctrace starts the target with only the variables passed to it.
+                passed = [item for key, value in sorted(env.items()) if key.startswith("IKKOKU_")
+                          for item in ("--env", "%s=%s" % (key, value))]
+                target = (["xcrun", "xctrace", "record", "--template", args.xctrace, "--output", trace, "--no-prompt", "--target-stdout", "-",
+                           "--time-limit", "%ds" % (warmup + seconds + args.startup_timeout)]
+                          + passed + ["--launch", "--"] + target)
             guard = [sys.executable, os.path.abspath(__file__), "_exec",
-                     "--timeout", str(warmup + seconds + args.startup_timeout), "--", os.path.abspath(args.app)]
+                     "--timeout", str(warmup + seconds + args.startup_timeout + (120 if args.xctrace else 0)), "--"] + target
             argv = ([args.wrap] if args.wrap else []) + guard
             log_path = output[:-5] + ".log"
             print("[perf] %s -> %s" % (workload, output), flush=True)
@@ -118,9 +134,14 @@ def guarded_exec(args):
     try:
         return process.wait(timeout=args.timeout)
     except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-        print("[perf] app killed after %d s" % args.timeout, flush=True)
+        # SIGINT first: xctrace then stops its target and finishes the trace.
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        print("[perf] launch stopped after %d s" % args.timeout, flush=True)
         return 124
 
 
@@ -178,6 +199,7 @@ def main(argv=None):
     runner.add_argument("--startup-timeout", type=int, default=180, help="seconds allowed beyond warmup+recording")
     runner.add_argument("--wrap", help="command each launch runs under, e.g. a machine-wide app lock script")
     runner.add_argument("--set", action="append", metavar="IKKOKU_PERF_X=VALUE", help="extra launch variable")
+    runner.add_argument("--xctrace", metavar="TEMPLATE", help="record each launch with this xctrace template")
     summary = sub.add_parser("summarize", help="print a table for report directories")
     summary.add_argument("directories", nargs="+")
     guard = sub.add_parser("_exec", help=argparse.SUPPRESS)

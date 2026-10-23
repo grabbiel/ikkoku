@@ -448,10 +448,15 @@ final class PerfTrace {
             return String(cString: buffer)
         }
         let info = ProcessInfo.processInfo
+        // Other processes share the machine (builds, other agents' lanes); the
+        // 1/5/15-minute load average at report time says how busy it was.
+        var load = [Double](repeating: 0, count: 3)
+        let loadCount = getloadavg(&load, 3)
         return ["model": sysctlString("hw.model"), "cpu": sysctlString("machdep.cpu.brand_string"),
                 "gpu": device?.name ?? "", "os": info.operatingSystemVersionString,
                 "physicalMemoryBytes": info.physicalMemory, "activeProcessors": info.activeProcessorCount,
-                "thermalState": info.thermalState.rawValue, "lowPowerMode": info.isLowPowerModeEnabled]
+                "thermalState": info.thermalState.rawValue, "lowPowerMode": info.isLowPowerModeEnabled,
+                "loadAverage": loadCount == 3 ? load.map { PerfTrace.round($0) } : []]
     }
 
     private static func processStartTime() -> Double? {
