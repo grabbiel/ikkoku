@@ -142,8 +142,8 @@ the public lane).
 ## Measurement setup
 
 Reference machine: Mac Studio `Mac14,14`, Apple M2 Ultra (24 CPU cores
-reported active, 76-core GPU), 192 GB, macOS 27.0.1, Xcode 27.0, a 1920×1080
-point display at 120 Hz and backing scale 2. The measured window has a
+reported active, 76-core GPU), 192 GB, macOS 27.0.1, Xcode 27.0, a 4K display
+at 120 Hz (1920×1080 points at backing scale 2). The measured window has a
 1600×946 point content area, so the viewport drawable is 1996×1824 pixels.
 Every run records the load average, thermal state and Low Power Mode with its
 numbers; other agents shared the machine, so the load average was 4–10 during
@@ -154,7 +154,8 @@ Scene: the private `IKKOKU_STUDIO_SCENARIO_SCENE` fixture
 (`koikatu_cs0002591.png`, SHA-256 `029f0b1d…a8bea04`, 32 document objects, 6
 source characters). Maker workloads use `IKKOKU_MAKER_SCENARIO_CARD`.
 
-Builds, all arm64. The baseline builds are from `9e02a62`: the harness on top of `7af03d6`, which merged `main` at `7c0b884`, with no quick win.
+Builds, all arm64. The baseline builds are from `9e02a62`: the harness on top
+of `7af03d6`, which merged `main` at `7c0b884`, with no quick win.
 
 | Label | How it was built | Engine code |
 | --- | --- | --- |
@@ -366,7 +367,10 @@ How each fix was checked:
   worktree's Engine. It loads the six source characters, runs 600 ticks and
   hashes every frame's model matrices, morph weights, skin palettes and
   bounds. Each fix was checked before and after with it (private, in the
-  session scratchpad; logs under `.local/app-perf/probe`).
+  session scratchpad; logs under `.local/app-perf/probe`). The quick-win 3
+  timings below are three interleaved 600-tick runs of each build at a load
+  average of 9–13 (`ab-qw2-*.log`, `ab-qw3-*.log`). The 60-tick numbers come
+  from single runs.
 - **Captures.** IKKOKU_AUTOCAPTURE of the source scene, a source rig with the
   scenario card, a native scene, and a Studio scenario capturing after live
   frames, an orbit, an FK edit and more live frames. Each was taken with the
@@ -376,10 +380,10 @@ How each fix was checked:
 
 | Step | Probe ms/tick (6 characters) | Probe frame digest (600 ticks) | Captures against the base build |
 | --- | ---: | --- | --- |
-| baseline (`9e02a62`) | 40.0 | — | — |
-| + quick win 1 | 13.3 | identical | — |
-| + quick win 2 (`5b01c92`) | 8.4–8.96 | `dc789a7f…` | identical: source scene `d5575bfb…`, rig + card `045884f0…`, native scene `d1ade80a…`, scenario renders `1fcd2488…`/`c1ad5327…`/`4b23ea6e…` (Debug and Release, `.local/app-perf/captures-1`) |
-| + quick win 3 (`decf961`) | 5.74 | `dc789a7f…` (unchanged) | TBD-CAPTURES2 |
+| baseline (`9e02a62`) | 40.0 (60 ticks) | — | — |
+| + quick win 1 | 13.3 (60 ticks) | checked together with quick win 2 | — |
+| + quick win 2 (`5b01c92`; `3cd44b7` with `main` merged) | 8.4 (60 ticks); 8.63, 8.70, 8.73 (600 ticks) | `dc789a7f…` | identical: source scene `d5575bfb…`, rig + card `045884f0…`, native scene `d1ade80a…`, scenario renders `1fcd2488…`/`c1ad5327…`/`4b23ea6e…` (Debug and Release, `.local/app-perf/captures-1`) |
+| + quick win 3 (`decf961`) | 5.66, 5.69, 5.72 (600 ticks) | `dc789a7f…` (unchanged) | TBD-CAPTURES2 |
 
 In-app harness results, Release, before → after:
 
@@ -440,7 +444,7 @@ loaded machine, so only the shares are used).
 
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| C1 | Animation sampling rebuilds a source-ID→node dictionary (~1,000 strings) per clip call and per state call and fills nested `[Int: [Int: [Float]]]` channel dictionaries | `SourceAnimationLibrary.applying(stateID:…)`, `applying(clipID:…)` | measured; **done** (quick win 3) | 3.2 ms/tick, of which ~2.8 ms is dictionary building, lookups, string hashing and their allocations; curve sampling itself is 0.1 ms | resolve each clip's bindings to node indices once per (clip, rig) and reuse a flat channel table: probe 8.96 → 5.74 ms/tick | Low: same arithmetic; a resolution is reused only while every binding still names the same node |
+| C1 | Animation sampling rebuilds a source-ID→node dictionary (~1,000 strings) per clip call and per state call and fills nested `[Int: [Int: [Float]]]` channel dictionaries | `SourceAnimationLibrary.applying(stateID:…)`, `applying(clipID:…)` | measured; **done** (quick win 3) | 3.2 ms/tick, of which ~2.8 ms is dictionary building, lookups, string hashing and their allocations; curve sampling itself is 0.1 ms | resolve each clip's bindings to node indices once per (clip, rig) and reuse a flat channel table: probe 8.63–8.73 → 5.66–5.72 ms/tick | Low: same arithmetic; a resolution is reused only while every binding still names the same node |
 | C2 | Hair dynamics rebuilds a full-rig transform state (all nodes, children lists, world matrices) per DynamicBone component per step and validates its output with a full `rig.evaluate` | `SourceDynamicBone.advance`, `DynamicsTransforms` | measured | 3.25 ms/tick: `DynamicsTransforms.init` 1.84, `pose(rig:)` 0.66 (`rig.evaluate` 0.48, `restPose` 0.13), teardown 0.32 | cache the topology per rig, transform only the required chains, validate only the changed nodes; ~2.5 ms/tick | Medium: must keep the float results bit-identical (same operation order) |
 | C3 | `SourceStudioPose` is rebuilt for every pose evaluation | `KoikatsuCharacterRecord.makePose` | measured | 1.4 ms/tick (init 0.58, apply 0.51, late update 0.23) | cache the bound pose per (rig, record, kinematics) | Low |
 | C4 | Eye look evaluates the whole rig to read four nodes | `SourceStudioCharacterPreview.updateEyeLook` | measured | ~0.1 ms/tick | evaluate the ancestor chains only | Low |
@@ -518,6 +522,10 @@ How to read the expected gain column:
 | 7 | An opt-in optimized-Engine Debug build for app work | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
 | 8 | Texture compression at conversion time; release staging data after upload | G7, R1 | smaller footprint and bandwidth | main memory-pressure relief on 8 GB | image comparison; this is a quality trade-off, so it stays opt-in until compared |
 | 9 | Instrument `StudioModel` directly: explicit tick, refresh and doc-change hooks in place of the inferred ones | harness | exact Studio attribution (the inferred hooks cannot separate a SwiftUI pass caused by a doc change from one caused by layout) | — | `test_perf_trace.py`, harness report schema |
+
+## Validation of this change
+
+TBD-VALIDATION
 
 ## Limits of these numbers
 
