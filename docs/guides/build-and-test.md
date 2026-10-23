@@ -91,12 +91,12 @@ is checked. Observed versions are dated runs, not support claims.
 
 | Tool | Requirement | Probe | Stated in | Observed |
 | --- | --- | --- | --- | --- |
-| Apple Silicon Mac | macOS on Apple Silicon | Python `platform` (built in) | [README.md](../../README.md) | - |
+| Apple Silicon Mac | macOS on Apple Silicon | Python `platform` (built in) | [README.md](../../README.md) | macOS 26.6.2 arm64, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
 | Xcode | `>=26` | `xcodebuild -version` | [README.md](../../README.md), [Tools/verification/README.md](../../Tools/verification/README.md) | 26.0.1, reference Mac, 2026-09-29; 26.6 (17F113), CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
-| Metal compiler | *unrecorded* | `xcrun -sdk macosx metal --version` | - | - |
+| Metal compiler | *unrecorded* | `xcrun -sdk macosx metal --version` | - | 32023.883 from the MetalToolchain 17.6.109.0 component with Xcode 26.6, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
 | Swift | `>=6.0` | `swift --version` | [Packages/Engine/Package.swift](../../Packages/Engine/Package.swift), [README.md](../../README.md) | 6.3.3, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
 | Python 3 (python3 on PATH) | *unrecorded* | `python3 --version` | - | 3.15.0, CI macos-26-arm64 image 20261013.0424.1, public lane passed, 2026-10-23; 3.11.15, Linux container: mod-tools, runner-self and validator suites passed, 2026-10-23 |
-| .NET SDK | `>=10.0` | `dotnet --list-sdks` | [Tools/translation/frontend/Translation.csproj](../../Tools/translation/frontend/Translation.csproj), [docs/reference/managed-recovery.md](../reference/managed-recovery.md) | .NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md); CI macos-26-arm64 image builds the net10.0 frontend: translation suite passed, 2026-10-23 (SDK version not logged) |
+| .NET SDK | `>=10.0` | `dotnet --list-sdks` | [Tools/translation/frontend/Translation.csproj](../../Tools/translation/frontend/Translation.csproj), [docs/reference/managed-recovery.md](../reference/managed-recovery.md) | .NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md); SDKs 8.0.101 to 10.0.401 (newest 10.0.401), CI macos-26-arm64 image 20261013.0424.1, translation suite passed, 2026-10-23 |
 | Python 3.12 venv for Tools/reverse | `3.12.*` | `.local/reverse/unitypy-venv/bin/python --version` | [.github/workflows/ci.yml](../../.github/workflows/ci.yml), [Tools/reverse/README.md](../../Tools/reverse/README.md) | 3.12, CI reverse-tools job (actions/setup-python); first hosted run 2026-10-01; 3.14 could not build the pinned dependencies on the reference Mac (Tools/reverse/README.md) |
 | UnityPy (reverse venv) | `==1.23.0` | `importlib.metadata` via `.local/reverse/unitypy-venv/bin/python` | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | - |
 | numpy (reverse venv) | `==2.2.6` | `importlib.metadata` via `.local/reverse/unitypy-venv/bin/python` | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | - |

@@ -608,6 +608,7 @@ def select_capabilities(prerequisites, specs):
 
 def render_text(prerequisites, results, required, verbose=False):
     tools = prerequisites["tools"]
+    shown = set()  # raw probe output is printed once per tool, not per capability
     lines = ["Ikkoku prerequisites from %s (reviewed %s)" % (prerequisites["path"], prerequisites["reviewed"]),
              "Statuses: ok / present (no recorded version) satisfy; mismatch, unparsed, error and absent do not.", ""]
     for capability in results["capabilities"]:
@@ -622,7 +623,10 @@ def render_text(prerequisites, results, required, verbose=False):
             lines.append(line)
             if record["status"] not in MET_STATUSES:
                 lines.append("            fix: %s" % tools[tool_id]["install"])
-            if verbose and record["argv"]:
+            if verbose and record["argv"] and tool_id in shown:
+                lines.append("            ran: (output shown above)")
+            elif verbose and record["argv"]:
+                shown.add(tool_id)
                 if tools[tool_id]["probe"] == "package":
                     ran = '%s -c "importlib.metadata.version(%r)"' % (record["argv"][0], tools[tool_id]["distribution"])
                 else:

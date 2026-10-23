@@ -18,7 +18,7 @@
       "probe": "host",
       "requirement": "macos-arm64",
       "statedIn": [{"path": "README.md", "phrase": "Apple Silicon development host"}],
-      "observed": [],
+      "observed": ["macOS 26.6.2 arm64, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"],
       "install": "Use macOS on Apple Silicon; the app builds for platform=macOS,arch=arm64. The minimum host macOS version is unrecorded."
     },
     {
@@ -46,7 +46,7 @@
       "parser": "metal",
       "requirement": "unrecorded",
       "statedIn": [],
-      "observed": [],
+      "observed": ["32023.883 from the MetalToolchain 17.6.109.0 component with Xcode 26.6, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"],
       "install": "Install the Xcode Metal Toolchain component: xcodebuild -downloadComponent MetalToolchain"
     },
     {
@@ -90,7 +90,7 @@
       ],
       "observed": [
         ".NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md)",
-        "CI macos-26-arm64 image builds the net10.0 frontend: translation suite passed, 2026-10-23 (SDK version not logged)"
+        "SDKs 8.0.101 to 10.0.401 (newest 10.0.401), CI macos-26-arm64 image 20261013.0424.1, translation suite passed, 2026-10-23"
       ],
       "install": "Install a .NET 10 SDK from https://dotnet.microsoft.com/download and put dotnet on PATH."
     },

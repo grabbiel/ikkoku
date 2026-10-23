@@ -406,8 +406,9 @@ drifts from the prerequisites file.
 runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 
 - `public-lane` first runs `doctor.py --require public --verbose`, so a missing
-  Xcode, Metal compiler, Swift, `python3` or .NET SDK fails with the fix named.
-  It then builds the Engine tests (`swift build --build-tests`, so the
+  Xcode, Metal compiler, Swift, `python3` or .NET SDK fails with the fix named
+  (10 s and 5/5 public capabilities met in the first dispatched run,
+  2026-10-23). It then builds the Engine tests (`swift build --build-tests`, so the
   lane's 600 s `swift test` timeout does not include a cold build), then runs
   `public.json` **without `--strict`**. Fixture-gated Swift tests report named
   skips instead of failing; the report and per-check logs are uploaded as the

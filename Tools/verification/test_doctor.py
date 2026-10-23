@@ -108,6 +108,9 @@ class SampleOutputTests(unittest.TestCase):
         self.assertIn("26.6 (17F113)", " ".join(tools["xcode"]["observed"]))
         self.assertIn("6.3.3", " ".join(tools["swift"]["observed"]))
         self.assertIn("3.15.0", " ".join(tools["python3"]["observed"]))
+        self.assertIn("32023.883", " ".join(tools["metal"]["observed"]))
+        self.assertIn("newest 10.0.401", " ".join(tools["dotnet-sdk"]["observed"]))
+        self.assertIn("macOS 26.6.2 arm64", " ".join(tools["host"]["observed"]))
 
 
 class VersionTests(unittest.TestCase):
@@ -323,6 +326,9 @@ class CheckEnvironmentTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("ran: /fake/xcodebuild -version", text)
         self.assertIn("| Build version 17F113", text)
+        # Swift serves two capabilities; its raw output is printed once.
+        self.assertEqual(text.count("| Target: arm64-apple-macosx26.0"), 1)
+        self.assertIn("ran: (output shown above)", text)
         self.assertIn('-c "importlib.metadata.version(\'UnityPy\')"', text)
 
     def test_markdown_probes_nothing(self):

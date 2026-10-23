@@ -71,6 +71,14 @@
       "expect": {"status": "ok", "version": "6.0.3", "detail": "target x86_64-unknown-linux-gnu"}
     },
     {
+      "id": "metal-ci-32023.883",
+      "tool": "metal",
+      "provenance": "recorded: CI public-lane job 120189060283 (run 39884395421), macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+      "returncode": 0,
+      "output": "Apple metal version 32023.883 (metalfe-32023.883)\nTarget: air64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.109.0.I2rLkV/Metal.xctoolchain/usr/metal/current/bin\n",
+      "expect": {"status": "present", "version": "32023.883", "detail": "target air64-apple-darwin25.6.0"}
+    },
+    {
       "id": "metal-installed",
       "tool": "metal",
       "provenance": "format sample: `xcrun -sdk macosx metal --version` with the toolchain installed",
@@ -93,6 +101,14 @@
       "returncode": 72,
       "output": "xcrun: error: unable to find utility \"metal\", not a developer tool or in PATH\n",
       "expect": {"status": "error", "version": null}
+    },
+    {
+      "id": "dotnet-sdks-ci",
+      "tool": "dotnet-sdk",
+      "provenance": "recorded: CI public-lane job 120189060283 (run 39884395421), macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+      "returncode": 0,
+      "output": "8.0.101 [/Users/runner/.dotnet/sdk]\n8.0.204 [/Users/runner/.dotnet/sdk]\n8.0.303 [/Users/runner/.dotnet/sdk]\n8.0.425 [/Users/runner/.dotnet/sdk]\n9.0.102 [/Users/runner/.dotnet/sdk]\n9.0.203 [/Users/runner/.dotnet/sdk]\n9.0.318 [/Users/runner/.dotnet/sdk]\n10.0.103 [/Users/runner/.dotnet/sdk]\n10.0.203 [/Users/runner/.dotnet/sdk]\n10.0.302 [/Users/runner/.dotnet/sdk]\n10.0.401 [/Users/runner/.dotnet/sdk]\n",
+      "expect": {"status": "ok", "version": "10.0.401", "detail": "installed SDKs: 8.0.101, 8.0.204, 8.0.303, 8.0.425, 9.0.102, 9.0.203, 9.0.318, 10.0.103, 10.0.203, 10.0.302, 10.0.401"}
     },
     {
       "id": "dotnet-sdks-8-9-10",
@@ -261,6 +277,13 @@
       "returncode": 0,
       "output": "11.3.0\n",
       "expect": {"status": "present", "version": "11.3.0"}
+    },
+    {
+      "id": "host-ci-macos-26.6.2",
+      "tool": "host",
+      "provenance": "recorded: CI public-lane job 120189060283 (run 39884395421), macos-26-arm64 image 20261013.0424.1, 2026-10-23 (platform values the checker reported)",
+      "host": {"system": "Darwin", "machine": "arm64", "macVersion": "26.6.2", "appleSilicon": true},
+      "expect": {"status": "ok", "version": "26.6.2", "detail": "macOS arm64"}
     },
     {
       "id": "host-apple-silicon",

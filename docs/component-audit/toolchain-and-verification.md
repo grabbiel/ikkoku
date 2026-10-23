@@ -122,14 +122,20 @@ data is deliberately not copied into the documentation or distribution.
   `--require`d capability and never reads `.local/` data. The build guide's
   [clean-checkout setup](../guides/build-and-test.md#set-up-a-clean-checkout)
   is the one documented path. CI's public-lane job now runs `--require public`
-  before the build. `test_doctor.py` (29 tests in `runner-self-tests`) covers
-  parsing of recorded CI and format-sample outputs, absent tools, the generated
+  before the build. A dispatched CI run of the branch (run 39884395421,
+  2026-10-23, `macos-26-arm64` image 20261013.0424.1) met all five public
+  capabilities in 10 s: macOS 26.6.2 arm64, Xcode 26.6, Metal 32023.883,
+  Swift 6.3.3, Python 3.15.0 and .NET SDK 10.0.401. The public lane (5/5),
+  unsigned app build and reverse-tools jobs passed in the same run.
+  `test_doctor.py` (29 tests in `runner-self-tests`) covers parsing of the
+  recorded CI outputs and labelled format samples, absent tools, the generated
   table and restated versions. It passed on Python 3.10–3.13 in a Linux
   container, where every Apple/.NET tool is reported absent and the checker
   exits 0 without `--require`. Real reverse-tools detection (Python 3.12 with
-  all three pins `ok`) was checked against a scratch venv. Still open: a clean
-  checkout on a second Mac, launching an unsigned build, the deployment
-  matrix (T02) and versions for the unrecorded entries (T06).
+  all three pins `ok`) was checked against a scratch venv. Still open:
+  following the setup path on a fresh contributor Mac (CI uses a
+  preprovisioned image), launching an unsigned build, the deployment matrix
+  (T02) and versions for the unrecorded entries (T06).
 - **T-T02 — Release packaging (P1).** Inspect archived contents, provide library
   selection/relocation, and verify all app resources on a clean user profile.
   Accept when the app works outside the checkout and no private recovered files
