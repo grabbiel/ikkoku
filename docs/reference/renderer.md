@@ -819,9 +819,11 @@ or Studio rendering parity. The broader asset/runtime limits remain in R3–R7.
 to MSL for `TranslatedSourceShaderProbe`. Eight character shader families have
 13 recorded forward/outline vertex-fragment pairs, including five outlines.
 The diagnostic consumes original-player baked geometry, camera/material/light
-state and captured textures. It compiles translated programs per job. Production
-`Renderer` still selects authored native toon/eye/outline materials; there is no
-live source-program registry integration.
+state and captured textures. Programs are parsed once and their pipelines cached
+(`TranslatedSourceProgram`, `TranslatedSourcePipelineCache`), shared with the
+opt-in [live source-shader path](#live-source-shader-path-r1cmt-04-opt-in-2026-10-22).
+Production `Renderer` selects authored native toon/eye/outline materials unless
+that opt-in is on.
 
 Historical comparison of a frozen original character frame (controls below;
 re-run against current code on 2026-09-26 into `.local/r1b/probe`, starting
@@ -1336,6 +1338,40 @@ Remaining gaps by cause, none guessed:
   submesh, so Unity draws it over the last submesh, but the probe's
   `materials.prefix(submeshes)` skips it. This is a probe gap, not a native one.
 
+**Gap fixes (2026-10-22).** Two of these gaps are closed.
+
+- **Eye-look offsets.** `derive(…, eyeLook:)` takes the six eye-look
+  transforms. `SourceStudioIrisRendering.bindingEyeLook` computes them from a
+  Studio look state: the exported `bo_head_00` eye settings, the card's
+  pupil/highlight fields and the per-eye iris-shift rates (resting `(0, 0)` by
+  default). The CLI takes `--eye-look <studio-look-settings.json>
+  [--eye-look-rates <left-h>,<right-h>,<v>]`.
+- **Extra material slots.** The probe now draws a material slot beyond the
+  submesh count over the last submesh, as Unity does
+  (`TranslatedDraw.slot`).
+
+The binding counts move as follows:
+
+| Bindings | Exact | Within tolerance | Differs | Missing natively | Extra |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before | 567 | 29 | 0 | 16 | 1 |
+| With the fixture look settings (`.local/stt07h/studio-look-settings.json`) | 567 | 35 | 0 | 10 | 1 |
+| With the eyeline slot drawn | 568 | 29 | 0 | 16 | 0 |
+| Both | 568 | 35 | 0 | 10 | 0 |
+
+The gated `sourceShaderBindingsMatchTheControlledOriginalFrame` pins the last
+two rows, the last one when `IKKOKU_STUDIO_LOOK_SETTINGS` is set (the
+private-source lane now declares it).
+The source-normal frozen render with the extra eyeline slot keeps the
+silhouette at 44 px / IoU 0.9995552051. The character colour goes from mean
+0.20886 / p99 4 / max 105 to 0.18762 / 4 / 55. `main_skin` goes from 13,516 px,
+mean 0.2019, max 105 to 13,488 px, 0.0550, max 10, because the slot covers the
+face pixels the original's eyeline draws. `toon_eyew_lod0` grows from 303 to
+327 px. Native-bound frames with the look settings give 0.18762 / p99 4.
+Hair is unchanged: p99 24 / 22. The remaining binding gaps are the 8 sampler
+states from bundles that are not local, `_Time` and `_RampG_ST`. Without a look
+state, the eye-look offsets are still missing.
+
 **Proof of concept (step 5).** `--write-frame <file>` writes a copy of the
 capture frame next to it. In that copy, every resolved native value replaces
 the bound value: 201 vectors, 58 transforms, 19 queues, 49 samplers and 6
@@ -1371,6 +1407,321 @@ unresolved, and composite content is not compared. Other heads, hair, clothes
 and accessories, mods and male cards need their own converted evidence. Private
 evidence (both comparison runs, the frame.json run, the PoC folders, logs, frame
 and render diffs, and the scripts) is in `.local/r1-live-bindings/`.
+
+### Live source-shader path (R1/CMT-04, opt-in, 2026-10-22)
+
+An opt-in path draws converted source characters with the translated original
+programs instead of the native toon shaders. Inputs come from the native binding
+set above, the live deformed vertices, and the live camera and light. It is OFF by
+default, and the toon path stays the production renderer. On one controlled
+fixture it meets the frozen probe's gates with capture texture pixels (numbers
+below). With natively decoded textures only one material of that fixture can draw
+live. This is not a production-parity claim.
+
+**Opt-in and inputs.** `IKKOKU_LIVE_SOURCE_SHADERS=1` starts the app with the
+path on. In the Studio, **View ▸ Live Source Shaders (Experimental)** toggles it.
+The Studio inspector's "Live source shaders" group lists, per character, the live,
+toon and hidden counts, each fallback with its reason, and the renderer's own
+render-time fallbacks. `SourceShaderLiveConfiguration` reads the inputs:
+
+| Variable | Input |
+| --- | --- |
+| `IKKOKU_LIVE_SOURCE_PROGRAMS` | translated programs (`<family>[_outline]/program.json` + `source.metal`; the R1 probe's `shaders/`) |
+| `IKKOKU_LIVE_SOURCE_TEXTURES` | native texture store `manifest.json` ([source_texture_store.py](../../Tools/reverse/source_texture_store.py)) |
+| `IKKOKU_LIVE_SOURCE_STREAMS` | source vertex streams `manifest.json` ([source_vertex_streams.py](../../Tools/reverse/source_vertex_streams.py)); optional |
+| `IKKOKU_SHADER_BINDING_SUPPLEMENT` | binding supplement (keywords, sampler state, body draw material) |
+| `IKKOKU_HEAD_MATERIAL_CONTRACT` | head material contract; default `head-materials/contract.json` beside the source avatar |
+| `IKKOKU_MAKER_LIBRARY` | Maker library (else the card's own library lookup) |
+
+A missing required input keeps every character on toon, with the reason. After an
+autocapture, `IKKOKU_LIVE_SOURCE_REPORT=<json>` writes the Studio report, and
+Studio benchmarks embed it as `liveSourceShaders`.
+
+**Programs and pipelines.** `TranslatedSourceProgram` (Renderer) parses
+`program.json` and checks the hash of `source.metal`. It records constant
+buffers, textures, vertex inputs, properties and the pass state (blend, culling,
+stencil, ZWrite); unknown semantics or states are rejected. One
+`TranslatedSourcePipelineCache` per `ResourceStore` (`translatedPipelines`)
+parses each program once. It compiles one pipeline plus depth/stencil state per
+program identity (path and source hash), target (colour format, depth/stencil
+format, sample count) and depth mode. The frozen-frame probe now encodes through
+the same parser, packer (`TranslatedSourceProgram.pack`) and cache.
+
+**Materials.** `SourceShaderLiveMaterial.resolve` turns one binding-set renderer
+slot into bind-ready values. It takes the outline program before the forward
+one and reads every vector the programs use. Colour properties are linearized as
+the probe does, `<texture>_ST` comes from the binding scale/offset, and globals
+come from the binding set. Each texture comes with its sampler state from a
+`SourceShaderLiveTextureProvider`, and an empty slot uses the Unity default
+texture. Resolution is all or nothing: any unresolved input throws a reason, and
+the slot keeps its toon draw. Unresolved inputs include a vector, a global, the
+render queue, a texture's pixels or sampler state, a missing program, a
+non-Shader-Forge shader, or a builtin the path does not compute
+(`_ProjectionParams`, other `unity_*`, `glstate_*`). Only `_RampG_ST` is bound by
+a documented convention (`[1, 1, 0, 0]`, as in the probe). Each material using it
+lists it, so nothing is substituted silently.
+
+**Per-frame inputs.** `SourceShaderLiveEncoder` converts each live item's vertices
+with a compute kernel, once per vertex source and register layout. The output is
+the program's `SourceInput` registers:
+
+- POSITION: the deform output with Z mirrored into Unity's basis.
+- NORMAL: the rest normal plus morph normal deltas, skinned linearly by the same
+  palette. It is not renormalized, which keeps the skinned magnitude the outline
+  programs extrude by (#96).
+- TANGENT: the deformed tangent, normalized, with the rest handedness.
+- TEXCOORD0: V flipped back to Unity's convention.
+- TEXCOORD1/2: the converted mesh's set when it carries one. A converted mesh
+  without the set aliases UV0, so the source stream is used instead; without a
+  stream the item stays toon.
+- TEXCOORD3 and COLOR: the source stream.
+
+Matrices are `unity_ObjectToWorld = B·M·B` and `unity_MatrixVP = P·V·B`, with
+`B = diag(1, 1, −1)`. The clip position therefore equals the native one, and live
+draws depth-test against native draws. Builtins:
+
+- `_WorldSpaceCameraPos = B·eye`.
+- `_WorldSpaceLightPos0 = (−B·d, 0)`, where d is the direction the main light
+  travels.
+- `_LightColor0 = linear(colour)·intensity`.
+- `_ScreenParams` from the viewport.
+- `unity_WorldTransformParams.w` from the model determinant.
+- `_Time` from the frame clock.
+
+**Assembly and fallbacks.** `SourceShaderLiveAssembly` (Character) derives the
+card's binding set once and resolves every slot. In the Studio, scene globals
+stay unresolved: CharaStudio's `SceneInfo` → `Shader.SetGlobal*` mapping is not
+recovered, so the harness constants must not stand in. Each frame, it marks the
+matching `RenderItem`s (`RenderItem.sourceShader`). Matching uses the source
+renderer name and submesh in the native mesh name (`<part>/<renderer>/<submesh>`),
+and the n-th native pass of an item maps to the n-th visible material slot.
+Renderers the source disables, and ShadowCaster-only slots, are hidden. Every
+other case keeps the toon draw and is reported:
+
+- an ambiguous mapping;
+- no source renderer;
+- an unresolved slot;
+- a missing or ambiguous vertex stream.
+
+Source slots that no native item draws are listed as unmatched. At render time,
+the renderer returns an item to its toon draw, listed in
+`Renderer.lastSourceShaderLive`, when it has no deformation this frame, its stream
+vertex count differs, or it has an unsupported input or a UV1/UV2 that would alias
+UV0. A draw that fails to encode is not drawn and is listed too.
+
+**Frame graph.** Live items leave the native opaque and transparent lists. The
+main pass draws them after native opaques and before native transparents, in
+source queue order: outline before forward, then by character, then in the
+binding set's renderer order. Unity's per-queue distance sort is not reproduced,
+which is the probe's R1 rule. A frame with live draws renders its main pass into
+a memoryless MSAA `depth32Float_stencil8` target, using stencil variants of the
+native pipelines, because the hair-front and eye programs test and write stencil
+reference 2. A frame without live draws keeps the depth-only attachment and
+pipelines. Shadows and picking keep the native draws.
+
+`Renderer.captureSourceShaderLive` is the validation capture. It renders only the
+live draws (optionally one family set) into the probe's 8-bit sRGB,
+depth+stencil, no-MSAA target. Its output is what `compare_original_frame.py`
+gates as `native-translated*.png`. `captureSourceGeometry` renders the geometry
+and depth-normal encodings of the live vertices.
+
+**Vertex streams.** The converted rigs carry no UV3 or COLOR, and the converted
+hair rigs no UV1. `source_vertex_streams.py` exports `m_UV1`/`m_UV2`/`m_UV3`/`m_Colors`
+of named source renderers in source vertex order (colours are Color32 bytes ÷ 255).
+Hair bundles reuse renderer names across prefabs with different meshes, so
+`--prefab` scopes a bundle to the prefabs the rigs record as `sourcePrefab`.
+`SourceVertexStreams.load` hash-checks schema 1–2 manifests. A channel the source
+mesh lacks is bound as the capture fixture's value (UV zero, COLOR white). Each
+material that uses such a value lists it as a convention, because Unity's
+missing-channel value is not verified. Against the R1 capture's frozen meshes,
+every exported channel matches with maximum error 0.0:
+
+- UV1: the four hair meshes, `cf_O_face`, `cf_Ohitomi_L02`/`R02` and `o_body_a`;
+- UV2: face, eyes and body;
+- UV3: face and body;
+- colours: body.
+
+The hair meshes have no UV2, and the capture's UV2 for them is all zero.
+
+```sh
+cd Tools/reverse && ../../.local/reverse/unitypy-venv/bin/python source_vertex_streams.py \
+  ../../.local/r1-live-b/store/streams-v2 \
+  --bundle ../../.local/reverse/rigs/source/abdata/chara/bo_head_00.unity3d --bundle ../../.local/reverse/rigs/source/abdata/chara/oo_base.unity3d \
+  --bundle ../../.local/reverse/rigs/source/abdata/chara/mm_base.unity3d --bundle ../../.local/reverse/rigs/source/abdata/chara/bo_hair_b_00.unity3d \
+  --bundle ../../.local/reverse/rigs/source/abdata/chara/bo_hair_f_00.unity3d \
+  --mesh o_body_a --mesh cf_O_face --mesh cf_Ohitomi_L02 --mesh cf_Ohitomi_R02 --mesh cf_hair_b_03_00 \
+  --mesh cf_hair_idol_hair_f_00 --mesh cf_hair_idol_hair_f_01 --mesh cf_hair_idol_hair_f_02 \
+  --prefab assets/illusion/assetbundle/chara/hair/00/bo_hair_b_00/p_cf_hair_b_03/p_cf_hair_b_03.prefab \
+  --prefab assets/illusion/assetbundle/chara/hair/00/bo_hair_f_00/p_cf_hair_f_01/p_cf_hair_f_01.prefab \
+  --verify-frame ../../.local/r1c/probe/frame-mips.json
+```
+
+**Texture store.** `source_texture_store.py` decodes every `Texture2D` identity
+of a binding set from the local bundles. It keeps the authored mips and
+linearizes sRGB textures, then writes a hash-checked half-float store; the
+texture's own filter, wrap and aniso settings are recorded. Runtime composites
+and textures whose bundle is not local are listed as unavailable.
+`SourceShaderTextureStore`, the production provider, never substitutes. On the
+fixture it holds 42 textures. Its 66 base-level comparisons with same-name
+capture textures have a maximum error of 0.0127 (linear, half float) and a mean
+of at most 0.0011. Five identities are unavailable because their bundles are
+not local: `mt_ramp_00`/`gt_ramp_01`, `mt_hairgloss_00`/`cf_hair_00_01_mh`,
+`mt_nip_00` and two `mt_body_detail_00` textures.
+`SourceShaderCaptureTextureProvider` is for validation only. It takes capture
+pixels whose texture type, name and size match the native identity (the
+substitution rule of the binding-set proof of concept).
+
+**Measurement: controlled fixture.** The R1 fixture card is drawn on the LIVE
+native rig: the source avatar, card shape and static ABMX, the fitted CharaStudio
+hand pose from the [native pose gate](#native-pose-gate), and the expression
+contract defaults. Bindings are native. The view is the original capture's
+camera, main light, effects and `_Time.y`, and the scene globals are the capture
+harness constants (`originalCharacterProbeHarness`). The capture's frozen meshes
+are not drawn; it supplies only the view. `IKKOKU_LIVE_SOURCE_PROBE=<frame-mips.json>`
+runs it in the app (`SourceShaderLiveFixtureProbe`, Studio module). The run
+writes the comparator's `native-*.png` files, `live-report.json` (every input
+with its hash, binding provenance, per-material resolution and attach lines) and
+toon and live benchmarks:
+
+```sh
+IKKOKU_SOURCE_AVATAR=$L/reverse/rigs/source-avatar.json IKKOKU_SOURCE_CARD=$L/r1c/probe/fixture-card.png \
+IKKOKU_STUDIO_HAND_POSE=$L/stt07d/studio-hand-fitted.json IKKOKU_STUDIO_LOOK_SETTINGS=$L/stt07h/studio-look-settings.json \
+IKKOKU_SOURCE_EXPRESSION=defaults IKKOKU_LIVE_SOURCE_PROGRAMS=$L/r1c/probe/shaders \
+IKKOKU_LIVE_SOURCE_TEXTURES=$L/r1-live-b/store/textures/manifest.json IKKOKU_LIVE_SOURCE_STREAMS=$L/r1-live-b/store/streams-v2/manifest.json \
+IKKOKU_SHADER_BINDING_SUPPLEMENT=$L/r1-live-bindings/supplement.json IKKOKU_MAKER_LIBRARY=$L/reverse/maker-library/library.json \
+IKKOKU_HEAD_MATERIAL_CONTRACT=$L/reverse/rigs/head-materials/contract.json \
+IKKOKU_LIVE_SOURCE_PROBE=<run>/frame-mips.json IKKOKU_LIVE_SOURCE_OUTPUT=<run> IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER=capture \
+  .local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_original_frame.py <run>
+```
+
+`$L` is the main checkout's `.local`. `<run>` links `frame-mips.json`,
+`frame.json` and the `original-*.png` renders of `.local/r1c/probe`. Inputs:
+capture frame `13bd11c2…66f039`, avatar `e90f6a24…e9ab5`, card
+`4b892fc4…ce53c65`, hand pose `0320580d…eec33`, look settings `13e7260f…be9ab`,
+texture store manifest `6b950538…c8ce2`, stream manifest `df8cfb0d…366f7`.
+
+With capture texture pixels, all 20 source slots draw live. The double tooth is
+hidden (`ChaControl.VisibleDoubleTooth`). There are no fallbacks, unmatched
+slots or render-time fallbacks. `compare_original_frame.py` reports the
+following, with thresholds unchanged:
+
+| Gate | Live fixture | Frozen probe, same bindings (step 1) |
+| --- | --- | --- |
+| Geometry (live vertices) | IoU 1.0, 0 of 99,750 px differ — pass | (frozen geometry) |
+| Depth-normals | mean 4.5e-7 m, p99 0, max 1.54 mm; normal p99 2 — pass | — |
+| translatedCharacter | silhouette 2 px (original-only, `main_hair`), IoU 0.99998; colour mean 0.1916, p99 4, max 237 — pass | 44 px, IoU 0.9995552; mean 0.18762, p99 4, max 55 — pass |
+| translatedGarments | 0 px; mean 0.119, p99 2 — pass | — |
+| Production colour (`native-color.png`: main pass, HDR, 4×MSAA, post) | mean 2.256, p99 69 — fail | toon: fail |
+
+| Family (frontmost in both) | Pixels | Mean | p99 | Max | Gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `main_opaque` | 76,556 | 0.112 | 1 | 50 | pass |
+| `main_skin` | 13,484 | 0.055 | 1 | 10 | pass |
+| `toon_eye_lod0` | 368 | 0.009 | 0 | 1 | pass |
+| `toon_eyew_lod0` | 327 | 0.614 | 1 | 237 | pass |
+| `main_hair` | 3,531 | 0.998 | 24 | 55 | fail (frozen probe: 0.999 / 24) |
+| `main_hair_front` | 6,154 | 0.841 | 22 | 45 | fail (frozen probe: 0.845 / 22) |
+| `main_item`, `toon_nose_lod0` | 0 | — | — | — | never frontmost |
+
+The hair families fail by the same amount as in the frozen probe, so their
+residual is not caused by live inputs. In `toon_eyew_lod0`, a single pixel
+exceeds 4 bytes. The geometry and depth gates are the first live-vertex
+comparison of this card with the original: native pose, native bindings and the
+default expression.
+The production main pass with the same live draws fails the colour gate. Over
+the translated silhouette, 4,779 pixels differ by more than 4 bytes. Of these,
+4,538 lie on colour or alpha edges of the original image, where an 8-neighbour
+differs by more than 16 or the alpha changes. The 86,238 interior pixels have a
+mean of 0.179 and a p99 of 1. The difference is therefore MSAA resolve and
+post-processing at edges, not shading. Two inputs were needed to reach these
+numbers. Without the source UV1 stream, hair aliased UV0 (character mean 7.65,
+p99 193). Without the default expression, the eyelid geometry differed from the
+capture (character mean 0.420, p99 6).
+
+With only the native texture store, 1 slot draws live (`cf_O_noseline`,
+`toon_nose_lod0`) and 19 stay toon, each with its reason:
+
+- 9 runtime composites that are not composed natively: the body and face
+  `CustomTextureControl` textures, the `ctCreateEyeW` eye whites,
+  `ctCreateEyeL`/`R` irises and three `ChangeCustomClothes` garments;
+- 6 `_RampG` (`gt_ramp_01`) slots;
+- 4 hair `_HairGloss` slots.
+
+The validation capture then draws only the nose, so the character gate fails by
+construction. Natively composed textures remain the next step.
+
+**Measurement: Studio scene.** `koikatu_cs0002591.png`
+(`IKKOKU_STUDIO_SCENARIO_SCENE`) was captured with `IKKOKU_LIVE_SOURCE_SHADERS=1`
+and the inputs above, without look settings. Six source characters loaded with
+no crash. 6 slots draw live (`cf_O_noseline` per character); the renderer
+reported 6 draws and no render-time fallbacks. 11 items are hidden: 6 double
+teeth, and 5 loafers hidden by `clothesState`/`shoesType`. 109 slots stay toon:
+
+| Reason | Slots |
+| --- | ---: |
+| `_ambientshadowG` unresolved: CharaStudio `SceneInfo` → `Shader.SetGlobal` mapping not recovered | 36 |
+| No source renderer in the binding set: the native preview draws the converted avatar's default hair and clothes for selections that are not converted | 36 |
+| `_linewidthG` unresolved (same mapping) | 25 |
+| `_MainTex_ST`: `EyeLookMaterialControll` offsets not evaluated (no look settings supplied) | 12 |
+
+The frame times are medians over runs of each run's p50, on an M2 Ultra at
+1200×1600 with 60 measured frames (`IKKOKU_BENCHMARK_FRAMES=60`).
+Opt-in OFF: 3 runs, 126 visible items, 346,590 triangles. CPU encode 15.04 ms,
+GPU 1.447 ms, completion 17.01 ms. Opt-in ON: 4 runs, 115 visible items (the 11
+hidden items are not drawn), 324,890 triangles. CPU encode 13.76 ms, GPU
+1.452 ms, completion 15.83 ms. On the fixture at 768×1024 (20 frames), 20 live
+draws took CPU 3.99 ms and GPU 1.027 ms (p95 1.101). The toon path took 2.50 ms
+and 0.317 ms. With the native store (1 live draw): 2.36 / 0.323 ms against toon
+2.38 / 0.306 ms. Pipelines compile on first use: once per program, target and
+depth mode.
+
+**Regression (opt-in OFF).** The `IKKOKU_AUTOCAPTURE` images of three cases were
+byte-identical between `main` and this branch:
+
+- `koikatu_cs0002591.png`: `a0dc50f4…`;
+- the rig and fixture card: `9d973e21…`;
+- `synthetic-current.png`: `6837cd63…`.
+
+The frozen probe's deterministic images (`--families`,
+`SWIFT_DETERMINISTIC_HASHING=1`, 3 runs per build) were identical between the
+step-1 build and the live build: colour, depth, geometry, hair front, item, skin,
+eye and nose. Against `main`, only `toon_eyew_lod0` differs, from the intended
+step-1 eyeline slot. `main_hair`, `main_opaque`, `native-translated` and
+`native-main_opaque` vary between runs of one build; their hash sets overlap
+across builds.
+
+**Tests.** `SourceShaderLiveTests.swift` uses synthetic programs to cover:
+
+- the pipeline cache: once per program, target and pass state, plus the source
+  identity check;
+- the register layout;
+- the Unity-basis builtins and matrices;
+- all-or-nothing material resolution, with every fallback reason;
+- the vertex kernel: source layout, skinned normal magnitude, UV1/UV2
+  native/stream/zero, UV3/COLOR defaults;
+- validation-capture pixels, including the refusal to alias UV0;
+- a production main-pass live draw that leaves later toon frames unchanged;
+- stream manifests, assembly mapping and configuration.
+
+The gated `liveSourceShadersMeetTheControlledOriginalFrameGates` repeats the
+fixture measurement in the Engine suite. It implements the comparator's
+silhouette and colour metrics in Swift. It requires the gates above (hair
+bounded at its frozen-probe level) and the 1-live/19-toon store result. The
+private-source lane declares its fixtures: `IKKOKU_SHADER_BINDING_PROBE`,
+`IKKOKU_SOURCE_AVATAR`, `IKKOKU_MAKER_LIBRARY`, `IKKOKU_HEAD_MATERIAL_CONTRACT`,
+`IKKOKU_SHADER_BINDING_SUPPLEMENT`, `IKKOKU_STUDIO_HAND_POSE`,
+`IKKOKU_STUDIO_LOOK_SETTINGS`, `IKKOKU_LIVE_SOURCE_STREAMS` and
+`IKKOKU_LIVE_SOURCE_TEXTURES`. `Tools/reverse/test_source_live_inputs.py` covers
+the exporters' pure parts.
+
+**Limits.** One controlled card, one pose and one frame. Live drawing needs
+pixels the native store does not yet hold: runtime composites, `mt_ramp_00` and
+`mt_hairgloss_00`. Studio scene globals are unresolved. Unity's per-queue
+distance sort, keyword variants and the ShadowCaster pass are not reproduced.
+Live items cast native shadows. The hair residual (p99 24/22) and the production
+edge difference remain. Private evidence (runs, comparisons, the stores, frozen
+app builds and scripts) is in `.local/r1-live-b/`.
 
 ### Native pose gate
 
