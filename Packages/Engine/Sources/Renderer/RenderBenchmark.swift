@@ -34,4 +34,4 @@ public struct RenderBenchmark: Encodable, Sendable {
     }
 }
 
-public enum RenderBenchmarkError: Error { case invalidConfiguration, commandBuffer, deformation([String]), gpu(String) }
+public enum RenderBenchmarkError: Error { case invalidConfiguration, commandBuffer, deformation([String]), gpu(String), frame(RenderFrameError) }
