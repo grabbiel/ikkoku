@@ -148,6 +148,19 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   its adapter-report checks and produces identical reload pixels. Both installed-disabled and explicit-enabled runs passed; evidence is in
   `.local/reverse/plugin-execution/accepted-pr-2/`. See
   [native adapters](../reference/mods/native-adapters.md#startup-and-acceptance).
+  **2026-10-23, macOS 27 regression and fix (local-wave-verify L3):** the
+  rerun on macOS 27.0.1 / Xcode 27.0 (`native-adapter-capture-03`, main
+  `b0b8cb6`) failed the enabled configuration with "generated tone is silent
+  before focus events". SwiftUI now creates `NSApplication` before `AppState`,
+  so the `NSApp != nil` test sampled focus during `AppState.init` from an app
+  that was not yet active, and an enabled Mute zeroed the gain. The fix
+  (`claude/a-t04-launch-focus`) samples at once only after launching finished
+  and otherwise waits for `didFinishLaunching`. The adapter report gains
+  `launchFinished`, and the probe now rejects a sample taken before launching
+  finished. With the fix, `native-adapter-capture-04` passed both
+  configurations, and an independent comparison with `accepted-pr-2` passed
+  89/89 checks. See
+  [Local rerun on macOS 27](../reference/mods/native-adapters.md#local-rerun-on-macos-27-2026-10-23).
 - **A-T05 — Capture result integrity (P2; implemented 2026-10-23, local app
   acceptance pending).** Make UI/thumbnail output failures
   observable and return nonzero on any required missing output. Test a destination

@@ -95,6 +95,10 @@ executed during the documentation pass:
 - `.local/reverse/plugin-execution/release-capture-01/report.json`: successful
   IR plugin run/reload/continue. `native-adapter-capture-01` is a **failed** later
   attempt from before the A-T04 fix, not equivalent evidence.
+  `native-adapter-capture-03` (2026-10-23, macOS 27) failed the enabled
+  configuration, and `native-adapter-capture-04` passed both with the
+  launch-finished fix; see
+  [native adapters](../reference/mods/native-adapters.md#local-rerun-on-macos-27-2026-10-23).
 - `.local/reverse/original-animation-probe/native-comparison.json`: 180 source
   player samples, 60,804 bone matrices; see Studio audit for errors and scope.
 - `.local/reverse/studio-dynamics/final-targeted-tests.log`: 36 combined targeted
