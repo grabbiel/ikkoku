@@ -449,3 +449,37 @@ private struct CaptureRecipe {
     let error = CaptureInputError(variable: "IKKOKU_CARD", value: "/cards/missing.png", reason: "no file exists at this path")
     #expect(String(describing: error) == "IKKOKU_CARD=/cards/missing.png: no file exists at this path")
 }
+
+// R7: the performance trace is its own mode. It keeps the editor window, so its
+// options are rejected outside it and a window capture cannot share its launch.
+@Test func captureRequestClassifiesThePerformanceTrace() throws {
+    let trace: [String: String] = ["IKKOKU_PERF_TRACE": "/perf/studio-idle.json", "IKKOKU_PERF_WORKLOAD": "studio-orbit",
+                                   "IKKOKU_PERF_SECONDS": "10", "IKKOKU_PERF_WARMUP_SECONDS": "3", "IKKOKU_PERF_INPUT_HZ": "120",
+                                   "IKKOKU_PERF_WINDOW_W": "1600", "IKKOKU_PERF_WINDOW_H": "1000", "IKKOKU_PERF_CHARACTERS": "6",
+                                   "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
+    let request = try CaptureRequest.validate(trace)
+    #expect(request.mode == .perfTrace)
+    #expect(request.isAutomated)
+    #expect(!request.capturesWindow)
+    for workload in CaptureRequest.perfWorkloads {
+        var environment = trace
+        environment["IKKOKU_PERF_WORKLOAD"] = workload
+        #expect(captureRequestProblems(environment).isEmpty, Comment(rawValue: workload))
+    }
+
+    let outside: [[String]] = [["IKKOKU_PERF_SECONDS"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_SECONDS": "10"]) == outside)
+    let misspelled: [[String]] = [["IKKOKU_PERF_SECOND"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_PERF_SECOND": "10"]) == misspelled)
+    let window: [[String]] = [["IKKOKU_CAPTURE_UI", "IKKOKU_PERF_TRACE"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_CAPTURE_UI": "/ui.png"]) == window)
+    let withCapture: [[String]] = [["IKKOKU_PERF_TRACE", "IKKOKU_AUTOCAPTURE"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_AUTOCAPTURE": "/out.png"]) == withCapture)
+    for (variable, value) in [("IKKOKU_PERF_WORKLOAD", "studio"), ("IKKOKU_PERF_SECONDS", "0"), ("IKKOKU_PERF_SECONDS", "2.5"),
+                              ("IKKOKU_PERF_WINDOW_W", "100"), ("IKKOKU_PERF_INPUT_HZ", "0"), ("IKKOKU_PERF_CHARACTERS", "33")] {
+        var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]
+        environment[variable] = value
+        let expected: [[String]] = [[variable]]
+        #expect(captureRequestProblems(environment) == expected, Comment(rawValue: "\(variable)=\(value)"))
+    }
+}
