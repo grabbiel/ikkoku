@@ -159,9 +159,13 @@ matching File command validates model files before changing the document.
 
 A converted asset catalog is version 1 with an `items` array; each item contains
 `group`, `category`, `no`, `name`, and a local `file`. Relative files resolve beside
-the catalog. The original game's scene PNG and Ikkoku's JSON-in-PNG card remain
-different formats. Ikkoku scene cards store external paths; they are not asset
-packages and moving the referenced model files breaks those links.
+the catalog. Each referenced glTF loads as a package rooted at its own directory, as
+`export_prefab.py` writes it: its `.bin` and images must stay inside that directory
+(no `..`, absolute path, `file:` URL or symlink out of it), or the item fails with
+`GLTFError.escapesPackageRoot`. The original game's scene PNG and Ikkoku's
+JSON-in-PNG card remain different formats. Ikkoku scene cards store external
+paths; they are not asset packages and moving the referenced model files breaks
+those links.
 
 **File → Preview CharaStudio Scene…** separately rebuilds supported normal
 male/female card selections, applies shape/static ABMX/expression/FK state and

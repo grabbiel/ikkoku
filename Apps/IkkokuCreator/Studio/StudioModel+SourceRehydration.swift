@@ -176,7 +176,8 @@ extension StudioModel {
                 do {
                     let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
                     if loadedItemAssets[asset.url.path] == nil {
-                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url)
+                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
+                            packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
                     }
                     bundle.itemAssets[id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
                         colors: item.colors, alpha: item.alpha)

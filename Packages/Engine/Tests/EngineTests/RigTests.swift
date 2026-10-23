@@ -150,7 +150,7 @@ private func legacyBone(_ name: String, _ parent: Int?, translation: Float3 = Fl
 private func skinnedGLTF(_ nodes: [[String: Any]], joints: [Int]) throws -> GLTFAsset {
     let root: [String: Any] = ["asset": ["version": "2.0"], "nodes": nodes, "skins": [["joints": joints]],
                                "scenes": [["nodes": [0]]], "scene": 0]
-    return try GLBLoader.load(data: JSONSerialization.data(withJSONObject: root), baseURL: nil)
+    return try GLBLoader.load(data: JSONSerialization.data(withJSONObject: root))
 }
 
 @Test func legacySkeletonRejectsInvalidGraphsAndRestDataNamingTheBone() throws {
