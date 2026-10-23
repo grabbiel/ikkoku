@@ -79,7 +79,15 @@ private func object(_ source: KoikatsuObjectRecord) -> [String: Any] {
 }
 
 do {
-    let arguments = Array(CommandLine.arguments.dropFirst())
+    var arguments = Array(CommandLine.arguments.dropFirst())
+    // `shader-bindings` takes optional `--supplement <file>` and
+    // `--write-frame <file>` pairs anywhere after the subcommand.
+    func takeOption(_ flag: String) -> String? {
+        guard arguments.first == "shader-bindings", let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+        defer { arguments.removeSubrange(index...(index + 1)) }
+        return arguments[index + 1]
+    }
+    let supplementPath = takeOption("--supplement"), substitutedFramePath = takeOption("--write-frame")
     let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card", "draw-overlays"].contains(arguments[0])
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
@@ -96,7 +104,8 @@ do {
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
     let lookData = (arguments.count == 2 || arguments.count == 3) && arguments[0] == "look-data"
-    guard inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose || lookData || routePlayback || routeStepping else {
+    let shaderBindings = (arguments.count == 5 || arguments.count == 6) && arguments[0] == "shader-bindings"
+    guard shaderBindings || inspecting || converting || rigSnapshot || expressionSnapshot || modCatalog || boneSnapshot || cardPose || cardMods || logicTrace || studioPose || animationPose || lookData || routePlayback || routeStepping else {
         throw GLTFError.io("""
             Usage: ikkoku-inspect <scene|model|camera|change-amount|rig|mod|card|draw-overlays> <local-file>
                    ikkoku-inspect mod-library <library.json>
@@ -117,6 +126,7 @@ do {
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
                    ikkoku-inspect expression-snapshot <rig-or-avatar.json> <expression-contract.json> <defaults|preset-id|inputs.json>
                    ikkoku-inspect look-data <source-scene.png> [studio-look-settings.json]
+                   ikkoku-inspect shader-bindings <card.png> <maker-library.json> <head-material-contract.json> <translated-shaders-dir> [<capture-frame.json>] [--supplement <source-binding-supplement.json>] [--write-frame <native-bound-frame.json>]
             """)
     }
     let url = URL(fileURLWithPath: arguments[1]).standardizedFileURL
@@ -238,6 +248,12 @@ do {
         report["scope"] = "Original bytes preserved; current character framing, shape records, supported ABMX data and saved mod-reference metadata decoded. Hair, outfits, materials, other plugins and edited-card serialization remain unfinished."
     case "draw-overlays":
         report.merge(try inspectDrawOverlays(url: url)) { _, new in new }
+    case "shader-bindings":
+        report.merge(try inspectShaderBindings(cardURL: url, libraryURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL,
+            headContractURL: URL(fileURLWithPath: arguments[3]).standardizedFileURL, programsURL: URL(fileURLWithPath: arguments[4]).standardizedFileURL,
+            frameURL: arguments.count == 6 ? URL(fileURLWithPath: arguments[5]).standardizedFileURL : nil,
+            supplementURL: supplementPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
+            substitutedFrameURL: substitutedFramePath.map { URL(fileURLWithPath: $0).standardizedFileURL })) { _, new in new }
     case "card-mods":
         let card = try SourceCharacterCard.load(url: url)
         let libraryURL = URL(fileURLWithPath: arguments[2]).standardizedFileURL
@@ -383,7 +399,8 @@ do {
         // Validate every referenced model before producing a usable native scene.
         var models: [String: GLTFAsset] = [:]
         for path in Set(document.objects.compactMap(\.assetFile)) {
-            let model = try GLBLoader.load(url: URL(fileURLWithPath: path))
+            let modelURL = URL(fileURLWithPath: path)
+            let model = try GLBLoader.load(url: modelURL, packageRoot: KoikatsuAssetResolver.packageRoot(of: modelURL))
             guard model.skins.isEmpty, !model.meshNodes.isEmpty else { throw GLTFError.io("Layout assets must contain static meshes.") }
             models[path] = model
         }
@@ -405,7 +422,8 @@ do {
         report["objectCount"] = document.objects.count
         report["scope"] = "Prop/folder transforms and visibility only; source materials, animation, cameras and scene settings are not applied."
     case "model":
-        let model = try GLBLoader.load(url: url)
+        // The command-line argument names the file explicitly: a trusted standalone load.
+        let model = try GLBLoader.loadTrustedFile(url: url)
         var bounds = AABB.empty
         var vertices = 0, triangles = 0
         for (node, mesh) in model.meshNodes {

@@ -68,8 +68,21 @@ The runtime handles Awake, OnEnable, Start, FixedUpdate, Update, LateUpdate,
 OnDisable and OnDestroy. Its scene adapter converts Unity coordinates once,
 resolves source character attachment frames, and excludes scale from self-space
 Translate. A failed frame restores document changes, component fields, lifecycle
-flags, clocks, pending destruction and trace together. Fuel, nesting, component
-count and fixed-step limits bound execution. Recursive methods fail before
+flags, clocks, pending destruction and trace together. A rejected attachment
+also rolls back as one transaction. This matters because a field initializer can
+reach Instantiate or SetActive, whose clone and activation callbacks run other
+components before a later initializer fails.
+
+These limits bound execution:
+
+- 20,000 instructions per component for each top-level callback. A nested
+  callback of the same component draws on the same fuel.
+- 16 evaluation levels at run time; validation rejects nesting deeper than 24.
+- Call depth 8, nested invocation depth 8 and nested activation depth 8.
+- 64 nested Studio world transactions and, by default, 64 fixed steps per frame.
+- 1,024 components; a further attachment is rejected as invalid.
+
+Run-time limits raise the budget error, so recursive methods fail before
 exhausting a native thread stack.
 
 The original Unity 5.6.2f1 lifecycle probe establishes:
@@ -115,6 +128,27 @@ field/clock values. Frontend tests also compile generated Swift and, with origin
 fixtures available, compare 4,002 recovered numeric method evaluations against
 unmodified original DLLs. Check executed fixture cases separately from a default
 test run whose private-fixture checks may be skipped.
+
+`SourcePluginFaultInjectionTests.swift` (P-T04 Swift slice, added 2026-10-23,
+synthetic fixtures) checks the interpreter and Studio host without the .NET or
+swiftc legs. Its verification is the CI Engine `swift test` run. It was not
+compiled locally. The suite covers:
+
+- Fixed-seed SplitMix64 mutation of IR and manifests. Each operation either
+  commits with finite host transforms and declared field types, or throws a
+  defined error and leaves the full snapshot unchanged. A second run must match
+  the first.
+- Random typed expressions checked bit for bit against an independent Swift
+  evaluation, including NaN and infinity.
+- Fuel, nesting, recursion, activation ping-pong and fixed-step budgets.
+- Failures injected into each lifecycle callback and into
+  Instantiate/Destroy/SetEnabled; retried runs must match a clean run in the
+  order listed above.
+- Attachment-resolver failures at every call of a frame, and an `afterUpdate`
+  failure, through both the runtime and `SourceStudioPluginSession`.
+
+IEEE results such as infinity remain bit-exact field values. Float literals
+outside Float range and nonfinite transform writes are rejected.
 
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized

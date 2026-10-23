@@ -52,6 +52,10 @@ root
 ```
 Weights: max 4 influences per vertex, normalised. Bone placement is derived
 from the mesh (slice centroids), verified by a render with bones drawn.
+Joint names must be unique within a skin. The engine's `Skeleton.from` rejects
+duplicate names and sheared Armature or intermediate-node transforms with a
+named error; see the
+[import contract](renderer.md#checked-math-legacy-skeletons-and-cameras-r4).
 
 ## Body files: `Assets/Characters/body_f.glb`, `body_m.glb`
 
@@ -194,3 +198,32 @@ and garment on the body, and a morph-target contact sheet to
   `textures.eyeWhite` are decoded fields, but current hair material uses mesh/node
   extras, chain discovery inspects the skeleton and eye material uses the fixed
   `eye_white.png` path. Do not treat every decoded field as applied behavior.
+* **glTF loader subset.** `GLBLoader` implements no glTF extensions. Any
+  `extensionsRequired` entry fails the load; `extensionsUsed` entries are reported.
+  It decodes POSITION, NORMAL, TANGENT, TEXCOORD_0–2, COLOR_0, paired
+  JOINTS_n/WEIGHTS_n and `_REGION`. Other vertex attributes and morph attributes
+  other than POSITION/NORMAL are reported, not decoded. Native materials sample
+  base-color/normal textures on UV0 with trilinear REPEAT. `LoadedAsset` rejects a
+  drawn texture that selects TEXCOORD_1/2. Other sampler modes,
+  metallic-roughness/occlusion/emissive textures and nonzero initial morph weights
+  are reported but not applied; `GLTFAsset.initialMorphWeights(ofNode:)` keeps the
+  weights. More than four influences are folded to the largest four, with a report.
+  Reports are `GLTFAsset.diagnostics` and are appended to `AssetLibrary.log`. The
+  app prints that log only at startup and after autocapture; there is no
+  interactive view. Bundled assets currently report nothing except the influence
+  fold in the two `Assets/fixtures` rigs.
+* **Package containment.** Catalog entries are package loads:
+  `AssetLibrary.asset(_:)` loads a relative catalog path with
+  `GLBLoader.load(url:packageRoot:)` under the asset root (`IKKOKU_ASSETS`, the app
+  bundle's resources or the source tree's `Assets/`). The asset file must resolve inside
+  that root after symlinks. Each external buffer/image URI must be a canonical
+  relative path after percent-decoding (no scheme or drive, absolute path,
+  backslash, NUL, or empty, `.` or `..` segment), and its `realpath` must stay inside
+  the root. All references are checked before any external bytes are read; an
+  escape fails with `GLTFError.escapesPackageRoot`. `data:` URIs and the GLB `BIN`
+  chunk are always allowed. Keep any symlink in the asset tree pointing inside it.
+  An absolute path, as recorded in a native scene's `assetFile` after File → Import
+  Model, is an explicit user choice and loads through the separately named
+  `GLBLoader.loadTrustedFile(url:)`/`AssetLibrary.importTrustedStaticAsset(url:)`
+  without containment. The library's PNG texture, sidecar and body-mask reads are
+  not glTF references and are not part of this check.

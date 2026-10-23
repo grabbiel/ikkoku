@@ -13,6 +13,8 @@ struct GLTFRoot: Codable {
         var rotation: [Float]?
         var scale: [Float]?
         var matrix: [Float]?
+        /// Initial morph weights for this node's mesh; they override `Mesh.weights`.
+        var weights: [Float]?
         var extras: JSONValue?
     }
     struct Primitive: Codable {
@@ -60,11 +62,14 @@ struct GLTFRoot: Codable {
         var baseColorTexture: TextureInfo?
         var metallicFactor: Float?
         var roughnessFactor: Float?
+        var metallicRoughnessTexture: TextureInfo?
     }
     struct Material: Codable {
         var name: String?
         var pbrMetallicRoughness: PBR?
         var normalTexture: TextureInfo?
+        var occlusionTexture: TextureInfo?
+        var emissiveTexture: TextureInfo?
         var emissiveFactor: [Float]?
         var alphaMode: String?
         var alphaCutoff: Float?
@@ -72,10 +77,13 @@ struct GLTFRoot: Codable {
         var extras: JSONValue?
     }
     struct Texture: Codable { var source: Int?; var sampler: Int? }
+    struct Sampler: Codable { var magFilter: Int?; var minFilter: Int?; var wrapS: Int?; var wrapT: Int?; var name: String? }
     struct Image: Codable { var uri: String?; var mimeType: String?; var bufferView: Int?; var name: String? }
     struct Skin: Codable { var name: String?; var inverseBindMatrices: Int?; var skeleton: Int?; var joints: [Int] }
 
     var asset: Asset
+    var extensionsUsed: [String]?
+    var extensionsRequired: [String]?
     var scene: Int?
     var scenes: [Scene]?
     var nodes: [Node]?
@@ -85,6 +93,7 @@ struct GLTFRoot: Codable {
     var buffers: [Buffer]?
     var materials: [Material]?
     var textures: [Texture]?
+    var samplers: [Sampler]?
     var images: [Image]?
     var skins: [Skin]?
     var extras: JSONValue?

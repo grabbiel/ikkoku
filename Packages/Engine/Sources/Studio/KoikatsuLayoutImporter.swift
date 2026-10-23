@@ -67,6 +67,13 @@ public struct KoikatsuAssetResolver {
         guard ["glb", "gltf"].contains(url.pathExtension.lowercased()) else { throw KoikatsuLayoutError.invalidAssetPath }
         return (entry.name, url.standardizedFileURL)
     }
+
+    /// The package root a resolved asset loads under (`GLBLoader.load(url:packageRoot:)`):
+    /// the directory holding the converted glTF/GLB. `export_prefab.py` writes the glTF,
+    /// its `.bin`, its PNGs and its provenance into one output directory, so external
+    /// buffers/images may not leave it. The catalog itself is user-chosen configuration
+    /// and may still name absolute files.
+    public static func packageRoot(of asset: URL) -> URL { asset.deletingLastPathComponent() }
 }
 
 /// Imports only the prop/folder hierarchy, visibility and transforms. Source
