@@ -2016,17 +2016,18 @@ pixels to establish their native-store colour accuracy.
 **Release measurements.** On the M2 Ultra at 768×1024, three old/new-store pairs
 were interleaved under the shared app lock with other builds and captures paused.
 All seven runs (six store runs plus one capture-provider control) used Release
-executable SHA-256 `7f2486ff481c966a8023b626033cd37b1ef077df7003b7897ae503d8fbc09eac`.
+executable SHA-256 `fdb6303169b33a01badafe4234ca86d47bf84c07e54bed81a2c035229fb87707`
+(after the verified-buffer/content-cache fix).
 Each synchronous offscreen benchmark warms three frames and measures 20; import,
 simulation and PNG readback are excluded. The table gives the median of each
 run's percentile:
 
 | Store | Live / toon slots | CPU encode p50 | GPU p50 / p95 | Completion p50 | Registered textures | Metal allocation |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Original 42 assets | 1 / 19 | 0.1547 ms | 0.3059 / 0.3418 ms | 0.7873 ms | 63 | 442.22 MiB |
-| Completed 47 assets | 11 / 9 | 0.2683 ms | 0.5326 / 0.5674 ms | 1.1665 ms | 65 | 455.12 MiB |
+| Original 42 assets | 1 / 19 | 0.1500 ms | 0.3110 / 0.3284 ms | 0.8079 ms | 63 | 442.22 MiB |
+| Completed 47 assets | 11 / 9 | 0.2739 ms | 0.5626 / 0.5976 ms | 1.2015 ms | 65 | 455.12 MiB |
 
-The ten additional translated slots cost 0.1135 ms CPU encode and 0.2268 ms GPU
+The ten additional translated slots cost 0.1239 ms CPU encode and 0.2516 ms GPU
 at p50. This measures added rendering work, not an equal-output speedup. Only two
 additional native textures are uploaded for these slots (ramp and gloss); the
 body-detail and nipple assets remain behind the body-composite fallback. Metal
@@ -2037,15 +2038,17 @@ assembly. The six paired toon renders are byte-identical (SHA-256
 
 For the three native-store Release renders, shared-frontmost eyebrow/eyeline
 pixels have mean 0.7098 and p99 0 over 278 pixels; back hair mean
-0.9893–0.9900, p99 23 over 3,529–3,530 pixels; front hair mean 0.6686–0.6687,
-p99 22 over 6,135–6,136 pixels. Hair still fails the strict p99≤4 colour gate,
+0.9895–0.9900, p99 23 over 3,530 pixels; front hair mean 0.6687,
+p99 22 over 6,135 pixels. Hair still fails the strict p99≤4 colour gate,
 within its existing residual bound. The complete capture-provider control has
 geometry IoU 1.0, depth p99 0, normal p99 2, and translated-character IoU
-0.9999798 / colour mean 0.19175 / p99 4. The production colour gate still fails
+0.9999798 / colour mean 0.19172 / p99 4. The production colour gate still fails
 (mean 2.2565, p99 69). The native subset cannot establish whole-character parity.
 Raw runs, input hashes, exact fallback lists, comparisons and the reproduction
-scripts are in `$R/release-*` and `$R/summary.json`; no new original-player capture
-was made.
+scripts are in `$R/reviewed-*` and `$R/reviewed-summary.json`; the initial
+pre-cache-fix runs remain in `$R/release-*` and `$R/summary.json`. The independent
+review and follow-up are retained as `$R/claude-*-review.json`. No new
+original-player capture was made.
 
 ### Native pose gate
 
