@@ -7,17 +7,20 @@ import CoreMath
 import ShaderTypes
 
 /// One source draw in the fixture's draw order: its render queue, the flat index
-/// of its item in `frame.items`, its source mesh, its shader family, and the
-/// programs to draw — outline before forward when the family has both programs,
-/// otherwise a single forward program.
+/// of its item in `frame.items`, the renderer material slot, its source mesh,
+/// its shader family, and the programs to draw — outline before forward when the
+/// family has both programs, otherwise a single forward program. A material slot
+/// beyond the mesh's submesh count draws over the last submesh, as Unity does,
+/// so its `item` is that submesh's item.
 public struct TranslatedDraw {
     public let queue: Int
     public let item: Int
+    public let slot: Int
     public let mesh: String
     public let family: String
     public let passes: [(pass: String, program: URL)]
-    public init(queue: Int, item: Int, mesh: String, family: String, passes: [(pass: String, program: URL)]) {
-        self.queue = queue; self.item = item; self.mesh = mesh; self.family = family; self.passes = passes
+    public init(queue: Int, item: Int, slot: Int, mesh: String, family: String, passes: [(pass: String, program: URL)]) {
+        self.queue = queue; self.item = item; self.slot = slot; self.mesh = mesh; self.family = family; self.passes = passes
     }
 }
 
@@ -52,12 +55,12 @@ public extension OriginalFrameProbe {
         guard let color = resources.device.makeTexture(descriptor: colorDescriptor), let depth = resources.device.makeTexture(descriptor: depthDescriptor), let command = queue.makeCommandBuffer() else { throw ProbeError.gpu("Source shader targets") }
         let outline = programURL.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent(programURL.deletingLastPathComponent().lastPathComponent + "_outline/program.json")
         let programs = FileManager.default.fileExists(atPath: outline.path) ? [outline, programURL] : [programURL]
-        var jobs: [(program: URL, item: Int?)] = programs.map { ($0, nil) }
+        var jobs: [(program: URL, selected: (item: Int, slot: Int)?)] = programs.map { ($0, nil) }
         if allFamilies || families != nil {
             jobs = try translatedDrawOrder(frameURL: frameURL, programURL: programURL, families: families)
-                .flatMap { draw in draw.passes.map { ($0.program, Optional(draw.item)) } }
+                .flatMap { draw in draw.passes.map { ($0.program, (draw.item, draw.slot)) } }
         }
-        for (index, job) in jobs.enumerated() { try encodeTranslatedShader(frameURL: frameURL, programURL: job.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selectedItem: job.item, sourceBackground: allFamilies, depth24Quantized: depth24Quantized) }
+        for (index, job) in jobs.enumerated() { try encodeTranslatedShader(frameURL: frameURL, programURL: job.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selected: job.selected, sourceBackground: allFamilies, depth24Quantized: depth24Quantized) }
         command.commit(); command.waitUntilCompleted()
         if let error = command.error { throw ProbeError.gpu(error.localizedDescription) }
         var bytes = [UInt8](repeating: 0, count: width * height * 4); bytes.withUnsafeMutableBytes { color.getBytes($0.baseAddress!, bytesPerRow: width * 4, from: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0) }
@@ -75,9 +78,9 @@ public extension OriginalFrameProbe {
     func captureTranslatedDrawTrace(frameURL: URL, programURL: URL, resources: ResourceStore, queue: any MTLCommandQueue, pixels: [(x: Int, y: Int)]) throws -> [DrawTraceRecord] {
         guard (1...256).contains(pixels.count) else { throw ProbeError.invalid("Trace pixel list must contain 1–256 pixels") }
         guard pixels.allSatisfy({ (0..<width).contains($0.x) && (0..<height).contains($0.y) }) else { throw ProbeError.invalid("Trace pixel outside the capture") }
-        struct Unit { let queue: Int; let item: Int; let mesh: String; let family: String; let pass: String; let program: URL }
+        struct Unit { let queue: Int; let item: Int; let slot: Int; let mesh: String; let family: String; let pass: String; let program: URL }
         let order = try translatedDrawOrder(frameURL: frameURL, programURL: programURL, families: nil)
-        let units: [Unit] = order.flatMap { draw in draw.passes.map { Unit(queue: draw.queue, item: draw.item, mesh: draw.mesh, family: draw.family, pass: $0.pass, program: $0.program) } }
+        let units: [Unit] = order.flatMap { draw in draw.passes.map { Unit(queue: draw.queue, item: draw.item, slot: draw.slot, mesh: draw.mesh, family: draw.family, pass: $0.pass, program: $0.program) } }
         let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height, mipmapped: false); colorDescriptor.usage = .renderTarget; colorDescriptor.storageMode = .shared
         let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float_stencil8, width: width, height: height, mipmapped: false); depthDescriptor.usage = [.renderTarget, .shaderRead]; depthDescriptor.storageMode = .private
         guard let color = resources.device.makeTexture(descriptor: colorDescriptor), let depth = resources.device.makeTexture(descriptor: depthDescriptor) else { throw ProbeError.gpu("Source shader trace targets") }
@@ -85,7 +88,7 @@ public extension OriginalFrameProbe {
         for count in 1...units.count {
             guard let command = queue.makeCommandBuffer() else { throw ProbeError.gpu("Source shader trace command") }
             for (index, unit) in units.prefix(count).enumerated() {
-                try encodeTranslatedShader(frameURL: frameURL, programURL: unit.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selectedItem: unit.item, sourceBackground: true)
+                try encodeTranslatedShader(frameURL: frameURL, programURL: unit.program, resources: resources, color: color, depth: depth, command: command, clear: index == 0, selected: (unit.item, unit.slot), sourceBackground: true)
             }
             guard let readback = resources.device.makeBuffer(length: 4 * pixels.count) else { throw ProbeError.gpu("Source shader trace readback") }
             guard let blit = command.makeBlitCommandEncoder() else { throw ProbeError.gpu("Source shader trace blit") }
@@ -109,18 +112,21 @@ public extension OriginalFrameProbe {
         return records
     }
 
-    /// Builds the fixture's whole draw list: one source draw per material that
-    /// has a translated program, sorted by render queue first and source mesh
-    /// order second; within one object the outline program precedes the forward
-    /// program. No per-queue distance ordering or shader pass order yet (R1).
+    /// Builds the fixture's whole draw list: one source draw per material slot
+    /// that has a translated program, sorted by render queue first and source
+    /// material order second; within one object the outline program precedes
+    /// the forward program. A slot beyond the submesh count draws the last
+    /// submesh again with its own material (Unity's extra-material rule). No
+    /// per-queue distance ordering or shader pass order yet (R1).
     private func translatedDrawOrder(frameURL: URL, programURL: URL, families: Set<String>?) throws -> [TranslatedDraw] {
         guard let source = try JSONSerialization.jsonObject(with: Data(contentsOf: frameURL)) as? [String: Any], let meshes = source["meshes"] as? [[String: Any]] else { throw ProbeError.invalid("Source mesh list") }
-        var draws: [TranslatedDraw] = [], index = 0
+        var draws: [(draw: TranslatedDraw, order: Int)] = [], firstItem = 0, order = 0
         let directory = programURL.deletingLastPathComponent().deletingLastPathComponent()
         for mesh in meshes {
-            guard let materials = mesh["materials"] as? [[String: Any]], let count = mesh["submeshes"] as? Int, count <= materials.count else { throw ProbeError.invalid("Source material list") }
-            for material in materials.prefix(count) {
-                defer { index += 1 }
+            guard let materials = mesh["materials"] as? [[String: Any]], let count = mesh["submeshes"] as? Int, count > 0, count <= materials.count else { throw ProbeError.invalid("Source material list") }
+            defer { firstItem += count }
+            for (slot, material) in materials.enumerated() {
+                defer { order += 1 }
                 guard let shader = material["shader"] as? String, let renderQueue = material["queue"] as? Int else { throw ProbeError.invalid("Source shader identity") }
                 // This original shader contains only a ShadowCaster pass;
                 // the controlled camera has shadows disabled.
@@ -131,14 +137,14 @@ public extension OriginalFrameProbe {
                 let forward = directory.appendingPathComponent(name + "/program.json")
                 let outline = directory.appendingPathComponent(name + "_outline/program.json")
                 guard FileManager.default.fileExists(atPath: forward.path) else { throw ProbeError.invalid("Missing translated shader \(shader)") }
-                draws.append(TranslatedDraw(queue: renderQueue, item: index, mesh: (mesh["name"] as? String) ?? name, family: name,
-                    passes: FileManager.default.fileExists(atPath: outline.path) ? [("outline", outline), ("forward", forward)] : [("forward", forward)]))
+                draws.append((TranslatedDraw(queue: renderQueue, item: firstItem + min(slot, count - 1), slot: slot, mesh: (mesh["name"] as? String) ?? name, family: name,
+                    passes: FileManager.default.fileExists(atPath: outline.path) ? [("outline", outline), ("forward", forward)] : [("forward", forward)]), order))
             }
         }
-        return draws.sorted { $0.queue == $1.queue ? $0.item < $1.item : $0.queue < $1.queue }
+        return draws.sorted { $0.draw.queue == $1.draw.queue ? $0.order < $1.order : $0.draw.queue < $1.draw.queue }.map(\.draw)
     }
 
-    private func encodeTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, color: any MTLTexture, depth: any MTLTexture, command: any MTLCommandBuffer, clear: Bool, selectedItem: Int?, sourceBackground: Bool, depth24Quantized: Bool = false) throws {
+    private func encodeTranslatedShader(frameURL: URL, programURL: URL, resources: ResourceStore, color: any MTLTexture, depth: any MTLTexture, command: any MTLCommandBuffer, clear: Bool, selected: (item: Int, slot: Int)?, sourceBackground: Bool, depth24Quantized: Bool = false) throws {
         typealias Row = [String: Any]
         func object(_ url: URL) throws -> Row { guard let row = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? Row else { throw ProbeError.invalid("Shader descriptor") }; return row }
         func integer(_ value: Any?) throws -> Int { guard let n = value as? NSNumber else { throw ProbeError.invalid("Missing integer shader binding") }; return n.intValue }
@@ -285,13 +291,18 @@ public extension OriginalFrameProbe {
                 if stage == "vertex" { encoder.setVertexTexture(gpuTexture, index: slot); encoder.setVertexSamplerState(gpuSampler, index: samplerSlot) } else { encoder.setFragmentTexture(gpuTexture, index: slot); encoder.setFragmentSamplerState(gpuSampler, index: samplerSlot) }
             }
         }
-        var itemIndex = 0, draws = 0
+        var firstItem = 0, draws = 0
         for sourceMesh in sourceMeshes {
-            guard let materials = sourceMesh["materials"] as? [Row], let submeshes = sourceMesh["submeshes"] as? Int else { throw ProbeError.invalid("Source mesh metadata") }
-            for index in 0..<submeshes {
-                defer { itemIndex += 1 }
-                guard index < materials.count, itemIndex < frame.items.count else { throw ProbeError.invalid("Source material index") }
-                let material = materials[index]; if material["shader"] as? String != shaderName || (selectedItem != nil && itemIndex != selectedItem) { continue }
+            guard let materials = sourceMesh["materials"] as? [Row], let submeshes = sourceMesh["submeshes"] as? Int, submeshes > 0 else { throw ProbeError.invalid("Source mesh metadata") }
+            guard submeshes <= materials.count else { throw ProbeError.invalid("Source material index") }
+            defer { firstItem += submeshes }
+            // Unity draws a material slot beyond the submesh count over the
+            // last submesh, with that slot's material.
+            for (slot, material) in materials.enumerated() {
+                let itemIndex = firstItem + min(slot, submeshes - 1)
+                guard itemIndex < frame.items.count else { throw ProbeError.invalid("Source material index") }
+                if material["shader"] as? String != shaderName { continue }
+                if let selected, selected.item != itemIndex || selected.slot != slot { continue }
                 let transform = try floats(sourceMesh["rendererMatrix"])
                 guard transform.count == 16 else { throw ProbeError.invalid("Source object transform") }
                 objectToWorld = float4x4(columns: (Float4(transform[0], transform[1], transform[2], transform[3]), Float4(transform[4], transform[5], transform[6], transform[7]), Float4(transform[8], transform[9], transform[10], transform[11]), Float4(transform[12], transform[13], transform[14], transform[15])))

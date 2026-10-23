@@ -463,18 +463,9 @@ public final class SourceStudioCharacterPreview {
         // fallback is not recovered) instead of inventing a constructor default.
         var irisCardValues: SourceStudioIrisRendering.CardValues?
         if !irisEyes.isEmpty {
-            let paths = ["face.pupilX", "face.pupilY", "face.pupilWidth", "face.pupilHeight",
-                         "face.hlUpY", "face.hlDownY"]
-            let unprefixed = ["pupil X", "pupil Y", "pupil width", "pupil height", "highlight up Y", "highlight down Y"]
-            var fields: [Double] = [], missing: [String] = []
-            for (path, label) in zip(paths, unprefixed) {
-                guard let value = draft?.number(path) else { missing.append(label); continue }
-                fields.append(Double(value))
-            }
-            if fields.count == paths.count {
-                irisCardValues = SourceStudioIrisRendering.cardOverrides(
-                    pupilX: fields[0], pupilY: fields[1], pupilWidth: fields[2], pupilHeight: fields[3],
-                    hlUpY: fields[4], hlDownY: fields[5], sex: identity.sex, exType: identity.exType)
+            let (values, missing) = SourceStudioIrisRendering.cardValues(appearance: draft, sex: identity.sex, exType: identity.exType)
+            if missing.isEmpty {
+                irisCardValues = values
                 if irisCardValues != nil {
                     messages.append("Iris rendering applies the card pupil offset/scale and highlight offsets over the bo_head_00 prefab snapshot.")
                 } else {
