@@ -2,6 +2,7 @@ import Foundation
 import simd
 import Testing
 @testable import Studio
+import Character
 
 // The renderer-side mapping from eye-look rates to MaterialUniforms.irisST,
 // replayed against the exported bo_head_00 eyeMaterial block without Metal or
@@ -206,4 +207,41 @@ private func defaults(
         #expect(abs(native - (1 - unity)) < 1e-6)
     }
     #expect(SourceStudioIrisRendering.nativeST(scale: SIMD2(1, 1), offset: .zero) == SIMD4<Float>(1, 1, 0, 0))
+}
+
+@Test func irisBindingEyeLookCarriesUnityTransformsPerGameObjectAndTexture() throws {
+    // The shader binding set's eye-look input: the same replay as
+    // `transforms`, kept in Unity convention (no native-V flip) and keyed by
+    // the source GameObject and texState texture name.
+    let eyes = try exportedSettings()
+    let card = try #require(defaults())
+    let look = try SourceStudioIrisRendering.bindingEyeLook(eyes: eyes, card: card, rates: nil, source: "fixture")
+    #expect(look.source == "fixture" && look.transforms.keys.sorted() == ["cf_Ohitomi_L02", "cf_Ohitomi_R02"])
+    for (object, expected) in [("cf_Ohitomi_L02", -0.02), ("cf_Ohitomi_R02", 0.02)] {
+        let entry = try #require(look.transforms[object])
+        #expect(entry.keys.sorted() == ["_MainTex", "_overtex1", "_overtex2"])
+        for transform in entry.values {
+            #expect(transform.scale == [1, 1] && !transform.yure)
+            #expect(abs(Double(transform.offset[0]) - expected) <= 1e-7 && abs(Double(transform.offset[1])) <= 1e-7)
+        }
+    }
+    // Live rates move the written offsets exactly as the renderer uniforms do.
+    let live = try SourceStudioIrisRendering.bindingEyeLook(eyes: eyes, card: card, rates: ([0.3, -0.1], -0.4), source: "live")
+    let native = try SourceStudioIrisRendering.transforms(rateH: 0.3, rateV: -0.4, settings: eyes[0], card: card)
+    let unity = try #require(live.transforms["cf_Ohitomi_L02"]?["_MainTex"])
+    #expect(SourceStudioIrisRendering.nativeST(scale: SIMD2(Double(unity.scale[0]), Double(unity.scale[1])),
+                                               offset: SIMD2(Double(unity.offset[0]), Double(unity.offset[1]))) == native[0])
+    // A Yure texState is flagged, so the derivation reports it unresolved.
+    let yureJSON = exportedEyeMaterialJSON.replacingOccurrences(of: #"{"isYure": 0, "texID": -1, "texName": "_overtex2"}"#,
+                                                                with: #"{"isYure": 1, "texID": -1, "texName": "_overtex2"}"#)
+    let yure = try SourceStudioIrisRendering.bindingEyeLook(eyes: SourceStudioEyeMaterialSettings.document(json: Data(yureJSON.utf8)),
+                                                            card: card, rates: nil, source: "yure")
+    #expect(yure.transforms["cf_Ohitomi_L02"]?["_overtex2"]?.yure == true && yure.transforms["cf_Ohitomi_L02"]?["_MainTex"]?.yure == false)
+}
+
+@Test func irisCardValuesNeedAllSixFaceFields() throws {
+    // A card without the face record keeps the prefab snapshot and names the
+    // missing fields, the preview's load-time rule.
+    let missing = SourceStudioIrisRendering.cardValues(appearance: nil, sex: 1, exType: 0)
+    #expect(missing.values == nil && missing.missing.count == 6 && missing.missing.first == "pupil X")
 }

@@ -123,7 +123,9 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
                     throw ComparisonError.invalid("Capture material \(name)[\(slot)] lacks a shader or name")
                 }
                 let family = shader.split(separator: "/").last.map(String.init) ?? shader
-                let drawnByProbe = slot < submeshes
+                // The probe draws every slot; one beyond the submesh count goes
+                // over the last submesh, as Unity draws it.
+                let extraSlot = slot >= submeshes
                 if family == "shadowcast" {
                     diagnostics.append("\(name)[\(slot)] \(shader) is a shadow caster; the probe skips it and it is not compared.")
                     continue
@@ -137,7 +139,7 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
                 }
                 matched.insert(index)
                 let renderer = bindings.renderers[index]
-                let probeNote = drawnByProbe ? nil : "material slot \(slot) is beyond the mesh's \(submeshes) submesh(es): Unity draws it over the last submesh, the probe's materials.prefix(submeshes) does not"
+                let probeNote = extraSlot ? "material slot \(slot) is beyond the mesh's \(submeshes) submesh(es): Unity and the probe draw it over the last submesh" : nil
                 if !renderer.visible {
                     findings.append(Finding(mesh: name, materialSlot: slot, material: materialName, family: family, category: .renderer,
                         input: "renderer", status: .differs, native: .string("hidden"), capture: .string("drawn"),
@@ -145,12 +147,11 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
                     continue
                 }
                 findings.append(Finding(mesh: name, materialSlot: slot, material: materialName, family: family, category: .renderer,
-                    input: "renderer", status: drawnByProbe ? .exact : .extra, native: .string("drawn"),
-                    capture: .string(drawnByProbe ? "drawn" : "recorded, not drawn by probe"), nativeSource: renderer.visibility,
-                    captureSource: "capture mesh row", cause: drawnByProbe ? nil : "probe draws only materials.prefix(submeshes)", note: probeNote))
+                    input: "renderer", status: .exact, native: .string("drawn"),
+                    capture: .string("drawn"), nativeSource: renderer.visibility,
+                    captureSource: "capture mesh row", cause: nil, note: probeNote))
                 findings += compareMaterial(renderer: renderer, captured: captured, family: family, shader: shader, catalog: catalog,
-                                            texturesByFile: texturesByFile, uses: &contractUses, usedGlobals: &usedGlobals, globalOrder: &globalOrder,
-                                            drawnByProbe: drawnByProbe)
+                                            texturesByFile: texturesByFile, uses: &contractUses, usedGlobals: &usedGlobals, globalOrder: &globalOrder)
             }
         }
         for (index, renderer) in bindings.renderers.enumerated() where !matched.contains(index) {
@@ -176,7 +177,7 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
     private static func compareMaterial(renderer: SourceShaderBindingSet.Renderer, captured: [String: Any], family: String, shader: String,
                                         catalog: SourceShaderProgramCatalog, texturesByFile: [String: [String: Any]],
                                         uses: inout [String: Int], usedGlobals: inout [String: SourceShaderProgramContract.Input],
-                                        globalOrder: inout [String], drawnByProbe: Bool) -> [Finding] {
+                                        globalOrder: inout [String]) -> [Finding] {
         let material = renderer.material
         let properties = captured["properties"] as? [String: Any] ?? [:]
         var result: [Finding] = []
@@ -244,7 +245,7 @@ public struct SourceShaderBindingComparison: Codable, Sendable {
         }
         let declared = catalog.properties(for: shader)
         for input in catalog.inputs(for: shader) {
-            uses[input.source.rawValue, default: 0] += drawnByProbe ? 1 : 0
+            uses[input.source.rawValue, default: 0] += 1
             switch input.source {
             case .builtin:
                 continue

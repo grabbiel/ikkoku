@@ -68,8 +68,9 @@ public enum SourceShaderBindingFrameSubstitution {
             guard let name = meshes[meshIndex]["name"] as? String, var materials = meshes[meshIndex]["materials"] as? [Row] else {
                 throw SubstitutionError.invalid("Capture mesh \(meshIndex) lacks a name or materials")
             }
-            let submeshes = (meshes[meshIndex]["submeshes"] as? NSNumber)?.intValue ?? materials.count
-            for slot in materials.indices where slot < submeshes {
+            // Every slot is drawn: one beyond the submesh count goes over the
+            // last submesh (Unity's extra-material rule, which the probe follows).
+            for slot in materials.indices {
                 guard let shader = materials[slot]["shader"] as? String, shader != "Shader Forge/shadowcast" else { continue }
                 let candidates = bindings.renderers.indices.filter { !matched.contains($0) && bindings.renderers[$0].mesh == name && bindings.renderers[$0].materialSlot == slot }
                 guard let index = candidates.first(where: { bindings.renderers[$0].visible }) ?? candidates.first else { keep("no native renderer"); continue }
