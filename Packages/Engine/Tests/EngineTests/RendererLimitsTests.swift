@@ -88,6 +88,46 @@ func frameRingSpillsPastItsRegionWithIntactDataAndTypedErrors() throws {
     ring.abandonFrame()
 }
 
+/// R6 Release regression (2026-10-23). A throwing caller of
+/// `allocate(array:)` must get its allocation back without an error. With
+/// Xcode 27.0 (Swift 6.4), Release builds of the former `withUnsafeBytes` copy
+/// failed this. The copy left `MTLBuffer.contents()` in the Swift error
+/// register, so this caller saw a thrown error that crashed when retained.
+/// Debug builds always passed, so this test only guards that case when the
+/// suite runs optimized:
+/// `swift test -c release -Xswiftc -enable-testing --filter frameRing`
+/// (the app-smoke lane's `engine-release-frame-ring` check).
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func frameRingArrayAllocationReachesAThrowingCallerWithoutAnError() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let ring = try #require(FrameRing(device: device, regionSize: 4096, regionCount: 1))
+    ring.beginFrame(0)
+    defer { ring.abandonFrame() }
+    let values: [UInt32] = [7, 11, 13, 17, 19]
+    let allocations = try copyArraysThroughAThrowingCaller(ring, values, repeats: 3)
+    #expect(allocations.count == 3)
+    for allocation in allocations {
+        let readBack = (0..<values.count).map {
+            allocation.buffer.contents().load(fromByteOffset: allocation.offset + $0 * MemoryLayout<UInt32>.stride, as: UInt32.self)
+        }
+        #expect(readBack == values)
+    }
+    // An empty array still takes one aligned slot and copies nothing.
+    let before = ring.bytesUsed
+    let empty = try copyArraysThroughAThrowingCaller(ring, [UInt32](), repeats: 1)
+    #expect(empty.count == 1)
+    #expect(ring.bytesUsed == before + FrameRing.alignment)
+}
+
+/// Throws only what `FrameRing` throws, like `Renderer.buildContext`. Kept out
+/// of line so the optimizer cannot merge it into the test body.
+@inline(never)
+private func copyArraysThroughAThrowingCaller(_ ring: FrameRing, _ values: [UInt32], repeats: Int) throws -> [FrameAllocation] {
+    var allocations: [FrameAllocation] = []
+    for _ in 0..<repeats { allocations.append(try ring.allocate(array: values)) }
+    return allocations
+}
+
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func frameRingNeverReusesARegionStillInFlight() throws {
     let device = try #require(MTLCreateSystemDefaultDevice())

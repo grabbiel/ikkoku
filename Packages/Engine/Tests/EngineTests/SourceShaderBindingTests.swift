@@ -369,10 +369,29 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
     let comparison = try SourceShaderBindingComparison.compare(bindings: bindings, frame: frameData, catalog: catalog)
     let overall = comparison.overall
     #expect(overall.differs == 0)
-    #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (567, 29, 16, 1, 613))
+    // The #102 supplement lacks the four catalog bundles behind 8 sampler
+    // states; the R1 sampler-bundle supplement (2026-10-23) adds exactly those
+    // bundles, copied from the original install. Either supplement is valid
+    // environment input, so the pinned numbers follow which one is supplied;
+    // a supplement with only some of the four is neither and fails.
+    let samplerBundles = ["chara/mt_hairgloss_00.unity3d", "chara/mt_nip_00.unity3d",
+                          "chara/mt_body_detail_00.unity3d", "chara/mt_ramp_00.unity3d"]
+    let supplementJSON = try #require(JSONSerialization.jsonObject(with: supplement) as? [String: Any])
+    let supplementSources = supplementJSON["sources"] as? [[String: Any]] ?? []
+    let bundles = Set(supplementSources.compactMap { $0["bundle"] as? String })
+    let samplerEvidence = samplerBundles.allSatisfy(bundles.contains)
+    #expect(samplerEvidence || !samplerBundles.contains(where: bundles.contains))
+    let samplers = comparison.findings.filter { $0.category == .sampler }
+    if samplerEvidence {
+        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (575, 29, 8, 1, 613))
+        #expect(samplers.count == 66 && samplers.allSatisfy { $0.status == .exact })
+    } else {
+        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (567, 29, 16, 1, 613))
+        #expect(samplers.filter { $0.status == .missingNatively }.count == 8)
+    }
     // Every remaining gap is one of the named, unresolvable causes.
     let causes = Set(comparison.gaps.map(\.cause))
-    #expect(causes.allSatisfy { $0.hasPrefix("sampler state") || $0.hasPrefix("EyeLookMaterialControll") || $0.hasPrefix("frame clock")
+    #expect(causes.allSatisfy { (!samplerEvidence && $0.hasPrefix("sampler state")) || $0.hasPrefix("EyeLookMaterialControll") || $0.hasPrefix("frame clock")
         || $0.hasPrefix("Unity value of an unset global") || $0 == "probe draws only materials.prefix(submeshes)" })
 
     // Mutation control on the capture side: one hair colour lane changed.

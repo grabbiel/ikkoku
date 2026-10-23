@@ -687,6 +687,20 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
 
+    def test_release_smoke_renders_with_the_optimized_app(self):
+        # R6 (2026-10-23): every Release render crashed while the Debug lanes
+        # passed, so app-smoke builds Release and renders one frame with it.
+        order = [check["id"] for lane, check in self.app_smoke_checks() if lane == "app-smoke.json"]
+        self.assertLess(order.index("build-release-app"), order.index("release-startup-capture"))
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        build = checks["build-release-app"]["argv"]
+        self.assertEqual(build[build.index("-configuration") + 1], "Release")
+        smoke = checks["release-startup-capture"]
+        self.assertIn("/Release/Ikkoku.app/", smoke["argv"][0])
+        self.assertEqual(smoke["env"].get("IKKOKU_SOURCE_TREE_FALLBACKS"), "0")
+        self.assertTrue(smoke["env"]["IKKOKU_AUTOCAPTURE"].endswith(".png"))
+
     def test_capture_only_plugin_evidence_runs_inside_a_capture(self):
         # A06: the app rejects IKKOKU_NATIVE_PLUGIN_REPORT and IKKOKU_APPLICATION_FOCUS
         # without IKKOKU_AUTOCAPTURE, the capture that ends the headless run; before,
