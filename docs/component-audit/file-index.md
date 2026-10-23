@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**837 files indexed; 837 assigned; 0 unassigned.**
+**843 files indexed; 843 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 87 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 89 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 180 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 304 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 150 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 305 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 153 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 176 |
-| Documentation / historical evidence | 54 |
+| Conversion / recovery / verification tool | 177 |
+| Documentation / historical evidence | 55 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 182 |
-| Test / validation | 169 |
+| Runtime / shared shader declaration | 185 |
+| Test / validation | 170 |
 
 ## App / gameplay / plugins
 
@@ -73,6 +73,8 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/ContentView.swift](../../Apps/IkkokuCreator/ContentView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceRelocation.swift](../../Packages/Engine/Sources/Assets/ResourceRelocation.swift) | Runtime / shared shader declaration |
@@ -668,6 +670,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/CoreMath/Ray.swift](../../Packages/Engine/Sources/CoreMath/Ray.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/CoreMath/Transform.swift](../../Packages/Engine/Sources/CoreMath/Transform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/CoreMath/UnityCoordinates.swift](../../Packages/Engine/Sources/CoreMath/UnityCoordinates.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/GPU/EngineBuild.swift](../../Packages/Engine/Sources/GPU/EngineBuild.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/GPU/FrameRing.swift](../../Packages/Engine/Sources/GPU/FrameRing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/GPU/GPUContext.swift](../../Packages/Engine/Sources/GPU/GPUContext.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift](../../Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift) | Runtime / shared shader declaration |
@@ -812,6 +815,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/private-source.json](../../Tools/verification/lanes/private-source.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
+| [Tools/verification/perf_trace.py](../../Tools/verification/perf_trace.py) | Conversion / recovery / verification tool |
 | [Tools/verification/prerequisites.json](../../Tools/verification/prerequisites.json) | Build / repository configuration |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/accessory-toggle.json](../../Tools/verification/scenarios/accessory-toggle.json) | Conversion / recovery / verification tool |
@@ -866,6 +870,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/visibility-folder.json](../../Tools/verification/scenarios/visibility-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/test_doctor.py](../../Tools/verification/test_doctor.py) | Test / validation |
 | [Tools/verification/test_inspect_app_bundle.py](../../Tools/verification/test_inspect_app_bundle.py) | Test / validation |
+| [Tools/verification/test_perf_trace.py](../../Tools/verification/test_perf_trace.py) | Test / validation |
 | [Tools/verification/test_run.py](../../Tools/verification/test_run.py) | Test / validation |
 | [docs/README.md](../../docs/README.md) | Documentation / historical evidence |
 | [docs/architecture.md](../../docs/architecture.md) | Documentation / historical evidence |
@@ -906,6 +911,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [docs/reference/mods/overview.md](../../docs/reference/mods/overview.md) | Documentation / historical evidence |
 | [docs/reference/mods/plugin-execution.md](../../docs/reference/mods/plugin-execution.md) | Documentation / historical evidence |
 | [docs/reference/native-assets.md](../../docs/reference/native-assets.md) | Documentation / historical evidence |
+| [docs/reference/performance.md](../../docs/reference/performance.md) | Documentation / historical evidence |
 | [docs/reference/renderer.md](../../docs/reference/renderer.md) | Documentation / historical evidence |
 | [docs/reference/studio/animation.md](../../docs/reference/studio/animation.md) | Documentation / historical evidence |
 | [docs/reference/studio/binary-contracts.md](../../docs/reference/studio/binary-contracts.md) | Documentation / historical evidence |

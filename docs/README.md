@@ -48,6 +48,7 @@ run; use the owning audit task to decide what still needs verification.
 
 - [Native bundled asset contract](reference/native-assets.md)
 - [Unity coordinates, renderer and matched-frame evidence](reference/renderer.md)
+- [App performance: harness, baseline and ranked costs (R7)](reference/performance.md)
 - [Managed assembly recovery](reference/managed-recovery.md), including the
   [2026-10-17 independent REA check](reference/managed-recovery.md#independent-rea-check--2026-10-17)
 
