@@ -2,24 +2,34 @@ import Foundation
 import AppKit
 import Studio
 import Gameplay
+import Renderer
 
 extension AppState {
+    /// Applies the Studio execution inputs. A failed input throws a `CaptureInputError`
+    /// naming its variable and value (A06); startup exits 1 on it in an automated run
+    /// and shows it as an alert otherwise.
     static func configureStudioExecution(_ studio: StudioModel) throws {
         let env = ProcessInfo.processInfo.environment
-        if let value = env["IKKOKU_STUDIO_ANIMATION_TIME"] {
+        try applyStudioInput("IKKOKU_STUDIO_ANIMATION_TIME", env) { value in
             guard let seconds = Float(value) else { throw SourcePluginError.invalid("Invalid source animation capture time.") }
             studio.liveAnimation = false
             try studio.setSourceAnimationTime(seconds)
         }
-        if let path = env["IKKOKU_SOURCE_PLUGIN_PROFILE"] { try studio.loadSourcePlugins(profileURL: URL(fileURLWithPath: path)) }
-        if let path = env["IKKOKU_NATIVE_PLUGIN_MANIFEST"] { try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: path)) }
-        if let json = env["IKKOKU_NATIVE_PLUGIN_MANIFESTS"] {
+        try applyStudioInput("IKKOKU_SOURCE_PLUGIN_PROFILE", env) { path in
+            try studio.loadSourcePlugins(profileURL: URL(fileURLWithPath: path))
+        }
+        try applyStudioInput("IKKOKU_NATIVE_PLUGIN_MANIFEST", env) { path in
+            try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: path))
+        }
+        try applyStudioInput("IKKOKU_NATIVE_PLUGIN_MANIFESTS", env) { json in
             let paths = try JSONDecoder().decode([String].self, from: Data(json.utf8))
             guard paths.count <= 32 else { throw SourcePluginError.invalid("Excessive native plugin capture mounts.") }
             for path in paths { try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: path)) }
         }
-        if let path = env["IKKOKU_MUTE_BACKGROUND_CONFIG"] { try studio.configureSourceMutePlugin(configURL: URL(fileURLWithPath: path)) }
-        if let value = env["IKKOKU_SOURCE_PLUGIN_STEPS"] {
+        try applyStudioInput("IKKOKU_MUTE_BACKGROUND_CONFIG", env) { path in
+            try studio.configureSourceMutePlugin(configURL: URL(fileURLWithPath: path))
+        }
+        try applyStudioInput("IKKOKU_SOURCE_PLUGIN_STEPS", env) { value in
             guard let steps = Int(value), (0...10_000).contains(steps),
                   let delta = Float(env["IKKOKU_SOURCE_PLUGIN_DELTA"] ?? "0.0333333333"), delta.isFinite, delta >= 0 else {
                 throw SourcePluginError.invalid("Invalid deterministic plugin capture steps.")
@@ -28,6 +38,15 @@ extension AppState {
             studio.sourcePluginsRunning = false; studio.liveAnimation = false
         }
         try captureSourceFocus(studio, env: env)
+    }
+
+    /// Runs `apply` with the value of `variable` when it is set, rethrowing a failure as a
+    /// `CaptureInputError` that names the variable and its value.
+    private static func applyStudioInput(_ variable: String, _ env: [String: String],
+                                         _ apply: (String) throws -> Void) throws {
+        guard let value = env[variable] else { return }
+        do { try apply(value) }
+        catch { throw CaptureInputError(variable: variable, value: value, reason: String(describing: error)) }
     }
 
     /// `IKKOKU_APPLICATION_FOCUS=0,1` delivers focus loss/gain through the AppKit
@@ -63,8 +82,8 @@ extension AppState {
         }
         let report: [String: Any] = ["schemaVersion": 1, "applicationCreated": NSApp != nil, "nativePlugins": references,
             "accessoryNamesEnabled": studio.sourceAccessoryNamesEnabled, "mount": mount, "focusTrace": trace, "final": studio.sourceFocusState()]
-        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-            .write(to: URL(fileURLWithPath: path), options: .atomic)
+        try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
+                                    to: URL(fileURLWithPath: path))
         print("[ikkoku] native plugin report written to \(path)")
     }
 }

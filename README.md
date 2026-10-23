@@ -21,6 +21,7 @@ Metal compiler. Deployment settings currently differ: app 14.6, engine package 1
 shader target 26.0. Older-macOS runtime support still needs verification. Run commands from the repository root:
 
 ```sh
+python3 Tools/verification/doctor.py --require public
 xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator \
   -configuration Debug -derivedDataPath .local/build \
   -destination 'platform=macOS,arch=arm64' build
@@ -28,6 +29,10 @@ open .local/build/Build/Products/Debug/Ikkoku.app
 swift test --package-path Packages/Engine
 ```
 
+The checker reports which recorded prerequisites are present. The
+[clean-checkout setup](docs/guides/build-and-test.md#set-up-a-clean-checkout)
+and its prerequisite table list every recorded tool and version, including the
+.NET SDK that the public test lane needs.
 The bundled prototype can run without the original installation. Source-based
 features require separately converted local data; see the
 [extraction runbook](Tools/reverse/README.md). Some tests require explicit private

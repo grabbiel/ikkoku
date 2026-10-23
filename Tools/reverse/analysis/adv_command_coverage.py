@@ -37,10 +37,10 @@ from pathlib import Path
 import re
 
 try:  # Run as a script or from Tools/reverse/analysis.
-    from gameplay_execution_contract import SUPPORTED, command_enum, digest, mono_records, recovered_project, selected_source
+    from gameplay_execution_contract import SUPPORTED, MissingRecoveredSource, RecoveredErrorStub, command_enum, digest, mono_records, recovered_project, selected_source
     import adv_host_requests as host
 except ImportError:  # Imported as analysis.adv_command_coverage from Tools/reverse.
-    from analysis.gameplay_execution_contract import SUPPORTED, command_enum, digest, mono_records, recovered_project, selected_source
+    from analysis.gameplay_execution_contract import SUPPORTED, MissingRecoveredSource, RecoveredErrorStub, command_enum, digest, mono_records, recovered_project, selected_source
     from analysis import adv_host_requests as host
 
 CONTROL_FLOW = {14, 15, 22, 23}  # IF, Switch, Close, Jump
@@ -83,11 +83,15 @@ def command_tables(index_path):
     project = recovered_project(index_path)
 
     def exists(type_name):
+        # A stubbed type still exists for C# name lookup; it is never read as
+        # input. Hash, ambiguity and manifest failures propagate.
         try:
             selected_source(index_path, type_name, project)
             return True
-        except ValueError as error:
-            return "stub" in str(error)
+        except RecoveredErrorStub:
+            return True
+        except MissingRecoveredSource:
+            return False
 
     enum_path, enum_text = selected_source(index_path, "ADV.Command", project)
     list_path, list_text = selected_source(index_path, "ADV.CommandList", project)

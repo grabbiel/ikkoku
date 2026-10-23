@@ -10,12 +10,12 @@ milestones; a successful extractor does not complete a gameplay feature.
 | ID / feature | Status | Specific review comments | Pending action |
 | --- | --- | --- | --- |
 | T01 · Swift package module graph | Mid-stage | `Packages/Engine/Package.swift` exposes nine library targets plus `IkkokuInspect`, with CoreMathTests/EngineTests. Gameplay has no Unity dependency; Studio depends on Gameplay. Character depends on Renderer for preview construction, so it is not a pure data/logic layer. | T-T01: document dependency boundaries and test pure logic separately from Metal-backed consumers. |
-| T02 · Native macOS build | Mid-stage | Current arm64 Release app built successfully before this documentation audit. Xcode app target declares macOS 14.6 and Swift 5 language mode; SwiftPM uses Swift tools 6 / macOS 14. They are distinct settings. The `IkkokuShaders` target declares macOS 26.0 in Debug and Release; do not describe app 14.6 as a verified product-wide minimum. | T-T01: establish supported deployment/architecture matrix, align intentional settings, run app and package checks in CI. |
-| T03 · Shader compilation and bundled resources | Mid-stage | Xcode builds Metal resources for the app; the runtime also has local/development shader and asset discovery paths. Package tests alone are not proof that an archived app contains its assets/metallib. | T-T02: build/archive from a clean checkout and validate resource lookup without source-tree fallbacks. |
-| T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no checked-in release automation, installer, notarization procedure or converted-library setup UI. App sandbox is disabled. | T-T02: write and exercise a release process, including private-content exclusion and user-owned external library access. |
-| T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. | T-T03: unify output policy and provenance checks; verify distributable artifact contents rather than relying only on Git ignore. |
-| T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Blender and local ILSpy/oracle tools are still environment prerequisites. | T-T01: record supported tool versions/install checks, lock a reproducible tool environment, fail helpfully when optional tools are absent. |
-| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe. Since 2026-09-29 `.github/workflows/ci.yml` runs the `public.json` lane skip-tolerant (no `--strict`) and an unsigned Debug app build on `macos-26` runners for pull requests and pushes to `main`; it is not a required status check, and the private lanes stay local because they need `.local/` fixtures or the VM. | T-T04 (partial): Maker import/outfit-switch/edit/export/reimport session scenarios now run headlessly in `maker-scenarios.json` (4/4 `--strict`, 2026-09-29); source-inspector hooks are merged (PR #5), while full interaction through visible Maker/Studio controls remains an acceptance boundary. |
+| T02 · Native macOS build | Mid-stage | Current arm64 Release app built successfully before this documentation audit. Xcode app target declares macOS 14.6 and Swift 5 language mode; SwiftPM uses Swift tools 6 / macOS 14. They are distinct settings. The `IkkokuShaders` target declares macOS 26.0 in Debug and Release; do not describe app 14.6 as a verified product-wide minimum. | T-T01 (partial): toolchain versions are now recorded and checked (T06). Still establish the supported deployment/architecture matrix and align intentional settings. CI has built the app and run the package tests since 2026-09-29 (T07). |
+| T03 · Shader compilation and bundled resources | Mid-stage | Xcode builds Metal resources for the app; the runtime also has local/development shader and asset discovery paths. Package tests alone are not proof that an archived app contains its assets/metallib. Since 2026-10-23 (T-T02), `Tools/verification/inspect_app_bundle.py` checks a built bundle for `IkkokuShaders.metallib` and its `MTLB` signature, `catalog.json`, and every model, mask and texture the catalog references (137 in the checked-in catalog). CI's `release-package` job runs it on an unsigned arm64 Release build, after a zip round trip outside the checkout. The metallib is loaded from `Bundle.main` only. The asset root and the two `.local/reverse/` defaults have `#filePath` source-tree fallbacks; `IKKOKU_SOURCE_TREE_FALLBACKS=0` now disables them, and each use is logged. | T-T02 (partial): the job passed in dispatched runs 39888875495 and 39889709790 (2026-10-23; 207 files, 0 findings) after its first run found the Engine package in the bundle (see T-T02). Still to do: launch the packaged app outside the checkout with the fallbacks disabled (the [documented thumbnail run](../guides/build-and-test.md#package-and-inspect-a-release-build); not run, and CI never launches the app). `xcodebuild archive` is not exercised. |
+| T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no installer, notarization procedure or converted-library setup UI. App sandbox is disabled. Since 2026-10-23 (T-T02), the [build guide](../guides/build-and-test.md#package-and-inspect-a-release-build) documents a clean-checkout Release build and bundle inspection, and CI builds an unsigned arm64 Release app and inspects it. That covers private-content exclusion and required resources only: the app is not signed, notarized, installed or launched. | T-T02 (partial): signing and notarization procedure, installer, a launch on a clean user profile, and user-owned converted-library selection/relocation (A-T02). |
+| T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. The app target copies its synchronized `Assets/` folder from disk, ignored files included. Since 2026-10-23 (T-T02), the bundle inspector therefore accepts a file only as a declared build product or a tracked `Assets/` file at its copied path. It fails `.local`/original-installation path components, repository and recovered source, PE assemblies, Unity asset bundles, mod archives, PNG card/scene payloads and build-machine paths in Info.plist or resources. The rules are reviewable in `Tools/verification/app-bundle-rules.json`. Its first CI run found the whole Engine package, including test fixtures, copied into the app's resources through a `Packages/` synchronized group; the T-T02 branch removes that group from the app target. | T-T03: unify converter output policy and provenance checks. The app bundle's contents are now checked by T-T02's inspector rather than by Git ignore alone. |
+| T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Since 2026-10-23 (T-T01), `Tools/verification/prerequisites.json` records each documented version once: Xcode ≥26, Swift ≥6.0, .NET SDK ≥10.0, a Python 3.12 venv with the `requirements.txt` pins, ilspycmd 11.1.0.9782 and 9.1.0.7988, and Blender 5.1. The Metal compiler, public `python3`, asset numpy/Pillow, Parallels `prlctl` and the host macOS version are *unrecorded*, so only their presence is checked. `doctor.py` reports every capability; only `--require`d ones can fail. | T-T01 (partial): record versions for the unrecorded entries from a reference-Mac run; pin the asset Python packages; certify Blender reproducibility across versions. |
+| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe. Since 2026-09-29 `.github/workflows/ci.yml` runs the `public.json` lane skip-tolerant (no `--strict`) and an unsigned Debug app build on `macos-26` runners for pull requests and pushes to `main`; since 2026-10-23 a `release-package` job also builds an unsigned arm64 Release app and runs the T-T02 bundle inspector on it. CI is not a required status check, and the private lanes stay local because they need `.local/` fixtures or the VM. | T-T04 (partial): Maker import/outfit-switch/edit/export/reimport session scenarios now run headlessly in `maker-scenarios.json` (4/4 `--strict`, 2026-09-29); source-inspector hooks are merged (PR #5), while full interaction through visible Maker/Studio controls remains an acceptance boundary. |
 
 ## E. Original installation access and recovery
 
@@ -31,7 +31,7 @@ in [the file index](file-index.md).
 | --- | --- | --- | --- |
 | E01 · Backend/version inventory | Fully ported — inspected installation triage | Checks `Managed` and `il2cpp_data`, reads Unity version header, records assemblies/bundles/tools. Actual inventory identifies Koikatu and CharaStudio as Mono Unity 5.6.2f1; VR is Mono 5.6.3f1. This is not an IL2CPP title. | Retain hash/version identity on future rescans; a new install must not reuse incompatible contracts silently. |
 | E02 · Explicit VM file transfer | Mid-stage | `prlctl exec` runs quoted/encoded PowerShell; relative source paths, byte cap, base64 transfer, source/native SHA-256 and provenance sidecars. It reads the installed file, not the running game's memory. | E-T01: timeout/cancellation, atomic fetch writes and resumable transport; test VM offline/partial transfer and destination reuse. |
-| E03 · Managed source/IL/metadata recovery | Mid-stage | Immutable generation key includes assembly/reference/tool identities. Dumps TypeDef/MethodDef/AssemblyRef/TypeRef, full C# project and IL, and detects decompiler stubs. Per-type compatibility overrides are preserved rather than silently replacing evidence. | E-T02: enforce selected-source override handling in all consumers and produce unresolved recovery coverage by subsystem. |
+| E03 · Managed source/IL/metadata recovery | Mid-stage | Immutable generation key includes assembly/reference/tool identities. Dumps TypeDef/MethodDef/AssemblyRef/TypeRef, full C# project and IL, and detects decompiler stubs. Per-type compatibility overrides are preserved rather than silently replacing evidence. Every generator that reads these exports now resolves through [`recovered_source.py`](../reference/managed-recovery.md#consuming-recovered-source): the indexed selected project, clean per-type fallbacks only, and named refusals otherwise. `translate.py` refuses stub-marked input. | E-T02 (partial): move the generators that still read older narrow `.local/reverse/decompiled/` trees after a private rerun confirms identical contracts. Produce unresolved recovery coverage by subsystem. |
 | E04 · Inspected managed exports | Fully ported — artifact recovery only | Private index reports five selected assemblies recovered, with 2,026 main-game, 2,026 Studio, 929 firstpass and two 3-file UnityScript project exports. Nine overrides each for main/Studio and two for firstpass resolve recorded decompiler diagnostics. The [2026-10-17 REA check](../reference/managed-recovery.md#independent-rea-check--2026-10-17) independently confirms all five source identities and four metadata table counts, 5,097 retained artifact hashes, 26 reference DLL hashes, and 294 selected method tokens/names/RVAs. The 17 recovery regressions pass. | Static recovery is corroborated; these checks prove neither C# recompilation nor semantic/runtime equivalence. Remaining game/plugin/VR assemblies and native feature verification are separate work. |
 | E05 · IL2CPP/AOT/Ghidra pipeline | Pending — conditional, not needed for this install | Detection exists, but no Il2CppDumper/GameAssembly/global-metadata recovery or Ghidra automation implementation is checked in. | Only activate this branch if a future inspected installation actually uses IL2CPP; do not spend current Mono-port work on struct-padding parity. |
 | E06 · Unity asset conversion | Mid-stage | UnityPy-based catalog/prefab/rig/material/animation tools export selected typed data. This is an explicit conversion pipeline, not a bulk AssetRipper project import with automatic feature parity. | Coverage inventory must distinguish catalog-known, fetched, decoded, converted, drawable and behavior-verified entries. |
@@ -107,14 +107,87 @@ data is deliberately not copied into the documentation or distribution.
 
 ## Actionable infrastructure tasks
 
-- **T-T01 — Reproducible developer environment (P1).** Record Xcode, Swift, .NET,
+- **T-T01 — Reproducible developer environment (P1, partial).** Record Xcode, Swift, .NET,
   ILSpy, Python packages and Blender versions; add prerequisite checks and one
   documented setup path. Accept when a clean checkout builds public tools/app
-  without depending on a previous agent's shell environment.
-- **T-T02 — Release packaging (P1).** Inspect archived contents, provide library
+  without depending on a previous agent's shell environment. Implemented
+  2026-10-23: `Tools/verification/prerequisites.json` is the single record of
+  versions, and the [build guide](../guides/build-and-test.md#prerequisites)
+  table is generated from it. Versions the repository does not document are
+  recorded as *unrecorded*. `Tools/verification/doctor.py` (stdlib) reports per
+  capability which tools are present and whether they meet the record. Its
+  public capabilities are the app build, Metal shaders, Engine tests, Python
+  suites and translation frontend; the optional ones are reverse tools, asset
+  regeneration, managed recovery and VM probes. It exits 1 only for an unmet
+  `--require`d capability and never reads `.local/` data. The build guide's
+  [clean-checkout setup](../guides/build-and-test.md#set-up-a-clean-checkout)
+  is the one documented path. CI's public-lane job now runs `--require public`
+  before the build. A dispatched CI run of the branch (run 39884395421,
+  2026-10-23, `macos-26-arm64` image 20261013.0424.1) met all five public
+  capabilities in 10 s: macOS 26.6.2 arm64, Xcode 26.6, Metal 32023.883,
+  Swift 6.3.3, Python 3.15.0 and .NET SDK 10.0.401. The public lane (5/5),
+  unsigned app build and reverse-tools jobs passed in the same run.
+  `test_doctor.py` (29 tests in `runner-self-tests`) covers parsing of the
+  recorded CI outputs and labelled format samples, absent tools, the generated
+  table and restated versions. It passed on Python 3.10–3.13 in a Linux
+  container, where every Apple/.NET tool is reported absent and the checker
+  exits 0 without `--require`. Real reverse-tools detection (Python 3.12 with
+  all three pins `ok`) was checked against a scratch venv. Still open:
+  following the setup path on a fresh contributor Mac (CI uses a
+  preprovisioned image), launching an unsigned build, the deployment matrix
+  (T02) and versions for the unrecorded entries (T06).
+- **T-T02 — Release packaging (P1, partial).** Inspect archived contents, provide library
   selection/relocation, and verify all app resources on a clean user profile.
   Accept when the app works outside the checkout and no private recovered files
-  are embedded unintentionally.
+  are embedded unintentionally. First slice implemented 2026-10-23.
+  `Tools/verification/inspect_app_bundle.py` (stdlib) checks a built `.app`
+  against `Tools/verification/app-bundle-rules.json`, a reviewable list of
+  required and forbidden contents, and writes a JSON report. Required are the
+  metallib with its signature, `catalog.json`, `Assets.car`, every
+  catalog-referenced asset, the expected Info.plist identity and an `arm64`
+  slice in every Mach-O file. Every other file must be a declared build
+  product or a tracked `Assets/` file at the path the synchronized group
+  copies it to. Private and original-game content fails, as listed under T05,
+  and so do absolute build-machine paths in Info.plist, text resources, PNG
+  text chunks and GLB JSON chunks. Compiled products only record their path
+  strings: the Swift 5 target's `#file`/`#filePath` strings embed the checkout
+  path in the executable. CI's `release-package` job builds Release unsigned
+  with `ARCHS=arm64` from the clean checkout. It round-trips the app through a
+  `ditto` zip into `$RUNNER_TEMP`, inspects that copy and uploads the
+  `release-bundle-report` artifact. The runtime's three `#filePath` source-tree
+  fallbacks print a `[ikkoku] source-tree fallback:` line when used, and
+  `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables them. The fallbacks are the asset
+  root when the bundle has no `catalog.json`, and the `.local/reverse/` Maker
+  library and original bases. Defaults are unchanged in both configurations,
+  so the local lanes behave as before. The first dispatched CI run (run
+  39887901874, 2026-10-23) compiled the `EngineHost.swift` change and built
+  the Release app in 6 minutes. The inspector then failed it with 247 errors,
+  one for each file under `Packages/`: the app target listed `Packages/` as a
+  synchronized group, so the whole Engine package was copied into
+  `Contents/Resources/Engine/`. That covered `Package.swift`, every source and
+  test file, and the six test fixtures under `Tests/EngineTests/Fixtures/`.
+  Debug builds of the same target have the same membership. Nothing reads these
+  files at runtime; the app links Engine through its local package reference.
+  The branch removes `Packages` from the IkkokuCreator target's
+  `fileSystemSynchronizedGroups`, keeping it in the project navigator. A
+  `source-code` rule now names such files, and a test checks the target's group
+  list. Everything else in that run passed: 6 build products, all 201 shipped
+  tracked assets byte-identical to the checkout, an arm64 executable, all 137
+  catalog references, and no private-content or build-path finding. With the
+  fix, dispatched run 39888875495 (2026-10-23, head `802b351`) passed all four
+  jobs. The Release job built in 5.5 minutes and produced a 26 MB zip. The
+  inspector found 207 files (45.7 MB): 6 build products and 201 tracked assets,
+  an arm64 executable, and 0 errors and 0 warnings. After merging A06 (#118),
+  which put `IKKOKU_SOURCE_TREE_FALLBACKS` in `CaptureRequest.dataSources`,
+  run 39889709790 (head `738f98f`) passed all four jobs again. Its inspector
+  found 207 files (45.8 MB) with 0 errors and 0 warnings. Other evidence: 61
+  synthetic-bundle tests in `test_inspect_app_bundle.py` (`runner-self-tests`)
+  on Python 3.10–3.13 in a Linux container, and a clean pass on a simulated
+  bundle copied from the 205 tracked assets. The tests include consistency
+  checks against `Ikkoku.xcodeproj` and the checked-in catalog. Still open: the
+  documented launch outside the checkout with fallbacks disabled (CI never
+  launches the app), a clean user profile, `xcodebuild archive`, signing,
+  notarization, an installer and library selection/relocation (A-T02).
 - **T-T03 — Unified provenance/output policy (P2).** Standardize source hashes,
   converter versions, immutable outputs and atomic publication for converters.
   Accept when interrupted or changed inputs cannot be presented as complete,
@@ -154,9 +227,29 @@ data is deliberately not copied into the documentation or distribution.
 - **E-T01 — Robust VM transport (P2).** Add bounded process timeout/cancellation
   and atomic file/provenance publication. Accept with offline VM, interrupted
   transfer, wrong hash and oversized input tests.
-- **E-T02 — Recovery consumer consistency (P1).** Require every contract generator
+- **E-T02 — Recovery consumer consistency (P1, partial).** Require every contract generator
   to resolve selected project and per-type fallback via the recovery manifest.
   Accept when a primary error stub cannot accidentally become translation input.
+  Implemented 2026-10-23 with synthetic fixtures only. The shared resolver
+  `Tools/reverse/analysis/recovered_source.py` selects a generation from
+  `index.json`. It returns the manifest-selected project file, or a type's
+  fallback only where that fallback is recorded clean, and checks each file
+  against its manifest hash. It refuses error stubs, missing types, hash
+  mismatches, ambiguous matches and unusable manifests by named exception.
+  Stub markers are `recover_managed.py`'s single `ERROR_STUB` definition. Six
+  generators that read the managed-recovery tree now use the resolver:
+  gameplay/ADV coverage, trigonometric IK, body shape, card round-trip, the
+  full-body oracle and dynamics. Their output is unchanged for valid inputs. The
+  body-shape `--source` and full-body `--recovered-project` directory options
+  are replaced by `--recovery-index`. `Tools/translation/translate.py` refuses
+  stub-marked sources before building or writing anything. Fifteen resolver and
+  consumer tests in `analysis/test_recovered_source.py`, plus the updated
+  gameplay helper tests, cover these paths. Three of the tests run real
+  generators against stub trees. Remaining: the consumers listed under
+  [consumers not moved](../reference/managed-recovery.md#consuming-recovered-source)
+  read older narrow decompilations or an explicit directory. They can still
+  ingest a stub if pointed at one. No private five-assembly generation has
+  been rerun through the moved consumers.
 - **E-T03 — Reproducible evidence manifests (P1, partial).** Standardize source
   hash, native executable/tool hash, input data, configuration, reference tier and
   tolerance/gate output. Accept when a new run can reproduce each claimed parity
@@ -167,7 +260,7 @@ data is deliberately not copied into the documentation or distribution.
   the environment file (`passedEnvironment`), values only for the check's own
   settings (`env`), `suppliedFixtures`/`missingFixtures` with paths and hashes,
   declared reference tier, tolerance text, and artifacts hashed **after** the
-  run — a missing artifact fails the check. Still remaining (CI now runs the
+  run — a missing or (since A-T05) empty artifact fails the check. Still remaining (CI now runs the
   public lane, see T-T04): the
   `original-managed-dll` / `original-player-probe` tiers have no checks that
   execute them yet — no claim of source parity is made from resemblance.

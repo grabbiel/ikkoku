@@ -34,46 +34,65 @@ final class AppState {
     var modDependencies: [SourceModCatalog.Dependency] = []
     var showModLibrary = false
     nonisolated(unsafe) static var sharedStudio: StudioModel?
+    /// `IKKOKU_CAPTURE_UI` readiness state (A-T05): set once the content's `onAppear` ran,
+    /// and the poll tracker while a capture is armed.
+    @ObservationIgnored private var uiCaptureContentAppeared = false
+    @ObservationIgnored private var uiCaptureTracker: UICaptureReadiness.Tracker?
 
     init() {
+        let env = ProcessInfo.processInfo.environment
+        // A06: classify the whole capture request before any work. Conflicting
+        // modes, options no requested mode reads and values a mode would ignore
+        // exit 1 here with one message naming every offending variable.
+        let request: CaptureRequest
+        do { request = try CaptureRequest.validate(env) }
+        catch { print("[ikkoku] \(error)"); exit(1) }
+        // In an automated run (any capture mode or IKKOKU_CAPTURE_UI) a startup
+        // input that fails exits 1 naming it, instead of capturing other content.
+        let automated = request.isAutomated
         do {
             let host = try EngineHost()
             self.host = host
-            if let probePath = ProcessInfo.processInfo.environment["IKKOKU_ORIGINAL_FRAME_PROBE"] {
+            if let probePath = env["IKKOKU_ORIGINAL_FRAME_PROBE"] {
                 AppState.captureOriginalFrameProbe(host: host, path: probePath)
             }
-            if let rigPath = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_RIG"] {
+            if let rigPath = env["IKKOKU_CAPTURE_RIG"] {
                 AppState.captureRig(host: host, path: rigPath)
             }
-            if ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_MODEL"] != nil {
+            if env["IKKOKU_CAPTURE_MODEL"] != nil {
                 AppState.captureModelIfRequested(host: host)
             }
-            if let scenePath = ProcessInfo.processInfo.environment["IKKOKU_CAPTURE_SCENE"] {
+            if let scenePath = env["IKKOKU_CAPTURE_SCENE"] {
                 AppState.captureScene(host: host, path: scenePath)
             }
             self.maker = MakerModel(host: host)
-            self.studio = StudioModel(host: host)
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_SCENE"] {
-                do { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
-                catch { self.errorMessage = "Could not preview source scene: \(error)" }
+            // The Maker falls back to the bundled character when the original base does not
+            // open; with an explicit IKKOKU_SOURCE_AVATAR an automated run must not capture that.
+            if automated, let avatar = env["IKKOKU_SOURCE_AVATAR"], let failure = maker?.sourceAvatarFailure {
+                AppState.failCaptureInput("IKKOKU_SOURCE_AVATAR", avatar, failure)
             }
-            if let libraryPath = ProcessInfo.processInfo.environment["IKKOKU_MOD_LIBRARY"] {
+            self.studio = StudioModel(host: host)
+            if let path = env["IKKOKU_SOURCE_SCENE"] {
+                do { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
+                catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
+            }
+            if let libraryPath = env["IKKOKU_MOD_LIBRARY"] {
                 do { try loadModLibrary(url: URL(fileURLWithPath: libraryPath)) }
-                catch { self.errorMessage = "Could not load mod library: \(error)" }
+                catch { startupInputFailed("IKKOKU_MOD_LIBRARY", libraryPath, "Could not load mod library", error, automated: automated) }
             }
             maker?.refresh()
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_OPEN_RIG"] {
+            if let path = env["IKKOKU_OPEN_RIG"] {
                 do { try maker?.openSourceRig(url: URL(fileURLWithPath: path)) }
-                catch { self.errorMessage = "Could not open source rig: \(error)" }
+                catch { startupInputFailed("IKKOKU_OPEN_RIG", path, "Could not open source rig", error, automated: automated) }
             }
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_BONE_MODIFIERS"] {
+            if let path = env["IKKOKU_BONE_MODIFIERS"] {
                 do { try maker?.loadBoneModifiers(url: URL(fileURLWithPath: path)) }
-                catch { self.errorMessage = "Could not load bone modifiers: \(error)" }
+                catch { startupInputFailed("IKKOKU_BONE_MODIFIERS", path, "Could not load bone modifiers", error, automated: automated) }
             }
-            if let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD"] {
+            if let path = env["IKKOKU_SOURCE_CARD"] {
                 do { try maker?.importSourceCardSettings(url: URL(fileURLWithPath: path)) }
                 catch {
-                    self.errorMessage = "Could not import source card settings: \(error)"
+                    startupInputFailed("IKKOKU_SOURCE_CARD", path, "Could not import source card settings", error, automated: automated)
                 }
             }
             // The Maker scenario hook is its own headless mode (the mirror of
@@ -82,43 +101,46 @@ final class AppState {
             // the required IKKOKU_MAKER_SCENARIO_REPORT and exits (0 when
             // every step passed, 1 otherwise) even when IKKOKU_AUTOCAPTURE is
             // unset — no capture is requested.
-            if let scenarioPath = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SCENARIO"] {
+            if let scenarioPath = env["IKKOKU_MAKER_SCENARIO"] {
                 do {
-                    guard let maker, let reportPath = ProcessInfo.processInfo.environment["IKKOKU_MAKER_SCENARIO_REPORT"] else {
+                    guard let maker, let reportPath = env["IKKOKU_MAKER_SCENARIO_REPORT"] else {
                         throw RigError.invalid("IKKOKU_MAKER_SCENARIO needs the Maker and IKKOKU_MAKER_SCENARIO_REPORT.")
                     }
                     let scenario = try JSONDecoder().decode(MakerScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
                     let report = MakerScenario.run(scenario, maker: maker)
                     let reportURL = URL(fileURLWithPath: reportPath)
                     try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try report.json().write(to: reportURL)
+                    try CaptureOutput.writeJSON(report.json(), to: reportURL)
                     print("[ikkoku] maker scenario: \(report.passed) passed, \(report.failed) failed")
                     exit(report.failed == 0 ? 0 : 1)
                 } catch { print("[ikkoku] maker scenario failed: \(error)"); exit(1) }
             }
-            if let errorMessage, ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil {
-                print("[ikkoku] requested capture input failed: \(errorMessage)")
-                exit(1)
-            }
+            // Plugin mounts, deterministic steps and focus evidence. The adapter
+            // report (IKKOKU_NATIVE_PLUGIN_REPORT) and focus events are capture-only:
+            // validation accepts them only with IKKOKU_AUTOCAPTURE, so a failure here
+            // always exits 1 instead of leaving the app open after a missing report.
             if let studio {
                 do { try AppState.configureStudioExecution(studio) }
-                catch { self.errorMessage = "Studio execution: \(error)"; if ProcessInfo.processInfo.environment["IKKOKU_AUTOCAPTURE"] != nil { print("[ikkoku] \(error)"); exit(1) } }
+                catch {
+                    if automated { print("[ikkoku] studio execution failed: \(error)"); exit(1) }
+                    self.errorMessage = "Studio execution: \(error)"
+                }
             }
             // The scenario hook is its own headless mode: it runs the JSON
             // checklist scenario over the imported source scene, writes the
             // report to the required IKKOKU_STUDIO_SCENARIO_REPORT and exits
             // (0 when every step passed, 1 otherwise) even when
             // IKKOKU_AUTOCAPTURE is unset — no capture is requested.
-            if let scenarioPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENARIO"] {
+            if let scenarioPath = env["IKKOKU_STUDIO_SCENARIO"] {
                 do {
-                    guard let studio, let reportPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_SCENARIO_REPORT"] else {
+                    guard let studio, let reportPath = env["IKKOKU_STUDIO_SCENARIO_REPORT"] else {
                         throw RigError.invalid("IKKOKU_STUDIO_SCENARIO needs the Studio and IKKOKU_STUDIO_SCENARIO_REPORT.")
                     }
                     let scenario = try JSONDecoder().decode(StudioScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
                     let report = StudioScenario.run(scenario, studio: studio)
                     let reportURL = URL(fileURLWithPath: reportPath)
                     try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try report.json().write(to: reportURL)
+                    try CaptureOutput.writeJSON(report.json(), to: reportURL)
                     print("[ikkoku] studio scenario: \(report.passed) passed, \(report.failed) failed")
                     exit(report.failed == 0 ? 0 : 1)
                 } catch { print("[ikkoku] studio scenario failed: \(error)"); exit(1) }
@@ -129,7 +151,24 @@ final class AppState {
         } catch {
             self.host = nil
             self.errorMessage = "\(error)"
+            // Without an engine no capture can run; do not snapshot the error window.
+            if automated { print("[ikkoku] startup failed: \(error)"); exit(1) }
         }
+        startUICaptureIfRequested()
+    }
+
+    /// A startup input failed (A06). An automated run exits 1 naming the variable, its
+    /// value and the error; an interactive launch shows the alert and keeps running.
+    private func startupInputFailed(_ variable: String, _ value: String, _ summary: String, _ error: Error, automated: Bool) {
+        if automated { AppState.failCaptureInput(variable, value, "\(summary): \(error)") }
+        errorMessage = "\(summary): \(error)"
+    }
+
+    /// Ends an automated run whose capture input could not be used, naming the
+    /// variable, its value and why (A06), instead of capturing other content.
+    static func failCaptureInput(_ variable: String, _ value: String, _ reason: String) -> Never {
+        print("[ikkoku] capture input failed: \(CaptureInputError(variable: variable, value: value, reason: reason))")
+        exit(1)
     }
 
     static func captureRig(host: EngineHost, path: String) {
@@ -138,9 +177,11 @@ final class AppState {
             guard let output = env["IKKOKU_AUTOCAPTURE"] else { throw RigError.invalid("Rig capture requires IKKOKU_AUTOCAPTURE.") }
             let sourceURL = URL(fileURLWithPath: path)
             let source = try SourceRig.loadModel(url: sourceURL)
-            let contractURL = env["IKKOKU_SHAPE_CONTRACT"].map { URL(fileURLWithPath: $0) }
+            let explicitContract = env["IKKOKU_SHAPE_CONTRACT"]
+            let contractURL = explicitContract.map { URL(fileURLWithPath: $0) }
                 ?? sourceURL.deletingLastPathComponent().appendingPathComponent("character-shape-contract.json")
-            let contract = FileManager.default.fileExists(atPath: contractURL.path)
+            // An explicit contract must load (A06); only the sidecar beside the rig is optional.
+            let contract = explicitContract != nil || FileManager.default.fileExists(atPath: contractURL.path)
                 ? try SourceShapeContract.decode(Data(contentsOf: contractURL)) : nil
             let appearanceURL = sourceURL.deletingPathExtension().appendingPathExtension("appearance.json")
             let modLibrary = try env["IKKOKU_MOD_LIBRARY"].map {
@@ -191,8 +232,10 @@ final class AppState {
             camera.yaw = (Float(env["IKKOKU_CAPTURE_YAW"] ?? "") ?? 180).degreesToRadians
             camera.pitch = 0.05
             camera.distance = max(bounds.radius, 0.1) / sin(camera.fovDegrees.degreesToRadians * 0.5) * 1.15
-            if env["IKKOKU_CAPTURE_PRESET"] == "face",
-               let face = source.parts.first(where: { $0.mesh.name == "cf_O_face/0" }) {
+            if env["IKKOKU_CAPTURE_PRESET"] == "face" {
+                guard let face = source.parts.first(where: { $0.mesh.name == "cf_O_face/0" }) else {
+                    throw RigError.invalid("IKKOKU_CAPTURE_PRESET=face needs the rig's cf_O_face/0 part; this rig has none.")
+                }
                 let pose = try preview.evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers)
                 let faceBounds = AABB.of(points: try source.deformedPositions(part: face, evaluation: pose,
                     morphWeights: preview.expressionWeights(expression)[face.mesh.name] ?? []))
@@ -209,7 +252,7 @@ final class AppState {
                   let image = host.renderer.capture(frame: frame, width: width, height: height) else {
                 throw RigError.invalid("Rig capture failed or dimensions are outside 1...8192: \(host.renderer.lastDeformationErrors)")
             }
-            try ImageIO.writePNG(image, to: URL(fileURLWithPath: output))
+            try CaptureOutput.writePNG(image, to: URL(fileURLWithPath: output))
             print("[ikkoku] captured source rig with \(frame.items.count) parts and \(frame.skinSets.count) separate skin palettes to \(output)")
             exit(0)
         } catch { print("[ikkoku] rig capture failed: \(error)"); exit(1) }
@@ -327,18 +370,7 @@ final class AppState {
             try studio.loadScene(from: URL(fileURLWithPath: path))
             try configureStudioExecution(studio)
             if let save = env["IKKOKU_SAVE_SCENE"] { try studio.saveScene(to: URL(fileURLWithPath: save)) }
-            for object in studio.doc.objects where object.kind == .item && studio.doc.isVisible(object.id) {
-                guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
-                    throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
-                }
-                // A catalog item is a library package load; an absolute `assetFile` was
-                // recorded from an explicit user import and keeps the trusted-file policy.
-                if file.hasPrefix("/") {
-                    _ = try host.library.importTrustedStaticAsset(url: URL(fileURLWithPath: file))
-                } else {
-                    _ = try host.library.importStaticAsset(url: host.library.url(file), packageRoot: host.library.root)
-                }
-            }
+            try loadSceneItemAssets(studio, host: host)
             studio.doc.effects.showGrid = false
             let width = Int(env["IKKOKU_CAPTURE_W"] ?? "") ?? 960
             let height = Int(env["IKKOKU_CAPTURE_H"] ?? "") ?? 720
@@ -346,12 +378,29 @@ final class AppState {
                   let image = host.renderer.capture(frame: studio.frame, width: width, height: height) else {
                 throw GLTFError.io("Scene capture failed or dimensions are outside 1...8192.")
             }
-            try ImageIO.writePNG(image, to: URL(fileURLWithPath: output))
+            try CaptureOutput.writePNG(image, to: URL(fileURLWithPath: output))
             print("[ikkoku] captured native scene \(path) to \(output)")
             exit(0)
         } catch {
             print("[ikkoku] scene capture failed: \(error)")
             exit(1)
+        }
+    }
+
+    /// Loads the asset of every visible item in a native scene, so a capture fails naming
+    /// the item instead of rendering without it (`IKKOKU_CAPTURE_SCENE`, `IKKOKU_LOAD_SCENE`).
+    static func loadSceneItemAssets(_ studio: StudioModel, host: EngineHost) throws {
+        for object in studio.doc.objects where object.kind == .item && studio.doc.isVisible(object.id) {
+            guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
+                throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
+            }
+            // A catalog item is a library package load; an absolute `assetFile` was
+            // recorded from an explicit user import and keeps the trusted-file policy.
+            if file.hasPrefix("/") {
+                _ = try host.library.importTrustedStaticAsset(url: URL(fileURLWithPath: file))
+            } else {
+                _ = try host.library.importStaticAsset(url: host.library.url(file), packageRoot: host.library.root)
+            }
         }
     }
 
@@ -391,7 +440,7 @@ final class AppState {
             guard let image = host.renderer.capture(frame: frame, width: width, height: height) else {
                 throw GLTFError.io("Metal capture failed.")
             }
-            try ImageIO.writePNG(image, to: URL(fileURLWithPath: output))
+            try CaptureOutput.writePNG(image, to: URL(fileURLWithPath: output))
             print("[ikkoku] captured \(asset.parts.count) parts from \(path) to \(output)")
             exit(0)
         } catch {
@@ -402,22 +451,45 @@ final class AppState {
 
     /// Development aid: IKKOKU_AUTOCAPTURE=<png path> renders the maker scene offscreen and exits.
     /// IKKOKU_CAPTURE_PRESET=face|upper|full picks the camera; IKKOKU_CARD=<png> loads a card first.
+    /// `CaptureRequest.validate` has already checked the option combination and value syntax
+    /// (A06); here an input that cannot be applied exits 1 naming it instead of being skipped.
     static func runAutoCapture(host: EngineHost, maker: MakerModel?) {
         let env = ProcessInfo.processInfo.environment
-        if let dir = env["IKKOKU_RENDER_THUMBS"], let maker { renderThumbnails(host: host, maker: maker, dir: URL(fileURLWithPath: dir)); exit(0) }
+        if let dir = env["IKKOKU_RENDER_THUMBS"], let maker {
+            exit(renderThumbnails(host: host, maker: maker, dir: URL(fileURLWithPath: dir)) ? 0 : 1)
+        }
         guard let out = env["IKKOKU_AUTOCAPTURE"], let maker else { return }
-        if let cardPath = env["IKKOKU_CARD"], let data = try? Data(contentsOf: URL(fileURLWithPath: cardPath)),
-           let card = try? CardIO.decode(CharacterCard.self, keyword: CardIO.cardKeyword, from: data) { maker.load(card: card) }
-        if env["IKKOKU_CAPTURE_SEX"] == "m", maker.importedSourceCard == nil { maker.newCharacter(sex: .male) }
+        if let cardPath = env["IKKOKU_CARD"] {
+            do {
+                let data = try Data(contentsOf: URL(fileURLWithPath: cardPath))
+                let card = try CardIO.decode(CharacterCard.self, keyword: CardIO.cardKeyword, from: data)
+                maker.load(card: card)
+            } catch { failCaptureInput("IKKOKU_CARD", cardPath, "not a readable Ikkoku card: \(error)") }
+        }
+        if env["IKKOKU_CAPTURE_SEX"] == "m", maker.importedSourceCard == nil {
+            maker.newCharacter(sex: .male)
+            if let avatar = env["IKKOKU_SOURCE_MALE_AVATAR"], let failure = maker.sourceAvatarFailure {
+                failCaptureInput("IKKOKU_SOURCE_MALE_AVATAR", avatar, failure)
+            }
+        }
         do {
-            if let expression = env["IKKOKU_SOURCE_BODY"], let domain = maker.sourceRigPreview?.contract?.domain("body") {
+            if let expression = env["IKKOKU_SOURCE_BODY"] {
+                guard let domain = maker.sourceRigPreview?.contract?.domain("body") else {
+                    throw RigError.invalid("IKKOKU_SOURCE_BODY needs a source rig preview with the recovered body shape contract.")
+                }
                 maker.sourceBodyValues = try domain.values(overrides: expression)
                 if maker.sourceSex == 0 { maker.sourceBodyValues[0] = 0.6 }
             }
-            if let expression = env["IKKOKU_SOURCE_FACE"], let domain = maker.sourceRigPreview?.contract?.domain("face") {
+            if let expression = env["IKKOKU_SOURCE_FACE"] {
+                guard let domain = maker.sourceRigPreview?.contract?.domain("face") else {
+                    throw RigError.invalid("IKKOKU_SOURCE_FACE needs a source rig preview with the recovered face shape contract.")
+                }
                 maker.sourceFaceValues = try domain.values(overrides: expression)
             }
-            if let outfit = env["IKKOKU_SOURCE_COORDINATE"].flatMap(Int.init) { try maker.selectSourceCoordinate(outfit) }
+            if let text = env["IKKOKU_SOURCE_COORDINATE"] {
+                guard let outfit = Int(text) else { throw RigError.invalid("IKKOKU_SOURCE_COORDINATE must be an integer.") }
+                try maker.selectSourceCoordinate(outfit)
+            }
             if let path = env["IKKOKU_SOURCE_COLOR_EDITS"] {
                 let edits = try JSONDecoder().decode([String: [Float]].self, from: Data(contentsOf: URL(fileURLWithPath: path)))
                 for (id, rgba) in edits {
@@ -430,7 +502,11 @@ final class AppState {
         if let sl = env["IKKOKU_CAPTURE_SLIDERS"] {          // "eye.size=80,body.height=-50"
             var c = maker.card
             for pair in sl.split(separator: ",") {
-                let kv = pair.split(separator: "="); if kv.count == 2, let v = Float(kv[1]) { c.setSlider(String(kv[0]), v) }
+                let kv = pair.split(separator: "=")
+                guard kv.count == 2, let v = Float(kv[1]), SliderRegistry.shared.slider(String(kv[0])) != nil else {
+                    failCaptureInput("IKKOKU_CAPTURE_SLIDERS", sl, "'\(pair)' does not name a registered slider and a value")
+                }
+                c.setSlider(String(kv[0]), v)
             }
             maker.card = c
         }
@@ -443,8 +519,19 @@ final class AppState {
             }
             maker.card = c
         }
-        if let o = env["IKKOKU_CAPTURE_OUTFIT"], let i = Int(o) { maker.card.currentOutfit = i }
-        if let hair = env["IKKOKU_CAPTURE_HAIR"] { maker.card.hair.parts[.back] = HairPart(styleID: hair) }
+        if let o = env["IKKOKU_CAPTURE_OUTFIT"] {
+            // The card clamps an out-of-range outfit to another one; refuse it instead.
+            guard let i = Int(o), maker.card.outfits.indices.contains(i) else {
+                failCaptureInput("IKKOKU_CAPTURE_OUTFIT", o, "the card has \(maker.card.outfits.count) outfits")
+            }
+            maker.card.currentOutfit = i
+        }
+        if let hair = env["IKKOKU_CAPTURE_HAIR"] {
+            guard host.library.catalog.hair.contains(where: { $0.id == hair }) else {
+                failCaptureInput("IKKOKU_CAPTURE_HAIR", hair, "no hair style with this ID in the asset catalog")
+            }
+            maker.card.hair.parts[.back] = HairPart(styleID: hair)
+        }
         if let duration = env["IKKOKU_SOURCE_PLAYBACK_SECONDS"] {
             do {
                 guard let seconds = Float(duration), seconds.isFinite, (0...30).contains(seconds) else {
@@ -484,9 +571,18 @@ final class AppState {
         }
         if env["IKKOKU_CAPTURE_STUDIO"] != nil, let studio = AppState.sharedStudio {
             studio.addCharacter(maker.card)
-            if let pose = env["IKKOKU_CAPTURE_POSE"], let id = studio.selection { studio.update(id) { $0.animationPreset = pose; $0.handGestureL = 4; $0.handGestureR = 2 } }
+            if let pose = env["IKKOKU_CAPTURE_POSE"] {
+                guard PosePresets.preset(pose) != nil else {
+                    failCaptureInput("IKKOKU_CAPTURE_POSE", pose, "no built-in pose preset with this ID")
+                }
+                if let id = studio.selection { studio.update(id) { $0.animationPreset = pose; $0.handGestureL = 4; $0.handGestureR = 2 } }
+            }
             if let items = env["IKKOKU_CAPTURE_ITEMS"] {           // "chair,room_classroom"
                 for (k, id) in items.split(separator: ",").enumerated() {
+                    // `addItem` skips an unknown ID silently; a capture must not.
+                    guard host.library.catalog.item(String(id)) != nil else {
+                        failCaptureInput("IKKOKU_CAPTURE_ITEMS", items, "no catalog item '\(id)'")
+                    }
                     studio.addItem(id: String(id))
                     if let sel = studio.selection, !String(id).hasPrefix("room"), !String(id).hasPrefix("sky") {
                         studio.update(sel) { $0.transform.position = Float3(0.9 + Float(k) * 0.8, 0, -0.3) }
@@ -507,25 +603,44 @@ final class AppState {
             studio.refresh()
             frame = studio.frame
         }
+        // Requested document outputs are required: a failed or empty save quits nonzero (A-T05).
         if let savePath = env["IKKOKU_EXPORT_SOURCE_CARD"] {
-            do { try maker.exportSourceCard(to: URL(fileURLWithPath: savePath)); frame = host.renderer.currentFrame(); print("[ikkoku] edited source card exported to \(savePath)") }
-            catch { print("[ikkoku] edited source card export failed: \(error)"); exit(1) }
+            do {
+                try maker.exportSourceCard(to: URL(fileURLWithPath: savePath))
+                try CaptureOutput.verifyNonempty(at: URL(fileURLWithPath: savePath))
+                frame = host.renderer.currentFrame(); print("[ikkoku] edited source card exported to \(savePath)")
+            } catch { print("[ikkoku] edited source card export failed: \(error)"); exit(1) }
         }
         if let savePath = env["IKKOKU_SAVE_CARD"] {                 // exercise the real card writer (thumbnail + JSON)
-            do { try maker.saveCard(to: URL(fileURLWithPath: savePath)); print("[ikkoku] card saved to \(savePath)") }
-            catch { print("[ikkoku] card save failed: \(error)") }
+            do {
+                try maker.saveCard(to: URL(fileURLWithPath: savePath))
+                try CaptureOutput.verifyNonempty(at: URL(fileURLWithPath: savePath))
+                print("[ikkoku] card saved to \(savePath)")
+            } catch { print("[ikkoku] card save failed: \(error)"); exit(1) }
         }
         if let scenePath = env["IKKOKU_SAVE_SCENE"], let studio = AppState.sharedStudio {
-            do { try studio.saveScene(to: URL(fileURLWithPath: scenePath)); print("[ikkoku] scene saved to \(scenePath)") }
-            catch { print("[ikkoku] scene save failed: \(error)") }
+            do {
+                try studio.saveScene(to: URL(fileURLWithPath: scenePath))
+                try CaptureOutput.verifyNonempty(at: URL(fileURLWithPath: scenePath))
+                print("[ikkoku] scene saved to \(scenePath)")
+            } catch { print("[ikkoku] scene save failed: \(error)"); exit(1) }
         }
         if let scenePath = env["IKKOKU_LOAD_SCENE"], let studio = AppState.sharedStudio {
-            do { try studio.loadScene(from: URL(fileURLWithPath: scenePath)); frame = studio.frame; print("[ikkoku] scene loaded: \(studio.doc.objects.count) objects") }
-            catch { print("[ikkoku] scene load failed: \(error)") }
+            // A06: a scene that does not load, or whose items do not, ends the run
+            // instead of capturing the previous frame.
+            do {
+                try studio.loadScene(from: URL(fileURLWithPath: scenePath))
+                try loadSceneItemAssets(studio, host: host)
+                frame = studio.frame
+                print("[ikkoku] scene loaded: \(studio.doc.objects.count) objects")
+            } catch { failCaptureInput("IKKOKU_LOAD_SCENE", scenePath, "\(error)") }
         }
         if let path = env["IKKOKU_EXPORT_SOURCE_SCENE"], let studio = AppState.sharedStudio {
-            do { try studio.exportSourceScene(to: URL(fileURLWithPath: path)); print("[ikkoku] edited original scene exported to \(path)") }
-            catch { print("[ikkoku] original scene export failed: \(error)"); exit(1) }
+            do {
+                try studio.exportSourceScene(to: URL(fileURLWithPath: path))
+                try CaptureOutput.verifyNonempty(at: URL(fileURLWithPath: path))
+                print("[ikkoku] edited original scene exported to \(path)")
+            } catch { print("[ikkoku] original scene export failed: \(error)"); exit(1) }
         }
         if env["IKKOKU_CAPTURE_GRID"] == "0" { frame.effects.showGrid = false }
         if env["IKKOKU_CAPTURE_GIZMOS"] == "0" { frame.gizmos = [] }
@@ -555,19 +670,20 @@ final class AppState {
                         document["simulation"] = try studio.benchmarkSourceEvaluation(measuredFrames: frames)
                     }
                 }
-                try JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys])
-                    .write(to: URL(fileURLWithPath: output), options: .atomic)
+                try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: document, options: [.prettyPrinted, .sortedKeys]),
+                                            to: URL(fileURLWithPath: output))
                 print("[ikkoku] benchmark written to \(output)")
             } catch { print("[ikkoku] benchmark failed: \(error)"); exit(1) }
         }
         let t0 = CFAbsoluteTimeGetCurrent()
         if let img = host.renderer.capture(frame: frame, width: w, height: h) {
-            do { try ImageIO.writePNG(img, to: URL(fileURLWithPath: out)) }
+            do { try CaptureOutput.writePNG(img, to: URL(fileURLWithPath: out)) }
             catch { print("[ikkoku] autocapture write failed: \(error)"); exit(1) }
             print("[ikkoku] autocapture written to \(out) (\(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms, \(frame.items.count) items)")
-        } else { print("[ikkoku] autocapture failed"); exit(1) }
+        } else { print("[ikkoku] autocapture failed: the renderer returned no image for \(out)"); exit(1) }
         if env["IKKOKU_CAPTURE_UI"] != nil {
-            // Real window snapshot after layout; handled by `snapshotWindowIfRequested` once the window exists.
+            // Real window snapshot once the window is ready; handled by the readiness poll
+            // that `startUICaptureIfRequested` arms at the end of `init`.
             for line in host.library.log { print("[ikkoku] \(line)") }
             return
         }
@@ -577,8 +693,20 @@ final class AppState {
     nonisolated(unsafe) static var uiCaptureState: AppState?
 
     /// `IKKOKU_RENDER_THUMBS=<dir>`: renders one 256×256 preview per catalog entry (hair, clothes, accessories, items).
-    static func renderThumbnails(host: EngineHost, maker: MakerModel, dir: URL) {
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    /// Every entry is attempted and written through the checked PNG path (A-T05). Each entry that
+    /// could not be loaded, rendered or written is reported by path, and the result is false — the
+    /// run exits nonzero — when any entry failed or nothing was written.
+    static func renderThumbnails(host: EngineHost, maker: MakerModel, dir: URL) -> Bool {
+        do { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        catch { print("[ikkoku] thumbnails failed: could not create \(dir.path): \(error.localizedDescription)"); return false }
+        var batch = CaptureOutputBatch()
+        func writeThumbnail(_ name: String, _ image: CGImage?) {
+            let url = dir.appendingPathComponent(name)
+            batch.attempt(url) {
+                guard let image else { throw CaptureOutputError(path: url.path, reason: .imageUnavailable("the renderer returned no image")) }
+                try CaptureOutput.writePNG(image, to: url)
+            }
+        }
         let cat = host.library.catalog
         let base = CharacterCard.defaultFemale()
         var plain = base
@@ -595,7 +723,7 @@ final class AppState {
             maker.apply(preset: .face)
             var cam = maker.camera; cam.yaw = 22 * .pi / 180; cam.pitch = 0.08; cam.target = Float3(0, maker.character.eyeHeight - 0.02, 0); cam.distance *= 1.9; maker.camera = cam
             var f = host.renderer.currentFrame(); f.effects.showGrid = false
-            if let img = host.renderer.capture(frame: f, width: 256, height: 256) { try? ImageIO.writePNG(img, to: dir.appendingPathComponent("hair_\(h.id).png")) }
+            writeThumbnail("hair_\(h.id).png", host.renderer.capture(frame: f, width: 256, height: 256))
         }
         // Clothes
         for cl in cat.clothes {
@@ -611,7 +739,7 @@ final class AppState {
             if lower { cam.target = Float3(0, 0.5, 0); cam.distance *= 0.55 } else if hands { cam.target = Float3(0.38, 0.95, 0); cam.distance *= 0.32 } else { cam.target = Float3(0, 1.15, 0); cam.distance *= 0.6 }
             maker.camera = cam
             var f = host.renderer.currentFrame(); f.effects.showGrid = false
-            if let img = host.renderer.capture(frame: f, width: 256, height: 256) { try? ImageIO.writePNG(img, to: dir.appendingPathComponent("cloth_\(cl.id).png")) }
+            writeThumbnail("cloth_\(cl.id).png", host.renderer.capture(frame: f, width: 256, height: 256))
         }
         // Accessories
         for a in cat.accessories {
@@ -623,11 +751,15 @@ final class AppState {
             maker.apply(preset: .face)
             var cam = maker.camera; cam.yaw = 28 * .pi / 180; cam.pitch = 0.12; cam.target = Float3(0, maker.character.eyeHeight, 0); cam.distance *= 1.7; maker.camera = cam
             var f = host.renderer.currentFrame(); f.effects.showGrid = false
-            if let img = host.renderer.capture(frame: f, width: 256, height: 256) { try? ImageIO.writePNG(img, to: dir.appendingPathComponent("acc_\(a.id).png")) }
+            writeThumbnail("acc_\(a.id).png", host.renderer.capture(frame: f, width: 256, height: 256))
         }
         // Items: a static prop alone in the frame
         for it in cat.items {
-            guard let asset = host.library.asset(it.file) else { continue }
+            guard let asset = host.library.asset(it.file) else {
+                batch.record(CaptureOutputError(path: dir.appendingPathComponent("item_\(it.id).png").path,
+                                                reason: .imageUnavailable("asset \(it.file) could not be loaded")))
+                continue
+            }
             var items: [RenderItem] = []
             var bounds = AABB.empty
             for part in asset.parts {
@@ -639,21 +771,35 @@ final class AppState {
             var fx = SceneEffects(); fx.showGrid = it.category != "Rooms" && it.category != "Sky"
             var f = RenderFrame(camera: cam, items: items, effects: fx, sceneBounds: bounds)
             if it.category == "Sky" || it.category == "Rooms" { cam.distance = max(bounds.radius, 0.2) * 0.9; f.camera = cam }
-            if let img = host.renderer.capture(frame: f, width: 256, height: 256) { try? ImageIO.writePNG(img, to: dir.appendingPathComponent("item_\(it.id).png")) }
+            writeThumbnail("item_\(it.id).png", host.renderer.capture(frame: f, width: 256, height: 256))
         }
-        print("[ikkoku] thumbnails written to \(dir.path)")
+        for failure in batch.failures { print("[ikkoku] thumbnail failed: \(failure)") }
+        guard batch.isComplete else {
+            print("[ikkoku] thumbnails incomplete in \(dir.path): \(batch.written.count) written, \(batch.failures.count) failed")
+            return false
+        }
+        print("[ikkoku] \(batch.written.count) thumbnails written to \(dir.path)")
+        return true
     }
 
     /// `IKKOKU_CAPTURE_UI=<png>`: snapshot the main window's AppKit/SwiftUI content
     /// (no screen-recording permission needed), then quit. `IKKOKU_CAPTURE_UI_MODE=studio`
     /// selects the first source character (falling back to the Maker card) and
     /// `IKKOKU_CAPTURE_UI_STUDIO_TAB` picks the inspector tab. `IKKOKU_CAPTURE_UI_REPORT=<json>`
-    /// also writes a report of the inspector actually shown — even when the PNG fails —
-    /// and the process quits nonzero if that report cannot be written.
+    /// also writes a report of the inspector actually shown — even when the PNG fails or
+    /// readiness times out — and the process quits nonzero if either output is missing.
+    /// Called from `ContentView.onAppear`: applies the requested UI state once and marks the
+    /// content as appeared for the readiness poll armed by `startUICaptureIfRequested`.
     func snapshotWindowIfRequested() {
         let env = ProcessInfo.processInfo.environment
-        guard let out = env["IKKOKU_CAPTURE_UI"] else { return }
-        if let tab = env["IKKOKU_CAPTURE_UI_TAB"].flatMap({ MakerTab(rawValue: $0.capitalized) }) { maker?.tab = tab }
+        guard env["IKKOKU_CAPTURE_UI"] != nil, !uiCaptureContentAppeared else { return }
+        if let tabText = env["IKKOKU_CAPTURE_UI_TAB"] {
+            guard let tab = MakerTab(rawValue: tabText.capitalized) else {
+                print("[ikkoku] unknown IKKOKU_CAPTURE_UI_TAB '\(tabText)'")
+                exit(1)
+            }
+            maker?.tab = tab
+        }
         if env["IKKOKU_CAPTURE_UI_MODE"] == "studio" {
             mode = .studio
             if let studio {
@@ -673,31 +819,81 @@ final class AppState {
                 }
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        uiCaptureContentAppeared = true
+    }
+
+    /// Arms the `IKKOKU_CAPTURE_UI` readiness poll at the end of startup (A-T05). Instead of a
+    /// fixed delay, a main-run-loop timer observes the window every
+    /// `UICaptureReadiness.pollInterval` seconds and captures once the content has appeared in a
+    /// visible window whose laid-out bounds are nonzero and unchanged for `stableObservations`
+    /// polls. After `IKKOKU_CAPTURE_UI_TIMEOUT` seconds (default 30) without readiness it writes
+    /// the report and quits nonzero, naming what was not ready. Arming here rather than in
+    /// `onAppear` bounds the wait even when no window ever appears.
+    private func startUICaptureIfRequested() {
+        let env = ProcessInfo.processInfo.environment
+        guard env["IKKOKU_CAPTURE_UI"] != nil, uiCaptureTracker == nil else { return }
+        let policy: UICaptureReadiness
+        do { policy = try UICaptureReadiness.fromEnvironment(env) }
+        catch { print("[ikkoku] ui snapshot failed: \(error)"); exit(1) }
+        uiCaptureTracker = UICaptureReadiness.Tracker(policy: policy)
+        let armed = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: policy.pollInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pollUICapture(elapsed: ProcessInfo.processInfo.systemUptime - armed) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// One readiness poll. Forces layout, observes the window and, once ready, writes the PNG
+    /// through the checked path; "written" is printed only after that file verified.
+    private func pollUICapture(elapsed: Double) {
+        let env = ProcessInfo.processInfo.environment
+        guard var tracker = uiCaptureTracker, let out = env["IKKOKU_CAPTURE_UI"] else { return }
+        let window = NSApp?.windows.first(where: { $0.isVisible && $0.contentView != nil })
+        let view = window?.contentView
+        view?.layoutSubtreeIfNeeded()
+        let bounds = view?.bounds ?? .zero
+        let decision = tracker.observe(UICaptureReadiness.Observation(
+            contentAppeared: uiCaptureContentAppeared, windowVisible: window != nil,
+            width: Double(bounds.width), height: Double(bounds.height)), elapsed: elapsed)
+        uiCaptureTracker = tracker
+        switch decision {
+        case .wait:
+            return
+        case .timedOut(let reason):
+            uiCaptureTracker = nil
+            print("[ikkoku] ui snapshot failed: \(out): \(reason)")
+            writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
+            exit(1)
+        case .capture:
+            uiCaptureTracker = nil
             var failed = false
-            guard let window = NSApp.windows.first(where: { $0.isVisible }), let view = window.contentView else {
-                print("[ikkoku] no window")
-                self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
-                exit(1)
+            do {
+                guard let view else {
+                    throw CaptureOutputError(path: out, reason: .imageUnavailable("the window closed before capture"))
+                }
+                let size = try writeWindowSnapshot(view, to: URL(fileURLWithPath: out))
+                print("[ikkoku] ui snapshot written to \(out) (\(size.width)x\(size.height) px, ready after \(String(format: "%.2f", elapsed)) s)")
+            } catch {
+                print("[ikkoku] ui snapshot failed: \(error)")
+                failed = true
             }
-            view.layoutSubtreeIfNeeded()
-            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
-                print("[ikkoku] ui snapshot failed: no image rep")
-                self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
-                exit(1)
-            }
-            view.cacheDisplay(in: view.bounds, to: rep)
-            guard let cg = rep.cgImage else {
-                print("[ikkoku] ui snapshot failed: no cached image")
-                self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
-                exit(1)
-            }
-            do { try ImageIO.writePNG(cg, to: URL(fileURLWithPath: out)); print("[ikkoku] ui snapshot written to \(out)") }
-            catch { print("[ikkoku] ui snapshot failed: \(error)"); failed = true }
-            // Write the report even if the PNG failed; quit nonzero only if the report can't be written.
-            self.writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
+            // Write the report even if the PNG failed; quit nonzero if either output is missing.
+            writeUICaptureReport(to: env["IKKOKU_CAPTURE_UI_REPORT"])
             exit(failed ? 1 : 0)
         }
+    }
+
+    /// Draws the window content into a bitmap and writes it as a verified PNG.
+    private func writeWindowSnapshot(_ view: NSView, to url: URL) throws -> (width: Int, height: Int) {
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+            throw CaptureOutputError(path: url.path, reason: .imageUnavailable("no bitmap for the window content"))
+        }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let image = rep.cgImage else {
+            throw CaptureOutputError(path: url.path, reason: .imageUnavailable("the cached window display has no image"))
+        }
+        try CaptureOutput.writePNG(image, to: url)
+        return (image.width, image.height)
     }
 
     /// Writes the headless UI-capture report describing the inspector actually shown.
@@ -734,8 +930,7 @@ final class AppState {
             "sourceAnimationSelection": animationSelection,
         ]
         do {
-            try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-                .write(to: url, options: .atomic)
+            try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), to: url)
             print("[ikkoku] ui report written to \(path)")
         } catch {
             print("[ikkoku] ui report failed: \(error)")
@@ -817,30 +1012,19 @@ final class AppState {
         guard let host else { return }
         let frame = mode == .studio ? (studio?.frame ?? host.renderer.currentFrame()) : host.renderer.currentFrame()
         let size = mode == .studio ? (studio?.captureSize ?? (1920, 1080)) : (1600, 1600)
-        guard let image = host.renderer.capture(frame: frame, width: size.0, height: size.1) else { return }
+        guard let image = host.renderer.capture(frame: frame, width: size.0, height: size.1) else {
+            errorMessage = "Could not capture a screenshot: the renderer returned no image."
+            return
+        }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "ikkoku_capture.png"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? ImageIO.writePNG(image, to: url)
+        do { try CaptureOutput.writePNG(image, to: url) }
+        catch { errorMessage = "Could not save screenshot: \(error)" }
     }
 
     func resetCamera() {
         if mode == .studio { studio?.resetCamera() } else { maker?.resetCamera() }
-    }
-}
-
-enum ImageIO {
-    static func pngData(_ image: CGImage) throws -> Data {
-        let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
-            throw RigError.invalid("Could not create PNG encoder.")
-        }
-        CGImageDestinationAddImage(dest, image, nil)
-        guard CGImageDestinationFinalize(dest) else { throw RigError.invalid("Could not finish PNG encoding.") }
-        return data as Data
-    }
-    static func writePNG(_ image: CGImage, to url: URL) throws {
-        try pngData(image).write(to: url, options: .atomic)
     }
 }

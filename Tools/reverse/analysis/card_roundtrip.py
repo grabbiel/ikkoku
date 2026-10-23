@@ -12,6 +12,7 @@ from pathlib import Path
 import struct
 
 from card_contract import Cursor, Limits, mapping, parse_card, png_end, sha, unpack
+from recovered_source import RecoveredAssembly
 
 LIMITS = Limits()
 ROOT = Path(__file__).resolve().parents[3]
@@ -168,26 +169,30 @@ def validate(directory: Path) -> dict:
 
 
 
+def managed_evidence(index: Path) -> list[dict]:
+    """Recovered reader/writer types, from each indexed generation's selected project or clean fallback."""
+    targets = {
+        "0038281caf8df48a7903c55dc389642eeeb3f2a9114bd9d68ac11c8ac0396bc5":
+            ["ChaFileCoordinate", "ChaFileFace", "ChaFileBody", "ChaFileHair", "ChaFileClothes", "ChaFileAccessory", "ChaFileMakeup"],
+        "ca572fff8740bbcd58d549723c80b0088d6676611eae2ab91624f460739aea10":
+            ["MessagePack.Unity.ColorFormatter"]
+    }
+    evidence = []
+    for assembly, names in targets.items():
+        recovery = RecoveredAssembly(index, sha256=assembly)
+        for name in names:
+            source = recovery.source(name)
+            evidence.append({"path": str(source.path.relative_to(ROOT)), "sha256": source.sha256, "assemblySHA256": assembly})
+    return evidence
+
+
 def evidence_contract() -> dict:
     base = json.loads((ROOT / ".local/reverse/cards/contract.json").read_text())
     evidence = list(base["evidence"])
     for item in evidence:
         if sha((ROOT / item["path"]).read_bytes()) != item["sha256"]:
             raise ValueError(f"Changed original card evidence: {item['path']}")
-    recovered = ROOT / ".local/reverse/managed-recovery"
-    targets = {
-        "0038281caf8df48a7903c55dc389642eeeb3f2a9114bd9d68ac11c8ac0396bc5":
-            ["ChaFileCoordinate.cs", "ChaFileFace.cs", "ChaFileBody.cs", "ChaFileHair.cs", "ChaFileClothes.cs", "ChaFileAccessory.cs", "ChaFileMakeup.cs"],
-        "ca572fff8740bbcd58d549723c80b0088d6676611eae2ab91624f460739aea10":
-            ["MessagePack.Unity/ColorFormatter.cs"]
-    }
-    for assembly, names in targets.items():
-        for name in names:
-            choices = sorted((recovered / assembly).glob("*/project/" + name))
-            if not choices:
-                raise ValueError(f"Required source evidence unavailable: {name}")
-            path = choices[0]
-            evidence.append({"path": str(path.relative_to(ROOT)), "sha256": sha(path.read_bytes()), "assemblySHA256": assembly})
+    evidence += managed_evidence(ROOT / ".local/reverse/managed-recovery/index.json")
     return {"schemaVersion": 1, "kind": "koikatsu-edited-card-contract", "evidence": evidence,
             "shapeCounts": {"face": 52, "body": 44},
             "recordVersions": {"face": "0.0.2", "body": "0.0.2", "hair": "0.0.4", "clothes": "0.0.1", "accessory": "0.0.2", "makeup": "0.0.0"},

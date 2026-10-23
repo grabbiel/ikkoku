@@ -1,11 +1,15 @@
 """Independent matrix oracle for the recovered rigid, direct-chain IK kernel."""
 from __future__ import annotations
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
 import numpy as np
+
+try:  # Run as a script or from Tools/reverse/analysis.
+    from recovered_source import FIRSTPASS, RecoveredAssembly
+except ImportError:  # Imported as analysis.trigonometric_ik_contract from Tools/reverse.
+    from analysis.recovered_source import FIRSTPASS, RecoveredAssembly
 
 REFLECTION = np.diag([1., 1., -1.])
 ZERO_SQUARED = 9.99999944e-11
@@ -137,18 +141,13 @@ def fixtures():
 
 
 def evidence(index):
-    assemblies=json.loads(Path(index).read_text())["assemblies"]
-    assembly=next(a for a in assemblies if "Koikatu_Data/Managed/Assembly-CSharp-firstpass.dll" in a["sourcePaths"])
-    directory=Path(assembly["directory"]);manifest=json.loads((directory/"manifest.json").read_text())
-    overrides={x["type"]:x["file"] for x in manifest.get("typeOverrides",[])}
+    # Selected project or clean per-type fallback only; error stubs are refused.
+    recovery=RecoveredAssembly(index,source_path=FIRSTPASS)
     result=[]
     for name in ["RootMotion.FinalIK.IKSolverTrigonometric","RootMotion.QuaTools"]:
-        ns,_,last=name.rpartition(".")
-        path=directory/overrides[name] if name in overrides else directory/assembly["selectedProject"]/ns/(last+".cs")
-        text=path.read_text()
-        if "Error decompiling" in text:raise ValueError("Unresolved solver source")
-        result.append(dict(type=name,path=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
-    return dict(assemblySHA256=assembly["assemblySHA256"],files=result)
+        source=recovery.source(name)
+        result.append(dict(type=name,path=str(source.path),sha256=source.sha256))
+    return dict(assemblySHA256=recovery.assembly_sha256,files=result)
 
 
 def main():

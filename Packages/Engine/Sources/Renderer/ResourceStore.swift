@@ -183,8 +183,11 @@ public final class ResourceStore: @unchecked Sendable {
         var cb: (any MTLBuffer)? = nil
         if hasColors {
             let c = data.colors.map { SIMD4<UInt8>(UInt8(clamp($0.x, 0, 1) * 255), UInt8(clamp($0.y, 0, 1) * 255), UInt8(clamp($0.z, 0, 1) * 255), UInt8(clamp($0.w, 0, 1) * 255)) }
-            cb = device.makeBuffer(bytes: c, length: 4 * n, options: .storageModeShared)
-            cb?.label = "\(data.name).color"
+            guard let colorBuffer = device.makeBuffer(bytes: c, length: 4 * n, options: .storageModeShared) else {
+                throw ResourceError.bufferAllocation
+            }
+            colorBuffer.label = "\(data.name).color"
+            cb = colorBuffer
         }
         guard let ib = device.makeBuffer(bytes: data.indices, length: 4 * data.indices.count, options: .storageModeShared) else { throw ResourceError.bufferAllocation }
         ib.label = "\(data.name).idx"
@@ -209,11 +212,19 @@ public final class ResourceStore: @unchecked Sendable {
                     if hasNormals { let nd = t.normalDeltas[i]; ndeltas[ti * n + i] = PackedFloat3(x: nd.x, y: nd.y, z: nd.z) }
                 }
             }
-            mb = device.makeBuffer(bytes: deltas, length: 12 * deltas.count, options: .storageModeShared)
-            mb?.label = "\(data.name).morph"
+            // A missing delta buffer would leave the kernel indexing the dummy buffer
+            // for every named target, so a refused allocation fails registration.
+            guard let morphBuffer = device.makeBuffer(bytes: deltas, length: 12 * deltas.count, options: .storageModeShared) else {
+                throw ResourceError.bufferAllocation
+            }
+            morphBuffer.label = "\(data.name).morph"
+            mb = morphBuffer
             if hasNormals {
-                mnb = device.makeBuffer(bytes: ndeltas, length: 12 * ndeltas.count, options: .storageModeShared)
-                mnb?.label = "\(data.name).morphN"
+                guard let normalBuffer = device.makeBuffer(bytes: ndeltas, length: 12 * ndeltas.count, options: .storageModeShared) else {
+                    throw ResourceError.bufferAllocation
+                }
+                normalBuffer.label = "\(data.name).morphN"
+                mnb = normalBuffer
             } else { hasNormals = false }
         }
         let mesh = GPUMesh(name: data.name, vertexCount: n, indexCount: data.indices.count, baseVertices: vb, texcoords: ub,
@@ -227,11 +238,14 @@ public final class ResourceStore: @unchecked Sendable {
 
     public func unregister(mesh h: MeshHandle) { lock.lock(); meshes[h.id] = nil; lock.unlock() }
 
-    func deformBuffer(for key: UInt64, vertexCount: Int) -> any MTLBuffer {
+    /// The persistent deformation output for `key`, reallocated when a mesh needs
+    /// more vertices. Nil when Metal refuses the allocation; the renderer reports it
+    /// as a deformation error instead of terminating.
+    func deformBuffer(for key: UInt64, vertexCount: Int) -> (any MTLBuffer)? {
         lock.lock(); defer { lock.unlock() }
-        let needed = MemoryLayout<DeformedVertex>.stride * vertexCount
+        let needed = MemoryLayout<DeformedVertex>.stride * max(vertexCount, 1)
         if let b = deformBuffers[key], b.length >= needed { return b }
-        let b = device.makeBuffer(length: needed, options: .storageModePrivate)!
+        guard let b = device.makeBuffer(length: needed, options: .storageModePrivate) else { return nil }
         b.label = "deform.\(key)"
         deformBuffers[key] = b
         return b
@@ -241,18 +255,23 @@ public final class ResourceStore: @unchecked Sendable {
 
     private var hiddenBuffers: [UInt64: any MTLBuffer] = [:]
 
-    /// Uploads (or replaces) a per-vertex hidden mask for `key`.
-    public func setHiddenBuffer(key: UInt64, bytes: [UInt8]) {
+    /// Uploads (or replaces) a per-vertex hidden mask for `key`. A replacement is a
+    /// new buffer, so frames already submitted keep the mask they were encoded with.
+    /// Returns false, and drops the key's previous mask, when Metal refuses the buffer.
+    @discardableResult
+    public func setHiddenBuffer(key: UInt64, bytes: [UInt8]) -> Bool {
+        let buffer = bytes.isEmpty ? device.makeBuffer(length: 1, options: .storageModeShared)
+            : device.makeBuffer(bytes: bytes, length: bytes.count, options: .storageModeShared)
         lock.lock(); defer { lock.unlock() }
-        let n = max(bytes.count, 1)
-        if let b = hiddenBuffers[key], b.length >= n {
-            bytes.withUnsafeBytes { b.contents().copyMemory(from: $0.baseAddress!, byteCount: bytes.count) }
-            return
-        }
-        guard let b = device.makeBuffer(bytes: bytes, length: n, options: .storageModeShared) else { return }
-        b.label = "hidden.\(key)"
-        hiddenBuffers[key] = b
+        guard let buffer else { hiddenBuffers[key] = nil; return false }
+        buffer.label = "hidden.\(key)"
+        hiddenBuffers[key] = buffer
+        return true
     }
+
+    /// Drops hidden masks, like `releaseDeformBuffers`; submitted frames keep theirs.
+    public func releaseHiddenBuffers(keys: [UInt64]) { lock.lock(); for k in keys { hiddenBuffers[k] = nil }; lock.unlock() }
+
     func hiddenBuffer(key: UInt64) -> (any MTLBuffer)? { lock.lock(); defer { lock.unlock() }; return hiddenBuffers[key] }
 
     // MARK: Textures

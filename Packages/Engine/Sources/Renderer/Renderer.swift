@@ -9,6 +9,45 @@ import Assets
 import Scene
 import ShaderTypes
 
+/// Limit and uniform-storage counters of the most recently prepared frame: the
+/// last interactive draw, pick, capture or benchmark sample, whichever ran last.
+public struct RenderFrameStatistics: Sendable, Equatable {
+    /// Enabled `RenderFrame.lights`.
+    public var enabledLights = 0
+    /// Enabled lights that were shaded: the first `IK_MAX_LIGHTS` in list order.
+    public var shadedLights = 0
+    /// Enabled lights left unshaded because the frame exceeded `IK_MAX_LIGHTS`.
+    public var droppedLights: Int { enabledLights - shadedLights }
+    /// Deform dispatches and the meaningful morph entries they accumulate.
+    public var deformDispatches = 0
+    public var activeMorphEntries = 0
+    /// Largest entry list of one dispatch. Lists above `IK_MAX_ACTIVE_MORPHS` are
+    /// accumulated in full, not truncated.
+    public var largestActiveMorphSet = 0
+    /// Where the frame's uniforms were placed. Nonzero overflow means the frame
+    /// needed more than its ring region, or found every region still in flight.
+    public var uniforms = FrameRing.Statistics()
+    public init() {}
+}
+
+/// Why the renderer skipped (interactive draw) or failed (pick, capture, benchmark)
+/// a frame. Invalid skin bindings are reported in `Renderer.lastDeformationErrors`.
+public enum RenderFrameError: Error, Equatable, CustomStringConvertible {
+    case commandBufferUnavailable
+    case renderTargetsUnavailable(width: Int, height: Int)
+    case readbackUnavailable
+    case uniformAllocation(FrameRingError)
+
+    public var description: String {
+        switch self {
+        case .commandBufferUnavailable: return "Metal did not provide a command buffer."
+        case let .renderTargetsUnavailable(width, height): return "Could not allocate \(width)x\(height) render targets."
+        case .readbackUnavailable: return "Could not allocate the pick readback buffer."
+        case let .uniformAllocation(error): return "Frame uniforms: \(error)"
+        }
+    }
+}
+
 /// Frame graph: deform → shadow → toon+outline → transparent → post → overlay.
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
@@ -28,10 +67,29 @@ public final class Renderer: @unchecked Sendable {
     /// Invalid skin bindings are skipped during interactive rendering; captures fail.
     public private(set) var lastDeformationErrors: [String] = []
 
-    public init(gpu: GPUContext) throws {
+    private let statusLock = NSLock()
+    private var publishedStatistics = RenderFrameStatistics()
+    private var publishedError: RenderFrameError?
+    /// Counters of the most recently prepared frame (see `RenderFrameStatistics`).
+    public var lastFrameStatistics: RenderFrameStatistics {
+        statusLock.lock(); defer { statusLock.unlock() }; return publishedStatistics
+    }
+    /// Nil when the most recent frame was encoded; otherwise why it was skipped or failed.
+    public var lastFrameError: RenderFrameError? {
+        statusLock.lock(); defer { statusLock.unlock() }; return publishedError
+    }
+
+    /// Loads the bundled `IkkokuShaders.metallib`.
+    public convenience init(gpu: GPUContext) throws {
+        let library = try gpu.makeShaderLibrary()
+        try self.init(gpu: gpu, shaderLibrary: library)
+    }
+
+    /// Uses an explicit shader library, for example one compiled from `Shaders/` in tests.
+    public init(gpu: GPUContext, shaderLibrary: any MTLLibrary) throws {
         self.gpu = gpu
         self.resources = ResourceStore(device: gpu.device)
-        self.pipelines = try Pipelines(gpu: gpu)
+        self.pipelines = try Pipelines(gpu: gpu, library: shaderLibrary)
         guard let ring = FrameRing(device: gpu.device) else { throw RendererError.frameRingCreationFailed }
         self.frameRing = ring
         let sd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.depthFormat, width: Renderer.shadowMapSize, height: Renderer.shadowMapSize, mipmapped: false)
@@ -59,15 +117,29 @@ public final class Renderer: @unchecked Sendable {
         var frame = currentFrame()
         frame.time = timestamp
         gpu.waitForFrameSlot()
-        guard let cb = gpu.commandQueue.makeCommandBuffer() else { gpu.releaseFrameSlot(); return }
+        guard let cb = gpu.commandQueue.makeCommandBuffer() else {
+            publish(error: .commandBufferUnavailable); gpu.releaseFrameSlot(); return
+        }
         cb.label = "Frame"
         renderLock.lock()
-        let targets = ensureTargets(width: tex.width, height: tex.height)
-        if let targets {
+        var encoded = false
+        if let targets = ensureTargets(width: tex.width, height: tex.height) {
             frameRing.beginFrame(frameIndex); frameIndex &+= 1
-            encode(frame: frame, target: tex, targets: targets, commandBuffer: cb)
+            do {
+                try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb)
+                frameRing.endFrame(retainedUntilCompletionOf: cb)
+                encoded = true
+            } catch {
+                // `prepare` failed before any encoder existed and published the error.
+                frameRing.abandonFrame()
+            }
+        } else {
+            publish(error: .renderTargetsUnavailable(width: tex.width, height: tex.height))
         }
         renderLock.unlock()
+        // A skipped frame keeps the previously presented image rather than
+        // presenting a drawable nothing was rendered into.
+        guard encoded else { gpu.releaseFrameSlot(); return }
         cb.addCompletedHandler { [weak self] c in
             self?.lastFrameGPUTime = c.gpuEndTime - c.gpuStartTime
         }
@@ -88,21 +160,27 @@ public final class Renderer: @unchecked Sendable {
     public func pick(frame: RenderFrame, pixel: Float2, size: (Int, Int)) -> UInt32 {
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
-        guard let cb = gpu.commandQueue.makeCommandBuffer() else { return 0 }
+        guard let cb = gpu.commandQueue.makeCommandBuffer() else { publish(error: .commandBufferUnavailable); return 0 }
+        guard let readback = gpu.device.makeBuffer(length: 16, options: .storageModeShared) else {
+            publish(error: .readbackUnavailable); return 0
+        }
         renderLock.lock()
-        guard let targets = ensureTargets(width: size.0, height: size.1) else { renderLock.unlock(); return 0 }
+        guard let targets = ensureTargets(width: size.0, height: size.1) else {
+            renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: size.0, height: size.1)); return 0
+        }
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
-        let ctx = prepare(frame: frame, targets: targets)
-        guard lastDeformationErrors.isEmpty else { renderLock.unlock(); return 0 }
+        guard let ctx = try? prepare(frame: frame, targets: targets, forPick: true), lastDeformationErrors.isEmpty else {
+            frameRing.abandonFrame(); renderLock.unlock(); return 0
+        }
         encodeDeform(ctx, cb)
         encodePick(ctx, targets: targets, cb)
-        let readback = gpu.device.makeBuffer(length: 16, options: .storageModeShared)!
         let x = min(max(Int(pixel.x), 0), size.0 - 1), y = min(max(Int(pixel.y), 0), size.1 - 1)
         if let blit = cb.makeBlitCommandEncoder() {
             blit.copy(from: targets.pick, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: x, y: y, z: 0),
                       sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: readback, destinationOffset: 0, destinationBytesPerRow: 4, destinationBytesPerImage: 4)
             blit.endEncoding()
         }
+        frameRing.endFrame(retainedUntilCompletionOf: cb)
         renderLock.unlock()
         cb.commit()
         cb.waitUntilCompleted()
@@ -118,14 +196,21 @@ public final class Renderer: @unchecked Sendable {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Pipelines.ldrFormat, width: width, height: height, mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .shared
-        guard let tex = gpu.device.makeTexture(descriptor: d), let cb = gpu.commandQueue.makeCommandBuffer() else { return nil }
+        guard let tex = gpu.device.makeTexture(descriptor: d) else {
+            publish(error: .renderTargetsUnavailable(width: width, height: height)); return nil
+        }
+        guard let cb = gpu.commandQueue.makeCommandBuffer() else { publish(error: .commandBufferUnavailable); return nil }
         renderLock.lock()
-        guard let targets = try? RenderTargets(device: gpu.device, width: width, height: height) else { renderLock.unlock(); return nil }
+        guard let targets = try? RenderTargets(device: gpu.device, width: width, height: height) else {
+            renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: width, height: height)); return nil
+        }
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
-        encode(frame: frame, target: tex, targets: targets, commandBuffer: cb)
+        var encoded = true
+        do { try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb) } catch { encoded = false }
         let validDeformation = lastDeformationErrors.isEmpty
+        if encoded && validDeformation { frameRing.endFrame(retainedUntilCompletionOf: cb) } else { frameRing.abandonFrame() }
         renderLock.unlock()
-        guard validDeformation else { return nil }
+        guard encoded, validDeformation else { return nil }
         cb.commit()
         cb.waitUntilCompleted()
         guard cb.status == .completed else { return nil }
@@ -162,13 +247,21 @@ public final class Renderer: @unchecked Sendable {
                 renderLock.lock()
                 let start = CACurrentMediaTime()
                 frameRing.beginFrame(frameIndex); frameIndex &+= 1
-                encode(frame: frame, target: target, targets: targets, commandBuffer: cb)
+                var failure: RenderFrameError?
+                do { try encode(frame: frame, target: target, targets: targets, commandBuffer: cb) }
+                catch { failure = (error as? RenderFrameError) ?? .commandBufferUnavailable }
                 let errors = lastDeformationErrors
                 // Commit under the lock so interactive draws cannot submit after
                 // reusing the same deformation buffers but before this frame.
-                if errors.isEmpty { cb.commit() }
+                if failure == nil && errors.isEmpty {
+                    frameRing.endFrame(retainedUntilCompletionOf: cb)
+                    cb.commit()
+                } else {
+                    frameRing.abandonFrame()
+                }
                 let submitted = CACurrentMediaTime()
                 renderLock.unlock()
+                if let failure { throw RenderBenchmarkError.frame(failure) }
                 guard errors.isEmpty else { throw RenderBenchmarkError.deformation(errors) }
                 cb.waitUntilCompleted()
                 let end = CACurrentMediaTime()
@@ -200,25 +293,109 @@ public final class Renderer: @unchecked Sendable {
         let mesh: GPUMesh
         let vertexBuffer: any MTLBuffer
         let hiddenBuffer: (any MTLBuffer)?
-        let drawOffset: Int
-        let materialOffset: Int
+        let draw: FrameAllocation
+        let material: FrameAllocation
         let distance: Float
     }
 
+    struct DeformRecord {
+        let key: UInt64
+        let mesh: GPUMesh
+        let buffer: any MTLBuffer
+        let skinBuffer: (any MTLBuffer)?
+        let boneCount: Int
+        let morphs: FrameAllocation
+        let morphCount: Int
+    }
+
+    struct GizmoRecord {
+        let batch: GizmoBatch
+        let vertices: FrameAllocation
+        let draw: FrameAllocation
+    }
+
+    /// Every ring allocation of a frame happens while preparing it, before any
+    /// encoder exists, so a failed allocation leaves the command buffer empty.
     struct FrameContext {
         let frame: RenderFrame
-        let frameOffset: Int
-        let lightsOffset: Int
-        let postOffset: Int
+        let frameUniforms: FrameAllocation
+        let lights: FrameAllocation
+        let post: FrameAllocation
+        let background: FrameAllocation?
         let opaque: [DrawRecord]
         let transparent: [DrawRecord]
         let shadowCasters: [DrawRecord]
-        let deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)]
+        let deforms: [DeformRecord]
+        let gizmos: [GizmoRecord]
         let width: Int
         let height: Int
     }
 
-    private func prepare(frame input: RenderFrame, targets: RenderTargets) -> FrameContext {
+    /// Enabled lights in list order. Only the first `IK_MAX_LIGHTS` fit
+    /// `LightsUniforms`; `enabled` counts all of them so the rest can be reported.
+    static func packLights(_ lights: [SceneLight]) -> (uniforms: LightsUniforms, enabled: Int) {
+        var lu = LightsUniforms()
+        var count = 0
+        var enabled = 0
+        withUnsafeMutableBytes(of: &lu.lights) { raw in
+            let p = raw.baseAddress!.assumingMemoryBound(to: LightUniform.self)
+            for l in lights where l.enabled {
+                enabled += 1
+                guard count < Int(IK_MAX_LIGHTS) else { continue }
+                var u = LightUniform()
+                let type: Float = l.kind == .directional ? 0 : (l.kind == .point ? 1 : 2)
+                u.position = Float4(l.position.x, l.position.y, l.position.z, type)
+                let d = l.direction
+                u.direction = Float4(d.x, d.y, d.z, l.range)
+                let c = l.color * l.intensity
+                let outer = cos(l.spotAngle.degreesToRadians * 0.5)
+                let inner = cos(l.spotAngle.degreesToRadians * 0.5 * (1 - l.spotBlend * 0.9))
+                u.color = Float4(c.x, c.y, c.z, outer)
+                u.params = Float4(inner, 1, 0, 0)
+                p[count] = u
+                count += 1
+            }
+        }
+        lu.count = UInt32(count)
+        return (lu, enabled)
+    }
+
+    /// Meaningful morph entries in caller order: an index inside the mesh's targets
+    /// and a finite weight above 1e-4 in magnitude. The deform kernel reads its
+    /// entries from an unbounded device buffer, so one dispatch accumulates all of
+    /// them; nothing is truncated at `IK_MAX_ACTIVE_MORPHS`.
+    static func activeMorphEntries(_ weights: [(index: Int, weight: Float)], targetCount: Int) -> [MorphWeightEntry] {
+        weights.compactMap { entry -> MorphWeightEntry? in
+            guard entry.index >= 0, entry.index < targetCount, entry.weight.isFinite, abs(entry.weight) > 1e-4 else { return nil }
+            return MorphWeightEntry(index: UInt32(entry.index), weight: entry.weight)
+        }
+    }
+
+    private func publish(statistics: RenderFrameStatistics? = nil, error: RenderFrameError?) {
+        statusLock.lock()
+        if let statistics { publishedStatistics = statistics }
+        publishedError = error
+        statusLock.unlock()
+    }
+
+    /// Prepares a frame and publishes its statistics and error. Throws only
+    /// `RenderFrameError.uniformAllocation`; nothing has been encoded by then.
+    private func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false) throws -> FrameContext {
+        var statistics = RenderFrameStatistics()
+        do {
+            let context = try buildContext(frame: input, targets: targets, forPick: forPick, statistics: &statistics)
+            statistics.uniforms = frameRing.frameStatistics
+            publish(statistics: statistics, error: nil)
+            return context
+        } catch let error as FrameRingError {
+            statistics.uniforms = frameRing.frameStatistics
+            publish(statistics: statistics, error: .uniformAllocation(error))
+            throw RenderFrameError.uniformAllocation(error)
+        }
+    }
+
+    private func buildContext(frame input: RenderFrame, targets: RenderTargets, forPick: Bool,
+                              statistics: inout RenderFrameStatistics) throws -> FrameContext {
         var frame = input
         frame.retainTextures(from: resources)
         lastDeformationErrors = []
@@ -259,29 +436,12 @@ public final class Renderer: @unchecked Sendable {
         fu.time = Float(frame.time.truncatingRemainder(dividingBy: 3600))
         fu.nearPlane = cam.near
         fu.exposure = fx.exposure
-        let frameOffset = frameRing.allocate(fu)
+        let frameUniforms = try frameRing.allocate(fu)
 
-        var lu = LightsUniforms()
-        var count = 0
-        withUnsafeMutableBytes(of: &lu.lights) { raw in
-            let p = raw.baseAddress!.assumingMemoryBound(to: LightUniform.self)
-            for l in frame.lights where l.enabled && count < IK_MAX_LIGHTS {
-                var u = LightUniform()
-                let type: Float = l.kind == .directional ? 0 : (l.kind == .point ? 1 : 2)
-                u.position = Float4(l.position.x, l.position.y, l.position.z, type)
-                let d = l.direction
-                u.direction = Float4(d.x, d.y, d.z, l.range)
-                let c = l.color * l.intensity
-                let outer = cos(l.spotAngle.degreesToRadians * 0.5)
-                let inner = cos(l.spotAngle.degreesToRadians * 0.5 * (1 - l.spotBlend * 0.9))
-                u.color = Float4(c.x, c.y, c.z, outer)
-                u.params = Float4(inner, 1, 0, 0)
-                p[count] = u
-                count += 1
-            }
-        }
-        lu.count = UInt32(count)
-        let lightsOffset = frameRing.allocate(lu)
+        let packedLights = Renderer.packLights(frame.lights)
+        statistics.enabledLights = packedLights.enabled
+        statistics.shadedLights = Int(packedLights.uniforms.count)
+        let lights = try frameRing.allocate(packedLights.uniforms)
 
         var pp = PostParams()
         pp.bloom = Float4(fx.bloomThreshold, fx.bloomIntensity, fx.bloomRadius, 0)
@@ -289,7 +449,14 @@ public final class Renderer: @unchecked Sendable {
         pp.grade = Float4(fx.exposure, fx.contrast, fx.saturation, fx.temperature)
         pp.texel = Float4(1 / fw, 1 / fh, fw, fh)
         pp.flags = (fx.fxaa ? 1 : 0) | (fx.bloomEnabled ? 2 : 0) | (fx.vignetteEnabled ? 4 : 0) | 8 | ((fx.toneMappingEnabled ?? true) ? 16 : 0)
-        let postOffset = frameRing.allocate(pp)
+        let post = try frameRing.allocate(pp)
+        var background: FrameAllocation?
+        if !forPick && !fx.transparentBackground {
+            var bgFrame = FrameUniforms()
+            bgFrame.ambientSky = Float4(fx.backgroundTop.x, fx.backgroundTop.y, fx.backgroundTop.z, 1)
+            bgFrame.ambientGround = Float4(fx.backgroundBottom.x, fx.backgroundBottom.y, fx.backgroundBottom.z, 1)
+            background = try frameRing.allocate(bgFrame)
+        }
 
         // Retained per-frame buffers preserve the complete palette without consuming
         // the fixed-capacity uniform ring. Command buffers retain their resources.
@@ -317,7 +484,7 @@ public final class Renderer: @unchecked Sendable {
         var opaque: [DrawRecord] = []
         var transparent: [DrawRecord] = []
         var casters: [DrawRecord] = []
-        var deforms: [(key: UInt64, mesh: GPUMesh, buffer: any MTLBuffer, skinBuffer: (any MTLBuffer)?, boneCount: Int, morphOffset: Int, morphCount: Int)] = []
+        var deforms: [DeformRecord] = []
         var deformSeen = Set<UInt64>()
 
         for item in frame.items where item.visible {
@@ -336,15 +503,21 @@ public final class Renderer: @unchecked Sendable {
             }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
-                let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount)
+                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount) else {
+                    lastDeformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
+                    continue
+                }
                 vb = buf
                 if !deformSeen.contains(key) {
                     deformSeen.insert(key)
-                    let entries = item.morphWeights.filter { $0.index >= 0 && $0.index < mesh.morphNames.count && $0.weight.isFinite && abs($0.weight) > 1e-4 }
-                        .prefix(Int(IK_MAX_ACTIVE_MORPHS)).map { MorphWeightEntry(index: UInt32($0.index), weight: $0.weight) }
-                    let mo = frameRing.allocate(array: Array(entries))
+                    let entries = Renderer.activeMorphEntries(item.morphWeights, targetCount: mesh.morphNames.count)
+                    let morphs = try frameRing.allocate(array: entries)
                     let skin = mesh.skin != nil ? palette : nil
-                    deforms.append((key, mesh, buf, skin?.buffer, skin?.count ?? 0, mo, entries.count))
+                    deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.buffer,
+                                                boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count))
+                    statistics.deformDispatches += 1
+                    statistics.activeMorphEntries += entries.count
+                    statistics.largestActiveMorphSet = max(statistics.largestActiveMorphSet, entries.count)
                 }
             }
             let hb = item.hiddenKey.flatMap { resources.hiddenBuffer(key: $0) }.flatMap { $0.length >= mesh.vertexCount ? $0 : nil }
@@ -355,16 +528,17 @@ public final class Renderer: @unchecked Sendable {
             du.flags = hb != nil ? DrawFlagHasHiddenBuffer : item.hiddenRegions
             du.outlineScale = item.outlineScale
             du.depthBias = item.material.depthBias
-            let doff = frameRing.allocate(du)
+            let drawUniforms = try frameRing.allocate(du)
             var mu = item.material.uniforms
             if item.material.transparent { mu.flags |= MaterialFlagAlphaBlend.rawValue }
             else { mu.flags &= ~MaterialFlagAlphaBlend.rawValue }
             if frame.texture(item.material.base, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBaseTexture.rawValue }
             if frame.texture(item.material.bodyMask, resources: resources) == nil { mu.flags &= ~MaterialFlagHasBodyMask.rawValue }
             if mesh.colors != nil { mu.flags |= MaterialFlagHasVertexColor.rawValue } else { mu.flags &= ~MaterialFlagHasVertexColor.rawValue }
-            let moff = frameRing.allocate(mu)
+            let materialUniforms = try frameRing.allocate(mu)
             let c = item.model.transformPoint(mesh.bounds.center)
-            let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, drawOffset: doff, materialOffset: moff, distance: length(c - cp))
+            let rec = DrawRecord(item: item, mesh: mesh, vertexBuffer: vb, hiddenBuffer: hb, draw: drawUniforms,
+                                 material: materialUniforms, distance: length(c - cp))
             if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
             if item.castsShadow && !item.material.transparent { casters.append(rec) }
         }
@@ -378,14 +552,27 @@ public final class Renderer: @unchecked Sendable {
             if $0.item.order != $1.item.order { return $0.item.order < $1.item.order }
             return $0.item.mesh.id < $1.item.mesh.id
         }
-        return FrameContext(frame: frame, frameOffset: frameOffset, lightsOffset: lightsOffset, postOffset: postOffset,
-                            opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms, width: W, height: H)
+        // Display frames draw every non-empty batch once (main pass when depth
+        // tested, overlay otherwise); pick frames draw only pickable batches.
+        var gizmos: [GizmoRecord] = []
+        for g in frame.gizmos where !g.vertices.isEmpty && (!forPick || g.objectID != 0) {
+            let vertices = try frameRing.allocate(array: g.vertices)
+            var du = DrawUniforms()
+            du.model = g.model
+            du.normalMatrix = matrix_identity_float4x4
+            du.objectID = g.objectID
+            let draw = try frameRing.allocate(du)
+            gizmos.append(GizmoRecord(batch: g, vertices: vertices, draw: draw))
+        }
+        return FrameContext(frame: frame, frameUniforms: frameUniforms, lights: lights, post: post, background: background,
+                            opaque: opaque, transparent: transparent, shadowCasters: casters, deforms: deforms,
+                            gizmos: gizmos, width: W, height: H)
     }
 
     // MARK: - Encoding
 
-    private func encode(frame: RenderFrame, target: any MTLTexture, targets: RenderTargets, commandBuffer cb: any MTLCommandBuffer) {
-        let ctx = prepare(frame: frame, targets: targets)
+    private func encode(frame: RenderFrame, target: any MTLTexture, targets: RenderTargets, commandBuffer cb: any MTLCommandBuffer) throws {
+        let ctx = try prepare(frame: frame, targets: targets)
         encodeDeform(ctx, cb)
         encodeShadow(ctx, cb)
         encodeMain(ctx, targets: targets, cb)
@@ -407,7 +594,7 @@ public final class Renderer: @unchecked Sendable {
             enc.setBuffer(d.mesh.skin ?? dummy, offset: 0, index: Int(BufferIndexSkinData.rawValue))
             if let skin = d.skinBuffer { enc.setBuffer(skin, offset: 0, index: Int(BufferIndexSkinMatrices.rawValue)) }
             else { enc.setBuffer(dummy, offset: 0, index: Int(BufferIndexSkinMatrices.rawValue)) }
-            enc.setBuffer(frameRing.buffer, offset: d.morphOffset, index: Int(BufferIndexMorphWeights.rawValue))
+            enc.setBuffer(d.morphs.buffer, offset: d.morphs.offset, index: Int(BufferIndexMorphWeights.rawValue))
             enc.setBuffer(d.mesh.morphDeltas ?? dummy, offset: 0, index: Int(BufferIndexMorphDeltas.rawValue))
             enc.setBuffer(d.mesh.morphNormals ?? dummy, offset: 0, index: Int(BufferIndexMorphNormals.rawValue))
             enc.setBytes(&params, length: MemoryLayout<DeformParams>.stride, index: Int(BufferIndexDeformParams.rawValue))
@@ -418,9 +605,9 @@ public final class Renderer: @unchecked Sendable {
     }
 
     private func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {
-        enc.setVertexBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setFragmentBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
-        enc.setFragmentBuffer(frameRing.buffer, offset: ctx.lightsOffset, index: Int(BufferIndexLights.rawValue))
+        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+        enc.setFragmentBuffer(ctx.lights.buffer, offset: ctx.lights.offset, index: Int(BufferIndexLights.rawValue))
         enc.setFragmentTexture(shadowMap, index: Int(TextureIndexShadowMap.rawValue))
         enc.setFrontFacing(.counterClockwise)
     }
@@ -433,11 +620,11 @@ public final class Renderer: @unchecked Sendable {
         enc.setVertexBuffer(rec.mesh.texcoords1, offset: 0, index: Int(BufferIndexTexcoords1.rawValue))
         enc.setVertexBuffer(rec.mesh.texcoords2, offset: 0, index: Int(BufferIndexTexcoords2.rawValue))
         enc.setVertexBuffer(rec.mesh.colors ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexColors.rawValue))
-        enc.setVertexBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))
-        enc.setVertexBuffer(frameRing.buffer, offset: rec.materialOffset, index: Int(BufferIndexMaterial.rawValue))
+        enc.setVertexBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+        enc.setVertexBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
         enc.setVertexBuffer(rec.hiddenBuffer ?? resources.dummyBuffer, offset: 0, index: Int(BufferIndexVertexHidden.rawValue))
-        enc.setFragmentBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))
-        enc.setFragmentBuffer(frameRing.buffer, offset: rec.materialOffset, index: Int(BufferIndexMaterial.rawValue))
+        enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+        enc.setFragmentBuffer(rec.material.buffer, offset: rec.material.offset, index: Int(BufferIndexMaterial.rawValue))
     }
 
     private func bindTextures(_ enc: any MTLRenderCommandEncoder, _ m: MaterialState, frame: RenderFrame) {
@@ -501,19 +688,15 @@ public final class Renderer: @unchecked Sendable {
         enc.label = "Main"
         bindCommon(enc, ctx)
 
-        if !fx.transparentBackground {
+        if !fx.transparentBackground, let background = ctx.background {
             enc.pushDebugGroup("Background")
             enc.setRenderPipelineState(pipelines.background)
             enc.setDepthStencilState(pipelines.depthNone)
             enc.setCullMode(.none)
-            var bgFrame = FrameUniforms()
-            bgFrame.ambientSky = Float4(fx.backgroundTop.x, fx.backgroundTop.y, fx.backgroundTop.z, 1)
-            bgFrame.ambientGround = Float4(fx.backgroundBottom.x, fx.backgroundBottom.y, fx.backgroundBottom.z, 1)
-            let off = frameRing.allocate(bgFrame)
-            enc.setFragmentBuffer(frameRing.buffer, offset: off, index: Int(BufferIndexFrameUniforms.rawValue))
-            enc.setFragmentBuffer(frameRing.buffer, offset: ctx.postOffset, index: Int(BufferIndexPostParams.rawValue))
+            enc.setFragmentBuffer(background.buffer, offset: background.offset, index: Int(BufferIndexFrameUniforms.rawValue))
+            enc.setFragmentBuffer(ctx.post.buffer, offset: ctx.post.offset, index: Int(BufferIndexPostParams.rawValue))
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-            enc.setFragmentBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
+            enc.setFragmentBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
             enc.popDebugGroup()
         }
         if fx.showGrid {
@@ -560,7 +743,7 @@ public final class Renderer: @unchecked Sendable {
             enc.popDebugGroup()
         }
 
-        let depthGizmos = ctx.frame.gizmos.filter { $0.depthTest && !$0.vertices.isEmpty }
+        let depthGizmos = ctx.gizmos.filter { $0.batch.depthTest }
         if !depthGizmos.isEmpty {
             enc.pushDebugGroup("GizmosDepth")
             enc.setRenderPipelineState(pipelines.gizmoHDR)
@@ -572,23 +755,17 @@ public final class Renderer: @unchecked Sendable {
         enc.endEncoding()
     }
 
-    private func encodeGizmos(_ enc: any MTLRenderCommandEncoder, _ batches: [GizmoBatch]) {
-        for g in batches {
-            let voff = frameRing.allocate(array: g.vertices)
-            var du = DrawUniforms()
-            du.model = g.model
-            du.normalMatrix = matrix_identity_float4x4
-            du.objectID = g.objectID
-            let doff = frameRing.allocate(du)
-            enc.setVertexBuffer(frameRing.buffer, offset: voff, index: Int(BufferIndexGizmoVertices.rawValue))
-            enc.setVertexBuffer(frameRing.buffer, offset: doff, index: Int(BufferIndexDrawUniforms.rawValue))
-            enc.setFragmentBuffer(frameRing.buffer, offset: doff, index: Int(BufferIndexDrawUniforms.rawValue))
-            enc.drawPrimitives(type: g.primitive == .lines ? .line : .triangle, vertexStart: 0, vertexCount: g.vertices.count)
+    private func encodeGizmos(_ enc: any MTLRenderCommandEncoder, _ records: [GizmoRecord]) {
+        for g in records {
+            enc.setVertexBuffer(g.vertices.buffer, offset: g.vertices.offset, index: Int(BufferIndexGizmoVertices.rawValue))
+            enc.setVertexBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentBuffer(g.draw.buffer, offset: g.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.drawPrimitives(type: g.batch.primitive == .lines ? .line : .triangle, vertexStart: 0, vertexCount: g.batch.vertices.count)
         }
     }
 
     private func fullscreen(_ cb: any MTLCommandBuffer, label: String, target: any MTLTexture, load: MTLLoadAction = .dontCare,
-                            pipeline: any MTLRenderPipelineState, postOffset: Int, textures: [(any MTLTexture, TextureIndex)]) {
+                            pipeline: any MTLRenderPipelineState, post: FrameAllocation, textures: [(any MTLTexture, TextureIndex)]) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = load
@@ -596,7 +773,7 @@ public final class Renderer: @unchecked Sendable {
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = label
         enc.setRenderPipelineState(pipeline)
-        enc.setFragmentBuffer(frameRing.buffer, offset: postOffset, index: Int(BufferIndexPostParams.rawValue))
+        enc.setFragmentBuffer(post.buffer, offset: post.offset, index: Int(BufferIndexPostParams.rawValue))
         for (t, i) in textures { enc.setFragmentTexture(t, index: Int(i.rawValue)) }
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -604,27 +781,27 @@ public final class Renderer: @unchecked Sendable {
 
     private func encodePost(_ ctx: FrameContext, targets: RenderTargets, target: any MTLTexture, _ cb: any MTLCommandBuffer) {
         let fx = ctx.frame.effects
-        let po = ctx.postOffset
+        let po = ctx.post
         if fx.bloomEnabled {
-            fullscreen(cb, label: "BloomThreshold", target: targets.bloom[0], pipeline: pipelines.bloomThreshold, postOffset: po, textures: [(targets.hdr, TextureIndexSceneColor)])
+            fullscreen(cb, label: "BloomThreshold", target: targets.bloom[0], pipeline: pipelines.bloomThreshold, post: po, textures: [(targets.hdr, TextureIndexSceneColor)])
             for i in 0..<(targets.bloom.count - 1) {
-                fullscreen(cb, label: "BloomDown\(i)", target: targets.bloom[i + 1], pipeline: pipelines.bloomDown, postOffset: po, textures: [(targets.bloom[i], TextureIndexSceneColor)])
+                fullscreen(cb, label: "BloomDown\(i)", target: targets.bloom[i + 1], pipeline: pipelines.bloomDown, post: po, textures: [(targets.bloom[i], TextureIndexSceneColor)])
             }
             for i in stride(from: targets.bloom.count - 2, through: 0, by: -1) {
-                fullscreen(cb, label: "BloomUp\(i)", target: targets.bloom[i], load: .load, pipeline: pipelines.bloomUp, postOffset: po, textures: [(targets.bloom[i + 1], TextureIndexSceneColor)])
+                fullscreen(cb, label: "BloomUp\(i)", target: targets.bloom[i], load: .load, pipeline: pipelines.bloomUp, post: po, textures: [(targets.bloom[i + 1], TextureIndexSceneColor)])
             }
         }
         let bloomTex = fx.bloomEnabled ? targets.bloom[0] : resources.blackTexture
         if fx.fxaa {
-            fullscreen(cb, label: "Composite", target: targets.ldr, pipeline: pipelines.composite, postOffset: po, textures: [(targets.hdr, TextureIndexSceneColor), (bloomTex, TextureIndexBloom)])
-            fullscreen(cb, label: "FXAA", target: target, pipeline: pipelines.fxaa, postOffset: po, textures: [(targets.ldr, TextureIndexSceneColor)])
+            fullscreen(cb, label: "Composite", target: targets.ldr, pipeline: pipelines.composite, post: po, textures: [(targets.hdr, TextureIndexSceneColor), (bloomTex, TextureIndexBloom)])
+            fullscreen(cb, label: "FXAA", target: target, pipeline: pipelines.fxaa, post: po, textures: [(targets.ldr, TextureIndexSceneColor)])
         } else {
-            fullscreen(cb, label: "Composite", target: target, pipeline: pipelines.composite, postOffset: po, textures: [(targets.hdr, TextureIndexSceneColor), (bloomTex, TextureIndexBloom)])
+            fullscreen(cb, label: "Composite", target: target, pipeline: pipelines.composite, post: po, textures: [(targets.hdr, TextureIndexSceneColor), (bloomTex, TextureIndexBloom)])
         }
     }
 
     private func encodeOverlay(_ ctx: FrameContext, targets: RenderTargets, target: any MTLTexture, _ cb: any MTLCommandBuffer) {
-        let overlays = ctx.frame.gizmos.filter { !$0.depthTest && !$0.vertices.isEmpty }
+        let overlays = ctx.gizmos.filter { !$0.batch.depthTest }
         guard !overlays.isEmpty else { return }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = target
@@ -639,7 +816,7 @@ public final class Renderer: @unchecked Sendable {
         enc.setRenderPipelineState(pipelines.gizmoLDR)
         enc.setDepthStencilState(pipelines.depthWrite)
         enc.setCullMode(.none)
-        enc.setVertexBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
+        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
         encodeGizmos(enc, overlays)
         enc.endEncoding()
     }
@@ -657,18 +834,18 @@ public final class Renderer: @unchecked Sendable {
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Pick"
         enc.setFrontFacing(.counterClockwise)
-        enc.setVertexBuffer(frameRing.buffer, offset: ctx.frameOffset, index: Int(BufferIndexFrameUniforms.rawValue))
+        enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
         enc.setRenderPipelineState(pipelines.pick)
         enc.setDepthStencilState(pipelines.depthWrite)
         enc.setCullMode(.none)
         for rec in ctx.opaque + ctx.transparent where rec.item.objectID != 0 {
             bindDraw(enc, rec)
             bindTextures(enc, rec.item.material, frame: ctx.frame)
-            enc.setFragmentBuffer(frameRing.buffer, offset: rec.drawOffset, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
             drawIndexed(enc, rec.mesh)
         }
         // Pickable gizmos draw on top (depth cleared so handles always win).
-        let pickable = ctx.frame.gizmos.filter { $0.objectID != 0 && !$0.vertices.isEmpty }
+        let pickable = ctx.gizmos.filter { $0.batch.objectID != 0 }
         if !pickable.isEmpty {
             enc.setRenderPipelineState(pipelines.pickGizmo)
             enc.setDepthStencilState(pipelines.depthNone)

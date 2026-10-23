@@ -60,6 +60,7 @@ def digest(path):
 def extract(rigs: Path, maker_library: Path | None = None) -> dict:
     import UnityPy
     import numpy as np
+    from analysis.recovered_source import MAIN_GAME, RecoveredAssembly
     rigs = rigs.resolve()
     maker_library = maker_library.resolve() if maker_library is not None else None
     evidence = []
@@ -180,11 +181,12 @@ def extract(rigs: Path, maker_library: Path | None = None) -> dict:
                 'freezeAxis': data['m_FreezeAxis'], 'particles': particles,
                 'colliders': colliders if data['m_Colliders'] is not None else []})
         coverage.append({'rig': str(rig_path.relative_to(REPO)), 'sourceAsset': asset_identity, 'components': len(result) - component_start})
-    index = read(REPO / '.local/reverse/managed-recovery/index.json')
-    project = Path(index['assemblies'][0]['directory']) / 'project'
-    for name in ['DynamicBone.cs', 'DynamicBoneCollider.cs', 'ChaControl.cs']:
-        path = project / name
-        evidence.append({'path': str(path.relative_to(REPO)), 'sha256': digest(path)})
+    index = REPO / '.local/reverse/managed-recovery/index.json'
+    read(index)
+    recovery = RecoveredAssembly(index, source_path=MAIN_GAME)
+    for name in ['DynamicBone', 'DynamicBoneCollider', 'ChaControl']:
+        source = recovery.source(name)
+        evidence.append({'path': str(source.path.relative_to(REPO)), 'sha256': source.sha256})
     return {'schemaVersion': 1, 'coordinateSpace': 'native-right-handed-y-up', 'components': result,
             'evidence': evidence, 'assetCoverage': coverage,
             'scope': 'Selected/converted original hair real-node DynamicBone setup. Source replaces prefab collider slots with body colliders. Other variants, virtual ends, exclusions/notRolls and distance disabling are unsupported.'}

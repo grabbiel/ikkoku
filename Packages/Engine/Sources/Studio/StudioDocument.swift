@@ -138,6 +138,10 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     public var sourcePreviewDiagnostics: [String]?
     public var sourcePluginState: SourceStudioPluginState?
     public var sourceNativePlugins: [SourceNativePluginReference]?
+    /// Exact plugin library revisions (P-T02). It resolves against its recorded
+    /// generation, never a newer one. Documents saved before this field existed
+    /// decode it as nil; their profile state and adapter references are unchanged.
+    public var sourcePluginLibrary: SourcePluginLibrarySelection?
 
     public init() {
         camera.target = Float3(0, 0.9, 0); camera.distance = 3.4; camera.yaw = 0.35; camera.pitch = 0.12
