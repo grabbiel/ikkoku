@@ -111,16 +111,18 @@ passed, and ticked items say how they were checked. The ST-T03 items are ticked
 because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
 #80, #81).
 
-**Merged 2026-10-23 (PRs #104–#110, #112, #114–#116):** a CI-verified wave of synthetic-fixture
-slices, written without a local Swift toolchain. The macOS Actions jobs (Engine
-`swift test`, unsigned Debug app build, `Tools/reverse` suites) were each PR's first
-compile and its only Swift test run. Each slice's report row names its evidence.
+**Merged 2026-10-23 (PRs #104–#110, #112, #114–#116, #118–#122):** a CI-verified wave of synthetic-fixture
+slices, written without a local Swift toolchain. The macOS Actions jobs were each
+PR's first compile and its only Swift test run: Engine `swift test`, the unsigned
+Debug app build, the `Tools/reverse` suites and, since #120, a Release bundle
+inspection. Each slice's report row names its evidence.
 - R5 ([#104](https://github.com/grabbiel/ikkoku/pull/104), [#108](https://github.com/grabbiel/ikkoku/pull/108)):
   secondary glTF UV sets and load diagnostics; unsupported required extensions are
   rejected; packaged glTF loads are confined to their verified package root.
 - G-T01 ([#105](https://github.com/grabbiel/ikkoku/pull/105)): engine
   `SourceGameplaySession` with classified, acknowledged completion barriers and a
-  deterministic mid-barrier reload. A-T01's first slice adds the native
+  deterministic mid-barrier reload. A-T01's first slice
+  ([#121](https://github.com/grabbiel/ikkoku/pull/121)) adds the native
   `SourceGameplayHost` that consumes it and a headless app mode
   (`IKKOKU_GAMEPLAY_SCENARIO`); the app run is pending.
 - R4 ([#106](https://github.com/grabbiel/ikkoku/pull/106), [#110](https://github.com/grabbiel/ikkoku/pull/110)):
@@ -145,8 +147,27 @@ compile and its only Swift test run. Each slice's report row names its evidence.
   are recorded once in `Tools/verification/prerequisites.json`. `doctor.py` checks
   them, and CI runs it with `--require public`. Unrecorded tools are only checked
   for presence.
+- A06 ([#118](https://github.com/grabbiel/ikkoku/pull/118)): startup validates the
+  whole `IKKOKU_*` capture request before any work. Conflicting modes, options that
+  no requested mode reads, and ignored values exit 1, naming every offending
+  variable. In an automated run, a capture input that fails exits 1 naming its
+  variable, instead of capturing other content.
+- R6 ([#119](https://github.com/grabbiel/ikkoku/pull/119)): the uniform ring spills
+  into overflow buffers instead of terminating, and never reuses a region still in
+  flight. A failed frame encodes nothing and reports `Renderer.lastFrameError`. More
+  than 64 active morph targets accumulate instead of being truncated, and lights
+  beyond 8 are counted.
+- T-T02 ([#120](https://github.com/grabbiel/ikkoku/pull/120)): CI builds the Release
+  app and inspects the bundle against reviewed rules. The first run found the whole
+  Engine package (sources, tests, fixtures) copied into every app build; that is
+  fixed. `IKKOKU_SOURCE_TREE_FALLBACKS=0` turns off the checkout-relative defaults.
+- A-T02 ([#122](https://github.com/grabbiel/ikkoku/pull/122)): saved scenes record
+  each referenced file's SHA-256 and library-relative path. On open, references
+  relocate into a user-selected converted library when the identity matches.
+  Missing, changed and escaping files are reported and their objects are not
+  loaded. Automated runs ignore the saved selection.
 
-None of this wave has been run in the app; the three app items below are still open.
+None of this wave has been run in the app; the seven app items below are still open.
 
 - [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
       FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
@@ -356,6 +377,23 @@ None of this wave has been run in the app; the three app items below are still o
       `reflectedFrame` message.
 - [ ] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
       follows it, and re-solving the same target leaves the pose unchanged.
+- [ ] A06 capture validation (PR #118): on a Debug build, run the commands in the
+      build guide's "Capture request validation" section. Each of these exits 1
+      naming its variables: two modes, an adapter report without a capture, and a
+      capture option without a mode. A missing `IKKOKU_CARD` or `IKKOKU_LOAD_SCENE`
+      exits 1 and writes no PNG. A plain Maker capture exits 0, and the `app-smoke`
+      lane passes.
+- [ ] T-T02 packaged app (PR #120): copy the Release app outside the checkout and run
+      the build guide's thumbnail recipe with `IKKOKU_SOURCE_TREE_FALLBACKS=0`. It
+      renders from the bundle alone and prints no `source-tree fallback` line. Also
+      open the project in Xcode once: the navigator shows `Packages/` and the Engine
+      package resolves.
+- [ ] A-T01 gameplay lane (PR #121): on a Debug build,
+      `python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json --strict`
+      passes.
+- [ ] A-T02 relocation (PR #122): follow the build guide's moved-library acceptance.
+      Every reference relocates, or one `Unresolved` line is printed per missing or
+      changed identity, and nothing is loaded in its place.
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
@@ -366,7 +404,7 @@ None of this wave has been run in the app; the three app items below are still o
 | 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
 | 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. **2026-10-23:** G-T01's engine slice (`SourceGameplaySession`, #105) is merged. A-T01's first slice (`SourceGameplayHost` and the headless `IKKOKU_GAMEPLAY_SCENARIO` mode) is CI-verified only, and its app lane has not run. G-T02 bindings remain. |
 | 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. **2026-10-23:** P-T02's first slice is merged as #112 (library generations, one dependency graph, saved selections). App selection wiring, batch DLL triage and P-T01/03/05 remain. P-T04's Swift slice (#107) is also merged. |
-| 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. **2026-10-23:** T-T01's first slice is merged as #116 (recorded prerequisites, `doctor.py`, a CI check). Versions for the unrecorded tools and the deployment matrix remain. |
+| 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. **2026-10-23:** first slices merged: T-T01 (#116: recorded prerequisites, `doctor.py`, a CI check); R6 (#119: recoverable uniform ring, frame errors, morph and light limits); T-T02 (#120: Release bundle inspection in CI, source-tree fallback switch); A-T02 (#122: a selected converted library and identity-checked relocation of saved scenes). Remaining: versions for the unrecorded tools, the deployment matrix, an app run outside the checkout, character resource release, R7 budgets and E-T04. |
 
 Do not resume these as one undifferentiated “finish the port” task. Each linked
 task states entry points and a measurable acceptance condition; preserve the

@@ -66,6 +66,7 @@ final class StudioModel: ViewportInputHandler {
     private(set) var undoStack: [StudioDocument] = []
     private(set) var redoStack: [StudioDocument] = []
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
+    @ObservationIgnored private var renderStatus = RenderStatusReporter()
     @ObservationIgnored private var sourceInstances: [UUID: SourceStudioCharacterPreview] = [:]
     /// Imported route objects with their authored point transforms, so each
     /// frame's world-matrix walks replace a route parent's authored transform
@@ -298,7 +299,12 @@ final class StudioModel: ViewportInputHandler {
     }
 
     private func tick() {
-        guard isActiveMode, drag == nil else { return }
+        guard isActiveMode else { return }
+        if let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
+                                          statistics: host.renderer.lastFrameStatistics, now: CFAbsoluteTimeGetCurrent()) {
+            status = text
+        }
+        guard drag == nil else { return }
         if timelinePlaying {
             var t = timelineTime + 1.0 / 30.0
             if t > doc.timeline.duration { t = doc.timeline.loop ? 0 : doc.timeline.duration; if !doc.timeline.loop { timelinePlaying = false } }
@@ -811,7 +817,9 @@ final class StudioModel: ViewportInputHandler {
         guard let id = selection else { return }
         pushUndo(force: true)
         doc.remove(id)
-        instances[id] = nil
+        // The document's refresh already released the instances of the object and
+        // its descendants; this keeps the delete path explicit.
+        releaseInstances { $0 == id }
         selection = nil
     }
 
@@ -1071,7 +1079,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -1119,7 +1127,7 @@ final class StudioModel: ViewportInputHandler {
         // `rehydrateSourceRuntime()`, which rebuilds the route half from the
         // original scene file (play state reseeded from the saved flags)
         // when it finds the caches missing for a source document.
-        sourceAnimationTime = 0; sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; activeSourceCamera = nil; instances.removeAll()
+        sourceAnimationTime = 0; sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; activeSourceCamera = nil; releaseInstances { _ in true }
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
         clearResourceDiagnostics()
         doc = empty; selection = nil; sceneURL = nil
@@ -1408,7 +1416,7 @@ final class StudioModel: ViewportInputHandler {
         for line in resources.diagnostics { print("[ikkoku] \(url.lastPathComponent): \(line)") }
         pushUndo(force: true)
         stopSourceVoices()
-        instances.removeAll()
+        releaseInstances { _ in true }
         sourceInstances.removeAll()
         sourceAnimationTime = 0
         selection = nil
@@ -1477,6 +1485,16 @@ final class StudioModel: ViewportInputHandler {
 
     // MARK: Frame building
 
+    /// Drops native character instances and hands their per-instance GPU buffers
+    /// back (R6). The store keeps them until a frame submitted after this call is
+    /// prepared, so the pending frame still draws them; release before building it.
+    private func releaseInstances(where shouldRelease: (UUID) -> Bool) {
+        for (id, inst) in instances where shouldRelease(id) {
+            inst.releaseGPUResources()
+            instances[id] = nil
+        }
+    }
+
     private func instance(for o: StudioObject) -> CharacterInstance {
         if let inst = instances[o.id] { return inst }
         let inst = CharacterInstance(instanceID: nextInstanceID, library: library, card: o.card ?? .defaultFemale())
@@ -1488,6 +1506,10 @@ final class StudioModel: ViewportInputHandler {
     func refresh() {
         let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
         sourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
+        // Native characters that left the document (delete, a deleted parent,
+        // undo/redo) release their GPU buffers before this frame is built (R6).
+        let nativeIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter == nil }.map(\.id))
+        releaseInstances { !nativeIDs.contains($0) }
         // Route runtimes are authored data: nothing edits them, so the prune
         // only drops entries whose object is gone or whose scene identity no
         // longer matches (a route object's own transform edits flow through

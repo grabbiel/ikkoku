@@ -414,8 +414,8 @@ morph-delta buffer left the kernel indexing the 256-byte dummy buffer.
 `setHiddenBuffer` always uploads a new buffer, so a frame already submitted
 keeps the mask it was encoded with. It returns false and drops the old mask
 when Metal refuses the buffer. `releaseHiddenBuffers(keys:)` mirrors
-`releaseDeformBuffers(keys:)`. `CharacterInstance` still releases neither when
-a character is removed.
+`releaseDeformBuffers(keys:)`. Owners whose frames may still be pending use
+the deferred `retire` instead ([second slice](#character-and-import-lifetime-r6-second-slice)).
 
 **Tests.** `RendererLimitsTests.swift` builds the production pipelines from
 `Shaders/` with `Renderer(gpu:shaderLibrary:)`, because the test bundle has no
@@ -444,13 +444,117 @@ Run them with
 Swift was not compiled locally, so the CI Engine suite is the only test run.
 Nothing here was run in the app.
 
+### Character and import lifetime (R6, second slice)
+
+**What a character owns.** A prototype `CharacterInstance` owns its
+deformation buffers (keys `instanceID << 16 | part`) and its body coverage
+mask (`instanceID << 8 | 0x77`). Its meshes and textures come from the shared
+`AssetLibrary` cache, which keeps one copy per file and skeleton key for the
+app's lifetime, so removing a character does not release them.
+`releaseGPUResources()` hands back the buffers. Owners call it when a
+character is removed or stops being drawn, and `deinit` calls it as a safety
+net. The keys are the largest part list any `build` has issued, so card
+changes reuse them. The instance stays usable: the next `build` uploads its
+mask again, and the renderer re-creates its deformation buffers. When a card
+change leaves no covering garment, the old mask is retired as well.
+
+**Why the release is deferred.** A `RenderFrame` names meshes, deformation
+keys and hidden-mask keys, not buffers, until the renderer prepares it.
+Encoded command buffers retain the resources they use, and a prepared
+`FrameContext` holds strong references, so dropping a store entry never
+affects GPU work in flight. The renderer's pending frame
+(`Renderer.submit`) can still be prepared after its owner gives the
+resources back, however, and so can a copy taken with `currentFrame()`.
+An immediate release would make that frame lose its hidden mask and skip
+its meshes. Its preparation would also re-create the deformation buffers
+under the released keys, and nothing would release them again. Slice 1's
+mask replacement uploads a new buffer, which protects encoded frames only:
+a pending frame still looks the mask up by key. `SourceRigPreview` avoids
+the re-creation by unregistering its own meshes first, so a pending frame
+skips its items for one frame. Shared library meshes cannot be dropped that
+way.
+
+`ResourceStore.retire(meshes:deformKeys:hiddenKeys:)` therefore takes a
+`ResourceClock` stamp and leaves the resources in place. Every `RenderFrame`
+also takes a stamp when it is created (copies keep it), and `submit` marks
+the pending snapshot as submitted. When the renderer prepares a submitted
+frame created after a retirement, it completes it. That frame replaced the
+pending frame, which was the only frame the interactive draw would prepare.
+An unsubmitted frame passed directly to `capture`, `pick` or `benchmark`
+never completes a retirement. A frame created before the newest completed
+retirement gets transient deformation buffers for missing keys. The buffers
+are filled by the frame's own deform pass and never stored, so a late copy
+renders without re-creating a released key. Such a frame draws without the
+retired hidden mask (the region bitmask applies) and skips retired meshes.
+`setHiddenBuffer` on a retired key and the immediate
+`unregister`/`release…` calls cancel that key's retirement.
+`ResourceStore.Statistics.retiring` counts pending entries. The renderer's
+frame lock and render lock order is unchanged; `retire` and completion take
+only the store lock, so `deinit` can retire from any thread.
+
+The rule for owners is to retire before building their next frame. A frame
+created after the retirement counts as current, so its preparation would
+re-create the deformation keys it still names.
+
+**Owners in the app.**
+
+- Studio prunes native character instances at the top of `refresh()`, before
+  building the frame. This covers objects removed by delete (including
+  characters under a deleted folder, which were never released before), undo
+  and redo. New Scene, scene load and source-scene preview replace the
+  instance table through the same release.
+- The Maker keeps one bundled instance and releases it when an original rig
+  preview replaces it; a card replacement reuses its keys.
+- `AssetLibrary.importStatic` retires the previous copy's meshes when the same
+  file is imported again; texture keys are shared and stay. It also
+  unregisters meshes left by an import that fails after registering some of
+  them.
+
+**App reporting.** `RenderStatusReporter` turns `lastFrameError` and
+`lastFrameStatistics.droppedLights` into status-line text. The Maker and
+Studio poll it from their 30 Hz editor timers while active. A new problem
+shows at once, and the line is rewritten only when the text changes. After
+one second of frames without a problem, the status it replaced comes back.
+If other code wrote the status line meanwhile, that text is kept.
+
+**Tests.** `CharacterLifetimeTests.swift` uses the bundled prototype assets and
+the production pipelines from `Shaders/` (CI-only, not compiled locally). The
+character tests copy the bundled female body and the five bundled garments that
+embed no image into a temporary root without `Textures/`, and they wear no hair
+or accessories, so no texture is loaded. A first version that drew the fully
+textured bundled characters passed when each test ran alone on CI. In the
+parallel suite, however, its two tests stalled together in their first
+`build`, the first synchronous `MTKTextureLoader` loads, and the Engine run
+exceeded the lane's 600 s timeout. The cause was not isolated further. The GPU
+tests now also run one at a time (`@Suite(.serialized)`).
+
+- `characterCreateRemoveCyclesReturnTheResourceStoreToBaseline` runs four
+  create–draw–remove cycles, alternating five and two garments. It alternates
+  the explicit release with `deinit`. After each removal, the pending frame still renders with
+  unchanged counts. The next submitted frame returns counts and bytes to the
+  baseline, and a late copy of the old frame renders without re-creating
+  anything.
+- `characterDrawnAgainAfterAReleaseOwnsItsBuffersAgain` covers the Maker's
+  release-then-redraw case: the mask re-upload cancels its retirement.
+- `repeatedStaticImportsKeepOneCopyOfTheItemMeshes` imports the same item
+  nine times. Each replaced copy stays drawable for the pending frame and is
+  released after the next submitted frame.
+- `onlyASubmittedFrameCreatedAfterARetirementCompletesIt` checks the
+  completion rule with a synthetic mesh.
+- `renderStatusReporterShowsAProblemOnceAndRestoresTheStatusAfterRecovery`
+  checks the debounce.
+
+Run them with
+`swift test --package-path Packages/Engine --filter 'characterCreateRemoveCycles|characterDrawnAgain|repeatedStaticImports|onlyASubmittedFrame|renderStatusReporter'`.
+None of this was run in the app. The Studio and Maker release paths and the
+status line are only compiled in CI.
+
 Remaining R6 work:
 
 - An interactive draw, pick and capture stress run that submits concurrently.
-- Bounded counts across real character, scene and import/delete cycles.
-  `CharacterInstance` does not release its deform or hidden buffers.
+- App-level import/delete/capture/pick cycles through `StudioModel` and
+  `MakerModel`, including original-source characters.
 - Allocation-failure injection beyond the oversized overflow request.
-- App-level reporting of `lastFrameError`.
 
 ## Checked math, legacy skeletons and cameras (R4)
 
@@ -1322,7 +1426,10 @@ target. Every meaningful active morph is accumulated (there is no 64-entry cap).
 The light budget is eight, and enabled lights beyond it are counted in
 `Renderer.lastFrameStatistics.droppedLights`. Uniforms beyond the ring's 8 MiB
 region go to overflow buffers; a refused buffer becomes `lastFrameError`
-([R6](#renderer-limits-and-resource-lifetime-r6-first-slice)). glTF UV1/2
+([R6](#renderer-limits-and-resource-lifetime-r6-first-slice)), which the Maker and
+Studio status lines show. Removed characters and replaced static imports release
+their GPU buffers once no pending frame names them
+([second slice](#character-and-import-lifetime-r6-second-slice)). glTF UV1/2
 are decoded, but native materials sample imported glTF textures on UV0 and
 `LoadedAsset` rejects other selections. Initial morph weights are retained but not
 applied, and tangent morphs are ignored; the loader reports both. There is no
