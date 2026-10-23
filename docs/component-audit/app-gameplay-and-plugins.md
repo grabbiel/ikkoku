@@ -284,7 +284,8 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
     `capture input failed: IKKOKU_X=…`, and no PNG is written.
   - A plain Maker capture exits 0 (21 items).
   - `app-smoke --strict`: 6/7. `startup-mute-capture` fails before it captures: its plugin profile, the `native-adapter-capture-01/profile.json` that `environment.example.json` names, binds `StudioMotionFixture` to source object key 10, and the check loads no source scene ("Original plugin target does not bind uniquely"; open finding).
-  The tests were compiled locally too (Xcode 27.0).
+  `CaptureRequestTests` ran locally in the `private-source` lane's Engine suite
+  (709 passed, 0 failed), and `test_run.py` passed (170 tests).
 
 ## G. Gameplay cycle, event selection and ADV
 
