@@ -136,22 +136,38 @@ beside the trace). It prints time per thread and binary, the heaviest functions 
 and inclusive time and, with `--focus REGEX`, what the outermost matching frame
 spends its time calling.
 
-`summarize` also checks that a run is valid. A drawable whose presented time
-is 0 was never shown on screen. When more than a tenth of a run's drawables
-were never shown while its main thread was not saturated (under 900 ms/s
-busy), the window was not being composited. That happens, for example, while
-the user switches desktops or full-screen apps during the run. `summarize`
-then prints a `WARNING` for that run, which must be repeated. A saturated run
-can drop drawables legitimately, so it is not flagged. The check was added
-after the baseline. Of the cited runs, only the Engine -O `studio-idle`
-baseline trips it (82 of 460 drawables never shown), so its presented FPS and
-hitches are marked in the table; its model-side numbers are unaffected. Every
-other number on this page comes from runs without the warning.
+`summarize` also checks that each run is valid:
+
+- **Drawables never shown.** A drawable whose presented time is 0 was never
+  shown on screen. The window was not being composited when either of these
+  holds:
+  - more than a tenth of a run's drawables were never shown while its main
+    thread had time to spare (under 900 ms/s busy);
+  - more than a quarter of at least 100 drawables were never shown, even
+    with the main thread saturated.
+
+  This happens, for example, while someone switches desktops or full-screen
+  apps during the run. A Debug source scene, whose frames take seconds, can
+  lose its few drawables legitimately, so a run with fewer than 100
+  drawables is not flagged on a saturated main thread.
+- **Stray input.** An idle workload (`studio-idle`, `maker-idle`,
+  `studio-native`, `startup`) sends no input. Any input calls in its report
+  came from someone's mouse over the window, so the run is checked against a
+  rerun.
+
+`summarize` prints a `WARNING` for each flagged run. `run` repeats a launch
+whose window was not composited (`--retries`, default 2) before giving up.
+
+The check was added after the baseline. Of the runs cited for frame rates,
+only the Engine -O `studio-idle` baseline trips it (82 of 460 drawables never
+shown). Its presented FPS and hitches are marked in the table; its
+model-side numbers are unaffected. Every other frame rate on this page comes
+from runs without the warning.
 
 [test_perf_trace.py](../../Tools/verification/test_perf_trace.py)
-covers the launch environments, the summary row, the export reader and the
-launch guard with synthetic data (it runs in the `runner-self-tests` check of
-the public lane).
+covers the launch environments, the summary row, the validity checks, the
+retry of a hidden run, the export reader and the launch guard with synthetic
+data (it runs in the `runner-self-tests` check of the public lane).
 
 ### Measuring a change
 
@@ -477,7 +493,14 @@ How each fix was checked:
 | baseline (`9e02a62`) | 40.0 (60 ticks) | — | — |
 | + quick win 1 | 13.3 (60 ticks) | checked together with quick win 2 | — |
 | + quick win 2 (`5b01c92`; `3cd44b7` with `main` merged) | 8.4 (60 ticks); 8.63, 8.70, 8.73 (600 ticks) | `dc789a7f…` | identical: source scene `d5575bfb…`, rig + card `045884f0…`, native scene `d1ade80a…`, scenario renders `1fcd2488…`/`c1ad5327…`/`4b23ea6e…` (Debug and Release, `.local/app-perf/captures-1`) |
-| + quick win 3 (`decf961`) | 5.66, 5.69, 5.72 (600 ticks) | `dc789a7f…` (unchanged) | TBD-CAPTURES2 |
+| + quick win 3 (`decf961`) | 5.66, 5.69, 5.72 (600 ticks) | `dc789a7f…` (unchanged) | identical, now against `main` `5e86b57`: the merged head `0d4548a` gives the same hashes as above (Debug and Release, `.local/app-perf/captures-3`) |
+
+The `main` builds for the last row have no harness, since they predate it.
+Three more cases match between `main` `5e86b57` and the merged head in Debug:
+the source scene with only the avatar (`d5be9858…`), the rig with the R1
+fixture card (`9d973e21…`) and the synthetic scene (`4b0fe94e…`).
+Every capture compared is also identical between the Debug and Release
+builds.
 
 In-app harness results, Release, before → after:
 
@@ -636,32 +659,37 @@ How to read the expected gain column:
 
 ## Validation of this change
 
-All runs were on `0a19718` or later. The reports are under
-`.local/verification/app-perf` in the worktree and `.local/app-perf/lanes`.
+The suites and lanes ran on the merged head `b20ccd7` (`main` at `f5587f5`
+merged) unless stated. The reports are under `.local/verification/app-perf`
+in the worktree and `.local/app-perf/lanes`.
 
-- **Engine suite.** Plain `swift test --package-path Packages/Engine`: 656
-  tests passed. With every private fixture exported (`IKKOKU_*` from the
-  fixture map), 655 passed and 1 failed:
-  `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested` (a hash
-  mismatch against a private oracle fixture). It fails identically on
-  `origin/main` `d9684e8`, so it is a stale private fixture, not this change.
-- **Lane `public`.** Runner self-tests passed: 175, including the 6 in
-  `test_perf_trace.py`. Engine unit tests: 525 passed, 68 skipped. One
-  translation test errors in a worktree checkout ("Recovered original source
-  and translations must remain under ignored .local"), identically on
-  `origin/main`.
-  - **Under `--strict`** the lane also fails `engine-unit-tests`, because
-    strict mode sets `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`. The public lane
-    supplies no fixtures, so its 67 fixture-gated tests fail by design.
+- **Engine suite.** Plain `swift test --package-path Packages/Engine`: 690
+  tests passed, plus 21 in the second test target. With every private
+  fixture exported (`IKKOKU_*` from the fixture map), all 690 passed, one of
+  them skipped for the optional `IKKOKU_APPEARANCE_REFERENCE_ROOT`. The
+  private hair-dynamics oracle test failed on `0a19718` and on `origin/main`
+  `d9684e8`. It passes now that the fixture map points at a new
+  `IKKOKU_SOURCE_DYNAMICS_REFERENCE`.
+- **Lane `public`** (default mode):
+  - Passed: runner self-tests (178, including the 9 in
+    `test_perf_trace.py`), Engine unit tests, mod tools and the inspector
+    validator tests.
+  - One translation test errors in a worktree checkout ("Recovered original
+    source and translations must remain under ignored .local"). It errors
+    the same way on `origin/main`.
+  - Under `--strict` the lane also fails `engine-unit-tests`, because strict
+    mode sets `IKKOKU_REQUIRE_SOURCE_FIXTURES=1`. The public lane supplies no
+    fixtures, so its fixture-gated tests fail by design (69 issues).
 - **Lane `maker`.**
   - Default mode: 6 passed and 2 skipped, both for missing optional fixtures
     (`IKKOKU_APPEARANCE_REFERENCE_ROOT`, `IKKOKU_MANAGED_RECOVERY_EXPORT`).
-  - One failure: `maker-roundtrip-audit` refuses its output path because a
-    worktree's `.local/reverse` is a symlink outside the worktree's
-    `.local`. It fails the same way on `origin/main`.
+  - One failure: `maker-roundtrip-audit` refuses its output path ("Evidence
+    output must remain under ignored .local"), because a worktree's
+    `.local/reverse` is a symlink outside the worktree's `.local`. It fails
+    the same way on `origin/main`.
   - Under `--strict` the two skips become failures.
 - **Lane `private-source`.**
-  - Default mode: 675 passed, 2 skipped.
+  - Default mode: its suite passed (690 tests, 2 skipped).
   - Under `--strict` it stops before running, on the optional
     `IKKOKU_APPEARANCE_REFERENCE_ROOT` that the fixture map does not supply.
 - **App lanes**, each `--strict` under the app lock: TBD-APP-LANES.
