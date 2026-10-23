@@ -17,12 +17,11 @@ public struct SourceMakerLibrary: Sendable {
         public let category: Int, id: Int, name: String
         public let modGUID: String?, empty: Bool?
         public let rig: File?, appearance: File?, cardBindings: File?, bodyMask: File?
-        /// Converted prefab renderers and serialized materials (`materials.json`).
+        /// Converted prefab renderers and serialized materials (`materials.json`);
+        /// its `catalog` object is the original list row (ListInfoBase.dictInfo
+        /// by KeyType name) of this entry.
         public let materialEvidence: File?
         public let meshNames: [String]?, attachment: Attachment?
-        /// Conversion evidence sidecar; its `catalog` object is the original
-        /// list row (ListInfoBase.dictInfo by KeyType name) of this entry.
-        public let materialEvidence: File?
     }
     public struct Assembly: Decodable, Sendable {
         public let sex: Int, headID: Int, exType: Int
@@ -136,9 +135,9 @@ public struct SourceMakerLibrary: Sendable {
         func row(_ resolution: Selection) throws -> CatalogRow {
             guard let entry = resolution.entry else { return .unknown(resolution.status) }
             if entry.empty == true { return .none }
-            guard let evidence = entry.materialEvidence else { return .unknown("no catalog evidence") }
+            guard let evidence = try materialEvidenceData(for: entry) else { return .unknown("no catalog evidence") }
             struct Evidence: Decodable { let catalog: [String: String]? }
-            let decoded = try JSONDecoder().decode(Evidence.self, from: Data(contentsOf: verified(evidence, maximumBytes: 4 * 1024 * 1024)))
+            let decoded = try JSONDecoder().decode(Evidence.self, from: evidence)
             return decoded.catalog.map(CatalogRow.row) ?? .unknown("no catalog evidence")
         }
         let parts = try card.recordFields(.clothes(coordinate: coordinate))["parts"]?.arrayValue ?? []
