@@ -460,6 +460,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-mirrored-camera",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_MIRRORED_CAMERA_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/mirrored-camera.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-mirrored-camera.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R4/ST-A06 mirrored camera parent: on the CharaStudio-authored scene-mirrored-camera.png (camera IKKOKU-MIRROR key 2 under item key 0 with scale (-1, 1, 1), saved active; control camera IKKOKU-CONTROL key 3 under item key 1 with scale (1, 1, 1)) the load winner is camera 2, and through StudioModel.viewCamera the preview renders from exactly the saved scene camera while the status line reports 'Source camera 2 view unresolved: Source camera object parent frame is mirrored'; toggling camera 3 looks through it (view position within 1e-5 of its world placement and forward within 0.01 degrees, not the saved camera), toggling camera 2 back falls back again, and after export+reimport the same holds. The original player does look through the mirrored camera (scene-records.md 'Mirrored camera parent'); matching that pose, a mirror further up the chain and rendered pixels are not asserted.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-mirrored-camera.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/mirrored-camera.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-charastudio-hide-rename",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

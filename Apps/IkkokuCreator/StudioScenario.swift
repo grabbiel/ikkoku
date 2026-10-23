@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import simd
 import CoreMath
 import CryptoKit
 import Scene
@@ -55,6 +56,15 @@ struct StudioScenario: Decodable {
         let sourceRuntime: SourceRuntimeValue?
         /// assert only: a substring one import diagnostic must contain.
         let diagnosticContains: String?
+        /// assert only: a substring the app's status line (`StudioModel.status`)
+        /// must contain, read after any `view` check in the same step, so a
+        /// look-through rejection the render camera reported is visible.
+        let statusContains: String?
+        /// assert only: the camera the preview renders from
+        /// (`StudioModel.viewCamera`, the camera `refresh()` hands the
+        /// renderer): the saved scene camera, or the look-through camera of
+        /// the source camera object with this key.
+        let view: ViewValue?
         /// setAnimation: the clip to select, mirroring the inspector's clip
         /// popup (`StudioModel.setSourceAnimation`, phase resets to zero).
         let group: Int32?
@@ -210,6 +220,14 @@ struct StudioScenario: Decodable {
             /// angle is not known in advance and cannot be matched exactly.
             let nonZero: Bool?
         }
+        struct ViewValue: Decodable {
+            /// true: the view must be exactly the saved camera `doc.camera`.
+            let saved: Bool?
+            /// the source camera object the view must look through: its
+            /// world position and forward, read through the same placement
+            /// walk `refresh()` uses, and not the saved camera.
+            let key: Int32?
+        }
         struct PositionValue: Decodable {
             let key: Int32
             /// the `captureObject` label to measure against: by default the
@@ -229,7 +247,7 @@ struct StudioScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
-                 activeCamera, routePlaying, sourceRuntime, diagnosticContains,
+                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit
@@ -263,6 +281,8 @@ struct StudioScenario: Decodable {
             // optional, so a present object only asserts the keys it names.
             sourceRuntime = try c.decodeIfPresent(SourceRuntimeValue.self, forKey: .sourceRuntime)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
+            statusContains = try c.decodeIfPresent(String.self, forKey: .statusContains)
+            view = try c.decodeIfPresent(ViewValue.self, forKey: .view)
             // Same rule as `activeCamera`/`sourceRuntime`: absent keys stay
             // `nil` ("not asserted"); a present `animation`/`fk` object only
             // asserts the fields it names.
@@ -653,6 +673,42 @@ struct StudioScenario: Decodable {
                     return "assert position: object \(check.key) moved only \(moved) from \"\(check.from)\" — it did not move"
                 }
             }
+            return nil
+        }
+
+        /// The camera the preview renders from, through `StudioModel.viewCamera`
+        /// (which reports a rejected look-through in the status line and falls
+        /// back to the saved camera), against either the saved camera or the
+        /// named camera object's world placement.
+        func assertView(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.view else { return nil }
+            guard (check.saved == true) != (check.key != nil), check.saved != false else {
+                return "assert view: name exactly one of saved: true or key"
+            }
+            let view = studio.viewCamera, saved = studio.doc.camera
+            let at = "(\(view.position.x), \(view.position.y), \(view.position.z))"
+            let looking = "(\(view.forward.x), \(view.forward.y), \(view.forward.z))"
+            if check.saved == true {
+                guard view == saved else {
+                    return "assert view: renders from \(at), expected the saved camera at (\(saved.position.x), \(saved.position.y), \(saved.position.z))"
+                }
+                details.append("view is the saved camera at \(at) looking \(looking)")
+                return nil
+            }
+            let key = check.key!
+            guard let id = studio.doc.objects.first(where: { $0.sourceObjectKey == key })?.id else {
+                return "assert view: no object with source key \(key)"
+            }
+            let world: float4x4
+            do { world = try studio.sourceObjectWorldMatrix(id) }
+            catch { return "assert view: camera \(key) world placement unavailable: \(error)" }
+            let offset = simd_distance(view.position, world.translation)
+            let forward = simd_normalize(world.rotationQuaternion.act(Float3(0, 0, -1)))
+            let turn = atan2(simd_length(simd_cross(view.forward, forward)), simd_dot(view.forward, forward)) * 180 / .pi
+            guard view != saved, offset <= tolerance, turn <= 0.01 else {
+                return "assert view: renders from \(at), \(offset) from camera \(key) and \(turn) degrees off its forward\(view == saved ? " (the saved camera)" : ""), expected it looked through camera \(key)"
+            }
+            details.append("view looks through camera \(key) from \(at) looking \(looking) (\(offset) m, \(turn) degrees from its placement)")
             return nil
         }
 
@@ -1320,6 +1376,12 @@ struct StudioScenario: Decodable {
                     if !diagnostics.contains(where: { $0.contains(needle) }) {
                         problems.append("assert diagnosticContains: no diagnostic contains \"\(needle)\"")
                     }
+                }
+                // After the view check, which reads `viewCamera` and so lets a
+                // rejected look-through report itself in the status line.
+                if let problem = assertView(step, details: &details) { problems.append(problem) }
+                if let needle = step.statusContains, !studio.status.contains(needle) {
+                    problems.append("assert statusContains: status \"\(studio.status)\" does not contain \"\(needle)\"")
                 }
                 if step.op == "assertRejected" {
                     guard let expected = step.errorContains, !expected.isEmpty else {
