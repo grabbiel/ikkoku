@@ -3,7 +3,10 @@
 Reviewed 2026-09-25. This reference retains the head-00 attachment investigation
 and its recorded numerical comparisons. Additional supported heads and
 card-selected parts are described in [Maker assets](maker-assets.md) and
-[coverage](maker-coverage.md). Feature status and remaining work are in the
+[coverage](maker-coverage.md). The [neutral original-player model gate](neutral-model-parity.md)
+covers female/head00, female/head200 and normal male/head200 selected skin
+matrices and vertices, including the source late hand-scale correction.
+Feature status and remaining work are in the
 [component audit](../../component-audit/character-and-mods.md). Commands run from
 the repository root.
 

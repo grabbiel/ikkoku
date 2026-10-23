@@ -23,6 +23,26 @@ private func sourceStudioReference(scene: URL, data: Data, rig: URL, catalog: UR
         rigFile: rig.path, boneCatalogFile: catalog.path, objectKey: key)
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_STUDIO_ANIMATION_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires original Studio pose and converted animation fixtures"))
+func sourceStudioLateHandCorrectionSurvivesAnimationAndShapeCacheRebuildWhenSupplied() throws {
+    let input = try sourceStudioPreviewInputs(), data = try Data(contentsOf: input.scene)
+    let reference = SourceStudioCharacterReference(sceneFile: input.scene.path, sceneSHA256: OriginalCardFixture.hash(data),
+        rigFile: input.rig.path, boneCatalogFile: input.catalog.path, objectKey: 10,
+        animationCatalogFile: try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG"))
+    let preview = try SourceStudioCharacterPreview(reference: reference, resources: ResourceStore(device: try #require(MTLCreateSystemDefaultDevice())))
+    var state = SourceStudioAnimationState(record: preview.record)
+    state.group = 0; state.category = 0; state.no = 0
+    let hands = try ["cf_j_hand_L", "cf_j_hand_R"].map { try preview.preview.source.rig.uniqueNode(named: $0) }
+    for time: Float in [0, 0.2, 0.4] {
+        let pose = try preview.editedPose(animationState: state, animationElapsed: time)
+        for index in hands { #expect(length(pose.localMatrices[index].scaleFactors - Float3(1, 0.9, 0.9)) < 1e-5) }
+    }
+    var body = preview.savedBodyValues; body[0] = 0.7
+    let edited = try preview.editedPose(bodyValues: body, animationState: state, animationElapsed: 0.4)
+    for index in hands { #expect(length(edited.localMatrices[index].scaleFactors - Float3(1, 0.9, 0.9)) < 1e-5) }
+}
+
 @Test func sourceStudioCharacterReferenceSurvivesNativeSceneCardRoundTrip() throws {
     let reference = SourceStudioCharacterReference(sceneFile: "/local/original scene.png", sceneSHA256: String(repeating: "a", count: 64),
         rigFile: "/local/source-avatar.json", boneCatalogFile: "/local/bone-catalog.json", objectKey: 42)

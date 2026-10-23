@@ -1,0 +1,167 @@
+# Neutral original-player model comparison (R2)
+
+Issue #136 adds an independent original-player geometry gate for the normal
+female/head00 control, female/head200, and male/head200. It also corrects the
+source high-detail female hand scales in the production pose path. This is a
+bounded selected-model comparison, not whole-character or whole-game parity.
+
+## Reference and capture context
+
+`Tools/reverse/original_character_probe.py --model-variant female00|female200|male200`
+creates a new fully clothed card in an isolated CharaStudio player. It waits for
+the Studio scene, loads the requested normal model, drives exactly one original
+`Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
+subsequent component updates, calls the original character update methods, and
+invokes the original `FaceBlendShape.LateUpdate` with blink disabled. It records
+Animator states/playheads and measured eye angle rates. No fitted hand clock or
+native-evaluated transforms/weights seed the reference.
+
+The original assembly is CharaStudio `Assembly-CSharp.dll`, SHA-256
+`902b9a237337b17a64514bdb0d857b460ece4fb6a57c658375dd32c5fa504c45`, Unity
+5.6.2f1, linear color space, Direct3D 11 under Parallels. The generated `run.json`
+binds the probe source hash and private player root/PID; its logs identify the
+single validation plug-in. Requested and actual sex/head/bone type, loaded head
+catalog ID, requested/actual shape arrays, detail level, correction flags and
+hand-controller readback counts are retained. A source fallback is an error.
+
+The normal male load changes requested height 0.5 to actual saved height 0.6.
+The native inspector uses that saved value and the normal-male head/neck factor
+0.91; it does not impose a separate Maker-only clamp. Eye openness is evaluated
+by the original complete face step: head00 yields 92%, head200 90% at zero gaze.
+An early development probe that forced 92% for every head was rejected, not
+used to change the expression implementation or relax tolerances.
+
+Zero post-load frames alone do not prove determinism. Two independent female00
+captures must compare exact transform records, Animator states, rest identities,
+morph identities/weights and all source geometry streams. These repeats cover
+this quiescent fixture, not arbitrary asynchronous or animated loading.
+The repeat gate rejects the same resolved folder and copied producer records;
+it requires distinct recorded VM/root/PID identities with the same probe source
+hash, and includes both `run.json` hashes. A changed frame hash alone is not
+evidence of a separate run.
+
+## Source correction and runtime order
+
+Recovered `ChaControl.LateUpdateForce` applies, after body/hand shape updates,
+only for `hiPoly && sex == 1`:
+
+| Destination | Flag on | Flag off |
+| --- | --- | --- |
+| `cf_j_forearm01_L/R` | `(0.92, 1, 1)` | `(1, 1, 1)` |
+| `cf_j_hand_L/R` | `(1, 0.9, 0.9)` | `(1, 1, 1)` |
+
+These are absolute local scale setters. `Manager.Character.Start` enables the
+hand flag; the arm flag defaults off. Both the exact Studio DLL and retained
+Maker source show the rule. Male and low-detail bodies receive no setter.
+The missing female hand scale caused up to 0.007331 source-unit vertex error;
+matching the original late rule removes that discrepancy without fitting.
+
+`SourceBodyLateCorrection` binds up to four exact destination indices once per
+assembly. Duplicate targets fail; reduced/head-only rigs may omit targets.
+Each pose applies only those cached indices, in place. Shape-only APIs and the
+low-level `SourceRigPreview` default keep the late pass disabled. Application
+callers explicitly select source high-detail options. Maker samples animation
+before `preview.pose`, then applies this late pass before supported static ABMX.
+Studio caches the final four scales from its shape/static-ABMX baseline and
+restores them after body and hand animation, before FK/IK. Shape edits rebuild
+that cache transactionally; a new outfit constructs a new preview. Appearance
+replacement preserves its options. This avoids multiplying static modifiers on
+each frame. Imported static ABMX handling remains separate from execution of
+an original ABMX plug-in; animated ABMX runtime parity is not established here.
+
+The retained converted motion library contains 411 clips with 1,640 arm/hand
+scale bindings, so a baseline-only correction is insufficient. A regression
+covers animated scale replacement, repeated application, shape-cache rebuild,
+flag states, male/low-detail no-op, reduced rigs, and the actual Metal deform
+kernel. The neutral source captures do not independently verify the full
+animated/FK/IK pipeline; those runtime-order checks are native regressions.
+
+The historical R1 `original-character-probe/frame.json` actually records
+`cf_j_hand_L/R.localScale == (1,1,1)` from its earlier startup context. Its legacy
+`card-pose` and shader/live-fixture diagnostics remain explicitly uncorrected;
+new settled-player captures must use `card-model`. Do not silently reinterpret
+that historical reference with settled-player defaults.
+
+## Numerical gate and exclusions
+
+```
+ikkoku-inspect card-model <avatar.json> <fixture-card.png> <maker-library.json>
+python Tools/reverse/compare_original_model.py <probe-folder> <native.json> \
+  --repeat <independent-same-model-probe> --visual-output <silhouette.png>
+```
+
+Use the female `source-avatar.json` or male `source-male-avatar.json` from the
+matching converted head directory. The inspector requires exact selected
+assembly identity and all selected catalog entries to be converted. It records
+input hashes and evaluates native shape, neutral expression and full skinned
+vertices independently of the original capture.
+
+The comparator binds each selected mesh by its original rest-position SHA-256,
+name, triangle order, ordered skin-joint names and inverse-bind matrices. It
+gates every selected skin-joint **world matrix** and every selected vertex at
+`2e-5` absolute source units/matrix elements; morph percentages at `1e-4`.
+It keeps three separate vertex comparisons: native versus original runtime
+matrix skinning; native versus actual `SkinnedMeshRenderer.BakeMesh`; and
+BakeMesh versus original matrix skinning. Raw Unity 5.6 BakeMesh positions
+retain embedded renderer scale; only its recorded renderer scale/matrix are
+used to express them in world coordinates. No alignment or fitted phase is used.
+
+The full hierarchy matching is diagnostic only. Local transforms, unskinned
+helpers/colliders and ambiguous duplicate camera paths are not promoted to
+parity by this gate. The report gives total native/source node counts, selected
+skin binding counts and unique native skin joints. The male body has one extra
+source `bones` tail entry (`cf_d_bust00`) beyond its 100 inverse binds; it cannot
+participate in that skin palette and is reported separately.
+
+Each model selects 19 of 20 assembled drawable parts: normal body, face,
+eyebrows, nose line, teeth, upper/lower eyelines, four iris/highlight meshes,
+tongue, top, bottom, outdoor shoes and four hair meshes. The inspector explicitly
+excludes canine geometry because this card has `doubleTooth == false`.
+**Production toon canine visibility is still unresolved; this inspector rule
+does not establish application visibility parity.** The source-only female
+`o_shadowcaster` and male `o_shadowcaster_cm` meshes (1,360 vertices each) are
+excluded using exact rest hashes. Any other missing visible source mesh fails.
+Unity Cloth, nonzero hand patterns, dynamics, nonzero gaze, other outfits/body
+bone types, low detail, special male, initial/multiframe morph variants and
+material/color rendering are outside this fixture.
+
+The optional PNG compares selected original BakeMesh and independently posed
+native vertices with the same recorded camera and CPU triangle-union rasterizer.
+It is a controlled geometric diagnostic, not a Metal or source-color claim.
+
+## Validation and performance
+
+Private captures, native reports, comparisons, logs and controlled images are
+retained under `.local/codex-renderer-maker-models-2026-10-23/base-model/`.
+The final three original-player gates pass with 19 selected parts each:
+
+| Model | Vertex entries | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error |
+| --- | ---: | ---: | ---: | ---: |
+| Female / head00 | 37,052 | 773 / 226 | 7.30e-7 | 7.16e-7 |
+| Female / head200 | 38,594 | 976 / 224 | 7.30e-7 | 7.16e-7 |
+| Normal male / head200 | 37,115 | 976 / 224 | 6.19e-7 | 5.63e-7 |
+
+Native versus raw BakeMesh maximum vertex error is below 6.20e-7 in all three.
+The independent female00 repeat has exactly equal 814 transform records and
+20 complete geometry/BakeMesh streams. Each controlled CPU silhouette has
+IoU 1.0 and zero differing pixels at the recorded 768×1024 camera.
+
+Five focused Release Swift tests pass, including the actual Metal deform kernel
+and supplied Studio animation/shape-cache regression. All 25 public Python
+probe/comparator tests pass. These synthetic tests cover corrupted identities,
+missing meshes, shadow exclusions, shape/flag mismatch,
+last-vertex errors, independent bone/morph/BakeMesh failures, malformed buffers,
+path traversal, same/copied run rejection and repeat drift.
+
+`card-model ... --benchmark 10000` reports Release p50/p95 nanoseconds for the
+bound late pass against a disabled pass, after 32 warmups. It mutates a uniquely
+owned full-rig pose, includes clock overhead, and makes no frame-rate claim.
+Names, asset parsing and binding are outside the measured/frame path. Run this
+only during a coordinated quiet window with original players stopped.
+
+The coordinated 2026-10-23 Release run measured female/head00 at 125/125 ns
+p50/p95 and female/head200 at 125/167 ns over 10,000 iterations. The male no-op
+and disabled controls both measured 0/42 ns; these small timings include clock
+quantization and overhead. Full commands, hardware/compiler identity and the
+executable hash are in `late-correction-benchmark.json`. This measures the
+cached four-bone pass only, not assembly/loading, whole-pose time or app FPS.

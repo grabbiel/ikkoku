@@ -15,6 +15,8 @@ public final class SourceRigPreview {
     public let supportsBodyCustomization: Bool
     public let supportsFaceCustomization: Bool
     public let hasSourceAppearance: Bool
+    public let lateCorrectionOptions: SourceBodyLateCorrection.Options
+    private let lateCorrection: SourceBodyLateCorrection
     public let bodyOptions: SourceBodyShapePose.Options
     public let bodyCoverage: SourceBodyShapePose.Coverage?
     private let appearance: SourcePreviewAppearance?
@@ -25,11 +27,14 @@ public final class SourceRigPreview {
 
     public init(source: SourceRig, contract: SourceShapeContract?, resources: ResourceStore, appearance: SourcePreviewAppearance? = nil,
                 expressionContract: SourceExpressionContract? = nil,
-                bodyOptions: SourceBodyShapePose.Options = .init()) throws {
+                bodyOptions: SourceBodyShapePose.Options = .init(),
+                lateCorrectionOptions: SourceBodyLateCorrection.Options = .disabled) throws {
         self.source = source; self.contract = contract
         liveBounds = SourceRigBounds(source: source)
         self.expressionContract = expressionContract
         self.bodyOptions = bodyOptions
+        self.lateCorrectionOptions = lateCorrectionOptions
+        lateCorrection = try .init(rig: source.rig, sex: bodyOptions.sex, options: lateCorrectionOptions)
         bodyCoverage = try contract?.domain("body").map { try SourceBodyShapePose.coverage(rig: source.rig, domain: $0, options: bodyOptions) }
         self.supportsExpressions = try expressionContract.map { try !$0.weights(source: source, inputs: $0.defaults).isEmpty } ?? false
         self.appearance = appearance; self.hasSourceAppearance = appearance?.materials.isEmpty == false
@@ -96,6 +101,7 @@ public final class SourceRigPreview {
                     Float3(repeating: SourceMakerAssemblyOptions.headColliderScale(boneType: type)))
             }
         }
+        try lateCorrection.apply(to: &pose)
         if let boneModifiers { pose = try boneModifiers.applying(to: source.rig, baseline: pose, coordinate: coordinate) }
         return pose
     }
@@ -104,6 +110,10 @@ public final class SourceRigPreview {
                            boneModifiers: SourceBoneModifiers? = nil, coordinate: Int = 0) throws -> RigEvaluation {
         try source.rig.evaluate(pose(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues,
                                     boneModifiers: boneModifiers, coordinate: coordinate))
+    }
+
+    public func lateCorrection(restoring baseline: RigPose) throws -> SourceBodyLateCorrection {
+        try lateCorrection.capturingScales(from: baseline)
     }
 
     public func bounds(heightScale: Float? = nil, bodyValues: [Float]? = nil, faceValues: [Float]? = nil,
