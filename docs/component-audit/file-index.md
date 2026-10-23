@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**858 files indexed; 858 assigned; 0 unassigned.**
+**861 files indexed; 861 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 96 |
 | [Character / Maker / mods](character-and-mods.md) | 118 |
-| [Studio / IK / animation](studio.md) | 181 |
+| [Studio / IK / animation](studio.md) | 184 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 313 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 150 |
 
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 54 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 193 |
-| Test / validation | 174 |
+| Runtime / shared shader declaration | 194 |
+| Test / validation | 176 |
 
 ## App / gameplay / plugins
 
@@ -306,6 +306,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift](../../Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioExpression.swift](../../Packages/Engine/Sources/Studio/SourceStudioExpression.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLookRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioGuide.swift](../../Packages/Engine/Sources/Studio/SourceStudioGuide.swift) | Runtime / shared shader declaration |
@@ -355,6 +356,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpansionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioExpressionPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpressionPerformanceTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioExpressionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioExpressionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioGuideTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIKTests.swift) | Test / validation |

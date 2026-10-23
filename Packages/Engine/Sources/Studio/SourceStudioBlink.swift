@@ -10,7 +10,7 @@ import Scene
 /// idle tick. A clock rewind (setSourceAnimationTime, a plugin rebase) cannot
 /// run the control backwards, so it rebuilds the control instead.
 struct SourceStudioBlink {
-    let eyesBlink: Bool
+    private(set) var eyesBlink: Bool
     private var playback = SourceBlinkPlayback()
     private var elapsed: Float?
     /// Sticky within one observation window: set once the control rendered a
@@ -43,6 +43,15 @@ struct SourceStudioBlink {
         try playback.update(time: newElapsed, randomInteger: randomInteger, randomFloat: randomFloat)
         if playback.snapshot.fixedFlags == 0, playback.snapshot.openness < 1 { observedBlink = true }
         return playback.expressionBlinkRate != previous
+    }
+
+    /// ChaControl.ChangeEyesBlinkFlag from the Studio State panel: only the
+    /// fixed flags change (FBSBlinkControl.SetFixedFlags); the schedule and
+    /// the held openness are kept, so turning blinking back on resumes the
+    /// clock where it stopped, as the original does.
+    mutating func setEyesBlink(_ blink: Bool) {
+        eyesBlink = blink
+        playback.setFixedFlags(blink ? 0 : 1)
     }
 
     /// Starts a new observation window without disturbing the control's own
