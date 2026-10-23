@@ -528,11 +528,89 @@ final class StudioModel: ViewportInputHandler {
         if let edits = object.sourceColorEdits { try fresh.setColorEdits(edits) }
         _ = try fresh.editedPose(fkRotations: object.sourceFKRotations ?? [:], faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues,
             ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: sourceAnimationTime)
+        // SetCoordinateInfo's Reload ends in UpdateClothesStateAll: the worn
+        // clothes state carries over and is re-normalized under the new
+        // outfit's garments. The document keeps nil when that equals the state
+        // the new outfit loads the saved bytes as; showAccessory is not
+        // per-outfit and carries over unchanged.
+        let clothes = fresh.wearRules.normalized(current.clothesState)
+        let storedClothes = clothes == fresh.loadedClothesState ? nil : clothes
+        try fresh.setWear(clothesState: storedClothes, showAccessory: object.sourceShowAccessory)
         pushUndo(force: true)
         // The cache entry goes first: the document's didSet refresh then
         // keeps this instance instead of building the same outfit again.
         sourceInstances[id] = fresh
-        doc.objects[i].sourceOutfit = stored
+        var edited = doc.objects[i]
+        edited.sourceOutfit = stored; edited.sourceClothesState = storedClothes
+        doc.objects[i] = edited
+    }
+
+    /// Clothes state (ST-C03), CharaStudio's clothing-detail buttons
+    /// (MPCharCtrl.StateInfo.OnClickClothingDetails -> OCIChar.SetClothesState
+    /// -> ChaControl.SetClothesState(kind, state)): `kind` is the row (0 top,
+    /// 1 bottom, 2 bra, 3 shorts, 4 gloves, 5 pantyhose, 6 socks, 7 shoes —
+    /// mirrored to the outdoor shoes by the source link) and `state` 0 on,
+    /// 1 half, 2 half 2, 3 off. A state the garment's catalog does not allow
+    /// advances to the next allowed one and the one-piece / no-shorts / shoe
+    /// links run, exactly like the source call; a row without a garment
+    /// (not a state kind) is refused as CharaStudio disables it. The preview
+    /// re-evaluates before anything is recorded, so a refusal leaves both
+    /// preview and document untouched; the document keeps nil for the state
+    /// the saved bytes load as, so a return to it exports byte-identical card
+    /// bytes. The Clothes tab's pickers and the scenario's `setClothesState`
+    /// op share this path.
+    func setSourceClothesState(_ id: UUID, kind: Int, state: Int) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Clothes state editing needs a loaded source character.")
+        }
+        guard SourceStudioWear.studioKinds.contains(kind) else {
+            throw RigError.invalid("Clothes row must be one of CharaStudio's rows 0...7 (top, bottom, bra, shorts, gloves, pantyhose, socks, shoes).")
+        }
+        guard (0...3).contains(state) else { throw RigError.invalid("Clothes state must be in 0...3 (on, half, half 2, off).") }
+        guard preview.wearRules.allowed[kind] != nil else {
+            throw RigError.invalid("Outfit \(preview.coordinate) has no \(SourceStudioWear.kindNames[kind]) state kind, so CharaStudio disables this row.")
+        }
+        try storeSourceClothesState(i, preview: preview, preview.wearRules.setting(preview.clothesState, kind: kind, state: UInt8(state)))
+    }
+
+    /// CharaStudio's whole-outfit buttons (MPCharCtrl.StateInfo.OnClickCosState
+    /// -> ChaControl.SetClothesStateAll): on, half or off for every kind.
+    func setSourceClothesStateAll(_ id: UUID, state: Int) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Clothes state editing needs a loaded source character.")
+        }
+        guard [0, 1, 3].contains(state) else { throw RigError.invalid("CharaStudio's whole-outfit buttons set 0 (on), 1 (half) or 3 (off).") }
+        try storeSourceClothesState(i, preview: preview, preview.wearRules.settingAll(preview.clothesState, state: UInt8(state)))
+    }
+
+    private func storeSourceClothesState(_ i: Int, preview: SourceStudioCharacterPreview, _ next: [UInt8]) throws {
+        guard next != preview.clothesState else { return }
+        let stored = next == preview.loadedClothesState ? nil : next
+        try preview.setWear(clothesState: stored, showAccessory: doc.objects[i].sourceShowAccessory)
+        pushUndo(force: true)
+        doc.objects[i].sourceClothesState = stored
+    }
+
+    /// Accessory visibility (ST-C03), CharaStudio's accessory toggles
+    /// (MPCharCtrl.StateInfo.OnClickAccessories -> OCIChar.ShowAccessory, which
+    /// writes ChaFileStatus.showAccessory[slot]). Only slots holding a saved
+    /// accessory are interactable, like AccessoriesInfo's objAccessory check;
+    /// the document keeps nil for the card's saved flags.
+    func setSourceAccessoryVisible(_ id: UUID, slot: Int, visible: Bool) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Accessory visibility needs a loaded source character.")
+        }
+        guard (0..<20).contains(slot) else { throw RigError.invalid("Accessory slot must be in 0...19.") }
+        guard preview.savedAccessorySlots.contains(slot) else {
+            throw RigError.invalid("Accessory slot \(slot) holds no accessory in outfit \(preview.coordinate), so CharaStudio disables its toggle.")
+        }
+        var flags = preview.showAccessory
+        guard flags[slot] != visible else { return }
+        flags[slot] = visible
+        let stored = flags == preview.savedWear.showAccessory ? nil : flags
+        try preview.setWear(clothesState: doc.objects[i].sourceClothesState, showAccessory: stored)
+        pushUndo(force: true)
+        doc.objects[i].sourceShowAccessory = stored
     }
 
     func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
@@ -1174,17 +1252,27 @@ final class StudioModel: ViewportInputHandler {
                 }
                 edits.kinematics[key] = .init(enableFK: true, enableIK: false, activeFK: groups)
             }
-            if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil || object.sourceOutfit != nil {
+            if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil || object.sourceOutfit != nil
+                || object.sourceClothesState != nil || object.sourceShowAccessory != nil {
                 // Export writes back only the arrays, colors and outfit that
                 // actually differ from the embedded card's saved values; a
                 // value edited back to the saved rate, color or outfit produces
                 // no card edit and stays byte-identical. Shape, color and
                 // outfit edits on one character merge into one Edits so none
                 // overwrites another.
-                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape, color or outfit edits require a loaded source character.") }
+                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape, color, outfit or wear edits require a loaded source character.") }
                 guard preview.coordinate == (object.sourceOutfit ?? preview.savedCoordinate) else {
                     throw RigError.invalid("The rendered outfit differs from the document's outfit selection; let the preview rebuild before exporting.")
                 }
+                guard preview.clothesState == (object.sourceClothesState ?? preview.loadedClothesState),
+                      preview.showAccessory == (object.sourceShowAccessory ?? preview.savedWear.showAccessory) else {
+                    throw RigError.invalid("The rendered clothes state or accessory visibility differs from the document; let the preview refresh before exporting.")
+                }
+                // Only a state that differs from the card's saved bytes is
+                // written (Status.clothesState / showAccessory, patched in
+                // place); nil and the saved values leave the card untouched.
+                let clothes = object.sourceClothesState.flatMap { $0 != preview.savedWear.clothesState ? $0 : nil }
+                let accessories = object.sourceShowAccessory.flatMap { $0 != preview.savedWear.showAccessory ? $0 : nil }
                 let outfit = preview.coordinate != preview.savedCoordinate ? preview.coordinate : nil
                 let face = object.sourceFaceValues != preview.savedFaceValues ? object.sourceFaceValues : nil
                 let body = object.sourceBodyValues != preview.savedBodyValues ? object.sourceBodyValues : nil
@@ -1196,8 +1284,9 @@ final class StudioModel: ViewportInputHandler {
                     // edit from the document's edited value explicitly.
                     colors.append(.init(record: color.record, path: color.path, rgba: [rgba.x, rgba.y, rgba.z, rgba.w]))
                 }
-                if face != nil || body != nil || !colors.isEmpty || outfit != nil {
-                    edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors, coordinateType: outfit)
+                if face != nil || body != nil || !colors.isEmpty || outfit != nil || clothes != nil || accessories != nil {
+                    edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors, coordinateType: outfit,
+                                             clothesState: clothes, showAccessory: accessories)
                 }
             }
             if let character = original.character {
@@ -1484,6 +1573,10 @@ final class StudioModel: ViewportInputHandler {
                             if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
                             sourceInstances[o.id] = fresh; preview = fresh
                         }
+                        // The document's wear (scene reload, undo/redo); a
+                        // repeat of the rendered values is a comparison only.
+                        do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory) }
+                        catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
                         let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         if showGizmos, selection == o.id { gizmos += try sourceCharacterGizmos(o, preview: preview, world: world) }

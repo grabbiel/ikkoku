@@ -386,8 +386,8 @@ original card format.
 returns a new `Data` value. It never writes or overwrites a file. Its supported
 edits are the 52 face values, 44 body values, existing RGBA color arrays in
 face/body/hair records, existing RGBA colors in a selected coordinate's
-clothes/accessory/makeup records, the worn-outfit index in `Status`, and
-optional replacement thumbnails. Shape and
+clothes/accessory/makeup records, the worn-outfit index, clothes state and
+accessory visibility in `Status`, and optional replacement thumbnails. Shape and
 color numbers must be finite Float32 values with the expected array lengths.
 Editing a sex or asset identity is deliberately outside this API: retaining the
 old Sideloader resolver entry after changing its destination would create a
@@ -407,6 +407,35 @@ field and no `Coordinate` record changes. This follows
 `ChaControl.ChangeCoordinateType`, described in the
 [Studio outfit section](../studio/scene-editing.md#source-outfit-selection-st-c03-first-slice). The re-decoded card must read back the requested
 outfit.
+
+`Edits.clothesState` and `Edits.showAccessory` (ST-C03 second slice,
+2026-10-22) write `ChaFileStatus.clothesState` (nine values, one per
+`ClothesKind`, each 0…3) and `showAccessory` (20 slot flags). These are the
+fields CharaStudio's clothing-detail and accessory buttons change (see the
+[Studio clothes-state section](../studio/scene-editing.md#source-clothes-state-and-accessory-visibility-st-c03-second-slice)).
+`savedStatusWear()` reads them, together with `shoesType`, as a
+`StatusWear`. An absent field, or an absent `Status` block, is the
+`MemberInit` default: all on, `shoesType` 0, every accessory shown. A field of
+another shape is rejected, never guessed. `clothesState` is read from
+MessagePack-CSharp's `bin` (game-saved cards) or from an array of nine
+integers (written by other tools).
+
+Edits are byte patches in place:
+
+- The nine `bin` payload bytes, or the nine positive-fixint array members.
+  Wider integer members are refused.
+- Each changed `showAccessory` bool token.
+- A field the card does not save is appended after the last map entry in the
+  form MessagePack-CSharp writes (`bin 9` / `array16` of 20 bools). Only the
+  map count changes among the existing bytes; a fixmap that outgrows 15
+  entries becomes a map16.
+
+Values equal to the saved ones produce no patch, so a no-op or back-to-saved
+export is byte-identical. Wrong lengths, values above 3, a `Status` version
+other than `0.0.0`, and a non-default value on a card without a `Status` block
+are rejected. The re-decoded card must read back the requested values with
+`shoesType` unchanged, and every other `Status` field must decode exactly as
+saved.
 
 The writer indexes original MessagePack token spans. Only numeric leaves whose
 Float32 values actually changed are replaced, using the source Float32 wire
