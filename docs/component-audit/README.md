@@ -450,6 +450,22 @@ reruns, and branch cleanup) is handed off in
 - [ ] A-T02 relocation (PR #122): follow the build guide's moved-library acceptance.
       Every reference relocates, or one `Unresolved` line is printed per missing or
       changed identity, and nothing is loaded in its place.
+      (2026-10-23, local-wave-verify. Automated variant: Release app of `f402483`
+      copied outside the checkout, `IKKOKU_SOURCE_TREE_FALLBACKS=0`, explicit
+      variables, since automated runs ignore the selection. A scene saved against
+      `.local/reverse/` relocated 31/31 references into an APFS clone holding
+      the libraries, `studio-pose/`, `animation-assets/` and the source scene.
+      The capture was byte-identical to the original location's. Without the
+      source scene, 7 references were unresolved, with one `Unresolved` line each
+      and nothing drawn. Without `studio-pose/`, two `converted layout gap:`
+      lines were printed, 19 references were unresolved, and the preview exited 1.
+      The user's interactive run showed all 6 characters with no `Unresolved` or
+      fallback line, but the scene was saved after the copy was chosen, so it
+      tested the selection, not relocation. It first found the missing
+      `studio-pose/` companion, fixed in `f402483`. Not ticked: no run has yet
+      opened a scene saved against one location after choosing a moved copy
+      through the menu. See the
+      [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout).)
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |

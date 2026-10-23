@@ -190,7 +190,7 @@ installer.
 
 ### Use a converted library outside the checkout
 
-Since A-T02 (2026-10-23; compiled by CI, not yet run), File → Choose Converted
+Since A-T02 (2026-10-23), File → Choose Converted
 Library… selects the folder that holds `maker-library/library.json`,
 `rigs/source-avatar.json` and/or `male/source-male-avatar.json`. That is the
 `.local/reverse/` layout, copied or moved anywhere. Copy these folders together:
@@ -203,6 +203,11 @@ Library… selects the folder that holds `maker-library/library.json`,
   studio-pose/                    Studio bone catalog (contract.json, attachments.json, ik-bindings.json)
   animation-assets/female-base/   Maker idle animation (animation.json)
 ```
+
+A scene saved from a source scene inside this folder (for example under
+`.local/reverse/studio-scenes/`) records that scene by its path inside the
+folder, so copy it too. Otherwise the scene file and every character in it stay
+unresolved after the move.
 
 The last two are companion files, not libraries: the app reads them beside the
 female base (`rigs/../studio-pose/contract.json` and
@@ -257,12 +262,47 @@ drop every character. An automated run (capture or scenario) whose scene
 characters all failed to build exits 1 naming `IKKOKU_SOURCE_SCENE`, instead of
 capturing an empty scene.
 
-Acceptance, not run: preview a CharaStudio scene and save it with Save Scene….
-Copy or move the whole converted folder, including `studio-pose/` and
-`animation-assets/`, and choose the new location. Then launch the
+Acceptance: preview a CharaStudio scene and save it with Save Scene….
+Copy or move the whole converted folder, including `studio-pose/`,
+`animation-assets/` and the source scene, and choose the new location. Then launch the
 Release app outside the checkout with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and open
 the saved scene. Expect every reference to relocate, or one `Unresolved` line per
 missing or changed identity, with nothing else loaded in its place.
+
+Recorded 2026-10-23 (local-wave-verify). The automated variant ran on the Release
+app of `f402483` (executable `c56210ef…`), copied outside the checkout and
+launched from that folder with `IKKOKU_SOURCE_TREE_FALLBACKS=0`. Automated runs
+ignore the selection, so explicit variables pointed each launch at a library.
+Every library was an APFS clone of `~/IkkokuLibraryCopy`'s three libraries, plus
+the listed folders:
+
+| Run | Library | Result |
+| --- | --- | --- |
+| save | `.local/reverse/` | `IKKOKU_SOURCE_SCENE=koikatu_cs0002591.png` with `IKKOKU_SAVE_SCENE`: 32 objects saved (6 characters, 26 folders), 111 render items |
+| load, original | `.local/reverse/` | 32 objects, no resource line, 111 items; the PNG is byte-identical to the save capture |
+| load, moved | clone + `studio-pose/` + `animation-assets/female-base/` + the scene at `studio-scenes/…` | `Resource check: 31 references: 0 resolved, 31 relocated, 0 unresolved.`; 111 items, PNG byte-identical to the original load |
+| load, moved without the scene | clone + `studio-pose/` + `animation-assets/female-base/` | 24 relocated, 7 unresolved (the scene file and each character's scene file), one `Unresolved` line each; 0 items |
+| load, three libraries only | clone | two `converted layout gap:` lines; 12 relocated, 19 unresolved (scene, and per character the scene, bone catalog and attachment catalog); 0 items |
+| preview, three libraries only | clone | exit 1: `capture input failed: IKKOKU_SOURCE_SCENE=…: Could not preview source scene: The Studio pose contract is missing at …`; no PNG |
+| preview, with `studio-pose/` | clone + `studio-pose/` (+ `animation-assets/`) | exit 0, 111 items, PNG identical to the original load |
+
+The preview printed 20 `retained without rendering` lines: 19 items, because
+no item catalog was set, and character 1299 ("Expression pattern is outside
+the recovered controller"). They are saved as unrendered placeholder folders,
+which are part of the 26. Evidence: `.local/local-wave-verify/a-t02/`.
+
+The user's manual run, the same day, used the Release app of main `7c0b884`,
+copied to a temporary folder, with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and
+`~/IkkokuLibraryCopy` chosen through the menu:
+- **Without `studio-pose/`:** the scene was saved with no character. That led to
+  the companion check above.
+- **With `studio-pose/` added:** startup printed three `converted library:`
+  lines, no fallback line and no crash. Open Scene of the saved scene showed all
+  6 characters with no `Unresolved` line.
+
+That run covers the selection path, not relocation: the scene was saved after
+the copy was chosen. Not yet run: open a scene saved against one location after
+choosing a moved copy through the menu.
 
 ## Test layers
 

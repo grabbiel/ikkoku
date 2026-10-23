@@ -86,7 +86,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   MapChange acknowledgements carry none), cancellation during a barrier, and an
   interactive gameplay UI.
 - **A-T02 — Portable resource installation (P1, partial; first slice 2026-10-23,
-  app acceptance pending).** Replace reliance on `#filePath`
+  app acceptance run in part 2026-10-23).** Replace reliance on `#filePath`
   development defaults with a user-selected, versioned conversion library and
   relocation resolver. Accept when a release app launched outside this checkout
   opens a saved scene after relocating its library, or reports each unresolved
@@ -122,9 +122,10 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   libraries must be reported with their recorded SHA-256 and library. Symlinks
   out of the root, crafted `..` paths and escaping catalog entries must be
   rejected. Further cases cover ambiguous roots, format versions and documents
-  saved before A-T02. Neither the Engine nor the app was compiled locally (no
-  Swift toolchain in the authoring container). CI is the first compile and the
-  only test run.
+  saved before A-T02. When #122 merged, neither the Engine nor the app had been
+  compiled locally (no Swift toolchain in the authoring container), and CI was
+  the only test run. local-wave-verify built both and ran these tests on the
+  reference Mac on 2026-10-23.
   **Companion files (2026-10-23, local-wave-verify).** The user's manual run
   copied `maker-library/`, `rigs/` and `male/` to a new folder and chose it.
   Preview CharaStudio Scene then built no characters, because each preview reads
@@ -147,9 +148,28 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   missing, unrecorded and changed companions, the copied-without-`studio-pose/`
   layout, a Maker-only root, legacy decode and duplicate refusal. It failed 10
   expectations when `convertedRoot` stopped recording companions (mutation
-  control). Still open: the moved-library launch in the
-  [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout),
-  relocation for documents saved before A-T02 (they lack library roots), the
+  control).
+  **App runs (2026-10-23).** An automated Release run (`f402483`, copied outside
+  the checkout, `IKKOKU_SOURCE_TREE_FALLBACKS=0`, explicit variables, because
+  automated runs ignore the selection) saved `koikatu_cs0002591.png` as a
+  32-object scene. Opened against an APFS clone of the libraries with
+  `studio-pose/`, `animation-assets/` and the source scene, it relocated 31/31
+  references. Its capture was byte-identical to the original location's (111
+  items).
+  - Without the source scene: 7 unresolved, one `Unresolved` line each, nothing
+    drawn.
+  - Without `studio-pose/`: two `converted layout gap:` lines and 19
+    unresolved. The preview exited 1 with "The Studio pose contract is
+    missing".
+
+  The user's interactive run with `studio-pose/` added to `~/IkkokuLibraryCopy`
+  showed all 6 characters, three `converted library:` lines and no
+  `Unresolved` or fallback line. That run covers the selection path only. The
+  table is in the
+  [build guide](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout).
+  Still open: opening a scene saved against one location after choosing a
+  moved copy through the menu (interactive); relocation for documents saved
+  before A-T02 (they lack library roots); the
   source-scene import's environment-variable conversion inputs, native card
   catalog IDs, plugin paths and derived sibling files. See the
   [contract](../reference/native-assets.md#library-location-and-relocation-a-t02).

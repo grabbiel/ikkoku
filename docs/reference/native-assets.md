@@ -234,7 +234,7 @@ and garment on the body, and a morph-target contact sheet to
 
 ## Library location and relocation (A-T02)
 
-Added 2026-10-23; compiled and unit-tested by CI only, never run in the app.
+Added 2026-10-23. Run in the app the same day; see [App runs](#app-runs-2026-10-23).
 Code: `ResourceLibrary.swift` and `ResourceRelocation.swift` in the Assets module,
 `StudioResourceReferences.swift` in Studio, `EngineHost.swift` and `StudioModel.swift`
 in the app; tests: `ResourceRelocationTests.swift`.
@@ -377,4 +377,25 @@ hashed either. A document saved before A-T02 cannot be relocated, because it doe
 not record which part of a path was its library root. Its paths are checked in
 place, unverified apart from the scene digest. The source-scene import still
 reads its item catalog and the other conversion inputs from environment
-variables. No moved library has been opened in the app yet.
+variables.
+
+### App runs (2026-10-23)
+
+The build guide's
+[converted-library section](../guides/build-and-test.md#use-a-converted-library-outside-the-checkout)
+has the full table. An automated Release run (`f402483`, copied outside the
+checkout, `IKKOKU_SOURCE_TREE_FALLBACKS=0`, explicit variables) saved
+`koikatu_cs0002591.png` as a 32-object native scene against `.local/reverse/`.
+Opened against an APFS clone holding the libraries, `studio-pose/`,
+`animation-assets/female-base/` and the source scene, it relocated all 31
+references. The capture was byte-identical to the original location's.
+
+The source scene sits inside the converted root, so the binding records it
+relative to that root, like the libraries. Moving the libraries without it left
+the scene file and the six characters' scene files unresolved, with nothing
+drawn. Without `studio-pose/`, 19 references were unresolved, and the preview
+refused the scene and exited 1.
+
+The user's interactive run exercised the menu selection, not relocation on load.
+Opening a scene saved against one location after choosing a moved copy through
+the menu has not been run.
