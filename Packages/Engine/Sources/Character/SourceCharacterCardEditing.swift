@@ -333,6 +333,56 @@ extension SourceCharacterCard {
         let thumbnail = try Self.editedPNG(edits.thumbnailData, original: thumbnailData)
         let faceThumbnail = try Self.editedPNG(edits.faceThumbnailData, original: faceThumbnailData)
         if replacements.isEmpty && thumbnail == thumbnailData && faceThumbnail == faceThumbnailData { return preservedData }
+        let verified = try replacingBlocks(replacements, thumbnail: thumbnail, faceThumbnail: faceThumbnail)
+        let result = verified.preservedData
+        if let face = edits.faceValues, try verified.customization().faceValues != face { throw cardEditError("Face edit verification failed.") }
+        if let body = edits.bodyValues, try verified.customization().bodyValues != body { throw cardEditError("Body edit verification failed.") }
+        if let coordinate = edits.coordinateType, try verified.savedCoordinateType() != coordinate { throw cardEditError("Outfit edit verification failed.") }
+        if edits.clothesState != nil || edits.showAccessory != nil {
+            let before = try savedStatusWear(), after = try verified.savedStatusWear()
+            guard after.clothesState == (edits.clothesState ?? before.clothesState), after.shoesType == before.shoesType,
+                  after.showAccessory == (edits.showAccessory ?? before.showAccessory) else {
+                throw cardEditError("Clothes state or accessory visibility edit verification failed.")
+            }
+        }
+        if !edits.faceState.isEmpty {
+            let before = try savedStatusFace(), after = try verified.savedStatusFace(), face = edits.faceState
+            let expected = StatusFace(eyebrowPtn: face.eyebrowPtn ?? before.eyebrowPtn, eyesPtn: face.eyesPtn ?? before.eyesPtn,
+                mouthPtn: face.mouthPtn ?? before.mouthPtn, eyesOpenMax: face.eyesOpenMax ?? before.eyesOpenMax,
+                eyesBlink: face.eyesBlink ?? before.eyesBlink, eyesLookPtn: face.eyesLookPtn ?? before.eyesLookPtn,
+                neckLookPtn: face.neckLookPtn ?? before.neckLookPtn, tearsLv: face.tearsLv ?? before.tearsLv,
+                hohoAkaRate: face.hohoAkaRate ?? before.hohoAkaRate)
+            guard after.eyebrowPtn == expected.eyebrowPtn, after.eyesPtn == expected.eyesPtn, after.mouthPtn == expected.mouthPtn,
+                  after.eyesOpenMax.bitPattern == expected.eyesOpenMax.bitPattern, after.eyesBlink == expected.eyesBlink,
+                  after.eyesLookPtn == expected.eyesLookPtn, after.neckLookPtn == expected.neckLookPtn,
+                  after.tearsLv == expected.tearsLv, after.hohoAkaRate.bitPattern == expected.hohoAkaRate.bitPattern else {
+                throw cardEditError("Face-state edit verification failed.")
+            }
+        }
+        if let original = block(named: "Status"), let edited = verified.block(named: "Status"), original.data != edited.data {
+            // Every Status field other than the edited ones must decode
+            // exactly as saved (the byte patches cannot reach them).
+            var old = try SourceMessagePack.decode(original.data).stringKeyedMap(), new = try SourceMessagePack.decode(edited.data).stringKeyedMap()
+            for key in ["coordinateType", "backCoordinateType", "clothesState", "showAccessory"] + edits.faceState.editedKeys { old[key] = nil; new[key] = nil }
+            guard old == new else { throw cardEditError("Unedited Status field preservation verification failed.") }
+        }
+        guard verified.trailingData == trailingData else { throw cardEditError("Trailer preservation verification failed.") }
+        for block in blocks where replacements[block.name] == nil {
+            guard verified.block(named: block.name)?.data == block.data else { throw cardEditError("Unedited block preservation verification failed.") }
+        }
+        return result
+    }
+
+    /// Shared original framing writer. Callers supply only surgically edited
+    /// blocks; unedited payloads and their raw tokens are never re-encoded.
+    func replacingBlocks(_ replacements: [String: Data], thumbnail: Data? = nil,
+                         faceThumbnail: Data? = nil, trailer: Data? = nil) throws -> Self {
+        let thumbnail = thumbnail ?? thumbnailData, faceThumbnail = faceThumbnail ?? faceThumbnailData
+        let trailer = trailer ?? trailingData
+        guard replacements.keys.allSatisfy({ block(named: $0) != nil }) else {
+            throw cardEditError("Cannot replace an absent card block.")
+        }
+        if replacements.isEmpty && thumbnail == thumbnailData && faceThumbnail == faceThumbnailData && trailer == trailingData { return self }
 
         // For non-contiguous payloads the installed Extended Save hook seeks
         // from payloadEnd - sum(sizes). Its target can overlap other blocks.
@@ -374,44 +424,13 @@ extension SourceCharacterCard {
         let headerLengthOffset = payloadOffset - 8 - headerData.count - 4
         let faceLengthOffset = headerLengthOffset - faceThumbnailData.count - 4
         var result = thumbnail + preservedData.subdata(in: thumbnailData.count..<faceLengthOffset)
-        result += cardLengthData(faceThumbnail) + cardLengthData(newHeader) + cardLittle(UInt64(payload.count), count: 8) + payload + trailingData
+        result += cardLengthData(faceThumbnail) + cardLengthData(newHeader) + cardLittle(UInt64(payload.count), count: 8) + payload + trailer
         let verified = try Self.decode(result)
-        if let face = edits.faceValues, try verified.customization().faceValues != face { throw cardEditError("Face edit verification failed.") }
-        if let body = edits.bodyValues, try verified.customization().bodyValues != body { throw cardEditError("Body edit verification failed.") }
-        if let coordinate = edits.coordinateType, try verified.savedCoordinateType() != coordinate { throw cardEditError("Outfit edit verification failed.") }
-        if edits.clothesState != nil || edits.showAccessory != nil {
-            let before = try savedStatusWear(), after = try verified.savedStatusWear()
-            guard after.clothesState == (edits.clothesState ?? before.clothesState), after.shoesType == before.shoesType,
-                  after.showAccessory == (edits.showAccessory ?? before.showAccessory) else {
-                throw cardEditError("Clothes state or accessory visibility edit verification failed.")
-            }
-        }
-        if !edits.faceState.isEmpty {
-            let before = try savedStatusFace(), after = try verified.savedStatusFace(), face = edits.faceState
-            let expected = StatusFace(eyebrowPtn: face.eyebrowPtn ?? before.eyebrowPtn, eyesPtn: face.eyesPtn ?? before.eyesPtn,
-                mouthPtn: face.mouthPtn ?? before.mouthPtn, eyesOpenMax: face.eyesOpenMax ?? before.eyesOpenMax,
-                eyesBlink: face.eyesBlink ?? before.eyesBlink, eyesLookPtn: face.eyesLookPtn ?? before.eyesLookPtn,
-                neckLookPtn: face.neckLookPtn ?? before.neckLookPtn, tearsLv: face.tearsLv ?? before.tearsLv,
-                hohoAkaRate: face.hohoAkaRate ?? before.hohoAkaRate)
-            guard after.eyebrowPtn == expected.eyebrowPtn, after.eyesPtn == expected.eyesPtn, after.mouthPtn == expected.mouthPtn,
-                  after.eyesOpenMax.bitPattern == expected.eyesOpenMax.bitPattern, after.eyesBlink == expected.eyesBlink,
-                  after.eyesLookPtn == expected.eyesLookPtn, after.neckLookPtn == expected.neckLookPtn,
-                  after.tearsLv == expected.tearsLv, after.hohoAkaRate.bitPattern == expected.hohoAkaRate.bitPattern else {
-                throw cardEditError("Face-state edit verification failed.")
-            }
-        }
-        if let original = block(named: "Status"), let edited = verified.block(named: "Status"), original.data != edited.data {
-            // Every Status field other than the edited ones must decode
-            // exactly as saved (the byte patches cannot reach them).
-            var old = try SourceMessagePack.decode(original.data).stringKeyedMap(), new = try SourceMessagePack.decode(edited.data).stringKeyedMap()
-            for key in ["coordinateType", "backCoordinateType", "clothesState", "showAccessory"] + edits.faceState.editedKeys { old[key] = nil; new[key] = nil }
-            guard old == new else { throw cardEditError("Unedited Status field preservation verification failed.") }
-        }
-        guard verified.trailingData == trailingData else { throw cardEditError("Trailer preservation verification failed.") }
+        guard verified.trailingData == trailer else { throw cardEditError("Trailer replacement verification failed.") }
         for block in blocks where replacements[block.name] == nil {
             guard verified.block(named: block.name)?.data == block.data else { throw cardEditError("Unedited block preservation verification failed.") }
         }
-        return result
+        return verified
     }
 
     /// CharaStudio's outfit buttons (MPCharCtrl.StateInfo.OnClickCosType ->

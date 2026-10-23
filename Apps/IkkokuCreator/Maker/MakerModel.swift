@@ -56,6 +56,13 @@ final class MakerModel: ViewportInputHandler {
     @ObservationIgnored private var sourceMakerLibrary: SourceMakerLibrary?
     @ObservationIgnored private var sourcePreparedAssets: SourceMakerLibrary.Prepared?
     var sourceAssetSelections: [SourceMakerLibrary.Selection] = []
+    struct SourceSelectionRow: Identifiable {
+        struct Choice: Identifiable { let id: Int; let name: String }
+        let id: String, label: String, slot: SourceMakerSelectionSlot
+        let selectedID: Int?, current: String, unavailableReason: String?, choices: [Choice]
+    }
+    /// Refreshed only when a card, outfit or selection changes, never on a tick.
+    private(set) var sourceSelectionRows: [SourceSelectionRow] = []
     @ObservationIgnored private var sourceModLibrary: SourceModLibrary?
     @ObservationIgnored private var sourceModCatalog: SourceModCatalog?
     @ObservationIgnored private var sourceModCatalogContract: SourceModCatalogContract?
@@ -344,6 +351,8 @@ final class MakerModel: ViewportInputHandler {
         importedSourceCard = imported
         sourceMakerLibrary = makerLibrary; sourcePreparedAssets = prepared
         sourceAssetSelections = prepared?.selections ?? []
+        sourceSelectionRows = selectionRows(card: imported, library: makerLibrary, coordinate: 0,
+            unavailableReason: selectionUnavailableReason(draft: draft, url: url))
         importedSourceCardURL = cardURL
         sourceColorEdits = [:]
         sourceAppearanceDraft = draft
@@ -377,7 +386,7 @@ final class MakerModel: ViewportInputHandler {
         frameSourceRig()
     }
 
-    func closeSourceRig() { importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
+    func closeSourceRig() { sourceSelectionRows = []; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
 
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
@@ -518,22 +527,143 @@ final class MakerModel: ViewportInputHandler {
         status = "Applied \(sourceAppearanceAppliedFields.count) supported appearance fields"
     }
 
+    /// Snapshot supported edits without rebuilding or mutating the visible preview.
+    private func pendingSourceColors(card: SourceCharacterCard) throws -> [ColorEditKey: SourceCharacterCard.ColorEdit] {
+        var colors = sourceColorEdits
+        if let draft = sourceAppearanceDraft {
+            let original = try SourceCardAppearance(card: card, coordinate: draft.coordinate)
+            for color in draft.colors where sourceAppearanceAppliedFields.contains(color.id) {
+                colors[colorEditKey(color)] = original.color(color.id) == color.rgba ? nil : color.edit
+            }
+        }
+        return colors
+    }
+
     func selectSourceCoordinate(_ coordinate: Int) throws {
         guard let importedSourceCard, (0..<sourceCoordinateCount).contains(coordinate) else {
             throw RigError.invalid("This card does not contain the selected supported outfit.")
         }
         guard coordinate != sourceBoneModifierCoordinate else { return }
-        // Commit pending supported color edits before changing outfits.
-        try applySourceAppearance()
+        let colors = try pendingSourceColors(card: importedSourceCard)
         var draft = try SourceCardAppearance(card: importedSourceCard, coordinate: coordinate)
         for color in draft.colors {
-            if let edit = sourceColorEdits[colorEditKey(color)] {
+            if let edit = colors[colorEditKey(color)] {
                 try draft.setColor(color.id, rgba: Float4(edit.rgba))
             }
         }
+        // Replacing the outfit can still fail. Commit its pending colors only
+        // after the candidate assembly and appearance have been validated.
+        updatingSource = true
+        var committed = false
+        defer { updatingSource = false; if committed { refresh() } }
         try replaceSourceAppearance(draft)
+        sourceColorEdits = colors
         sourceAppearanceDraft = draft
         sourceBoneModifierCoordinate = coordinate
+        sourceSelectionRows = selectionRows(card: importedSourceCard, library: sourceMakerLibrary, coordinate: coordinate,
+            unavailableReason: selectionUnavailableReason(draft: draft, url: sourceRigURL))
+        committed = true
+    }
+
+    private func selectionUnavailableReason(draft: SourceCardAppearance?, url: URL?) -> String? {
+        guard draft != nil else { return "Asset changes require readable card appearance data." }
+        guard let url, FileManager.default.fileExists(atPath: url.deletingPathExtension().appendingPathExtension("appearance.json").path) else {
+            return "Asset changes require this assembly's appearance sidecar."
+        }
+        return nil
+    }
+
+    private func selectionRows(card: SourceCharacterCard?, library: SourceMakerLibrary?, coordinate: Int,
+                               unavailableReason: String?) -> [SourceSelectionRow] {
+        guard let card, let library else { return [] }
+        let slots: [(String, SourceMakerSelectionSlot)] = ["Back hair", "Front hair", "Side hair", "Hair option"].enumerated().map { ($0.element, .hair($0.offset)) }
+            + ["Top", "Bottom", "Bra", "Shorts", "Gloves", "Pantyhose", "Socks", "Inner shoes", "Outer shoes"].enumerated()
+                .filter { $0.offset != 7 }.map { ($0.element, .clothes(coordinate: coordinate, slot: $0.offset)) }
+        let references: SourceCardModReferences?
+        let resolverError: String?
+        do {
+            try card.validateMakerSelectionMetadata()
+            references = try card.modReferences(); resolverError = nil
+        } catch { references = nil; resolverError = "Invalid resolver metadata: \(error)" }
+        return slots.compactMap { label, slot in
+            guard let destination = try? slot.destination(),
+                  let parts = try? card.recordFields(destination.record)["parts"]?.arrayValue,
+                  parts.indices.contains(destination.slot),
+                  let savedID = try? parts[destination.slot].stringKeyedMap()["id"]?.integerValue else { return nil }
+            let selection = library.selection(category: destination.category, savedID: savedID,
+                property: destination.property, references: references)
+            let reason = resolverError ?? unavailableReason
+            let choices = library.entries.filter { reason == nil && $0.category == destination.category && $0.modGUID == nil }
+                .map { SourceSelectionRow.Choice(id: $0.id, name: "\($0.name) · ID \($0.id)") }
+            let selectedID = reason == nil && selection.entry != nil && selection.modGUID == nil ? selection.sourceID : nil
+            let current = reason ?? ("ID \(selection.sourceID)" + (selection.modGUID.map { " · \($0)" } ?? "") + " · \(selection.status)")
+            return SourceSelectionRow(id: destination.property, label: label, slot: slot,
+                selectedID: selectedID, current: current, unavailableReason: reason, choices: choices)
+        }
+    }
+
+    /// All fallible work precedes the commit. In particular, pending colors are
+    /// copied into the candidate rather than applied to the visible preview.
+    func selectSourceAsset(_ slot: SourceMakerSelectionSlot, id: Int) throws {
+        guard let card = importedSourceCard, let current = sourceRigPreview,
+              let library = sourceMakerLibrary, let url = sourceRigURL else {
+            throw RigError.invalid("Import an original card with a converted Maker library before selecting assets.")
+        }
+        let destination = try slot.destination()
+        if let coordinate = destination.record.coordinate, coordinate != sourceBoneModifierCoordinate {
+            throw RigError.invalid("Select clothing in the currently displayed outfit.")
+        }
+        guard library.entries.contains(where: { $0.category == destination.category && $0.id == id && $0.modGUID == nil }) else {
+            throw RigError.invalid("This vanilla source selection has no converted Maker entry.")
+        }
+        // Rows are built from validated, resolved identities. A saved mod with
+        // the same numeric local ID has no selectedID and must still be edited.
+        // An effective vanilla no-op keeps even shadowed metadata untouched.
+        if sourceSelectionRows.first(where: { $0.id == destination.property })?.selectedID == id { return }
+        if let reason = selectionUnavailableReason(draft: sourceAppearanceDraft, url: url) { throw RigError.invalid(reason) }
+        let bytes = try card.selectingVanillaAsset(id, at: slot)
+        guard bytes != card.preservedData else { return }
+        let candidate = try SourceCharacterCard.decode(bytes)
+        let colors = try pendingSourceColors(card: card)
+        var draft = try SourceCardAppearance(card: candidate, coordinate: sourceBoneModifierCoordinate)
+        for color in draft.colors {
+            if let edit = colors[colorEditKey(color)] { try draft.setColor(color.id, rgba: Float4(edit.rgba)) }
+        }
+        let prepared = try library.prepare(card: candidate, coordinate: sourceBoneModifierCoordinate, baseURL: url)
+        guard let selected = prepared.selections.first(where: { $0.property == destination.property }),
+              selected.entry != nil, selected.modGUID == nil, selected.sourceID == id else {
+            throw RigError.invalid("The selected source asset could not be assembled.")
+        }
+        let base = try SourcePreviewAppearance.load(url: url.deletingPathExtension().appendingPathExtension("appearance.json"),
+            resources: host.renderer.resources, modLibrary: sourceModLibrary)
+        let application = try applyCardAppearance(draft, base: base, url: url, prepared: prepared, modLibrary: sourceModLibrary)
+        let preview = try SourceRigPreview(source: prepared.source, contract: current.contract, resources: host.renderer.resources,
+            appearance: application?.appearance ?? base, expressionContract: current.expressionContract, bodyOptions: current.bodyOptions)
+        let pose = try sourceUpstreamPose(preview: preview, at: sourceAnimationTime)
+        let frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
+            expression: effectiveSourceExpressionInputs, showBones: showBones, poseOverride: pose)
+        guard !frame.sceneBounds.isEmpty, frame.sceneBounds.radius.isFinite else {
+            throw RigError.invalid("Selected assembly has no finite rendered bounds.")
+        }
+        let rows = selectionRows(card: candidate, library: library, coordinate: sourceBoneModifierCoordinate, unavailableReason: nil)
+        updatingSource = true
+        defer { updatingSource = false; refresh() }
+        importedSourceCard = candidate
+        sourceColorEdits = colors
+        sourceAppearanceDraft = draft
+        sourceAppliedColors = Dictionary(uniqueKeysWithValues: draft.colors.map { ($0.id, $0.rgba) })
+        sourceAppearanceAppliedFields = application?.appliedFields ?? []
+        sourceAppearanceDiagnostics = application?.diagnostics ?? ["This assembly has no card appearance bindings."]
+        sourcePreparedAssets = prepared; sourceAssetSelections = prepared.selections
+        sourceSelectionRows = rows
+        sourceRigPreview = preview
+        // Selected-hair dynamics are not yet a Maker feature. Never reuse the
+        // reference assembly's particle bindings after replacing its geometry.
+        sourceDynamicsDocument = nil; hasSourceHairDynamics = false
+        invalidateSourceSimulation()
+        sourceSimulationPose = pose // The immediate refresh can reuse the validated upstream solve.
+        refreshSourceCardModReport()
+        status = "Selected source ID \(id). Export saves this selection and supported edits."
     }
 
     private func replaceSourceAppearance(_ draft: SourceCardAppearance) throws {

@@ -1,6 +1,7 @@
 import Foundation
 import Character
 import CoreMath
+import Renderer
 
 /// JSON-driven Maker scenario: a scripted sequence of checklist moves over the
 /// imported source card, run headlessly behind `IKKOKU_MAKER_SCENARIO` so the
@@ -36,13 +37,27 @@ struct MakerScenario: Decodable {
         let colorApplied: String?
         /// assert only: a substring one import/appearance diagnostic must contain.
         let diagnosticContains: String?
+        let selection: SelectionValue?
+        let expectFailure: Bool?, unchanged: Bool?
+        let resourcesAtMost: String?
+        struct SelectionValue: Decodable {
+            let kind: String, slot: Int, sourceID: Int
+            let coordinate: Int?
+            func destination(currentCoordinate: Int) throws -> SourceMakerSelectionSlot {
+                switch kind {
+                case "hair": return .hair(slot)
+                case "clothes": return .clothes(coordinate: coordinate ?? currentCoordinate, slot: slot)
+                default: throw SourceCharacterCardError.invalid("Unknown Maker selection kind.")
+                }
+            }
+        }
 
         struct SlotValue: Decodable { let index: Int; let value: Float }
         struct ColorValue: Decodable { let id: String; let rgba: [Float] }
 
         private enum CodingKeys: String, CodingKey {
             case op, on, index, value, id, rgba, path, coordinate, face, body, color,
-                 colorApplied, diagnosticContains
+                 colorApplied, diagnosticContains, selection, expectFailure, unchanged, resourcesAtMost
         }
 
         init(from decoder: Decoder) throws {
@@ -64,6 +79,10 @@ struct MakerScenario: Decodable {
             color = try c.decodeIfPresent(ColorValue.self, forKey: .color)
             colorApplied = try c.decodeIfPresent(String.self, forKey: .colorApplied)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
+            selection = try c.decodeIfPresent(SelectionValue.self, forKey: .selection)
+            expectFailure = try c.decodeIfPresent(Bool.self, forKey: .expectFailure)
+            unchanged = try c.decodeIfPresent(Bool.self, forKey: .unchanged)
+            resourcesAtMost = try c.decodeIfPresent(String.self, forKey: .resourcesAtMost)
         }
     }
 
@@ -74,6 +93,9 @@ struct MakerScenario: Decodable {
             let op: String
             let ok: Bool
             let detail: String
+            let selectionMilliseconds: Double?
+            let resourcesBefore: ResourceStore.Statistics?
+            let resources: ResourceStore.Statistics?
         }
         let steps: [StepResult]
         let passed: Int
@@ -103,9 +125,15 @@ struct MakerScenario: Decodable {
             URL(fileURLWithPath: $0, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).standardizedFileURL)
                 .standardizedFileURL.resolvingSymlinksInPath().path
         }
+        var stepStart = ProcessInfo.processInfo.systemUptime
+        var resourcesBefore: ResourceStore.Statistics?
+        var resourceSnapshots: [String: ResourceStore.Statistics] = [:]
         @discardableResult
         func record(_ step: Step, _ ok: Bool, _ detail: String) -> Bool {
-            results.append(Report.StepResult(op: step.op, ok: ok, detail: detail))
+            results.append(Report.StepResult(op: step.op, ok: ok, detail: detail,
+                selectionMilliseconds: step.op == "selectAsset" ? (ProcessInfo.processInfo.systemUptime - stepStart) * 1000 : nil,
+                resourcesBefore: resourcesBefore,
+                resources: ["selectAsset", "captureResources"].contains(step.op) || step.resourcesAtMost != nil ? maker.host.renderer.resources.statistics() : nil))
             return ok
         }
         func insideLocal(_ path: String) -> URL? {
@@ -137,6 +165,8 @@ struct MakerScenario: Decodable {
         }
 
         scenarioLoop: for step in scenario.steps {
+            stepStart = ProcessInfo.processInfo.systemUptime
+            resourcesBefore = nil
             switch step.op {
             case "customization":
                 guard let on = step.on else { record(step, false, "customization: missing on"); continue }
@@ -149,6 +179,41 @@ struct MakerScenario: Decodable {
                     let shown = maker.sourceAppearanceDraft?.coordinate ?? -1
                     record(step, true, "outfit \(index) shown as \(shown) · \(maker.status)")
                 } catch { record(step, false, "selectCoordinate: \(error)") }
+            case "selectAsset":
+                guard let selection = step.selection else { record(step, false, "selectAsset: missing selection"); continue }
+                let preview = maker.sourceRigPreview.map(ObjectIdentifier.init)
+                let bytes = maker.importedSourceCard?.preservedData
+                let face = maker.sourceFaceValues, body = maker.sourceBodyValues
+                let coordinate = maker.sourceBoneModifierCoordinate
+                let colors = Dictionary(uniqueKeysWithValues: (maker.sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) })
+                let resources = maker.host.renderer.resources.statistics()
+                resourcesBefore = resources
+                var failure: Error?
+                do { try maker.selectSourceAsset(selection.destination(currentCoordinate: coordinate), id: selection.sourceID) }
+                catch { failure = error }
+                if (failure != nil) != (step.expectFailure == true) {
+                    record(step, false, "selectAsset: \(failure.map(String.init(describing:)) ?? "expected failure but selection succeeded")"); continue
+                }
+                if step.unchanged == true || step.expectFailure == true {
+                    let nextColors = Dictionary(uniqueKeysWithValues: (maker.sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) })
+                    guard preview == maker.sourceRigPreview.map(ObjectIdentifier.init), bytes == maker.importedSourceCard?.preservedData,
+                          face == maker.sourceFaceValues, body == maker.sourceBodyValues, coordinate == maker.sourceBoneModifierCoordinate,
+                          colors == nextColors else {
+                        record(step, false, "selectAsset: rejected/no-op selection changed the preview or editor state"); continue
+                    }
+                    if step.unchanged == true {
+                        let after = maker.host.renderer.resources.statistics()
+                        guard resources.meshes == after.meshes, resources.textures == after.textures,
+                              resources.meshBufferBytes == after.meshBufferBytes, resources.deformBuffers == after.deformBuffers else {
+                            record(step, false, "selectAsset: no-op changed GPU resource counts"); continue
+                        }
+                    }
+                }
+                record(step, true, failure.map { "rejected atomically: \($0)" } ?? "selected \(selection.kind) slot \(selection.slot), source ID \(selection.sourceID)")
+            case "captureResources":
+                guard let id = step.id else { record(step, false, "captureResources: missing id"); continue }
+                resourceSnapshots[id] = maker.host.renderer.resources.statistics()
+                record(step, true, "captured resource counts: \(id)")
             case "setFace", "setBody":
                 let face = step.op == "setFace"
                 guard let index = step.index, let value = step.value, value.isFinite else {
@@ -161,7 +226,7 @@ struct MakerScenario: Decodable {
                 values[index] = value
                 if face { maker.sourceFaceValues = values } else { maker.sourceBodyValues = values }
                 record(step, true, "\(face ? "face" : "body") slot \(index)=\(value)")
-            case "setColor":
+            case "setColor", "setColorDraft":
                 guard let colorID = step.id, let rgba = step.rgba, rgba.count == 4,
                       rgba.allSatisfy({ $0.isFinite && (0...1).contains($0) }) else {
                     record(step, false, "setColor: id and rgba [4] in 0...1 are required"); continue
@@ -171,7 +236,7 @@ struct MakerScenario: Decodable {
                 }
                 do {
                     maker.setSourceColor(colorID, rgba: Float4(rgba))
-                    try maker.applySourceAppearance()
+                    if step.op == "setColor" { try maker.applySourceAppearance() }
                     guard let shown = draftColor(colorID), colorEqual(shown, rgba) else {
                         record(step, false, "setColor: \"\(colorID)\" did not take the edit: \(maker.status)"); continue
                     }
@@ -221,6 +286,24 @@ struct MakerScenario: Decodable {
                 }
             case "assert":
                 var problems: [String] = []
+                if let expected = step.selection {
+                    do {
+                        let destination = try expected.destination(currentCoordinate: maker.sourceBoneModifierCoordinate).destination()
+                        let row = maker.sourceAssetSelections.first { $0.property == destination.property }
+                        if row?.sourceID != expected.sourceID || row?.savedID != expected.sourceID || row?.modGUID != nil || row?.entry == nil {
+                            problems.append("assert selection: \(destination.property) did not resolve vanilla ID \(expected.sourceID)")
+                        }
+                    } catch { problems.append("assert selection: \(error)") }
+                }
+                if let id = step.resourcesAtMost {
+                    if let previous = resourceSnapshots[id] {
+                        let current = maker.host.renderer.resources.statistics()
+                        if current.meshes > previous.meshes || current.textures > previous.textures || current.meshBufferBytes > previous.meshBufferBytes
+                            || current.deformBuffers > previous.deformBuffers || current.deformBufferBytes > previous.deformBufferBytes {
+                            problems.append("assert resources: repeated selection exceeded warmed mesh/texture/deform counts")
+                        }
+                    } else { problems.append("assert resources: unknown snapshot \(id)") }
+                }
                 if let expected = step.coordinate {
                     let shown = maker.sourceAppearanceDraft?.coordinate
                     if shown != expected {
