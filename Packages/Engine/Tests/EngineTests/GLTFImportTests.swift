@@ -43,13 +43,13 @@ private let trianglePositions = floats([0, 0, 0, 1, 0, 0, 0, 1, 0])
     for invalid: Float in [.nan, .infinity, -.infinity] {
         let positions = floats([0, 0, 0, 1, invalid, 0, 0, 1, 0])
         let json = try gltfJSON(triangleFields(), buffer: positions)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: json, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: json) }
         var fields = triangleFields(extraAccessor: ["bufferView": 1, "componentType": 5126, "count": 3, "type": "VEC3"])
         fields["bufferViews"] = [["buffer": 0, "byteLength": 36], ["buffer": 0, "byteOffset": 36, "byteLength": 36]]
         fields["meshes"] = [["primitives": [["attributes": ["POSITION": 0, "NORMAL": 1]]]]]
         let normals = floats([0, 0, invalid, 0, 0, 1, 0, 0, 1])
         let withNormals = try gltfJSON(fields, buffer: trianglePositions + normals)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: withNormals, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: withNormals) }
     }
 }
 
@@ -64,7 +64,7 @@ private let trianglePositions = floats([0, 0, 0, 1, 0, 0, 0, 1, 0])
     let base: [String: Any] = ["bufferViews": [["buffer": 0, "byteLength": 36]],
         "accessors": [["bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"]]]
     let tooShort = try gltfJSON(base, buffer: Data(repeating: 0, count: 35), declaredLength: 36)
-    #expect(throws: (any Error).self) { try GLBLoader.load(data: tooShort, baseURL: nil) }
+    #expect(throws: (any Error).self) { try GLBLoader.load(data: tooShort) }
 
     for accessor in [
         ["bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3"],
@@ -75,7 +75,7 @@ private let trianglePositions = floats([0, 0, 0, 1, 0, 0, 0, 1, 0])
         var fields = base
         fields["accessors"] = [accessor]
         let data = try gltfJSON(fields, buffer: trianglePositions)
-        #expect(throws: (any Error).self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: (any Error).self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -83,7 +83,7 @@ private let trianglePositions = floats([0, 0, 0, 1, 0, 0, 0, 1, 0])
     let fields: [String: Any] = ["bufferViews": [["buffer": 0, "byteOffset": 1, "byteLength": 3]]]
     // Four bytes exist physically, but only one byte belongs to the declared buffer.
     let data = try gltfJSON(fields, buffer: Data([1, 2, 3, 4]), declaredLength: 1)
-    #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+    #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
 }
 
 @Test func gltfReadsInterleavedAccessorWithOffsetAndRejectsShortStride() throws {
@@ -92,12 +92,12 @@ private let trianglePositions = floats([0, 0, 0, 1, 0, 0, 0, 1, 0])
     var fields = triangleFields()
     fields["bufferViews"] = [["buffer": 0, "byteLength": buffer.count, "byteStride": 16]]
     fields["accessors"] = [["bufferView": 0, "byteOffset": 4, "componentType": 5126, "count": 3, "type": "VEC3"]]
-    let asset = try GLBLoader.load(data: gltfJSON(fields, buffer: buffer), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(fields, buffer: buffer))
     #expect(asset.meshes[0].primitives[0].positions == [Float3(0, 0, 0), Float3(1, 0, 0), Float3(0, 1, 0)])
     for stride in [0, -4, 8, 14, 256, Int.max] {
         fields["bufferViews"] = [["buffer": 0, "byteLength": buffer.count, "byteStride": stride]]
         let data = try gltfJSON(fields, buffer: buffer)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -117,16 +117,16 @@ private func sparseTriangle(indices: [UInt32], valueByteLength: Int? = nil, inde
 }
 
 @Test func gltfAppliesSparseAccessorsAndRejectsInvalidSparseIndices() throws {
-    let valid = try GLBLoader.load(data: sparseTriangle(indices: [1, 2]), baseURL: nil)
+    let valid = try GLBLoader.load(data: sparseTriangle(indices: [1, 2]))
     #expect(valid.meshes[0].primitives[0].positions == [Float3(0, 0, 0), Float3(1, 0, 0), Float3(0, 1, 0)])
     for indices: [UInt32] in [[1, 3], [2, 1], [1, 1], [0, .max]] {
         let data = try sparseTriangle(indices: indices)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
     let shortValues = try sparseTriangle(indices: [1, 2], valueByteLength: 20)
-    #expect(throws: GLTFError.self) { try GLBLoader.load(data: shortValues, baseURL: nil) }
+    #expect(throws: GLTFError.self) { try GLBLoader.load(data: shortValues) }
     let shortIndices = try sparseTriangle(indices: [1, 2], indexOffset: 4)
-    #expect(throws: GLTFError.self) { try GLBLoader.load(data: shortIndices, baseURL: nil) }
+    #expect(throws: GLTFError.self) { try GLBLoader.load(data: shortIndices) }
 }
 
 @Test func gltfRejectsCyclesMultipleParentsAndInvalidSceneRoots() throws {
@@ -141,7 +141,7 @@ private func sparseTriangle(indices: [UInt32], valueByteLength: Int? = nil, inde
     ]
     for fields in fixtures {
         let data = try gltfJSON(fields)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -155,7 +155,7 @@ private func sparseTriangle(indices: [UInt32], valueByteLength: Int? = nil, inde
     ]
     fields["scenes"] = [["nodes": [0]], ["nodes": [1]]]
     fields["scene"] = 1
-    let asset = try GLBLoader.load(data: gltfJSON(fields, buffer: trianglePositions), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(fields, buffer: trianglePositions))
     #expect(asset.rootNodes == [1])
     #expect(asset.meshNodes.map(\.node) == [2])
     #expect(asset.nodes[1].authoredMatrix != nil)
@@ -163,7 +163,7 @@ private func sparseTriangle(indices: [UInt32], valueByteLength: Int? = nil, inde
     #expect(asset.worldMatrix(ofNode: 2).translation == Float3(2, 11, 7.5))
     #expect(simd_determinant(asset.worldMatrix(ofNode: 2).upperLeft3x3) < 0)
     fields["scene"] = 0
-    let first = try GLBLoader.load(data: gltfJSON(fields, buffer: trianglePositions), baseURL: nil)
+    let first = try GLBLoader.load(data: gltfJSON(fields, buffer: trianglePositions))
     #expect(first.meshNodes.map(\.node) == [0])
 }
 
@@ -177,13 +177,13 @@ private func sparseTriangle(indices: [UInt32], valueByteLength: Int? = nil, inde
     let json = try gltfJSON(fields)
     let url = directory.appendingPathComponent("asset.gltf")
     try json.write(to: url)
-    let asset = try GLBLoader.load(url: url)
+    let asset = try GLBLoader.loadTrustedFile(url: url)
     #expect(asset.images[0].data == png)
     #expect(asset.images[0].mimeType == "image/png")
     #expect(asset.url == url)
-    #expect(throws: GLTFError.self) { try GLBLoader.load(data: json, baseURL: nil) }
+    #expect(throws: GLTFError.self) { try GLBLoader.load(data: json) }
     let brokenDataURI = try gltfJSON(["images": [["uri": "data:image/png;base64,!invalid!"]]])
-    #expect(throws: GLTFError.self) { try GLBLoader.load(data: brokenDataURI, baseURL: directory) }
+    #expect(throws: GLTFError.self) { try GLBLoader.load(data: brokenDataURI, external: .trustedFile(directory: directory)) }
 }
 
 @Test func gltfUInt32IndicesRemainExactAndRejectOverflowValuesSafely() throws {
@@ -194,7 +194,7 @@ private func sparseTriangle(indices: [UInt32], valueByteLength: Int? = nil, inde
         fields["meshes"] = [["primitives": [["attributes": ["POSITION": 0], "indices": 1]]]]
         let json = try gltfJSON(fields, buffer: trianglePositions + words([0, 1, index]))
         do {
-            _ = try GLBLoader.load(data: json, baseURL: nil)
+            _ = try GLBLoader.load(data: json)
             Issue.record("Out-of-range triangle index was accepted")
         } catch let error as GLTFError {
             #expect(error.description.contains("triangle index \(index) exceeds 3 vertices"))
@@ -214,9 +214,9 @@ private func glb(_ chunks: [(UInt32, Data)], version: UInt32 = 2) -> Data {
     var json = try gltfJSON()
     while !json.count.isMultiple(of: 4) { json.append(0x20) }
     let valid = glb([(0x4E4F534A, json)])
-    _ = try GLBLoader.load(data: valid, baseURL: nil)
+    _ = try GLBLoader.load(data: valid)
     // Unknown trailing chunks are permitted by the GLB extension rules.
-    _ = try GLBLoader.load(data: glb([(0x4E4F534A, json), (0x12345678, Data([0, 0, 0, 0]))]), baseURL: nil)
+    _ = try GLBLoader.load(data: glb([(0x4E4F534A, json), (0x12345678, Data([0, 0, 0, 0]))]))
     let fixtures = [
         glb([(0x4E4F534A, json)], version: 1),
         glb([(0x4E4F534A, json), (0x4E4F534A, json)]),
@@ -227,7 +227,7 @@ private func glb(_ chunks: [(UInt32, Data)], version: UInt32 = 2) -> Data {
         Data(valid.dropLast())
     ]
     for data in fixtures {
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -277,7 +277,7 @@ private let onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQ
         stream(trianglePositions, 5126, "VEC3"), stream(floats(uv0), 5126, "VEC2"), stream(floats(uv1), 5126, "VEC2"),
         stream(halves([0, 65535, 65535, 0, 0, 0]), 5123, "VEC2", normalized: true)
     ], primitive: ["attributes": ["POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_1": 2, "TEXCOORD_2": 3]])
-    let asset = try GLBLoader.load(data: gltfJSON(built.fields, buffer: built.buffer), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(built.fields, buffer: built.buffer))
     let mesh = try #require(asset.meshes.first?.primitives.first)
     #expect(mesh.uvs == [Float2(0, 0), Float2(1, 0), Float2(0, 1)])
     #expect(mesh.uvs1 == [Float2(0.25, 0.5), Float2(0.75, 0.5), Float2(0.5, 1)])
@@ -287,7 +287,7 @@ private let onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQ
     // TEXCOORD_0-only content without extensions keeps empty secondary streams and reports nothing.
     let legacy = singleMeshFields([stream(trianglePositions, 5126, "VEC3"), stream(floats(uv0), 5126, "VEC2")],
                                   primitive: ["attributes": ["POSITION": 0, "TEXCOORD_0": 1]])
-    let plain = try GLBLoader.load(data: gltfJSON(legacy.fields, buffer: legacy.buffer), baseURL: nil)
+    let plain = try GLBLoader.load(data: gltfJSON(legacy.fields, buffer: legacy.buffer))
     let plainMesh = try #require(plain.meshes.first?.primitives.first)
     #expect(plainMesh.uvs == [Float2(0, 0), Float2(1, 0), Float2(0, 1)])
     #expect(plainMesh.uvs1.isEmpty && plainMesh.uvs2.isEmpty)
@@ -307,7 +307,7 @@ private let onePixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQ
             let built = singleMeshFields([stream(trianglePositions, 5126, "VEC3"), item],
                                          primitive: ["attributes": ["POSITION": 0, semantic: 1]])
             let data = try gltfJSON(built.fields, buffer: built.buffer)
-            #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+            #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
         }
     }
 }
@@ -331,11 +331,11 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
 }
 
 @Test func gltfRetainsTextureCoordinateSelectionAndNativeMaterialsRejectSecondarySets() throws {
-    let primary = try GLBLoader.load(data: texturedTriangle(baseTexCoord: 0), baseURL: nil)
+    let primary = try GLBLoader.load(data: texturedTriangle(baseTexCoord: 0))
     #expect(primary.materials[0].baseColorTexCoord == 0 && primary.materials[0].normalTexCoord == 0)
     try LoadedAsset.requirePrimaryTextureCoordinates(primary)
 
-    let secondary = try GLBLoader.load(data: texturedTriangle(baseTexCoord: 1, normalTexCoord: 0), baseURL: nil)
+    let secondary = try GLBLoader.load(data: texturedTriangle(baseTexCoord: 1, normalTexCoord: 0))
     #expect(secondary.materials[0].baseColorTexCoord == 1 && secondary.materials[0].normalTexCoord == 0)
     #expect(secondary.materials[0].baseColorImage == 0)
     #expect(secondary.meshes[0].primitives[0].uvs1.count == 3)
@@ -345,7 +345,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     } catch let error as GLTFError {
         #expect(error.description.contains("baseColorTexture from TEXCOORD_1"))
     }
-    let normalSecondary = try GLBLoader.load(data: texturedTriangle(baseTexCoord: 0, normalTexCoord: 1), baseURL: nil)
+    let normalSecondary = try GLBLoader.load(data: texturedTriangle(baseTexCoord: 0, normalTexCoord: 1))
     #expect(normalSecondary.materials[0].normalTexCoord == 1)
     #expect(throws: GLTFError.self) { try LoadedAsset.requirePrimaryTextureCoordinates(normalSecondary) }
 
@@ -353,7 +353,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     let absentSet = try texturedTriangle(baseTexCoord: 1, uvSets: 1)
     let undecodedSet = try texturedTriangle(baseTexCoord: 3, uvSets: 3)
     for data in [absentSet, undecodedSet] {
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -364,7 +364,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     fields["extensionsRequired"] = names + [names[0]]
     let data = try gltfJSON(fields, buffer: trianglePositions)
     do {
-        _ = try GLBLoader.load(data: data, baseURL: nil)
+        _ = try GLBLoader.load(data: data)
         Issue.record("Unsupported required extensions were accepted")
     } catch GLTFError.unsupportedExtensions(let rejected) {
         #expect(rejected == names)
@@ -383,7 +383,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     fields["samplers"] = [["wrapS": 33071, "wrapT": 10497], ["magFilter": 9729, "minFilter": 9987]]
     fields["textures"] = [["source": 0, "sampler": 0], ["source": 0, "sampler": 1]]
     fields["images"] = [["uri": "data:image/png;base64," + onePixelPNG]]
-    let asset = try GLBLoader.load(data: gltfJSON(fields, buffer: trianglePositions), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(fields, buffer: trianglePositions))
     let codes = asset.diagnostics.map(\.code)
     #expect(codes == ["unsupported_extension", "unsupported_extension", "unsupported_texture_slot", "unsupported_sampler"])
     try #require(asset.diagnostics.count == 4)
@@ -405,7 +405,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
         broken["images"] = [["uri": "data:image/png;base64," + onePixelPNG]]
         for (key, value) in overrides { broken[key] = value }
         let data = try gltfJSON(broken, buffer: trianglePositions)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -417,7 +417,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     let streams = [stream(trianglePositions, 5126, "VEC3"), stream(joints0, 5121, "VEC4"), stream(weights0, 5126, "VEC4"),
                    stream(joints1, 5121, "VEC4"), stream(weights1, 5126, "VEC4")]
     let two = singleMeshFields(streams, primitive: ["attributes": ["POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2, "JOINTS_1": 3, "WEIGHTS_1": 4]])
-    let asset = try GLBLoader.load(data: gltfJSON(two.fields, buffer: two.buffer), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(two.fields, buffer: two.buffer))
     let mesh = try #require(asset.meshes.first?.primitives.first)
     #expect(mesh.joints[0] == SIMD4<UInt16>(0, 1, 4, 5))
     #expect(mesh.joints[1] == SIMD4<UInt16>(0, 1, 2, 4))
@@ -431,7 +431,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     // Additional contiguous sets fold in the same way and are reported with their count.
     let three = singleMeshFields(streams, primitive: ["attributes": ["POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2,
         "JOINTS_1": 3, "WEIGHTS_1": 4, "JOINTS_2": 3, "WEIGHTS_2": 4]])
-    let twelve = try GLBLoader.load(data: gltfJSON(three.fields, buffer: three.buffer), baseURL: nil)
+    let twelve = try GLBLoader.load(data: gltfJSON(three.fields, buffer: three.buffer))
     #expect(twelve.diagnostics.first?.message.contains("12 skin influences per vertex (JOINTS_0...JOINTS_2)") == true)
 
     for attributes in [
@@ -441,7 +441,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     ] {
         let built = singleMeshFields(streams, primitive: ["attributes": attributes])
         let data = try gltfJSON(built.fields, buffer: built.buffer)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
 }
 
@@ -453,7 +453,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
     built.fields["nodes"] = [["name": "override", "mesh": 0, "weights": [0, 0.5]], ["name": "inherit", "mesh": 0],
                              ["name": "zero", "mesh": 0, "weights": [0, 0]]]
     built.fields["scenes"] = [["nodes": [0, 1, 2]]]
-    let asset = try GLBLoader.load(data: gltfJSON(built.fields, buffer: built.buffer), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(built.fields, buffer: built.buffer))
     let meshWeights: [Float] = [0.25, 0], nodeWeights: [Float] = [0, 0.5], zeroWeights: [Float] = [0, 0]
     let inheritsMesh = asset.nodes[1].weights == nil
     #expect(asset.meshes[0].weights == meshWeights)
@@ -469,7 +469,7 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
 
     // Absent weights default to zero for every target and are not reported.
     let unweighted = singleMeshFields(streams, primitive: morphed)
-    let zero = try GLBLoader.load(data: gltfJSON(unweighted.fields, buffer: unweighted.buffer), baseURL: nil)
+    let zero = try GLBLoader.load(data: gltfJSON(unweighted.fields, buffer: unweighted.buffer))
     #expect(zero.initialMorphWeights(ofNode: 0) == zeroWeights)
     #expect(zero.diagnostics.isEmpty)
 
@@ -482,19 +482,19 @@ private func texturedTriangle(baseTexCoord: Int, normalTexCoord: Int? = nil, uvS
         var broken = singleMeshFields(streams, primitive: morphed, mesh: item.mesh)
         broken.fields["nodes"] = item.nodes
         let data = try gltfJSON(broken.fields, buffer: broken.buffer)
-        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data, baseURL: nil) }
+        #expect(throws: GLTFError.self) { try GLBLoader.load(data: data) }
     }
     var mismatched = singleMeshFields(streams, primitive: morphed)
     mismatched.fields["meshes"] = [["primitives": [morphed, ["attributes": ["POSITION": 0]]]]]
     let mismatchedData = try gltfJSON(mismatched.fields, buffer: mismatched.buffer)
-    #expect(throws: GLTFError.self) { try GLBLoader.load(data: mismatchedData, baseURL: nil) }
+    #expect(throws: GLTFError.self) { try GLBLoader.load(data: mismatchedData) }
 }
 
 @Test func gltfReportsAttributesItDoesNotDecode() throws {
     let built = singleMeshFields([stream(trianglePositions, 5126, "VEC3"), stream(floats([0, 0, 1, 0, 0, 1]), 5126, "VEC2")],
         primitive: ["attributes": ["POSITION": 0, "TEXCOORD_0": 1, "TEXCOORD_3": 1, "COLOR_1": 0, "_CUSTOM": 1],
                     "targets": [["POSITION": 0, "TANGENT": 0]]])
-    let asset = try GLBLoader.load(data: gltfJSON(built.fields, buffer: built.buffer), baseURL: nil)
+    let asset = try GLBLoader.load(data: gltfJSON(built.fields, buffer: built.buffer))
     #expect(asset.diagnostics.map(\.code) == ["ignored_attribute", "ignored_morph_attribute"])
     #expect(asset.diagnostics.first?.message.contains("COLOR_1, TEXCOORD_3, _CUSTOM") == true)
     #expect(asset.diagnostics.last?.message.contains("TANGENT") == true)

@@ -336,8 +336,13 @@ final class AppState {
                 guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
                     throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
                 }
-                let url = file.hasPrefix("/") ? URL(fileURLWithPath: file) : host.library.url(file)
-                _ = try host.library.importStaticAsset(url: url)
+                // A catalog item is a library package load; an absolute `assetFile` was
+                // recorded from an explicit user import and keeps the trusted-file policy.
+                if file.hasPrefix("/") {
+                    _ = try host.library.importTrustedStaticAsset(url: URL(fileURLWithPath: file))
+                } else {
+                    _ = try host.library.importStaticAsset(url: host.library.url(file), packageRoot: host.library.root)
+                }
             }
             studio.doc.effects.showGrid = false
             let width = Int(env["IKKOKU_CAPTURE_W"] ?? "") ?? 960
@@ -363,7 +368,7 @@ final class AppState {
             exit(1)
         }
         do {
-            let asset = try host.library.importStaticAsset(url: URL(fileURLWithPath: path))
+            let asset = try host.library.importTrustedStaticAsset(url: URL(fileURLWithPath: path))
             let mirror = env["IKKOKU_CAPTURE_MIRROR"] == "1" ? Transform.scale(Float3(-1, 1, 1)) : matrix_identity_float4x4
             var items: [RenderItem] = []
             var bounds = AABB.empty
