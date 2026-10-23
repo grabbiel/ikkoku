@@ -966,6 +966,27 @@ public final class SourceStudioCharacterPreview {
         colorEditDiagnostics = edits == nil ? nil : messages
     }
 
+    /// The FK/IK state a frame evaluates with: the document's explicit state,
+    /// else the saved record's, switched to FK (groups of the edited bones) or
+    /// IK (groups of the edited targets) by edits the document holds.
+    public func effectiveKinematics(fkRotations: [Int: Float3], ikTargets: [Int32: SourceStudioIKEdit],
+                                    kinematics: SourceStudioKinematicState?) throws -> SourceStudioKinematicState {
+        var effective = kinematics ?? SourceStudioKinematicState(record: record)
+        for (id, angles) in fkRotations {
+            guard let target = controller.targets.first(where: { $0.bone.id == id && $0.hasGuide }),
+                  angles.x.isFinite, angles.y.isFinite, angles.z.isFinite else { throw RigError.invalid("Source FK edit has no original guide or finite rotation.") }
+            if kinematics == nil {
+                for (index, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { effective.activeFK[index] = true }
+            }
+        }
+        if kinematics == nil, !fkRotations.isEmpty { effective.enableFK = true; effective.enableIK = false }
+        if kinematics == nil, !ikTargets.isEmpty {
+            effective.enableFK = false; effective.enableIK = true
+            for id in ikTargets.keys { effective.activeIK[try SourceStudioIKEditing.groupIndex(target: id)] = true }
+        }
+        return effective
+    }
+
     public func editedPose(fkRotations: [Int: Float3] = [:], faceValues: [Float]? = nil, bodyValues: [Float]? = nil, ikTargets: [Int32: SourceStudioIKEdit] = [:], kinematics: SourceStudioKinematicState? = nil, animationState: SourceStudioAnimationState? = nil,
                            animationElapsed: Float = 0) throws -> RigPose {
         try setShapeValues(face: faceValues, body: bodyValues)
@@ -984,19 +1005,7 @@ public final class SourceStudioCharacterPreview {
         if let handPatternLibrary {
             try handPatternLibrary.applySaved(record.handPatterns, to: preview.source.rig, on: &result, elapsed: animationElapsed)
         }
-        var effective = kinematics ?? SourceStudioKinematicState(record: record)
-        for (id, angles) in fkRotations {
-            guard let target = controller.targets.first(where: { $0.bone.id == id && $0.hasGuide }),
-                  angles.x.isFinite, angles.y.isFinite, angles.z.isFinite else { throw RigError.invalid("Source FK edit has no original guide or finite rotation.") }
-            if kinematics == nil {
-                for (index, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { effective.activeFK[index] = true }
-            }
-        }
-        if kinematics == nil, !fkRotations.isEmpty { effective.enableFK = true; effective.enableIK = false }
-        if kinematics == nil, !ikTargets.isEmpty {
-            effective.enableFK = false; effective.enableIK = true
-            for id in ikTargets.keys { effective.activeIK[try SourceStudioIKEditing.groupIndex(target: id)] = true }
-        }
+        let effective = try effectiveKinematics(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics)
         let restored = try record.makePose(rig: preview.source.rig, catalog: poseCatalog, baseline: result,
             characterRoot: characterRoot, bodyRoot: preview.source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: preview.source.rig.uniqueNode(named: "cf_J_FaceUp_ty"), kinematics: effective, fkOverrides: fkRotations)

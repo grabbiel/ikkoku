@@ -551,6 +551,8 @@ final class StudioModel: ViewportInputHandler {
         let clothes = fresh.wearRules.normalized(current.clothesState)
         let storedClothes = clothes == fresh.loadedClothesState ? nil : clothes
         try fresh.setWear(clothesState: storedClothes, showAccessory: object.sourceShowAccessory)
+        // The face state is Status data independent of the outfit.
+        try fresh.setExpressionState(object.sourceExpression)
         pushUndo(force: true)
         // The cache entry goes first: the document's didSet refresh then
         // keeps this instance instead of building the same outfit again.
@@ -626,6 +628,51 @@ final class StudioModel: ViewportInputHandler {
         try preview.setWear(clothesState: doc.objects[i].sourceClothesState, showAccessory: stored)
         pushUndo(force: true)
         doc.objects[i].sourceShowAccessory = stored
+    }
+
+    /// Face state (ST-C04), CharaStudio's State panel face controls
+    /// (MPCharCtrl.EtcInfo patterns, eye openness, blink, mouth openness and
+    /// lip sync; LookAtInfo and NeckInfo patterns; OtherInfo tears and
+    /// cheek). The request is settled against the rendered state first, which
+    /// ports the setters' runtime side effects (blinking off holds the eyes
+    /// open rate), then the preview validates and applies it before anything
+    /// is recorded, so a refusal leaves both the preview and the document
+    /// untouched. A neck pattern change is refused while FK owns the neck,
+    /// as NeckInfo's buttons are not interactable then. The document keeps
+    /// nil for the card's saved state, so a return to it exports
+    /// byte-identical card and scene bytes. The Face tab's Expression
+    /// controls, its Reset to card button and the scenario's
+    /// `setExpression`/`resetExpression` ops share this one path; nil resets.
+    func setSourceExpression(_ id: UUID, _ requested: SourceStudioExpressionState?) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Face state editing needs a loaded source character.")
+        }
+        let current = preview.expressionState
+        let next = requested.map { $0.settled(from: current) } ?? preview.savedExpression
+        guard next != current else { return }
+        if next.neckLookPattern != current.neckLookPattern, try sourceFKOwnsNeck(id) {
+            throw RigError.invalid("FK owns the neck, so CharaStudio disables the neck look buttons; turn the FK neck group off first.")
+        }
+        try preview.setExpressionState(next)
+        // A slider drag coalesces into one undo step; a button, picker or
+        // toggle is its own step.
+        let continuous = next.eyesOpen != current.eyesOpen || next.mouthOpen != current.mouthOpen || next.cheek != current.cheek
+        pushUndo(force: !continuous)
+        doc.objects[i].sourceExpression = next == preview.savedExpression ? nil : next
+    }
+
+    /// "Reset to card" for the face state: the card's saved values, as a
+    /// scene load replays them.
+    func resetSourceExpression(_ id: UUID) throws { try setSourceExpression(id, nil) }
+
+    /// True while the frame's effective kinematics enable FK with the neck
+    /// group active (MPCharCtrl.NeckInfo: interactable only when
+    /// `!enableFK || !activeFK[1]`).
+    func sourceFKOwnsNeck(_ id: UUID) throws -> Bool {
+        guard let object = doc.object(id), let preview = sourceInstances[id] else { return false }
+        let state = try preview.effectiveKinematics(fkRotations: object.sourceFKRotations ?? [:],
+                                                    ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics)
+        return state.enableFK && state.activeFK.count > 1 && state.activeFK[1]
     }
 
     func firstExecutableAnimation(group: Int32, category: Int32?) -> (category: Int32, no: Int32)? {
@@ -1267,15 +1314,29 @@ final class StudioModel: ViewportInputHandler {
                 }
                 edits.kinematics[key] = .init(enableFK: true, enableIK: false, activeFK: groups)
             }
+            // Face state (ST-C04): the Status fields that differ from the
+            // card's saved values patch the embedded card; mouth openness and
+            // lip sync patch the scene's OICharInfo record. A state edited
+            // back to the saved values writes nothing; the native held eyes
+            // rate is not an original value and never exported.
+            var faceState = SourceCharacterCard.StatusFaceEdit()
+            if let expression = object.sourceExpression {
+                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Face state edits require a loaded source character.") }
+                guard preview.expressionState == expression else {
+                    throw RigError.invalid("The rendered face state differs from the document; let the preview refresh before exporting.")
+                }
+                faceState = expression.statusEdit(from: preview.savedExpression)
+                if let mouth = expression.mouthEdit(from: preview.savedExpression) { edits.mouth[key] = mouth }
+            }
             if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil || object.sourceOutfit != nil
-                || object.sourceClothesState != nil || object.sourceShowAccessory != nil {
+                || object.sourceClothesState != nil || object.sourceShowAccessory != nil || !faceState.isEmpty {
                 // Export writes back only the arrays, colors and outfit that
                 // actually differ from the embedded card's saved values; a
                 // value edited back to the saved rate, color or outfit produces
                 // no card edit and stays byte-identical. Shape, color and
                 // outfit edits on one character merge into one Edits so none
                 // overwrites another.
-                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape, color, outfit or wear edits require a loaded source character.") }
+                guard let preview = sourceInstances[object.id], original.character != nil else { throw RigError.invalid("Shape, color, outfit, wear or face state edits require a loaded source character.") }
                 guard preview.coordinate == (object.sourceOutfit ?? preview.savedCoordinate) else {
                     throw RigError.invalid("The rendered outfit differs from the document's outfit selection; let the preview rebuild before exporting.")
                 }
@@ -1299,9 +1360,9 @@ final class StudioModel: ViewportInputHandler {
                     // edit from the document's edited value explicitly.
                     colors.append(.init(record: color.record, path: color.path, rgba: [rgba.x, rgba.y, rgba.z, rgba.w]))
                 }
-                if face != nil || body != nil || !colors.isEmpty || outfit != nil || clothes != nil || accessories != nil {
+                if face != nil || body != nil || !colors.isEmpty || outfit != nil || clothes != nil || accessories != nil || !faceState.isEmpty {
                     edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors, coordinateType: outfit,
-                                             clothesState: clothes, showAccessory: accessories)
+                                             clothesState: clothes, showAccessory: accessories, faceState: faceState)
                 }
             }
             if let character = original.character {
@@ -1322,7 +1383,7 @@ final class StudioModel: ViewportInputHandler {
             guard i < source.settings.cameraSlots.count, let camera else { throw RigError.invalid("Original scene export cannot remove a camera slot.") }
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
-        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
+        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)
@@ -1593,6 +1654,10 @@ final class StudioModel: ViewportInputHandler {
                         // repeat of the rendered values is a comparison only.
                         do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory) }
                         catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
+                        // The document's face state (scene reload, undo/redo),
+                        // stored settled; a repeat is a comparison only.
+                        do { try preview.setExpressionState(o.sourceExpression) }
+                        catch { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
                         var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
