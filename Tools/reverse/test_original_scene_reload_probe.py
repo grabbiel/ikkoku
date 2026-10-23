@@ -37,6 +37,20 @@ class StartTests(unittest.TestCase):
         self.assertEqual(run,recorded);self.assertEqual(recorded['processID'],4321);self.assertEqual(recorded['root'],ROOT_A)
         self.assertEqual(recorded['sceneSHA256'],expected_hashes)
 
+class ExpressionStartTests(unittest.TestCase):
+    def test_expression_pair_keeps_both_labels_and_input_bytes(self):
+        events=[]
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch('original_scene_reload_probe.player_root',return_value=ROOT_A), \
+             patch('original_scene_reload_probe.write_small',side_effect=lambda vm,path,data:events.append((path,data))), \
+             patch('original_scene_reload_probe.retry',side_effect=lambda vm,script,user=False:'4321' if user else ''):
+            inputs={}
+            for label in probe.EXPRESSION_LABELS:
+                inputs[label]=Path(tmp)/(label+'.png');inputs[label].write_bytes(label.encode())
+            run=probe.start('vm',Path(tmp),scenes=inputs)
+        self.assertEqual([path for path,_ in events[1:]], [ROOT_A+r'\BepInEx\plugins\reload-'+label+'.png' for label in probe.EXPRESSION_LABELS])
+        self.assertEqual(run['sceneSHA256'],{label:hashlib.sha256(label.encode()).hexdigest() for label in probe.EXPRESSION_LABELS})
+
 class AuthorStartTests(unittest.TestCase):
     def test_author_run_uploads_card_and_records_then_launches(self):
         events=[]

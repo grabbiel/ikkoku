@@ -194,6 +194,48 @@ def compare(trace,scene_hashes=None):
                       'load of its CharaStudio-authored source scene, with world transforms settled frames later')
 
 
+EXPRESSION_LABELS=('expression-edit','expression-source')
+
+def expression_expectations(data):
+    """Independent Python scene/card reader, not the native writer or probe values."""
+    from analysis.scene_editing_oracle import collect,objects
+    from analysis.studio_scene_contract import inspect_scene
+    from analysis.card_contract import parse_card
+    import msgpack
+    cards=collect(data);expected={}
+    fields={'eyebrowPattern':('eyebrowPtn',0),'eyesPattern':('eyesPtn',0),'mouthPattern':('mouthPtn',0),
+            'eyesOpen':('eyesOpenMax',1.0),'blink':('eyesBlink',True),'eyesLookPattern':('eyesLookPtn',0),
+            'neckLookPattern':('neckLookPtn',0),'tears':('tearsLv',0),'cheek':('hohoAkaRate',0.0)}
+    for key,obj in objects(inspect_scene(data)['roots']).items():
+        if 'card' not in obj:continue
+        card=parse_card(cards[obj['card']['sha256']])
+        status=msgpack.unpackb(next(b['raw'] for b in card.blocks if b['name']=='Status'),raw=False,strict_map_key=False)
+        expected[key]={name:status.get(member,default) for name,(member,default) in fields.items()}
+        expected[key].update(mouthOpen=obj['mouthOpen'],lipSync=obj['lipSync'])
+    if not expected:raise ValueError('Expression acceptance requires character records')
+    return expected
+
+
+def compare_expression(trace,expected,scene_hashes=None):
+    """Every serialized face field of every character, immediately and after settling."""
+    if trace.get('schemaVersion')!=1:raise ValueError('Unsupported reload trace schemaVersion')
+    reports={}
+    for label in EXPRESSION_LABELS:
+        claims=[];case=trace.get('cases',{}).get(label,{})
+        for phase in ('afterLoad','settled'):
+            actual=_objects(case.get(phase,{})) if isinstance(case.get(phase),dict) and 'objects' in case[phase] else {}
+            for key,fields in expected[label].items():
+                values=(actual.get(key,{}).get('character') or {}).get('expression') or {}
+                for field,wanted in fields.items():
+                    value=values.get(field)
+                    if isinstance(wanted,bool):passed=isinstance(value,bool) and value==wanted
+                    else:passed=isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and abs(value-wanted)<=1e-6
+                    claims.append(dict(claim='%s/%s/character%d/%s'%(label,phase,key,field),expected=wanted,actual=value,passed=passed))
+        reports[label]=dict(claims=claims,passed=bool(claims) and all(c['passed'] for c in claims),sceneSHA256=(scene_hashes or {}).get(label))
+    return dict(schemaVersion=1,cases=reports,passed=all(c['passed'] for c in reports.values()),
+                scope='All serialized face fields of all characters from independent Python scene/card decoding versus original CharaStudio afterLoad and settled snapshots; no rendered-image or transition parity claim')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe',type=Path,default=REPO/'.local/stt03e/probe')
@@ -204,12 +246,15 @@ def main():
     trace_path=arguments.probe/'reload-trace.json'
     trace=json.loads(trace_path.read_text())
     scene_hashes={}
-    for label in LABELS+FK_LABELS:
+    for label in LABELS+FK_LABELS+EXPRESSION_LABELS:
         path=arguments.probe/('reload-'+label+'.png') # the FK pair runs upload both records under these names
         if path.is_file():scene_hashes[label]=hashlib.sha256(path.read_bytes()).hexdigest()
-    report=compare(trace,scene_hashes)
+    if any(label in trace.get('cases',{}) for label in EXPRESSION_LABELS):
+        expected={label:expression_expectations((arguments.probe/('reload-'+label+'.png')).read_bytes()) for label in EXPRESSION_LABELS}
+        report=compare_expression(trace,expected,scene_hashes)
+    else:report=compare(trace,scene_hashes)
     evidence=[dict(path=str(p.resolve()),sha256=hashlib.sha256(p.read_bytes()).hexdigest())
-              for p in [trace_path,Path(__file__)]+[arguments.probe/('reload-%s.png'%l) for l in LABELS] if p.is_file()]
+              for p in [trace_path,Path(__file__)]+[arguments.probe/('reload-%s.png'%l) for l in LABELS+FK_LABELS+EXPRESSION_LABELS] if p.is_file()]
     report['evidence']=evidence
     arguments.output.parent.mkdir(parents=True,exist_ok=True)
     arguments.output.write_text(json.dumps(report,indent=2)+'\n')

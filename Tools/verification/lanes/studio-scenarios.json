@@ -1715,6 +1715,127 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-expression-edit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/expression-edit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-expression-edit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Source Expression controls share StudioModel editing: validates fields, rendered pixels, exact undo/redo/reset, native reload and identity-preserving original export. Undrawn fields must report explicit diagnostics.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-expression-edit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/expression-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/expression-changed.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 900
+    },
+    {
+      "id": "studio-scenario-reload-save-expression",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-expression.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-expression.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Source Expression controls share StudioModel editing: validates fields, rendered pixels, exact undo/redo/reset, native reload and identity-preserving original export. Undrawn fields must report explicit diagnostics.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-expression.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-expression.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-expression",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-expression.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-expression.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Source Expression controls share StudioModel editing: validates fields, rendered pixels, exact undo/redo/reset, native reload and identity-preserving original export. Undrawn fields must report explicit diagnostics.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-expression.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

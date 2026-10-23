@@ -11,8 +11,12 @@ import json
 from pathlib import Path
 import struct
 import msgpack
-from studio_scene_contract import Reader, inspect_scene
-from card_contract import Limits, png_end, parse_card
+try:
+    from .studio_scene_contract import Reader, inspect_scene
+    from .card_contract import Limits, png_end, parse_card
+except ImportError:  # direct script invocation
+    from studio_scene_contract import Reader, inspect_scene
+    from card_contract import Limits, png_end, parse_card
 
 ROOT = Path(__file__).resolve().parents[3]
 
