@@ -80,7 +80,8 @@ private func object(_ source: KoikatsuObjectRecord) -> [String: Any] {
 
 do {
     var arguments = Array(CommandLine.arguments.dropFirst())
-    // `shader-bindings` takes optional `--supplement <file>` and
+    // `shader-bindings` takes optional `--supplement <file>`, `--eye-look <file>`,
+    // `--eye-look-rates <h,h,v>` and
     // `--write-frame <file>` pairs anywhere after the subcommand.
     func takeOption(_ flag: String) -> String? {
         guard arguments.first == "shader-bindings", let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
@@ -88,6 +89,7 @@ do {
         return arguments[index + 1]
     }
     let supplementPath = takeOption("--supplement"), substitutedFramePath = takeOption("--write-frame")
+    let eyeLookPath = takeOption("--eye-look"), eyeLookRates = takeOption("--eye-look-rates")
     let inspecting = arguments.count == 2 && ["scene", "model", "camera", "change-amount", "rig", "mod", "mod-library", "card", "draw-overlays"].contains(arguments[0])
     let modCatalog = arguments.count == 3 && arguments[0] == "mod-catalog"
     let cardMods = arguments.count == 4 && arguments[0] == "card-mods"
@@ -126,7 +128,7 @@ do {
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
                    ikkoku-inspect expression-snapshot <rig-or-avatar.json> <expression-contract.json> <defaults|preset-id|inputs.json>
                    ikkoku-inspect look-data <source-scene.png> [studio-look-settings.json]
-                   ikkoku-inspect shader-bindings <card.png> <maker-library.json> <head-material-contract.json> <translated-shaders-dir> [<capture-frame.json>] [--supplement <source-binding-supplement.json>] [--write-frame <native-bound-frame.json>]
+                   ikkoku-inspect shader-bindings <card.png> <maker-library.json> <head-material-contract.json> <translated-shaders-dir> [<capture-frame.json>] [--supplement <source-binding-supplement.json>] [--write-frame <native-bound-frame.json>] [--eye-look <studio-look-settings.json> [--eye-look-rates <left-h>,<right-h>,<v>]]
             """)
     }
     let url = URL(fileURLWithPath: arguments[1]).standardizedFileURL
@@ -253,7 +255,8 @@ do {
             headContractURL: URL(fileURLWithPath: arguments[3]).standardizedFileURL, programsURL: URL(fileURLWithPath: arguments[4]).standardizedFileURL,
             frameURL: arguments.count == 6 ? URL(fileURLWithPath: arguments[5]).standardizedFileURL : nil,
             supplementURL: supplementPath.map { URL(fileURLWithPath: $0).standardizedFileURL },
-            substitutedFrameURL: substitutedFramePath.map { URL(fileURLWithPath: $0).standardizedFileURL })) { _, new in new }
+            substitutedFrameURL: substitutedFramePath.map { URL(fileURLWithPath: $0).standardizedFileURL },
+            eyeLookURL: eyeLookPath.map { URL(fileURLWithPath: $0).standardizedFileURL }, eyeLookRates: eyeLookRates)) { _, new in new }
     case "card-mods":
         let card = try SourceCharacterCard.load(url: url)
         let libraryURL = URL(fileURLWithPath: arguments[2]).standardizedFileURL

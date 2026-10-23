@@ -57,6 +57,21 @@ final class StudioModel: ViewportInputHandler {
     var selectedSourceIK: Int32? { didSet { refresh() } }
     var selectedIK: IKChain? { didSet { refresh() } }
     var showGizmos = true { didSet { refresh() } }
+    /// R1/CMT-04 opt-in (View ▸ Live Source Shaders, `IKKOKU_LIVE_SOURCE_SHADERS=1`):
+    /// converted source characters draw with the translated original shader
+    /// programs; every material that cannot keeps the toon draw and is listed
+    /// in `liveSourceShaderStatus`. Off by default: the toon renderer.
+    var liveSourceShaders = SourceShaderLiveConfiguration.environment(ProcessInfo.processInfo.environment).enabledAtLaunch {
+        didSet { if liveSourceShaders != oldValue { if !liveSourceShaders { liveSourceShaderStatus = [] }; refresh() } }
+    }
+    /// Per-character live-path status while the opt-in is on: counts, then
+    /// every toon fallback and hidden slot with its reason.
+    var liveSourceShaderStatus: [String] = []
+    @ObservationIgnored var liveSourceAssemblies: [UUID: (preview: SourceStudioCharacterPreview, result: Result<SourceShaderLiveAssembly, SourceShaderLiveReason>)] = [:]
+    @ObservationIgnored var liveSourceShared: Result<SourceShaderLiveConfiguration.Shared, SourceShaderLiveReason>?
+    @ObservationIgnored var liveSourceLastAttach: [UUID: SourceShaderLiveAssembly.AttachReport] = [:]
+    /// Characters kept toon this frame because the document changed their wear.
+    @ObservationIgnored var liveSourceWearChanged: [UUID: String] = [:]
     var inspectorTab: InspectorTab = .object
     var viewportSize = SIMD2<Float>(1600, 1200)
     var status = "Ready"
@@ -1542,6 +1557,7 @@ final class StudioModel: ViewportInputHandler {
         var gizmos: [GizmoBatch] = []
         var bounds = AABB.empty
         var lightGlyphs: [(Float3, Float3)] = []
+        var liveLines: [String] = []
 
         let animated = !doc.timeline.keyframes.isEmpty
         var animatedDoc = doc
@@ -1577,8 +1593,9 @@ final class StudioModel: ViewportInputHandler {
                         // repeat of the rendered values is a comparison only.
                         do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory) }
                         catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
-                        let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
+                        var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
+                        if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         if showGizmos, selection == o.id { gizmos += try sourceCharacterGizmos(o, preview: preview, world: world) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
@@ -1698,8 +1715,9 @@ final class StudioModel: ViewportInputHandler {
                 // so none are passed and original export rejects them.
                 if let preview = sourceRouteCharacterPreview(of: o.id, document: doc) {
                     do {
-                        let rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
+                        var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, animationElapsed: sourceAnimationTime)
+                        if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
                     } catch { status = "Route character \(o.sourceObjectKey ?? 0): \(error)" }
@@ -1736,6 +1754,7 @@ final class StudioModel: ViewportInputHandler {
         f.skinSets = skinSets
         frame = f
         host.renderer.submit(f)
+        if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
     }
 
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
