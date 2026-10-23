@@ -61,11 +61,14 @@ extension SourceCharacterCard {
     /// `showAccessory` is one flag per accessory slot. A field the Status map
     /// does not carry is the ChaFileStatus.MemberInit default (all on, inner
     /// shoes, every accessory shown); a field of another shape is rejected,
-    /// never guessed.
+    /// never guessed. MessagePack-CSharp writes the byte[] as bin; a card
+    /// that spells it as an array of nine small integers (written by other
+    /// tools) is read by value and `clothesStateIsArray` records the spelling.
     public struct StatusWear: Equatable, Sendable {
         public var clothesState: [UInt8]
         public var shoesType: Int
         public var showAccessory: [Bool]
+        public var clothesStateIsArray = false
         public static let memberInit = StatusWear(clothesState: Array(repeating: 0, count: 9), shoesType: 0,
                                                   showAccessory: Array(repeating: true, count: 20))
         public init(clothesState: [UInt8], shoesType: Int, showAccessory: [Bool]) {
@@ -74,11 +77,14 @@ extension SourceCharacterCard {
         public init(status: [String: SourceMessagePackValue]) throws {
             self = .memberInit
             if let value = status["clothesState"] {
-                guard case .binary(let bytes) = value, bytes.count == 9 else {
-                    throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.")
-                }
-                guard bytes.allSatisfy({ $0 <= 3 }) else { throw cardEditError("Saved Status.clothesState has a value outside 0...3.") }
-                clothesState = Array(bytes)
+                let bytes: [Int]
+                if case .binary(let data) = value { bytes = data.map(Int.init) }
+                else if let members = value.arrayValue, members.allSatisfy({ $0.integerValue != nil }) {
+                    bytes = members.compactMap(\.integerValue); clothesStateIsArray = true
+                } else { bytes = [] }
+                guard bytes.count == 9 else { throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.") }
+                guard bytes.allSatisfy({ (0...3).contains($0) }) else { throw cardEditError("Saved Status.clothesState has a value outside 0...3.") }
+                clothesState = bytes.map(UInt8.init)
             }
             if let value = status["shoesType"] {
                 guard let type = value.integerValue, (0...255).contains(type) else { throw cardEditError("Saved Status.shoesType is not a byte.") }
@@ -314,10 +320,14 @@ extension SourceCharacterCard {
     /// -> OCIChar.SetClothesState -> ChaControl.SetClothesState) and the
     /// accessory toggles (OnClickAccessories -> OCIChar.ShowAccessory) write
     /// ChaFileStatus.clothesState[kind] / showAccessory[slot], which the
-    /// scene save serializes in the same block: the 9-byte bin payload and
+    /// scene save serializes in the same block: the 9-byte bin payload (or,
+    /// for a card that spells it as an array, the nine fixint members) and
     /// the 20 bool tokens are patched in place (same header, same length), so
-    /// no other byte of the block moves. Returns nil (no bytes change) when
-    /// every requested field already holds the saved value.
+    /// no other byte of the block moves. A wear field the card does not save
+    /// is appended after the last entry (bin 9 / array16 of 20 bools, the
+    /// MessagePack-CSharp forms) and only the map count changes. Returns nil
+    /// (no bytes change) when every requested field already holds the saved
+    /// value.
     private func editedStatus(coordinate: Int?, clothesState: [UInt8]?, showAccessory: [Bool]?) throws -> Data? {
         if let coordinate {
             guard (0..<7).contains(coordinate) else { throw cardEditError("Outfit index must be in 0...6.") }
@@ -353,20 +363,35 @@ extension SourceCharacterCard {
             }
         }
         let saved = try StatusWear(status: fields)
+        // A field the card does not save (its MemberInit default applies) is
+        // appended to the root map in the form MessagePack-CSharp writes, the
+        // map count is raised, and no existing byte changes.
+        var appended = Data(), appendedCount = 0
         if let clothesState, clothesState != saved.clothesState {
-            guard fields["clothesState"] != nil else {
-                throw cardEditError("The card saves no Status.clothesState; adding the field is unsupported.")
+            if fields["clothesState"] == nil {
+                appended += Data([0xac]) + Data("clothesState".utf8) + Data([0xc4, 0x09]) + Data(clothesState); appendedCount += 1
+            } else {
+                let node = try tokens.node(at: [.key("clothesState")])
+                if node.kind == .array {
+                    guard node.children.count == 9 else { throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.") }
+                    for (child, value) in zip(node.children, clothesState) {
+                        guard child.kind == .scalar, child.range.count == 1, let old = try tokens.value(child).integerValue, (0...3).contains(old) else {
+                            throw cardEditError("Saved Status.clothesState array members must be positive fixints 0...3.")
+                        }
+                        if old != Int(value) { patches.append(.init(range: child.range, replacement: Data([value]))) }
+                    }
+                } else {
+                    guard node.kind == .scalar, case .binary(let bytes) = try tokens.value(node), bytes.count == 9, node.range.count > 9 else {
+                        throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.")
+                    }
+                    patches.append(.init(range: (node.range.upperBound - 9)..<node.range.upperBound, replacement: Data(clothesState)))
+                }
             }
-            let node = try tokens.node(at: [.key("clothesState")])
-            guard node.kind == .scalar, case .binary(let bytes) = try tokens.value(node), bytes.count == 9, node.range.count > 9 else {
-                throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.")
-            }
-            patches.append(.init(range: (node.range.upperBound - 9)..<node.range.upperBound, replacement: Data(clothesState)))
         }
-        if let showAccessory, showAccessory != saved.showAccessory {
-            guard fields["showAccessory"] != nil else {
-                throw cardEditError("The card saves no Status.showAccessory; adding the field is unsupported.")
-            }
+        if let showAccessory, showAccessory != saved.showAccessory, fields["showAccessory"] == nil {
+            appended += Data([0xad]) + Data("showAccessory".utf8) + Data([0xdc, 0x00, 0x14]) + Data(showAccessory.map { $0 ? 0xc3 : 0xc2 })
+            appendedCount += 1
+        } else if let showAccessory, showAccessory != saved.showAccessory {
             let node = try tokens.node(at: [.key("showAccessory")])
             guard node.kind == .array, node.children.count == 20 else {
                 throw cardEditError("Saved Status.showAccessory is not the 20-slot bool array.")
@@ -377,6 +402,22 @@ extension SourceCharacterCard {
                 }
                 if old != flag { patches.append(.init(range: child.range, replacement: Data([flag ? 0xc3 : 0xc2]))) }
             }
+        }
+        if appendedCount > 0 {
+            guard tokens.root.kind == .map, tokens.root.range == 0..<status.data.count else { throw cardEditError("Status block is not one MessagePack map.") }
+            let count = tokens.root.children.count / 2, header = status.data[status.data.startIndex]
+            let next = count + appendedCount
+            switch header {
+            case 0x80...0x8f:
+                patches.append(.init(range: 0..<1, replacement: next <= 15 ? Data([0x80 | UInt8(next)]) : Data([0xde]) + cardBig(UInt64(next), count: 2)))
+            case 0xde:
+                guard next <= 0xffff else { throw cardEditError("Status map is too large.") }
+                patches.append(.init(range: 0..<3, replacement: Data([0xde]) + cardBig(UInt64(next), count: 2)))
+            case 0xdf:
+                patches.append(.init(range: 0..<5, replacement: Data([0xdf]) + cardBig(UInt64(next), count: 4)))
+            default: throw cardEditError("Status block is not one MessagePack map.")
+            }
+            patches.append(.init(range: status.data.count..<status.data.count, replacement: appended))
         }
         guard !patches.isEmpty else { return nil }
         let result = try tokens.applying(patches)

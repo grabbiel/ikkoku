@@ -321,12 +321,14 @@ public struct SourceStudioWearLayout: Equatable, Sendable {
                     && SourceStudioWear.switchActive(kind: kind, node: node, states: s) == true && !used.contains(node)
             }.sorted()
             let name = SourceStudioWear.kindNames[kind], state = SourceStudioWear.stateNames[Int(s[kind])]
-            if !missing.isEmpty {
-                effective[kind] = dressed
-                result.fallbacks.append("\(name) is \(state) with \(stateSummary(s, around: kind)): its alternate meshes under \(missing.joined(separator: ", ")) are not converted, so the dressed meshes render instead.")
-            } else if rules.unknownKinds.contains(kind), [1, 2].contains(s[kind]), [0, 1, 2, 3, 5].contains(kind) {
+            // An unconverted catalog row is the first cause: its geometry is a
+            // reference stand-in, whatever switch nodes that stand-in carries.
+            if rules.unknownKinds.contains(kind), [1, 2].contains(s[kind]), [0, 1, 2, 3, 5].contains(kind) {
                 effective[kind] = dressed
                 result.fallbacks.append("\(name) is \(state), but its catalog row is not converted (reference geometry), so the half state cannot be rendered and the dressed meshes render instead.")
+            } else if !missing.isEmpty {
+                effective[kind] = dressed
+                result.fallbacks.append("\(name) is \(state) with \(stateSummary(s, around: kind)): its alternate meshes under \(missing.joined(separator: ", ")) are not converted, so the dressed meshes render instead.")
             } else { effective[kind] = s }
         }
         // A top drawn dressed in place of its half state keeps the dressed

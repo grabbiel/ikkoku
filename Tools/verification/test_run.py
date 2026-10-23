@@ -593,7 +593,8 @@ class CheckExecutionTests(unittest.TestCase):
 
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
-                "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit", "setAnimation", "setAnimationSpeed",
+                "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
+                "setClothesState", "setAccessoryVisible", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "captureBone", "captureRender",
                 "advance", "orbit", "setAutomaticBlink",
@@ -624,7 +625,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and not name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 37)
+        self.assertEqual(len(self.checks), 42)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -695,6 +696,19 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIs(type(step["index"]), int)
                     if "errorContains" in step:
                         self.assertTrue(step["errorContains"], "a refused outfit needs a specific diagnostic")
+                if op in ("setClothesState", "setAccessoryVisible"):
+                    self.assertIsInstance(step["key"], int)
+                    self.assertIs(type(step["index"]), int)
+                    if op == "setClothesState":
+                        self.assertIs(type(step["state"]), int)
+                    else:
+                        self.assertIsInstance(step["on"], bool)
+                    if "errorContains" in step:
+                        self.assertTrue(step["errorContains"], "a refused wear edit needs a specific diagnostic")
+                    else:
+                        self.assertIn(step["index"], range(8) if op == "setClothesState" else range(20))
+                        if op == "setClothesState":
+                            self.assertIn(step["state"], range(4))
                 if op == "captureRender":
                     self.assertTrue(step["name"])
                     if "path" in step:
@@ -731,7 +745,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "sourceRuntime", "animation", "fk",
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "render",
-                                            "exportIdenticalToSource", "outfit") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -764,6 +778,21 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         for index in ("coordinate", "saved"):
                             if index in outfit:
                                 self.assertIn(outfit[index], range(7))
+                    if "clothes" in step:
+                        clothes = step["clothes"]
+                        self.assertIsInstance(clothes["key"], int)
+                        self.assertTrue({"state", "saved", "rendered", "accessories", "accessoriesOff",
+                                         "edited", "fallbacks", "diagnosticContains"} & set(clothes),
+                                        "a clothes assert must name what it checks: %s" % path)
+                        for name in ("state", "saved"):
+                            if name in clothes:
+                                self.assertEqual(len(clothes[name]), 9)
+                                self.assertTrue(all(v in range(4) for v in clothes[name]))
+                        if "rendered" in clothes:
+                            self.assertTrue(all(v in range(9) for v in clothes["rendered"]))
+                        for name in ("accessories", "accessoriesOff"):
+                            if name in clothes:
+                                self.assertTrue(all(v in range(20) for v in clothes[name]))
                     for slot in ("face", "body"):
                         if slot in step:
                             self.assertIsInstance(step[slot]["index"], int)
@@ -792,7 +821,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -818,7 +847,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
 
     def test_visual_reset_controls_keep_clock_and_camera_fixed(self):
         checks = {check["id"]: check for check in self.checks}
-        for name in ("shape-visual-reset", "color-visual-reset", "outfit-select"):
+        for name in ("shape-visual-reset", "color-visual-reset", "outfit-select",
+                     "clothes-saved-off", "clothes-toggle", "accessory-toggle"):
             self.assertIn({"env": "IKKOKU_MAKER_LIBRARY", "kind": "file"},
                           checks["studio-scenario-" + name]["fixtures"],
                           "visual evidence must hash its selected assembly catalog")

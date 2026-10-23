@@ -682,7 +682,7 @@ public final class SourceStudioCharacterPreview {
             throw RigError.invalid("Clothes state must be nine ClothesKind values, each in 0...3.")
         }
         guard accessories.count == 20 else { throw RigError.invalid("Accessory visibility must contain exactly 20 slot flags.") }
-        guard clothes != self.clothesState || accessories != showAccessory else { return }
+        guard clothes != self.clothesState || accessories != self.showAccessory else { return }
         wearEvaluation = wearLayout.evaluate(rules: wearRules, states: clothes, shoesType: savedWear.shoesType,
                                              showAccessory: accessories, hideHairSlots: hideHairSlots)
         self.clothesState = clothes
