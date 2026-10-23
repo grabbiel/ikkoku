@@ -60,7 +60,7 @@ public struct ResourceBinding: Codable, Sendable, Equatable {
     /// is recorded, so a document without file references saves as before.
     public static func record(_ references: [ResourceReference], libraries: [ResourceLibraryRecord],
                               previous: ResourceBinding? = nil) -> ResourceBinding? {
-        let current: [ResourceLibraryRecord] = libraries.compactMap { record in
+        let current: [ResourceLibraryRecord] = libraries.compactMap { (record: ResourceLibraryRecord) -> ResourceLibraryRecord? in
             guard let root = ResourcePath.canonical(record.root), ResourcePath.isDirectory(root) else { return nil }
             var canonical = record
             canonical.root = root
