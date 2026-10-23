@@ -111,6 +111,30 @@ passed, and ticked items say how they were checked. The ST-T03 items are ticked
 because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
 #80, #81).
 
+**Merged 2026-10-23 (PRs #104–#110, #112):** a CI-verified wave of synthetic-fixture
+slices, written without a local Swift toolchain. The macOS Actions jobs (Engine
+`swift test`, unsigned Debug app build, `Tools/reverse` suites) were each PR's first
+compile and its only Swift test run. Each slice's report row names its evidence.
+- R5 ([#104](https://github.com/grabbiel/ikkoku/pull/104), [#108](https://github.com/grabbiel/ikkoku/pull/108)):
+  secondary glTF UV sets and load diagnostics; unsupported required extensions are
+  rejected; packaged glTF loads are confined to their verified package root.
+- G-T01 ([#105](https://github.com/grabbiel/ikkoku/pull/105)): engine
+  `SourceGameplaySession` with classified, acknowledged completion barriers and a
+  deterministic mid-barrier reload. No app host consumes it yet (A-T01).
+- R4 ([#106](https://github.com/grabbiel/ikkoku/pull/106), [#110](https://github.com/grabbiel/ikkoku/pull/110)):
+  degenerate math, legacy skeletons, cameras, IK, gaze, rays, poses and mirrored
+  camera-object parents now produce named errors.
+- P-T04 ([#107](https://github.com/grabbiel/ikkoku/pull/107)): seeded IR and
+  manifest fuzzing, budget, lifecycle and host-failure rollback tests. It fixed an
+  `attach` partial-commit defect.
+- A-T05 ([#109](https://github.com/grabbiel/ikkoku/pull/109)): every capture output
+  is verified after writing, and UI capture waits for readiness.
+- P-T02 ([#112](https://github.com/grabbiel/ikkoku/pull/112)): an immutable plugin
+  library with generations and one IR/native-adapter dependency graph; saved
+  selections never remap.
+
+None of this wave has been run in the app; the two app items below are still open.
+
 - [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
       FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
       (automated in part: `scenarios/fk-edit.json` — an FK bone rotation on character
@@ -308,6 +332,15 @@ because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
       15+15 frame.json bone maxima as `.local/stt07f/r5-9` down to the last digit;
       `.local/vm-merged-probe`, see
       [material-expansion](../reference/character/material-expansion.md))
+- [ ] A-T05 capture integrity (PR #109): on a Debug build, run the acceptance
+      commands in [build and test](../guides/build-and-test.md). The checks: an
+      unwritable or directory `IKKOKU_CAPTURE_UI` path and a tiny
+      `IKKOKU_CAPTURE_UI_TIMEOUT` exit 1 without a "written" line; a normal UI capture
+      and `IKKOKU_RENDER_THUMBS` exit 0; and the `app-smoke` lane passes.
+- [ ] R4 app paths (PR #110): give a native character a degenerate IK target. The
+      status line names the unsolved chain and the pose is kept. A source camera
+      under a mirrored parent falls back to the saved camera with a
+      `reflectedFrame` message.
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
@@ -316,8 +349,8 @@ because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
 | 3 | **R1, R2, CMT-04** | Close full-character shader/appearance mismatch, integrate verified source materials into live rendering, then compare independently loaded original/native scenes at matched time/camera/light. |
 | 4 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
 | 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
-| 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. |
-| 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. |
+| 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. **2026-10-23:** G-T01's engine slice (`SourceGameplaySession`, #105) is merged; the app host (A-T01) and G-T02 bindings remain. |
+| 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. **2026-10-23:** P-T02's first slice is merged as #112 (library generations, one dependency graph, saved selections). App selection wiring, batch DLL triage and P-T01/03/05 remain. P-T04's Swift slice (#107) is also merged. |
 | 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. |
 
 Do not resume these as one undifferentiated “finish the port” task. Each linked

@@ -163,6 +163,28 @@ diagnostics. Selecting a camera placeholder offers a Look through / Stop
 looking through toggle in its inspector, mirroring `ChangeCamera`'s toggle
 semantics.
 
+Mirrored frames (R4, 2026-10-23): `viewCamera(world:base:)` rejects a world
+matrix with a negative determinant with
+`SourceStudioCameraObjectError.reflectedFrame("world frame")`, rejects a
+singular one with `RigError`, and validates its result with
+`OrbitCamera.validate()`. `rotationQuaternion` divides by unsigned column
+lengths, so a mirrored basis would become a nonunit quaternion. The captured
+rotation is unaffected by a non-uniform parent scale (`item-nonuniform`), but
+no capture covers a mirrored parent, and a mirrored matrix does not say which
+axis carries the mirror. The case is therefore rejected rather than guessed.
+`SourceStudioWorldTransform.world` composes a child's rotation through the
+parent frame's unchecked `rotationQuaternion`, which turns a mirrored parent
+into a nonunit rotation that the composed matrix no longer shows. The preview
+therefore uses `viewCamera(parentFrame:localPosition:localRotation:base:)`.
+That overload rejects a mirrored parent frame with
+`reflectedFrame("parent frame")` and otherwise equals
+`viewCamera(world:base:)` of the non-scalable Studio-rule world matrix. A
+rejection keeps the saved camera and reports the reason in the status line;
+accepted cameras are bit-identical to before. Still unsupported: a mirror
+further up the chain, and a parent with two negative scale components, which
+as a matrix is a proper rotation. Both still reach the camera through the
+walk, as they do for every other child of a mirrored parent.
+
 Not verified: camera animation and route-driven camera motion (a camera
 parented to a moving route is followed through the ordinary world-matrix
 walk, but no original capture of that case exists), and any in-app run of

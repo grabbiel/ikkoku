@@ -10,6 +10,8 @@ REGISTRY = {
   'adapterID':'kk-studio-accessory-names-v1','type':'KK_StudioAccessoryNames.KK_StudioAccessoryNames',
   'identity':{'guid':'KK_StudioAccessoryNames','name':'KK_StudioAccessoryNames','version':'1.1.0'},'processes':['CharaStudio']}
 }
+# Adapters whose package may retain the original BepInEx configuration file.
+CONFIGURABLE = frozenset({'bepinex-mute-in-background-v1'})
 
 def identify(source: Path):
  if source.suffix.lower()!='.dll':return None
@@ -24,7 +26,7 @@ def publish(source: Path, stage: Path, entry, config: Path | None):
  (stage/'Original.dll').write_bytes(data)
  manifest={'schemaVersion':1,'kind':'ikkoku-native-plugin-adapter',**row,'source':{'file':'Original.dll','sha256':digest}}
  if config is not None:
-  if row['adapterID']!='bepinex-mute-in-background-v1':raise ValueError('This installed adapter has no original configuration file')
+  if row['adapterID'] not in CONFIGURABLE:raise ValueError('This installed adapter has no original configuration file')
   if not config.is_file() or config.stat().st_size>1024*1024:raise ValueError('Configuration exceeds its limit')
   data=config.read_bytes();(stage/'Original.cfg').write_bytes(data)
   manifest['configuration']={'file':'Original.cfg','sha256':hashlib.sha256(data).hexdigest()}

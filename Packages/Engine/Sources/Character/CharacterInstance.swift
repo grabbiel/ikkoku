@@ -120,14 +120,25 @@ public final class CharacterInstance: Identifiable {
     /// Rest pose + slider bone effects + studio FK deltas.
     public func currentPose() -> Pose {
         guard let skel = skeleton else { return Pose(rotations: [], translations: [], scales: [], skinScales: []) }
-        var delta = sliderPoseDelta(skeleton: skel)
-        delta.merge(poseDelta)
-        let pose = delta.apply(to: skel)
-        var p = applyGaze(to: applyIK(to: pose, targets: ikTargets))
+        var p = applyGaze(to: applyIK(to: deltaPose(skel), targets: ikTargets))
         if hairDynamicsEnabled {
             for (bi, q) in hairDynamics.rotations where bi < p.count { p.rotations[bi] = (p.rotations[bi] * q).normalized }
         }
         return p
+    }
+
+    /// The pose before IK and gaze: rest pose + slider bone effects + studio FK deltas.
+    private func deltaPose(_ skel: Skeleton) -> Pose {
+        var delta = sliderPoseDelta(skeleton: skel)
+        delta.merge(poseDelta)
+        return delta.apply(to: skel)
+    }
+
+    /// Enabled IK chains that `currentPose()` leaves unsolved, with the reason
+    /// (R4; see `solveIK`). Empty when no target is enabled.
+    public func ikFailures() -> [IKChain: MathContractError] {
+        guard let skel = skeleton, ikTargets.values.contains(where: { $0.enabled }) else { return [:] }
+        return (try? solveIK(on: deltaPose(skel), targets: ikTargets))?.failures ?? [:]
     }
 
     /// Advance hair springs by `dt` seconds (call from a timer; cheap).
@@ -142,50 +153,9 @@ public final class CharacterInstance: Identifiable {
 
     /// Rotates the eye bones toward `gazeTarget` (clamped so the irises stay inside the lids).
     private func applyGaze(to pose: Pose) -> Pose {
-        guard var target = gazeTarget, let skel = skeleton else { return pose }
-        var p = pose
-        let rootInv = rootMatrix.inverse
-        // Limit convergence: a camera right in front of the face would cross the eyes.
-        if let hi = skel["head"] {
-            let headPos = (rootMatrix * p.worldMatrices(skeleton: skel)[hi]).translation
-            let d = target - headPos
-            let minDist: Float = 1.6
-            if length(d) < minDist, length_squared(d) > 1e-6 { target = headPos + normalize(d) * minDist }
-        }
-        let localTarget = rootInv.transformPoint(target)
-        if card.expression.headLook == true, let hi = skel["head"] {
-            // Turn the head (and a little of the neck) toward the target, clamped.
-            let w0 = p.worldMatrices(skeleton: skel)
-            let m = w0[hi]
-            let d = m.inverse.transformPoint(localTarget)
-            if length_squared(d) > 1e-6 {
-                let dn = normalize(d)
-                var yaw = atan2(dn.x, max(dn.z, 0.05)), pitch = atan2(-dn.y, max(dn.z, 0.05))
-                yaw = clamp(yaw, -0.6, 0.6); pitch = clamp(pitch, -0.35, 0.35)
-                let qh = simd_quatf(angle: yaw * 0.7, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch * 0.7, axis: Float3(1, 0, 0))
-                p.rotations[hi] = (p.rotations[hi] * qh).normalized
-                if let ni = skel["neck"] {
-                    let qn = simd_quatf(angle: yaw * 0.3, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch * 0.3, axis: Float3(1, 0, 0))
-                    p.rotations[ni] = (p.rotations[ni] * qn).normalized
-                }
-            }
-        }
-        let world = p.worldMatrices(skeleton: skel)
-        for name in ["eye_L", "eye_R"] {
-            guard let ei = skel[name], ei < world.count else { continue }
-            let m = world[ei]
-            let dir = m.inverse.transformPoint(localTarget)
-            guard length_squared(dir) > 1e-6 else { continue }
-            // Eyes look along their local +Z (the mesh faces +Z); yaw about Y, pitch about X.
-            let d = normalize(dir)
-            var yaw = atan2(d.x, max(d.z, 0.05))
-            var pitch = atan2(-d.y, max(d.z, 0.05))
-            let limit: Float = 0.42   // ~24°
-            yaw = clamp(yaw, -limit, limit); pitch = clamp(pitch, -limit * 0.7, limit * 0.7)
-            let q = simd_quatf(angle: yaw, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch, axis: Float3(1, 0, 0))
-            p.rotations[ei] = (p.rotations[ei] * q).normalized
-        }
-        return p
+        guard let target = gazeTarget, let skel = skeleton else { return pose }
+        return CharacterGaze.apply(to: pose, skeleton: skel, rootMatrix: rootMatrix, target: target,
+                                   headLook: card.expression.headLook == true)
     }
 
     public var modelScale: Float {
@@ -718,33 +688,106 @@ public enum IKChain: String, CaseIterable, Codable, Sendable {
 }
 
 extension CharacterInstance {
-    /// Applies enabled IK targets to a pose (root space). Returns the modified pose.
+    /// Applies enabled IK targets to a pose (root space). Returns the modified
+    /// pose: a chain `solveIK` cannot solve keeps its rotations, and a pose
+    /// that does not match the skeleton is returned unchanged (R4).
     public func applyIK(to pose: Pose, targets: [IKChain: IKTarget]) -> Pose {
-        guard let skel = skeleton, targets.values.contains(where: { $0.enabled }) else { return pose }
+        (try? solveIK(on: pose, targets: targets))?.pose ?? pose
+    }
+
+    /// `applyIK` with its failures (R4). Each enabled chain is solved in
+    /// `IKChain.allCases` order by `IKSolver.solveTwoBone`; a chain whose
+    /// joints, target or pole are degenerate keeps its rotations and its
+    /// `MathContractError` is returned in `failures`. Throws `PoseError` when
+    /// `pose` does not have one entry per bone of the skeleton.
+    public func solveIK(on pose: Pose, targets: [IKChain: IKTarget]) throws
+        -> (pose: Pose, failures: [IKChain: MathContractError]) {
+        guard let skel = skeleton, targets.values.contains(where: { $0.enabled }) else { return (pose: pose, failures: [:]) }
+        try pose.validate(for: skel)
         var p = pose
+        var failures: [IKChain: MathContractError] = [:]
         for chain in IKChain.allCases {
             guard let t = targets[chain], t.enabled else { continue }
             let names = chain.bones
             guard let ui = skel[names.upper], let li = skel[names.lower], let ei = skel[names.end] else { continue }
-            let world = p.worldMatrices(skeleton: skel)
-            let a = world[ui].translation, b = world[li].translation, c = world[ei].translation
-            let pole = t.pole ?? (b + chain.defaultPoleOffset)
-            let r = IKSolver.twoBone(a: a, b: b, c: c, target: t.position, pole: pole)
-            // Upper: world delta → local
-            let upperWorldRot = p.worldRotation(ui, skeleton: skel)
-            let parentRot = skel.bones[ui].parent.map { p.worldRotation($0, skeleton: skel) } ?? .identity
-            p.rotations[ui] = (parentRot.inverse * (r.upper * upperWorldRot)).normalized
-            // Lower: recompute its parent's new world rotation first
-            let lowerWorldRot = r.upper * p.worldRotation(li, skeleton: skel)   // old lower world rotated by upper delta
-            let newUpperWorld = p.worldRotation(ui, skeleton: skel)
-            p.rotations[li] = (newUpperWorld.inverse * (r.lower * lowerWorldRot)).normalized
+            do {
+                p = try IKSolver.solveTwoBone(p, skeleton: skel, upper: ui, lower: li, end: ei, target: t.position,
+                                              pole: t.pole, defaultPoleOffset: chain.defaultPoleOffset)
+            } catch let error as MathContractError {
+                failures[chain] = error
+            }
+        }
+        return (pose: p, failures: failures)
+    }
+
+    /// World-space (root-space) joint position for a chain end in the current
+    /// pose; nil when the bone is missing or (R4) `pose` does not match the skeleton.
+    public func jointPosition(_ boneName: String, pose: Pose) -> Float3? {
+        guard let skel = skeleton, let i = skel[boneName], let world = try? pose.checkedWorldMatrices(skeleton: skel) else { return nil }
+        return world[i].translation
+    }
+}
+
+/// The prototype eye/head gaze of Maker and native Studio characters
+/// (`CharacterInstance.gazeTarget`), not the recovered source look
+/// controllers. R4 safe results instead of NaN rotations: a nonfinite target,
+/// a character root without a finite inverse, a target that the root maps to
+/// a nonfinite point, or a pose that does not match the skeleton leave the
+/// pose unchanged; a head or eye whose world frame has no finite inverse, or
+/// whose direction to the target is nonfinite, keeps its rotation. Accepted
+/// input gives exactly the former unchecked result.
+public enum CharacterGaze {
+    /// Rotates `eye_L`/`eye_R` (and with `headLook` the head and neck) of
+    /// `pose` toward `target`, a world point; `rootMatrix` maps the
+    /// skeleton's root space to the world.
+    public static func apply(to pose: Pose, skeleton skel: Skeleton, rootMatrix: float4x4, target gazeTarget: Float3,
+                             headLook: Bool) -> Pose {
+        var target = gazeTarget
+        guard isFinite(target), let rootInv = try? rootMatrix.checkedInverse("character root"),
+              (try? pose.validate(for: skel)) != nil else { return pose }
+        var p = pose
+        // Limit convergence: a camera right in front of the face would cross the eyes.
+        if let hi = skel["head"] {
+            let headPos = (rootMatrix * p.worldMatrices(skeleton: skel)[hi]).translation
+            let d = target - headPos
+            let minDist: Float = 1.6
+            if length(d) < minDist, length_squared(d) > 1e-6 { target = headPos + normalize(d) * minDist }
+        }
+        let localTarget = rootInv.transformPoint(target)
+        guard isFinite(localTarget) else { return pose }
+        if headLook, let hi = skel["head"] {
+            // Turn the head (and a little of the neck) toward the target, clamped.
+            let w0 = p.worldMatrices(skeleton: skel)
+            let m = w0[hi]
+            if let inverse = try? m.checkedInverse("head frame") {
+                let d = inverse.transformPoint(localTarget)
+                if length_squared(d) > 1e-6, let dn = try? d.checkedNormalized("head gaze") {
+                    var yaw = atan2(dn.x, max(dn.z, 0.05)), pitch = atan2(-dn.y, max(dn.z, 0.05))
+                    yaw = clamp(yaw, -0.6, 0.6); pitch = clamp(pitch, -0.35, 0.35)
+                    let qh = simd_quatf(angle: yaw * 0.7, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch * 0.7, axis: Float3(1, 0, 0))
+                    p.rotations[hi] = (p.rotations[hi] * qh).normalized
+                    if let ni = skel["neck"] {
+                        let qn = simd_quatf(angle: yaw * 0.3, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch * 0.3, axis: Float3(1, 0, 0))
+                        p.rotations[ni] = (p.rotations[ni] * qn).normalized
+                    }
+                }
+            }
+        }
+        let world = p.worldMatrices(skeleton: skel)
+        for name in ["eye_L", "eye_R"] {
+            guard let ei = skel[name], ei < world.count, let inverse = try? world[ei].checkedInverse("eye frame") else { continue }
+            let dir = inverse.transformPoint(localTarget)
+            guard length_squared(dir) > 1e-6, let d = try? dir.checkedNormalized("eye gaze") else { continue }
+            // Eyes look along their local +Z (the mesh faces +Z); yaw about Y, pitch about X.
+            var yaw = atan2(d.x, max(d.z, 0.05))
+            var pitch = atan2(-d.y, max(d.z, 0.05))
+            let limit: Float = 0.42   // ~24°
+            yaw = clamp(yaw, -limit, limit); pitch = clamp(pitch, -limit * 0.7, limit * 0.7)
+            let q = simd_quatf(angle: yaw, axis: Float3(0, 1, 0)) * simd_quatf(angle: pitch, axis: Float3(1, 0, 0))
+            p.rotations[ei] = (p.rotations[ei] * q).normalized
         }
         return p
     }
 
-    /// World-space (root-space) joint position for a chain end in the current pose.
-    public func jointPosition(_ boneName: String, pose: Pose) -> Float3? {
-        guard let skel = skeleton, let i = skel[boneName] else { return nil }
-        return pose.worldMatrices(skeleton: skel)[i].translation
-    }
+    private static func isFinite(_ v: Float3) -> Bool { v.x.isFinite && v.y.isFinite && v.z.isFinite }
 }
