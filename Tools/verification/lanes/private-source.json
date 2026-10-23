@@ -16,6 +16,11 @@
           "optional": true
         },
         {
+          "env": "IKKOKU_STUDIO_SCENARIO_SCENE",
+          "kind": "file",
+          "optional": true
+        },
+        {
           "env": "IKKOKU_STUDIO_POSE_CONTRACT",
           "kind": "file",
           "optional": true

@@ -12,7 +12,7 @@ starts a CI job, downloads anything, or runs commands through a shell.
 # Public lane — safe without any private data:
 python3 Tools/verification/run.py --manifest Tools/verification/lanes/public.json
 
-# Private-source lane — the one Engine-suite check declares 51 fixture
+# Private-source lane — the one Engine-suite check declares 61 fixture
 # variables, all `"optional": true`, so it runs whatever is supplied.
 # Without an environment file it runs with none supplied and lists
 # everything under `missingFixtures` (a supplied-but-unreadable path
@@ -89,7 +89,7 @@ Three additional Studio checks cover the Face tab's shared model entry point:
 `expression-edit`, `reload-save-expression` and `reload-load-expression`. They
 require the existing scenario scene, source avatar, Maker library and Studio look
 settings fixtures. Native reload runs in a fresh process without a source scene
-environment variable. The lane now contains 50 checks.
+environment variable. The lane now contains 52 checks, including the two skirt save/load checks.
 
 The fixed 512×512 scene framing shows key 65's eyebrow/eye area but crops its
 mouth, so the mouth-only pattern and openness checks use fully visible key 0.
