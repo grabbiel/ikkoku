@@ -79,7 +79,7 @@ them claims whole-game parity; read each `tolerance`.
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup app capture (its plugin report and Maker PNG hashed as artifacts; the app accepts the adapter report only with `IKKOKU_AUTOCAPTURE`, A06), then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report and hashes both the UI PNG and that report, so an exit-0 run that leaves either missing or empty fails (A-T05); `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON. Three Release guards follow (R6, 2026-10-23): `build-release-app` builds the Release app with the CI release-package flags, but signed. `release-startup-capture` then renders one bundled Maker frame with that build, with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and no fixtures, and hashes the PNG. `engine-release-frame-ring` runs the FrameRing Engine tests with `swift test -c release` | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. The lane has not been rerun since A-T05 (2026-10-23) added the PNG and Mute-report artifacts, or since A06 added the Mute check's `IKKOKU_AUTOCAPTURE` (without it the app never exited, so the check could only time out). Release guards, 2026-10-23 (Xcode 27.0 / Swift 6.4), run outside the full lane: with the fix, `build-release-app` and `release-startup-capture` passed 2/2 under `--strict`. The PNG sha256 was `1cf309e14a1e…` and the capture took 1.0 s. `engine-release-frame-ring` passed 4/4 tests in 195.6 s, including the cold optimized build. Negative controls: the smoke check run on the unfixed Release binary of main `87cf261` exited −11 (SIGSEGV). The optimized test run with the unfixed `FrameRing.swift` ended with signal 10 inside `frameRingArrayAllocationReachesAThrowingCallerWithoutAnError`. |
-| `studio-scenarios.json` | Forty-five `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-10-23: the mirrored-camera slice added `mirrored-camera` (`IKKOKU_MIRRORED_CAMERA_SCENE`), giving 45 after merging main. Before that merge its branch had 40 checks, and the full strict run on the Debug build of `6270e82` passed 40/40 (1,368 s; see [Mirrored camera parent](#mirrored-camera-parent-r4-st-a06)). On the merge with main `8d83f01` (`aa3c1cd`, 45 checks) the full strict run under the app lock passed 45/45 (0 skipped, 1,567.6 s), with `mirrored-camera` at 17/17. Earlier, 2026-10-23: merging the two CharaStudio-authored fixture checks from #111 brought the lane to 44. 2026-10-22: the five clothes-state/accessory checks were added, giving 42 checks before that merge (see [Clothes state and accessory visibility](#clothes-state-and-accessory-visibility-st-c03-second-slice)). On the Debug build of this change the complete lane passed 42/42 with `--strict` (0 skipped) and `maker-scenarios` passed 4/4. On the final merged head (with main at 9caa3f3), the full strict run passed 41/42. The one failure, `face-shape`, was terminated from outside the runner (SIGTERM: exit −15 after 0.6 s). A strict rerun passed 1/1, and `maker-scenarios` again passed 4/4. Earlier post-merge runs lost `blink-toggle`, `eye-look-orbit`, `neck-look-orbit` and `reload-save-clothes` the same way, and each passed when rerun. On the fixture-scenes branch (39 checks before this slice): 2026-10-22: the full 39-check run passed 39/39 with `--strict` (0 failed, 0 skipped; clean merge commit `e650c5a`, 1,321.5 s), including the two new CharaStudio-authored fixture checks `route-children-motion` (`IKKOKU_ROUTE_CHILDREN_SCENE`) and `neck-target-orbit` (`IKKOKU_NECK_TARGET_SCENE`). The lane was rerun after each later merge of main. Clean merges `12af3cc` and `4b39282` passed 39/39. Clean merges `a1e591c` and `a44e6c2` (main `4263de3`) passed 37/39. In each of those runs, two checks were killed by an outside SIGTERM: exit −15 with empty logs. The cause was another session running `pkill -x Ikkoku` while its own app runs were in progress. The killed checks were `route-children-motion` and `neck-look-orbit`, then `neck-look-orbit` and `color-visual-reset`. Both pairs passed a 2/2 `--strict` rerun on the same commit. 2026-10-17, before the outfit slice brought the lane to 37 checks: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
+| `studio-scenarios.json` | Forty-seven `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-10-23 (local-wave-verify): the native IK reload pair `reload-save-ik`/`reload-load-ik` brought the lane to 47 checks (see [Native IK re-solve and unsolved status](#native-ik-re-solve-and-unsolved-status-r4-115-and-110)); a two-check cut passed 2/2 `--strict`. Before that, 2026-10-23: the mirrored-camera slice added `mirrored-camera` (`IKKOKU_MIRRORED_CAMERA_SCENE`), giving 45 after merging main. Before that merge its branch had 40 checks, and the full strict run on the Debug build of `6270e82` passed 40/40 (1,368 s; see [Mirrored camera parent](#mirrored-camera-parent-r4-st-a06)). On the merge with main `8d83f01` (`aa3c1cd`, 45 checks) the full strict run under the app lock passed 45/45 (0 skipped, 1,567.6 s), with `mirrored-camera` at 17/17. Earlier, 2026-10-23: merging the two CharaStudio-authored fixture checks from #111 brought the lane to 44. 2026-10-22: the five clothes-state/accessory checks were added, giving 42 checks before that merge (see [Clothes state and accessory visibility](#clothes-state-and-accessory-visibility-st-c03-second-slice)). On the Debug build of this change the complete lane passed 42/42 with `--strict` (0 skipped) and `maker-scenarios` passed 4/4. On the final merged head (with main at 9caa3f3), the full strict run passed 41/42. The one failure, `face-shape`, was terminated from outside the runner (SIGTERM: exit −15 after 0.6 s). A strict rerun passed 1/1, and `maker-scenarios` again passed 4/4. Earlier post-merge runs lost `blink-toggle`, `eye-look-orbit`, `neck-look-orbit` and `reload-save-clothes` the same way, and each passed when rerun. On the fixture-scenes branch (39 checks before this slice): 2026-10-22: the full 39-check run passed 39/39 with `--strict` (0 failed, 0 skipped; clean merge commit `e650c5a`, 1,321.5 s), including the two new CharaStudio-authored fixture checks `route-children-motion` (`IKKOKU_ROUTE_CHILDREN_SCENE`) and `neck-target-orbit` (`IKKOKU_NECK_TARGET_SCENE`). The lane was rerun after each later merge of main. Clean merges `12af3cc` and `4b39282` passed 39/39. Clean merges `a1e591c` and `a44e6c2` (main `4263de3`) passed 37/39. In each of those runs, two checks were killed by an outside SIGTERM: exit −15 with empty logs. The cause was another session running `pkill -x Ikkoku` while its own app runs were in progress. The killed checks were `route-children-motion` and `neck-look-orbit`, then `neck-look-orbit` and `color-visual-reset`. Both pairs passed a 2/2 `--strict` rerun on the same commit. 2026-10-17, before the outfit slice brought the lane to 37 checks: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
 | `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 | `gameplay-scenarios.json` | One `app-smoke` check running the Debug app binary with `IKKOKU_GAMEPLAY_SCENARIO` pointed at `scenarios/gameplay-controlled-event.json` (A-T01; see below); no fixtures, synthetic catalog; the report and the three host snapshots are hashed artifacts | Not run yet (2026-10-23). The Engine test `sourceGameplayHostShippedScenarioPersistsReloadsAndResumesIdentically` runs the same scenario in CI; the app path is only compiled there. |
 
@@ -127,7 +127,16 @@ clocks all run, exactly like the editor's timer tick — and starts a new blink
 observation window first), `orbit` `{dx,dy}` (the viewport drag: `yaw -= dx`,
 `pitch += dy` clamped to ±1.55; refused while a source camera object is looked
 through, like the view's gesture), `setAutomaticBlink` `{on}` (the Studio
-toggle's property; its didSet forwards to every rendered preview), `export`/`reimport`
+toggle's property; its didSet forwards to every rendered preview),
+`addCharacter` `{sex:"female"|"male"}` (the toolbar's Add ▸ Character button),
+`setIKEnabled` `{character,chain,on}` and `setIKTarget`
+`{character,chain,axis,delta|value}` (the Pose tab's IK toggle and Target row:
+`delta` is one Stepper click, `advanced(by:)`, and `value` types the component;
+both call the same `StudioModel` setter as the row), `captureIKPose`
+`{character,chain,name}` (memorizes the rendered chain under a label). The
+native IK ops address a NATIVE character by its object name, because an added
+character has no source key; `chain` is an `IKChain` raw value such as
+`hand_L`. `export`/`reimport`
 `{path}`, `saveDocument`/`loadDocument` `{path}` (native save/load of a
 Studio document card) and `assert` with any of `name`, `visible`,
 `face`/`body`
@@ -137,6 +146,13 @@ Studio document card) and `assert` with any of `name`, `visible`,
 or looking through that camera object — position within the tolerance of its
 world placement from `sourceObjectWorldMatrix`, forward within 0.01°, and not
 the saved camera; a pass records the view's position and forward),
+`ik` `{character,chain,enabled?,target?,solved?,reachesTarget?,from?,within?}`
+(one native chain: the document target the Target row shows, with `null` to
+skip a component; whether the frame builder's `ikFailures()` solves it; the
+end's root-space distance to the target; and, against a `captureIKPose` label,
+the largest quaternion-component difference of its three bones and largest
+joint displacement — moved beyond the tolerance by default, or within `within`;
+the pose read is `CharacterInstance.currentPose()` of the rendered instance),
 `statusContains` (a substring of the app's status line, read after the step's
 `view` check so a rejected look-through has reported itself), `animation`
 `{key,group?,category?,no?,speed?,forceLoop?}` (the live animation state the
@@ -490,6 +506,76 @@ recorded in the lane row above. After the later main merges `29a3bfb`,
 `9ee757a` and `735105f`, the two new checks were rerun on their own and reproduced
 the same numbers. Attempts cut short by the same outside kill were retried. These are headless model and live-tick checks. The visible route
 buttons, the rendered pixels and the FK-owned neck case remain separate gates.
+
+### Native IK re-solve and unsolved status (R4, #115 and #110)
+
+The R4 checklist items for native characters were mouse-only: a dragged IK
+handle re-solves (#115), and a degenerate target names the unsolved chain in
+the status line and keeps the pose (#110). The scenario hook now reaches the
+same `StudioModel` methods the Pose tab calls: `addCharacter(sex:)`,
+`enableIK(_:on:)`, and `setIKTarget(_:_:position:)`, which the Target row's
+binding now calls too. It reads the rendered instance, `selectedInstance`'s
+`currentPose()` and `ikFailures()`, which `refresh()` hands the document's
+targets on every edit.
+
+`reload-save-ik.json` (lane check `studio-scenario-reload-save-ik`, 20 steps)
+imports `koikatu_cs0002591.png`, runs `newScene` and adds a native female
+("Hana"). It captures her Left hand chain before IK (`fk`), turns Left hand
+IK on, which places the target at the hand, and captures the solved chain
+(`solved`). Then:
+
+- The end reaches the target within 1 mm.
+- One Stepper click (+0.02 on X) moves the chain (an `assertRejected` control
+  shows it no longer matches `solved` within 1e-6). One click back must
+  reproduce `solved` within 1e-6, both in quaternion components and in joint
+  metres. The bound allows the Float32 round trip `x + 0.02 − 0.02` to land one
+  ulp off; the solve is a pure function of the pre-IK pose and the target.
+- Typing X = 1e20 must leave the chain unsolved. The status line must contain
+  "Left hand IK left unsolved: ", and the chain must match its pre-IK capture
+  `fk` within 1e-6: `solveIK` keeps a failed chain's rotations. Before the edit,
+  an `assertRejected` control shows the status did not already say so; after
+  it, one shows `solved: true` is rejected.
+- Typing X = 0.3 must solve again within 1 mm, and the result must differ from
+  `solved` (control).
+- `saveDocument` writes `.local/verification/scenario-exports/reload-save-ik.png`.
+
+`reload-load-ik.json` (`studio-scenario-reload-load-ik`, 7 steps) loads that
+card in a fresh process with no import. Left hand IK must be on with target X
+0.3, solve within 1 mm, and show no unsolved status (control). Turning IK off
+must leave the hand away from the target (control), and undo must restore the
+reach.
+
+Recorded 2026-10-23 on the Debug build of the change (`f402483` plus the
+scenario edits, committed as `ddcbb2e`; app SHA-256 `23398e37…`), a two-check
+manifest cut from the lane ran `--strict` and passed 2/2 (20/20 and 7/7 steps,
+23.1 s):
+
+- Enabling IK put the target at the hand, (0.42610925, 1.0355155, 0.16130337)
+  in root space, and the end within 1.4e-7 m of it. The default pole moved the
+  elbow by about 2.3 cm, from (0.31489, 1.15254, 0.02271) to
+  (0.29778, 1.13831, 0.02626).
+- +0.02 moved the chain by 0.0968 (quaternion) and 0.0242 m. −0.02 returned
+  the target to the same float, 0.42610925, and the chain matched `solved`
+  bit for bit (difference 0.0).
+- At 1e20 the status read "Left hand IK left unsolved: IK reach is not
+  finite." The arm matched the pre-IK `fk` capture bit for bit. That is the
+  arm before IK, not the last solved arm, which had the elbow 2.3 cm away.
+- At X = 0.3 the end sat 9.4e-8 m from the target. The status line still read
+  "Left hand IK left unsolved: IK reach is not finite.", because the frame
+  builder sets the message on a failure and nothing clears it after a later
+  success (finding, not asserted).
+- The loaded card gave the same end position, 9.4e-8 m from the target. With
+  IK off the hand sat 0.126 m away.
+
+Mutation control: the pre-#115 update, which reads the lower bone's world
+rotation after writing the upper bone, applied to `IK.swift` and rebuilt,
+failed 4 of the save check's 20 steps. Those were the four reach asserts,
+missing by 0.0161, 0.0220, 0.0742 and 0.0742 m. The round trip, unsolved and
+pre-IK asserts still passed, because they do not depend on the lower-bone
+formula. Evidence: `.local/local-wave-verify/ik-scenario/` (`run1/`,
+`mutation/`). This is a headless model check. The handle drag and the visible
+status bar stay manual, and only the Left hand chain of the default native
+female is exercised.
 
 ### Mirrored camera parent (R4, ST-A06)
 

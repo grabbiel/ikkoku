@@ -847,6 +847,17 @@ rejections now also cover a zero-length lower bone and a nonfinite pole.
 Swift was not compiled locally, so the CI Engine suite is the only test run.
 Studio's IK handles, drag and status line were not run interactively.
 
+App check, 2026-10-23 (local-wave-verify, Debug build): the studio lane's
+`reload-save-ik` / `reload-load-ik` pair drives a native female's Left hand IK
+through the Pose tab's methods. It reads the rendered instance's pose; see
+[Native IK re-solve and unsolved status](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
+The end reached each target within 1.5e-7 m. A +0.02/−0.02 Stepper round trip
+on X returned the same target float and a bit-identical arm. A 1e20 target
+reported "Left hand IK left unsolved: IK reach is not finite." and left the arm
+bit-identical to its pre-IK pose. With this section's former update patched
+back in, the four reach asserts failed by 16–74 mm. Enabling IK at the hand's
+own position moves the elbow about 2.3 cm, to the default pole's side.
+
 Remaining limits:
 
 - The result is exact only when the upper bone and its ancestors have uniform

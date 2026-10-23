@@ -409,10 +409,30 @@ reruns, and branch cleanup) is handed off in
       view unresolved: Source camera object parent frame is mirrored …; using the
       saved camera."; the control camera looks through, and both hold after export →
       reimport. The original itself looks through the mirrored camera (scene-records.md
-      "Mirrored camera parent"). The degenerate-IK half and the visible status line
-      stay unchecked; passed 2026-10-23.)
+      "Mirrored camera parent"). Passed 2026-10-23.
+      The degenerate-IK half is automated too, in `scenarios/reload-save-ik.json`
+      (2026-10-23, 20/20 steps on the Debug build). A native female's Left hand
+      target at X = 1e20 sets the status line to "Left hand IK left unsolved: IK
+      reach is not finite.", and the arm stays bit-identical to its pre-IK pose.
+      "Kept" means the pose before IK, not the last solved pose, whose elbow sat
+      2.3 cm away. After the target returns to a reachable X, the status line keeps
+      the unsolved message; this is an open finding.
+      [Native IK](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
+      In the user's manual run, the status line appeared; the user did not confirm
+      the pose and camera halves by hand. The visible status bar is not asserted
+      headlessly.)
 - [ ] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
       follows it, and re-solving the same target leaves the pose unchanged.
+      (User, 2026-10-23: the hand follows the handle. Automated re-solve half:
+      `scenarios/reload-save-ik.json`, 20/20 steps on the Debug build. A
+      +0.02/−0.02 Stepper round trip on the Left hand target's X returns the same
+      target float, and the arm is bit-identical to the solved capture. Each target
+      is reached within 1.5e-7 m, and the targets survive a native document
+      save/load (`reload-load-ik.json`, 7/7). With the pre-#115 update patched back
+      in, the reach asserts fail by 16–74 mm.
+      [Native IK](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
+      Not ticked: the re-solve is driven through the Target row's setter, not a
+      handle drag.)
 - [ ] A06 capture validation (PR #118): on a Debug build, run the commands in the
       build guide's "Capture request validation" section. Each of these exits 1
       naming its variables: two modes, an adapter report without a capture, and a
