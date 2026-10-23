@@ -13,7 +13,7 @@ Supported edits are:
 - Character FK bones, IK targets and look-at target transforms; item FK transforms identified by their original ordinal bone name.
 - Character `enableFK`, `enableIK`, seven `activeFK` flags and five `activeIK` flags. Flags are written literally; source loading gives IK precedence if both modes are enabled.
 - Character animation catalog IDs, speed, pattern, force-loop, options and normalized time; ordered voice playlists and repeat mode, including variable-length replacement.
-- Embedded card body/face values, supported color fields, the worn outfit (`Status.coordinateType`, see [source outfit selection](#source-outfit-selection-st-c03-first-slice)) and face thumbnail, using the existing bounded card editor. Head/sex/bone type, asset IDs, saved resolver identities and opaque card plug-ins remain unchanged.
+- Embedded card body/face values, supported color fields, the worn outfit (`Status.coordinateType`, see [source outfit selection](#source-outfit-selection-st-c03-first-slice)), the per-garment clothes state and accessory visibility (`Status.clothesState` / `showAccessory`, see [source clothes state](#source-clothes-state-and-accessory-visibility-st-c03-second-slice)) and face thumbnail, using the existing bounded card editor. Head/sex/bone type, asset IDs, saved resolver identities and opaque card plug-ins remain unchanged.
 - Current camera and ten saved camera slots, preserving position, all three Euler angles, all three distance components and field of view. Only the 40-byte version-2 payload changes.
 - A replacement scene PNG only when explicitly supplied. It must be one complete CRC-valid PNG; an embedded card cannot acquire a PNG prefix.
 
@@ -57,7 +57,7 @@ remains separate.
 
 ## App boundary and remaining work
 
-The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
+The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states and accessory flags that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
 
 The export validator rejects added/deleted/duplicated objects, reparenting, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
@@ -192,12 +192,179 @@ has SHA-256 `029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`
   matches, only `coordinateType` changes. Unrelated blocks, thumbnails,
   KKEx and trailer bytes are identical.
 
-Remaining exclusions: `clothesState` 0–3 (including half-dressed state) and
-`showAccessory` are not consumed or editable. A saved all-off state on key 0
-still renders clothed, a pre-existing gap. Shoes type, accessory groups, the
-female skirt-dynamics and skirt-FK refresh, CharaStudio reload of the changed
-export, mouse-driven use of the picker, and original-player appearance
-parity remain unverified.
+Remaining exclusions: shoes type, accessory groups, the female skirt-dynamics
+and skirt-FK refresh, CharaStudio reload of the changed export, mouse-driven
+use of the picker, and original-player appearance parity remain unverified.
+The clothes state and accessory visibility that this slice left unconsumed
+(a saved all-off state on key 0 rendered clothed) are covered by the
+[second slice](#source-clothes-state-and-accessory-visibility-st-c03-second-slice).
+
+## Source clothes state and accessory visibility (ST-C03 second slice)
+
+Reviewed 2026-10-22. The defect this slice fixes: the embedded card's
+`Status.clothesState` and `showAccessory` were never read, so source character
+key 0 of `koikatu_cs0002591.png` rendered clothed, although its card saves
+`clothesState` = `c4 09 03 03 03 03 03 03 03 03 03` (all nine kinds off,
+`shoesType` 1, every accessory flag true). The pre-fix lane build showed its
+reference top, reference bottom and converted outdoor shoes drawn.
+
+**Recovered semantics.** The C# remains private under `.local/reverse` and is
+not committed:
+
+- `ChaFileStatus` carries `clothesState` (`byte[9]`, one per
+  `ChaFileDefine.ClothesKind`: 0 top, 1 bottom, 2 bra, 3 shorts, 4 gloves,
+  5 pantyhose, 6 socks, 7 indoor shoes, 8 outdoor shoes; 0 on, 1 half, 2 half
+  2, 3 off), `shoesType` (byte, 0 indoor / 1 outdoor) and `showAccessory`
+  (`bool[20]`). `MemberInit` defaults are all on, `shoesType` 0 and every
+  accessory shown. MessagePack-CSharp writes the byte array as `bin`.
+- `ChaControl.AddClothesStateKind` / `AddClothesStateKindSub` build
+  `dictStateType` from each loaded garment's catalog `StateType`: 0 → {on,
+  half, off}, 1 → {on, off}, 2 → all four, anything else (including the empty
+  id-0 rows, `StateType` 3) → not a state kind. Top and bottom widen each
+  other through the top's `n_bot_a` and the bottom's `n_top_a` switch nodes,
+  and bra and shorts do the same. The flags come from the garment loaders:
+  `ChangeClothesTopAsync` sets `notBra` (`NotBra` == 1) and `notBot`
+  (`Coordinate` == 2), `ChangeClothesBraAsync` sets `notShorts` (`Coordinate`
+  == "2"), and `ChangeClothesBotAsync` sets `hideShortsBot` from `HideShorts`,
+  or from a fixed bottom-ID list when the row lacks that column. For a sailor
+  or jacket top (`Kind` 1 or 2), `ChangeClothesTopPartsAsync` can override
+  `notBra` from sub-parts that are not converted.
+- `ChaControl.SetClothesState(kind, state, next: true)` advances a state the
+  kind does not allow to the next allowed one. It then applies the links: a
+  one-piece top (`notBot`) drags the bottom, a no-shorts bra (`notShorts`)
+  drags the shorts, and the indoor and outdoor shoes mirror each other.
+  `SetClothesStateAll` and `UpdateClothesStateAll` replay it over every kind.
+  A scene load (`AddObjectAssist.UpdateState`) runs Reload's
+  `UpdateClothesStateAll` and then a `SetClothesState` loop over the saved
+  bytes, so the loaded state is normalized twice.
+- `ChaControl.UpdateVisible` decides which garment GameObjects are active.
+  Top, bottom, bra and shorts stay drawn when half; bottom, bra and shorts also
+  honour the one-piece, no-bra and HideShorts flags. Gloves, socks and shoes
+  are drawn only when on, with the shoe matching `shoesType`, and pantyhose
+  hides at half 2 and off. It also switches the `n_top_a/b`, `n_bot_a/b/c` and
+  `n_panst_a/b` nodes by state. `ChangeAlphaMask` sets the body mask pair by
+  top state: on (1,1), half (0,1), off (0,0). An accessory renders while its
+  `showAccessory` flag is set. `CheckHideHair` hides the hair while a shown
+  accessory's catalog `HideHair` is set.
+- CharaStudio: `MPCharCtrl.StateInfo.OnClickClothingDetails` →
+  `OCIChar.SetClothesState` (rows top, bottom, bra, shorts, gloves, pantyhose,
+  socks, shoes; the shoes row is kind 7; a row is interactable only for a state
+  kind). `OnClickCosState` → `SetClothesStateAll(0/1/3)`. `OnClickShoesType` →
+  `SetShoesType`. `OnClickAccessories` → `OCIChar.ShowAccessory`, interactable
+  only for a slot that holds an accessory. A scene save serializes
+  `ChaFile.status` into the embedded card's `Status` block.
+
+**Native port.**
+
+- **Rules.** `SourceStudioWear` (`Packages/Engine/Sources/Studio/SourceStudioWear.swift`)
+  ports `dictStateType`, `SetClothesState`, the load replay, garment
+  visibility, switch nodes and the alpha-mask table. It reads the catalog rows
+  through `SourceMakerLibrary.wearCatalog`, which uses each converted entry's
+  verified material evidence. A kind without a converted row is "unknown":
+  every state stays selectable, the saved byte is kept and never re-guessed,
+  its one-piece flags read false, and a diagnostic names it. Bra and shorts
+  rules are also unknown when the top is unknown or a sailor/jacket composite.
+- **Preview.** `SourceStudioWearLayout` maps assembled renderers to their
+  clothing kind, accessory slot or hair, using the assembly prefixes and the
+  switch-node ancestors. `SourceStudioCharacterPreview` loads the saved wear
+  (`savedWear`, `loadedClothesState`), applies it through `setWear`, and hands
+  the hidden parts and the body-mask pair to `SourceRigPreview.frame`.
+- **Native rendering.** On and off render natively for every assembled
+  garment. Half states of gloves, socks and shoes, and pantyhose at half 2,
+  render natively too, because the source simply hides them.
+- **Fallback and stand-in diagnostics.** These draw the garment dressed and
+  never draw silently wrong:
+  - The converter keeps only the fully dressed meshes. A top, bottom, bra,
+    shorts or pantyhose half state whose alternate node (`n_top_b`, `n_bot_b`,
+    `n_bot_c`, `n_panst_b`) holds no converted mesh draws the dressed meshes
+    and dressed body mask with a fallback diagnostic.
+  - Half states of an unconverted (reference) garment get a "half state cannot
+    be rendered" diagnostic.
+  - The assembly converts only the outdoor shoes. With `shoesType` 0 that
+    geometry stands in for the indoor shoes and follows their state; a
+    diagnostic says so.
+- **Model.** `StudioModel.setSourceClothesState` (one Clothes-tab row),
+  `setSourceClothesStateAll` (All on/half/off) and `setSourceAccessoryVisible`
+  serve both the inspector and the scenario ops `setClothesState` /
+  `setAccessoryVisible`. Each records one undo snapshot. A row that is not a
+  state kind is refused, and so is a toggle for a slot without an accessory;
+  both name the CharaStudio control that is disabled. `StudioObject`
+  persists `sourceClothesState` / `sourceShowAccessory`; nil means the card's
+  saved state, and so does a value equal to it. An outfit switch renormalizes
+  the current state under the new outfit's rules.
+- **Export.** `exportSourceScene` merges `clothesState` / `showAccessory` into
+  the character's card `Edits` only when they differ from the card's saved
+  values, after checking that the preview and the document agree. See
+  [card editing](../character/cards.md#editing-and-exporting-original-cards)
+  for the in-place token patch. The export validator checks the field shapes
+  and rejects them on placeholders.
+
+**Evidence, 2026-10-22 (headless, no VM).** Five new `studio-scenarios`
+checks:
+
+- `clothes-saved-off`, 24 steps:
+  - Key 0 imports with state `[3,3,3,3,3,3,3,3,3]`, draws none of its three
+    assembled garments, and the body mask is (0,0). Key 65 (all on) draws
+    all three.
+  - Forcing key 0's top, bottom and shoes rows on changes 17,024 of 262,144
+    pixels by more than 2/255 (maximum delta 140). Three undos restore every
+    RGBA8 byte.
+  - The saved-state export keeps the source SHA-256 `029f0b1d…a04` before and
+    after reimport.
+  - The top-on export reimports with `[0,3,3,3,3,3,3,3,3]` and differs from
+    the source scene body in one byte only, at body offset 66,135: key 0's
+    `clothesState[0]` changes 3→0.
+- `clothes-toggle`, 31 steps:
+  - Key 65 top off changes 10,762 pixels (maximum delta 125) and sets the body
+    mask to (0,0). Undo and redo restore exactly.
+  - Half on the reference top draws the dressed render byte-identically and
+    reports that the half state cannot be rendered.
+  - Out-of-range values are refused with the document unchanged. Returning to
+    on gives `exportIdenticalToSource` before and after reimport.
+  - The top-off export reimports with saved state `[3,0,0,0,0,0,0,0,0]`. It
+    differs from the source in one byte, at body offset 142,468: key 65's
+    `clothesState[0]` changes 0→3.
+- `accessory-toggle`, 34 steps, on a synthetic character that wears glasses in
+  slot 0:
+  - Hiding the glasses changes 239 pixels (maximum delta 96). Undo and redo
+    restore exactly.
+  - Bottom half on a converted bottom whose `StateType` is 1 advances to off
+    and changes 10,562 pixels.
+  - Top half on a converted top hits the missing `n_top_b` fallback. The shoes
+    row mirrors to kind 8. The gloves row (not a state kind in this outfit) is refused.
+  - Restoring the state gives `exportIdenticalToSource` before and after
+    reimport.
+  - The changed export reimports with the glasses hidden. This card spells
+    `clothesState` as a fixint array and saves no `showAccessory`, so the
+    export appends the field (see below).
+- `reload-save-clothes` / `reload-load-clothes`: a native save keeps two
+  edited characters (key 65 top off, key 0 top on). A fresh process reloads
+  both states beside the cards' unchanged saved bytes and draws the edited
+  garments. An edit there followed by undo restores the loaded frame exactly.
+  The engine test `sourceSceneExportValidationChecksWearShapesAndDocumentsRoundTripThem`
+  covers the accessory flags' native round trip.
+
+The full lane and runner counts are recorded in the
+[verification guide](../../../Tools/verification/README.md). Engine tests
+`sourceCardEditingClothesStateAndAccessoryFlagsPatchOnlyTheirTokens`,
+`sourceCardEditingWearRejectsInvalidValuesAndUnreadableFields`,
+`sourceCardEditingWearReadsArraySpellingAndAppendsMissingFields`, the
+document test above and the five `sourceStudioWear*` tests cover the patch,
+the document fields and the rule tables.
+
+**Still open.**
+
+- Half-state meshes: the converter drops them, so half states fall back to
+  dressed.
+- Indoor-shoe assembly, `shoesType` editing, the bra/shorts/socks garments
+  (not assembled in the tested outfits) and composite-top sub-parts.
+- The `visibleSimple`/`visibleBodyAlways` toggles and accessory hide
+  categories.
+- The exact per-row button sets CharaStudio shows: the port enables a row for
+  any state kind and maps unsupported requests the way `SetClothesState`
+  does.
+- CharaStudio reload of a changed export, mouse-driven use of the new
+  controls, and original-player appearance parity.
 
 ## CharaStudio reload acceptance
 
