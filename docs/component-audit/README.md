@@ -401,6 +401,16 @@ reruns, and branch cleanup) is handed off in
       status line names the unsolved chain and the pose is kept. A source camera
       under a mirrored parent falls back to the saved camera with a
       `reflectedFrame` message.
+      (automated in part: `scenarios/mirrored-camera.json` — on
+      `scene-mirrored-camera.png`, which the original CharaStudio authored (camera
+      key 2 under an item scaled (−1, 1, 1), saved active; control camera key 3 under
+      an unmirrored copy), `StudioModel.viewCamera` renders from exactly the saved
+      camera while camera 2 is active and the status line reads "Source camera 2
+      view unresolved: Source camera object parent frame is mirrored …; using the
+      saved camera."; the control camera looks through, and both hold after export →
+      reimport. The original itself looks through the mirrored camera (scene-records.md
+      "Mirrored camera parent"). The degenerate-IK half and the visible status line
+      stay unchecked; passed 2026-10-23.)
 - [ ] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
       follows it, and re-solving the same target leaves the pose unchanged.
 - [ ] A06 capture validation (PR #118): on a Debug build, run the commands in the

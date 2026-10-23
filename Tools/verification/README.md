@@ -79,7 +79,7 @@ them claims whole-game parity; read each `tolerance`.
 | `private-source.json` | One `engine-source-suite` check declaring every `IKKOKU_*` variable gated in `Packages/Engine/Tests` except `…_OUTPUT/_REPORT/_RESULT`, `IKKOKU_SAVE_SCENE` and `IKKOKU_EXPORT_SOURCE_SCENE` — all marked `optional` so the suite runs with whatever exists | Runs with or without an environment file; unsupplied fixtures are recorded per check and only fail under `--strict`. With 32 local fixtures supplied on the integrated tree, Engine runs 379 tests: 359 passed, 20 named skips (via PR #4), 0 failed. |
 | `maker.json` | Seven Swift `--filter` checks over converted Maker/card/material data plus `card_roundtrip.py` / `maker_roundtrip.py` audits | 6 checks pass (47 executed tests) and 3 skip: one Swift check skips because `IKKOKU_APPEARANCE_REFERENCE_ROOT` exceeds the 512 MiB hash bound when supplied; both roundtrip audits declare their real prerequisites (`IKKOKU_MANAGED_RECOVERY_EXPORT`, `IKKOKU_MAKER_COMPLETION_INPUTS`) as fixtures and skip with named reasons while absent — nothing shipped here fails on the reference machine. |
 | `app-smoke.json` | Debug `xcodebuild` build (built binary hashed as artifact), headless Mute-startup app capture (its plugin report and Maker PNG hashed as artifacts; the app accepts the adapter report only with `IKKOKU_AUTOCAPTURE`, A06), then two ordered checks: `studio-inspector-capture` runs the Debug app expecting the source-pose report and hashes both the UI PNG and that report, so an exit-0 run that leaves either missing or empty fails (A-T05); `studio-inspector-validate` runs `Tools/verification/checks/studio_inspector_report.py` against that JSON | Debug build passes; `startup-mute-capture` skips (3 plugin fixtures absent locally); `studio-inspector-capture` and `studio-inspector-validate` pass when PR #5 UI report hooks are merged (report confirms `SourcePoseInspector observed == expected`), but fail with a clear missing-report result on this branch without PR #5, as stated in their tolerance text. The lane has not been rerun since A-T05 (2026-10-23) added the PNG and Mute-report artifacts, or since A06 added the Mute check's `IKKOKU_AUTOCAPTURE` (without it the app never exited, so the check could only time out). |
-| `studio-scenarios.json` | Thirty-nine `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-10-22: the full 39-check run passed 39/39 with `--strict` (0 failed, 0 skipped; clean merge commit `e650c5a`, 1,321.5 s), including the two new CharaStudio-authored fixture checks `route-children-motion` (`IKKOKU_ROUTE_CHILDREN_SCENE`) and `neck-target-orbit` (`IKKOKU_NECK_TARGET_SCENE`). The lane was rerun after each later merge of main. Clean merges `12af3cc` and `4b39282` passed 39/39. Clean merges `a1e591c` and `a44e6c2` (main `4263de3`) passed 37/39. In each of those runs, two checks were killed by an outside SIGTERM: exit −15 with empty logs. The cause was another session running `pkill -x Ikkoku` while its own app runs were in progress. The killed checks were `route-children-motion` and `neck-look-orbit`, then `neck-look-orbit` and `color-visual-reset`. Both pairs passed a 2/2 `--strict` rerun on the same commit. Earlier, 2026-10-17: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
+| `studio-scenarios.json` | Forty `app-smoke` checks, each running the Debug app binary with `IKKOKU_STUDIO_SCENARIO` pointed at one scenario JSON under `Tools/verification/scenarios/` (see below) | 2026-10-22: the full 39-check run passed 39/39 with `--strict` (0 failed, 0 skipped; clean merge commit `e650c5a`, 1,321.5 s), including the two new CharaStudio-authored fixture checks `route-children-motion` (`IKKOKU_ROUTE_CHILDREN_SCENE`) and `neck-target-orbit` (`IKKOKU_NECK_TARGET_SCENE`). The lane was rerun after each later merge of main. Clean merges `12af3cc` and `4b39282` passed 39/39. Clean merges `a1e591c` and `a44e6c2` (main `4263de3`) passed 37/39. In each of those runs, two checks were killed by an outside SIGTERM: exit −15 with empty logs. The cause was another session running `pkill -x Ikkoku` while its own app runs were in progress. The killed checks were `route-children-motion` and `neck-look-orbit`, then `neck-look-orbit` and `color-visual-reset`. Both pairs passed a 2/2 `--strict` rerun on the same commit. Earlier, 2026-10-17: the full 34-check run passed 31 and failed three synthetic imports (0 skipped); pinning their optional Maker library off resolved all three in a 3/3 strict rerun, with fixtures unchanged. The shape/color visual checks passed 45/45 and 31/31 steps. Historical: 32/32 checks passed 2026-10-01 (including the four `charastudio-*` export checks whose PNGs the CharaStudio reload probe loads) with `IKKOKU_SOURCE_AVATAR` (+`IKKOKU_STUDIO_ITEM_CATALOG` for props, +`IKKOKU_STUDIO_ANIMATION_CATALOG` for the animation/FK scenarios, +`IKKOKU_STUDIO_LOOK_SETTINGS` for the eye/neck look scenarios, +`IKKOKU_STUDIO_HAND_PATTERNS` for `hand-patterns`) supplied; every save/import-side check fills `IKKOKU_SOURCE_SCENE` through the fixture `from` key: the seven character scenarios (including `undo-props` and the catalog-less `undo-no-catalog`) and the two look scenarios (`eye-look-orbit`, `neck-look-orbit`) from `IKKOKU_STUDIO_SCENARIO_SCENE` (`koikatu_cs0002591.png`), the camera scenarios (`camera-*`, `undo-camera`, `reload-save-camera`) alias `IKKOKU_SOURCE_SCENE` from `IKKOKU_CAMERA_OBJECT_PROBE_SCENE` (scene-x), the route scenarios (`route-play-state`, `undo-route`, `reload-save-route`) from `IKKOKU_ROUTE_PROBE_SCENE` and the live-clock scenarios (`blink-toggle`, `hand-patterns`, `hand-patterns-kept` — a single character with saved hand patterns [5, 6]) from `IKKOKU_STUDIO_SCENARIO_SYNTHETIC_SCENE` (`synthetic-current.png`); the three `reload-load-*` checks declare no scene fixture on purpose (see below); every scenario report and exported scene hashed as an artifact. Earlier run: 12/12 passed 2026-09-29 before the reload pairs were added. |
 | `maker-scenarios.json` | Four `app-smoke` checks, each running the Debug app binary with `IKKOKU_MAKER_SCENARIO` pointed at one `maker-*.json` scenario under `Tools/verification/scenarios/` (see below) | 4/4 checks passed 2026-09-29 under `--strict` with `IKKOKU_MAKER_SCENARIO_CARD` (the 7-coordinate `synthetic-appearance-card.png`) and `IKKOKU_SOURCE_AVATAR` in the environment file; every check fills `IKKOKU_SOURCE_CARD` through the fixture `from` key; every scenario report and exported card hashed as an artifact. |
 | `gameplay-scenarios.json` | One `app-smoke` check running the Debug app binary with `IKKOKU_GAMEPLAY_SCENARIO` pointed at `scenarios/gameplay-controlled-event.json` (A-T01; see below); no fixtures, synthetic catalog; the report and the three host snapshots are hashed artifacts | Not run yet (2026-10-23). The Engine test `sourceGameplayHostShippedScenarioPersistsReloadsAndResumesIdentically` runs the same scenario in CI; the app path is only compiled there. |
 
@@ -132,7 +132,13 @@ toggle's property; its didSet forwards to every rendered preview), `export`/`rei
 Studio document card) and `assert` with any of `name`, `visible`,
 `face`/`body`
 `{index,value}`, `color` `{id,rgba}`, `activeCamera` (key or null),
-`routePlaying` `{key,playing}`, `animation`
+`routePlaying` `{key,playing}`, `view` `{saved:true}` or `{key}` (the camera
+`StudioModel.viewCamera` hands the renderer: exactly the saved `doc.camera`,
+or looking through that camera object — position within the tolerance of its
+world placement from `sourceObjectWorldMatrix`, forward within 0.01°, and not
+the saved camera; a pass records the view's position and forward),
+`statusContains` (a substring of the app's status line, read after the step's
+`view` check so a rejected look-through has reported itself), `animation`
 `{key,group?,category?,no?,speed?,forceLoop?}` (the live animation state the
 preview plays for that character — the document's saved-clip override or the
 scene record's own — an absent sub-key is not asserted), `fk`
@@ -309,17 +315,19 @@ back. The load-side checks deliberately declare NO scene fixture: with
 caches and the load asserts would pass vacuously; without it the process
 starts on the empty document and only `loadDocument` + rehydration can
 produce the asserted cache entries (that is exactly the ST-T01 defect the
-pair pins). The two CharaStudio-authored fixture scenes (see "Route children and
-neck TARGET/AWAY" below) arrive the same way: `route-children-motion` aliases
-`IKKOKU_SOURCE_SCENE` from `IKKOKU_ROUTE_CHILDREN_SCENE` and
-`neck-target-orbit` from `IKKOKU_NECK_TARGET_SCENE`.
+pair pins). The three CharaStudio-authored fixture scenes (see "Route children and
+neck TARGET/AWAY" and "Mirrored camera parent" below) arrive the same way:
+`route-children-motion` aliases `IKKOKU_SOURCE_SCENE` from
+`IKKOKU_ROUTE_CHILDREN_SCENE`, `neck-target-orbit` from
+`IKKOKU_NECK_TARGET_SCENE` and `mirrored-camera` from
+`IKKOKU_MIRRORED_CAMERA_SCENE`.
 
 ```sh
-# Build Debug first, then (needs the 13 private fixture paths — scenario
+# Build Debug first, then (needs the 14 private fixture paths — scenario
 # scene, avatar, item catalog, animation catalog, look settings, hand patterns,
 # Maker library, camera probe scene, route probe scene, synthetic scene, the
-# CharaStudio FK scene and the route-children / neck-target scenes — in
-# .local/verification/environment.json):
+# CharaStudio FK scene and the route-children / neck-target / mirrored-camera
+# scenes — in .local/verification/environment.json):
 python3 Tools/verification/run.py \
   --manifest Tools/verification/lanes/studio-scenarios.json \
   --environment .local/verification/environment.json --strict
@@ -393,6 +401,43 @@ recorded in the lane row above. After the later main merges `29a3bfb`,
 `9ee757a` and `735105f`, the two new checks were rerun on their own and reproduced
 the same numbers. Attempts cut short by the same outside kill were retried. These are headless model and live-tick checks. The visible route
 buttons, the rendered pixels and the FK-owned neck case remain separate gates.
+
+### Mirrored camera parent (R4, ST-A06)
+
+The R4 app path "a source camera under a mirrored parent falls back to the
+saved camera with a `reflectedFrame` message" had no scene to run against. The
+original CharaStudio authored one without a card
+(`original_scene_reload_probe.py --author-scenes mirrored-camera`; see
+[Mirrored camera parent](../../docs/reference/studio/scene-records.md#mirrored-camera-parent-original-capture-r4)).
+Its private path goes in the environment file as
+`IKKOKU_MIRRORED_CAMERA_SCENE`.
+
+`mirrored-camera.json` (lane check `studio-scenario-mirrored-camera`, 17
+steps; scene plus `IKKOKU_SOURCE_AVATAR`) runs on camera key 2
+`IKKOKU-MIRROR` under item key 0 (scale (−1, 1, 1)), saved active, and
+control camera key 3 `IKKOKU-CONTROL` under item key 1 (scale (1, 1, 1)). It
+asserts that camera 2 is the load winner, that `view` is exactly the saved
+camera and that the status line contains "Source camera 2 view unresolved:
+Source camera object parent frame is mirrored". An `assertRejected` control
+shows the view is not looking through camera 2. `toggleCamera` 3 must look
+through camera 3, with `assertRejected` controls that the view is no longer
+the saved camera and that the status no longer names a mirrored frame.
+`toggleCamera` 2 falls back again. After export → reimport camera 2 is still
+the winner and falls back, and camera 3 still looks through.
+
+Recorded 2026-10-23: a one-check manifest cut from the lane ran `--strict` on
+the Debug build of this change (`31d4508`) and passed 17/17 steps. The saved
+camera view was (1.1910985, 1.8764572, −3.0230198) looking
+(−0.33037, −0.25882, 0.90767); camera 3 looked through from
+(0.124513626, 0.95720124, 0.17588627), 1.2e-7 m and 2.2e-6° from its
+placement. Mutation control: the same check against a copy of the scene whose
+item 0 scale x was patched from −1 to +1 (byte offset 883,
+`.local/vm-mirrored-camera/controls/`) failed 4 of 17 steps — the three
+fallback/status asserts and the "not looking through camera 2" control —
+because camera 2 then looks through from (−1.0754863, 0.95720124, 0.17588627).
+Evidence: `.local/vm-mirrored-camera/runs/`. This is a headless model check:
+the visible status line and rendered pixels are not asserted, and the
+original's own mirrored look-through pose is recorded, not reproduced.
 
 ## Maker scenario hook (T-T04)
 

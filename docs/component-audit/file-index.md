@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**829 files indexed; 829 assigned; 0 unassigned.**
+**830 files indexed; 830 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 304 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 144 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 145 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 170 |
+| Conversion / recovery / verification tool | 171 |
 | Documentation / historical evidence | 54 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
@@ -836,6 +836,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/maker-outfit-colors.json](../../Tools/verification/scenarios/maker-outfit-colors.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-reset-shapes.json](../../Tools/verification/scenarios/maker-reset-shapes.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-shape-roundtrip.json](../../Tools/verification/scenarios/maker-shape-roundtrip.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/mirrored-camera.json](../../Tools/verification/scenarios/mirrored-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/neck-look-orbit.json](../../Tools/verification/scenarios/neck-look-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/neck-target-orbit.json](../../Tools/verification/scenarios/neck-target-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/outfit-select.json](../../Tools/verification/scenarios/outfit-select.json) | Conversion / recovery / verification tool |
