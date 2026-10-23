@@ -97,6 +97,9 @@ func sourceStudioDynamicsActualAnimationIKOrderingAndRollbackWhenSupplied() thro
         var expected = baseline
         for index in direct.indices {expected = try direct[index].step(deltaTime:1/30,rig:rig,pose:expected)}
         let checkpoint = actual.captureDynamicsCheckpoint()
+        // Gaze reads the solved pose before the live tick supplies dynamics.
+        // Reuse that upstream cache, but integrate the new step exactly once.
+        _ = try actual.editedPose(ikTargets:targets,kinematics:kinematics,animationState:animation,animationElapsed:time)
         try actual.setDynamicsStep(elapsed:time,deltaTime:1/30)
         let output = try actual.editedPose(ikTargets:targets,kinematics:kinematics,animationState:animation,animationElapsed:time)
         #expect(output.localMatrices == expected.localMatrices)

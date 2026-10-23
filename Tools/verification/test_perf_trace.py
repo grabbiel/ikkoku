@@ -164,6 +164,26 @@ class PerfTraceTests(unittest.TestCase):
         idle["summary"]["inputCalls"] = {}
         self.assertIsNone(perf_trace.stray_input(idle))
 
+    def test_run_rejects_a_stale_report_when_launch_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fixture = os.path.join(folder, "fixture")
+            open(fixture, "w").close()
+            environment = os.path.join(folder, "environment.json")
+            with open(environment, "w") as handle:
+                json.dump({"IKKOKU_SOURCE_AVATAR": fixture, "IKKOKU_MAKER_LIBRARY": fixture}, handle)
+            output = os.path.join(folder, "out")
+            os.mkdir(output)
+            stale = os.path.join(output, "studio-native.json")
+            with open(stale, "w") as handle:
+                json.dump(report(), handle)
+            args = argparse.Namespace(environment=environment, workloads="studio-native", out=output,
+                                      repeat=1, retries=2, seconds=10, warmup=3, startup_timeout=180, set=None,
+                                      app="/apps/Ikkoku", xctrace=None, wrap=None)
+            with mock.patch.object(perf_trace.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(perf_trace.run(args), 1)
+            self.assertFalse(os.path.exists(stale))
+
     def test_profile_resolves_refs_and_charges_focus_callees(self):
         args = argparse.Namespace(trace="unused.trace", whole=True, thread="Main Thread", top=10, binary="Ikkoku", focus="^hot$", skip_toc=True)
         output = io.StringIO()

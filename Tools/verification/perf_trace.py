@@ -127,6 +127,10 @@ def run(args):
             # A run whose window was not composited (the user switched Spaces,
             # say) says nothing about presentation: run it again.
             for attempt in range(1 + args.retries):
+                # An exit-zero launch that writes no report must not inherit a
+                # successful report from an earlier invocation or retry.
+                if os.path.exists(output):
+                    os.unlink(output)
                 with open(log_path, "w", encoding="utf-8") as log:
                     code = subprocess.run(argv, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
                 reason = None

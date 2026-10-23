@@ -189,7 +189,7 @@ public final class SourceStudioCharacterPreview {
     /// wrote anything: the pose the TARGET/AWAY gaze solver reads its Transforms
     /// from, the way the original LateUpdate runs NeckUpdateCalc after
     /// Animator/FK/IK and before its own rotation write.
-    fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
+    fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
     private var evaluatedCache: EvaluatedPose?
     /// The animated, FK/IK-solved pose (`preOverride`) with the kinematic
     /// state and guides it was solved with, for the same key as
@@ -862,12 +862,14 @@ public final class SourceStudioCharacterPreview {
                            animationElapsed: Float = 0) throws -> RigPose {
         try setShapeValues(face: faceValues, body: bodyValues)
         let state = animationState ?? SourceStudioAnimationState(record: record)
-        if let cache = evaluatedCache, cache.state == state, cache.elapsed == animationElapsed, cache.fk == fkRotations, cache.ik == ikTargets, cache.kinematics == kinematics { return cache.pose }
+        // Saved, unconverted motion may fall back, but an explicit edit must
+        // still resolve or throw even when its numeric state is unchanged.
+        let required = animationState != nil
+        if let cache = evaluatedCache, cache.state == state, cache.required == required, cache.elapsed == animationElapsed, cache.fk == fkRotations, cache.ik == ikTargets, cache.kinematics == kinematics { return cache.pose }
         try SourceStudioIKEditing.validate(ikTargets); try kinematics?.validate()
         var result: RigPose
         let effective: SourceStudioKinematicState
         let guides: [SourceStudioIK.Guide]
-        let required = animationState != nil
         if let solved = solvedCache, solved.state == state, solved.required == required, solved.elapsed == animationElapsed,
            solved.fk == fkRotations, solved.ik == ikTargets, solved.kinematics == kinematics {
             result = solved.pose; effective = solved.effective; guides = solved.guides
@@ -878,7 +880,7 @@ public final class SourceStudioCharacterPreview {
         }
         let preOverride = result
         try applyLookAndDynamics(to: &result, preOverride: preOverride, effective: effective, animationElapsed: animationElapsed)
-        evaluatedCache = (state, animationElapsed, fkRotations, ikTargets, kinematics, result, preOverride, guides)
+        evaluatedCache = (state, required, animationElapsed, fkRotations, ikTargets, kinematics, result, preOverride, guides)
         return result
     }
 
@@ -1020,7 +1022,7 @@ public final class SourceStudioCharacterPreview {
     }
 
     public func resetAnimationPlayback() {
-        animationPlayback.reset(); solvedCache = nil; hasSteppedNeckLook = false; resetNeckLook(); resetEyeLook()
+        animationPlayback.reset(); evaluatedCache = nil; solvedCache = nil; hasSteppedNeckLook = false; resetNeckLook(); resetEyeLook()
     }
 
     /// True when the effective neck pattern is TARGET or AWAY and the gaze

@@ -67,6 +67,64 @@ private func animationLibrary(_ document: [String: Any] = animationDocument()) t
     #expect(pose.localMatrices == rig.restPose.localMatrices)
 }
 
+@Test func sourceAnimationCachedBindingsFollowRigIdentityAndCurrentBaseline() throws {
+    let library = try animationLibrary()
+    let joint = RigDefinition.Node(name: "joint", sourceID: "source:joint", parent: nil)
+    let other = RigDefinition.Node(name: "other", sourceID: "other", parent: nil)
+    // One library is shared by different rigs. Equal node counts do not imply
+    // equal bindings, and the cache may outlive a larger rig.
+    for nodes in [[joint, other], [other, joint], [joint], [other, joint]] {
+        let rig = try RigDefinition(nodes: nodes, skins: [])
+        let index = try #require(nodes.firstIndex { $0.sourceID == "source:joint" })
+        for shift: Float in [0, 20] {
+            var baseline = rig.restPose
+            for node in baseline.localMatrices.indices { baseline.localMatrices[node][3].x += shift }
+            let expected = try animationLibrary().applying(clipID: "clip", time: 0.5, to: rig, baseline: baseline)
+            let actual = try library.applying(clipID: "clip", time: 0.5, to: rig, baseline: baseline)
+            #expect(actual.localMatrices == expected.localMatrices)
+            #expect(actual.localMatrices[index].translation == Float3(0.125, 1, -3))
+            for node in nodes.indices where node != index {
+                #expect(actual.localMatrices[node] == baseline.localMatrices[node])
+            }
+        }
+    }
+    for nodes in [[other], [.init(name: "renamed", sourceID: "source:joint", parent: nil)]] {
+        let rig = try RigDefinition(nodes: nodes, skins: [])
+        #expect(throws: RigError.self) { try library.applying(clipID: "clip", time: 0, to: rig) }
+    }
+}
+
+@Test func sourceAnimationCachedPositionChannelPreservesCurrentBaselineShear() throws {
+    var document = animationDocument(), clips = document["clips"] as! [[String: Any]]
+    let binding = (clips[0]["bindings"] as! [[String: Any]])[0]
+    clips[0]["bindings"] = [binding]
+    clips[0]["curves"] = [1, 2, 3].map { ["kind": "constant", "value": $0] as [String: Any] }
+    document["clips"] = clips
+    let library = try animationLibrary(document)
+    let rig = try RigDefinition(nodes: [.init(name: "joint", sourceID: "source:joint", parent: nil)], skins: [])
+    for shear: Float in [0.25, 0.5] {
+        var baseline = rig.restPose; baseline.localMatrices[0][0].y = shear
+        var expected = baseline; expected.localMatrices[0][3] = Float4(1, 2, -3, 1)
+        #expect(try library.applying(clipID: "clip", time: 0.5, to: rig, baseline: baseline).localMatrices == expected.localMatrices)
+    }
+}
+
+@Test func sourceAnimationCachedBlendChannelsFollowReorderedRig() throws {
+    var document = animationDocument(), states = document["states"] as! [[String: Any]]
+    states[0]["blendParameter"] = "Speed"
+    states[0]["motions"] = [["clipID": "clip", "threshold": 0, "cycleOffset": 0], ["clipID": "clip", "threshold": 1, "cycleOffset": 0.5]]
+    document["states"] = states
+    let library = try animationLibrary(document)
+    let joint = RigDefinition.Node(name: "joint", sourceID: "source:joint", parent: nil)
+    let other = RigDefinition.Node(name: "other", sourceID: "other", parent: nil, translation: Float3(7, 8, 9))
+    for nodes in [[joint, other], [other, joint], [joint]] {
+        let rig = try RigDefinition(nodes: nodes, skins: [])
+        let actual = try library.applying(stateID: "idle", normalizedTime: 0.25, floatParameters: ["Speed": 0.25], to: rig)
+        let expected = try animationLibrary(document).applying(stateID: "idle", normalizedTime: 0.25, floatParameters: ["Speed": 0.25], to: rig)
+        #expect(actual.localMatrices == expected.localMatrices)
+    }
+}
+
 @Test func sourceAnimationProjectsStateSpeedAndOneDimensionalWeights() throws {
     var document = animationDocument(), states = document["states"] as! [[String: Any]]
     states[0]["blendParameter"] = "Speed"

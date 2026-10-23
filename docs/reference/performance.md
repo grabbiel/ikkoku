@@ -33,6 +33,11 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
 3. **The display link shares the main run loop**, so any cost above turns
    into a presentation hitch.
 
+These headline numbers are the original phase-1 measurements. The
+[resumed review](#resumed-phase-1-review-2026-10-23) retained near-120 FPS idle
+on the current merged code but found substantial orbit pacing variation; it
+does not establish an interactive speedup.
+
 Debug builds cannot use a source scene: a tick takes 1.75 s because the
 Engine is compiled `-Onone`. Every capture in this change was byte-identical
 between Debug and Release. That supports an opt-in optimized-Engine Debug
@@ -451,7 +456,9 @@ changes arithmetic: each skips work whose result is already known.
      animation state, whether the animation is required, the elapsed time,
      the FK and IK edits and the kinematic state. The cache is cleared
      wherever its inputs can change: shape values, dynamics reset and
-     checkpoint restore, and animation playback reset. The neck override and
+     checkpoint restore, and animation playback reset. Both pose caches include
+     the required-animation flag, so an optional saved-animation fallback
+     cannot conceal an error from a later explicit animation request. The neck override and
      dynamics still run every time, so they see the same pose as before.
 3. **Animation clip bindings are resolved once per clip and rig.**
    - What it did before: `SourceAnimationLibrary.applying(clipID:…)` and
@@ -659,9 +666,10 @@ How to read the expected gain column:
 
 ## Validation of this change
 
-The suites and lanes ran on the merged head `b20ccd7` (`main` at `f5587f5`
-merged) unless stated. The reports are under `.local/verification/app-perf`
-in the worktree and `.local/app-perf/lanes`.
+The historical suites and lanes below ran on the merged head `b20ccd7`
+(`main` at `f5587f5` merged) unless stated. They are retained evidence from
+the initial phase-1 work, not fresh runs from the resumed review. Reports are
+under `.local/verification/app-perf` in the worktree and `.local/app-perf/lanes`.
 
 - **Engine suite.** Plain `swift test --package-path Packages/Engine`: 690
   tests passed, plus 21 in the second test target. With every private
@@ -692,8 +700,8 @@ in the worktree and `.local/app-perf/lanes`.
   - Default mode: its suite passed (690 tests, 2 skipped).
   - Under `--strict` it stops before running, on the optional
     `IKKOKU_APPEARANCE_REFERENCE_ROOT` that the fixture map does not supply.
-- **App lanes**, each `--strict` under the app lock, on Debug and Release
-  apps built from the merged head:
+- **App lanes**, each `--strict` under the app lock, using Debug for
+  Studio, Maker and gameplay scenarios; app-smoke also includes Release checks:
   - `studio-scenarios`: 45 of 45 passed.
   - `app-smoke`: 5 of 7 passed. The two failures are `startup-mute-capture`
     ("Original plugin target does not bind uniquely") and
@@ -703,7 +711,86 @@ in the worktree and `.local/app-perf/lanes`.
     `IKKOKU_SOURCE_SCENE`, so Studio plugin execution fails at startup.
     `main` `f5587f5`, built and run the same way, fails both checks
     identically (`.local/app-perf/lanes/main-f5587f5`).
-  - TBD-APP-LANES-REST
+  - `maker-scenarios`: 4 of 4 passed.
+  - `gameplay-scenarios`: 1 of 1 passed. These last two results are
+    recorded in `.local/app-perf/phase-c.log`. Its subsequent idle harness
+    rerun had 67 stray input calls and remains excluded from frame-rate claims.
+
+### Resumed phase-1 review (2026-10-23)
+
+Merged `main` at `2f29e27` and reviewed each optimization's cache keys and
+invalidation. The evaluated-pose cache now includes the explicit-animation
+requirement, matching the solved-pose cache: a cached optional fallback cannot
+hide a missing-animation error from a later explicit edit. Playback reset clears
+both pose caches. The harness runner also removes an earlier report before each
+launch, so exit zero without a new report cannot pass using stale measurements.
+
+Fresh validation, separate from the historical runs above:
+
+- `swift test --package-path Packages/Engine --filter
+  'sourceAnimation|sourceStudioPose|sourceStudioCharacterPreview|sourceStudioDynamics'`
+  with private fixture variables exported: **33 passed, no skips**. Coverage
+  includes shared clip bindings across reordered, smaller, missing and renamed
+  rig nodes; current baselines and translation-only shear; blended sampling;
+  duplicate-name depth-first lookup and Unicode byte equality; shape replacement
+  at an unchanged elapsed time; explicit-animation errors through both caches;
+  and pre-sampling before dynamics with checkpoint replay. The independent
+  100-frame dynamics oracle's maximum world error was `2.4102368e-7`.
+- `python3 -m unittest discover -s Tools/verification -p test_perf_trace.py`:
+  **10 passed**, including refusal of stale output.
+- `xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator
+  -configuration Release -derivedDataPath .local/build-release
+  -destination 'platform=macOS,arch=arm64' build`: **succeeded**.
+- Fresh Release source-scene, rig-plus-card and native-scene PNGs, plus four
+  live/orbit/FK scenario PNGs: **7 of 7 byte-identical** to the retained
+  `main` `5e86b57` baseline in `.local/app-perf/captures-3`. All four launches
+  exited zero under the app lock. These are fresh captures compared with
+  historical baseline bytes; the fresh current-main comparison belongs to
+  combined-branch integration validation.
+- A full fixture-backed suite started during this review was stopped to avoid
+  concurrent writes with another task's fixture suite; it is not counted as a
+  passing run. The full suite and current app lanes are pending combined-branch
+  integration validation; the current Studio lane has 47 checks.
+
+Fresh Release window measurements used the same six-character source scene
+(SHA-256 `029f0b1d…`), 120 Hz display and 1996×1824 drawable as the original
+baseline. Each standard workload recorded 10 seconds after a three-second
+warmup (startup: two seconds without warmup). App launches held the shared
+lock; other task builds/tests were paused. Load averages were recorded in each
+report. None of the eight runs triggered the compositing or stray-input checks.
+These are fresh samples, not replacements for the historical table.
+
+| Workload | Presented FPS | Hitches/s | Tick ms p50/p95 × rate/s | Main busy ms/s |
+| --- | ---: | ---: | --- | ---: |
+| studio-idle | 119.7 | 0.3 | 8.06/8.46 ×30 | 349 |
+| studio-orbit | 7.0 | 4.0 | — | 924 |
+| studio-fk-drag | 25.3 | 25.2 | — | 995 |
+| studio-hover | 117.5 | 2.5 | 7.71/8.07 ×30 | 614 |
+| maker-idle | 119.4 | 0.6 | 1.98/2.63 ×30 | 177 |
+| maker-slider | 43.7 | 28.6 | 0.45/0.53 ×30 | 999 |
+| studio-native | 119.6 | 0.4 | 1.51/2.04 ×30 | 184 |
+
+Startup imported the scene in 4.62 s and drew its first frame at 6.16 s.
+The source idle tick remained at 30/s, with draw CPU 0.86/0.93 ms and GPU
+1.89/2.04 ms (p50/p95). This preserves the phase-1 idle improvement; the
+interactive cases still spend most main-thread time outside model work.
+
+The unusually slow first orbit run prompted a bounded control using the retained
+prior phase-1 Release executable (SHA-256 `6577f481…`), without rebuilding it.
+All runs had identical scene hash, object count, window, drawable and configured
+120 Hz input. Current runs presented **7.0, 22.0 and 35.3 FPS**; prior-binary
+controls presented **44.7 and 34.1 FPS**. The final interleaved pair delivered
+119.6 inputs/s in both builds; current model/other time was 103/868 ms/s versus
+106/827 ms/s for the prior build. The earlier prior run delivered 113 inputs/s.
+In the first slow run, refresh cost stayed 0.76–0.86 ms across one-second bins
+while display callbacks had multi-second gaps; there was no growing model
+phase cost in those samples. This small control does not isolate a consistent
+code regression or its cause, and it does not establish an interactive
+improvement. Keep the severe presentation stalls visible when evaluating the
+phase-2 main-thread and SwiftUI work.
+
+Private logs and executable/source provenance are in
+`.local/codex-resume-2026-10-23/performance/` in the primary checkout.
 
 ## Limits of these numbers
 
