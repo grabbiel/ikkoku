@@ -68,10 +68,11 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   one heroine, event 9001: VAR/Calc/IF/Wait/MapChange/Close) selects Morning,
   reloads mid-map-load, requests HR1 during the event, reloads while that ADV
   barrier is held and after completion, and checks that the next day's Morning
-  does not rerun the event. Verification: `SourceGameplayHostTests.swift` (8 tests,
-  CI Engine suite only, not compiled locally) checks the exact trace from period
-  selection to completion and both barrier holds. It reloads through JSON before
-  each of the 28 steps of a four-operation trace, covering every barrier kind, the
+  does not rerun the event. Verification: `SourceGameplayHostTests.swift` (8 tests;
+  they pass in the CI Engine suite, the only place they were compiled or run)
+  checks the exact trace from period selection to completion and both barrier
+  holds. It reloads through JSON before
+  each of the 25 steps of a four-operation trace, covering every barrier kind, the
   held ADV barrier, the map load and the ADV Wait, and requires an identical
   trace and final host. It also covers period/week/map state changes,
   rejected operations and requests, corrupted, mismatched and inconsistent

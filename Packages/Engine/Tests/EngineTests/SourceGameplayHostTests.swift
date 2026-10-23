@@ -213,7 +213,8 @@ private func drive(_ start: SourceGameplayHost, _ script: [Drive], reloadBefore:
         return false
     }
     #expect(selections.count == 1) // Tuesday Morning does not rerun the completed event.
-    #expect(reference.steps > 15)
+    // 9 steps to the map load, 7 to idle after HR1, 4 after the day change, 5 after _Next.
+    #expect(reference.steps == 25)
 
     var points: [ReloadPoint] = []
     for index in 0..<reference.steps {

@@ -433,7 +433,7 @@ back from disk; the report goes through the same checked writer. The process
 exits 0 only when every step passed.
 
 **Verification.** `SourceGameplayHostTests.swift` (8 tests) runs in the public
-CI lane over the synthetic catalog in
+CI lane, the only place it was compiled or run, over the synthetic catalog in
 `Tools/verification/scenarios/gameplay-controlled-event.json`. Event 9001 runs
 VAR, Calc, IF to a local tag, a 0.5 s Wait, MapChange to a second map and Close.
 The tests check:
@@ -443,7 +443,7 @@ The tests check:
 - that a Change(Type) requested during the map load keeps Morning committed and
   its ADV barrier outstanding until the event completes, and that a `_Next`
   during the event applies its sunlight only after the map load;
-- a JSON reload before each of the 28 steps of a four-operation trace (period
+- a JSON reload before each of the 25 steps of a four-operation trace (period
   selection, a mid-event HR1 change, a backward day change, `_Next`), covering
   both barrier kinds, the held ADV barrier, the map load and the ADV Wait, each
   reproducing the uninterrupted trace and final host exactly;
