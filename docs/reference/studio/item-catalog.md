@@ -102,6 +102,17 @@ chair lookup and the two converted basic-shape props do not establish arbitrary
 item restoration. Test a mixed character/item hierarchy and retain unresolved
 source keys explicitly.
 
+The catalog is user-chosen configuration, so an entry may still name an absolute
+file. Each resolved asset is a package rooted at the directory that holds it
+(`KoikatsuAssetResolver.packageRoot(of:)`, added 2026-10-23 for R5), because
+`export_prefab.py` writes the glTF, `.bin` and PNGs together. Layout import, the
+mixed preview and `ikkoku-inspect layout` load it with
+`GLBLoader.load(url:packageRoot:)`. A buffer or image URI that leaves that
+directory, by `..`, an absolute path, a `file:` URL, percent-encoded traversal
+or a symlink, fails the item with `GLTFError.escapesPackageRoot`. This is checked
+before the referenced bytes are read. Verified only by synthetic CI Engine tests;
+not compiled locally.
+
 ## Preview item rendering (added 2026-09-29, ST-T04 second slice)
 
 `StudioModel.importSourceScenePreview` now draws source item props in the mixed
@@ -109,9 +120,9 @@ preview when `IKKOKU_STUDIO_ITEM_CATALOG` names a `KoikatsuAssetCatalog` version
 1 file. The catalog is resolved once with `KoikatsuAssetResolver` (the same key
 and path rules as `KoikatsuLayoutImporter`); a catalog error becomes one
 diagnostic and the import continues with unrendered placeholders. For each
-`.item` record the key is resolved and `library.importStaticAsset(url:)` runs at
-import time, so a load failure is a per-item diagnostic and an unresolved or
-unloadable key stays an unrendered named node.
+`.item` record the key is resolved and `library.importStaticAsset(url:packageRoot:)`
+(package root as above) runs at import time, so a load failure is a per-item
+diagnostic and an unresolved or unloadable key stays an unrendered named node.
 
 This is **runtime-only**, exactly like source cameras: the placeholder entry
 stays kind `.folder` with no `assetFile`/`itemID` and its saved

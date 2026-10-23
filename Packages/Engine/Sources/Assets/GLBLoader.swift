@@ -9,6 +9,10 @@ public enum GLTFError: Error, CustomStringConvertible {
     case unsupportedAccessor(String)
     case missingAttribute(String)
     case unsupportedExtensions([String])
+    /// A package load met an asset file or external buffer/image URI that is not a
+    /// canonical relative reference resolving inside the verified package root.
+    /// Raised before the referenced bytes are read.
+    case escapesPackageRoot(uri: String, reason: String)
     case io(String)
 
     public var description: String {
@@ -20,15 +24,36 @@ public enum GLTFError: Error, CustomStringConvertible {
         case .missingAttribute(let s): return "Primitive lacks attribute \(s)."
         case .unsupportedExtensions(let names):
             return "glTF requires unsupported extension(s): \(names.joined(separator: ", "))."
+        case .escapesPackageRoot(let uri, let reason):
+            return "glTF reference '\(uri)' is outside its package: \(reason)."
         case .io(let s): return s
         }
     }
+}
+
+/// Where a glTF's external (non-`data:`) buffer and image URIs may be read from.
+/// `data:` URIs and the GLB `BIN` chunk are embedded and always allowed.
+public enum GLTFExternalResources: Sendable {
+    /// Embedded data only; any external URI fails the load.
+    case embeddedOnly
+    /// A trusted standalone file the user chose explicitly. URIs resolve relative to
+    /// `directory` with no containment or symlink policy.
+    case trustedFile(directory: URL)
+    /// A package or library asset. URIs resolve relative to `directory` and must be
+    /// canonical relative paths after percent-decoding (no scheme or drive, absolute
+    /// path, backslash, NUL, or empty, `.` or `..` segment) whose symlink-resolved
+    /// file lies inside `root`. Every reference is checked before any external byte
+    /// is read.
+    case packaged(root: URL, directory: URL)
 }
 
 /// Loads `.glb` (binary) and `.gltf` (JSON + external/base64 buffers).
 ///
 /// Unsupported data that would change an asset's meaning is rejected (`GLTFError`).
 /// Data the native pipeline reduces or ignores is reported in `GLTFAsset.diagnostics`.
+/// The trust boundary is explicit: `load(url:packageRoot:)` confines a package or
+/// library asset and its external files to a verified root, while
+/// `loadTrustedFile(url:)` keeps the unconfined behavior for a file the user chose.
 public enum GLBLoader {
     /// glTF extensions this loader implements. Any other `extensionsRequired` entry is
     /// rejected; any other `extensionsUsed` entry is reported as `unsupported_extension`.
@@ -41,12 +66,26 @@ public enum GLBLoader {
             && (sampler.magFilter ?? 9729) == 9729 && [9729, 9987].contains(sampler.minFilter ?? 9987)
     }
 
-    public static func load(url: URL) throws -> GLTFAsset {
+    /// Loads a standalone file the user chose explicitly (file dialog, command-line or
+    /// environment path, a native scene's recorded model path). External URIs resolve
+    /// relative to the file without package containment or symlink policy.
+    public static func loadTrustedFile(url: URL) throws -> GLTFAsset {
         let data = try Data(contentsOf: url)
-        return try load(data: data, baseURL: url.deletingLastPathComponent(), sourceURL: url)
+        return try load(data: data, external: .trustedFile(directory: url.deletingLastPathComponent()), sourceURL: url)
     }
 
-    public static func load(data: Data, baseURL: URL?, sourceURL: URL? = nil) throws -> GLTFAsset {
+    /// Loads an asset from a package or library whose root the caller verified. The
+    /// asset file and every external buffer/image must resolve, after symlinks, inside
+    /// `packageRoot`; otherwise `GLTFError.escapesPackageRoot` is thrown before the
+    /// offending bytes are read. External URIs resolve relative to `url`'s directory.
+    public static func load(url: URL, packageRoot: URL) throws -> GLTFAsset {
+        let file = try contained(url, root: packageRoot, reference: url.path)
+        let data = try Data(contentsOf: file)
+        return try load(data: data, external: .packaged(root: packageRoot, directory: url.deletingLastPathComponent()),
+                        sourceURL: url)
+    }
+
+    public static func load(data: Data, external: GLTFExternalResources = .embeddedOnly, sourceURL: URL? = nil) throws -> GLTFAsset {
         var json: Data
         var bin: Data?
         if data.count >= 12, data.readUInt32(at: 0) == 0x46546C67 { // "glTF"
@@ -78,10 +117,63 @@ public enum GLBLoader {
         }
         let root = try JSONDecoder().decode(GLTFRoot.self, from: json)
         try root.validateReferences()
-        let ctx = try Context(root: root, bin: bin, baseURL: baseURL)
+        let ctx = try Context(root: root, bin: bin, external: external)
         var asset = try ctx.build()
         asset.url = sourceURL
         return asset
+    }
+
+    // MARK: - External references
+
+    /// Resolves a non-`data:` buffer/image URI under `external` without reading it;
+    /// nil when only embedded data is allowed.
+    static func externalURL(_ uri: String, external: GLTFExternalResources) throws -> URL? {
+        switch external {
+        case .embeddedOnly:
+            return nil
+        case .trustedFile(let directory):
+            return directory.appendingPathComponent(uri.removingPercentEncoding ?? uri)
+        case .packaged(let root, let directory):
+            // Decoded once before the checks, so `%2E%2E%2F` is the `../` it encodes.
+            guard let path = uri.removingPercentEncoding else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "its percent-encoding is invalid")
+            }
+            guard !path.hasPrefix("/") else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "an absolute path is not package-relative")
+            }
+            guard !path.contains(":") else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "a URI scheme (such as file:) or drive is not package-relative")
+            }
+            guard !path.contains("\\"), !path.contains("\0"),
+                  path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+                throw GLTFError.escapesPackageRoot(uri: uri, reason: "it is not a canonical relative path")
+            }
+            return try contained(directory.appendingPathComponent(path), root: root, reference: uri)
+        }
+    }
+
+    /// The canonical file for `candidate` when it exists and, after every symlink is
+    /// resolved, lies strictly inside `root`.
+    static func contained(_ candidate: URL, root: URL, reference: String) throws -> URL {
+        guard let rootPath = canonicalPath(root) else { throw GLTFError.io("Package root \(root.path) does not exist.") }
+        guard let path = canonicalPath(candidate) else { throw GLTFError.io("Package file '\(reference)' does not exist.") }
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard path.hasPrefix(prefix) else {
+            throw GLTFError.escapesPackageRoot(uri: reference, reason: "it resolves outside the package root")
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    /// `realpath(3)`: the existing item's absolute path with every symlink, `.` and
+    /// `..` resolved, or nil when it does not exist. Root and candidate are both
+    /// canonicalized this way; `URL.resolvingSymlinksInPath()` drops a leading
+    /// `/private` only for some paths, so its results are not comparable.
+    static func canonicalPath(_ url: URL) -> String? {
+        url.withUnsafeFileSystemRepresentation { path -> String? in
+            guard let path, let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
     }
 
     // MARK: - Decoding context
@@ -89,16 +181,32 @@ public enum GLBLoader {
     private final class Context {
         let root: GLTFRoot
         var buffers: [Data]
-        let baseURL: URL?
+        /// Resolved (and, for a package, contained) external image files by image index.
+        let imageURLs: [Int: URL]
         var diagnostics: [GLTFDiagnostic] = []
 
         func report(_ code: String, _ message: String) {
             diagnostics.append(GLTFDiagnostic(code: code, message: message))
         }
 
-        init(root: GLTFRoot, bin: Data?, baseURL: URL?) throws {
+        init(root: GLTFRoot, bin: Data?, external: GLTFExternalResources) throws {
             self.root = root
-            self.baseURL = baseURL
+            // Every external buffer and image reference is resolved first, so a package
+            // reference outside its root fails before any external bytes are read.
+            var bufferURLs: [Int: URL] = [:], imageURLs: [Int: URL] = [:]
+            for (i, buffer) in (root.buffers ?? []).enumerated() {
+                guard let uri = buffer.uri, !uri.hasPrefix("data:") else { continue }
+                guard let url = try GLBLoader.externalURL(uri, external: external) else { throw GLTFError.missingBuffer(i) }
+                bufferURLs[i] = url
+            }
+            for (i, image) in (root.images ?? []).enumerated() {
+                guard image.bufferView == nil, let uri = image.uri, !uri.hasPrefix("data:") else { continue }
+                guard let url = try GLBLoader.externalURL(uri, external: external) else {
+                    throw GLTFError.io("External image requires a base URL: \(uri)")
+                }
+                imageURLs[i] = url
+            }
+            self.imageURLs = imageURLs
             var bufs: [Data] = []
             for (i, b) in (root.buffers ?? []).enumerated() {
                 if let uri = b.uri {
@@ -109,9 +217,8 @@ public enum GLBLoader {
                         }
                         bufs.append(d)
                     } else {
-                        guard let base = baseURL else { throw GLTFError.missingBuffer(i) }
-                        let u = base.appendingPathComponent(uri.removingPercentEncoding ?? uri)
-                        bufs.append(try Data(contentsOf: u))
+                        guard let url = bufferURLs[i] else { throw GLTFError.missingBuffer(i) }
+                        bufs.append(try Data(contentsOf: url))
                     }
                 } else if i == 0, let bin {
                     bufs.append(bin)
@@ -395,7 +502,7 @@ public enum GLBLoader {
 
             // Images
             var images: [ImageData] = []
-            for img in root.images ?? [] {
+            for (imageIndex, img) in (root.images ?? []).enumerated() {
                 if let bv = img.bufferView {
                     images.append(ImageData(name: img.name ?? "", data: try bufferViewData(bv).data, mimeType: img.mimeType))
                 } else if let uri = img.uri {
@@ -406,8 +513,7 @@ public enum GLBLoader {
                         }
                         images.append(ImageData(name: img.name ?? "", data: d, mimeType: img.mimeType))
                     } else {
-                        guard let baseURL else { throw GLTFError.io("External image requires a base URL: \(uri)") }
-                        let imageURL = baseURL.appendingPathComponent(uri.removingPercentEncoding ?? uri)
+                        guard let imageURL = imageURLs[imageIndex] else { throw GLTFError.io("External image requires a base URL: \(uri)") }
                         images.append(ImageData(name: img.name ?? uri, data: try Data(contentsOf: imageURL), mimeType: img.mimeType))
                     }
                 } else {

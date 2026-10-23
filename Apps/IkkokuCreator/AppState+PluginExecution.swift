@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import Studio
 import Gameplay
+import Renderer
 
 extension AppState {
     static func configureStudioExecution(_ studio: StudioModel) throws {
@@ -63,8 +64,8 @@ extension AppState {
         }
         let report: [String: Any] = ["schemaVersion": 1, "applicationCreated": NSApp != nil, "nativePlugins": references,
             "accessoryNamesEnabled": studio.sourceAccessoryNamesEnabled, "mount": mount, "focusTrace": trace, "final": studio.sourceFocusState()]
-        try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
-            .write(to: URL(fileURLWithPath: path), options: .atomic)
+        try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
+                                    to: URL(fileURLWithPath: path))
         print("[ikkoku] native plugin report written to \(path)")
     }
 }

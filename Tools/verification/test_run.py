@@ -525,6 +525,41 @@ class CheckExecutionTests(unittest.TestCase):
             self.assertEqual(record["status"], "failed")
             self.assertIn("not hashed", record["error"])
 
+    def test_empty_artifact_fails_even_after_exit_zero(self):
+        # A-T05: a capture that exits 0 and claims "written" but leaves a
+        # zero-byte file has not produced its output.
+        with tempfile.TemporaryDirectory(dir=run.REPO_ROOT) as artifact_dir:
+            artifact = os.path.join(artifact_dir, "captures", "ui.png")
+            record = self.run_check(
+                argv=[sys.executable, "-c",
+                      "open(%r, 'wb').close(); print('[ikkoku] ui snapshot written to %s')"
+                      % (artifact, artifact)],
+                artifacts=[{"path": os.path.relpath(artifact, run.REPO_ROOT),
+                            "kind": "ui-capture"}])
+            self.assertEqual(record["exitCode"], 0)
+            self.assertEqual(record["status"], "failed")
+            self.assertIn("artifact is empty", record["error"])
+            self.assertIsNone(record["artifacts"][0]["sha256"])
+
+    def test_nonzero_capture_exit_fails_without_hashing_outputs(self):
+        # A-T05: the app exits nonzero when a required output is missing
+        # (here the PNG) even though another output (the report) was
+        # written; the runner must not accept or hash that run's artifacts.
+        with tempfile.TemporaryDirectory(dir=run.REPO_ROOT) as artifact_dir:
+            report = os.path.join(artifact_dir, "captures", "ui.json")
+            png = os.path.join(artifact_dir, "captures", "ui.png")
+            record = self.run_check(
+                argv=[sys.executable, "-c",
+                      "import sys; open(%r, 'w').write('{}');"
+                      "print('[ikkoku] ui snapshot failed: %s: could not be written');"
+                      "sys.exit(1)" % (report, png)],
+                artifacts=[{"path": os.path.relpath(png, run.REPO_ROOT), "kind": "ui-capture"},
+                           {"path": os.path.relpath(report, run.REPO_ROOT),
+                            "kind": "capture-report"}])
+            self.assertEqual(record["status"], "failed")
+            self.assertEqual(record["error"], "command exited 1")
+            self.assertEqual(record["artifacts"], [])
+
     def test_artifact_parent_created_before_command(self):
         with tempfile.TemporaryDirectory(dir=run.REPO_ROOT) as artifact_dir:
             artifact = os.path.join(artifact_dir, "nested", "captures", "pose.json")
@@ -601,6 +636,53 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "resetShapes", "export", "reimport", "assert"}
+
+# App settings that name a file the app is asked to write (A-T05).
+APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
+                        "IKKOKU_NATIVE_PLUGIN_REPORT", "IKKOKU_BENCHMARK_OUTPUT",
+                        "IKKOKU_STUDIO_SCENARIO_REPORT", "IKKOKU_MAKER_SCENARIO_REPORT",
+                        "IKKOKU_SAVE_CARD", "IKKOKU_SAVE_SCENE", "IKKOKU_EXPORT_SOURCE_CARD",
+                        "IKKOKU_EXPORT_SOURCE_SCENE")
+
+
+class AppOutputArtifactTests(unittest.TestCase):
+    """A-T05: every output an app-smoke check requests is a hashed artifact.
+
+    The app now exits nonzero when a required output is missing, but a lane
+    check only fails on an absent (or empty) file it declares; an undeclared
+    output could silently go missing behind a zero exit.
+    """
+
+    def app_smoke_checks(self):
+        lanes = sorted(os.path.join(_HERE, "lanes", name)
+                       for name in os.listdir(os.path.join(_HERE, "lanes"))
+                       if name.endswith(".json"))
+        for lane in lanes:
+            for check in run.load_manifest(lane):
+                if check["referenceTier"] == "app-smoke":
+                    yield os.path.basename(lane), check
+
+    def test_every_requested_app_output_is_a_declared_artifact(self):
+        requested = 0
+        for lane, check in self.app_smoke_checks():
+            artifacts = [artifact["path"] for artifact in check.get("artifacts", [])]
+            for name in APP_OUTPUT_VARIABLES:
+                value = check.get("env", {}).get(name)
+                if value is None:
+                    continue
+                requested += 1
+                self.assertIn(value, artifacts, "%s/%s: %s=%s must be a declared artifact"
+                              % (lane, check["id"], name, value))
+        self.assertGreater(requested, 0)
+
+    def test_ui_capture_hashes_both_png_and_report(self):
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        capture = checks["studio-inspector-capture"]
+        artifacts = [artifact["path"] for artifact in capture["artifacts"]]
+        self.assertTrue(capture["env"]["IKKOKU_CAPTURE_UI"].endswith(".png"))
+        self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
+        self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
 
 
 class StudioScenarioLaneTests(unittest.TestCase):

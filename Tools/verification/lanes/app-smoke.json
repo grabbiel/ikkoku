@@ -28,6 +28,9 @@
       },
       "referenceTier": "app-smoke",
       "tolerance": "Headless startup must exit before NSApplication finishes launching and still deliver the deferred focus sample; a nonzero exit or a missing report fails this check.",
+      "artifacts": [
+        {"path": ".local/verification/captures/mute-gain.json", "kind": "capture-report"}
+      ],
       "timeout": 300
     },
     {
@@ -44,8 +47,9 @@
         "IKKOKU_CAPTURE_UI_REPORT": ".local/verification/captures/studio-pose.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Runs the Debug app so the Studio source-pose inspector writes the report at IKKOKU_CAPTURE_UI_REPORT, which must then validate (see studio-inspector-validate). The app hooks that read these settings land in PR #5 (branch qwen/st-t01-source-inspectors), not in this branch — expect this check to fail here until that change merges.",
+      "tolerance": "Runs the Debug app so the Studio source-pose inspector writes the report at IKKOKU_CAPTURE_UI_REPORT, which must then validate (see studio-inspector-validate). The app hooks that read these settings land in PR #5 (branch qwen/st-t01-source-inspectors), not in this branch — expect this check to fail here until that change merges. The window PNG is hashed only to prove the capture wrote a nonempty file (the app itself verifies it decodes at the captured size, A-T05); cacheDisplay omits most SwiftUI content (ST-D07), so the PNG is not inspector evidence.",
       "artifacts": [
+        {"path": ".local/verification/captures/studio-pose.png", "kind": "ui-capture"},
         {"path": ".local/verification/captures/studio-pose.json", "kind": "capture-report"}
       ],
       "timeout": 300

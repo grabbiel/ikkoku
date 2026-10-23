@@ -23,14 +23,14 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**798 files indexed; 798 assigned; 0 unassigned.**
+**801 files indexed; 801 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 71 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 73 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 301 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 302 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 132 |
 
 | File role | Files |
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
-| Runtime / shared shader declaration | 172 |
-| Test / validation | 156 |
+| Runtime / shared shader declaration | 173 |
+| Test / validation | 158 |
 
 ## App / gameplay / plugins
 
@@ -85,6 +85,8 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginPackage.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift](../../Packages/Engine/Sources/Gameplay/SourcePluginRuntime.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
@@ -679,6 +681,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFImportTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFImportTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/MaterialImportTests.swift](../../Packages/Engine/Tests/EngineTests/MaterialImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |

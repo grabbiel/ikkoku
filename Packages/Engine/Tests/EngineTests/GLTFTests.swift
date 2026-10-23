@@ -13,7 +13,7 @@ private func fixtureURL(_ name: String) -> URL {
 }
 
 @Test func loadsRigFixtureWithSkinAndMorphs() throws {
-    let asset = try GLBLoader.load(url: fixtureURL("rig_fixture.gltf"))
+    let asset = try GLBLoader.loadTrustedFile(url: fixtureURL("rig_fixture.gltf"))
     #expect(asset.skins.count == 1)
     let mesh = try #require(asset.meshes.first?.primitives.first)
     #expect(mesh.vertexCount == 425)
@@ -35,11 +35,13 @@ private func fixtureURL(_ name: String) -> URL {
 @Test func bundledAssetsLoadUnchangedUnderInterchangeChecks() throws {
     // Every checked-in GLB/glTF passes the stricter R5 validation, decodes no secondary UVs
     // or texture-coordinate selections, and reports nothing except the fixtures' influence fold.
+    // They load as `AssetLibrary` loads catalog entries: contained in the assets root, whose
+    // external `.bin` buffers (the fixtures) stay inside it.
     let assets = fixtureURL("").deletingLastPathComponent()
     let files = try #require(FileManager.default.enumerator(at: assets, includingPropertiesForKeys: [.isRegularFileKey]))
     var count = 0
     for case let url as URL in files where ["glb", "gltf"].contains(url.pathExtension.lowercased()) {
-        let asset = try GLBLoader.load(url: url)
+        let asset = try GLBLoader.load(url: url, packageRoot: assets)
         count += 1
         let expected: [String] = url.deletingLastPathComponent().lastPathComponent == "fixtures" ? ["skin_influences_reduced"] : []
         #expect(asset.diagnostics.map(\.code) == expected, "\(url.lastPathComponent): \(asset.diagnostics)")
@@ -50,7 +52,7 @@ private func fixtureURL(_ name: String) -> URL {
 }
 
 @Test func poseDeltaRotatesBone() throws {
-    let asset = try GLBLoader.load(url: fixtureURL("rig_fixture.gltf"))
+    let asset = try GLBLoader.loadTrustedFile(url: fixtureURL("rig_fixture.gltf"))
     let skel = try #require(try Skeleton.from(asset: asset))
     let pose = PoseDelta(rotations: ["spine_a": Float3(0, 0, 90)]).apply(to: skel)
     let world = pose.worldMatrices(skeleton: skel)
