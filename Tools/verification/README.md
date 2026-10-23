@@ -327,6 +327,62 @@ the check never produced (or an oversized one) FAILS the check, e.g.
 `studio-inspector-capture` while the PR #5 hooks are absent, or
 `build-debug-app` if the build itself fails.
 
+### Route children and neck TARGET/AWAY (ST-T11, ST-T07)
+
+Neither claim had a scene to run against until the original CharaStudio
+authored two from the synthetic fixture card (`original_scene_reload_probe.py
+--author-character … --author-scenes route-children,neck-target`; see
+[the fixture-scene section](../../docs/reference/studio/scene-editing.md#charastudio-authored-route-children-and-neck-targetaway-fixtures)).
+Their private paths go in the environment file as
+`IKKOKU_ROUTE_CHILDREN_SCENE` and `IKKOKU_NECK_TARGET_SCENE`.
+
+`route-children-motion.json` (lane check `studio-scenario-route-children-motion`,
+24 steps; scene plus `IKKOKU_SOURCE_AVATAR`) runs on route key 0, which is saved
+playing and looping over four points. Its children are folder key 9 and the
+fixture female key 10; the female renders on the route, but its document entry
+is a placeholder. The scenario asserts the route plays and the route-character
+diagnostic. It captures both children with `captureObject` and advances 2 s.
+Both must have moved, and each `assertRejected` "held within 0.5" control must
+fail. The folder must move more than 0.1 m in a further 0.5 s. `toggleRoute`
+then stops the route, and both children must sit within 1e-5 of their start
+(point 0) and stay there through a 2 s advance. After export → reimport the
+route reads back stopped, and the children still hold within 1e-5 after another
+2 s.
+
+`neck-target-orbit.json` (lane check `studio-scenario-neck-target-orbit`, 28
+steps; scene plus `IKKOKU_SOURCE_AVATAR` and `IKKOKU_STUDIO_LOOK_SETTINGS`)
+asserts the "Neck look override live: TARGET|AWAY" diagnostics and that both
+characters' eyes are TARGET-type. After a 3 s advance it captures hair-front
+bone 100 (`cf_J_hairF_00`) on key 0 (neck TARGET) and key 147 (neck AWAY), the
+bone a yaw visibly moves. It orbits +60° (`dx` 1.0471976 rad), advances 3 s,
+then orbits to −60° and advances 3 s. Every movement claim is an
+`assertRejected` "held within" control:
+
+- TARGET moves more than 0.05 m from front to +60° and more than 0.1 m from +60°
+  to −60°.
+- AWAY moves more than 0.15 m on each leg, and at −60° it is back within 0.01 m
+  of its front pose.
+- At both sides, AWAY's bone sits more than 0.15 m from TARGET's in the rig
+  frame.
+
+After export → reimport the live diagnostics return. A further 3 s advance holds
+both bones within 0.01 m of their pre-export poses, with the document camera
+still at −60°. Without `IKKOKU_STUDIO_LOOK_SETTINGS` the scenario fails 12 of
+28 steps. The four live-diagnostic asserts, both eye-look asserts and all six
+movement controls fail, and bone 100 stays inside every "held within" bound.
+The check therefore cannot pass on the animated pose alone (evidence:
+`.local/vm-fixture-scenes/controls/neck-target-nolook-report.json`). Speed and gaze magnitudes against the
+original are recorded in the reference section, not asserted here.
+
+Recorded 2026-10-18: a two-check manifest cut from the lane ran `--strict` on the
+Debug build of this change and passed 2/2. The route scenario passed 24/24
+steps. After 2 s both children sat 1.2051 m from their starts, at (1.2, y,
+−0.1111). The folder then moved 0.3333 m in the next 0.5 s, and every hold was
+within 1e-5. The neck scenario passed 28/28. Front to +60°, TARGET's bone moved
+0.0877 m and AWAY's 0.2380 m. From +60° to −60° they moved 0.1575 m and
+0.2364 m. At +60° and −60° the AWAY–TARGET separations were 0.2084 m and
+0.1940 m. LANE_RESULT
+
 ## Maker scenario hook (T-T04)
 
 When the app starts with `IKKOKU_MAKER_SCENARIO` set, `AppState` runs it
