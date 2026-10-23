@@ -63,12 +63,11 @@ extension SourceCharacterCard {
     /// shoes, every accessory shown); a field of another shape is rejected,
     /// never guessed. MessagePack-CSharp writes the byte[] as bin; a card
     /// that spells it as an array of nine small integers (written by other
-    /// tools) is read by value and `clothesStateIsArray` records the spelling.
+    /// tools) is read by value.
     public struct StatusWear: Equatable, Sendable {
         public var clothesState: [UInt8]
         public var shoesType: Int
         public var showAccessory: [Bool]
-        public var clothesStateIsArray = false
         public static let memberInit = StatusWear(clothesState: Array(repeating: 0, count: 9), shoesType: 0,
                                                   showAccessory: Array(repeating: true, count: 20))
         public init(clothesState: [UInt8], shoesType: Int, showAccessory: [Bool]) {
@@ -80,7 +79,7 @@ extension SourceCharacterCard {
                 let bytes: [Int]
                 if case .binary(let data) = value { bytes = data.map(Int.init) }
                 else if let members = value.arrayValue, members.allSatisfy({ $0.integerValue != nil }) {
-                    bytes = members.compactMap(\.integerValue); clothesStateIsArray = true
+                    bytes = members.compactMap(\.integerValue)
                 } else { bytes = [] }
                 guard bytes.count == 9 else { throw cardEditError("Saved Status.clothesState is not the 9-byte ClothesKind array.") }
                 guard bytes.allSatisfy({ (0...3).contains($0) }) else { throw cardEditError("Saved Status.clothesState has a value outside 0...3.") }
