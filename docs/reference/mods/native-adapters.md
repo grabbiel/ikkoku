@@ -81,9 +81,12 @@ pending.
 
 ## Startup and acceptance
 
-SwiftUI constructs `AppState` before `NSApplication` exists. Environment and
+SwiftUI constructs `AppState` before launching finishes. Environment and
 capture mounts, and saved-scene restores in `captureScene`, all run inside that
-initializer. The Mute mount used to read `NSApp.isActive` there, so the private
+initializer. On macOS 26 `NSApplication` did not exist yet. On macOS 27.0.1
+(Swift 6.4) it already exists there and reports `isRunning`, but `isActive` is
+false and `NSRunningApplication.current.isFinishedLaunching` is false until
+`didFinishLaunching` (checked 2026-10-23 with a minimal SwiftUI app). The Mute mount used to read `NSApp.isActive` there, so the private
 `.local/reverse/plugin-execution/native-adapter-capture-01` run terminated with
 SIGTRAP before capture; `Ikkoku-2026-09-25-071053.ips` identifies that method.
 
@@ -91,8 +94,12 @@ SIGTRAP before capture; `Ikkoku-2026-09-25-071053.ips` identifies that method.
 become/resign-active observers. Every remount replaces the pair and unmounting
 removes it. `SourceApplicationFocusHost` restores the replaced adapter's saved
 volume first, as before. It then delivers the initial focus sample immediately
-when `NSApp` exists. Otherwise it delivers the sample once, at
-`NSApplication.didFinishLaunchingNotification`. A real focus change supersedes a
+when `NSApp` exists and launching has finished
+(`NSRunningApplication.current.isFinishedLaunching`). Otherwise it delivers the
+sample once, at `NSApplication.didFinishLaunchingNotification`. Until
+2026-10-23 the test was only `NSApp != nil`. On macOS 27 that sampled the
+not-yet-active app during `AppState.init`, so an enabled Mute stored and zeroed
+the gain before any real focus event (see the rerun below). A real focus change supersedes a
 pending sample, so a duplicate startup loss cannot store zero through the
 repeated-loss quirk. `sourceMuteFocusHostDefersInitialFocusOnceAndRestoresReplacedAdapter`
 covers this state machine.
@@ -101,8 +108,9 @@ Headless captures exit before launch finishes, so two capture-only variables
 provide focus evidence. `IKKOKU_APPLICATION_FOCUS=0,1` delivers up to 64 focus
 losses (`0`) and gains (`1`) through the same method as the AppKit observers; it
 requires a mounted Mute adapter. `IKKOKU_NATIVE_PLUGIN_REPORT=/path/report.json`
-records the mounted package references, whether `NSApplication` existed, the
-observer count and the pending initial sample. After each event it also records
+records the mounted package references, whether `NSApplication` existed and
+whether launching had finished (`launchFinished`), the observer count and the
+pending initial sample. After each event it also records
 master and voice gain plus the RMS of a generated 440 Hz tone rendered offline
 through the app's voice and master mixers. Tone capture refuses running audio
 output and returns the bus to realtime mode with its gains unchanged. Startup
@@ -129,7 +137,9 @@ saved native scene. Each phase must exit zero and delivers `--focus-events`
 
 - manifest hashes, identities or the Mute setting change between phases;
 - a phase has anything other than one observer pair;
-- the initial sample was taken before `NSApplication` existed;
+- the initial sample was taken before launching finished (`launchFinished`
+  false while no sample is pending; until 2026-10-23 the probe checked only
+  that `NSApplication` existed, which macOS 27 always satisfies);
 - master, voice or tone gain differs from Mute 1.1;
 - reload pixels change.
 
