@@ -202,14 +202,37 @@ def row(name, report):
         model_text, summary["memory"]["peakFootprintBytes"] / 1048576)
 
 
+def uncomposited(report):
+    """Why a report's presentation numbers cannot be trusted, or None.
+
+    A drawable whose presented handler reports time 0 was never shown. A
+    saturated main thread drops some, but when most drawables are dropped while
+    the main thread has time to spare, the window was not being composited
+    (another Space, a full-screen app or Mission Control during the run)."""
+    summary = report["summary"]
+    callbacks = summary.get("displayLinkCallbacks", 0)
+    dropped = summary.get("droppedDrawables", 0)
+    busy = summary["mainThread"]["busyMsPerSecond"]
+    if callbacks >= 30 and dropped > 0.1 * callbacks and busy < 900:
+        return "%d of %d drawables never presented with the main thread %.0f ms/s busy" % (dropped, callbacks, busy)
+    return None
+
+
 def summarize(directories):
     print("| report | app/engine | presented FPS | hitches | draw ms p50/p95 | GPU ms p50/p95 | main busy ms/s | draw ms/s | model ms/s | other ms/s | model phases ms p50/p95 × rate | peak footprint MiB |")
     print("|---|---|---:|---:|---|---|---:|---:|---:|---:|---|---:|")
+    warnings = []
     for directory in directories:
         for name, report in load(directory).items():
             if "summary" not in report:
                 continue
-            print(row("%s/%s" % (os.path.basename(os.path.normpath(directory)), name), report))
+            label = "%s/%s" % (os.path.basename(os.path.normpath(directory)), name)
+            print(row(label, report))
+            reason = uncomposited(report)
+            if reason:
+                warnings.append("%s: %s; the window was probably not on screen, rerun it" % (label, reason))
+    for warning in warnings:
+        print("[perf] WARNING " + warning)
     return 0
 
 

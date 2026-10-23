@@ -28,8 +28,8 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    slider write or FK drag event costs 7–25 ms of SwiftUI graph update and
    layout, because the Studio and Maker views observe whole documents and
    arrays. The main thread then stays about 1000 ms/s busy. This is the main
-   lag left after the quick wins. Its fix needs `StudioModel.swift`, which is
-   frozen for this change, so it is phase 2.
+   lag left after the quick wins. Its fix restructures `StudioModel.swift`
+   and the views, so it is phase 2.
 3. **The display link shares the main run loop**, so any cost above turns
    into a presentation hitch.
 
@@ -253,7 +253,7 @@ which the "per second" column shows.
 | 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state | most of 775 ms/s (hypothesis) | low |
 | 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2 | as rank 2 | medium |
 | 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3 | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured) | low |
-| 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move | M5 | ~2 ms per move | low; renderer file, after #127 |
+| 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move | M5 | ~2 ms per move | low; renderer file |
 | 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis) | low |
 | 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3 | 0.9 ms per event | medium |
 | 9 | Source scene load at startup | 4,700 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
@@ -317,8 +317,9 @@ No run was made on an M1. These are estimates from the reference numbers
 
 ## Quick wins in this change
 
-All three are in Engine files outside the renderer files frozen for this
-change. None changes arithmetic: each skips work whose result is already known.
+All three are in Engine files. The renderer files and `StudioModel.swift`
+were frozen while #127 was in review, so nothing here touches them. None
+changes arithmetic: each skips work whose result is already known.
 
 1. **The catalog bone lookup in `SourceStudioPose.init`.**
    - What it did before: for every catalog bone it walked the character's
@@ -428,7 +429,7 @@ gains are for the reference machine unless stated; the M1 column of the
 | M2 | Every document change re-evaluates all of `StudioView` | `StudioView.body` reads `model.doc` (workspace list, toolbar, inspector) | measured | orbit: `GraphHost.flushTransactions` 733 ms/s, inside it `ViewBodyAccessor.updateBody` 194 ms/s and `NSHostingView.layout` 148 ms/s, against 19 ms/s in `StudioView.body` itself ([rank 4](#ranked-costs)) | split `StudioView` into child views that each read only what they show (workspace list, toolbar, timeline, inspector), with per-event state (camera, an FK drag in progress) outside what they read; most of the 7–25 ms per event (hypothesis until measured) | Low–medium: UI captures (`IKKOKU_CAPTURE_UI` lanes) must stay identical |
 | M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items | Medium: the camera is saved with the document and undo must keep working |
 | M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates; ~10 ms per write (hypothesis) | Low |
-| M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work | Low; renderer file, after #127 |
+| M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work | Low; renderer file |
 | M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking | `StudioModel.init` | hypothesis | the 15 Hz tick rate above is the late-handler case | drive the live step from the display link's target time with a fixed 1/30 s accumulator so animation speed never depends on main-thread load | Medium: the scenario lanes rely on fixed 1/30 s steps, which an accumulator keeps |
 | M7 | Status-line churn | `StudioModel.tick` → `RenderStatusReporter.status` | measured (negative) | assigns only when the text changes | none needed | — |
 | M8 | Native characters step hair dynamics once per `refresh()`, not per tick, so an orbit (one refresh per mouse event) runs their hair simulation faster than real time | `StudioModel.refresh` (`inst.stepHairDynamics(dt: 1/30)`) | measured (code path) | `studio-native` refreshes at 30/s idle; any extra refresh adds a 1/30 s step | step native hair only from the live tick | Behavior change; a correctness fix more than a performance one |
@@ -460,7 +461,7 @@ loaded machine, so only the shares are used).
 | G1 | GPU time is not the bottleneck on the reference machine | whole frame graph | measured | 1.3–1.9 ms GPU per frame at 1996×1824, 6 characters; draw encoding 0.6–0.9 ms CPU | — | — |
 | G2 | MSAA color/depth, overlay depth and pick depth are already memoryless | `RenderTargets` | measured (code) | `storageMode = .memoryless` | — | — |
 | G3 | Unchanged frames are fully re-rendered at the display rate, including the deform compute pass and the 2048² shadow map | `Renderer.draw`, `ViewportNSView` | measured | 120 draws/s while Studio content changes 30 times/s and the camera is still | skip prepare/encode/present when the frame and drawable size did not change (frame version counter); or lower `preferredFrameRateRange` when idle. ~3/4 of GPU and draw CPU at idle | Low |
-| G4 | Skin matrices are copied into a new `MTLBuffer` per skin set per frame and validated element by element | `Renderer.buildContext` | hypothesis | allocation per draw; not separated in the profile | write skin matrices into the frame ring | Low; renderer file, after #127 |
+| G4 | Skin matrices are copied into a new `MTLBuffer` per skin set per frame and validated element by element | `Renderer.buildContext` | hypothesis | allocation per draw; not separated in the profile | write skin matrices into the frame ring | Low; renderer file |
 | G5 | Shadow map re-rendered every frame | `Renderer` shadow pass | hypothesis | — | re-render only when casters or the light moved | Low |
 | G6 | No pipeline binary archive | `Pipelines` | hypothesis | pipeline creation happens during startup | `MTLBinaryArchive` for the production pipelines; measure first-launch versus warm | Low |
 | G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`MTKTextureLoader`, `.generateMipmaps`) | hypothesis | Metal allocation 470 MB peak for 6 characters | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1) | Medium: image quality must be checked |
@@ -501,9 +502,9 @@ loaded machine, so only the shares are used).
 The plan is ordered by expected effect on what a user feels, then by risk.
 Each step keeps the rules of this change: rendered output stays
 byte-identical, the harness numbers are recorded before and after, and the
-lanes and the Engine suite pass. Items 1, 2, 4, 5 and the camera part of 3
-need `StudioModel.swift` or renderer files, so they wait for the freeze to
-lift (#127).
+lanes and the Engine suite pass. Items 1–5 and 9 touch `StudioModel.swift`
+or renderer files. Those were frozen while #127 was in review; #127 merged
+(`main` `5e86b57`), so phase 2 can start after the phase-1 review.
 
 How to read the expected gain column:
 
@@ -583,8 +584,8 @@ All runs were on `0a19718` or later. The reports are under
   and its statistics cover the whole run. Allocation counts are therefore
   given for the whole run, not per tick.
 - **The Studio tick and refresh are inferred** from observed `StudioModel`
-  properties, because `StudioModel.swift` is frozen. Explicit hooks are phase
-  2, item 9.
+  properties, because `StudioModel.swift` was frozen during this work.
+  Explicit hooks are phase 2, item 9.
 - **No M1 run.** The low-end column is an estimate from core counts,
   bandwidth and drawable size.
 - **The drawable is not a full 4K frame.** It is 1996×1824 pixels, the

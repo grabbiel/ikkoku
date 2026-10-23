@@ -106,6 +106,16 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("studioTick 1.50/2.50 ×30/s", line)
         self.assertTrue(line.endswith("| 512 |"))
 
+    def test_summary_flags_runs_whose_window_was_not_composited(self):
+        hidden = report()
+        hidden["summary"].update(displayLinkCallbacks=1200, droppedDrawables=1100)
+        saturated = report()
+        saturated["summary"].update(displayLinkCallbacks=40, droppedDrawables=38)
+        saturated["summary"]["mainThread"]["busyMsPerSecond"] = 999
+        self.assertIn("1100 of 1200 drawables", perf_trace.uncomposited(hidden))
+        self.assertIsNone(perf_trace.uncomposited(saturated))
+        self.assertIsNone(perf_trace.uncomposited(report()))
+
     def test_profile_resolves_refs_and_charges_focus_callees(self):
         args = argparse.Namespace(trace="unused.trace", whole=True, thread="Main Thread", top=10, binary="Ikkoku", focus="^hot$", skip_toc=True)
         output = io.StringIO()
