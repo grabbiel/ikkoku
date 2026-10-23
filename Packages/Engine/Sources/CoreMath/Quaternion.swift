@@ -49,6 +49,15 @@ public extension simd_quatf {
         return q.normalized
     }
 
+    /// Checked `rotation(from:to:)`: throws `MathContractError` for nonfinite
+    /// or near-zero directions, which the unchecked form normalizes to NaN, and
+    /// otherwise returns exactly `rotation(from:to:)`.
+    static func checkedRotation(from: Float3, to: Float3) throws -> simd_quatf {
+        _ = try from.checkedNormalized("rotation from")
+        _ = try to.checkedNormalized("rotation to")
+        return rotation(from: from, to: to)
+    }
+
     static func lookRotation(forward: Float3, up: Float3 = Float3(0, 1, 0)) -> simd_quatf {
         let f = normalize(forward)
         var u = up
@@ -58,6 +67,20 @@ public extension simd_quatf {
         // Columns: right, up, forward  (object +Z faces forward)
         let m = float3x3(r, u2, f)
         return simd_quatf(m).normalized
+    }
+
+    /// Checked `lookRotation(forward:up:)`: throws for nonfinite or near-zero
+    /// `forward`/`up`, and when the +X fallback for an up parallel to forward is
+    /// itself (nearly) parallel to forward. Otherwise returns exactly
+    /// `lookRotation(forward:up:)`.
+    static func checkedLookRotation(forward: Float3, up: Float3 = Float3(0, 1, 0)) throws -> simd_quatf {
+        let f = try forward.checkedNormalized("look forward")
+        let unitUp = try up.checkedNormalized("look up")
+        // Same fallback decision as `lookRotation`, with a unit up so the
+        // perpendicular's length depends only on the angle.
+        let u = abs(dot(f, unitUp)) > 0.999 ? Float3(1, 0, 0) : unitUp
+        _ = try cross(u, f).checkedNormalized("look basis")
+        return lookRotation(forward: forward, up: up)
     }
 
     var forward: Float3 { act(Float3(0, 0, 1)) }

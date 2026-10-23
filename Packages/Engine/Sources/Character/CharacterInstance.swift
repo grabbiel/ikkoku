@@ -88,7 +88,12 @@ public final class CharacterInstance: Identifiable {
                 }
                 if !chain.isEmpty { hairChains.append(chain) }
             }
-            if !extras.isEmpty { skel = base.extended(with: extras) }
+            if !extras.isEmpty {
+                // Extras are copies of validated hair bones under slot-prefixed
+                // names, so this fails only if such a name is already a body bone.
+                // Keep the body skeleton then; the chains would index missing bones.
+                if let extended = try? base.extended(with: extras) { skel = extended } else { hairChains = [] }
+            }
         }
         skeleton = skel
         hairDynamics.reset()

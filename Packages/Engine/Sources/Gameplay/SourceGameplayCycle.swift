@@ -51,7 +51,9 @@ public enum SourceGameplayCycleError: Error, Equatable, LocalizedError {
 
 /// Commands owed to the surrounding source systems. Returning one never means
 /// that the corresponding scene, NPC, menu, or ADV behavior has been executed.
-public enum SourceGameplayDeferredEffect: Equatable, Sendable {
+/// `SourceGameplaySession` classifies each case as synchronous work or a
+/// completion barrier; Codable lets it persist the effects still owed.
+public enum SourceGameplayDeferredEffect: Equatable, Sendable, Codable {
     case persistWeek(SourceGameplayWeek)
     case updateWeekDisplay(SourceGameplayWeek)
     case advanceCharacterDays(Int)
@@ -76,7 +78,8 @@ public enum SourceGameplayDeferredEffect: Equatable, Sendable {
 /// Pure control-state translation of ActionGame.Cycle. It deliberately does not
 /// run source coroutines: the host must satisfy their scene/ADV/fade barriers
 /// before committing the matching completion operation below.
-public struct SourceGameplayCycle: Sendable {
+/// `SourceGameplaySession` enforces that ordering and persists this state.
+public struct SourceGameplayCycle: Sendable, Equatable, Codable {
     public static let timeLimit: Float = 500
     public static let eventLimit: Float = 499
     public private(set) var period: SourceGameplayPeriod
@@ -97,6 +100,34 @@ public struct SourceGameplayCycle: Sendable {
         self.isOpening = isOpening
         self.week = week
         self.period = isOpening ? .wakeUp : .myHouse
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case period, week, timer, timePass, timerVisible, isOpening, isShufflePoped, mapMoveActive
+    }
+
+    /// Native session persistence, not the original SaveData layout. Decoding
+    /// rejects values no operation below can produce instead of repairing them:
+    /// clock values stay finite and nonnegative, and only beginMapMove (action
+    /// periods only) sets mapMoveActive, which every period change clears.
+    public init(from decoder: any Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        period = try box.decode(SourceGameplayPeriod.self, forKey: .period)
+        week = try box.decode(SourceGameplayWeek.self, forKey: .week)
+        timer = try box.decode(Float.self, forKey: .timer)
+        timePass = try box.decode(Float.self, forKey: .timePass)
+        timerVisible = try box.decode(Bool.self, forKey: .timerVisible)
+        isOpening = try box.decode(Bool.self, forKey: .isOpening)
+        isShufflePoped = try box.decode(Bool.self, forKey: .isShufflePoped)
+        mapMoveActive = try box.decode(Bool.self, forKey: .mapMoveActive)
+        guard timer.isFinite, timer >= 0, timePass.isFinite, timePass >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .timer, in: box,
+                debugDescription: "Gameplay timer and display fraction must be finite and nonnegative.")
+        }
+        guard !mapMoveActive || period.isAction else {
+            throw DecodingError.dataCorruptedError(forKey: .mapMoveActive, in: box,
+                debugDescription: "MapMove can only be active in a source action period.")
+        }
     }
 
     /// A direct backward Change(Type) advances one weekday. An equal period does

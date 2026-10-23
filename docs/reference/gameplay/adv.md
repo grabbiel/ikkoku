@@ -489,9 +489,12 @@ the reference expectations embedded in the input file.
 
 ## Pending integration
 
-1. Implement a session and deferred-effect dispatcher with acknowledged scene/task
-   barriers and saveable in-flight state (`G-T01`). A cycle transition must wait
-   for actual completion rather than test-injected flags.
+1. The engine session host (`G-T01`, [effect inventory](cycle.md#session-host-and-effect-inventory-g-t01))
+   now holds cycle transitions on acknowledged barriers and persists in-flight
+   cycle state. An app host (`A-T01`) must acknowledge them on actual completion
+   rather than test-injected flags, and save a running `SourceADVInterpreter`
+   next to the session snapshot: the session neither owns nor persists one, and
+   ADV request acknowledgements stay on the interpreter.
 2. Bind source player/heroine data and implement `HeroineParam` (`G-T02`). Accept
    when original scenario 301 completes with source-verified values and a fixed
    event runs once across save/reload with its original ID.
