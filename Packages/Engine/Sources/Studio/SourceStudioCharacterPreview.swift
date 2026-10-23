@@ -235,6 +235,11 @@ public final class SourceStudioCharacterPreview {
     /// other step is a pure function of its inputs.
     private typealias SolvedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, effective: SourceStudioKinematicState, guides: [SourceStudioIK.Guide])
     private var solvedCache: SolvedPose?
+    /// Checkpoints rewind dynamics/animation, not edits or gaze. Revisions
+    /// avoid comparing rig-sized state when deciding whether their cached
+    /// evaluated pose and shape-bound simulation are still compatible.
+    private var shapeRevision: UInt64 = 0
+    private var neckPoseRevision: UInt64 = 0
     /// The import-time shape/binding inputs setShapeValues replays when the
     /// edited arrays replace the card's saved shape values.
     private let shapeBoneModifiers: SourceBoneModifiers?
@@ -250,6 +255,8 @@ public final class SourceStudioCharacterPreview {
     private let appearanceBindingsURL: URL
     public struct DynamicsCheckpoint {
         fileprivate let owner: ObjectIdentifier
+        fileprivate let shapeRevision: UInt64
+        fileprivate let neckPoseRevision: UInt64
         fileprivate let activeClothes: UInt16
         fileprivate let simulation: SourceStudioDynamics?
         fileprivate let step: (elapsed: Float, delta: Float)?
@@ -257,12 +264,17 @@ public final class SourceStudioCharacterPreview {
         fileprivate let animationPlayback: SourceStudioAnimation.Playback
     }
     public func captureDynamicsCheckpoint() -> DynamicsCheckpoint {
-        .init(owner: ObjectIdentifier(self), activeClothes: dynamicsActiveClothes, simulation: dynamics, step: dynamicsStep, evaluated: evaluatedCache, animationPlayback: animationPlayback)
+        .init(owner: ObjectIdentifier(self), shapeRevision: shapeRevision, neckPoseRevision: neckPoseRevision,
+            activeClothes: dynamicsActiveClothes, simulation: dynamics, step: dynamicsStep, evaluated: evaluatedCache, animationPlayback: animationPlayback)
     }
     public func restoreDynamicsCheckpoint(_ checkpoint: DynamicsCheckpoint) throws {
         guard checkpoint.owner == ObjectIdentifier(self) else { throw RigError.invalid("Dynamics checkpoint belongs to another character instance.") }
+        // A shape edit rebuilt the solver and simulation's rest geometry; an
+        // earlier simulation cannot be installed over it. Reject atomically.
+        guard checkpoint.shapeRevision == shapeRevision else { throw RigError.invalid("Dynamics checkpoint predates the current character shape.") }
         dynamics = checkpoint.simulation; dynamicsStep = checkpoint.step
-        evaluatedCache = checkpoint.activeClothes == dynamicsActiveClothes ? checkpoint.evaluated : nil
+        evaluatedCache = checkpoint.activeClothes == dynamicsActiveClothes && checkpoint.neckPoseRevision == neckPoseRevision
+            ? checkpoint.evaluated : nil
         animationPlayback = checkpoint.animationPlayback; solvedCache = nil
     }
     public func clearDynamicsStep() { dynamicsStep = nil; evaluatedCache = nil; solvedCache = nil; dynamics?.resetHistory() }
@@ -782,7 +794,7 @@ public final class SourceStudioCharacterPreview {
             let neck = Self.resolveNeckLook(source: neckLookSource, pattern: Int32(state.neckLookPattern), targetType: neckTargetType)
             neckLook = neck.override; liveNeckLook = neck.live; neckLookRuntime = neck.runtime
             hasSteppedNeckLook = false; reportedNeckLookFK = []
-            evaluatedCache = nil
+            invalidateNeckPose()
             neckLookNotes = state.neckLookPattern == savedExpression.neckLookPattern ? []
                 : neckLookSource == nil ? ["Neck look settings are not configured; neck pattern \(state.neckLookPattern) is saved and exported but not rendered."]
                 : neck.messages
@@ -917,6 +929,7 @@ public final class SourceStudioCharacterPreview {
         if let dynamicsBindings = shapeDynamicsBindings {
             simulation = try SourceStudioDynamics(rig: preview.source.rig, initializationPose: shapeBaseline, bindings: dynamicsBindings)
         }
+        shapeRevision &+= 1
         baseline = shapeBaseline
         controller = restored.controller
         self.pose = pose
@@ -1124,6 +1137,7 @@ public final class SourceStudioCharacterPreview {
                     // report once and stop retrying.
                     result = preOverride
                     runtime.lastLocalRotations = nil
+                    invalidateNeckPose()
                     if reportedNeckLookFK.insert(lookType).inserted {
                         diagnostics.append("Neck look override skipped: \(error); the animated pose is kept.")
                     }
@@ -1174,6 +1188,12 @@ public final class SourceStudioCharacterPreview {
     /// runtime exists: the Studio tick then steps updateNeckLook per frame.
     public var hasLiveNeckLook: Bool { neckLookRuntime != nil }
 
+    private func invalidateNeckPose() {
+        neckPoseRevision &+= 1
+        evaluatedCache = nil
+        // The animation/FK/IK solve precedes gaze and remains reusable.
+    }
+
     /// Rebuilds the TARGET/AWAY gaze runtime from the saved fixAngle, the way
     /// a scene load restores the calculator, so a seek or clock jump restarts
     /// the transition instead of carrying stale smoothing across the jump.
@@ -1182,7 +1202,7 @@ public final class SourceStudioCharacterPreview {
         do { neckLookRuntime = try SourceStudioNeckLookRuntime(settings: live.settings, fixAngle: live.fixAngle) }
         catch { diagnostics.append("Studio neck look runtime reset failed: \(error); the animated pose is kept.") }
         hasSteppedNeckLook = false
-        evaluatedCache = nil
+        invalidateNeckPose()
     }
 
     /// True when the effective eye pattern is live: the Studio tick then steps
@@ -1277,7 +1297,7 @@ public final class SourceStudioCharacterPreview {
                 neckRefPosition: neckRef.position, neckRefRotation: neckRef.rotation,
                 headRotation: head.rotation, target: target))
         hasSteppedNeckLook = true
-        evaluatedCache = nil
+        invalidateNeckPose()
         return runtime.lastLocalRotations != rotationsBefore || runtime.fixAngle != fixBefore
     }
 

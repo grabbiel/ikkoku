@@ -103,11 +103,16 @@ func sourceStudioCharacterPreviewShapeChangesInvalidateCachedPoseAtSameTimeWhenS
     }
     let preview = try fresh()
     let initial = try preview.editedPose(animationElapsed: 0.5)
+    let checkpoint = preview.captureDynamicsCheckpoint()
     var body = preview.savedBodyValues
     body[0] = body[0] < 0.5 ? 0.9 : 0.1
     let edited = try preview.editedPose(bodyValues: body, animationElapsed: 0.5)
     #expect(edited.localMatrices != initial.localMatrices)
     #expect(edited.localMatrices == (try fresh().editedPose(bodyValues: body, animationElapsed: 0.5)).localMatrices)
+    // A shape rebuild replaces the simulation's rest geometry as well as the
+    // pose baseline. Reject the old checkpoint before replacing either one.
+    #expect(throws: RigError.self) { try preview.restoreDynamicsCheckpoint(checkpoint) }
+    #expect(try preview.editedPose(bodyValues: body, animationElapsed: 0.5).localMatrices == edited.localMatrices)
     #expect(try preview.editedPose(animationElapsed: 0.5).localMatrices == initial.localMatrices)
 }
 

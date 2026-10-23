@@ -372,3 +372,42 @@ func sourceStudioExpressionPortsBlinkFlagMouthFixedRateAndEyeLookGuide() throws 
     try preview.setExpressionState(preview.expressionState.with { $0.neckLookPattern = 1 })
     #expect(preview.hasLiveNeckLook && preview.eyeLookRates != nil)
 }
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(expressionPreviewVariables) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires the Studio scenario scene, source avatar, pose contract, Maker library, look settings and a Metal device"))
+func sourceStudioExpressionCheckpointKeepsCurrentNeckPatternAndGaze() throws {
+    let preview = try expressionPreview()
+    let kinematics = SourceStudioKinematicState(enableFK: false, enableIK: false,
+        activeFK: [Bool](repeating: false, count: 7), activeIK: [Bool](repeating: false, count: 5))
+    func pose() throws -> RigPose { try preview.editedPose(kinematics: kinematics, animationElapsed: 0.5) }
+    func gaze(_ camera: Float3) throws {
+        for _ in 0..<8 {
+            try preview.updateNeckLook(deltaTime: 1 / 30, cameraModelPosition: camera,
+                kinematics: kinematics, animationElapsed: 0.5)
+        }
+    }
+    try preview.setExpressionState(preview.expressionState.with { $0.neckLookPattern = 4 })
+    let fixed = try pose(), fixedCheckpoint = preview.captureDynamicsCheckpoint()
+    try preview.setExpressionState(preview.expressionState.with { $0.neckLookPattern = 1 })
+    try gaze(Float3(-2, 1.4, 1.5))
+    let lookingLeft = try pose()
+    #expect(lookingLeft.localMatrices != fixed.localMatrices)
+    try preview.restoreDynamicsCheckpoint(fixedCheckpoint)
+    #expect(preview.expressionState.neckLookPattern == 1)
+    #expect(try pose().localMatrices == lookingLeft.localMatrices)
+
+    // The pattern can stay the same while the live runtime changes. Rolling
+    // back dynamics must retain the current gaze, including a runtime reset.
+    let leftCheckpoint = preview.captureDynamicsCheckpoint()
+    try gaze(Float3(2, 1, 1.5))
+    let lookingRight = try pose()
+    #expect(lookingRight.localMatrices != lookingLeft.localMatrices)
+    try preview.restoreDynamicsCheckpoint(leftCheckpoint)
+    #expect(try pose().localMatrices == lookingRight.localMatrices)
+    let rightCheckpoint = preview.captureDynamicsCheckpoint()
+    preview.resetNeckLook()
+    let reset = try pose()
+    #expect(reset.localMatrices != lookingRight.localMatrices)
+    try preview.restoreDynamicsCheckpoint(rightCheckpoint)
+    #expect(try pose().localMatrices == reset.localMatrices)
+}

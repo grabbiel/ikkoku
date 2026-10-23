@@ -125,7 +125,12 @@ skirt bindings use group index 6. Re-enabling resets particles to the new upstre
 pose. Backwards seeks and edits at a paused frame discard particle history. A
 failed component frame commits no component state. Preview checkpoints include
 particles, the pending dynamics tick, evaluated pose and animation clock so a
-failed plug-in callback can roll back the whole pose consumer state.
+failed plug-in callback can roll back their state. Checkpoints do not rewind
+expression edits or gaze: the evaluated pose is reused only when clothing
+activity and the neck-pose revision still match. Pattern changes, gaze updates
+and gaze resets invalidate that checkpoint cache without discarding the cached
+animation/FK/IK solve. A checkpoint from before a shape rebuild is rejected
+before any state changes, because its simulation carries the old rest geometry.
 
 Binding uses exact source CAB/path identities; only the assembled hair namespace
 may change when empty slots compact the assembly. It never matches a different

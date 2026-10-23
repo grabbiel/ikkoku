@@ -725,6 +725,12 @@ hide a missing-animation error from a later explicit edit. Playback reset clears
 both pose caches. The harness runner also removes an earlier report before each
 launch, so exit zero without a new report cannot pass using stale measurements.
 
+Integration with editable expressions also guards checkpoint restoration with
+constant-time shape and neck revisions. Restoring dynamics retains the current
+neck pattern and live gaze; shape changes reject checkpoints bound to the old
+rest geometry before mutating state. Neck revision updates leave `solvedCache`
+intact, preserving the once-per-tick animation/FK/IK solve.
+
 Fresh validation, separate from the historical runs above:
 
 - `swift test --package-path Packages/Engine --filter
@@ -736,6 +742,14 @@ Fresh validation, separate from the historical runs above:
   at an unchanged elapsed time; explicit-animation errors through both caches;
   and pre-sampling before dynamics with checkpoint replay. The independent
   100-frame dynamics oracle's maximum world error was `2.4102368e-7`.
+- Integration checkpoint review: **15 focused tests passed, no skips**, using
+  the private expression, shape, hair and skirt fixtures. The new regressions
+  failed before the fix and now verify retained neck edits/gaze at unchanged
+  elapsed time and atomic refusal of a checkpoint from an earlier shape
+  baseline; unchanged dynamics checkpoint replay still passes. The independent
+  100-frame oracle remains at `2.4102368e-7` maximum world error. Command:
+  `swift test --package-path Packages/Engine --filter
+  'sourceStudioExpression(Checkpoint|EditRenders|PortsBlink)|sourceStudioCharacterPreview(Caches|ShapeChanges)|sourceStudioDynamics'`.
 - `python3 -m unittest discover -s Tools/verification -p test_perf_trace.py`:
   **10 passed**, including refusal of stale output.
 - `xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator
