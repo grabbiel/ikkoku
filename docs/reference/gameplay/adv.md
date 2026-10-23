@@ -1,23 +1,27 @@
 # Fixed-event selection and bounded ADV execution
 
-Reviewed 2026-10-17 against the working tree (G-T03 coverage slice). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract; the app still has no gameplay session host.
+Reviewed 2026-10-22 against the working tree (G-T03 host-request slice). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract; the app still has no gameplay session host.
 
 The native `Gameplay` module can select original fixed-character events and
-execute a bounded subset of the original ADV scalar commands. This extends the
-day/period state model with actual event eligibility, variables, arithmetic,
-branches, command batching, and timed waits. NPC navigation, character-state
-bindings, presentation commands, and complete ADV execution remain unported.
+execute a bounded subset of the original ADV commands: the scalar commands
+(variables, arithmetic, branches, batching, timed waits) and, since the
+host-request slice, fourteen presentation commands whose effects are issued as
+typed, saveable host requests. NPC navigation, character-state bindings, the
+remaining presentation commands and complete ADV execution remain unported.
 These kernels run in tests and CLI traces. The app has Maker and Studio only; no
-NPC entity, campaign save or asynchronous presentation host consumes them yet.
+NPC entity, campaign save or presentation host consumes the requests yet, so
+nothing is displayed, played or loaded.
 
 ## Source recovery and original data
 
 The converter reads `.local/reverse/managed-recovery/index.json`, chooses the main
 game's selected recovered assembly project, and honors `manifest.json` per-type
 compatibility overrides. It rejects selected files containing decompiler error
-stubs. The generated contract hashes 22 selected source files, including
+stubs. The generated contract hashes 40 selected source files, including
 `FixEventScheduler`, `Cycle`, `ScenarioData`, `CommandList`, `TextScenario`,
-`ValData`, and each implemented command handler. Previously generated incomplete
+`MainScenario`, `ValData`, `NullCheck`, `StringExtensions`, the `BGM` enum and each
+implemented command handler, and checks the 24 implemented ordinals against the
+recovered `ADV.Command` enum. Previously generated incomplete
 decompilations are not used.
 
 Three small bundles were fetched read-only from the local Windows installation
@@ -91,6 +95,9 @@ when eligible. Variables retain distinct Int32, Single, Boolean, and String type
 | 23 | Jump | Local tag lookup; a missing local tag continues normally. External file jumps report unsupported. |
 | 25 | Wait | Float32 timer, default-zero parse behavior, batching, and cancellation by explicit Next input. |
 
+IDs 16–19, 35, 37, 44, 45, 88, 106, 112, 125, 128 and 169 are presentation
+commands executed as host requests; see the next section.
+
 Several recovered details matter for compatibility:
 
 - `ConvertBeforeArgsProc` runs before whole-argument variable substitution.
@@ -116,19 +123,104 @@ Several recovered details matter for compatibility:
   decimal-point locale used by these fixtures. The JSON interchange separately
   preserves float32 values for round trips.
 
-The state reports `ready`, `frameBoundary`, `waiting`, `closed`, `exhausted`, or
-`faulted`, plus the next command index and active waits. `exhausted` means that
+The state reports `ready`, `frameBoundary`, `waiting`, `awaitingHost`,
+`awaitingNext`, `closed`, `exhausted`, or `faulted`, plus the next command index,
+active waits, pending host requests and the batch counter. `exhausted` means that
 the program's command records have been consumed; it does not mean the original
 ADV scene has closed. A fault records the exact executing command index, command
 ID, and reason. Previously executed scalar effects are retained for inspection.
 
-Unsupported commands stop when encountered, including character/player bindings,
-NPC actions, dialogue/choice presentation, audio, cameras, animation, task/background
-execution, external-file opens, and arbitrary plug-in behavior. Extended literal
+Unsupported commands stop when encountered, including character/player bindings
+(`HeroineParam`, `ParameterFile`), NPC actions, choices, voice/SE playback commands,
+cameras, backgrounds, Fade/Filter effects, animation other than CharaMotion,
+task/background execution, external-file opens, and arbitrary plug-in behavior. Extended literal
 types, scientific IF literals, culture-sensitive string ordering, nonfinite
 numbers, and random VAR alternatives also stop explicitly. The implemented
 command subset is not a complete ADV VM. Native bounds limit recursion,
 instructions, argument sizes, variables, input files, and trace output workload.
+
+## Host requests for presentation commands (G-T03 second slice)
+
+Sources: [SourceADVHostRequest.swift](../../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift),
+[SourceADVArgumentParsing.swift](../../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift),
+[SourceADVInterpreter.swift](../../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift);
+independent model [adv_host_requests.py](../../../Tools/reverse/analysis/adv_host_requests.py).
+
+**Request model.** A presentation command does not present anything natively.
+Its handler arguments are decoded exactly as the recovered `Do()` decodes them
+and queued as a `SourceADVHostRequest`: `requestID` (sequential per
+interpreter), `pc` (source command index), `commandID`, `batch` (the
+`RequestNextLine` count when it ran), a `blocking` policy and a typed `command`
+payload (`{"kind": …, "arguments": …}` in JSON, nil fields omitted). The host
+calls `drainRequests()` to receive them in source execution order, then
+`acknowledge(_:variables:)` for blocking ones, or `hostFailure(_:reason:)` when it
+cannot perform one (for example a missing character, which would throw inside the
+source handler); that faults at the request's pc. Character numbers keep the
+source convention: `2147483647` (`int.MaxValue`, the handlers' default) means
+the current character. The whole interpreter (program, variables, waits, queued
+and pending requests, Next state, batch counter, Text bindings) is `Codable`; a
+decoded state is validated and resumes identically, including mid-wait,
+mid-acknowledgement and mid-Next.
+
+**Frame model.** `tick` follows `TextScenario.MessageWindowProc`:
+
+1. `UpdateRegulate` gates come first. While a MapChange request is pending
+   (`advScene.Map.isMapLoading`), or a SceneFade request is pending and
+   `isSceneFadeRegulate` is set (`sceneFade.IsFadeNow`), nothing runs: no Next,
+   no Wait timer, no command. The flag defaults to true (`TextScenario.MemberInit`)
+   and SceneFadeRegulate changes it.
+2. Otherwise Wait timers advance. The next batch starts on explicit Next, or
+   when no Text waits for Next and no Wait or SceneFade is still processing.
+   `RequestNextLine` runs `CommandList.ProcessEnd` (ends Waits and a non-gating
+   SceneFade) and `textHash.Clear()`; only this advance path also runs
+   `CurrentCharaData.Clear()`. Local jumps re-enter `RequestNextLine` without it.
+3. A Text batch waits for Next. The source's first click on incomplete text only
+   completes the display; the host forwards Next once its display is complete.
+
+**Commands.** Arguments are `CommandBase.Initialize` (non-empty arguments
+override `ArgsDefault`, extras append) followed by `TextScenario.ReplaceVars` on
+every argument (whole-argument substitution; none of these handlers overrides
+`ConvertBeforeArgsProc`). "Fault" means an uncaught exception in `Do()`, which
+stops the source coroutine; the native kernel faults at that pc.
+
+| ID | Command | Recovered handler | Request / effect | Blocking | Argument decoding |
+|---:|---|---|---|---|---|
+| 128 | CharaLookNeck | `ADV.Commands.Chara.LookNeck.Do` | `charaLookNeck {chara, pattern, rate}` → `ChangeLookNeckPtn` | none | Defaults `[int.MaxValue, 0, 1]`; `int.Parse` No and Ptn, `float.Parse` Rate; any exception faults. |
+| 125 | CharaLookEyes | `ADV.Commands.Chara.LookEyes.Do` | `charaLookEyes {chara, pattern}` → `ChangeLookEyesPtn` | none | Defaults `[int.MaxValue, 0]`; `int.Parse` No and Ptn. |
+| 88 | BGMPlay | `ADV.Commands.Sound.BGM.Play.Do` | `bgmPlay` with `number` (+`enumName`) or `bundle`, `asset?`, `delay`, `fade?`, `isAsync`, `pitch?`, `panStereo?`, `time?`, `volume?` | none | Nine defaults (`Delay` 0, `isAsync` True). Bundle: `int.TryParse`, else `Utils.Enum<Illusion.Game.BGM>.FindIndex(ignoreCase)` (28 names checked against the recovered enum), else a bundle path. Asset/Fade/Pitch/PanStereo/Time/Volume via `SafeProc`; `float.Parse`, `bool.Parse`. |
+| 112 | CharaExpression | `ADV.Commands.Chara.Expression.Do` → `Base.Expression.Convert` | `charaExpression [entry]` (`chara`, `lookupKey?`, `expression?`) | none | Default `[int.MaxValue]`. Per entry: with a second argument, `int.Parse(No)` outside any try (faults), then the ExpLoad table (always empty: ExpLoad is unsupported) and the personality table (`Manager.Game.GetExpression`, host). A key that is not a valid `Expression.Pattern` yields a lookup-only entry (the fallback parse consumes the same two arguments and changes nothing). Otherwise `Expression.Data` parses No and 11 fields (`Expression.Initialize` order) with exceptions swallowed; when both a key and fields are present the host must reject a table hit (`requiresLookupMiss`). |
+| 106 | CharaMotion | `ADV.Commands.Chara.Motion.Do` → `Base.Motion.Convert`, `Motion.Data` | `charaMotion [motion]`; the host starts `CrossFadeStart` when the list is non-empty | none | Default `[int.MaxValue]`. MotionLoad table always empty. `Data`: No, State, eight `SafeGet` names, LayerNo (`Split(',')` + `int.Parse`); exceptions swallowed, leaving later fields nil (`chara` 0). |
+| 19 | Expression | `ADV.Commands.Base.Expression.Do` | Appends one entry list to the Text bindings (`expressions`) | — | As 112. |
+| 18 | Motion | `ADV.Commands.Base.Motion.Do` | Appends to `motions` | — | As 106. |
+| 17 | Voice | `ADV.Commands.Base.Voice.Do`, `Voice.Data` | Appends to `voices` | — | Default `[int.MaxValue]`; No `int.Parse`, Bundle/Asset `SafeGet`, Personality `int.Parse` and Pitch `float.Parse` via `SafeProc`; exceptions swallowed. Nil personality/pitch and an empty bundle are resolved by the host (character `voiceNo`/`voicePitch`, `bundleVoices` memory). |
+| 16 | Text | `ADV.Commands.Base.Text.Do` | `text {name, text, voices?, expressions?, motions?}`: the `CurrentCharaData` lists since the last advance, which `Text.Next` plays in step with the voices | next | No defaults; `Text.Data`: name = argument 0, text = argument 1 (`@br` was converted at import). `ReplaceText` name tags and the backlog are host work. |
+| 169 | MapChange | `ADV.Commands.Game.MapChange.Do` | `mapChange {mapNumber? / mapName?, fade}`; the acknowledgement carries `Cycle.ADVVariables`, stored as String variables | acknowledge (map-loading gate; survives ProcessEnd) | Defaults `["0", "1"]`. `int.TryParse` No, else the host's `Map.ConvertMapNo(name)`. Fade: `Scene.Data.FadeType` `Check(ignoreCase)`, else `bool.TryParse` (false → None), else `int.TryParse`, whose success clamps the unchanged default, so InOut stays. The source writes ADV variables synchronously after `Map.Change`; that is equivalent to writing them at acknowledgement only because MapChange ends its batch, so `Multi=true` faults (no installed record uses it). The host must evaluate them right after starting the change. |
+| 35 | NullLoad | `ADV.Commands.Base.NullLoad.Do` | `nullLoad {version, map?}` → bundle `map/advpos/<version:00>/<name>.unity3d` | none | Defaults `["0", ""]`; `int.Parse` Version; the handler's default-map literal maps to nil (`default`), other names go through the host's `Map.GetParam(name).AssetName`. |
+| 37 | NullSet | `ADV.Commands.Base.NullSet.Do` | `nullSet {name, target?}` (`Base`/`Camera`/`Chara`; nil does nothing) | none | Defaults `["", "Base"]`; `Check(ignoreCase, Enum<Type>.Names)`. |
+| 44 | SceneFade | `ADV.Commands.Effect.SceneFade.Do`/`Process`/`Result` | `sceneFade {fadeIn, time?, textureBundle?, textureAsset?}` | acknowledge (`Process` returns `fade.IsEnd`; with `isSceneFadeRegulate` also the UpdateRegulate gate; ProcessEnd → `ForceEnd`) | Defaults `["in", "", "", "", "none"]`; `Compare("in", ignoreCase)`, Time `SafeProc` `float.Parse`. A non-empty Color faults as unsupported (`GetColor` is not modelled; no installed record sets it). |
+| 45 | SceneFadeRegulate | `ADV.Commands.Effect.SceneFadeRegulate.Do` | Interpreter state `sceneFadeRegulate` (saved) | — | Default `["True"]`; `bool.Parse`. |
+
+**Parsing.** `SourceCLR` reproduces Unity Mono's `mscorlib` (decompiled from the
+installed `Managed/mscorlib.dll`): `int.Parse`/`TryParse` (invariant fast path:
+white space, one sign, ASCII digits, NUL terminates, overflow throws),
+`float.Parse` (`(float)double.Parse(s, Float | AllowThousands)` state machine plus
+Mono's positive-overflow check, so `3.4028235e38` throws), `bool.Parse` (`Trim`
+then ignore-case comparison). Results the kernel cannot reproduce exactly fault
+as unsupported instead of guessing, even where the source would swallow an
+exception: non-ASCII digits or white space, `,` (culture group/decimal
+separator), culture NaN/Infinity symbols, non-canonical digit strings for the
+native `Double.ParseImpl`, Unicode-version-dependent white space (U+180E, U+200B,
+U+FEFF), and culture-sensitive string comparisons (`Check`, `Enum.FindIndex`,
+`Compare`) that differ only in punctuation, spaces or non-ASCII characters. The
+current culture is assumed to be non-Turkic with `.` as decimal separator (as in
+the game's Japanese environment).
+
+**Not covered.** Rendering, audio, map loading, character lookup and personality
+tables are host work, and no host exists yet. A BGMPlay whose Pitch, PanStereo,
+Time or Volume throws faults before its request is issued, whereas the source
+has already started playback (no installed record does this). Expression and
+motion definitions loaded by ExpLoad/MotionLoad, choices, skip and auto modes,
+backlog, and expression icons (`ExpressionIcon` is unsupported) are excluded.
 
 ## Concrete original-source execution
 
@@ -139,15 +231,18 @@ binding is unported. This is a real original data path through the native
 interpreter, with a visible compatibility boundary. It is not a reconstructed
 dialogue or a playable NPC interaction.
 
-## Original scenario command coverage (G-T03 first slice)
+## Original scenario command coverage (G-T03)
 
 `Tools/reverse/analysis/adv_command_coverage.py` measures every `ScenarioData`
 asset of the installed `abdata/adv/scenario` tree against the native kernel. It
 reuses the contract tool's recovered-source selection and UnityPy extraction,
 names ordinals from the recovered `ADV.Command` enum, and resolves the handler
 class each `CommandList.CommandGet` arm constructs (enclosing `ADV` namespace
-first, then exactly one `using` namespace, as C# does). Outputs contain original
-arguments and stay in ignored `.local/gt03-adv-coverage/`; this page records
+first, then exactly one `using` namespace, as C# does). It also checks that the
+presentation model's handler classes and its `BGM`, `FadeType` and `NullSet.Type`
+name tables match the recovered source. Outputs contain original arguments and
+stay in ignored `.local/gt03-adv-coverage/` (scalar slice) and
+`.local/gt03b-adv-host-requests/` (host-request slice); this page records
 aggregate counts only.
 
 **Corpus.** The VM listing found 225 scenario bundles (5,761,559 bytes; 274 `._*`
@@ -166,122 +261,158 @@ using **120 distinct ordinals**; every `_version` is 0.
 | `common_param` | 2 | 150 | 236 |
 | `op` | 1 | 8 | 811 |
 
-**Implemented subset in real data.** Eight implemented ordinals occur (None and
-Switch never do): Tag 6,949, Close 6,853, VAR 4,722, Jump 3,848, Calc 3,368,
-IF 1,922, Wait 826 and Clamp 76 records, 28,564 in total (9.7%). The other 112
-ordinals (265,829 records) are unsupported natively. Every used ordinal has an
-original `CommandGet` handler, so no original no-op is mistaken for a fault.
-Inside implemented commands, 101 VAR records carry random alternatives (native
-fault whenever executed) and 299 IF records name an external `file:tag` branch
-(native fault only when that branch is taken). All 3,848 Jump targets are local.
+**Implemented subset in real data.** With the host-request slice, 22
+implemented ordinals occur in **239,612 of 294,393 records (81.4%)**; the scalar
+slice alone covered 8 ordinals and 28,564 records (9.7%; None and Switch never
+occur). The fourteen presentation ordinals account for 211,048 records: Text
+63,122, Voice 31,165, Expression 19,901, CharaLookNeck 16,529, CharaLookEyes
+15,907, Motion 14,535, SceneFade 12,106, CharaExpression 9,586, CharaMotion 8,407,
+SceneFadeRegulate 5,687, NullSet 5,501, BGMPlay 3,205, NullLoad 2,982 and
+MapChange 2,415. The other 98 ordinals (54,781 records) are unsupported natively.
+Every used ordinal has an original `CommandGet` handler, so no original no-op is
+mistaken for a fault. Inside implemented commands, 101 VAR records carry random
+alternatives (native fault whenever executed) and 299 IF records name an external
+`file:tag` branch (native fault only when that branch is taken); all 3,848 Jump
+targets are local. Under default inputs, 312 presentation records (156
+CharaExpression, 156 Expression) pass a character number that names an absent
+host variable, a definite `int.Parse` exception in `Expression.Convert`; all lie
+after an earlier halt. Another 1,072 presentation records name a variable that
+their own asset assigns, so their outcome is value-dependent.
 
 **Static first unsupported command** (program order, ignoring values):
 
-| First unsupported index | Assets |
-|---|---:|
-| 0 | 9,569 |
-| 1 | 436 |
-| 2–4 | 366 |
-| 10–19 | 4 |
-| none | 88 |
+| First unsupported index | Scalar slice | Host-request slice |
+|---|---:|---:|
+| 0 | 9,569 | 1,724 |
+| 1 | 436 | 848 |
+| 2–4 | 366 | 1,844 |
+| 5–9 | 0 | 1,255 |
+| 10–19 | 4 | 1,347 |
+| 20+ | 0 | 799 |
+| none | 88 | 2,646 |
 
-Only 1,360 of 294,393 records (0.46%) precede their asset's first unsupported
-command. **88 assets contain no unsupported ordinal**: 74 empty assets, 13
-assets consisting of one Close, and one 11-command asset in `common` whose VAR
-dereferences a host variable. No asset with dialogue, presentation or
-character commands executes end to end today.
+Records preceding their asset's first unsupported command rose from 1,360 (0.46%)
+to **80,992 (27.5%)**. 2,646 assets contain no unsupported ordinal (the first
+slice's greedy prediction for these fourteen commands was 2,646 and 80,992,
+matched exactly by the rescan); 2,640 of them (2,566 non-empty) also have no
+certain argument halt, the other 6 contain a VAR random alternative. These are
+static ceilings: value-dependent faults remain possible and every request still
+needs a host.
 
-**Which command blocks first.** Ranked by the number of assets whose first
-unsupported command it is (the full 27-row ranking is in `coverage.json`).
-"Sole" counts assets for which it is the only unsupported ordinal.
+**Which command blocks first now.** Ranked by the number of assets whose first
+unsupported command it is (the full ranking is in `coverage.json`). "Sole" counts
+assets for which it is the only unsupported ordinal.
 
 | Rank | ID | Command | Recovered handler | Uses | Assets | First blocker | Sole |
 |---:|---:|---|---|---:|---:|---:|---:|
-| 1 | 128 | CharaLookNeck | `ADV.Commands.Chara.LookNeck` | 16,529 | 8,525 | 2,977 | 0 |
-| 2 | 88 | BGMPlay | `ADV.Commands.Sound.BGM.Play` | 3,205 | 3,008 | 2,588 | 0 |
-| 3 | 169 | MapChange | `ADV.Commands.Game.MapChange` | 2,415 | 2,219 | 1,262 | 0 |
-| 4 | 43 | Fade | `ADV.Commands.Effect.Fade` | 6,827 | 2,833 | 1,112 | 0 |
-| 5 | 38 | BGLoad | `ADV.Commands.Base.BackGroundLoad` | 2,383 | 1,938 | 784 | 0 |
-| 6 | 112 | CharaExpression | `ADV.Commands.Chara.Expression` | 9,586 | 6,458 | 462 | 136 |
-| 7 | 17 | Voice | `ADV.Commands.Base.Voice` | 31,165 | 8,907 | 450 | 0 |
-| 8 | 19 | Expression | `ADV.Commands.Base.Expression` | 19,901 | 6,314 | 178 | 0 |
-| 9 | 45 | SceneFadeRegulate | `ADV.Commands.Effect.SceneFadeRegulate` | 5,687 | 5,174 | 78 | 0 |
-| 9 | 106 | CharaMotion | `ADV.Commands.Chara.Motion` | 8,407 | 6,748 | 78 | 0 |
-| 9 | 201 | ParameterFile | `ADV.Commands.Game.ParameterFile` | 6,243 | 5,810 | 78 | 0 |
-| 12 | 165 | HeroineParam | `ADV.Commands.Game.HeroineParam` | 3,365 | 1,318 | 76 | 76 |
+| 1 | 201 | ParameterFile | `ADV.Commands.Game.ParameterFile` | 6,243 | 5,810 | 2,030 | 1,706 |
+| 2 | 43 | Fade | `ADV.Commands.Effect.Fade` | 6,827 | 2,833 | 1,648 | 5 |
+| 3 | 38 | BGLoad | `ADV.Commands.Base.BackGroundLoad` | 2,383 | 1,938 | 1,235 | 0 |
+| 4 | 120 | CharaVoicePlay | `ADV.Commands.Chara.VoicePlay` | 1,790 | 957 | 589 | 0 |
+| 5 | 51 | Filter | `ADV.Commands.Effect.Filter` | 457 | 455 | 452 | 0 |
+| 6 | 107 | CharaMotionDefault | `ADV.Commands.Chara.MotionDefault` | 909 | 771 | 386 | 67 |
+| 7 | 117 | CharaCoordinate | `ADV.Commands.Chara.Coordinate` | 1,354 | 1,309 | 296 | 68 |
+| 8 | 21 | Open | `ADV.Commands.Base.Open` | 2,869 | 2,197 | 253 | 253 |
+| 9 | 162 | CharaEvent | `ADV.Commands.Game.CharaEvent` | 1,665 | 1,465 | 161 | 6 |
+| 10 | 156 | CharaActive | `ADV.Commands.Game.CharaActive` | 1,842 | 481 | 117 | 34 |
+| 11 | 39 | BGRelease | `ADV.Commands.Base.BackGroundRelease` | 1,594 | 1,588 | 95 | 0 |
+| 12 | 165 | HeroineParam | `ADV.Commands.Game.HeroineParam` | 3,365 | 1,318 | 92 | 76 |
 
-The most used command, Text (`ADV.Commands.Base.Text`, 63,122 records in 8,956
-assets), is the first blocker of only 46 assets because character look, audio,
-map and fade setup precede it. Grouped by handler namespace:
+Grouped by handler namespace (`Sound.BGM` still holds one unsupported ordinal):
 
 | Namespace (`ADV.Commands.*`) | Used IDs | Unsupported IDs | Uses | Assets | First blocker |
 |---|---:|---:|---:|---:|---:|
-| `Chara` | 35 | 35 | 65,303 | 9,268 | 3,558 |
-| `Sound.BGM` | 2 | 2 | 3,220 | 3,008 | 2,589 |
-| `Base` | 31 | 23 | 173,922 | 10,004 | 1,544 |
-| `Game` | 17 | 17 | 17,547 | 7,246 | 1,471 |
-| `Effect` | 7 | 7 | 26,261 | 6,108 | 1,194 |
-| `Camera` | 10 | 10 | 1,115 | 351 | 19 |
-| `EventCG` | 3 | 3 | 3,673 | 970 | 0 |
-| `CameraEffect` | 3 | 3 | 1,936 | 852 | 0 |
+| `Game` | 17 | 16 | 17,547 | 7,246 | 2,513 |
+| `Effect` | 7 | 5 | 26,261 | 6,108 | 2,100 |
+| `Base` | 31 | 17 | 173,922 | 10,004 | 1,657 |
+| `Chara` | 35 | 31 | 65,303 | 9,268 | 1,431 |
+| `Camera` | 10 | 10 | 1,115 | 351 | 95 |
+| `Sound.SE2D` | 2 | 2 | 484 | 268 | 9 |
+| `CameraEffect` | 3 | 3 | 1,936 | 852 | 7 |
+| `EventCG` | 3 | 3 | 3,673 | 970 | 4 |
+| `Sound.BGM` | 2 | 1 | 3,220 | 3,008 | 1 |
 | `H` | 7 | 7 | 837 | 378 | 0 |
-| `Sound.SE2D` | 2 | 2 | 484 | 268 | 0 |
 | `Object` | 3 | 3 | 95 | 4 | 0 |
 
-Implementing one blocker mostly moves halts forward; it rarely completes an
-asset. A greedy order that repeatedly implements the current most frequent
-first blocker (static, by ordinal only) reaches:
+A greedy order that repeatedly implements the current most frequent first
+blocker (static, by ordinal only) reaches:
 
 | After implementing | Assets with no unsupported ordinal | Records before first unsupported |
 |---|---:|---:|
-| CharaLookNeck, CharaLookEyes, BGMPlay | 88 | 13,021 |
-| + CharaExpression | 224 | 15,507 |
-| + CharaMotion, Expression, Motion, Voice | 476 | 25,500 |
-| + Text | 2,124 | 47,294 |
-| + MapChange, NullLoad, NullSet, SceneFade, SceneFadeRegulate, ParameterFile | 4,352 | 84,728 |
+| (this slice) | 2,646 | 80,992 |
+| + ParameterFile | 4,352 | 84,728 |
+| + Fade, BGLoad | 4,392 | 118,299 |
+| + CharaCoordinate, BGRelease | 5,055 | 138,217 |
+| + HeroineParam | 5,904 | 151,311 |
+| + Open | 6,706 | 152,736 |
+| + CharaMotionDefault, CharaVoicePlay, CharaVoiceWait | 7,792 | 171,425 |
 
-"No unsupported ordinal" is a static ceiling, not playback: those commands
-still need character, audio, map and presentation hosts, and value-dependent
-faults (below) remain possible.
+ParameterFile inserts library scenario data into the running program and its
+inserted scenarios use HeroineParam, so it belongs with the character-binding
+task (G-T02) rather than this request model.
 
-### Observed native halts
+### Observed native halts and host requests
 
-Every asset was run through `ikkoku-inspect adv-trace` with **default inputs**:
-no host variables, a 1,000-second frame per batch (completing any source Wait),
-no explicit Next input, `commandCount + 4` frames. The comparison step checks
-each observed fault position, command ID and reason against the static
-prediction, detects batches whose observed next pc cannot be sequential (a
-taken local jump), and checks the outcome against a static reachable-outcome
-set that forks every IF branch and treats reachable Calc/Clamp/IF/Switch and VAR
-dereferences as possible value faults.
+Every asset was run through `ikkoku-inspect adv-trace` with **default inputs**
+(no host variables, a 1,000-second frame per batch completing any source Wait,
+`commandCount + 4` frames) and a **scripted host**: every blocking request is
+acknowledged after the frame that issued it (MapChange with no ADV variables),
+and Next is pressed whenever a Text batch waits for it; `isSceneFadeRegulate`
+starts true. The comparison checks each observed fault position, command ID and
+reason against the static prediction (including argument halts), detects frames
+that re-entered `RequestNextLine` through a local jump or ended at a
+non-sequential pc, and checks the outcome against a static reachable-outcome set
+that forks every IF branch and treats reachable Calc/Clamp/IF/Switch, VAR
+dereferences and value-dependent presentation arguments as possible faults.
 
-| Observed outcome | Assets |
-|---|---:|
-| Fault at the predicted index with the predicted ID and reason | 10,369 (10,360 unsupported ordinals, 9 VAR random alternatives) |
-| Close or exhaustion where no halt was predicted | 87 (74 empty, 13 Close-only) |
-| Value-dependent fault before the predicted index | 7 |
-| Unexplained mismatch / outcome outside the reachable set | 0 / 0 |
+| Observed outcome | Scalar slice (no host) | Host-request slice (scripted host) |
+|---|---:|---:|
+| Fault at the predicted index with the predicted ID and reason | 10,369 | 7,582 (7,573 unsupported ordinals, 9 VAR random alternatives) |
+| Close or exhaustion where no halt was predicted | 87 (13 non-empty) | 2,594 (2,520 non-empty) |
+| Exhaustion after an observed jump past the predicted halt | 0 | 39 |
+| Value-dependent fault before the predicted index | 7 | 248 |
+| Unexplained mismatch / outcome outside the reachable set | 0 / 0 | 0 / 0 |
 
-Of 176 assets with IF/Jump/Close before their predicted halt, 170 halt exactly
-as predicted (40 after an observed taken jump). The 7 value-dependent faults are
-six IFs at pc 0 whose left operand names a host variable that default inputs do
-not supply, which native rejects as an extended IF literal (the recovered
-`VAR.CheckLiterals` cannot parse that name either; the game supplies the
-variable), and one VAR dereferencing an absent host variable. These are
-default-input outcomes, not game behavior: with real host variables, IF branches
-can select other paths.
+**2,633 assets now run to completion** (2,559 non-empty, 25,892 records): 1,586
+end at Close and 1,047 exhaust their records (74 of them empty). The 39
+jump-past cases are one asset in each `c00`–`c38` directory whose local Jump
+skips the predicted halting record. The 248 value-dependent faults are 247 IFs
+whose left operand names a host variable that default inputs do not supply
+(native rejects it as an extended IF literal; the game supplies the variable) and
+one VAR dereferencing an absent host variable; 46 of them are in assets with no
+static halt. Observed halts by unsupported command: ParameterFile 1,971, Fade
+1,648, BGLoad 1,235, CharaVoicePlay 511, Filter 452, CharaMotionDefault 386,
+CharaCoordinate 296, CharaEvent 155, Open 152, CharaActive 117, BGRelease 95,
+HeroineParam 92, others 463.
+
+**Requests.** The run issued **51,953 host requests in 8,134 assets** (text
+15,692, charaLookNeck 8,668, charaLookEyes 8,599, sceneFade 3,850, charaMotion
+3,433, charaExpression 3,317, nullSet 2,882, bgmPlay 2,594, nullLoad 1,496,
+mapChange 1,422). Every request names the command at its pc and has the model's
+kind and blocking policy, and **all 51,953 argument payloads equal the independent
+Python decoding** (`adv_host_requests.py`, written from the recovered handlers and
+Mono parsers; none was skipped as value-dependent). The 15,692 Text requests
+carry 10,022 voice, 6,210 expression and 5,100 motion binding lists, each equal to
+the model's `CurrentCharaData` reconstruction for its batch. For 9,926
+straight-line assets (7,725 with at least one request, 48,898 requests) the
+complete request sequence (IDs, pcs, batch numbers, policies and arguments)
+equals the model's prediction. Native execution totalled 87,366 instructions.
 
 **Sample regression.** `sample.json` is a deterministic stratified sample chosen
-from static properties only: 32 assets (first-command 6, scalar prefix 5,
-value-dependent prefix 3, taken-branch-possible prefix 6, other control flow 4,
-argument limit 3, executable 4, empty 1; no corpus asset has a Wait-only or
-Close-before prefix). The gated Engine test
-`sourceADVCoverageSampleHaltsAtPredictedSourceIndex` runs each with the same
-default inputs, requires every outcome to be statically reachable, requires the
-exact predicted pc, ID and `ADV command ID <id> at pc <pc>` reason for the 17
-straight-line cases, and runs 10 mutation controls that replace the halting
-record with None and require the halt to move to the next predicted record. A
-deliberately corrupted sample fails the test with 3 issues.
+from static properties only: 36 assets (first-command 6, scalar prefix 5,
+value-dependent prefix 3, taken-branch-possible prefix 6, other control flow 3,
+argument limit 5, executable 4, request sequence 3, empty 1). The gated Engine
+test `sourceADVCoverageSampleHaltsAtPredictedSourceIndex` runs each with the same
+default inputs and scripted host, requires every outcome to be statically
+reachable, requires the exact predicted pc, ID and reason for the 22
+straight-line cases and their native request sequences (91 requests in 12
+sequences) to equal the Python prediction, and runs 11 mutation controls that
+replace the halting record with None. Three fully executed request-sequence
+assets issue 10–14 requests each across 11–15 batches (Text, SceneFade, look,
+expression and motion requests in all three; one also MapChange, NullLoad and
+NullSet). A deliberately
+corrupted sample (one argument, one blocking policy, one halt reason) fails the
+test with exactly 3 issues.
 
 ```sh
 python3 Tools/reverse/vm_source.py --vm 'Windows 11' --output .local/reverse \
@@ -289,29 +420,42 @@ python3 Tools/reverse/vm_source.py --vm 'Windows 11' --output .local/reverse \
 swift build --package-path Packages/Engine --product ikkoku-inspect
 .local/reverse/unitypy-venv/bin/python Tools/reverse/analysis/adv_command_coverage.py scan \
   --recovery-index .local/reverse/managed-recovery/index.json \
-  --scenario-root .local/reverse/source/abdata/adv/scenario --output .local/gt03-adv-coverage
-for f in .local/gt03-adv-coverage/traces/trace-[0-9][0-9][0-9].json; do
+  --scenario-root .local/reverse/source/abdata/adv/scenario --output .local/gt03b-adv-host-requests
+for f in .local/gt03b-adv-host-requests/traces/trace-[0-9][0-9][0-9].json; do
   "$(swift build --package-path Packages/Engine --show-bin-path)/ikkoku-inspect" adv-trace "$PWD/$f" \
     > "${f%.json}.report.json"
 done
 .local/reverse/unitypy-venv/bin/python Tools/reverse/analysis/adv_command_coverage.py compare \
-  --output .local/gt03-adv-coverage
-IKKOKU_ADV_COVERAGE_SAMPLE="$PWD/.local/gt03-adv-coverage/sample.json" \
+  --output .local/gt03b-adv-host-requests
+IKKOKU_ADV_COVERAGE_SAMPLE="$PWD/.local/gt03b-adv-host-requests/sample.json" \
   swift test --package-path Packages/Engine --filter sourceADVCoverage
 ```
 
 Base and namespace asset counts overlap; they are not additive. Exclusions: the
-static prediction ignores values and host state; the dynamic
+static prediction ignores values and host state; the scripted host never fails a
+request, supplies no MapChange variables and presses Next as soon as it is
+accepted, so these runs exercise the interpreter, not presentation; the dynamic
 run starts every asset at pc 0 although the game can open a file at a tag; the
 corpus is this installation's `abdata/adv/scenario` only (no mod or other
 scenario roots), and no original game run was captured for comparison.
 
 ## Verification and reproduction
 
-The retained focused run contains twelve native tests covering scheduler behavior, command batching, waits, arithmetic,
-type-sensitive comparisons, fault positions, loop budgets, float interchange,
-and the original parameter scenario. Twelve Python tests cover the converter,
-source-selection rules, and independent expected outcomes.
+The focused native run (`swift test --filter 'sourceFixedEvent|sourceADV|sourceCLR'`)
+has 29 tests: thirteen cover scheduler behavior, command batching, waits,
+arithmetic, type-sensitive comparisons, fault positions, loop budgets, float
+interchange, the original parameter scenario and the coverage sample; sixteen in
+`SourceADVHostRequestTests.swift` cover the Mono parsers, every presentation
+command's defaults and argument forms, invalid and unmodelled forms, blocking
+(Text/Next, the MapChange gate freezing Waits and ignoring Next, SceneFade with
+and without `isSceneFadeRegulate`), request order inside `Multi` batches, Text
+bindings across advances and jumps, host failure, JSON round trips and
+save/restore mid-wait, mid-acknowledgement and mid-Next. Python: twelve contract
+tests, twelve `test_adv_host_requests.py` tests (parsers, handlers, request
+prediction) and 27 `test_adv_command_coverage.py` tests (static halts, argument
+limits, reachability, request checks, sample selection). All expected values in
+these tests are derived by hand from the recovered source; all strings are
+synthetic.
 
 The fixed-event oracle evaluates original uppercase-field Unity records directly,
 not the converted native rows. It generates **4,032 synthetic contexts** covering
@@ -335,9 +479,13 @@ IKKOKU_GAMEPLAY_EXECUTION_REFERENCE="$PWD/.local/reverse/gameplay-execution" \
 
 The CLI helpers accept the generated `fixed-event-trace.json`, `adv-reference.json`,
 and `original-parameter-trace.json`. A fixed-event request supplies a table path
-and contexts. An ADV request supplies a program, optional typed variables, and
-explicit frame durations/Next inputs. Reports show computed selections or state
-snapshots, not the reference expectations embedded in the input file.
+and contexts. An ADV request supplies a program, optional typed variables,
+explicit frame durations/Next inputs and per-frame `acknowledge` lists, or the
+scripted host options (`autoAcknowledge`, `autoNext`, `mapVariables`,
+`sceneFadeRegulate`, `requestDetail`). Report schema 2 adds per-frame `batch`,
+`awaitingNext`, `pending`, the requests drained in that frame and the IDs
+acknowledged after it. Reports show computed selections or state snapshots, not
+the reference expectations embedded in the input file.
 
 ## Pending integration
 
@@ -348,13 +496,18 @@ snapshots, not the reference expectations embedded in the input file.
    when original scenario 301 completes with source-verified values and a fixed
    event runs once across save/reload with its original ID.
 3. Expand the VM by command family in the measured order above (`G-T03`); the
-   inventory and halting check are done. Add cross-file resolution,
-   dialogue/choices, tasks and audio/camera/animation consumers with typed host
-   effects. Test cancellation, skip, interruption and save/reload at every wait.
+   inventory, halting check and the first fourteen presentation commands as host
+   requests are done. Next: Fade, BGLoad/BGRelease, Filter, CharaCoordinate,
+   CharaMotionDefault and CharaVoicePlay/Wait as further requests; then
+   cross-file resolution (Open, external IF branches), choices and tasks. A real
+   host must consume the requests (G-T01/A-T01) before any of this is visible;
+   test cancellation, skip, interruption and save/reload at every wait.
 4. Recover one neutral map/NPC route and its action/navigation/behavior-tree data
    (`G-T04`). Compare numeric decisions/positions with source traces, including
    interaction interruption and resumed movement.
 
-The installed source corpus is broader than this implemented scalar subset.
-Report discovered, decoded, executed and host-integrated command coverage
-separately; stopping at an explicit unsupported command is not scenario completion.
+The installed source corpus is broader than this implemented subset. Report
+discovered, decoded, executed and host-integrated command coverage separately:
+an asset that runs to completion against the scripted host has had its requests
+decoded and sequenced, not presented, and stopping at an explicit unsupported
+command is not scenario completion.

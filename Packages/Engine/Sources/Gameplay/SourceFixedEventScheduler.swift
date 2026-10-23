@@ -53,6 +53,8 @@ public enum SourceGameplayExecutionError: Error, Equatable, LocalizedError {
     case missingVariable(String)
     case invalidCast(String)
     case budgetExceeded
+    case invalidArgument(String)
+    case hostFailure(String)
     public var errorDescription: String? {
         switch self {
         case .invalidData(let detail): "Invalid source gameplay data: \(detail)"
@@ -60,6 +62,8 @@ public enum SourceGameplayExecutionError: Error, Equatable, LocalizedError {
         case .missingVariable(let name): "Missing source ADV variable: \(name)"
         case .invalidCast(let detail): "Invalid source ADV conversion: \(detail)"
         case .budgetExceeded: "Source ADV instruction or recursion budget exceeded"
+        case .invalidArgument(let detail): "Source ADV argument parse throws in \(detail)"
+        case .hostFailure(let detail): "Source ADV host request failed: \(detail)"
         }
     }
 }
