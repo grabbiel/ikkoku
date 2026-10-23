@@ -74,6 +74,56 @@ jobs:
           CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
           build
 
+  # T-T02: build the Release app from this clean checkout and inspect what it
+  # would ship (Tools/verification/inspect_app_bundle.py with the reviewed
+  # app-bundle-rules.json). The inspector fails on a missing metallib, catalog
+  # or catalog-referenced asset, a Mach-O without arm64, any file that is
+  # neither a declared build product nor a git-tracked Assets/ file, and
+  # private or original-game content. It never launches the app, so runtime
+  # resource lookup outside the checkout is not verified by this job.
+  release-package:
+    name: IkkokuCreator Release package inspection
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          python3 --version
+      - name: Prerequisite check (app build)
+        run: python3 Tools/verification/doctor.py --require app-build --verbose
+      # Unsigned for the same reason as the Debug job. ARCHS=arm64: the port
+      # targets Apple Silicon, and a default Release build would also compile
+      # an x86_64 slice that nothing tests.
+      - name: Build IkkokuCreator (Release, unsigned, arm64)
+        run: >-
+          xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator
+          -configuration Release -derivedDataPath .local/build-release
+          -destination 'platform=macOS,arch=arm64'
+          ARCHS=arm64
+          CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY=""
+          build
+      # Inspect the app after a zip round trip outside the checkout, the form
+      # it would be handed over in, rather than the build folder itself.
+      - name: Package the app outside the checkout
+        run: |
+          ditto -c -k --keepParent .local/build-release/Build/Products/Release/Ikkoku.app "$RUNNER_TEMP/Ikkoku.zip"
+          ditto -x -k "$RUNNER_TEMP/Ikkoku.zip" "$RUNNER_TEMP/package"
+          ls -l "$RUNNER_TEMP/Ikkoku.zip"
+      - name: Inspect the packaged app
+        run: >-
+          python3 Tools/verification/inspect_app_bundle.py
+          "$RUNNER_TEMP/package/Ikkoku.app"
+          --report .local/verification/reports/release-bundle.json
+      - name: Upload bundle report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-report
+          path: .local/verification/reports/
+          if-no-files-found: ignore
+
   reverse-tools:
     name: Reverse tools (Python suites, pinned requirements)
     # macOS arm64 like the machines that generate the checked-in float32
