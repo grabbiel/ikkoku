@@ -42,7 +42,37 @@ PROFILE = """<?xml version="1.0"?>
 </node></trace-query-result>"""
 
 
+def signposts(*marks):
+    """An os-signpost export with one `Mark` event per (name, ns); later rows ref the first's name."""
+    rows = []
+    for index, (name, time) in enumerate(marks):
+        signpost = '<signpost-name id="2" fmt="Mark">Mark</signpost-name>' if index == 0 else '<signpost-name ref="2"/>'
+        rows.append('<row><event-time id="t%d">%d</event-time>%s<os-log-metadata id="m%d" fmt="%s"><string>%s</string></os-log-metadata></row>'
+                    % (index, time, signpost, index, name, name))
+    rows.append('<row><event-time id="x">5</event-time><signpost-name id="3" fmt="Input">Input</signpost-name>'
+                '<os-log-metadata id="y" fmt="recordingBegin"/></row>')  # not a Mark
+    return ('<?xml version="1.0"?><trace-query-result><node>%s</node></trace-query-result>' % "".join(rows)).encode()
+
+
 class PerfTraceTests(unittest.TestCase):
+    def test_recording_window_prefers_signposts_and_otherwise_aligns_the_report(self):
+        with mock.patch.object(perf_trace, "export_table", return_value=signposts(
+                ("appStateReady", 4_000_000_000), ("recordingBegin", 7_000_000_000), ("recordingEnd", 15_000_000_000))):
+            self.assertEqual(perf_trace.recording_window("w.time-profiler.trace")[:2], (7_000_000_000, 15_000_000_000))
+        with tempfile.TemporaryDirectory() as folder:
+            trace = os.path.join(folder, "studio-orbit.time-profiler.trace")
+            self.assertEqual(perf_trace.report_for(trace + "/"), os.path.join(folder, "studio-orbit.json"))
+            with open(os.path.join(folder, "studio-orbit.json"), "w") as handle:
+                handle.write('{"startupSeconds": {"appStateReady": 5.5, "recordingBegin": 9.0, "recordingEnd": 17.0}}')
+            # The attached recorder saw appStateReady 1.5 s earlier than process time.
+            with mock.patch.object(perf_trace, "export_table", return_value=signposts(("appStateReady", 4_000_000_000))):
+                begin, end, how = perf_trace.recording_window(trace)
+            self.assertEqual((begin, end), (7_500_000_000, 15_500_000_000))
+            self.assertIn("aligned on appStateReady", how)
+            with mock.patch.object(perf_trace, "export_table", return_value=signposts(("unrelated", 1))):
+                self.assertEqual(perf_trace.recording_window(trace)[:2], (None, None))
+
+
     def test_launch_environment_maps_fixtures_and_drops_inherited_ikkoku_variables(self):
         with tempfile.TemporaryDirectory() as folder:
             paths = {}

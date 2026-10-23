@@ -244,17 +244,47 @@ def xml_rows(data, resolve=None):
         yield [(child.tag, resolve(child)) for child in row]
 
 
-def recording_window(trace):
-    """The app's recordingBegin/recordingEnd mark times (ns), when present."""
+def signpost_marks(trace):
+    """Trace time (ns) of each `Mark` signpost the app emitted, by mark name."""
     data = export_table(trace, "os-signpost", ' and @category="PointsOfInterest"')
-    begin = end = None
+    marks = {}
     for row in xml_rows(data):
-        texts = " ".join(element.attrib.get("fmt", "") for _, element in row)
-        if "recordingBegin" in texts:
-            begin = int(row[0][1].text)
-        elif "recordingEnd" in texts:
-            end = int(row[0][1].text)
-    return begin, end
+        fields = dict(row)
+        name, metadata = fields.get("signpost-name"), fields.get("os-log-metadata")
+        if name is None or metadata is None or name.attrib.get("fmt") != "Mark":
+            continue
+        marks.setdefault(metadata.attrib.get("fmt", ""), int(fields["event-time"].text))
+    return marks
+
+
+def report_for(trace):
+    """The report `run` wrote beside a trace: <workload>.<template>.trace -> <workload>.json."""
+    stem = os.path.splitext(os.path.splitext(trace.rstrip("/"))[0])[0]
+    return stem + ".json"
+
+
+def recording_window(trace, report=None):
+    """(begin ns, end ns, how) of the recording window in trace time.
+
+    The app emits recordingBegin/recordingEnd signposts. A trace recorded by
+    an older harness lacks them; then the report's startup marks (seconds since
+    process start) are shifted onto trace time through a mark both share, as
+    an attached recorder misses the marks emitted before it attached."""
+    marks = signpost_marks(trace)
+    if "recordingBegin" in marks and "recordingEnd" in marks:
+        return marks["recordingBegin"], marks["recordingEnd"], "recordingBegin..recordingEnd signposts"
+    report = report or report_for(trace)
+    if not os.path.exists(report):
+        return None, None, "whole trace"
+    with open(report, encoding="utf-8") as handle:
+        startup = json.load(handle).get("startupSeconds", {})
+    shared = [name for name in ("contentAppeared", "appStateReady", "sourceSceneImport.end", "makerReady")
+              if name in marks and name in startup]
+    if not shared or "recordingBegin" not in startup or "recordingEnd" not in startup:
+        return None, None, "whole trace"
+    offset = marks[shared[0]] - startup[shared[0]] * 1e9
+    return (int(startup["recordingBegin"] * 1e9 + offset), int(startup["recordingEnd"] * 1e9 + offset),
+            "report marks aligned on %s (%s)" % (shared[0], os.path.basename(report)))
 
 
 def traced_processes(trace):
@@ -270,7 +300,7 @@ def profile(args):
         # A trace of the wrong executable would be silently misattributed.
         for path in traced_processes(args.trace):
             print("process: %s" % path)
-    begin, end = (None, None) if args.whole else recording_window(args.trace)
+    begin, end, how = (None, None, "whole trace") if args.whole else recording_window(args.trace, getattr(args, "report", None))
     data = export_table(args.trace, "time-profile")
     stacks = {}
     total = 0
@@ -325,7 +355,7 @@ def profile(args):
             if binary_pattern is None or binary_pattern.search(binary):
                 inclusive[name] += weight
     seconds = (end - begin) / 1e9 if begin is not None and end is not None else None
-    print("window: %s" % ("%.2f s (recordingBegin..recordingEnd)" % seconds if seconds else "whole trace"))
+    print("window: %s" % ("%.2f s (%s)" % (seconds, how) if seconds else "whole trace"))
     print("samples ms by thread (all threads):")
     for name, value in by_thread.most_common(8):
         print("  %8.1f  %s" % (value, name))
@@ -367,6 +397,7 @@ def main(argv=None):
     prof.add_argument("--top", type=int, default=30)
     prof.add_argument("--binary", help="regular expression limiting the inclusive table to these binaries (e.g. 'Ikkoku')")
     prof.add_argument("--whole", action="store_true", help="ignore the recording marks")
+    prof.add_argument("--report", help="report whose startup marks place the window when the trace lacks recording signposts (default: the report beside the trace)")
     prof.add_argument("--focus", help="regular expression: keep samples inside a matching frame and list what it spends its time calling")
     guard = sub.add_parser("_exec", help=argparse.SUPPRESS)
     guard.add_argument("--timeout", type=int, required=True)

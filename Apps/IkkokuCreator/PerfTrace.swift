@@ -241,7 +241,8 @@ final class PerfTrace {
         cpuAtStart = PerfTrace.cpuSeconds()
         recordStart = CACurrentMediaTime()
         recording = true
-        mark("recordingBegin")
+        // The static `mark` also emits the signpost xctrace windows on.
+        PerfTrace.mark("recordingBegin")
         let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
             MainActor.assumeIsolated { PerfTrace.active?.sampleMemory() }
         }
@@ -256,7 +257,7 @@ final class PerfTrace {
         cpuAtEnd = PerfTrace.cpuSeconds()
         sampleMemory()
         memoryTimer?.invalidate(); memoryTimer = nil
-        mark("recordingEnd")
+        PerfTrace.mark("recordingEnd")
     }
 
     private func sampleMemory() {
