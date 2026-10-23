@@ -775,6 +775,8 @@ def check_requests(commands, requests, exact_halt=None):
         predicted = host.predict_requests(commands, exact_halt)
         observed = [{k: v for k, v in r.items() if k not in ("frameStart", "frameBatches")} for r in requests]
         stats["sequenceChecked"] += 1
+        stats["sequenceRequests"] += len(predicted)
+        stats["sequenceNonEmpty"] += bool(predicted)
         if host.same(observed, predicted):
             stats["sequenceMatches"] += 1
         else:

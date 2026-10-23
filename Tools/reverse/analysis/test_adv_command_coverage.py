@@ -295,6 +295,7 @@ class PresentationTests(unittest.TestCase):
         requests = [dict(r, frameStart=0 if r["batch"] == 1 else 1, frameBatches=1) for r in self.native(program)]
         stats, mismatches = coverage.check_requests(program, requests, len(program))
         self.assertEqual((stats["requests"], stats["argumentMatches"], stats["sequenceMatches"], stats["mismatches"]), (12, 12, 1, 0))
+        self.assertEqual((stats["sequenceRequests"], stats["sequenceNonEmpty"]), (12, 1))
         self.assertEqual(mismatches, [])
         wrong = [dict(r) for r in requests]
         wrong[0] = dict(wrong[0], blocking="none")

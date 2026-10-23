@@ -148,6 +148,11 @@ private let current = Int32.max
     #expect(try single([.init(id: 106, args: ["0", "A"] + two + ["1", "B"])])
             == .charaMotion([.init(chara: 0, state: "A", bundle: "", asset: "", ikBundle: "", ikAsset: "", shakeBundle: "", shakeAsset: "",
                                    overrideBundle: "", overrideAsset: ""), .init(chara: 1, state: "B")]))
+    // Voice.Data: a failed Personality ends that entry after cnt passed it, so
+    // the Pitch argument is read as the next entry's No (which fails too).
+    var vm = try machine([command(17, "0", "", "v", "x", "1.2", multi: true), command(16, "n", "t")])
+    try vm.start()
+    #expect(vm.drainRequests().map(\.command) == [.text(.init(name: "n", text: "t", voices: [[.init(chara: 0, bundle: "", asset: "v"), .init(chara: 0)]]))])
 }
 
 @Test func sourceADVTextBindsVoiceExpressionMotionAndWaitsForNext() throws {
