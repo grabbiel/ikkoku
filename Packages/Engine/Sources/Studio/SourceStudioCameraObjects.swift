@@ -102,8 +102,10 @@ public enum SourceStudioCameraObjectError: Error, Equatable, CustomStringConvert
     /// mirrored (negative determinant). The original copies the camera's
     /// `transform.rotation`, which the capture shows is unaffected by a
     /// non-uniform parent scale. A mirrored matrix does not say which axis
-    /// carries the mirror, so it does not determine that rotation, and no
-    /// original capture covers a mirrored parent.
+    /// carries the mirror, so it does not determine that rotation. The one
+    /// original capture of a mirrored parent (an item scaled (-1, 1, 1),
+    /// scene-records.md "Mirrored camera parent") looks through with the local
+    /// rotation reflected through that axis, which one axis cannot generalize.
     case reflectedFrame(String)
 
     public var description: String {

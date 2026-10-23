@@ -789,7 +789,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 44)
+        self.assertEqual(len(self.checks), 45)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -912,7 +912,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "activeCamera", "routePlaying",
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
-                                            "diagnosticContains", "render",
+                                            "diagnosticContains", "statusContains", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
@@ -949,6 +949,16 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     if "position" in step:
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
+                    if "view" in step:
+                        # exactly one target: the saved camera or one camera object
+                        view = step["view"]
+                        self.assertEqual(len(view), 1, "a view assert names saved or key: %s" % path)
+                        if "saved" in view:
+                            self.assertIs(view["saved"], True)
+                        else:
+                            self.assertIsInstance(view["key"], int)
+                    if "statusContains" in step:
+                        self.assertTrue(step["statusContains"])
                     if "clothes" in step:
                         clothes = step["clothes"]
                         self.assertIsInstance(clothes["key"], int)
