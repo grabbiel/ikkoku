@@ -90,8 +90,8 @@ public enum SourceADVValue: Equatable, Sendable, Codable {
     }
 }
 
-public struct SourceADVProgram: Codable, Sendable {
-    public struct Command: Codable, Sendable {
+public struct SourceADVProgram: Codable, Sendable, Equatable {
+    public struct Command: Codable, Sendable, Equatable {
         public var hash: Int32
         public var version: Int32
         public var multi: Bool
@@ -126,9 +126,9 @@ public struct SourceADVProgram: Codable, Sendable {
 /// The state is `Codable`: a host may save it at any frame boundary, including
 /// while a Wait timer runs, a request awaits acknowledgement or a Text batch
 /// awaits Next, and resume with identical results.
-public struct SourceADVInterpreter: Codable, Sendable {
-    public struct Wait: Codable, Sendable { public var pc: Int; public var duration: Float; public var elapsed: Float }
-    public struct Fault: Codable, Sendable { public var pc: Int; public var commandID: Int; public var reason: String }
+public struct SourceADVInterpreter: Codable, Sendable, Equatable {
+    public struct Wait: Codable, Sendable, Equatable { public var pc: Int; public var duration: Float; public var elapsed: Float }
+    public struct Fault: Codable, Sendable, Equatable { public var pc: Int; public var commandID: Int; public var reason: String }
     /// A blocking host request that has not been acknowledged.
     public struct Pending: Codable, Equatable, Sendable {
         public enum Gate: String, Codable, Sendable {
