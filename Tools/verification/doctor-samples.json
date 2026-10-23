@@ -79,6 +79,14 @@
       "expect": {"status": "present", "version": "32023.883", "detail": "target air64-apple-darwin25.6.0"}
     },
     {
+      "id": "metal-reference-mac-32023.921",
+      "tool": "metal",
+      "provenance": "recorded: reference Mac doctor run (macOS 27.0.1, Xcode 27.0), 2026-10-23",
+      "returncode": 0,
+      "output": "Apple metal version 32023.921 (metalfe-32023.921.6)\nTarget: air64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.1.266.1.hdmsAO/Metal.xctoolchain/usr/metal/current/bin\n",
+      "expect": {"status": "present", "version": "32023.921", "detail": "target air64-apple-darwin27.0.0"}
+    },
+    {
       "id": "metal-installed",
       "tool": "metal",
       "provenance": "format sample: `xcrun -sdk macosx metal --version` with the toolchain installed",
@@ -157,6 +165,14 @@
       "returncode": 0,
       "output": "Python 3.11.15\n",
       "expect": {"status": "present", "version": "3.11.15"}
+    },
+    {
+      "id": "python3-reference-mac-3.14.6",
+      "tool": "python3",
+      "provenance": "recorded: reference Mac doctor run (macOS 27.0.1, Xcode 27.0), 2026-10-23",
+      "returncode": 0,
+      "output": "Python 3.14.6\n",
+      "expect": {"status": "present", "version": "3.14.6"}
     },
     {
       "id": "reverse-python-3.12",
@@ -247,6 +263,14 @@
       "expect": {"status": "present", "version": "26.1.1", "detail": "build 57288"}
     },
     {
+      "id": "prlctl-reference-mac-27.0.2",
+      "tool": "prlctl",
+      "provenance": "recorded: reference Mac doctor run (macOS 27.0.1, Xcode 27.0), 2026-10-23",
+      "returncode": 0,
+      "output": "prlctl version 27.0.2 (58673)\n",
+      "expect": {"status": "present", "version": "27.0.2", "detail": "build 58673"}
+    },
+    {
       "id": "package-numpy-pinned",
       "tool": "reverse-packages:numpy",
       "provenance": "format sample: the importlib.metadata probe prints one version",
@@ -279,11 +303,34 @@
       "expect": {"status": "present", "version": "11.3.0"}
     },
     {
+      "id": "package-numpy-assets-reference-mac-absent",
+      "tool": "assets-numpy",
+      "provenance": "recorded: reference Mac doctor run (macOS 27.0.1, Xcode 27.0), 2026-10-23: the probe exited 3 with no output in /opt/homebrew/bin/python3 3.14.6",
+      "returncode": 3,
+      "output": "",
+      "expect": {"status": "absent", "version": null}
+    },
+    {
+      "id": "package-pillow-assets-reference-mac-absent",
+      "tool": "assets-pillow",
+      "provenance": "recorded: reference Mac doctor run (macOS 27.0.1, Xcode 27.0), 2026-10-23: the probe exited 3 with no output in /opt/homebrew/bin/python3 3.14.6",
+      "returncode": 3,
+      "output": "",
+      "expect": {"status": "absent", "version": null}
+    },
+    {
       "id": "host-ci-macos-26.6.2",
       "tool": "host",
       "provenance": "recorded: CI public-lane job 120189060283 (run 39884395421), macos-26-arm64 image 20261013.0424.1, 2026-10-23 (platform values the checker reported)",
       "host": {"system": "Darwin", "machine": "arm64", "macVersion": "26.6.2", "appleSilicon": true},
       "expect": {"status": "ok", "version": "26.6.2", "detail": "macOS arm64"}
+    },
+    {
+      "id": "host-reference-mac-macos-27.0.1",
+      "tool": "host",
+      "provenance": "recorded: reference Mac doctor run (macOS 27.0.1, Xcode 27.0), 2026-10-23 (platform values the checker reported)",
+      "host": {"system": "Darwin", "machine": "arm64", "macVersion": "27.0.1", "appleSilicon": true},
+      "expect": {"status": "ok", "version": "27.0.1", "detail": "macOS arm64"}
     },
     {
       "id": "host-apple-silicon",
