@@ -396,6 +396,10 @@ final class AppState {
     /// the item instead of rendering without it (`IKKOKU_CAPTURE_SCENE`, `IKKOKU_LOAD_SCENE`).
     static func loadSceneItemAssets(_ studio: StudioModel, host: EngineHost) throws {
         for object in studio.doc.objects where object.kind == .item && studio.doc.isVisible(object.id) {
+            // A-T02: a reference the scene's resource check left unresolved is never read.
+            guard !studio.resourceBlockedObjects.contains(object.id) else {
+                throw GLTFError.io("Scene item '\(object.name)' has an unresolved resource reference (see the scene's Unresolved lines).")
+            }
             guard let file = object.assetFile ?? object.itemID.flatMap({ host.library.catalog.item($0)?.file }) else {
                 throw GLTFError.io("Scene item '\(object.name)' has no resolvable asset reference.")
             }
@@ -1031,5 +1035,34 @@ final class AppState {
 
     func resetCamera() {
         if mode == .studio { studio?.resetCamera() } else { maker?.resetCamera() }
+    }
+
+    // MARK: Converted library (A-T02)
+
+    /// Choose the folder holding the converted Maker library and original bases, in
+    /// the layout the exporters write under `.local/reverse/`. The selection records
+    /// each manifest's identity and is read before the source-tree defaults; explicit
+    /// variables still win. Scenes opened afterwards relocate their references into it.
+    func chooseConvertedLibrary() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the converted library folder: the one holding maker-library/, rigs/ or male/, as written under .local/reverse/."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let location = try EngineHost.selectConvertedLibrary(root: url)
+            let kinds = location.libraries.map(\.kind.rawValue).joined(separator: ", ")
+            let message = "Converted library \(url.path) (\(kinds)). Scenes opened from now on relocate into it."
+            studio?.status = message
+            maker?.status = message
+        } catch { errorMessage = "Could not choose the converted library: \(error)" }
+    }
+
+    func forgetConvertedLibrary() {
+        EngineHost.forgetConvertedLibrary()
+        let message = "Converted library selection removed; the default lookups apply."
+        studio?.status = message
+        maker?.status = message
     }
 }
