@@ -168,6 +168,9 @@ inspection. Each slice's report row names its evidence.
   loaded. Automated runs ignore the saved selection.
 
 None of this wave has been run in the app; the seven app items below are still open.
+The local-environment work they need (these app checks, the private lanes and
+reruns, and branch cleanup) is handed off in
+[HANDOFF-2026-10-23-local-environment.md](../../HANDOFF-2026-10-23-local-environment.md).
 
 - [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
       FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
