@@ -345,7 +345,17 @@ checks:
   covers the accessory flags' native round trip.
 
 The full lane and runner counts are recorded in the
-[verification guide](../../../Tools/verification/README.md). Engine tests
+[verification guide](../../../Tools/verification/README.md). A headless UI
+capture of the Clothes tab (`IKKOKU_CAPTURE_UI`, Studio mode, key 0 selected)
+shows the new "Clothes state" section:
+
+- Top, bottom, bra, shorts, socks and shoes pickers on Off.
+- Gloves and pantyhose read "No garment".
+- The `shoesType` 1 caption.
+- The accessory list.
+
+The offscreen capture does not draw the unselected segment and button labels.
+No control was clicked, so mouse-driven acceptance remains open. Engine tests
 `sourceCardEditingClothesStateAndAccessoryFlagsPatchOnlyTheirTokens`,
 `sourceCardEditingWearRejectsInvalidValuesAndUnreadableFields`,
 `sourceCardEditingWearReadsArraySpellingAndAppendsMissingFields`, the
