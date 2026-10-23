@@ -21,7 +21,10 @@ from test_rig_parity import REPO, REFLECTION, compare, file_record, local_matrix
 
 
 def source_operations(path, domain):
-    source = path.read_text()
+    return source_text_operations(path.read_text(), domain)
+
+
+def source_text_operations(source, domain):
     names = re.search(r"public enum DstBoneName\s*\{([^}]+)\}", source)
     if not names:
         raise ValueError("Missing source destination enum")

@@ -94,23 +94,23 @@ is checked. Observed versions are dated runs, not support claims.
 
 | Tool | Requirement | Probe | Stated in | Observed |
 | --- | --- | --- | --- | --- |
-| Apple Silicon Mac | macOS on Apple Silicon | Python `platform` (built in) | [README.md](../../README.md) | macOS 26.6.2 arm64, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
-| Xcode | `>=26` | `xcodebuild -version` | [README.md](../../README.md), [Tools/verification/README.md](../../Tools/verification/README.md) | 26.0.1, reference Mac, 2026-09-29; 26.6 (17F113), CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
-| Metal compiler | *unrecorded* | `xcrun -sdk macosx metal --version` | - | 32023.883 from the MetalToolchain 17.6.109.0 component with Xcode 26.6, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
-| Swift | `>=6.0` | `swift --version` | [Packages/Engine/Package.swift](../../Packages/Engine/Package.swift), [README.md](../../README.md) | 6.3.3, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23 |
-| Python 3 (python3 on PATH) | *unrecorded* | `python3 --version` | - | 3.15.0, CI macos-26-arm64 image 20261013.0424.1, public lane passed, 2026-10-23; 3.11.15, Linux container: mod-tools, runner-self and validator suites passed, 2026-10-23 |
-| .NET SDK | `>=10.0` | `dotnet --list-sdks` | [Tools/translation/frontend/Translation.csproj](../../Tools/translation/frontend/Translation.csproj), [docs/reference/managed-recovery.md](../reference/managed-recovery.md) | .NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md); SDKs 8.0.101 to 10.0.401 (newest 10.0.401), CI macos-26-arm64 image 20261013.0424.1, translation suite passed, 2026-10-23 |
-| Python 3.12 venv for Tools/reverse | `3.12.*` | `.local/reverse/unitypy-venv/bin/python --version` | [.github/workflows/ci.yml](../../.github/workflows/ci.yml), [Tools/reverse/README.md](../../Tools/reverse/README.md) | 3.12, CI reverse-tools job (actions/setup-python); first hosted run 2026-10-01; 3.14 could not build the pinned dependencies on the reference Mac (Tools/reverse/README.md) |
+| Apple Silicon Mac | macOS on Apple Silicon | Python `platform` (built in) | [README.md](../../README.md) | macOS 26.6.2 arm64, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23; macOS 27.0.1 (sw_vers build 26A434) arm64, reference Mac, app build and lanes ran, 2026-10-23 |
+| Xcode | `>=26` | `xcodebuild -version` | [README.md](../../README.md), [Tools/verification/README.md](../../Tools/verification/README.md) | 26.0.1, reference Mac, 2026-09-29; 26.6 (17F113), CI macos-26-arm64 image 20261013.0424.1, 2026-10-23; 27.0 (27A266a), reference Mac, Debug and Release app builds, 2026-10-23 |
+| Metal compiler | *unrecorded* | `xcrun -sdk macosx metal --version` | - | 32023.883 from the MetalToolchain 17.6.109.0 component with Xcode 26.6, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23; 32023.921 (metalfe-32023.921.6) from the MetalToolchain 27.1.266.1 component with Xcode 27.0, reference Mac, app build compiled the metallib, 2026-10-23 |
+| Swift | `>=6.0` | `swift --version` | [Packages/Engine/Package.swift](../../Packages/Engine/Package.swift), [README.md](../../README.md) | 6.3.3, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23; 6.4 (swiftlang-6.4.0.34.1), reference Mac, Engine tests ran, 2026-10-23 |
+| Python 3 (python3 on PATH) | *unrecorded* | `python3 --version` | - | 3.15.0, CI macos-26-arm64 image 20261013.0424.1, public lane passed, 2026-10-23; 3.11.15, Linux container: mod-tools, runner-self and validator suites passed, 2026-10-23; 3.14.6 (/opt/homebrew/bin/python3), reference Mac, Tools/verification suite and lane runner passed, 2026-10-23 |
+| .NET SDK | `>=10.0` | `dotnet --list-sdks` | [Tools/translation/frontend/Translation.csproj](../../Tools/translation/frontend/Translation.csproj), [docs/reference/managed-recovery.md](../reference/managed-recovery.md) | .NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md); SDKs 8.0.101 to 10.0.401 (newest 10.0.401), CI macos-26-arm64 image 20261013.0424.1, translation suite passed, 2026-10-23; SDK 10.0.302 only, reference Mac doctor run, 2026-10-23 |
+| Python 3.12 venv for Tools/reverse | `3.12.*` | `.local/reverse/unitypy-venv/bin/python --version` | [.github/workflows/ci.yml](../../.github/workflows/ci.yml), [Tools/reverse/README.md](../../Tools/reverse/README.md) | 3.12, CI reverse-tools job (actions/setup-python); first hosted run 2026-10-01; 3.14 could not build the pinned dependencies on the reference Mac (Tools/reverse/README.md); 3.12.9 venv with UnityPy 1.23.0, numpy 2.2.6 and msgpack 1.1.2, reference Mac doctor run, 2026-10-23 |
 | UnityPy (reverse venv) | `==1.23.0` | `importlib.metadata` via `.local/reverse/unitypy-venv/bin/python` | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | - |
 | numpy (reverse venv) | `==2.2.6` | `importlib.metadata` via `.local/reverse/unitypy-venv/bin/python` | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | - |
 | msgpack (reverse venv) | `==1.1.2` | `importlib.metadata` via `.local/reverse/unitypy-venv/bin/python` | [Tools/reverse/requirements.txt](../../Tools/reverse/requirements.txt) | - |
-| Asset-pipeline python3 (PY) | *unrecorded* | `$PY --version` (default `/opt/homebrew/bin/python3`) | - | - |
-| numpy (asset python) | *unrecorded* | `importlib.metadata` via `$PY` | - | - |
-| Pillow (asset python) | *unrecorded* | `importlib.metadata` via `$PY` | - | - |
+| Asset-pipeline python3 (PY) | *unrecorded* | `$PY --version` (default `/opt/homebrew/bin/python3`) | - | 3.14.6 (/opt/homebrew/bin/python3, $PY unset), reference Mac doctor run, 2026-10-23 |
+| numpy (asset python) | *unrecorded* | `importlib.metadata` via `$PY` | - | not installed in /opt/homebrew/bin/python3 3.14.6, reference Mac doctor run, 2026-10-23 |
+| Pillow (asset python) | *unrecorded* | `importlib.metadata` via `$PY` | - | not installed in /opt/homebrew/bin/python3 3.14.6, reference Mac doctor run, 2026-10-23 |
 | Blender | `5.1.*` | `$BLENDER --version` (default `/Applications/Blender.app/Contents/MacOS/Blender`) | [Tools/assets/README.md](../../Tools/assets/README.md) | - |
 | ILSpy command (primary) | `==11.1.0.9782` | `.local/reverse/tools/ilspycmd --version` | [Tools/reverse/README.md](../../Tools/reverse/README.md), [docs/reference/managed-recovery.md](../reference/managed-recovery.md), [docs/reference/studio/binary-contracts.md](../reference/studio/binary-contracts.md) | 11.1.0.9782 on .NET 10.0.10 arm64, reference Mac (docs/reference/studio/binary-contracts.md) |
 | ILSpy command (per-type fallback) | `==9.1.0.7988` | `.local/reverse/tools-compat/ilspycmd --version` | [docs/reference/managed-recovery.md](../reference/managed-recovery.md) | 9.1.0.7988 with roll-forward on .NET 10, reference Mac (docs/reference/managed-recovery.md) |
-| Parallels prlctl | *unrecorded* | `prlctl --version` | - | - |
+| Parallels prlctl | *unrecorded* | `prlctl --version` | - | 27.0.2 (build 58673), reference Mac doctor run, 2026-10-23 |
 
 <!-- END prerequisites -->
 
@@ -190,21 +190,55 @@ installer.
 
 ### Use a converted library outside the checkout
 
-Since A-T02 (2026-10-23; compiled by CI, not yet run), File → Choose Converted
+Since A-T02 (2026-10-23), File → Choose Converted
 Library… selects the folder that holds `maker-library/library.json`,
 `rigs/source-avatar.json` and/or `male/source-male-avatar.json`. That is the
-`.local/reverse/` layout, copied or moved anywhere. The app records each
-manifest's SHA-256 and saves the selection in user defaults. The Maker library
-and original-base lookups then read it after their explicit variables and before
-the source-tree defaults. It does not change the asset root. Startup prints a
-`[ikkoku] converted library:` line for each selected manifest, and a
-`converted library changed since it was selected` line when its bytes differ. To
-inspect or clear the selection, use File → Forget Converted Library or:
+`.local/reverse/` layout, copied or moved anywhere. Copy these folders together:
+
+```text
+<library>/
+  maker-library/                  Maker library (library.json)
+  rigs/                           original female base (source-avatar.json)
+  male/                           original male base (source-male-avatar.json)
+  studio-pose/                    Studio bone catalog (contract.json, attachments.json, ik-bindings.json)
+  animation-assets/female-base/   Maker idle animation (animation.json)
+```
+
+A scene saved from a source scene inside this folder (for example under
+`.local/reverse/studio-scenes/`) records that scene by its path inside the
+folder, so copy it too. Otherwise the scene file and every character in it stay
+unresolved after the move.
+
+The last two are companion files, not libraries: the app reads them beside the
+female base (`rigs/../studio-pose/contract.json` and
+`rigs/../animation-assets/female-base/animation.json`). Without `studio-pose/`,
+Preview CharaStudio Scene refuses a scene with characters. Without
+`animation-assets/`, the Maker shows the original base without its idle
+animation. The app records each manifest's and companion's SHA-256 and saves the
+selection in user defaults. The Maker library and original-base lookups then read
+it after their explicit variables and before the source-tree defaults. It does
+not change the asset root. A folder without a companion is still selected; the
+app then shows an alert and a status line naming each missing file, and prints
+it as a `[ikkoku] converted library:` line. Startup prints a
+`[ikkoku] converted library:` line for each selected manifest. It also prints a
+`converted library changed since it was selected` line when a manifest's bytes
+differ, and one line for each companion that is missing, changed or was not
+recorded. An explicit `IKKOKU_SOURCE_AVATAR` (or the source-tree default) without
+its companions prints a `[ikkoku] converted layout gap:` line for each missing
+one. To inspect or clear the selection, use File → Forget Converted Library or,
+with the app quit:
 
 ```sh
-defaults read com.grabbiel.IkkokuCreator ConvertedLibraryLocation
-defaults delete com.grabbiel.IkkokuCreator ConvertedLibraryLocation
+plutil -p ~/Library/Preferences/com.grabbiel.IkkokuCreator.plist
+defaults delete ~/Library/Preferences/com.grabbiel.IkkokuCreator ConvertedLibraryLocation
 ```
+
+The app is not sandboxed and writes `~/Library/Preferences/`. Do not use the
+bare domain (`defaults read com.grabbiel.IkkokuCreator`). When an old sandbox
+container `~/Library/Containers/com.grabbiel.IkkokuCreator` exists, the bare
+domain reads that container's plist instead; on the development Mac (container
+from August 2026) it showed only a window frame. `defaults read
+~/Library/Preferences/com.grabbiel.IkkokuCreator` also reads the app's file.
 
 Automated runs ignore a saved selection: any capture or scenario mode, and
 `IKKOKU_CAPTURE_UI`. Startup prints `the saved converted library selection is
@@ -220,11 +254,59 @@ and printed as `[ikkoku] <scene>: Unresolved …` lines; their objects are not
 loaded. The rules are in
 [Library location and relocation](../reference/native-assets.md#library-location-and-relocation-a-t02).
 
-Acceptance, not run: preview a CharaStudio scene and save it with Save Scene….
-Copy or move the converted folder and choose the new location. Then launch the
+Preview CharaStudio Scene… and `IKKOKU_SOURCE_SCENE` print each object they could
+not build as a `[ikkoku] <scene>: … retained without rendering: …` line. A scene
+with characters is refused when the Studio pose contract is missing (`The Studio
+pose contract is missing at …`), so a save can no longer keep the folders and
+drop every character. An automated run (capture or scenario) whose scene
+characters all failed to build exits 1 naming `IKKOKU_SOURCE_SCENE`, instead of
+capturing an empty scene.
+
+Acceptance: preview a CharaStudio scene and save it with Save Scene….
+Copy or move the whole converted folder, including `studio-pose/`,
+`animation-assets/` and the source scene, and choose the new location. Then launch the
 Release app outside the checkout with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and open
 the saved scene. Expect every reference to relocate, or one `Unresolved` line per
 missing or changed identity, with nothing else loaded in its place.
+
+Recorded 2026-10-23 (local-wave-verify). The automated variant ran on the Release
+app of `f402483` (executable `c56210ef…`), copied outside the checkout and
+launched from that folder with `IKKOKU_SOURCE_TREE_FALLBACKS=0`. Automated runs
+ignore the selection, so explicit variables pointed each launch at a library.
+Every library was an APFS clone of `~/IkkokuLibraryCopy`'s three libraries, plus
+the listed folders:
+
+| Run | Library | Result |
+| --- | --- | --- |
+| save | `.local/reverse/` | `IKKOKU_SOURCE_SCENE=koikatu_cs0002591.png` with `IKKOKU_SAVE_SCENE`: 32 objects saved (6 characters, 26 folders), 111 render items |
+| load, original | `.local/reverse/` | 32 objects, no resource line, 111 items; the PNG is byte-identical to the save capture |
+| load, moved | clone + `studio-pose/` + `animation-assets/female-base/` + the scene at `studio-scenes/…` | `Resource check: 31 references: 0 resolved, 31 relocated, 0 unresolved.`; 111 items, PNG byte-identical to the original load |
+| load, moved without the scene | clone + `studio-pose/` + `animation-assets/female-base/` | 24 relocated, 7 unresolved (the scene file and each character's scene file), one `Unresolved` line each; 0 items |
+| load, three libraries only | clone | two `converted layout gap:` lines; 12 relocated, 19 unresolved (scene, and per character the scene, bone catalog and attachment catalog); 0 items |
+| preview, three libraries only | clone | exit 1: `capture input failed: IKKOKU_SOURCE_SCENE=…: Could not preview source scene: The Studio pose contract is missing at …`; no PNG |
+| preview, with `studio-pose/` | clone + `studio-pose/` (+ `animation-assets/`) | exit 0, 111 items, PNG identical to the original load |
+
+The preview printed 20 `retained without rendering` lines: 19 items, because
+no item catalog was set, and character 1299 ("Expression pattern is outside
+the recovered controller"). They are saved as unrendered placeholder folders,
+which are part of the 26. Evidence: `.local/local-wave-verify/a-t02/`.
+
+The user's manual run, the same day, used the Release app of main `7c0b884`,
+copied to a temporary folder, with `IKKOKU_SOURCE_TREE_FALLBACKS=0` and
+`~/IkkokuLibraryCopy` chosen through the menu:
+- **Without `studio-pose/`:** the scene was saved with no character. That led to
+  the companion check above.
+- **With `studio-pose/` added:** startup printed three `converted library:`
+  lines, no fallback line and no crash. Open Scene of the saved scene showed all
+  6 characters with no `Unresolved` line.
+
+That run covers the selection path, not relocation: the scene was saved after
+the copy was chosen. The user's relocation run, the same day on main `c9df5df`,
+saved the scene from the Debug app with `.local/reverse/` chosen, then chose the
+moved copy, which held the libraries, both companions and the scene. The Release
+app, copied outside the checkout with `IKKOKU_SOURCE_TREE_FALLBACKS=0`, opened the
+saved scene with `Resource check: 31 references: 0 resolved, 31 relocated, 0
+unresolved.` and all 6 characters.
 
 ## Test layers
 
@@ -463,7 +545,8 @@ converted assets. Reload steps with a `path` write the host snapshot there and
 resume from the file read back. The report at `IKKOKU_GAMEPLAY_SCENARIO_REPORT`
 lists every step, reload and host trace entry. The app exits 0 only when every
 step passed. The Engine suite runs the same shipped scenario in CI; the app run
-is the `gameplay-scenarios` lane (not yet run on the Mac):
+is the `gameplay-scenarios` lane (passed 1/1 `--strict` on the Mac on 2026-10-23; see
+`Tools/verification/README.md`):
 
 ```sh
 python3 Tools/verification/run.py --manifest Tools/verification/lanes/gameplay-scenarios.json

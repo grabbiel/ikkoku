@@ -324,7 +324,8 @@ final class MakerModel: ViewportInputHandler {
             faceValues: preview.supportsFaceCustomization ? faceValues : nil, boneModifiers: settings?.boneModifiers)
 
         let env = ProcessInfo.processInfo.environment
-        let defaultAnimation = url.deletingLastPathComponent().appendingPathComponent("../animation-assets/female-base/animation.json").standardizedFileURL
+        // A-T02: a companion of the converted layout (ResourceCompanion), recorded by a selection.
+        let defaultAnimation = ResourceCompanion.femaleBaseAnimation.url(besideManifest: url)
         let animationURL = env["IKKOKU_SOURCE_ANIMATION"].map { URL(fileURLWithPath: $0) }
             ?? (url.lastPathComponent == "source-avatar.json" ? defaultAnimation : nil)
         let animation = try animationURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? try SourceAnimationLibrary.load(url: $0) : nil }

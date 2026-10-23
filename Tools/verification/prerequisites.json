@@ -18,7 +18,10 @@
       "probe": "host",
       "requirement": "macos-arm64",
       "statedIn": [{"path": "README.md", "phrase": "Apple Silicon development host"}],
-      "observed": ["macOS 26.6.2 arm64, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"],
+      "observed": [
+        "macOS 26.6.2 arm64, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+        "macOS 27.0.1 (sw_vers build 26A434) arm64, reference Mac, app build and lanes ran, 2026-10-23"
+      ],
       "install": "Use macOS on Apple Silicon; the app builds for platform=macOS,arch=arm64. The minimum host macOS version is unrecorded."
     },
     {
@@ -34,7 +37,8 @@
       ],
       "observed": [
         "26.0.1, reference Mac, 2026-09-29",
-        "26.6 (17F113), CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"
+        "26.6 (17F113), CI macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+        "27.0 (27A266a), reference Mac, Debug and Release app builds, 2026-10-23"
       ],
       "install": "Install Xcode 26 and select it: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
     },
@@ -46,7 +50,10 @@
       "parser": "metal",
       "requirement": "unrecorded",
       "statedIn": [],
-      "observed": ["32023.883 from the MetalToolchain 17.6.109.0 component with Xcode 26.6, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"],
+      "observed": [
+        "32023.883 from the MetalToolchain 17.6.109.0 component with Xcode 26.6, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+        "32023.921 (metalfe-32023.921.6) from the MetalToolchain 27.1.266.1 component with Xcode 27.0, reference Mac, app build compiled the metallib, 2026-10-23"
+      ],
       "install": "Install the Xcode Metal Toolchain component: xcodebuild -downloadComponent MetalToolchain"
     },
     {
@@ -60,7 +67,10 @@
         {"path": "Packages/Engine/Package.swift", "phrase": "swift-tools-version: {version}"},
         {"path": "README.md", "phrase": "Swift {major} tooling"}
       ],
-      "observed": ["6.3.3, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23"],
+      "observed": [
+        "6.3.3, CI macos-26-arm64 image 20261013.0424.1, 2026-10-23",
+        "6.4 (swiftlang-6.4.0.34.1), reference Mac, Engine tests ran, 2026-10-23"
+      ],
       "install": "Swift ships with Xcode; select Xcode 26 with xcode-select."
     },
     {
@@ -73,7 +83,8 @@
       "statedIn": [],
       "observed": [
         "3.15.0, CI macos-26-arm64 image 20261013.0424.1, public lane passed, 2026-10-23",
-        "3.11.15, Linux container: mod-tools, runner-self and validator suites passed, 2026-10-23"
+        "3.11.15, Linux container: mod-tools, runner-self and validator suites passed, 2026-10-23",
+        "3.14.6 (/opt/homebrew/bin/python3), reference Mac, Tools/verification suite and lane runner passed, 2026-10-23"
       ],
       "install": "Any python3 on PATH; the public Python suites and the lane runner use the standard library only."
     },
@@ -90,7 +101,8 @@
       ],
       "observed": [
         ".NET 10.0.10 arm64 runtime with ilspycmd 11.1.0.9782, reference Mac (docs/reference/studio/binary-contracts.md)",
-        "SDKs 8.0.101 to 10.0.401 (newest 10.0.401), CI macos-26-arm64 image 20261013.0424.1, translation suite passed, 2026-10-23"
+        "SDKs 8.0.101 to 10.0.401 (newest 10.0.401), CI macos-26-arm64 image 20261013.0424.1, translation suite passed, 2026-10-23",
+        "SDK 10.0.302 only, reference Mac doctor run, 2026-10-23"
       ],
       "install": "Install a .NET 10 SDK from https://dotnet.microsoft.com/download and put dotnet on PATH."
     },
@@ -107,7 +119,8 @@
       ],
       "observed": [
         "3.12, CI reverse-tools job (actions/setup-python); first hosted run 2026-10-01",
-        "3.14 could not build the pinned dependencies on the reference Mac (Tools/reverse/README.md)"
+        "3.14 could not build the pinned dependencies on the reference Mac (Tools/reverse/README.md)",
+        "3.12.9 venv with UnityPy 1.23.0, numpy 2.2.6 and msgpack 1.1.2, reference Mac doctor run, 2026-10-23"
       ],
       "install": "python3.12 -m venv .local/reverse/unitypy-venv && .local/reverse/unitypy-venv/bin/python -m pip install -r Tools/reverse/requirements.txt"
     },
@@ -128,7 +141,7 @@
       "parser": "python",
       "requirement": "unrecorded",
       "statedIn": [],
-      "observed": [],
+      "observed": ["3.14.6 (/opt/homebrew/bin/python3, $PY unset), reference Mac doctor run, 2026-10-23"],
       "install": "A python3 with numpy and Pillow; Tools/assets/run_all.sh uses $PY, default /opt/homebrew/bin/python3."
     },
     {
@@ -139,7 +152,7 @@
       "distribution": "numpy",
       "requirement": "unrecorded",
       "statedIn": [],
-      "observed": [],
+      "observed": ["not installed in /opt/homebrew/bin/python3 3.14.6, reference Mac doctor run, 2026-10-23"],
       "install": "$PY -m pip install numpy"
     },
     {
@@ -150,7 +163,7 @@
       "distribution": "Pillow",
       "requirement": "unrecorded",
       "statedIn": [],
-      "observed": [],
+      "observed": ["not installed in /opt/homebrew/bin/python3 3.14.6, reference Mac doctor run, 2026-10-23"],
       "install": "$PY -m pip install Pillow"
     },
     {
@@ -198,7 +211,7 @@
       "parser": "prlctl",
       "requirement": "unrecorded",
       "statedIn": [],
-      "observed": [],
+      "observed": ["27.0.2 (build 58673), reference Mac doctor run, 2026-10-23"],
       "install": "Install Parallels Desktop with a Windows VM that has guest tools and the game installed; see Tools/reverse/README.md."
     }
   ],
