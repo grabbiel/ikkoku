@@ -460,18 +460,21 @@ with a `path` writes the snapshot through `CaptureOutput.writeJSON` and reads it
 back from disk; the report goes through the same checked writer. The process
 exits 0 only when every step passed.
 
-**Verification.** `SourceGameplayHostTests.swift` (8 tests) runs in the public
-CI lane, the only place it was compiled or run, over the synthetic catalog in
+**Verification.** `SourceGameplayHostTests.swift` (9 tests) runs in the Engine
+suite (locally and in the public CI lane) over the synthetic catalog in
 `Tools/verification/scenarios/gameplay-controlled-event.json`. Event 9001 runs
-VAR, Calc, IF to a local tag, a 0.5 s Wait, MapChange to a second map and Close.
-The tests check:
+VAR, Calc, IF to a local tag, a 0.5 s Wait and MapChange to a second map. Since
+G-T02 it continues with a ParameterFile that inserts a synthetic Calc → Clamp →
+HeroineParam program, a ParameterFile naming a missing asset, a HeroineParam
+`H_callID` (CallNameChange), a VAR and Close. The heroine is bound to synthetic
+character tables. The tests check:
 
-- the exact trace from WakeUp → Morning period selection to completion (16
+- the exact trace from WakeUp → Morning period selection to completion (21
   entries, two barriers);
 - that a Change(Type) requested during the map load keeps Morning committed and
   its ADV barrier outstanding until the event completes, and that a `_Next`
   during the event applies its sunlight only after the map load;
-- a JSON reload before each of the 25 steps of a four-operation trace (period
+- a JSON reload before each of the 30 steps of a four-operation trace (period
   selection, a mid-event HR1 change, a backward day change, `_Next`), covering
   both barrier kinds, the held ADV barrier, the map load and the ADV Wait, each
   reproducing the uninterrupted trace and final host exactly;
@@ -480,11 +483,21 @@ The tests check:
 - text, unknown-map, faded MapChange and unported-command failures without
   mutation;
 - each named snapshot rejection above;
-- the shipped scenario, whose three reloads leave its trace and final state
-  identical to a reload-free run, and whose corrupted reload stops it with a
-  named error.
+- the shipped scenario, whose four reloads (steps 5, 8, 12 and 15: mid map
+  load, mid barrier, right after the insertion, after completion) leave its
+  trace and final state identical to a reload-free run, and whose corrupted
+  reload stops it with a named error;
+- a schema-1 snapshot taken mid map load, migrated to the new-game heroine with
+  its three fields copied, equal to the schema-2 host and running on
+  identically; mixed or mislabelled shapes are rejected.
 
 The `gameplay-scenarios` verification lane runs that scenario through the built
-app. It needs the Mac and has not run yet. No original data or host trace is
-compared: this verifies the native ordering and persistence contract, not source
-parity.
+Debug app. On 2026-10-23 (G-T02 branch, strict, under the app lock) it
+**passed**: 20 of 20 steps, four snapshots of 10,427, 10,907, 10,824 and 3,954
+bytes, final state Tuesday Morning, map 2, `completedEvents` `[9001]`. The
+event ran once: Tuesday's Morning selected nothing. Its resumed heroine had
+`H_intimacy` 4, `H_callID` 3 with the special call name, `H_eventAfterDay` 0,
+then 1 after the day change. A copy of the scenario expecting `H_intimacy` 5
+failed that one step (19 passed, 1 failed, exit 1). No original data or host
+trace is compared: this verifies the native ordering and persistence contract,
+not source parity.

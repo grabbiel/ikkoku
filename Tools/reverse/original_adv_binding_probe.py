@@ -15,7 +15,9 @@ an errno-24 check against --errno-baseline:
 5. run, as the signed-in user: start the player and wait a bounded time for it to exit. If it
    is still running, stop it by PID. Then return the TSV, status and logs.
 Nothing in C:\\Illusion\\Koikatsu is written. The root stays in C:\\Temp, as the earlier
-probes' roots do. A rerun with the same output folder resumes after a completed setup.
+probes' roots do. Every run makes a fresh root (Koikatu.exe, not the CharaStudio root that
+original_character_probe.player_root reuses); an output folder that already holds run.json is
+refused, so a failed run is repeated in a new folder.
 
 compare: runs the same cases through `ikkoku-inspect adv-trace` with the new-game heroine and
 player and the coverage scan's tables and library. Per case it compares Vars (type and value;
@@ -227,9 +229,12 @@ def stripped_source():
 
 
 def run(args):
-    """Setup (resumed when run.json records a complete setup of the same source), compile,
-    then the player run. An errno-24 check precedes every exec."""
+    """Setup of a fresh root, mirror, compile, then the player run. An errno-24 check precedes
+    every exec."""
     output = args.output
+    record_path = output / "run.json"
+    if record_path.exists():
+        raise RuntimeError(f"{record_path} exists: run the probe into a new output folder")
     coverage_dir = args.coverage
     library = json.loads((coverage_dir / "parameter-library.json").read_text())["programs"]
     tables = json.loads((coverage_dir / "character-tables.json").read_text())
@@ -237,19 +242,11 @@ def run(args):
     prefixes = prefix_cases(coverage_dir)
     cases = case_rows(named, prefixes)
     source = stripped_source()
-    record_path = output / "run.json"
-    previous = json.loads(record_path.read_text()) if record_path.is_file() else None
-    scripts = None
-    if previous and re.fullmatch(ROOT_PATTERN, previous["root"]) and previous.get("uploadedSourceSHA256") == digest(source.encode()) \
-            and "processID" not in previous:
-        root, record = previous["root"], previous
-        if len(record["setup"]) != len(setup_scripts(root, source)):
-            raise RuntimeError("run.json records an incomplete setup; start with a new output folder")
-    else:
-        root = r"C:\Temp\IkkokuADVBindingProbe-" + uuid.uuid4().hex
-        record = dict(vm=args.vm, root=root, sourceSHA256=digest(SOURCE.read_bytes()), uploadedSourceSHA256=digest(source.encode()),
-                      errnoBaseline=args.errno_baseline, errno=[], setup=[])
-        scripts = setup_scripts(root, source)
+    root = r"C:\Temp\IkkokuADVBindingProbe-" + uuid.uuid4().hex
+    assert re.fullmatch(ROOT_PATTERN, root)
+    record = dict(vm=args.vm, root=root, sourceSHA256=digest(SOURCE.read_bytes()), uploadedSourceSHA256=digest(source.encode()),
+                  errnoBaseline=args.errno_baseline, errno=[], setup=[])
+    scripts = setup_scripts(root, source)
     dump(output / "cases.json", dict(schemaVersion=1, named=named, prefixes=prefixes))
     (output / "cases.tsv").write_bytes(cases)
     record["casesSHA256"] = digest(cases)
@@ -259,11 +256,10 @@ def run(args):
         result = vm_exec(args.vm, script, user)
         dump(record_path, record)
         return result
-    for index, script in enumerate(scripts or []):
+    for index, script in enumerate(scripts):
         record["setup"].append(exec_phase(f"setup {index + 1}", script))
-    if "mirror" not in record:
-        record["mirror"] = json.loads(exec_phase("mirror", mirror_script(root)))
-        dump(record_path, record)
+    record["mirror"] = json.loads(exec_phase("mirror", mirror_script(root)))
+    dump(record_path, record)
     record["compile"] = exec_phase("compile", compile_script(root, cases, record["uploadedSourceSHA256"]))
     result = json.loads(exec_phase("run", run_script(root), user=True))
     files = {}

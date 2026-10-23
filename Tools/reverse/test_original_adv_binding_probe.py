@@ -89,6 +89,15 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(run.call_count, 1)
             self.assertIn("--current-user", run.call_args[0][0])
 
+    def test_run_refuses_an_output_folder_that_already_holds_a_run(self):
+        with tempfile.TemporaryDirectory() as tmp, patch("original_adv_binding_probe.vm_exec") as vm, \
+                patch("original_adv_binding_probe.errno_count") as errno:
+            (Path(tmp) / "run.json").write_text("{}")
+            args = type("Args", (), dict(output=Path(tmp), coverage=Path(tmp) / "missing", vm="vm", errno_baseline=5))
+            with self.assertRaisesRegex(RuntimeError, "new output folder"):
+                probe.run(args)
+            vm.assert_not_called(); errno.assert_not_called()
+
     def test_guarded_stops_when_the_errno_count_moves(self):
         with patch("original_adv_binding_probe.errno_count", return_value=6):
             with self.assertRaisesRegex(RuntimeError, "errno-24 count is 6"):
