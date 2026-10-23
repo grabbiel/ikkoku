@@ -27,7 +27,7 @@ class AdapterReportTests(unittest.TestCase):
     def tearDown(self):
         self.scratch.cleanup()
 
-    def reports(self, enabled=False, events=(False, True), created=False, mute=True):
+    def reports(self, enabled=False, events=(False, True), created=False, launched=False, mute=True):
         refs = [dict(manifestFile=str(path.resolve()), manifestSHA256=hashlib.sha256(path.read_bytes()).hexdigest(),
                      guid=guid, version=version, adapterID=adapter, enabled=True)
                 for path, guid, version, adapter in zip(self.manifests, ('BepInEx.MuteInBackground', 'KK_StudioAccessoryNames'),
@@ -38,14 +38,15 @@ class AdapterReportTests(unittest.TestCase):
         trace = [dict(masterVolume=1., voiceVolume=1., toneRMS=.17)]
         trace += [dict(focus=focus, masterVolume=volume, voiceVolume=1., toneRMS=.17 * volume)
                   for focus, volume in zip(events, volumes)]
-        awaiting = not created
+        awaiting = not launched
         mount = dict(mounted=mute, awaitingInitialFocus=awaiting and mute, focusObservers=2 if mute else 0,
                      launchObserver=awaiting and mute)
         final = dict(mount, awaitingInitialFocus=mount['awaitingInitialFocus'] and not events,
                      launchObserver=mount['launchObserver'] and not events)
         if mute:
             mount['enabled'] = final['enabled'] = enabled
-        report = dict(schemaVersion=1, applicationCreated=created, nativePlugins=refs, accessoryNamesEnabled=True,
+        report = dict(schemaVersion=1, applicationCreated=created, launchFinished=launched, nativePlugins=refs,
+                      accessoryNamesEnabled=True,
                       mount=mount, focusTrace=trace, final=final)
         return {mode: copy.deepcopy(report) for mode in ('run', 'reload', 'continue')}
 
@@ -86,13 +87,20 @@ class AdapterReportTests(unittest.TestCase):
             self.check(duplicate)
         premature = self.reports()
         premature['run']['mount'].update(awaitingInitialFocus=False, launchObserver=False)
-        with self.assertRaisesRegex(ValueError, 'before NSApplication existed'):
+        with self.assertRaisesRegex(ValueError, 'before launching finished'):
             self.check(premature)
+        # macOS 27: SwiftUI creates NSApplication before AppState, but launching has not
+        # finished, so an immediate sample there is still premature (A-T04, 2026-10-23).
+        early = self.reports(created=True)
+        early['run']['mount'].update(awaitingInitialFocus=False, launchObserver=False)
+        with self.assertRaisesRegex(ValueError, 'run: initial focus was sampled before launching finished'):
+            self.check(early)
         stale = self.reports()
         stale['reload']['final']['launchObserver'] = True
         with self.assertRaisesRegex(ValueError, 'deferred initial focus observer'):
             self.check(stale)
         self.check(self.reports(created=True))
+        self.check(self.reports(created=True, launched=True))
 
     def test_rejects_changed_package_identity_or_configuration(self):
         changed = self.reports()

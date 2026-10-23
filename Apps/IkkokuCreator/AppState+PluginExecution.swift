@@ -51,8 +51,9 @@ extension AppState {
 
     /// `IKKOKU_APPLICATION_FOCUS=0,1` delivers focus loss/gain through the AppKit
     /// notification path; `IKKOKU_NATIVE_PLUGIN_REPORT` records mounts, observers
-    /// and generated-tone gain after each event. Headless captures never create
-    /// NSApplication, so they also record the deferred initial-focus state.
+    /// and generated-tone gain after each event. Headless captures exit before
+    /// launching finishes, so they also record the deferred initial-focus state.
+    /// `launchFinished` lets the probe reject a sample taken before then (A-T04).
     private static func captureSourceFocus(_ studio: StudioModel, env: [String: String]) throws {
         let events: [Bool] = try env["IKKOKU_APPLICATION_FOCUS"].map { value in
             try value.split(separator: ",", omittingEmptySubsequences: false).map { text -> Bool in
@@ -80,7 +81,8 @@ extension AppState {
         let references = try (studio.doc.sourceNativePlugins ?? []).map { reference -> Any in
             try JSONSerialization.jsonObject(with: JSONEncoder().encode(reference))
         }
-        let report: [String: Any] = ["schemaVersion": 1, "applicationCreated": NSApp != nil, "nativePlugins": references,
+        let report: [String: Any] = ["schemaVersion": 1, "applicationCreated": NSApp != nil,
+            "launchFinished": NSRunningApplication.current.isFinishedLaunching, "nativePlugins": references,
             "accessoryNamesEnabled": studio.sourceAccessoryNamesEnabled, "mount": mount, "focusTrace": trace, "final": studio.sourceFocusState()]
         try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
                                     to: URL(fileURLWithPath: path))

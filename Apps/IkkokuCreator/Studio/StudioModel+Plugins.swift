@@ -69,8 +69,10 @@ extension StudioModel {
     }
 
     /// Replaces the adapter and its single observer set. SwiftUI builds AppState
-    /// before NSApplication exists, so capture/env mounts sample the initial focus
-    /// at launch instead of reading a nil NSApp.
+    /// before launching finishes, so capture/env mounts sample the initial focus at
+    /// `didFinishLaunching`. On macOS 27 NSApplication already exists (and reports
+    /// `isRunning`) at that point, but `isActive` is still false, so the existence
+    /// of `NSApp` alone no longer means the sample is valid (A-T04).
     func mountSourceFocusAdapter(_ adapter: SourceMuteInBackgroundPlugin?) {
         for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
         sourceFocusObservers = []; removeSourceLaunchObserver()
@@ -81,7 +83,7 @@ extension StudioModel {
                 MainActor.assumeIsolated { self?.receiveSourceApplicationFocus(focused) }
             })
         }
-        if let app = NSApp { deliverInitialSourceFocus(app.isActive); return }
+        if let app = NSApp, NSRunningApplication.current.isFinishedLaunching { deliverInitialSourceFocus(app.isActive); return }
         sourceLaunchObserver = NotificationCenter.default.addObserver(forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.deliverInitialSourceFocus(NSApp?.isActive ?? false) }
         }

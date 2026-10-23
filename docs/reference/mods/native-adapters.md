@@ -81,9 +81,12 @@ pending.
 
 ## Startup and acceptance
 
-SwiftUI constructs `AppState` before `NSApplication` exists. Environment and
+SwiftUI constructs `AppState` before launching finishes. Environment and
 capture mounts, and saved-scene restores in `captureScene`, all run inside that
-initializer. The Mute mount used to read `NSApp.isActive` there, so the private
+initializer. On macOS 26 `NSApplication` did not exist yet. On macOS 27.0.1
+(Swift 6.4) it already exists there and reports `isRunning`, but `isActive` is
+false and `NSRunningApplication.current.isFinishedLaunching` is false until
+`didFinishLaunching` (checked 2026-10-23 with a minimal SwiftUI app). The Mute mount used to read `NSApp.isActive` there, so the private
 `.local/reverse/plugin-execution/native-adapter-capture-01` run terminated with
 SIGTRAP before capture; `Ikkoku-2026-09-25-071053.ips` identifies that method.
 
@@ -91,8 +94,12 @@ SIGTRAP before capture; `Ikkoku-2026-09-25-071053.ips` identifies that method.
 become/resign-active observers. Every remount replaces the pair and unmounting
 removes it. `SourceApplicationFocusHost` restores the replaced adapter's saved
 volume first, as before. It then delivers the initial focus sample immediately
-when `NSApp` exists. Otherwise it delivers the sample once, at
-`NSApplication.didFinishLaunchingNotification`. A real focus change supersedes a
+when `NSApp` exists and launching has finished
+(`NSRunningApplication.current.isFinishedLaunching`). Otherwise it delivers the
+sample once, at `NSApplication.didFinishLaunchingNotification`. Until
+2026-10-23 the test was only `NSApp != nil`. On macOS 27 that sampled the
+not-yet-active app during `AppState.init`, so an enabled Mute stored and zeroed
+the gain before any real focus event (see the rerun below). A real focus change supersedes a
 pending sample, so a duplicate startup loss cannot store zero through the
 repeated-loss quirk. `sourceMuteFocusHostDefersInitialFocusOnceAndRestoresReplacedAdapter`
 covers this state machine.
@@ -101,8 +108,9 @@ Headless captures exit before launch finishes, so two capture-only variables
 provide focus evidence. `IKKOKU_APPLICATION_FOCUS=0,1` delivers up to 64 focus
 losses (`0`) and gains (`1`) through the same method as the AppKit observers; it
 requires a mounted Mute adapter. `IKKOKU_NATIVE_PLUGIN_REPORT=/path/report.json`
-records the mounted package references, whether `NSApplication` existed, the
-observer count and the pending initial sample. After each event it also records
+records the mounted package references, whether `NSApplication` existed and
+whether launching had finished (`launchFinished`), the observer count and the
+pending initial sample. After each event it also records
 master and voice gain plus the RMS of a generated 440 Hz tone rendered offline
 through the app's voice and master mixers. Tone capture refuses running audio
 output and returns the bus to realtime mode with its gains unchanged. Startup
@@ -129,7 +137,9 @@ saved native scene. Each phase must exit zero and delivers `--focus-events`
 
 - manifest hashes, identities or the Mute setting change between phases;
 - a phase has anything other than one observer pair;
-- the initial sample was taken before `NSApplication` existed;
+- the initial sample was taken before launching finished (`launchFinished`
+  false while no sample is pending; until 2026-10-23 the probe checked only
+  that `NSApplication` existed, which macOS 27 always satisfies);
 - master, voice or tone gain differs from Mute 1.1;
 - reload pixels change.
 
@@ -165,6 +175,67 @@ Merge `aa4bcb9` has the identical source tree. Private evidence is retained at
 
 The inspector gate, live config watching and general observer/timer lifetime work
 are separate tasks. No complete plugin or original Studio parity is implied.
+
+## Local rerun on macOS 27 (2026-10-23)
+
+The handoff's L3 task reran the probe above on the reference Mac (macOS 27.0.1
+`26A434`, Xcode 27.0 `27A266a`, Swift 6.4), with the Release app built
+`ARCHS=arm64` and signed, both original adapter manifests from
+`.local/reverse/plugin-execution/packages/` and the IR motion fixture. The
+private `capture-environment.json` held no capture option, so it was not edited.
+The enabled run used `mute-enabled.cfg`, the installed configuration with
+`Mute In Background = true` (SHA-256 `ec34c90c…`). PR #2's enabled copy was not
+retained.
+
+`native-adapter-capture-03`, `claude/local-wave-verify` at `0501cf1` (main
+`b0b8cb6`), executable SHA-256 `3c578d90…`, **failed**:
+
+- installed-config: probe exit 0;
+- enabled-config: probe exit 1, `run: generated tone is silent before focus
+  events`. Every phase reported `applicationCreated: true` (PR #2: false). The
+  mount showed no pending initial sample, and master gain and tone RMS were 0
+  before the first scripted event, after the loss and after the gain.
+
+The cause is the startup order described under
+[Startup and acceptance](#startup-and-acceptance). A minimal SwiftUI app on this
+Mac printed `NSApp=true isRunning=true isActive=false finishedLaunching=false`
+from a `@State` initializer and `finishedLaunching=true` at
+`didFinishLaunching`. The mount therefore delivered the initial sample during
+`AppState.init`, as an inactive app. With Mute enabled that zeroed the gain, the
+first scripted loss stored zero through the 1.1 repeated-loss quirk, and the
+gain restored zero. The installed (disabled) configuration hides this, because
+a disabled Mute never changes the gain. The old probe rule, "sampled before
+`NSApplication` existed", cannot fail on macOS 27. The probe now checks
+`launchFinished`. Its unit test adds a report shaped like capture-03's
+(`applicationCreated` true, no pending sample, launching not finished): the new
+probe rejects it, and the old probe accepted it.
+
+`native-adapter-capture-04`, `claude/a-t04-launch-focus` at `a031b50` (main
+`d9684e8`), executable SHA-256 `13d1799a…`, with the fix:
+
+- installed-config: probe exit 0. In every phase the mount reports
+  `applicationCreated: true`, `launchFinished: false`, and the initial sample
+  pending behind the launch observer, the same mount and final states as PR #2.
+  Master and voice gain stay 1, and the tone RMS stays 0.125052124 through the
+  loss and the gain.
+- enabled-config: probe exit 0, with the same mount states. In each of run,
+  reload and continue, master gain went 1 → 0 → 1 and tone RMS 0.125052124 → 0 →
+  0.125052124 across the loss and the gain, voice gain stayed 1, and the
+  report's `muteConfigSHA256` is the configuration passed. Reload pixels were
+  identical, Start stayed 1 and continuation reached 1.9999994 s, as in PR #2.
+  The first enabled attempt was terminated (exit 143) when app launches were
+  paused for an interactive session; the rerun at 12:18 is the result.
+
+A separate comparison against `accepted-pr-2/` derives the requested Mute
+setting from the bytes of each configuration file, because the probe trusts the
+report's effective setting. It compares each phase's mount and final
+`enabled`, gains, tone RMS and focus trace with the accepted reports. It also
+checks pixel identity, Start count, elapsed time, object key, scene and package
+hashes, and adapter identities. PR #2's `applicationCreated: false` is a macOS 26
+fact, so in its place the comparison requires the deferred sample at mount. For
+capture-04 it passed all 89 checks across the two configurations. Evidence:
+`.local/reverse/plugin-execution/native-adapter-capture-03` and `-04`, with
+the commands and the comparison in `.local/local-wave-verify/l3/`.
 
 ## Accessory label UI gate
 
