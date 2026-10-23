@@ -65,6 +65,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 ## G. Gameplay cycle, event selection and ADV
 
 Sources: [SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift),
+[SourceGameplaySession.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift),
 [SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift),
 [SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift).
 Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
@@ -74,8 +75,8 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
 | G01 · Period/week values and pure transitions | Fully ported — bounded control kernel | Twelve saved period ordinals, seven weekdays, backward-period day advance, same-week seven-day advance and night-menu completion rules are explicit. Negative invalid weekday arithmetic is deliberately rejected instead of reproducing a source nonterminating search. | Keep this scope distinct from scenes/menus; add regressions when more host callbacks are connected. |
-| G02 · MapMove timing/gates | Fully ported — bounded timer kernel | Cursor/game regulation controls advancement; ADV/talk/interaction flags control visibility separately. Frame increments may overshoot 500; finish forces display fraction 1 without clamping stored timer. | Supply real source flags through G-T01; current caller-supplied flags are not gameplay integration. |
-| G03 · Deferred scene/menu/NPC effects | Infancy | The cycle returns `SourceGameplayDeferredEffect` values such as `loadNPCs`, `prepareNextPeriodSceneBarrier`, tutorial and sunlight changes. Returning an enum does not execute any of these operations. | G-T01: implement a host dispatcher with acknowledged completion/barriers. |
+| G02 · MapMove timing/gates | Fully ported — bounded timer kernel | Cursor/game regulation controls advancement; ADV/talk/interaction flags control visibility separately. Frame increments may overshoot 500; finish forces display fraction 1 without clamping stored timer. | Supply real source flags from the gameplay host (A-T01, over the G-T01 session); current caller-supplied flags are not gameplay integration. |
+| G03 · Deferred scene/menu/NPC effects | Mid-stage — engine host, no app consumer | `SourceGameplaySession` classifies all 19 `SourceGameplayDeferredEffect` cases in an exhaustive switch: 11 synchronous, 8 completion barriers, of which `loadNPCs`, `prepareMapMoveCharactersAndCamera` and `startTimeZoneCutIn` are conservative because their source completion is not recovered. It releases effects in source order, requires an ID-and-effect acknowledgement per barrier, rejects unknown, duplicate, out-of-order and mismatched acknowledgements without mutation, and commits the cycle only after the operation's last barrier. Version-1 snapshots reload deterministically mid-barrier and reject other versions and inconsistent state. It still executes none of the effects; verification is the synthetic Engine suite in CI ([session host](../reference/gameplay/cycle.md#session-host-and-effect-inventory-g-t01)). | A-T01: an app host executes each effect and acknowledges barriers from real scene/ADV/NPC completion, including cancellation. Replace a conservative barrier only with recovered completion evidence. |
 | G04 · Fixed-event table decode and eligibility | Fully ported — inspected selection rules | First unfinished event only; weekday/period/day/lesson conditions, map lookup and wait-point layer match. Failed eligibility does not search later unfinished events. Tested against 4,032 independent contexts for 48 source entries. | Extend catalog coverage independently; selected event still needs G-T02 dispatch. |
 | G05 · Fixed-event placement and execution | Pending | `Selection` contains asset, map and optional wait-point/layer identity. No NPC entity spawn, movement, encounter dispatch or completion persistence consumes it in the app. | G-T02: bind selection to native state and a recovered scenario with exact completion flags. |
 | G06 · ADV program decoding and batch/wait execution | Mid-stage | Bounded program/argument/variable sizes; `multi` batching, local jump recursion budget, cancelable Wait and explicit ready/waiting/faulted/exhausted states. A fault preserves already-executed scalar effects for inspection; this VM is not a transaction. | G-T03: implement frame/task/scene host integration and saveable running-state model. |
@@ -84,7 +85,7 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
 | G09 · Dialogue, choices and UI flow | Pending | No text/choice renderer, input state, localization flow or dialogue backlog is driven by ADV. `requestNext` is supplied by tests/CLI. Measured use: Text 63,122 records in 8,956 assets, Voice 31,165, Choice 466; Text is the first blocker of only 46 assets because character look, BGM, map and fade commands precede it. After the first nine commands of the measured greedy order (character look/expression/motion, BGM, Voice, Text), 2,124 assets would contain no unsupported ordinal (a static ceiling, not playback). | G-T03: recover blocking semantics, implement display/input actions and test skip/choice/save/load. |
 | G10 · Cross-file ADV, tasks, animation/camera/audio actions | Pending | External `file:tag` jumps and unknown commands fault with command index/reason; this halting position is now checked across the installed corpus. Studio animation/audio consumers are not wired to ADV. Top first blockers: CharaLookNeck 2,977 assets, BGMPlay 2,588, MapChange 1,262, Fade 1,112, BGLoad 784, CharaExpression 462. Open has 2,869 records; Task/TaskEnd 156/117. | G-T03: identity-preserving scenario resolver plus typed presentation commands and cancellation barriers, in the measured order. |
 | G11 · NPC population, navigation and decisions | Pending | No native NPC behavior-tree runner, source action/navigation tables, map topology, pathfinding or encounter loop is connected. | G-T04: recover one map and one neutral NPC route; implement decisions, movement and save-state continuity against numeric traces. |
-| G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. | G-T01/G-T02: recover native session schema and original load/save adapters before treating scalar variables as campaign state. |
+| G12 · Original game save/session state | Pending | Character cards and Studio documents are separate formats; neither supplies original player/heroine campaign save state. The G-T01 session snapshot persists only native cycle control state and pending barriers. | G-T02: recover original load/save adapters and extend the native session schema before treating scalar variables as campaign state. |
 | G13 · Full original game screens/modes | Pending | The app has Maker and Studio only. Original title/start/load, school/map interaction, menus and the remaining game modes are absent. | Build an explicit recovered mode inventory with dependencies and one vertical slice per mode; no overall completion percentage is defensible yet. |
 
 ### Actionable gameplay tasks
@@ -93,6 +94,17 @@ Recovery: `Tools/reverse/analysis/gameplay_contract.py`,
   `SourceGameplayDeferredEffect`, classify synchronous work vs completion barrier,
   implement acknowledgements, and persist in-flight state. Acceptance: no period
   advance before its dependencies complete; reload during a barrier is deterministic.
+  Engine slice implemented: `SourceGameplaySession` classifies every effect
+  ([inventory and source basis](../reference/gameplay/cycle.md#session-host-and-effect-inventory-g-t01)),
+  requires typed acknowledgements, commits no period/day advance before its
+  operation's last barrier and persists in-flight state as a versioned snapshot.
+  `SourceGameplaySessionTests.swift` checks both acceptance criteria on synthetic
+  traces, including a JSON reload at each of the 52 barriers of a
+  Friday-to-Wednesday trace; this is the synthetic Engine suite in CI, not
+  original-host evidence. Remaining: no app host consumes it (A-T01),
+  cancellation during a barrier is not modelled, the three conservative barriers
+  need recovered completion rules, and timer operations are rejected while a
+  barrier is outstanding.
 - **G-T02 — Character bindings and event completion (P1).** Recover original
   player/heroine data access, event flags and `HeroineParam`; implement typed
   bindings without renaming original IDs. Acceptance: the existing original
@@ -174,6 +186,7 @@ Concrete Studio integration is covered in [Studio](studio.md).
 ## Evidence and specific cautions
 
 - Gameplay tests: `SourceGameplayCycleTests.swift`,
+  `SourceGameplaySessionTests.swift`,
   `SourceGameplayExecutionTests.swift`, `test_gameplay_contract.py`,
   `test_gameplay_execution_contract.py`, `test_adv_command_coverage.py`. Their references are independent
   calculations/recovered-source fixtures, **not a complete running game**.

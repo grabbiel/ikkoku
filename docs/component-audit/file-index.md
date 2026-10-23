@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**779 files indexed; 779 assigned; 0 unassigned.**
+**781 files indexed; 781 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 63 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 65 |
 | [Character / Maker / mods](character-and-mods.md) | 115 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 294 |
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
-| Runtime / shared shader declaration | 163 |
-| Test / validation | 150 |
+| Runtime / shared shader declaration | 164 |
+| Test / validation | 151 |
 
 ## App / gameplay / plugins
 
@@ -76,6 +76,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayCycle.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceIRProgram.swift](../../Packages/Engine/Sources/Gameplay/SourceIRProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift](../../Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift) | Runtime / shared shader declaration |
@@ -84,6 +85,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
