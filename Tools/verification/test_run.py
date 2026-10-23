@@ -727,6 +727,10 @@ CAPTURE_REQUEST_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sour
                                       "CaptureRequest.swift")
 CAPTURE_OUTPUT_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sources", "Renderer",
                                      "CaptureOutput.swift")
+# The app reads the live source-shader data variables through this Engine type
+# (`SourceShaderLiveConfiguration.environment(ProcessInfo...environment)`).
+LIVE_SOURCE_CONFIGURATION_SOURCE = os.path.join(run.REPO_ROOT, "Packages", "Engine", "Sources", "Character",
+                                                "SourceShaderLiveConfiguration.swift")
 # Whole variable names; the capture prefixes such as "IKKOKU_CAPTURE_" end in "_".
 IKKOKU_LITERAL = re.compile(r'"(IKKOKU_[A-Z0-9_]*[A-Z0-9])"')
 
@@ -753,7 +757,7 @@ class CaptureRequestInventoryTests(unittest.TestCase):
         for root, _, files in os.walk(os.path.join(run.REPO_ROOT, "Apps", "IkkokuCreator")):
             sources.extend(os.path.join(root, name) for name in files if name.endswith(".swift"))
         self.assertTrue(sources)
-        return _ikkoku_literals(*sources)
+        return _ikkoku_literals(*sources, LIVE_SOURCE_CONFIGURATION_SOURCE)
 
     def test_every_variable_the_app_reads_is_classified(self):
         # IKKOKU_CAPTURE_UI_TIMEOUT is the UICaptureReadiness constant in CaptureOutput.swift.
@@ -1149,7 +1153,7 @@ GAMEPLAY_SCENARIO_OPS = ("perform", "run", "reload", "assert")
 GAMEPLAY_OPERATIONS = ("nextPeriod", "changePeriod", "changeWeek", "nextWeek",
                        "reloadNightMenuWeek", "completeNightMenu", "beginMapMove",
                        "finishMapMove")
-GAMEPLAY_RUN_CONDITIONS = ("idle", "eventRunning", "mapLoading", "barrier")
+GAMEPLAY_RUN_CONDITIONS = ("idle", "eventRunning", "mapLoading", "barrier", "parameterInserted")
 
 
 class GameplayScenarioLaneTests(unittest.TestCase):
@@ -1219,9 +1223,16 @@ class GameplayScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step.get("until", "idle"), GAMEPLAY_RUN_CONDITIONS)
                 if op == "assert":
                     declared = [k for k in ("period", "week", "savedWeek", "activeMap",
-                                            "completedEvents", "runningEvent", "idle")
+                                            "completedEvents", "runningEvent", "idle",
+                                            "heroineParameters", "eventVariables", "insertions")
                                 if k in step]
                     self.assertTrue(declared, "assert declares nothing")
+                    if "heroineParameters" in step:
+                        self.assertIsInstance(step.get("heroine"), int,
+                                              "heroineParameters names no saved heroine")
+                    for key in ("heroineParameters", "eventVariables"):
+                        for value in step.get(key, {}).values():
+                            self.assertRegex(value, r"^System\.[A-Za-z0-9]+:", "%s value is not <type>:<value>" % key)
                     if "activeMap" in step:
                         self.assertIn(step["activeMap"], maps)
 

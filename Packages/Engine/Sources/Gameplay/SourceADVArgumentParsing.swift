@@ -70,6 +70,50 @@ enum SourceCLR {
         return .value(negative ? -number : number)
     }
 
+    /// `Convert.ChangeType(string, typeof(int))`: `String.ToInt32(provider)` →
+    /// `Int32.Parse(s, NumberStyles.Integer, CurrentCulture)`, Mono's styled
+    /// parser (not the `int.Parse(string)` fast path): leading white space, a
+    /// culture sign (`-`/`+`; `+` only when a character follows it), white
+    /// space again, digits, trailing white space, then end or NUL. Overflow
+    /// throws. `char.IsWhiteSpace`/`char.IsDigit` beyond ASCII depend on
+    /// Mono's Unicode tables, so any non-ASCII input is unsupported.
+    static func int32Integer(_ text: String) -> SourceCLRResult<Int32> {
+        let s = Array(text.utf16)
+        if s.isEmpty { return .exception("Int32.Parse: empty string") }
+        guard s.allSatisfy({ $0 < 0x80 }) else { return .unsupported("Int32.Parse(NumberStyles.Integer) of non-ASCII text") }
+        func white(_ c: UInt16) -> Bool { (0x09...0x0D).contains(c) || c == 0x20 }
+        func jump(_ pos: inout Int) { while pos < s.count && white(s[pos]) { pos += 1 } }
+        var pos = 0, negative = false, foundSign = false
+        jump(&pos)
+        if pos >= s.count { return .exception("Int32.Parse: format") }
+        // FindSign: NegativeSign when it fits, PositiveSign only before another character.
+        if s[pos] == 0x2D { negative = true; foundSign = true; pos += 1 }
+        else if s[pos] == 0x2B, pos + 1 < s.count { foundSign = true; pos += 1 }
+        if foundSign {
+            jump(&pos)
+            if pos >= s.count { return .exception("Int32.Parse: format") }
+        }
+        // Mono accumulates the negated value, then negates it unless negative.
+        var number: Int32 = 0, digits = 0
+        repeat {
+            let c = s[pos]
+            guard (0x30...0x39).contains(c) else { break }
+            digits += 1; pos += 1
+            let (scaled, o1) = number.multipliedReportingOverflow(by: 10)
+            let (next, o2) = scaled.subtractingReportingOverflow(Int32(c - 0x30))
+            if o1 || o2 { return .exception("Int32.Parse: overflow") }
+            number = next
+        } while pos < s.count
+        if digits == 0 { return .exception("Int32.Parse: format") }
+        jump(&pos)
+        if pos < s.count && s[pos] != 0 { return .exception("Int32.Parse: format") }
+        if !negative {
+            guard number != .min else { return .exception("Int32.Parse: overflow") }
+            number = -number
+        }
+        return .value(number)
+    }
+
     private static func trailingWhiteSpace(_ s: [Unicode.Scalar], from start: Int) -> Bool? {
         for c in s[min(start, s.count)...] where c != "\0" {
             guard let white = isWhiteSpace(c) else { return nil }

@@ -119,13 +119,21 @@ public struct SourceADVProgram: Codable, Sendable, Equatable {
     }
 }
 
-/// Source command batching, the bounded scalar command subset, and typed host
-/// requests for the first presentation commands. Unsupported commands stop
-/// with an exact source command index and reason.
+/// Source command batching, the bounded scalar command subset, typed host
+/// requests for the first presentation commands, and the saved-character
+/// bindings (`HeroineParam`, `ParameterFile`). Unsupported commands stop with
+/// an exact source command index and reason.
+///
+/// `program` is the asset as loaded; `commands` is `TextScenario.CommandPacks`,
+/// which `ParameterFile` grows by inserting library programs after its own
+/// line (`insertions` records each one). Command indexes (`pc`, request and
+/// fault `pc`) refer to `commands`.
 ///
 /// The state is `Codable`: a host may save it at any frame boundary, including
 /// while a Wait timer runs, a request awaits acknowledgement or a Text batch
-/// awaits Next, and resume with identical results.
+/// awaits Next, and resume with identical results. States saved before the
+/// character bindings existed decode with no binding, no library and no
+/// insertions.
 public struct SourceADVInterpreter: Codable, Sendable, Equatable {
     public struct Wait: Codable, Sendable, Equatable { public var pc: Int; public var duration: Float; public var elapsed: Float }
     public struct Fault: Codable, Sendable, Equatable { public var pc: Int; public var commandID: Int; public var reason: String }
@@ -146,9 +154,32 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
         public var commandID: Int
         public var gate: Gate
     }
+    /// One `ParameterFile` insertion (`CommandPacks.InsertRange(CurrentLine + 1, list)`).
+    public struct Insertion: Codable, Sendable, Equatable {
+        /// The ParameterFile's command index; the list starts at `pc + 1`.
+        public var pc: Int
+        /// The `scenarioParameterDic` key (the argument after ReplaceVars).
+        public var asset: String
+        public var count: Int
+        /// `nextRequestID` when it ran: requests with smaller IDs came before it.
+        public var nextRequestID: Int
+        public var batch: Int
+    }
     public static let requestQueueLimit = 100_000
+    public static let commandLimit = 100_000
     public let program: SourceADVProgram
+    /// `TextScenario.CommandPacks`: `program.commands` plus `insertions`.
+    public private(set) var commands: [SourceADVProgram.Command]
+    public private(set) var insertions: [Insertion] = []
     public private(set) var variables: [String: SourceADVValue]
+    /// `TextScenario.Replaces` (the host's `ReplaceText` tags).
+    public private(set) var replaces: [String: String] = [:]
+    /// `currentHeroine`, `Manager.Game.Player` and their tables; nil when no
+    /// character is bound (HeroineParam then faults as the source's null
+    /// `currentHeroine` would).
+    public private(set) var character: SourceADVCharacterBinding?
+    /// `Manager.Game.scenarioParameterDic`; nil faults ParameterFile as unsupported.
+    public let parameterLibrary: SourceADVParameterLibrary?
     public private(set) var pc = 0
     public private(set) var executedInstructions = 0
     public private(set) var waits: [Wait] = []
@@ -170,7 +201,7 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
     private var executingPC = 0
 
     public var exhausted: Bool {
-        pc >= program.commands.count && waits.isEmpty && pending.isEmpty && !awaitingNext && !closed && fault == nil
+        pc >= commands.count && waits.isEmpty && pending.isEmpty && !awaitingNext && !closed && fault == nil
     }
     /// `UpdateRegulate` gates that suspend command processing and input.
     public var hostGated: Bool { pending.contains { $0.gate == .mapLoading || ($0.gate == .sceneFade && sceneFadeRegulate) } }
@@ -184,10 +215,20 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
         return exhausted ? "exhausted" : "frameBoundary"
     }
 
-    public init(program: SourceADVProgram, variables: [String: SourceADVValue] = [:], sceneFadeRegulate: Bool = true) throws {
+    /// With `character`, the heroine is seeded into `variables`/`replaces` as
+    /// `Heroine.SetADVParam(scenario)` does (after the given variables).
+    public init(program: SourceADVProgram, variables: [String: SourceADVValue] = [:], sceneFadeRegulate: Bool = true,
+                character: SourceADVCharacterBinding? = nil, parameterLibrary: SourceADVParameterLibrary? = nil) throws {
         try program.validate()
         try Self.validate(variables)
-        self.program = program; self.variables = variables; self.sceneFadeRegulate = sceneFadeRegulate
+        try character?.validate()
+        try parameterLibrary?.validate()
+        self.program = program; self.commands = program.commands; self.variables = variables; self.sceneFadeRegulate = sceneFadeRegulate
+        self.character = character; self.parameterLibrary = parameterLibrary
+        if self.character != nil {
+            try self.character!.seed(variables: &self.variables, replaces: &self.replaces)
+            try Self.validate(self.variables)
+        }
     }
     private static func validate(_ variables: [String: SourceADVValue]) throws {
         guard variables.count <= 10_000, variables.allSatisfy({ key, value in
@@ -199,6 +240,45 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case program, variables, pc, executedInstructions, waits, closed, started, fault, requests, pending
         case awaitingNext, batch, nextRequestID, sceneFadeRegulate, textBindings, executingPC
+        case insertions, replaces, character, parameterLibrary
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var box = encoder.container(keyedBy: CodingKeys.self)
+        try box.encode(program, forKey: .program)
+        try box.encode(variables, forKey: .variables)
+        try box.encode(pc, forKey: .pc)
+        try box.encode(executedInstructions, forKey: .executedInstructions)
+        try box.encode(waits, forKey: .waits)
+        try box.encode(closed, forKey: .closed)
+        try box.encode(started, forKey: .started)
+        try box.encodeIfPresent(fault, forKey: .fault)
+        try box.encode(requests, forKey: .requests)
+        try box.encode(pending, forKey: .pending)
+        try box.encode(awaitingNext, forKey: .awaitingNext)
+        try box.encode(batch, forKey: .batch)
+        try box.encode(nextRequestID, forKey: .nextRequestID)
+        try box.encode(sceneFadeRegulate, forKey: .sceneFadeRegulate)
+        try box.encode(textBindings, forKey: .textBindings)
+        try box.encode(executingPC, forKey: .executingPC)
+        // `commands` is derived: program + insertions from the library.
+        try box.encode(insertions, forKey: .insertions)
+        try box.encode(replaces, forKey: .replaces)
+        try box.encodeIfPresent(character, forKey: .character)
+        try box.encodeIfPresent(parameterLibrary, forKey: .parameterLibrary)
+    }
+    /// Re-applies `insertions` to `program`, checking each against the library.
+    private static func replay(_ program: SourceADVProgram, _ insertions: [Insertion],
+                               _ library: SourceADVParameterLibrary?) throws -> [SourceADVProgram.Command] {
+        var commands = program.commands
+        for item in insertions {
+            guard let library, let list = library.programs[item.asset], list.count == item.count,
+                  commands.indices.contains(item.pc), commands[item.pc].id == 201, item.batch >= 1, item.nextRequestID >= 0,
+                  commands.count + list.count <= commandLimit else {
+                throw SourceGameplayExecutionError.invalidData("ADV ParameterFile insertion does not replay")
+            }
+            commands.insert(contentsOf: list, at: item.pc + 1)
+        }
+        return commands
     }
     public init(from decoder: any Decoder) throws {
         let box = try decoder.container(keyedBy: CodingKeys.self)
@@ -218,10 +298,21 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
         sceneFadeRegulate = try box.decode(Bool.self, forKey: .sceneFadeRegulate)
         textBindings = try box.decode(SourceADVTextBindings.self, forKey: .textBindings)
         executingPC = try box.decode(Int.self, forKey: .executingPC)
+        insertions = try box.decodeIfPresent([Insertion].self, forKey: .insertions) ?? []
+        replaces = try box.decodeIfPresent([String: String].self, forKey: .replaces) ?? [:]
+        character = try box.decodeIfPresent(SourceADVCharacterBinding.self, forKey: .character)
+        parameterLibrary = try box.decodeIfPresent(SourceADVParameterLibrary.self, forKey: .parameterLibrary)
         try program.validate()
         try Self.validate(variables)
-        let lines = 0..<max(program.commands.count, 1)
-        guard (0...program.commands.count).contains(pc), lines.contains(executingPC), executedInstructions >= 0, batch >= 0,
+        try character?.validate()
+        try parameterLibrary?.validate()
+        guard insertions.count <= Self.commandLimit, replaces.count <= 10_000,
+              replaces.allSatisfy({ $0.key.utf8.count <= 65536 && $0.value.utf8.count <= 65536 }) else {
+            throw SourceGameplayExecutionError.invalidData("ADV interpreter state limits")
+        }
+        commands = try Self.replay(program, insertions, parameterLibrary)
+        let lines = 0..<max(commands.count, 1)
+        guard (0...commands.count).contains(pc), lines.contains(executingPC), executedInstructions >= 0, batch >= 0,
               nextRequestID >= 0, requests.count <= Self.requestQueueLimit, waits.count <= 100_000,
               waits.allSatisfy({ lines.contains($0.pc) && $0.duration.isFinite && $0.elapsed.isFinite }),
               pending.allSatisfy({ lines.contains($0.pc) && (0..<nextRequestID).contains($0.requestID) }),
@@ -287,8 +378,8 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
     /// The host could not perform an issued request (for example a missing
     /// character): the source would throw inside the handler and stop.
     public mutating func hostFailure(_ request: SourceADVHostRequest, reason: String) {
-        guard fault == nil, (0..<nextRequestID).contains(request.requestID), program.commands.indices.contains(request.pc),
-              program.commands[request.pc].id == request.commandID else { return }
+        guard fault == nil, (0..<nextRequestID).contains(request.requestID), commands.indices.contains(request.pc),
+              commands[request.pc].id == request.commandID else { return }
         fault = .init(pc: request.pc, commandID: request.commandID,
                       reason: SourceGameplayExecutionError.hostFailure("request \(request.requestID) \(request.command.kind): \(reason)").errorDescription ?? reason)
         waits.removeAll(); pending.removeAll(); awaitingNext = false
@@ -297,7 +388,7 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
         var remaining = instructionBudget
         do { try requestLine(remaining: &remaining, depth: 0) }
         catch {
-            fault = .init(pc: executingPC, commandID: program.commands.indices.contains(executingPC) ? program.commands[executingPC].id : -1,
+            fault = .init(pc: executingPC, commandID: commands.indices.contains(executingPC) ? commands[executingPC].id : -1,
                           reason: (error as? LocalizedError)?.errorDescription ?? String(describing: error))
             throw error
         }
@@ -309,10 +400,10 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
         pending.removeAll { $0.gate == .sceneFade }
         awaitingNext = false
         batch += 1
-        while pc < program.commands.count && !closed {
+        while pc < commands.count && !closed {
             guard remaining > 0 else { throw SourceGameplayExecutionError.budgetExceeded }
             remaining -= 1; executingPC = pc; executedInstructions += 1
-            let command = program.commands[pc], line = pc
+            let command = commands[pc], line = pc
             pc += 1
             try execute(command, line: line, remaining: &remaining, depth: depth)
             if !command.multi && command.id != 0 { break }
@@ -334,7 +425,7 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
     }
     private mutating func jump(_ target: String, remaining: inout Int, depth: Int) throws {
         guard !target.contains(":") else { throw SourceGameplayExecutionError.unsupported("External ADV file jump: \(target)") }
-        for (index, command) in program.commands.enumerated() where command.id == 12 {
+        for (index, command) in commands.enumerated() where command.id == 12 {
             guard let label = command.args.first else { throw SourceGameplayExecutionError.invalidData("Tag has no label") }
             if replace(label) == target {
                 pc = index
@@ -447,6 +538,38 @@ public struct SourceADVInterpreter: Codable, Sendable, Equatable {
             guard !command.multi else { throw SourceGameplayExecutionError.unsupported("MapChange inside a Multi batch needs synchronous host variables") }
             let change = try SourceADVHandlerArguments.mapChange(handlerArguments(command, defaults: ["0", "1"]))
             try emit(command, line: line, .acknowledge, .mapChange(change), gate: .mapLoading)
+        case 165:
+            // ADV.Commands.Game.HeroineParam: no ArgsDefault; ConvertBeforeArgsProc
+            // captures args[0] (the key) before ReplaceVars; Do reads args[1]
+            // after it and calls currentHeroine.SetADVParam(scenario, key, value).
+            guard let key = command.args.first else {
+                throw SourceGameplayExecutionError.unsupported("ADV character source exception: HeroineParam args[0] (IndexOutOfRangeException)")
+            }
+            guard command.args.count >= 2 else {
+                throw SourceGameplayExecutionError.unsupported("ADV character source exception: HeroineParam args[1] (IndexOutOfRangeException)")
+            }
+            guard character != nil else {
+                throw SourceGameplayExecutionError.unsupported(
+                    "ADV command ID 165 at pc \(line): HeroineParam has no bound current heroine (the source throws NullReferenceException)")
+            }
+            let value = replace(command.args[1])
+            // At most five new variables (the key, callBundle, callName0...2).
+            guard variables.count <= 10_000 - 5 else { throw SourceGameplayExecutionError.invalidData("ADV variable count") }
+            try character!.setHeroine(key, value, variables: &variables, replaces: &replaces)
+        case 201:
+            // ADV.Commands.Game.ParameterFile: default [""], ReplaceVars; a known
+            // asset's list goes after this line (CurrentLine + 1); unknown is a no-op.
+            let asset = handlerArguments(command, defaults: [""])[0]
+            guard let parameterLibrary else {
+                throw SourceGameplayExecutionError.unsupported(
+                    "ADV command ID 201 at pc \(line): ParameterFile has no bound Manager.Game.scenarioParameterDic")
+            }
+            guard let list = parameterLibrary.programs[asset] else { break }
+            guard commands.count + list.count <= Self.commandLimit, insertions.count < Self.commandLimit else {
+                throw SourceGameplayExecutionError.invalidData("ADV command list limit")
+            }
+            commands.insert(contentsOf: list, at: line + 1)
+            insertions.append(.init(pc: line, asset: asset, count: list.count, nextRequestID: nextRequestID, batch: batch))
         default: throw SourceGameplayExecutionError.unsupported("ADV command ID \(command.id) at pc \(line)")
         }
     }

@@ -51,7 +51,7 @@ public extension OriginalFrameProbe {
         return image
     }
 
-    private static let diagnosticMSL = """
+    static let diagnosticMSL = """
     #include <metal_stdlib>
     using namespace metal;
     struct Vertex { float4 position, normal, tangent; };

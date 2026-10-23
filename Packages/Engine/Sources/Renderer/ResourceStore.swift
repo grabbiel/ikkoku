@@ -29,6 +29,11 @@ public final class GPUMesh: @unchecked Sendable {
     public let bounds: AABB
     public let regions: [UInt8]
     public var needsDeform: Bool { skin != nil || morphDeltas != nil }
+    /// Whether the mesh data carried its own UV1 / UV2 (otherwise the buffer
+    /// aliases UV0, which is right for the native toon shaders but is not the
+    /// source mesh's channel).
+    public var carriesUV1: Bool { (texcoords1 as AnyObject) !== (texcoords as AnyObject) }
+    public var carriesUV2: Bool { (texcoords2 as AnyObject) !== (texcoords as AnyObject) }
 
     init(name: String, vertexCount: Int, indexCount: Int, baseVertices: any MTLBuffer, texcoords: any MTLBuffer,
          texcoords1: any MTLBuffer, texcoords2: any MTLBuffer, colors: (any MTLBuffer)?,
@@ -97,9 +102,13 @@ public final class ResourceStore: @unchecked Sendable {
     public let blackTexture: any MTLTexture
     public let flatNormalTexture: any MTLTexture
     public let dummyBuffer: any MTLBuffer
+    /// Translated original programs and their pipelines, shared by the
+    /// frozen-frame probe and the opt-in live source-shader path.
+    public let translatedPipelines: TranslatedSourcePipelineCache
 
     public init(device: any MTLDevice) {
         self.device = device
+        self.translatedPipelines = TranslatedSourcePipelineCache(device: device)
         self.textureLoader = MTKTextureLoader(device: device)
         whiteTexture = ResourceStore.makeSolid(device: device, rgba: [255, 255, 255, 255], label: "White")
         blackTexture = ResourceStore.makeSolid(device: device, rgba: [0, 0, 0, 0], label: "Black")

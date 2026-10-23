@@ -16,6 +16,9 @@ public struct SourceGameplayHostScenario: Codable, Sendable {
         /// Catalog name of the map the session starts on.
         public var map: String
         public var heroines: [SourceGameplayNativeState.Heroine]
+        /// `Manager.Game.Player`'s parameters; absent, a catalog with character
+        /// tables creates the new-game player.
+        public var player: SourcePlayerParameters?
         /// Seconds per ADV frame.
         public var frameDelta: Float
     }
@@ -46,11 +49,22 @@ public struct SourceGameplayHostScenario: Codable, Sendable {
         /// assert: the asset ID of the running event.
         public var runningEvent: Int?
         public var idle: Bool?
+        /// assert: the saved heroine whose `heroineParameters` are checked.
+        public var heroine: Int?
+        /// assert: original keys (`H_intimacy`, `H名`, …) to `"<type>:<value>"`
+        /// as the key's getter reads them, for example `"System.Int32:4"`.
+        public var heroineParameters: [String: String]?
+        /// assert: the running event's ADV variables, `"<type>:<value>"`.
+        public var eventVariables: [String: String]?
+        /// assert: the running event's ParameterFile insertion count.
+        public var insertions: Int?
     }
 
     /// Where a `run` step stops: before the first step at which it holds.
     public enum StopCondition: String, Codable, Sendable, CaseIterable {
         case idle, eventRunning, mapLoading, barrier
+        /// The running event's ParameterFile has inserted its library program.
+        case parameterInserted
 
         public func holds(_ host: SourceGameplayHost) -> Bool {
             switch self {
@@ -58,6 +72,7 @@ public struct SourceGameplayHostScenario: Codable, Sendable {
             case .eventRunning: return host.event != nil
             case .mapLoading: return host.mapLoad != nil
             case .barrier: return host.session.outstandingBarrier != nil
+            case .parameterInserted: return host.event?.interpreter.insertions.isEmpty == false
             }
         }
     }
@@ -134,7 +149,8 @@ public struct SourceGameplayHostScenario: Codable, Sendable {
         let week = try Self.week(start.week)
         let cycle = SourceGameplayCycle(isOpening: start.isOpening, week: week)
         guard let map = catalog.mapNumbers[start.map] else { throw SourceGameplayHostError.unknownMap(start.map) }
-        let state = SourceGameplayNativeState(cycle: cycle, activeMap: map, heroines: start.heroines)
+        let state = SourceGameplayNativeState(cycle: cycle, activeMap: map, heroines: start.heroines,
+                                              player: .init(parameters: start.player))
         return try SourceGameplayHost(catalog: catalog, cycle: cycle, state: state, frameDelta: start.frameDelta)
     }
 
@@ -236,6 +252,29 @@ public struct SourceGameplayHostScenario: Codable, Sendable {
             try expect("runningEvent", "\(asset)", host.event.map { "\($0.selection.assetID)" } ?? "none")
         }
         if let idle = step.idle { try expect("idle", "\(idle)", "\(host.isIdle)") }
+        if let expected = step.heroineParameters {
+            guard let id = step.heroine, let saved = host.state.heroines.first(where: { $0.id == id }) else {
+                throw SourceGameplayHostScenarioError("assert heroineParameters names no saved heroine")
+            }
+            for (name, value) in expected.sorted(by: { $0.key < $1.key }) {
+                guard let key = SourceHeroineParameters.keys.first(where: { $0.key == name }) else {
+                    throw SourceGameplayHostScenarioError("unknown heroine parameter key '\(name)'")
+                }
+                var copy = saved.parameters // Getters may cache or clamp; the saved state is not changed.
+                let read = try copy.read(key, player: host.state.player.parameters, tables: catalog.characterTables)
+                try expect("heroine \(id) \(name)", value, "\(read.typeName):\(read.sourceString)")
+            }
+        }
+        if let expected = step.eventVariables {
+            guard let event = host.event else { throw SourceGameplayHostScenarioError("assert eventVariables without a running event") }
+            for (name, value) in expected.sorted(by: { $0.key < $1.key }) {
+                let actual = event.interpreter.variables[name].map { "\($0.typeName):\($0.sourceString)" } ?? "missing"
+                try expect("event variable \(name)", value, actual)
+            }
+        }
+        if let count = step.insertions {
+            try expect("insertions", "\(count)", host.event.map { "\($0.interpreter.insertions.count)" } ?? "none")
+        }
         guard !checked.isEmpty else { throw SourceGameplayHostScenarioError("assert declares nothing") }
         return "checked " + checked.joined(separator: ", ")
     }

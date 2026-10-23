@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**837 files indexed; 837 assigned; 0 unassigned.**
+**858 files indexed; 858 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 87 |
-| [Character / Maker / mods](character-and-mods.md) | 116 |
-| [Studio / IK / animation](studio.md) | 180 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 304 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 96 |
+| [Character / Maker / mods](character-and-mods.md) | 118 |
+| [Studio / IK / animation](studio.md) | 181 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 313 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 150 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 176 |
+| Conversion / recovery / verification tool | 180 |
 | Documentation / historical evidence | 54 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 182 |
-| Test / validation | 169 |
+| Reference host / controlled fixture | 28 |
+| Runtime / shared shader declaration | 193 |
+| Test / validation | 174 |
 
 ## App / gameplay / plugins
 
@@ -56,6 +56,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/AppState+GameplayScenario.swift](../../Apps/IkkokuCreator/AppState+GameplayScenario.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift](../../Apps/IkkokuCreator/AppState+OriginalFrameProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/AppState+PluginExecution.swift](../../Apps/IkkokuCreator/AppState+PluginExecution.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/AppState+SourceShaderLiveProbe.swift](../../Apps/IkkokuCreator/AppState+SourceShaderLiveProbe.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/AppState.swift](../../Apps/IkkokuCreator/AppState.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Assets.xcassets/AccentColor.colorset/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/AccentColor.colorset/Contents.json) | App resource metadata / icon |
 | [Apps/IkkokuCreator/Assets.xcassets/AppIcon.appiconset/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/AppIcon.appiconset/Contents.json) | App resource metadata / icon |
@@ -77,6 +78,8 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceRelocation.swift](../../Packages/Engine/Sources/Assets/ResourceRelocation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVCharacterBinding.swift](../../Packages/Engine/Sources/Gameplay/SourceADVCharacterBinding.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceADVCharacterParameters.swift](../../Packages/Engine/Sources/Gameplay/SourceADVCharacterParameters.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift](../../Packages/Engine/Sources/Gameplay/SourceFixedEventScheduler.swift) | Runtime / shared shader declaration |
@@ -97,6 +100,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceADVCharacterBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVCharacterBindingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
@@ -108,21 +112,26 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginLibraryTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
 | [Tools/reverse/analysis/accessory_names_oracle.py](../../Tools/reverse/analysis/accessory_names_oracle.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/adv_character_tables.py](../../Tools/reverse/analysis/adv_character_tables.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_command_coverage.py](../../Tools/reverse/analysis/adv_command_coverage.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_host_requests.py](../../Tools/reverse/analysis/adv_host_requests.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_contract.py](../../Tools/reverse/analysis/gameplay_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/gameplay_execution_contract.py](../../Tools/reverse/analysis/gameplay_execution_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/mute_plugin_oracle.py](../../Tools/reverse/analysis/mute_plugin_oracle.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/analysis/test_adv_character_tables.py](../../Tools/reverse/analysis/test_adv_character_tables.py) | Test / validation |
 | [Tools/reverse/analysis/test_adv_command_coverage.py](../../Tools/reverse/analysis/test_adv_command_coverage.py) | Test / validation |
 | [Tools/reverse/analysis/test_adv_host_requests.py](../../Tools/reverse/analysis/test_adv_host_requests.py) | Test / validation |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs](../../Tools/reverse/fixtures/AccessoryNamesOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Host.cs](../../Tools/reverse/fixtures/MutePluginOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Program.cs](../../Tools/reverse/fixtures/MutePluginOracle/Program.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalADVBindingProbe.cs](../../Tools/reverse/fixtures/OriginalADVBindingProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLifecycleProbe.cs](../../Tools/reverse/fixtures/OriginalLifecycleProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/original_adv_binding_probe.py](../../Tools/reverse/original_adv_binding_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_lifecycle_probe.py](../../Tools/reverse/original_lifecycle_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_gameplay_contract.py](../../Tools/reverse/test_gameplay_contract.py) | Test / validation |
 | [Tools/reverse/test_gameplay_execution_contract.py](../../Tools/reverse/test_gameplay_execution_contract.py) | Test / validation |
+| [Tools/reverse/test_original_adv_binding_probe.py](../../Tools/reverse/test_original_adv_binding_probe.py) | Test / validation |
 | [Tools/translation/fixtures/LifecycleFixture.cs](../../Tools/translation/fixtures/LifecycleFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/fixtures/StudioMotionFixture.cs](../../Tools/translation/fixtures/StudioMotionFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/frontend/Program.cs](../../Tools/translation/frontend/Program.cs) | Conversion / recovery / verification tool |
@@ -190,6 +199,8 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceRigCustomization.swift](../../Packages/Engine/Sources/Character/SourceRigCustomization.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceRigPreview.swift](../../Packages/Engine/Sources/Character/SourceRigPreview.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShaderBindingDerivation.swift](../../Packages/Engine/Sources/Character/SourceShaderBindingDerivation.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceShaderLiveAssembly.swift](../../Packages/Engine/Sources/Character/SourceShaderLiveAssembly.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceShaderLiveConfiguration.swift](../../Packages/Engine/Sources/Character/SourceShaderLiveConfiguration.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapeChannels.swift](../../Packages/Engine/Sources/Character/SourceShapeChannels.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift](../../Packages/Engine/Sources/Character/SourceShapePoseBaseline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift](../../Packages/Engine/Sources/Character/SourceStudioHandPatterns.swift) | Runtime / shared shader declaration |
@@ -270,6 +281,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
@@ -677,12 +689,16 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Renderer/RenderBenchmark.swift](../../Packages/Engine/Sources/Renderer/RenderBenchmark.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/RenderFrame.swift](../../Packages/Engine/Sources/Renderer/RenderFrame.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/RenderTargets.swift](../../Packages/Engine/Sources/Renderer/RenderTargets.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift](../../Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/Renderer.swift](../../Packages/Engine/Sources/Renderer/Renderer.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/ResourceStore.swift](../../Packages/Engine/Sources/Renderer/ResourceStore.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingFrameSubstitution.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingFrameSubstitution.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingSet.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingSet.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/SourceShaderLiveEncoder.swift](../../Packages/Engine/Sources/Renderer/SourceShaderLiveEncoder.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/SourceShaderLiveMaterial.swift](../../Packages/Engine/Sources/Renderer/SourceShaderLiveMaterial.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderProgramContract.swift](../../Packages/Engine/Sources/Renderer/SourceShaderProgramContract.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/TranslatedSourceProgram.swift](../../Packages/Engine/Sources/Renderer/TranslatedSourceProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/TranslatedSourceShaderProbe.swift](../../Packages/Engine/Sources/Renderer/TranslatedSourceShaderProbe.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/Camera.swift](../../Packages/Engine/Sources/Scene/Camera.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/Light.swift](../../Packages/Engine/Sources/Scene/Light.swift) | Runtime / shared shader declaration |
@@ -693,6 +709,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Scene/SourceRigBounds.swift](../../Packages/Engine/Sources/Scene/SourceRigBounds.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h](../../Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/ShaderTypes/shim.c](../../Packages/Engine/Sources/ShaderTypes/shim.c) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceShaderLiveFixtureProbe.swift](../../Packages/Engine/Sources/Studio/SourceShaderLiveFixtureProbe.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift](../../Packages/Engine/Tests/CoreMathTests/CoreMathTests.swift) | Test / validation |
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
@@ -709,6 +726,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMorphGPUTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceRigBoundsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigBoundsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift) | Test / validation |
 | [Shaders/Common.h](../../Shaders/Common.h) | Runtime / shared shader declaration |
 | [Shaders/Deform.metal](../../Shaders/Deform.metal) | Runtime / shared shader declaration |
 | [Shaders/Outline.metal](../../Shaders/Outline.metal) | Runtime / shared shader declaration |
@@ -745,6 +763,8 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/rig_inventory.py](../../Tools/reverse/rig_inventory.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/source_binding_supplement.py](../../Tools/reverse/source_binding_supplement.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/source_shader_translation.py](../../Tools/reverse/source_shader_translation.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/source_texture_store.py](../../Tools/reverse/source_texture_store.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/source_vertex_streams.py](../../Tools/reverse/source_vertex_streams.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_avatar_parity.py](../../Tools/reverse/test_avatar_parity.py) | Test / validation |
 | [Tools/reverse/test_compare_draw_overlays.py](../../Tools/reverse/test_compare_draw_overlays.py) | Test / validation |
 | [Tools/reverse/test_compare_original_frame.py](../../Tools/reverse/test_compare_original_frame.py) | Test / validation |
@@ -757,6 +777,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |
 | [Tools/reverse/test_rig_parity.py](../../Tools/reverse/test_rig_parity.py) | Test / validation |
 | [Tools/reverse/test_source_binding_supplement.py](../../Tools/reverse/test_source_binding_supplement.py) | Test / validation |
+| [Tools/reverse/test_source_live_inputs.py](../../Tools/reverse/test_source_live_inputs.py) | Test / validation |
 | [Tools/reverse/test_source_shader_translation.py](../../Tools/reverse/test_source_shader_translation.py) | Test / validation |
 
 ## Toolchain / verification / historical docs

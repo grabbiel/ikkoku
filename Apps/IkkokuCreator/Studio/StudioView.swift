@@ -209,6 +209,13 @@ struct StudioView: View {
                         }
                     }.padding(12)
                 }
+                if model.liveSourceShaders {
+                    DisclosureGroup("Live source shaders") {
+                        ForEach(Array(model.liveSourceShaderStatus.enumerated()), id: \.offset) { _, text in
+                            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                        }
+                    }.padding(12).accessibilityIdentifier("studio.inspector.liveSourceShaders")
+                }
                 Group {
                     switch model.inspectorTab {
                     case .object: ObjectInspector(model: model)
