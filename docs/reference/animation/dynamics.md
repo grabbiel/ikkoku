@@ -559,8 +559,36 @@ error was `1.78814e-7 m` against the `4e-5 m` gate. The source preview verified
 8 hair + 8 skirt bindings, garment off/half, skirt FK disable, checkpoint replay
 and outfit rebuilds of 16 → 8 → 16 components without changing card bytes.
 Exporter tests passed 10/10, numerical reference tests 8/8, and the expanded
-Maker-library audit 8/8 with its private input supplied. The added app scenario
-requires a combined-app run before claiming UI/pixel or native-save acceptance.
+Maker-library audit 8/8 with its private input supplied.
+
+Combined Release acceptance (runtime `dffc9df`, scenario setup `83cb84b`): the
+save and fresh-process load scenarios pass 31/31 and 6/6 steps. They exercise
+live ticks, FK gating, garment-off and outfit changes, bone/pixel displacement
+and native persistence. The initial fixture saved unavailable animation
+`[2,3,4]`; the scenario now explicitly selects converted T-pose `[0,0,0]`,
+freezes speed to zero and asserts both after save/load. Both checks declare the
+animation catalog. This fixes setup without weakening motion or pixel gates.
+The complete Studio lane first passed 51/52, and the corrected pair then passed
+2/2; together all 52 unique combined-branch scenarios have passing evidence.
+This is automated production-render acceptance, not a visible skirt-control
+interaction test or original-player skirt comparison.
+
+Quiet Release timing on the M2 Ultra, macOS 27.0.1 / Xcode 27.0, records the
+complete rigs with FK disabled, all garment roots active, static upstream poses
+and 1/60 delta. Each mode has 20 warmups and 120 samples:
+
+| Input | Hair-only components | Hair + clothes components | Hair-only p50/p95, ms | Hair + clothes p50/p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Bottom-4 fixture, one character | 8 | 16 | 0.453 / 0.508 | 0.904 / 0.978 |
+| Source scene, seven characters | 5 each | 13 each | 2.000 / 2.201 | 4.962 / 5.214 |
+
+These measure isolated dynamics execution, not render time or interactive
+throughput. Existing hair-only environment maps remain hair-only. The full
+combined Release Engine/CoreMath suite passes 736 executed tests with three
+named optional skips. Final private timing and setup-failure evidence are in
+`.local/codex-resume-2026-10-23/integration/skirt-performance.json` and
+`integration/skirt-initial/`; the corrected app report is
+`.local/verification/reports/codex-integrated-skirt-corrected.json`.
 
 Retained derived-input SHA-256 values:
 

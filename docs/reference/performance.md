@@ -763,8 +763,8 @@ Fresh validation, separate from the historical runs above:
   combined-branch integration validation.
 - A full fixture-backed suite started during this review was stopped to avoid
   concurrent writes with another task's fixture suite; it is not counted as a
-  passing run. The full suite and current app lanes are pending combined-branch
-  integration validation; the current Studio lane has 47 checks.
+  passing run. Combined-branch validation is recorded below; the Studio lane
+  had 47 checks at this phase-1 review point.
 
 Fresh Release window measurements used the same six-character source scene
 (SHA-256 `029f0b1d…`), 120 Hz display and 1996×1824 drawable as the original
@@ -806,7 +806,121 @@ phase-2 main-thread and SwiftUI work.
 Private logs and executable/source provenance are in
 `.local/codex-resume-2026-10-23/performance/` in the primary checkout.
 
-## Limits of these numbers
+## Combined integration acceptance (2026-10-23)
+
+The performance, source-expression and selected-skirt branches are integrated
+on `codex/continue-claude-2026-10-23`. The final runtime is `dffc9df`; `83cb84b`
+corrects only the skirt scenario's animation setup, and `c5822a8` adds a fixture
+assertion without changing runtime code. Debug and Release app builds succeed.
+
+### Fresh offscreen control
+
+Fresh Release runs compare untouched `main` `2f29e27`, the retained
+performance-only `a6b2016` executable, and the integrated app. These used the
+same source scene (`029f0b1d…`), explicit fixture map, 512×512 render target,
+60 render frames and 120 simulation samples per Studio launch on the M2 Ultra,
+macOS 27.0.1, Xcode 27.0 / Swift 6.4. Other task builds, tests, apps and VM work
+were paused, and launches held the shared app lock. This is a quiet task window,
+not an otherwise idle operating system; each report retains load averages.
+
+| Build | Studio characters / triangles | Runs | Simulation p50 / p95, ms |
+| --- | --- | ---: | ---: |
+| Main `2f29e27` | 6 / 285,016 | 3 | 22.502 / 23.240 |
+| Performance-only `a6b2016` | 6 / 285,016 | 1 | 5.353 / 5.668 |
+| Integrated `dffc9df` | 7 / 330,851 | 3 | 5.123 / 5.627 |
+
+For three-run rows, the table gives the median of the per-run percentiles.
+Baseline p50s were 22.505, 22.383 and 22.502 ms; integrated p50s were 4.874,
+5.123 and 5.265 ms. The equal-output performance-only control reduces p50 by
+**76.2% (4.2×)**, and all three native, Maker and Studio PNGs are byte-identical
+to the fresh baseline. This control has only one repeat; it establishes the
+large optimization without claiming a precise distribution or an interactive
+frame-rate improvement.
+
+The integrated native and Maker PNGs also match exactly. Its Studio image
+changes because key 1299 now renders: the saved eye catalog row 30 maps to FBS
+pattern 21. The old importer treated 30 as an FBS index and rejected the whole
+character against a 28-pattern controller. The original-player reload preserves
+row 30, and the new fixture assertion checks the mapping and unchanged reset.
+The 29,689 changed Studio pixels therefore reflect additional character
+coverage, not an equal-output comparison. Gag-eye objects/visibility remain
+explicitly unsupported; this does not establish original eye appearance parity.
+The integrated result is 77.2% below baseline despite rendering seven characters,
+but use the six-character control to attribute the optimization.
+
+Executable SHA-256 values:
+
+- Main: `254525037c3420313e749d12b14776e57f9ac3d4dd77457fa68e647ba3a3ca03`
+- Performance-only: `4b04f5744156869cb7ce9ef4613a8f1d9506aa6bd765d018587aefa453a04820`
+- Integrated: `2f12010fca621804c2bb517660d51d1ae76fec051913155e954481ea69bbaf7e`
+
+### New-feature cost and window behavior
+
+Three quiet Release expression probes give steady frame medians
+96.416/94.500/100.167 µs and edited frame medians 97.250/94.333/98.167 µs.
+Expression edits take 1.458/1.416/1.459 µs; neck-pattern edits take
+2.250/2.042/2.250 µs. These small samples show no material steady-frame penalty.
+They measure the fixture preview, not UI event processing.
+
+Selected skirt dynamics add measurable simulation work: on complete rigs with
+FK disabled, all garment roots active, static upstream poses and 1/60 delta,
+one character's hair-only p50/p95 is 0.453/0.508 ms versus 0.904/0.978 ms with
+clothes. Seven characters give 2.000/2.201 ms versus 4.962/5.214 ms. Each mode
+uses 20 warmups and 120 samples. These are isolated dynamics probes, distinct
+from the scene benchmark above, whose default fixture map remains hair-only.
+
+Final live-window runs use the seven-character integrated scene, a 120 Hz
+display and 1996×1824 drawable, requesting 10 measurement seconds after three
+warmup seconds (actual recorded durations: idle 10.425 s, orbit 10.053 s). The
+reports pass the harness compositing/input validity checks.
+
+| Workload | Presented FPS | Hitches/s | Tick p50/p95 × rate/s | Main busy ms/s |
+| --- | ---: | ---: | --- | ---: |
+| studio-idle | 119.8 | 0.2 | 7.45/7.88 ms ×30 | 342 |
+| studio-orbit | 48.1 | 30.4 | No studio tick recorded | 991 |
+
+Idle draw CPU is 0.95/1.06 ms and GPU is 2.06/2.18 ms. Orbit spends 866 ms/s
+outside the measured model and draw work, with 1.08/1.24 ms input handlers at
+74 events/s and GPU 1.50/1.96 ms. Main-thread/SwiftUI interaction remains the
+phase-2 priority; neither this single orbit run nor the earlier variable controls
+establish a resolved interaction bottleneck.
+
+### Combined correctness evidence
+
+- Full Release Engine/CoreMath suite: **736 executed and passed**, 0 failed,
+  3 named skips (opt-in expression timing, opt-in card-edit output and absent
+  appearance reference root). Expression timing subsequently passed separately.
+- Python verification: **180 passed**; focused exporter, numerical oracle and
+  original-reload tooling: **56 passed** with the private NumPy environment.
+- Studio: the full Release lane passed **51/52**, exposing an unavailable
+  animation in the new skirt fixture setup. Selecting converted T-pose
+  `[0,0,0]`, explicitly declaring its catalog and freezing speed to zero fixes
+  setup without relaxing assertions. The corrected save/load pair passed
+  **2/2** (31 and 6 steps), so all **52 unique scenarios** have passing evidence.
+- Source-expression scenarios pass **83/83**, **6/6** and **8/8** steps. The
+  visible Face inspector also passes edit, Undo, Redo and Reset checks. Fresh
+  original-export body bytes match the VM-accepted export; all **308/308**
+  original-player serialized-field claims remain applicable.
+- Maker app scenarios pass **4/4** and gameplay **1/1**. App-smoke retains the
+  known startup-Mute fixture binding failure (target 10, no loaded scene).
+  A concurrent DerivedData build collision was rerun alone successfully;
+  it is not an unresolved build failure.
+
+Private evidence is under `.local/codex-resume-2026-10-23/`: `baseline/captures/`,
+`integration/{captures,performance-only-control,window-performance}/`,
+`integration/{baseline-comparison,skirt-performance,microbenchmarks}.json` and
+`expression/default-render-diagnosis.json`. The capture driver's `revision`
+field records the orchestrating checkout; `label`, executable hash and the
+provenance above identify retained binaries. Verification reports are
+`.local/verification/reports/codex-integrated-{engine-release,studio-release,skirt-corrected,other-apps}.json`
+and `codex-release-build-retry.json`. Initial failed skirt output remains in
+`integration/skirt-initial/`. No private assets are committed.
+
+## Limits of the historical profiling campaign
+
+The following qualifications apply to the original campaign above. Fresh
+combined runs have their own conditions and repeat counts in the preceding
+section.
 
 - **The machine was shared.** Other agents ran builds, tests and app lanes
   during the work. Every report records the load average: 4–10 during the

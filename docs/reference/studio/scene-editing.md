@@ -451,9 +451,9 @@ builds for macOS arm64 Debug. The reverse reload tooling passes 38 tests and the
 verification runner passes 80. The initial app run passed the native save/load
 pair (5/5 and 8/8); two mouth-only pixel checks exposed fixture framing: key 65's
 mouth is outside the saved camera, so the corrected checks use fully visible key
-0. The corrected strict run was interrupted after its exports completed, so the
-combined build can exercise its two slow live-blink advances with the R7 pose
-cache. Its completion is pending at this point; no full visual parity is claimed.
+0. That corrected task-local run was interrupted after its exports completed;
+the final combined Release run below completes its two live-blink advances with
+the R7 pose cache. No full visual parity is claimed.
 
 An independent byte audit of the corrected eleven-field export found 13 changed
 bytes in the unchanged-length 534,166-byte scene body. Only the nine requested
@@ -505,6 +505,45 @@ frames 94.375/94.916/93.917 µs. These are dated local CPU timings, not a curren
 integrated-build result. `sourceStudioExpressionPerformanceProbe` reproduces the
 measurements with `IKKOKU_EXPRESSION_PERF=1` and the scenario fixture environment,
 `swift test -c release -Xswiftc -enable-testing --filter sourceStudioExpressionPerformanceProbe`.
+
+**Combined acceptance (2026-10-23).** With final runtime `dffc9df`, the Release
+app scenarios pass 83/83 edit steps, 6/6 native-save steps and 8/8 fresh-process
+load steps. Visible Face-inspector acceptance on the earlier integrated Release
+build `9737631` showed all eleven controls, mouth openness 1 → 0.5, Undo → 1,
+Redo → 0.5 and Reset → 1, the FK-owned neck control disabled, and the lip-sync
+limitation displayed. The later checkpoint correction retains current neck
+pattern/live gaze on dynamics restore and atomically rejects old shape baselines;
+its regressions failed before the fix and pass afterward. Full combined Release
+Engine/CoreMath verification passes 736 executed tests, with three named optional
+skips; Debug and Release app builds both succeed.
+
+A fresh byte audit reproduces the 13 changed scene-body bytes and exact reset.
+Its edited PNG differs from the VM input only in its regenerated thumbnail;
+both scene bodies have SHA-256
+`c5aeff049c8ef13028f9c0a255bc5621232c929feb1379b025386c83565a82fd`.
+The 308 original-player serialized-field claims therefore cover the final
+exported body, without claiming a second VM run or rendered-image parity.
+
+The same input scene now renders seven characters instead of six. Key 1299's
+saved eye catalog row 30 maps to FBS 21; before this change the importer used
+30 directly against 28 FBS patterns and retained that whole character unrendered.
+The original-player trace confirms saved row 30 after load and after settling.
+The fixture regression in `c5822a8` verifies the mapped pattern, nonempty frame,
+unchanged reset and explicit unsupported gag-eye diagnostic. The character is
+now visible, but row 30's special eye visibility/object/texture behavior remains
+unrendered. This intentional coverage change explains the integrated Studio
+image difference; the separate performance-only build preserves baseline pixels.
+
+Three final Release probes give steady-frame medians
+96.416/94.500/100.167 µs, edited-frame medians 97.250/94.333/98.167 µs,
+expression-edit medians 1.458/1.416/1.459 µs and neck-pattern-edit medians
+2.250/2.042/2.250 µs. These fixture measurements show no material steady-frame
+penalty. See [combined performance](../performance.md#combined-integration-acceptance-2026-10-23)
+for conditions, scene coverage and the unresolved interaction stalls.
+Private final evidence is in `.local/codex-resume-2026-10-23/integration/`:
+`face-ui-verification.json`, `face-window.png`, `byte-audit.json`,
+`original-player-body-match.json` and `expression-perf-{1,2,3}.log`; the eye-row
+diagnosis and focused regression log are in the sibling `expression/` directory.
 
 ## CharaStudio reload acceptance
 
