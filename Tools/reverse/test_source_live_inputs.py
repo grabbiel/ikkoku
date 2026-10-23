@@ -5,12 +5,14 @@ identity collection, level sizes, sRGB linearization, sampler settings, the
 prefab scoping that keeps hair renderers unambiguous, the frozen-mesh row
 layout and both `--verify-frame` comparisons on synthetic files.
 """
+import hashlib
 import json
 import struct
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 
 import numpy as np
 
@@ -52,6 +54,52 @@ class TextureStoreTests(unittest.TestCase):
             self.assertEqual(found[0]['uses'], ['o_body slot 0 _MainTex', 'o_face slot 1 _MainTex'])
             self.assertEqual(found[1]['uses'], ['global _RampG'])
 
+    def test_conflicting_identity_requirements_are_not_merged_away(self):
+        asset = dict(kind='asset', bundle='chara/a.unity3d', pathID='7', name='t')
+        report = dict(globalTextures={key: dict(identity=dict(asset, mipLevels=mips)) for key, mips in [('a', 1), ('b', 2)]})
+        self.assertEqual(len(store.identities(report)), 2)
+
+    def test_build_validates_identity_and_records_actual_file_and_input_hash(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'chara').mkdir()
+            (root / 'chara/a.unity3d').write_bytes(b'bundle')
+            digest = hashlib.sha256(b'bundle').hexdigest()
+            texture = NS(m_Name='ramp', m_Width=2, m_Height=2, m_MipCount=2, m_ColorSpace=0, m_TextureFormat=4)
+            obj = NS(path_id=7, assets_file=NS(name='CAB-source'), type=kind('Texture2D'), read=lambda: texture)
+            base = dict(kind='asset', bundle='chara/a.unity3d', pathID='7', name='ramp', mipLevels=2, bundleSHA256=digest)
+            variants = [base, dict(base, serializedFile='CAB-source'), dict(base, name='wrong'), dict(base, mipLevels=1),
+                        dict(base, serializedFile='CAB-other'), dict(base, bundleSHA256='wrong'), dict(base, width=4)]
+            report = dict(globalTextures={str(i): dict(identity=identity) for i, identity in enumerate(variants)})
+            levels = [(2, 2, np.ones((2, 2, 4))), (1, 1, np.zeros((1, 1, 4)))]
+            with patch.dict('sys.modules', UnityPy=NS(load=lambda path: NS(objects=[obj]))), patch.object(store, 'decode_levels', return_value=levels) as decode:
+                manifest = store.build(report, [root], root / 'out', source=dict(file='bindings.json', sha256='input-hash'))
+            self.assertEqual(len(manifest['entries']), 1)
+            self.assertEqual(len(manifest['unavailable']), 5)
+            self.assertEqual(decode.call_count, 1)
+            entry = manifest['entries'][0]
+            self.assertEqual(entry['serializedFile'], 'CAB-source')
+            self.assertEqual(entry['bundleSHA256'], digest)
+            self.assertEqual(entry['mipLevels'], 2)
+            self.assertEqual(len(entry['uses']), 2)
+            self.assertEqual(manifest['source']['sha256'], 'input-hash')
+            for name, expected in zip(entry['files'], entry['sha256']):
+                self.assertEqual(hashlib.sha256((root / 'out' / entry['directory'] / name).read_bytes()).hexdigest(), expected)
+
+    def test_build_reports_path_id_collisions_across_serialized_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'bundle').write_bytes(b'bundle')
+            texture = NS(m_Name='ramp', m_Width=1, m_Height=1, m_MipCount=1, m_ColorSpace=0, m_TextureFormat=4)
+            objects = [NS(path_id=7, assets_file=NS(name=file), type=kind('Texture2D'), read=lambda: texture) for file in ['CAB-a', 'CAB-b']]
+            report = dict(globalTextures={file: dict(identity=dict(kind='asset', bundle='bundle', pathID='7', name='ramp', serializedFile=file))
+                                          for file in ['CAB-a', 'CAB-b']})
+            with patch.dict('sys.modules', UnityPy=NS(load=lambda path: NS(objects=objects))), patch.object(store, 'decode_levels', return_value=[(1, 1, np.ones((1, 1, 4)))]):
+                manifest = store.build(report, [root], root / 'out')
+            self.assertEqual(len(manifest['entries']), 1)
+            self.assertEqual(len(manifest['unavailable']), 1)
+            self.assertIn('different serialized files', manifest['unavailable'][0]['reason'])
+
     def test_locate_checks_the_root_and_its_abdata_folder(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -84,6 +132,40 @@ class TextureStoreTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0]['captureFile'], 'capture.rgba16f')
             self.assertAlmostEqual(results[0]['maximumError'], 0.25, places=3)
+
+    def test_verify_compares_retained_mips_and_reports_missing_or_nonindependent_levels(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'k').mkdir()
+            files = []
+            for level, count in enumerate([4 * 2 * 4, 2 * 1 * 4, 1 * 1 * 4]):
+                name = 'level-%d.rgba16f' % level; files.append(name)
+                (root / 'k' / name).write_bytes(np.zeros(count, dtype='<f2').tobytes())
+                if level < 2:
+                    (root / name).write_bytes(np.full(count, level * 0.5, dtype='<f2').tobytes())
+            entry = dict(name='gloss', width=4, height=2, colorSpace='linear', directory='k', files=files)
+            (root / 'manifest.json').write_text(json.dumps(dict(entries=[entry])))
+            (root / 'frame.json').write_text(json.dumps(dict(textures=[dict(textureType='Texture2D', name='gloss', width=4,
+                height=2, file=files[0], mipFiles=files[:2], authoredMipSource=dict(decodedColorSpace='linear'))])))
+            [result] = store.verify(root / 'manifest.json', root / 'frame.json')
+            self.assertEqual(result['comparedMipLevels'], 2)
+            self.assertEqual(result['unverifiedMipLevels'], [2])
+            self.assertEqual(result['levels'][0]['referenceKind'], 'GPU base readback')
+            self.assertEqual(result['levels'][1]['referenceKind'], 'offline authored mip decode')
+            self.assertEqual(result['levels'][1]['maximumError'], 0.5)
+            (root / files[1]).write_bytes(b'short')
+            with self.assertRaisesRegex(ValueError, 'mip 1.*byte count'):
+                store.verify(root / 'manifest.json', root / 'frame.json')
+
+    def test_verify_does_not_silently_omit_assets_without_reference_pixels(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'manifest.json').write_text(json.dumps(dict(entries=[dict(
+                name='missing', width=1, height=1, colorSpace='linear', directory='k', files=['level-0.rgba16f'])])))
+            (root / 'frame.json').write_text(json.dumps(dict(textures=[])))
+            [result] = store.verify(root / 'manifest.json', root / 'frame.json')
+            self.assertEqual(result['comparedMipLevels'], 0)
+            self.assertEqual(result['unverifiedMipLevels'], [0])
 
 
 def game_object(path_id, name, children=(), filters=()):

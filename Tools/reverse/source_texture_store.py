@@ -51,7 +51,9 @@ def identities(report):
     def add(identity, use):
         if not identity or identity.get('kind') != 'asset':
             return
-        key = (identity.get('bundle'), identity.get('pathID') or '', identity.get('name') or '')
+        # Do not silently discard a conflicting hash, file or mip requirement
+        # when several slots refer to the same asset. Validate every identity.
+        key = json.dumps(identity, sort_keys=True, separators=(',', ':'))
         entry = found.setdefault(key, dict(identity=identity, uses=[]))
         entry['uses'].append(use)
 
@@ -60,7 +62,9 @@ def identities(report):
             add(texture.get('identity'), '%s slot %s %s' % (renderer['mesh'], renderer['materialSlot'], name))
     for name, texture in bindings.get('globalTextures', {}).items():
         add(texture.get('identity'), 'global ' + name)
-    return [found[key] for key in sorted(found, key=lambda k: tuple(str(v) for v in k))]
+    return sorted(found.values(), key=lambda item: (item['identity'].get('bundle') or '',
+                  item['identity'].get('pathID') or '', item['identity'].get('name') or '',
+                  json.dumps(item['identity'], sort_keys=True)))
 
 
 def locate(bundle, roots):
@@ -100,10 +104,10 @@ def decode_levels(texture):
         width, height = max(1, width // 2), max(1, height // 2)
 
 
-def build(report, roots, output):
+def build(report, roots, output, source=None):
     import UnityPy
     output.mkdir(parents=True, exist_ok=True)
-    entries, unavailable, bundles = [], [], {}
+    entries, unavailable, bundles, exported = [], [], {}, {}
     for item in identities(report):
         identity = item['identity']
         bundle = identity.get('bundle')
@@ -124,12 +128,27 @@ def build(report, roots, output):
             matches = [obj for obj in objects if str(obj.path_id) == str(identity['pathID'])]
         else:
             matches = [obj for obj in objects if obj.read().m_Name == identity.get('name')]
+        if identity.get('serializedFile'):
+            matches = [obj for obj in matches if obj.assets_file.name == identity['serializedFile']]
         if len(matches) != 1:
             unavailable.append(dict(record, reason='asset missing from the bundle' if not matches else 'asset name is ambiguous in the bundle'))
             continue
         texture = matches[0].read()
         if identity.get('name') and texture.m_Name != identity['name']:
             unavailable.append(dict(record, reason='bundle asset name differs from the binding identity'))
+            continue
+        dimensions = dict(width=texture.m_Width, height=texture.m_Height,
+                          mipLevels=max(1, getattr(texture, 'm_MipCount', 1) or 1))
+        mismatch = [key for key, value in dimensions.items() if identity.get(key) is not None and identity[key] != value]
+        if mismatch:
+            unavailable.append(dict(record, reason='bundle asset %s differs from the binding identity' % ', '.join(mismatch)))
+            continue
+        asset_key = (bundle, str(matches[0].path_id))
+        if asset_key in exported:
+            if exported[asset_key]['serializedFile'] != matches[0].assets_file.name:
+                unavailable.append(dict(record, reason='path ID is shared by different serialized files; store identity is ambiguous'))
+                continue
+            exported[asset_key]['uses'].extend(use for use in item['uses'] if use not in exported[asset_key]['uses'])
             continue
         color_space = 'srgb' if getattr(texture, 'm_ColorSpace', 1) == 1 else 'linear'
         try:
@@ -151,20 +170,28 @@ def build(report, roots, output):
             hashes.append(hashlib.sha256(data).hexdigest())
         filter_mode, wrap, aniso = texture_settings(texture)
         fmt = texture.m_TextureFormat
-        entries.append(dict(bundle=bundle, bundleSHA256=digest, name=texture.m_Name, pathID=str(matches[0].path_id),
-                            serializedFile=identity.get('serializedFile'), width=texture.m_Width, height=texture.m_Height,
+        entry = dict(bundle=bundle, bundleSHA256=digest, name=texture.m_Name, pathID=str(matches[0].path_id),
+                            serializedFile=matches[0].assets_file.name, width=texture.m_Width, height=texture.m_Height,
                             mipLevels=len(levels), colorSpace=color_space, textureFormat=int(getattr(fmt, 'value', fmt)),
-                            filter=filter_mode, wrap=wrap, aniso=aniso, directory=key, files=files, sha256=hashes, uses=item['uses']))
+                            filter=filter_mode, wrap=wrap, aniso=aniso, directory=key, files=files, sha256=hashes, uses=list(item['uses']))
+        entries.append(entry); exported[asset_key] = entry
     manifest = dict(schemaVersion=1, encoding=ENCODING,
                     scope='Texture2D pixels decoded from local game bundles for the identities a native shader binding set names. '
-                          'Runtime composites and textures in bundles that are not local are listed as unavailable.',
+                          'Runtime composites are excluded. Unavailable asset identities are listed with their reasons.',
                     roots=[str(root) for root in roots], entries=entries, unavailable=unavailable)
+    if source is not None:
+        manifest['source'] = source
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest
 
 
 def verify(manifest_path, frame_path):
-    """Compare stored base levels with a capture's decoded textures of the same name and size."""
+    """Compare available reference levels; missing mip pixels are never called verified.
+
+    The retained frame's base is GPU readback. Its `authoredMipSource` levels
+    are offline bundle decoding, not independent GPU captures; report that
+    provenance separately even when the pixels match exactly.
+    """
     manifest = json.loads(manifest_path.read_text())
     frame = json.loads(frame_path.read_text())
     rows = {}
@@ -173,15 +200,37 @@ def verify(manifest_path, frame_path):
             rows.setdefault((row.get('name'), row.get('width'), row.get('height')), []).append(row)
     results = []
     for entry in manifest['entries']:
-        for row in rows.get((entry['name'], entry['width'], entry['height']), []):
-            if not row['file'].endswith('.rgba16f'):
-                continue
-            original = np.frombuffer((frame_path.parent / row['file']).read_bytes(), dtype='<f2').reshape(row['height'], row['width'], 4).astype(np.float32)
-            stored = np.frombuffer((manifest_path.parent / entry['directory'] / entry['files'][0]).read_bytes(), dtype='<f2').reshape(entry['height'], entry['width'], 4).astype(np.float32)
-            error = np.abs(original - stored)
-            results.append(dict(name=entry['name'], captureFile=row['file'], colorSpace=entry['colorSpace'],
-                                captureDecodedColorSpace=(row.get('authoredMipSource') or {}).get('decodedColorSpace'),
-                                meanAbsoluteError=float(error.mean()), maximumError=float(error.max())))
+        matches = rows.get((entry['name'], entry['width'], entry['height']), [])
+        for row in matches or [{}]:
+            references = row.get('mipFiles') or ([row['file']] if row.get('file', '').endswith('.rgba16f') else [])
+            levels = []
+            for level, name in enumerate(entry['files']):
+                result = dict(level=level)
+                levels.append(result)
+                if level >= len(references):
+                    result.update(status='not compared', reason='reference mip pixels not retained')
+                    continue
+                w, h = max(1, entry['width'] >> level), max(1, entry['height'] >> level)
+                original_data = (frame_path.parent / references[level]).read_bytes()
+                stored_data = (manifest_path.parent / entry['directory'] / name).read_bytes()
+                if len(original_data) != w * h * 8 or len(stored_data) != w * h * 8:
+                    raise ValueError('%s mip %d has an invalid byte count' % (entry['name'], level))
+                original = np.frombuffer(original_data, dtype='<f2').astype(np.float32)
+                stored = np.frombuffer(stored_data, dtype='<f2').astype(np.float32)
+                error = np.abs(original - stored)
+                result.update(status='compared', referenceFile=references[level],
+                              referenceKind='GPU base readback' if level == 0 else (
+                                  'offline authored mip decode' if row.get('authoredMipSource') else 'retained mip pixels'),
+                              meanAbsoluteError=float(error.mean()), maximumError=float(error.max()))
+            result = dict(name=entry['name'], captureFile=row.get('file'), colorSpace=entry['colorSpace'],
+                          bundle=entry.get('bundle'), bundleSHA256=entry.get('bundleSHA256'), pathID=entry.get('pathID'),
+                          captureDecodedColorSpace=(row.get('authoredMipSource') or {}).get('decodedColorSpace'), levels=levels,
+                          comparedMipLevels=sum(level['status'] == 'compared' for level in levels),
+                          unverifiedMipLevels=[level['level'] for level in levels if level['status'] != 'compared'])
+            # Keep the existing base-level summary fields for report consumers.
+            if levels and levels[0]['status'] == 'compared':
+                result.update({key: levels[0][key] for key in ('meanAbsoluteError', 'maximumError')})
+            results.append(result)
     return results
 
 
@@ -190,16 +239,21 @@ def main():
     parser.add_argument('bindings', type=Path, help='ikkoku-inspect shader-bindings report or binding set JSON')
     parser.add_argument('output', type=Path, help='store folder (under .local)')
     parser.add_argument('--bundle-root', type=Path, action='append', required=True)
-    parser.add_argument('--verify-frame', type=Path, help='capture frame JSON to compare base levels against')
+    parser.add_argument('--verify-frame', type=Path, help='capture frame JSON to compare retained mip pixels against')
+    parser.add_argument('--require-complete', action='store_true', help='fail if any requested asset identity is unavailable (runtime composites are excluded)')
     args = parser.parse_args()
     if '.local' not in args.output.resolve().parts:
         raise SystemExit('Decoded source textures must stay under a .local folder')
-    manifest = build(json.loads(args.bindings.read_text()), args.bundle_root, args.output)
+    data = args.bindings.read_bytes()
+    manifest = build(json.loads(data), args.bundle_root, args.output,
+                     source=dict(file=str(args.bindings), sha256=hashlib.sha256(data).hexdigest()))
     summary = dict(entries=len(manifest['entries']), unavailable=len(manifest['unavailable']),
                    unavailableReasons=sorted({u['reason'] for u in manifest['unavailable']}))
     if args.verify_frame:
         summary['verification'] = verify(args.output / 'manifest.json', args.verify_frame)
     print(json.dumps(summary, indent=2))
+    if args.require_complete and manifest['unavailable']:
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

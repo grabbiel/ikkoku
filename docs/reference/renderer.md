@@ -1528,8 +1528,8 @@ remaining binding gaps are `_Time` and `_RampG_ST`. Without a look state, the
 eye-look offsets are still missing. The live measurements below used the #102
 supplement. On the merged build, the gated live check passes with the
 sampler-bundle supplement, at character mean 0.1913, p99 4. The native texture
-store does not yet hold the four bundles' textures, so the store result (1 live,
-19 toon) is unchanged.
+store used for that measurement did not hold the four bundles' textures, so its
+result remained 1 live and 19 toon.
 
 **Proof of concept (step 5, with the #102 supplement).** `--write-frame <file>` writes a copy of the
 capture frame next to it. In that copy, every resolved native value replaces
@@ -1578,8 +1578,9 @@ programs instead of the native toon shaders. Inputs come from the native binding
 set above, the live deformed vertices, and the live camera and light. It is OFF by
 default, and the toon path stays the production renderer. On one controlled
 fixture it meets the frozen probe's gates with capture texture pixels (numbers
-below). With natively decoded textures only one material of that fixture can draw
-live. This is not a production-parity claim.
+below). The initial native texture store drew one material; the completed asset
+store draws 11 of 20 slots ([native asset completion](#native-asset-completion-r1-137-2026-10-23)).
+This is not a production-parity claim.
 
 **Opt-in and inputs.** `IKKOKU_LIVE_SOURCE_SHADERS=1` starts the app with the
 path on. In the Studio, **View ▸ Live Source Shaders (Experimental)** toggles it.
@@ -1729,12 +1730,12 @@ cd Tools/reverse && ../../.local/reverse/unitypy-venv/bin/python source_vertex_s
 of a binding set from the local bundles. It keeps the authored mips and
 linearizes sRGB textures, then writes a hash-checked half-float store; the
 texture's own filter, wrap and aniso settings are recorded. Runtime composites
-and textures whose bundle is not local are listed as unavailable.
+are excluded; unavailable asset identities are listed with their reasons.
 `SourceShaderTextureStore`, the production provider, never substitutes. On the
-fixture it holds 42 textures. Its 66 base-level comparisons with same-name
-capture textures have a maximum error of 0.0127 (linear, half float) and a mean
-of at most 0.0011. Five identities are unavailable because their bundles are
-not local: `mt_ramp_00`/`gt_ramp_01`, `mt_hairgloss_00`/`cf_hair_00_01_mh`,
+initial fixture store it held 42 textures. Its 66 base-level comparisons with
+same-name capture textures had a maximum error of 0.0127 (linear, half float) and a mean
+of at most 0.0011. Five identities were unavailable because their bundles were
+not local then: `mt_ramp_00`/`gt_ramp_01`, `mt_hairgloss_00`/`cf_hair_00_01_mh`,
 `mt_nip_00` and two `mt_body_detail_00` textures.
 `SourceShaderCaptureTextureProvider` is for validation only. It takes capture
 pixels whose texture type, name and size match the native identity (the
@@ -1814,7 +1815,7 @@ numbers. Without the source UV1 stream, hair aliased UV0 (character mean 7.65,
 p99 193). Without the default expression, the eyelid geometry differed from the
 capture (character mean 0.420, p99 6).
 
-With only the native texture store, 1 slot draws live (`cf_O_noseline`,
+With the initial native texture store, 1 slot draws live (`cf_O_noseline`,
 `toon_nose_lod0`) and 19 stay toon, each with its reason:
 
 - 9 runtime composites that are not composed natively: the body and face
@@ -1824,7 +1825,8 @@ With only the native texture store, 1 slot draws live (`cf_O_noseline`,
 - 4 hair `_HairGloss` slots.
 
 The validation capture then draws only the nose, so the character gate fails by
-construction. Natively composed textures remain the next step.
+construction. The asset-backed gaps are closed below; natively composed textures
+remain a separate step.
 
 **Measurement: Studio scene.** `koikatu_cs0002591.png`
 (`IKKOKU_STUDIO_SCENARIO_SCENE`) was captured with `IKKOKU_LIVE_SOURCE_SHADERS=1`
@@ -1914,7 +1916,8 @@ across builds.
 The gated `liveSourceShadersMeetTheControlledOriginalFrameGates` repeats the
 fixture measurement in the Engine suite. It implements the comparator's
 silhouette and colour metrics in Swift. It requires the gates above (hair
-bounded at its frozen-probe level) and the 1-live/19-toon store result. The
+bounded at its frozen-probe level) and, since #137, the 11-live/9-toon complete
+asset-store result below. The
 private-source lane declares its fixtures: `IKKOKU_SHADER_BINDING_PROBE`,
 `IKKOKU_SOURCE_AVATAR`, `IKKOKU_MAKER_LIBRARY`, `IKKOKU_HEAD_MATERIAL_CONTRACT`,
 `IKKOKU_SHADER_BINDING_SUPPLEMENT`, `IKKOKU_STUDIO_HAND_POSE`,
@@ -1923,12 +1926,106 @@ private-source lane declares its fixtures: `IKKOKU_SHADER_BINDING_PROBE`,
 the exporters' pure parts.
 
 **Limits.** One controlled card, one pose and one frame. Live drawing needs
-pixels the native store does not yet hold: runtime composites, `mt_ramp_00` and
-`mt_hairgloss_00`. Studio scene globals are unresolved. Unity's per-queue
+runtime-composite pixels the native store does not yet hold. The ramp and gloss
+asset gaps are closed by #137 below. Studio scene globals are unresolved. Unity's per-queue
 distance sort, keyword variants and the ShadowCaster pass are not reproduced.
 Live items cast native shadows. The hair residual (p99 24/22) and the production
 edge difference remain. Private evidence (runs, comparisons, the stores, frozen
 app builds and scripts) is in `.local/r1-live-b/`.
+
+### Native asset completion (R1, #137, 2026-10-23)
+
+The four bundles recovered in the sampler investigation now supply the native
+texture store. It contains **47 assets, zero unavailable asset identities** and
+resolves **11 of 20 controlled-fixture slots**, up from 1. The six ramp users
+(brows, teeth, three eyeline slots and tongue) and four hair-gloss users draw
+live. The nine body, face, eye and garment composites still fall back with their
+explicit reason. No captured texture pixels are used by this provider. Studio's
+unrecovered scene globals remain separate blockers; this is a controlled-card
+coverage result, not a Studio coverage or production-parity claim.
+
+`source_texture_store.py` validates every requested asset identity, including
+conflicting requests for the same asset, against the bundle hash, serialized
+file, path ID/name, dimensions and mip count. It records the actual serialized
+file and the binding report's SHA-256. `--require-complete` exits nonzero if any
+asset is unavailable; runtime composites are outside that check. The store keeps
+the authored mip chain and sampler settings and is built offline:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/source_texture_store.py \
+  "$L/r1-sampler-bundles/shader-bindings-after.json" "$R/textures" \
+  --bundle-root "$L/reverse/rigs/source/abdata" \
+  --verify-frame "$L/r1c/probe/frame-mips.json" --require-complete
+```
+
+Here `$L` is the primary checkout's `.local`, and `$R` is
+`$L/codex-renderer-maker-models-2026-10-23/renderer`. Generated texture pixels stay
+private. Set `IKKOKU_LIVE_SOURCE_TEXTURES=$R/textures/manifest.json` when running
+the app or the gated `liveSourceShadersMeetTheControlledOriginalFrameGates` test;
+that test now requires the complete asset store. Its manifest SHA-256 is
+`faf4de5026eaa26f627c7429011e2e515be128136874c08e0c4cac18f8c71160`.
+
+There are 71 base-level comparisons with retained same-name/size GPU readbacks:
+maximum error 0.0126953, maximum mean error 0.00113748 (linear half float).
+`gt_ramp_01` is exact; `cf_hair_00_01_mh` has mean 0.00000315 and max 0.00392151.
+The verifier also compares 430 retained lower levels, explicitly labelled as
+offline authored-mip decodes rather than independent GPU observations, and lists
+47 level references without retained pixels. The new gloss, body-line and nipple
+assets account for 29 of those missing lower levels. Their authored mip counts,
+dimensions, byte counts and hashes are checked, but their lower mip pixels have
+no independent GPU oracle in this run. Capture frame and new bundle hashes are
+unchanged from the earlier sampler investigation and are retained in each report.
+
+The runtime rejects zero/excessive mip counts, invalid dimensions, unsafe or
+aliased level paths, inconsistent file counts and mismatched level bytes/hashes.
+Path-ID resolution still checks the requested name, serialized file, bundle
+hash, dimensions and mip count. A weak owner check distinguishes resource stores
+even when an object address is reused; a lock serializes cold uploads, and dead
+owner buckets are pruned when a new owner resolves a texture. Stores are immutable
+for their lifetime: editing their files requires a new store and resource store.
+These checks run during assembly resolution, with no new per-frame texture work.
+
+The synthetic tests cover malformed manifests, wrong identities, damaged levels,
+row orientation, authored lower-mip preservation, resource-owner release and 16
+concurrent requests producing one upload. The 16 focused `liveSource` tests and
+14 exporter tests pass. Native family colour is checked only where the family is
+frontmost in both the complete capture-provider render and the native subset,
+because missing composites change occlusion. The existing colour limits and hair
+residual bounds are unchanged.
+
+**Release measurements.** On the M2 Ultra at 768×1024, three old/new-store pairs
+were interleaved under the shared app lock with other builds and captures paused.
+All seven runs (six store runs plus one capture-provider control) used Release
+executable SHA-256 `7f2486ff481c966a8023b626033cd37b1ef077df7003b7897ae503d8fbc09eac`.
+Each synchronous offscreen benchmark warms three frames and measures 20; import,
+simulation and PNG readback are excluded. The table gives the median of each
+run's percentile:
+
+| Store | Live / toon slots | CPU encode p50 | GPU p50 / p95 | Completion p50 | Registered textures | Metal allocation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Original 42 assets | 1 / 19 | 0.1547 ms | 0.3059 / 0.3418 ms | 0.7873 ms | 63 | 442.22 MiB |
+| Completed 47 assets | 11 / 9 | 0.2683 ms | 0.5326 / 0.5674 ms | 1.1665 ms | 65 | 455.12 MiB |
+
+The ten additional translated slots cost 0.1135 ms CPU encode and 0.2268 ms GPU
+at p50. This measures added rendering work, not an equal-output speedup. Only two
+additional native textures are uploaded for these slots (ramp and gloss); the
+body-detail and nipple assets remain behind the body-composite fallback. Metal
+allocation includes all renderer resources and is not a texture-only measure.
+The fixture test verifies that live draws add no registered textures after
+assembly. The six paired toon renders are byte-identical (SHA-256
+`5762dd7c656199bec71c9329d97c7ef87c22c82cf15ffe88eef327004fc0abfd`).
+
+For the three native-store Release renders, shared-frontmost eyebrow/eyeline
+pixels have mean 0.7098 and p99 0 over 278 pixels; back hair mean
+0.9893–0.9900, p99 23 over 3,529–3,530 pixels; front hair mean 0.6686–0.6687,
+p99 22 over 6,135–6,136 pixels. Hair still fails the strict p99≤4 colour gate,
+within its existing residual bound. The complete capture-provider control has
+geometry IoU 1.0, depth p99 0, normal p99 2, and translated-character IoU
+0.9999798 / colour mean 0.19175 / p99 4. The production colour gate still fails
+(mean 2.2565, p99 69). The native subset cannot establish whole-character parity.
+Raw runs, input hashes, exact fallback lists, comparisons and the reproduction
+scripts are in `$R/release-*` and `$R/summary.json`; no new original-player capture
+was made.
 
 ### Native pose gate
 
