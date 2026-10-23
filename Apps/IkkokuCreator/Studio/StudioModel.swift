@@ -1293,7 +1293,7 @@ final class StudioModel: ViewportInputHandler {
     func importScene(from url: URL) throws {
         let data = try Data(contentsOf: url)
         let d = try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: data)
-        guard d.sourcePluginState == nil, d.sourceNativePlugins?.isEmpty != false else { throw SourcePluginError.invalid("Open a plugin-bound scene separately; merging would change its object or configuration identities.") }
+        guard d.sourcePluginState == nil, d.sourceNativePlugins?.isEmpty != false, d.sourcePluginLibrary == nil else { throw SourcePluginError.invalid("Open a plugin-bound scene separately; merging would change its object or configuration identities.") }
         try d.validateHierarchy()
         try d.validateCameras()
         pushUndo(force: true)
