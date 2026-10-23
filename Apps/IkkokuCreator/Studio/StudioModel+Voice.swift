@@ -10,7 +10,7 @@ extension StudioModel {
                 throw RigError.invalid("Configure a converted Studio voice catalog before playback.")
             }
             // A-T02: the scene's own catalog failed its resource check; never read it.
-            guard doc.sourceVoiceCatalogFile == nil || !resourceBlockedFields.contains(.sourceVoiceCatalogFile) else {
+            guard !resourceBlockedVoiceCatalogs.contains(path) || doc.sourceVoiceCatalogFile == nil else {
                 throw RigError.invalid("The scene's voice catalog is unresolved; see the source compatibility details.")
             }
             if let previous = sourceVoicePlayers.removeValue(forKey: id) { previous.dispose() }

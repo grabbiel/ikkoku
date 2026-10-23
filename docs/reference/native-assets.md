@@ -315,7 +315,9 @@ Its object is blocked: `refresh()` skips the character or item, plugin attachmen
 frames and the rehydration rig inputs ignore it, and an `IKKOKU_LOAD_SCENE` or
 `IKKOKU_CAPTURE_SCENE` item capture fails naming it. The source scene file keeps
 its own hash check in rehydration and export. A blocked voice catalog refuses
-playback. The status line shows the summary. One line per unresolved
+playback. Blocks are kept per object ID and catalog path, so an undo back to an
+earlier opened scene keeps its blocks; reopening a scene checks it again. The
+status line shows the summary. One line per unresolved
 reference, naming the reference, its recorded SHA-256 and the library it was
 saved in, is listed under the inspector's "Source compatibility details" and
 printed as `[ikkoku] <scene>: …`. Import Scene… (merge) takes relocated paths and

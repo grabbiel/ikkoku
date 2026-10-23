@@ -153,23 +153,32 @@ final class StudioModel: ViewportInputHandler {
     /// re-reading the scene file.
     @ObservationIgnored private var sourceItemAssets: [UUID: (sceneSHA256: String, key: String, path: String,
         colors: [SIMD4<Float>], alpha: Float)] = [:]
-    /// A-T02: the last opened scene's resource check (`resolvingResources`).
-    /// Objects listed here have a reference that is missing, changed or outside
-    /// its library, so their files are never read: `refresh()` skips them and
-    /// rehydration and plugin attachment frames do not build their previews.
-    /// Runtime-only: every load replaces it; New Scene and a fresh source
-    /// import clear it.
+    /// A-T02: objects of opened scenes whose resource check (`resolvingResources`)
+    /// left a reference missing, changed or outside its library, so their files
+    /// are never read: `refresh()` skips them and rehydration and plugin
+    /// attachment frames do not build their previews. Runtime-only. Each load
+    /// recomputes the entries of its own objects and keeps the others, so an
+    /// undo back to an earlier opened scene stays blocked as it was checked.
     @ObservationIgnored private(set) var resourceBlockedObjects: Set<UUID> = []
-    /// Unresolved document-level fields (the source scene, the voice catalog).
-    @ObservationIgnored private(set) var resourceBlockedFields: Set<StudioResourceField> = []
-    /// The check's summary and one line per unresolved reference, shown with the
-    /// source compatibility details.
+    /// Voice catalog paths an opened scene's check left unresolved.
+    @ObservationIgnored private(set) var resourceBlockedVoiceCatalogs: Set<String> = []
+    /// The last opened scene's summary and one line per unresolved reference,
+    /// shown with the source compatibility details.
     private(set) var resourceDiagnostics: [String] = []
     /// What the inspector's "Source compatibility details" lists.
     var compatibilityDiagnostics: [String] { resourceDiagnostics + (doc.sourcePreviewDiagnostics ?? []) }
 
-    private func clearResourceCheck() {
-        resourceBlockedObjects = []; resourceBlockedFields = []; resourceDiagnostics = []
+    private func clearResourceDiagnostics() { resourceDiagnostics = [] }
+
+    /// Installs a load's resource check before its document is shown.
+    private func applyResourceCheck(_ resources: StudioResourceResolution) {
+        resourceBlockedObjects.subtract(resources.document.objects.map(\.id))
+        resourceBlockedObjects.formUnion(resources.blockedObjects)
+        if let catalog = resources.document.sourceVoiceCatalogFile {
+            if resources.blockedFields.contains(.sourceVoiceCatalogFile) { resourceBlockedVoiceCatalogs.insert(catalog) }
+            else { resourceBlockedVoiceCatalogs.remove(catalog) }
+        }
+        resourceDiagnostics = resources.diagnostics
     }
     /// The entry for a still-valid placeholder: the same scene-identity guard
     /// as the route caches, so a stale id after undo or object deletion reads
@@ -984,7 +993,7 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
-        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceCheck(); doc = imported;sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
+        stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; instances = [:]; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
@@ -1034,7 +1043,7 @@ final class StudioModel: ViewportInputHandler {
         // when it finds the caches missing for a source document.
         sourceAnimationTime = 0; sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; activeSourceCamera = nil; instances.removeAll()
         var empty = StudioDocument(); empty.sourceNativePlugins = doc.sourceNativePlugins
-        clearResourceCheck()
+        clearResourceDiagnostics()
         doc = empty; selection = nil; sceneURL = nil
     }
 
@@ -1314,9 +1323,7 @@ final class StudioModel: ViewportInputHandler {
         sourceInstances.removeAll()
         sourceAnimationTime = 0
         selection = nil
-        resourceBlockedObjects = resources.blockedObjects
-        resourceBlockedFields = resources.blockedFields
-        resourceDiagnostics = resources.diagnostics
+        applyResourceCheck(resources)
         doc = d
         rehydrateSourceRuntime()
         try restoreSourcePlugins()
