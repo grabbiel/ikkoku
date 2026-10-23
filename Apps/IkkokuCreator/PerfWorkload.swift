@@ -32,6 +32,8 @@ final class PerfWorkloadDriver {
     private var inject: ((Double) -> Void)?
     /// Ends whatever gesture the workload holds (mouse up).
     private var finishGesture: (() -> Void)?
+    /// Keeps App Nap off for the measurement (see `configureWindow`).
+    private var activity: (any NSObjectProtocol)?
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -76,9 +78,19 @@ final class PerfWorkloadDriver {
         }
         window.setContentSize(size)
         window.center()
-        NSApp.activate(ignoringOtherApps: true)
+        // A launch from a script is not allowed to take focus, so its window
+        // would open behind the frontmost app. A fully occluded window is
+        // composited and paced differently (its drawables may never be
+        // presented), so the measured window floats above other apps' windows
+        // for the run. The process also opts out of App Nap, which a visible
+        // foreground window would not get either.
+        window.level = .floating
+        NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated], reason: "IKKOKU_PERF_TRACE measurement")
         trace.details["windowContentPointsRequested"] = [configuration.windowPoints.width, configuration.windowPoints.height]
+        trace.details["windowLevel"] = "floating"
     }
 
     private func record() {
