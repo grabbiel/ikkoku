@@ -409,7 +409,7 @@ public extension OriginalFrameProbe {
             """),
         ]
         var result = source
-        for (range, replacement) in replacements.sorted { $0.0.lowerBound > $1.0.lowerBound } { result.replaceSubrange(range, with: replacement) }
+        for (range, replacement) in replacements.sorted(by: { $0.0.lowerBound > $1.0.lowerBound }) { result.replaceSubrange(range, with: replacement) }
         return result
     }
 }

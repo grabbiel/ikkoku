@@ -329,7 +329,7 @@ final class StudioModel: ViewportInputHandler {
         // Each card's saved eyesBlink flag decides whether its blink clock
         // schedules blinks; this tick already rebuilds the frame every step, so a
         // rate change needs no extra refresh condition here.
-        if sourceAutomaticBlink { for preview in sourceInstances.values { try? preview.updateBlink(elapsed: sourceAnimationTime) } }
+        if sourceAutomaticBlink { for preview in sourceInstances.values { _ = try? preview.updateBlink(elapsed: sourceAnimationTime) } }
         // The TARGET/AWAY gaze steps before setDynamicsStep so the pose the
         // solver reads stays a pure sample (dynamicsStep still holds the
         // previous tick's elapsed) and refresh integrates hair once. The
