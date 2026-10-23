@@ -1815,6 +1815,23 @@ teeth, and 5 loafers hidden by `clothesState`/`shoesType`. 109 slots stay toon:
 | `_linewidthG` unresolved (same mapping) | 25 |
 | `_MainTex_ST`: `EyeLookMaterialControll` offsets not evaluated (no look settings supplied) | 12 |
 
+These numbers were taken before #125 (Studio clothes state). The native preview
+now applies the scene's clothes state itself, so the loafers are no longer
+drawn. In one ON run on `f46f80d` with the same inputs, 6 slots draw live, 99
+stay toon and 6 are hidden (the double teeth only). There are no unmatched
+slots and no render-time fallbacks. The reasons are:
+
+| Reason | Slots |
+| --- | ---: |
+| `_ambientshadowG` unresolved | 36 |
+| No source renderer in the binding set | 26 |
+| `_linewidthG` unresolved | 25 |
+| `_MainTex_ST` eye-look offsets | 12 |
+
+That run drew 105 visible items and 284,500 triangles. CPU encode was 9.59 ms,
+GPU 1.351 ms and completion 11.58 ms. It is a single run, not a median, and it
+has no paired OFF run.
+
 The frame times are medians over runs of each run's p50, on an M2 Ultra at
 1200×1600 with 60 measured frames (`IKKOKU_BENCHMARK_FRAMES=60`).
 Opt-in OFF: 3 runs, 126 visible items, 346,590 triangles. CPU encode 15.04 ms,
@@ -1828,11 +1845,20 @@ depth mode.
 
 **Regression (opt-in OFF).** The `IKKOKU_AUTOCAPTURE` images of three cases were
 byte-identical between Debug builds of `main` and this branch. The comparison was
-run twice: `4263de3` against the live build `e6ec395`, then `9caa3f3`
-(after #121–#124) against the merged branch `51b457e`. Each case was launched
-with only its own `IKKOKU_*` variables:
+repeated after each merge of `main`:
 
-- `koikatu_cs0002591.png`: `a0dc50f4…`;
+| `main` | Branch |
+| --- | --- |
+| `4263de3` | `e6ec395` (the live build) |
+| `9caa3f3` (after #121–#124) | `51b457e` |
+| `8d83f01` (after #125) | `28eba51` |
+| `b0b8cb6` (after #128, #130) | `f46f80d` |
+| `d9684e8` (after #129) | `685b93e` |
+
+Each case was launched with only its own `IKKOKU_*` variables:
+
+- `koikatu_cs0002591.png`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
+  on both sides, because #125 applies the scene's clothes state.
 - the rig and fixture card: `9d973e21…`;
 - `synthetic-current.png`: `6837cd63…`.
 
