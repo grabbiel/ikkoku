@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**878 files indexed; 878 assigned; 0 unassigned.**
+**884 files indexed; 884 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 98 |
-| [Character / Maker / mods](character-and-mods.md) | 120 |
+| [Character / Maker / mods](character-and-mods.md) | 122 |
 | [Studio / IK / animation](studio.md) | 185 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 314 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 161 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 316 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 163 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 189 |
-| Documentation / historical evidence | 55 |
+| Conversion / recovery / verification tool | 190 |
+| Documentation / historical evidence | 56 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 199 |
-| Test / validation | 178 |
+| Runtime / shared shader declaration | 201 |
+| Test / validation | 180 |
 
 ## App / gameplay / plugins
 
@@ -275,6 +275,8 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Tools/reverse/test_resolver_contract.py](../../Tools/reverse/test_resolver_contract.py) | Test / validation |
 | [Packages/Engine/Sources/Character/SourceCharacterCardSelections.swift](../../Packages/Engine/Sources/Character/SourceCharacterCardSelections.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/SourceCharacterCardSelectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceCharacterCardSelectionTests.swift) | Test / validation |
+| [Packages/Engine/Sources/Character/SourceBodyLateCorrection.swift](../../Packages/Engine/Sources/Character/SourceBodyLateCorrection.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Tests/EngineTests/SourceBodyLateCorrectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceBodyLateCorrectionTests.swift) | Test / validation |
 
 ## Studio / IK / animation
 
@@ -788,6 +790,8 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_source_binding_supplement.py](../../Tools/reverse/test_source_binding_supplement.py) | Test / validation |
 | [Tools/reverse/test_source_live_inputs.py](../../Tools/reverse/test_source_live_inputs.py) | Test / validation |
 | [Tools/reverse/test_source_shader_translation.py](../../Tools/reverse/test_source_shader_translation.py) | Test / validation |
+| [Tools/reverse/compare_original_model.py](../../Tools/reverse/compare_original_model.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/test_compare_original_model.py](../../Tools/reverse/test_compare_original_model.py) | Test / validation |
 
 ## Toolchain / verification / historical docs
 
@@ -956,6 +960,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [docs/reference/studio/scene-records.md](../../docs/reference/studio/scene-records.md) | Documentation / historical evidence |
 | [docs/reference/studio/voice.md](../../docs/reference/studio/voice.md) | Documentation / historical evidence |
 | [Tools/verification/scenarios/maker-selection-roundtrip.json](../../Tools/verification/scenarios/maker-selection-roundtrip.json) | Conversion / recovery / verification tool |
+| [Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift) | Runtime / shared shader declaration |
+| [docs/reference/character/neutral-model-parity.md](../../docs/reference/character/neutral-model-parity.md) | Documentation / historical evidence |
 
 ## Audit deliverables
 

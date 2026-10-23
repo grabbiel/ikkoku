@@ -87,7 +87,8 @@ def player_root(vm,output):
   dump(run_path,dict(vm=vm,root=root,processID=0,stopped=True))
  return root
 
-def start(vm,output,settings=None,hand_patterns=None,look_patterns=None):
+def start(vm,output,settings=None,hand_patterns=None,look_patterns=None,model_variant=None):
+ if model_variant is not None and (model_variant not in ('female00','female200','male200') or settings is not None or hand_patterns is not None or look_patterns is not None):raise ValueError('Neutral model variant cannot be combined with other capture inputs')
  run_path=output/'run.json';root=player_root(vm,output)
  properties=[]
  for path in sorted((output/'shaders').glob('*/program.json')):
@@ -107,6 +108,12 @@ def start(vm,output,settings=None,hand_patterns=None,look_patterns=None):
  # plugin can read it at Start(); an absent file keeps outputs byte-identical.
  if hand_patterns is not None:write_small(vm,root+r'\BepInEx\plugins\hand-patterns.tsv',hand_patterns_bytes(hand_patterns))
  if look_patterns is not None:write_small(vm,root+r'\BepInEx\plugins\look-patterns.tsv',look_patterns_bytes(look_patterns))
+ # Reused roots must not retain optional inputs from a previous capture.
+ for name,present in [('hand-patterns.tsv',hand_patterns is not None),('look-patterns.tsv',look_patterns is not None),('model-variant.txt',model_variant is not None)]:
+  if not present:
+   path=ps_quote(root+'\\BepInEx\\plugins\\'+name)
+   retry(vm,'if(Test-Path -LiteralPath '+path+'){Remove-Item -LiteralPath '+path+' -Force}')
+ if model_variant is not None:write_small(vm,root+r'\BepInEx\plugins\model-variant.txt',(model_variant+'\n').encode())
  pid=int(retry(vm,"$root="+ps_quote(root)+r''';$p=Get-Process CharaStudio -ErrorAction SilentlyContinue|Where-Object {$_.Path -eq "$root\CharaStudio.exe"}|Select-Object -First 1;if($p){$p.Id}else{(Start-Process -FilePath "$root\CharaStudio.exe" -WorkingDirectory $root -ArgumentList @('-force-d3d11','-screen-fullscreen','0','-screen-width','768','-screen-height','1024','-logFile',"$root\unity.log") -PassThru).Id}''',True))
  run=dict(vm=vm,root=root,processID=pid,sourceSHA256=digest(source.read_bytes()),currentUser=True,stopped=False);dump(run_path,run);return run
 
@@ -131,11 +138,11 @@ def collect(vm,output):
  return dict(status=status,files=len(provenance),archiveBytes=len(data))
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path,help='optional "key<TAB>value" character-settings.tsv (makeup, blush, nip, underhair and iris-highlight IDs/colors); keys: docs/reference/character/material-expansion.md');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path,help='optional "key<TAB>value" character-settings.tsv (makeup, blush, nip, underhair and iris-highlight IDs/colors); keys: docs/reference/character/material-expansion.md');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');p.add_argument('--model-variant',choices=['female00','female200','male200'],help='Neutral source model immediately after load, with hand pattern 0 and no fitted clock');a=p.parse_args()
  # Checked before any output folder is touched: these inputs are uploaded only by the capture step.
- if a.collect and (a.settings is not None or a.hand_patterns is not None or a.look_patterns is not None):raise ValueError('--settings/--hand-patterns/--look-patterns belong to the capture step, not --collect')
+ if a.collect and (a.settings is not None or a.hand_patterns is not None or a.look_patterns is not None or a.model_variant is not None):raise ValueError('--settings/--hand-patterns/--look-patterns/--model-variant belong to the capture step, not --collect')
  if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must stay under .local')
  a.output.mkdir(parents=True,exist_ok=True)
  if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
- print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output,a.settings,a.hand_patterns,a.look_patterns),indent=2))
+ print(json.dumps(collect(a.vm,a.output) if a.collect else start(a.vm,a.output,a.settings,a.hand_patterns,a.look_patterns,a.model_variant),indent=2))
 if __name__=='__main__':main()

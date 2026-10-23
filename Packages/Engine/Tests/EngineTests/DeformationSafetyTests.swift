@@ -5,6 +5,8 @@ import simd
 import Assets
 import CoreMath
 import ShaderTypes
+import Scene
+import Character
 @testable import Renderer
 
 @Test func skinInfluencesRejectMalformedWeightsAndCounts() throws {
@@ -93,6 +95,18 @@ func deformKernelPreservesNormalsReflectionsAndPaletteBounds() throws {
     #expect(length(xyz(deformed.normal) - normalize(Float3(0.5, 1, 0))) < 1e-5)
     #expect(length(xyz(deformed.tangent) - normalize(Float3(2, -1, 0))) < 1e-5)
     #expect(abs(dot(xyz(deformed.normal), xyz(deformed.tangent))) < 1e-5)
+    // Source LateUpdateForce hand correction must reach the real GPU skin palette.
+    let handRig = try RigDefinition(nodes: [.init(name: "cf_j_hand_L", sourceID: "hand", parent: nil,
+        translation: Float3(7, 0, 0), scale: Float3(repeating: 2))], skins: [])
+    for enabled in [false, true] {
+        let correction = try SourceBodyLateCorrection(rig: handRig, sex: .female,
+            options: .init(enableCorrectHandSize: enabled))
+        var pose = handRig.restPose
+        try correction.apply(to: &pose)
+        let output = try run(matrix: handRig.evaluate(pose).worldMatrices[0])
+        let scale: Float = enabled ? 0.9 : 1
+        #expect(length(xyz(output.position) - Float3(8, 2 * scale, 3 * scale)) < 1e-6)
+    }
     let reflected = try run(matrix: Transform.scale(Float3(-2, 1, 0.5)))
     #expect(length(xyz(reflected.normal) - normalize(Float3(-0.5, 1, 0))) < 1e-5)
     #expect(reflected.tangent.w == -1)

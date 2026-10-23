@@ -36,6 +36,22 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // when no look-patterns.tsv is present.
     Dictionary<string,object> irisCard;
     Transform lookTarget; // dedicated target transform the look controllers follow; Studio owns Camera.main
+    string modelVariant;
+    int modelSex=1, modelHead=0;
+    float[] modelRequestedBody,modelRequestedFace;
+    readonly List<object> modelAnimators=new List<object>();
+    readonly Dictionary<string,int> modelHandCounts=new Dictionary<string,int>{{"L",0},{"R",0}};
+    void TryLoadModelVariant() {
+        var path=Path.Combine(Path.GetDirectoryName(folder),"model-variant.txt");
+        if(!File.Exists(path))return;
+        modelVariant=File.ReadAllText(path).Trim();
+        if(modelVariant=="female00") { modelSex=1;modelHead=0; }
+        else if(modelVariant=="female200") { modelSex=1;modelHead=200; }
+        else if(modelVariant=="male200") { modelSex=0;modelHead=200; }
+        else throw new Exception("Unsupported neutral model variant");
+        if(handPatterns!=null || lookPhases.Count>0)throw new Exception("Neutral model mode cannot use hand/look phases");
+        handPatterns=new Dictionary<string,int>{{"L",0},{"R",0}};
+    }
     IEnumerator Start()
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
@@ -44,7 +60,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // killing this coroutine silently. Without either file both loaders
         // return at once, so the no-tsv frame sequence and outputs are unchanged.
         string error = null;
-        try { TryLoadHandPatterns(); TryLoadLookPatterns(); }
+        try { TryLoadHandPatterns(); TryLoadLookPatterns(); TryLoadModelVariant(); }
         catch(Exception e) {
             // Drop any rows read before the bad one so Finish writes no partial look trace.
             handPatterns=null; lookPhases.Clear(); lookTargetPositions.Clear();
@@ -63,7 +79,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // objects, so look mode waits for the scene camera and then 60 more
         // settled frames before it builds the fixture; without the tsv this
         // block never runs and every existing output stays byte-identical.
-        if(lookPhases.Count>0) {
+        if(lookPhases.Count>0 || modelVariant!=null) {
             for(int i=0;i<3600&&Camera.main==null;i++) yield return null;
             if(Camera.main==null) { Finish("Camera.main did not appear within 3600 frames; the look capture needs Studio's loaded scene"); yield break; }
             for(int i=0;i<60;i++) yield return null;
@@ -83,7 +99,35 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // enables the hand Animator and Play()s the named clip. Play() writes
         // bones on the next Animator update, so the moment-(b) snapshot below
         // still holds the default-state pose and frame0 starts the pattern.
-        if(handPatterns!=null)ApplyHandPatterns();
+        try { if(handPatterns!=null)ApplyHandPatterns(); } catch(Exception e) { error=e.ToString(); }
+        if(error!=null) { Finish(error);yield break; }
+        if(modelVariant!=null) {
+            // No fitted playhead or elapsed-frame wait. Freeze the source's
+            // loaded transforms, run its shape setters and neutral FBS once.
+            // Actual transforms/weights are recorded; no native output seeds them.
+            try {
+            Manager.Character.Instance.enabled=false;
+            foreach(var animator in character.GetComponentsInChildren<Animator>(true)) {
+                var states=new List<object>();
+                for(int layer=0;layer<animator.layerCount;layer++) {
+                    var state=animator.GetCurrentAnimatorStateInfo(layer);
+                    states.Add(new Dictionary<string,object>{{"layer",layer},{"fullPathHash",state.fullPathHash},{"normalizedTime",state.normalizedTime},{"length",state.length},{"speed",state.speed}});
+                }
+                modelAnimators.Add(new Dictionary<string,object>{{"path",RelativePath(animator.transform)},{"enabled",animator.enabled},{"controller",animator.runtimeAnimatorController==null?null:animator.runtimeAnimatorController.name},{"states",states}});
+            }
+            foreach(var b in character.GetComponentsInChildren<Behaviour>(true))b.enabled=false;
+            character.ChangeEyebrowPtn(0,false);character.ChangeEyesPtn(0,false);character.ChangeMouthPtn(0,false);
+            character.ChangeEyesOpenMax(1);character.ChangeEyesBlinkFlag(false);
+            character.UpdateForce();character.LateUpdateForce();
+            var fbs=character.GetComponentInChildren<FaceBlendShape>();
+            if(fbs==null)throw new Exception("Neutral model has no FaceBlendShape");
+            // Invoke the original complete FBS step: per-head neutral gaze can
+            // cap openness below ChaControl's 0.92 max (head200 uses 0.90).
+            typeof(FaceBlendShape).GetMethod("LateUpdate",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).Invoke(fbs,null);
+            Capture();
+            } catch(Exception e) { error=e.ToString(); }
+            Finish(error);yield break;
+        }
         // Moment (b): right after LoadAsync finishes, before the 10-frame wait.
         RecordFingers("afterLoadAsync");
         // ST-T07i: the look phases run before the 10-frame wait and the capture.
@@ -118,7 +162,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     }
     void CreateFixture() {
         var file=new ChaFileControl();
-        file.parameter.sex=1;
+        file.parameter.sex=(byte)modelSex;
+        if(modelVariant!=null)file.custom.face.headId=modelHead;
         var body=file.custom.body;
         body.skinMainColor=new Color(.95f,.75f,.65f,1);
         body.skinSubColor=new Color(.80f,.45f,.40f,1);
@@ -166,7 +211,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 default: throw new Exception("Unknown character-settings key: "+fields[0]);
             }
         }
-        character=Manager.Character.Instance.CreateFemale(null,1,file,true);
+        if(modelVariant!=null){modelRequestedBody=(float[])body.shapeValueBody.Clone();modelRequestedFace=(float[])face.shapeValueFace.Clone();}
+        character=modelSex==0 ? Manager.Character.Instance.CreateMale(0,null,1,file,true)
+            : Manager.Character.Instance.CreateFemale(null,1,file,true);
         // Moment (a): right after CreateFemale returns, before LoadAsync starts.
         RecordFingers("afterCreateFemale");
         character.name="IkkokuControlledClothedFixture";
@@ -232,7 +279,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         foreach(var renderer in visible)renderer.enabled=true;
         // The newly generated card receives only this controlled clothed image.
         character.chaFile.pngData=File.ReadAllBytes(Path.Combine(folder,"original-color.png"));character.chaFile.facePngData=null;
-        if(!character.chaFile.SaveCharaFile(Path.Combine(folder,"fixture-card.png"),1)) throw new Exception("Generated card save failed");
+        if(!character.chaFile.SaveCharaFile(Path.Combine(folder,"fixture-card.png"),(byte)modelSex)) throw new Exception("Generated card save failed");
         var meshes=new List<object>();int meshIndex=0;
         foreach(var renderer in visible) meshes.Add(ExportMesh(renderer,meshIndex++));
         // Moment (c): after the 10-frame wait, immediately before collecting
@@ -249,6 +296,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         globals["_linewidthG"]=Shader.GetGlobalFloat("_linewidthG");globals["_rimG"]=Shader.GetGlobalFloat("_rimG");
         var ramp=Shader.GetGlobalTexture("_RampG");if(ramp!=null) globals["_RampG"]=ExportTexture(ramp);
         var report=new Dictionary<string,object>{{"schemaVersion",1},{"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()},{"masterTextureLimit",QualitySettings.masterTextureLimit},{"lodBias",QualitySettings.lodBias},{"fixedDeltaTime",Time.fixedDeltaTime},{"maximumDeltaTime",Time.maximumDeltaTime},{"width",Width},{"height",Height},{"scope","Frozen original clothed character; source-evaluated geometry, source materials, dedicated camera/light; no Studio post-processing"},{"card","fixture-card.png"},{"color","original-color.png"},{"camera",new Dictionary<string,object>{{"position",V(camera.transform.position)},{"target",V(bounds.center)},{"rotation",V(camera.transform.rotation)},{"fov",camera.fieldOfView},{"near",camera.nearClipPlane},{"far",camera.farClipPlane},{"view",M(camera.worldToCameraMatrix)},{"projection",M(camera.projectionMatrix)}}},{"light",new Dictionary<string,object>{{"direction",V(key.transform.forward)},{"color",V(key.color)},{"intensity",key.intensity},{"ambient",V(RenderSettings.ambientLight)}}},{"bounds",new Dictionary<string,object>{{"min",V(bounds.min)},{"max",V(bounds.max)}}},{"background",V(camera.backgroundColor)},{"globals",globals},{"textures",textures},{"meshes",meshes},{"bones",bones},{"renderCPUMilliseconds",timer.Elapsed.TotalMilliseconds}};
+        if(modelVariant!=null) {
+            if(character.sex!=modelSex || character.chaFile.custom.face.headId!=modelHead || character.chaFile.custom.body.typeBone!=0)
+                throw new Exception("Loaded source model identity differs from request");
+            report["neutralModel"]=new Dictionary<string,object>{{"variant",modelVariant},{"sex",character.sex},{"headID",character.chaFile.custom.face.headId},{"boneType",character.chaFile.custom.body.typeBone},{"requestedSex",modelSex},{"requestedHeadID",modelHead},{"requestedBoneType",0},{"hiPoly",character.hiPoly},{"enableCorrectArmSize",Manager.Character.Instance.enableCorrectArmSize},{"enableCorrectHandSize",Manager.Character.Instance.enableCorrectHandSize},{"loadedHeadName",character.objHead.name},{"loadedHeadCatalogID",character.infoHead.Id},{"eyeAngleHRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleHRate(EYE_LR.EYE_L)},{"eyeAngleVRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleVRate()},{"requestedBodyValues",modelRequestedBody},{"requestedFaceValues",modelRequestedFace},{"actualBodyValues",character.chaFile.custom.body.shapeValueBody},{"actualFaceValues",character.chaFile.custom.face.shapeValueFace},{"handControllerCounts",modelHandCounts},{"handPatterns",new[]{handPatterns["L"],handPatterns["R"]}},{"animators",modelAnimators},{"elapsedFramesAfterLoad",0},{"clock","no post-load Animator tick; source shape and neutral FBS setters evaluated once; loading-clock determinism must be checked separately"},{"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
+        }
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
         if(handPatterns!=null)File.WriteAllText(Path.Combine(folder,"hand-anime.json"),J(handAnimeRecords));
@@ -322,6 +374,20 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         using(var output=new BinaryWriter(File.Create(Path.Combine(folder,normalFile))))foreach(var normal in sourceVertexNormals)Write(output,normal);
         // geometrySHA256 binds the sidecar to this capture's frozen mesh file.
         result["sourceVertexNormals"]=new Dictionary<string,object>{{"file",normalFile},{"count",positions.Length},{"space","unity-renderer-local"},{"sha256",Sha256File(Path.Combine(folder,normalFile))},{"geometrySHA256",Sha256File(Path.Combine(folder,file))}};
+        if(modelVariant!=null && skinned!=null) {
+            string bakedFile="mesh-"+index+"-baked.bin",restFile="mesh-"+index+"-rest.bin";
+            using(var output=new BinaryWriter(File.Create(Path.Combine(folder,bakedFile))))foreach(var position in positions)Write(output,position);
+            using(var output=new BinaryWriter(File.Create(Path.Combine(folder,restFile))))foreach(var position in skinned.sharedMesh.vertices)Write(output,position);
+            result["bakedPositions"]=new Dictionary<string,object>{{"file",bakedFile},{"sha256",Sha256File(Path.Combine(folder,bakedFile))},{"space","raw Unity 5.6 SkinnedMeshRenderer.BakeMesh; renderer scale embedded"}};
+            result["restPositions"]=new Dictionary<string,object>{{"file",restFile},{"sha256",Sha256File(Path.Combine(folder,restFile))},{"space","original sharedMesh vertices; before morph/skin"}};
+            var names=new List<string>();var shapeWeights=new List<float>();
+            for(int shape=0;shape<skinned.sharedMesh.blendShapeCount;shape++){names.Add(skinned.sharedMesh.GetBlendShapeName(shape));shapeWeights.Add(skinned.GetBlendShapeWeight(shape));}
+            result["morphNames"]=names;result["morphWeights"]=shapeWeights;
+            var joints=new List<object>();var inverseBinds=new List<object>();
+            foreach(var bone in skinned.bones)joints.Add(new Dictionary<string,object>{{"path",RelativePath(bone)},{"name",bone.name},{"worldMatrix",M(bone.localToWorldMatrix)}});
+            foreach(var bind in skinned.sharedMesh.bindposes)inverseBinds.Add(M(bind));
+            result["skinBones"]=joints;result["inverseBindMatrices"]=inverseBinds;
+        }
         if(skinned!=null)Destroy(mesh);return result;
     }
     object ExportMaterial(Material material) {
@@ -521,10 +587,16 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             }
             if(init==null||property==null)throw new Exception("Studio.HandAnimeCtrl is missing the recovered Init or ptn member");
             try {
-                init.Invoke(component,new object[]{1}); // the fixture's sex; Studio passes ChaControl.parameter.sex
+                init.Invoke(component,new object[]{modelSex}); // Studio passes the actual character sex.
                 property.SetValue(component,pattern,null); // setter runs LoadAnime, which enables and Play()s patterns 1-21
+                if(modelVariant!=null) {
+                    if((int)property.GetValue(component,null)!=pattern)throw new Exception("Hand pattern readback differs");
+                    modelHandCounts[side]++;
+                }
             } catch(Exception e) { throw new Exception("HandAnimeCtrl pattern "+pattern+" setup failed on "+component.transform.name+": "+e.Message,e); }
         }
+        if(modelVariant!=null && (modelHandCounts["L"]!=1 || modelHandCounts["R"]!=1))
+            throw new Exception("Neutral model needs exactly one driven hand controller per side");
     }
     Animator FindHandAnimator(string side) {
         foreach(var animator in character.GetComponentsInChildren<Animator>(true))

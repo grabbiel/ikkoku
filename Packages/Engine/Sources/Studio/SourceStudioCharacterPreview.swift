@@ -36,6 +36,7 @@ public final class SourceStudioCharacterPreview {
     /// and body options stay identical and no pose input changes.
     public private(set) var preview: SourceRigPreview
     public private(set) var pose: RigPose
+    private var latePoseCorrection: SourceBodyLateCorrection
     /// Import-time messages plus one-shot runtime notices (for example the FK
     /// neck conflict reported by editedPose); never grows per frame.
     public private(set) var diagnostics: [String]
@@ -467,10 +468,11 @@ public final class SourceStudioCharacterPreview {
         expressionBase = base
         let controls = try SourceStudioExpressionControls(contract: expression)
         expressionControls = controls
-        preview = try SourceRigPreview(source: source, contract: contract, resources: resources, appearance: appearance, expressionContract: expression, bodyOptions: options)
+        preview = try SourceRigPreview(source: source, contract: contract, resources: resources, appearance: appearance, expressionContract: expression, bodyOptions: options, lateCorrectionOptions: .init())
         let settings = try card.previewSettings(contract: contract, sex: identity.sex, headID: identity.headID, boneType: identity.boneType)
         let baseline = try preview.pose(bodyValues: settings.bodyValues, faceValues: settings.faceValues, boneModifiers: settings.boneModifiers, coordinate: coordinate)
         self.baseline = baseline
+        latePoseCorrection = try preview.lateCorrection(restoring: baseline)
         savedFaceValues = settings.faceValues
         savedBodyValues = settings.bodyValues
         savedColors = Dictionary(uniqueKeysWithValues: draft?.colors.map { ($0.id, $0.rgba) } ?? [])
@@ -615,6 +617,7 @@ public final class SourceStudioCharacterPreview {
             }
         }
         self.irisCardValues = irisCardValues
+        try latePoseCorrection.apply(to: &animationBaseline)
         let restored = try record.makePose(rig: source.rig, catalog: catalog.bones, baseline: animationBaseline,
             characterRoot: roots[0], bodyRoot: source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -907,12 +910,14 @@ public final class SourceStudioCharacterPreview {
         // untouched and the rejected edit keeps rendering the old shape.
         let shapeBaseline = try preview.pose(bodyValues: body ?? savedBodyValues, faceValues: face ?? savedFaceValues,
             boneModifiers: shapeBoneModifiers, coordinate: coordinate)
+        let shapeCorrection = try preview.lateCorrection(restoring: shapeBaseline)
         var animationBaseline = shapeBaseline
         let savedState = SourceStudioAnimationState(record: record)
         if let animation = animationCache["\(savedState.group)/\(savedState.category)/\(savedState.no)"] {
             animationBaseline = try animation.pose(state: savedState, elapsed: 0,
                 height: (body ?? savedBodyValues).first ?? animationHeight, rig: preview.source.rig, baseline: shapeBaseline)
         }
+        try shapeCorrection.apply(to: &animationBaseline)
         let restored = try record.makePose(rig: preview.source.rig, catalog: poseCatalog, baseline: animationBaseline,
             characterRoot: characterRoot, bodyRoot: preview.source.rig.uniqueNode(named: "p_cf_body_bone"),
             hairRoot: preview.source.rig.uniqueNode(named: "cf_J_FaceUp_ty"))
@@ -931,6 +936,7 @@ public final class SourceStudioCharacterPreview {
         }
         shapeRevision &+= 1
         baseline = shapeBaseline
+        latePoseCorrection = shapeCorrection
         controller = restored.controller
         self.pose = pose
         ikGuides = guides
@@ -1001,7 +1007,7 @@ public final class SourceStudioCharacterPreview {
         // preview (unregistered in its deinit) survives a rejected edit.
         preview = try SourceRigPreview(source: appearancePrepared?.source ?? preview.source, contract: preview.contract,
             resources: resources, appearance: appearance, expressionContract: preview.expressionContract,
-            bodyOptions: preview.bodyOptions)
+            bodyOptions: preview.bodyOptions, lateCorrectionOptions: preview.lateCorrectionOptions)
         sourceColorEdits = edits
         appliedColorFields = fields.intersection(supported)
         colorEditDiagnostics = edits == nil ? nil : messages
@@ -1071,6 +1077,9 @@ public final class SourceStudioCharacterPreview {
         if let handPatternLibrary {
             try handPatternLibrary.applySaved(record.handPatterns, to: preview.source.rig, on: &result, elapsed: animationElapsed)
         }
+        // Original ChaControl late setters run after the Animators. Keep the
+        // supported static ABMX scale from the shape baseline; FK/IK follows.
+        try latePoseCorrection.apply(to: &result)
         let effective = try effectiveKinematics(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics)
         let restored = try record.makePose(rig: preview.source.rig, catalog: poseCatalog, baseline: result,
             characterRoot: characterRoot, bodyRoot: preview.source.rig.uniqueNode(named: "p_cf_body_bone"),

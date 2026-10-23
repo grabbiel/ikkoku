@@ -92,12 +92,28 @@ class DriverWiringTests(unittest.TestCase):
 
 class ArgumentTests(unittest.TestCase):
     def test_capture_inputs_are_rejected_with_collect_before_the_output_is_touched(self):
-        for flag in ['--settings','--hand-patterns','--look-patterns']:
+        for flag in ['--settings','--hand-patterns','--look-patterns','--model-variant']:
             with self.subTest(flag=flag),tempfile.TemporaryDirectory() as tmp:
                 output=Path(tmp)/'never-created'
-                with patch.object(sys,'argv',['original_character_probe.py','--output',str(output),'--collect',flag,'input.tsv']),patch('original_character_probe.collect') as collect:
+                with patch.object(sys,'argv',['original_character_probe.py','--output',str(output),'--collect',flag,'female00' if flag=='--model-variant' else 'input.tsv']),patch('original_character_probe.collect') as collect:
                     with self.assertRaisesRegex(ValueError,'belong to the capture step'):probe.main()
                 collect.assert_not_called();self.assertFalse(output.exists())
+
+    def test_neutral_model_conflicts_fail_before_guest_access(self):
+        for inputs in [dict(model_variant='other'),dict(model_variant='female00',settings=Path('s')),
+                       dict(model_variant='male200',hand_patterns=Path('h')),dict(model_variant='female200',look_patterns=Path('l'))]:
+            with self.subTest(inputs=inputs),patch('original_character_probe.player_root') as root:
+                with self.assertRaises(ValueError):probe.start('vm',Path('unused'),**inputs)
+                root.assert_not_called()
+
+    def test_reused_capture_clears_absent_optional_inputs_before_launch(self):
+        with tempfile.TemporaryDirectory() as tmp,patch('original_character_probe.player_root',return_value=ROOT_A),\
+             patch('original_character_probe.write_small') as write,patch('original_character_probe.retry',side_effect=['','','','123']) as guest:
+            probe.start('vm',Path(tmp),model_variant='female00')
+        scripts=[call.args[1] for call in guest.call_args_list]
+        self.assertIn('hand-patterns.tsv',scripts[1]);self.assertIn('look-patterns.tsv',scripts[2])
+        self.assertTrue(all('Remove-Item -LiteralPath' in s and 'Test-Path -LiteralPath' in s for s in scripts[1:3]))
+        self.assertTrue(any(call.args[1].endswith('model-variant.txt') and call.args[2]==b'female00\n' for call in write.call_args_list))
 
     def test_settings_help_points_at_the_documented_keys(self):
         with patch.object(sys,'argv',['original_character_probe.py','--help']),patch('sys.stdout',new_callable=io.StringIO) as out:

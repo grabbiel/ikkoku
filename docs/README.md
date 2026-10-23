@@ -57,6 +57,7 @@ run; use the owning audit task to decide what still needs verification.
 - [Character Maker: recovered shape and persistence contracts](reference/character/contracts.md)
 - [Character Maker rig recovery](reference/character/rigs.md)
 - [Source head rig and clothed assembly](reference/character/head-rig.md)
+- [Neutral original-player model comparison](reference/character/neutral-model-parity.md)
 - [Head-00 material inputs and preview bakes](reference/character/head-materials.md)
 - [Source face shape destinations](reference/character/face-shape.md)
 - [Body shape destinations](reference/character/body-shape.md)
