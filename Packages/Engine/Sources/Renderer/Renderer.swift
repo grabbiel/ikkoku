@@ -105,6 +105,7 @@ public final class Renderer: @unchecked Sendable {
     public func submit(_ frame: RenderFrame) {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
+        snapshot.submitted = true
         frameLock.lock(); pendingFrame = snapshot; frameLock.unlock()
     }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
@@ -381,6 +382,9 @@ public final class Renderer: @unchecked Sendable {
     /// Prepares a frame and publishes its statistics and error. Throws only
     /// `RenderFrameError.uniformAllocation`; nothing has been encoded by then.
     private func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false) throws -> FrameContext {
+        // A submitted frame created after a retirement replaced every pending frame
+        // that could still name the retired resources (`ResourceStore.retire`).
+        if input.submitted { resources.completeRetirements(createdBefore: input.createdAt) }
         var statistics = RenderFrameStatistics()
         do {
             let context = try buildContext(frame: input, targets: targets, forPick: forPick, statistics: &statistics)
@@ -503,7 +507,7 @@ public final class Renderer: @unchecked Sendable {
             }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
-                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount) else {
+                guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
                     lastDeformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
                     continue
                 }
