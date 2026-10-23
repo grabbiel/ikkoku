@@ -467,11 +467,12 @@ affects GPU work in flight. The renderer's pending frame
 resources back, however, and so can a copy taken with `currentFrame()`.
 An immediate release would make that frame lose its hidden mask and skip
 its meshes. Its preparation would also re-create the deformation buffers
-under the released keys, and nothing would release them again. Slice 1
-avoided the same problem for mask replacement by always uploading a new
-buffer, and `SourceRigPreview` avoids it by unregistering its own meshes
-first, so its items are skipped. Shared library meshes cannot be dropped
-that way.
+under the released keys, and nothing would release them again. Slice 1's
+mask replacement uploads a new buffer, which protects encoded frames only:
+a pending frame still looks the mask up by key. `SourceRigPreview` avoids
+the re-creation by unregistering its own meshes first, so a pending frame
+skips its items for one frame. Shared library meshes cannot be dropped that
+way.
 
 `ResourceStore.retire(meshes:deformKeys:hiddenKeys:)` therefore takes a
 `ResourceClock` stamp and leaves the resources in place. Every `RenderFrame`
@@ -537,8 +538,8 @@ the production pipelines from `Shaders/` (CI-only, not compiled locally):
 
 Run them with
 `swift test --package-path Packages/Engine --filter 'characterCreateRemoveCycles|characterDrawnAgain|repeatedStaticImports|onlyASubmittedFrame|renderStatusReporter'`.
-None of this was run in the app. Studio deletion, scene replacement and the
-status line are verified only by the app compiling in CI.
+None of this was run in the app. The Studio and Maker release paths and the
+status line are only compiled in CI.
 
 Remaining R6 work:
 
