@@ -56,10 +56,16 @@ public struct MaterialData: Sendable {
     public var alphaCutoff: Float
     public var doubleSided: Bool
     public var extras: JSONValue?
+    /// Authored glTF `texCoord` selection (0...2) of each texture binding. The loader keeps
+    /// it; native toon materials sample UV0 only, so `LoadedAsset` rejects nonzero sets.
+    public var baseColorTexCoord: Int
+    public var normalTexCoord: Int
     public init(name: String, baseColorFactor: Float4 = Float4(1, 1, 1, 1), baseColorImage: Int? = nil, normalImage: Int? = nil,
-                emissiveFactor: Float3 = .zero, alphaMode: String = "OPAQUE", alphaCutoff: Float = 0.5, doubleSided: Bool = false, extras: JSONValue? = nil) {
+                emissiveFactor: Float3 = .zero, alphaMode: String = "OPAQUE", alphaCutoff: Float = 0.5, doubleSided: Bool = false, extras: JSONValue? = nil,
+                baseColorTexCoord: Int = 0, normalTexCoord: Int = 0) {
         self.name = name; self.baseColorFactor = baseColorFactor; self.baseColorImage = baseColorImage; self.normalImage = normalImage
         self.emissiveFactor = emissiveFactor; self.alphaMode = alphaMode; self.alphaCutoff = alphaCutoff; self.doubleSided = doubleSided; self.extras = extras
+        self.baseColorTexCoord = baseColorTexCoord; self.normalTexCoord = normalTexCoord
     }
 }
 
@@ -87,6 +93,8 @@ public struct NodeData: Sendable {
     public var extras: JSONValue?
     /// Preserve authored matrices, including reflections and shear, for static prefabs.
     public var authoredMatrix: float4x4? = nil
+    /// Authored node `weights` (initial morph weights overriding the mesh's), nil when absent.
+    public var weights: [Float]? = nil
     public var localMatrix: float4x4 { authoredMatrix ?? Transform.trs(translation, rotation, scale) }
 }
 
@@ -94,6 +102,22 @@ public struct MeshGroup: Sendable {
     public var name: String
     public var primitives: [MeshData]
     public var extras: JSONValue?
+    /// Authored mesh `weights` (initial morph weights, one per target), nil when absent.
+    public var weights: [Float]? = nil
+}
+
+/// A loader report about authored glTF data that the native pipeline reduces, ignores or
+/// does not apply. The asset still loads; data whose omission would change its meaning
+/// (for example an unsupported `extensionsRequired` entry) is rejected instead.
+///
+/// Codes: `unsupported_extension`, `skin_influences_reduced`, `ignored_attribute`,
+/// `ignored_morph_attribute`, `unsupported_texture_slot`, `unsupported_sampler` and
+/// `initial_morph_weights_not_applied`.
+public struct GLTFDiagnostic: Sendable, Equatable, CustomStringConvertible {
+    public let code: String
+    public let message: String
+    public init(code: String, message: String) { self.code = code; self.message = message }
+    public var description: String { "\(code): \(message)" }
 }
 
 /// A fully decoded glTF/GLB file.
@@ -106,6 +130,8 @@ public struct GLTFAsset: Sendable {
     public var images: [ImageData]
     public var skins: [SkinData]
     public var extras: JSONValue?
+    /// Compatibility reports produced while loading; see `GLTFDiagnostic`.
+    public var diagnostics: [GLTFDiagnostic] = []
 
     public func node(named name: String) -> Int? { nodes.firstIndex { $0.name == name } }
 
@@ -114,6 +140,15 @@ public struct GLTFAsset: Sendable {
         var p = nodes[i].parent
         while let pi = p { m = nodes[pi].localMatrix * m; p = nodes[pi].parent }
         return m
+    }
+
+    /// glTF initial morph weights for a mesh node: node `weights`, else mesh `weights`, else
+    /// zero for every target. Empty when the node has no mesh. Native render paths do not
+    /// apply these yet; the loader reports nonzero values (`initial_morph_weights_not_applied`).
+    public func initialMorphWeights(ofNode i: Int) -> [Float] {
+        guard nodes.indices.contains(i), let mesh = nodes[i].mesh, meshes.indices.contains(mesh) else { return [] }
+        if let weights = nodes[i].weights ?? meshes[mesh].weights { return weights }
+        return Array(repeating: 0, count: meshes[mesh].primitives.first?.morphTargets.count ?? 0)
     }
 
     /// All (node, mesh) pairs in scene order.
