@@ -15,6 +15,7 @@ percentage or general mod compatibility is claimed.
 | Project overview | [Repository README](../README.md) |
 | Contribute and collaborate through GitHub | [Contribution guide](../CONTRIBUTING.md) |
 | Build, tests, captures and prerequisites | [Build and test](guides/build-and-test.md) |
+| Build and inspect a Release app bundle | [Package and inspect a Release build](guides/build-and-test.md#package-and-inspect-a-release-build) |
 | Maker, cards, Studio and source-mode limitations | [Using the app](guides/using-the-app.md) |
 | Scan/mount a local mod library | [Mod library guide](guides/mod-library.md) |
 | Locate code and understand data boundaries | [Architecture](architecture.md) |

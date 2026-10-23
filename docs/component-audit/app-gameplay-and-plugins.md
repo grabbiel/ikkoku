@@ -19,7 +19,7 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
 | --- | --- | --- | --- |
 | A01 · SwiftUI shell, Maker/Studio switching and shared engine | Mid-stage | Both editors share one `EngineHost` and renderer. Mode changes activate one model and refresh its frame. There is no ActionGame/title/gameplay mode. | A-T01: add an actual game session host; retain editor isolation. |
-| A02 · Metal startup and asset discovery | Mid-stage | Explicit `IKKOKU_ASSETS`, bundle assets, then source-tree assets. Optional original male/female manifests and Maker library are separate private inputs. Explicit invalid source overrides fail instead of silently selecting another source. Development defaults depend on build-machine paths. | A-T02: install/import workflow, portable paths and actionable missing-resource UI; test a moved release app. |
+| A02 · Metal startup and asset discovery | Mid-stage | Explicit `IKKOKU_ASSETS`, bundle assets, then source-tree assets. Optional original male/female manifests and Maker library are separate private inputs. Explicit invalid source overrides fail instead of silently selecting another source. Development defaults depend on build-machine paths. Since 2026-10-23 (T-T02), each used source-tree default prints a `[ikkoku] source-tree fallback:` line, and `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables all three (assets root, Maker library, original bases); without it the defaults are unchanged. Compiled by CI only; no launch has exercised the switch. | A-T02: install/import workflow, portable paths and actionable missing-resource UI; test a moved release app. |
 | A03 · Viewport display and input | Mid-stage | `CAMetalDisplayLink` drives drawable presentation; Retina pixel conversion, orbit/pan/zoom, trackpad magnification, mouse and key delegation exist. Simulation uses editor timers, not this presentation timestamp. | A-T03: instrument displayed frames and simulation cadence together; validate resize, focus loss, mode switching and more than one window. |
 | A04 · File commands and error presentation | Mid-stage | Native cards/scenes, original-card fallback, static model import, original layout/scene preview and edited-original export are separate commands. Errors usually become an alert/status. These commands do not imply format-complete interoperability. | Verify all source/native branches, cancellation and failed import state preservation through UI tests; format details belong to the Character/Studio audits. |
 | A05 · Source Maker → Studio transfer | Pending | `Send to Studio` is explicitly disabled while a source rig is active. The enabled command sends the bundled `CharacterCard`. Original cards can instead enter through source scene preview. | Preserve edited source card bytes, selection, outfit, resolver GUIDs and source rig references when adding a source character; compare Maker and Studio posed appearance. |
@@ -83,9 +83,10 @@ Sources: [IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift),
   Renderer module is pure (an environment dictionary in, a mode or a
   `CaptureRequestError` out). It lives in the engine so Swift Testing covers it in
   CI; it imports only Foundation and holds the variable names, as
-  `UICaptureReadiness` already does. Its inventory classifies all 85 variables the
+  `UICaptureReadiness` already does. Its inventory classifies all 86 variables the
   app reads: 8 mode selectors including `IKKOKU_AUTOCAPTURE`, 44 mode-scoped options,
-  the window capture and its 5 options, 12 startup inputs and 15 data sources.
+  the window capture and its 5 options, 12 startup inputs and 16 data sources
+  (T-T02 added `IKKOKU_SOURCE_TREE_FALLBACKS`).
   `AppState.init` runs it first and prints the error and exits 1. The
   [build guide](../guides/build-and-test.md#capture-request-validation) lists the
   rules and every newly rejected combination; no documented recipe or lane uses one.

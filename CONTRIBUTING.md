@@ -93,8 +93,9 @@ reference type, sample count, tolerances and exclusions. Distinguish recovered-c
 oracles from original-player probes, and frozen geometry from independent live
 scene evaluation. A passing kernel does not establish UI or whole-game parity.
 GitHub Actions (`.github/workflows/ci.yml`) runs only the public lane, an
-unsigned Debug app build and the `Tools/reverse` Python suites with their pinned
-requirements; it never sees private fixtures. Include local results
+unsigned Debug app build, an unsigned Release build with a bundle-content
+inspection (it does not launch the app) and the `Tools/reverse` Python suites
+with their pinned requirements; it never sees private fixtures. Include local results
 for anything beyond that rather than assuming CI has exercised the change.
 
 ## Prepare the pull request

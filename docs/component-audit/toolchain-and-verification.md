@@ -11,11 +11,11 @@ milestones; a successful extractor does not complete a gameplay feature.
 | --- | --- | --- | --- |
 | T01 · Swift package module graph | Mid-stage | `Packages/Engine/Package.swift` exposes nine library targets plus `IkkokuInspect`, with CoreMathTests/EngineTests. Gameplay has no Unity dependency; Studio depends on Gameplay. Character depends on Renderer for preview construction, so it is not a pure data/logic layer. | T-T01: document dependency boundaries and test pure logic separately from Metal-backed consumers. |
 | T02 · Native macOS build | Mid-stage | Current arm64 Release app built successfully before this documentation audit. Xcode app target declares macOS 14.6 and Swift 5 language mode; SwiftPM uses Swift tools 6 / macOS 14. They are distinct settings. The `IkkokuShaders` target declares macOS 26.0 in Debug and Release; do not describe app 14.6 as a verified product-wide minimum. | T-T01 (partial): toolchain versions are now recorded and checked (T06). Still establish the supported deployment/architecture matrix and align intentional settings. CI has built the app and run the package tests since 2026-09-29 (T07). |
-| T03 · Shader compilation and bundled resources | Mid-stage | Xcode builds Metal resources for the app; the runtime also has local/development shader and asset discovery paths. Package tests alone are not proof that an archived app contains its assets/metallib. | T-T02: build/archive from a clean checkout and validate resource lookup without source-tree fallbacks. |
-| T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no checked-in release automation, installer, notarization procedure or converted-library setup UI. App sandbox is disabled. | T-T02: write and exercise a release process, including private-content exclusion and user-owned external library access. |
-| T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. | T-T03: unify output policy and provenance checks; verify distributable artifact contents rather than relying only on Git ignore. |
+| T03 · Shader compilation and bundled resources | Mid-stage | Xcode builds Metal resources for the app; the runtime also has local/development shader and asset discovery paths. Package tests alone are not proof that an archived app contains its assets/metallib. Since 2026-10-23 (T-T02), `Tools/verification/inspect_app_bundle.py` checks a built bundle for `IkkokuShaders.metallib` and its `MTLB` signature, `catalog.json`, and every model, mask and texture the catalog references (137 in the checked-in catalog). CI's `release-package` job runs it on an unsigned arm64 Release build, after a zip round trip outside the checkout. The metallib is loaded from `Bundle.main` only. The asset root and the two `.local/reverse/` defaults have `#filePath` source-tree fallbacks; `IKKOKU_SOURCE_TREE_FALLBACKS=0` now disables them, and each use is logged. | T-T02 (partial): the job passed in dispatched runs 39888875495 and 39889709790 (2026-10-23; 207 files, 0 findings) after its first run found the Engine package in the bundle (see T-T02). Still to do: launch the packaged app outside the checkout with the fallbacks disabled (the [documented thumbnail run](../guides/build-and-test.md#package-and-inspect-a-release-build); not run, and CI never launches the app). `xcodebuild archive` is not exercised. |
+| T04 · App signing, packaging and installation | Infancy | Automatic signing/hardened runtime settings are present; there is no installer, notarization procedure or converted-library setup UI. App sandbox is disabled. Since 2026-10-23 (T-T02), the [build guide](../guides/build-and-test.md#package-and-inspect-a-release-build) documents a clean-checkout Release build and bundle inspection, and CI builds an unsigned arm64 Release app and inspects it. That covers private-content exclusion and required resources only: the app is not signed, notarized, installed or launched. | T-T02 (partial): signing and notarization procedure, installer, a launch on a clean user profile, and user-owned converted-library selection/relocation (A-T02). |
+| T05 · Private extraction/build isolation | Mid-stage | `.gitignore` excludes `.local/`, `.build/`, build output, Python caches and decompiled/extracted local data. Public assets are generated prototypes. Scripts vary in whether they enforce `.local/` output or only use it as a default. The app target copies its synchronized `Assets/` folder from disk, ignored files included. Since 2026-10-23 (T-T02), the bundle inspector therefore accepts a file only as a declared build product or a tracked `Assets/` file at its copied path. It fails `.local`/original-installation path components, repository and recovered source, PE assemblies, Unity asset bundles, mod archives, PNG card/scene payloads and build-machine paths in Info.plist or resources. The rules are reviewable in `Tools/verification/app-bundle-rules.json`. Its first CI run found the whole Engine package, including test fixtures, copied into the app's resources through a `Packages/` synchronized group; the T-T02 branch removes that group from the app target. | T-T03: unify converter output policy and provenance checks. The app bundle's contents are now checked by T-T02's inspector rather than by Git ignore alone. |
 | T06 · Dependency reproducibility | Mid-stage | Reverse tools pin UnityPy 1.23.0, NumPy 2.2.6 and msgpack 1.1.2. Roslyn frontend targets .NET 10 and references the installed SDK parser without NuGet. Since 2026-10-23 (T-T01), `Tools/verification/prerequisites.json` records each documented version once: Xcode ≥26, Swift ≥6.0, .NET SDK ≥10.0, a Python 3.12 venv with the `requirements.txt` pins, ilspycmd 11.1.0.9782 and 9.1.0.7988, and Blender 5.1. The Metal compiler, public `python3`, asset numpy/Pillow, Parallels `prlctl` and the host macOS version are *unrecorded*, so only their presence is checked. `doctor.py` reports every capability; only `--require`d ones can fail. | T-T01 (partial): record versions for the unrecorded entries from a reference-Mac run; pin the asset Python packages; certify Blender reproducibility across versions. |
-| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe. Since 2026-09-29 `.github/workflows/ci.yml` runs the `public.json` lane skip-tolerant (no `--strict`) and an unsigned Debug app build on `macos-26` runners for pull requests and pushes to `main`; it is not a required status check, and the private lanes stay local because they need `.local/` fixtures or the VM. | T-T04 (partial): Maker import/outfit-switch/edit/export/reimport session scenarios now run headlessly in `maker-scenarios.json` (4/4 `--strict`, 2026-09-29); source-inspector hooks are merged (PR #5), while full interaction through visible Maker/Studio controls remains an acceptance boundary. |
+| T07 · Continuous integration and release gating | Partial | T-T04's lane machinery now exists: the stdlib runner `Tools/verification/run.py` plus lane manifests `public.json`, `private-source.json`, `maker.json` and `app-smoke.json` under `Tools/verification/lanes/`, each run on 2026-09-26 with reports under git-ignored `.local/verification/reports/`. A check whose declared required fixture is not in the environment file skips (fails under `--strict`); missing optional fixtures are recorded in `missingFixtures` and the check runs anyway (also failing under `--strict`). No lane runs a managed-DLL or original-player probe. Since 2026-09-29 `.github/workflows/ci.yml` runs the `public.json` lane skip-tolerant (no `--strict`) and an unsigned Debug app build on `macos-26` runners for pull requests and pushes to `main`; since 2026-10-23 a `release-package` job also builds an unsigned arm64 Release app and runs the T-T02 bundle inspector on it. CI is not a required status check, and the private lanes stay local because they need `.local/` fixtures or the VM. | T-T04 (partial): Maker import/outfit-switch/edit/export/reimport session scenarios now run headlessly in `maker-scenarios.json` (4/4 `--strict`, 2026-09-29); source-inspector hooks are merged (PR #5), while full interaction through visible Maker/Studio controls remains an acceptance boundary. |
 
 ## E. Original installation access and recovery
 
@@ -136,10 +136,58 @@ data is deliberately not copied into the documentation or distribution.
   following the setup path on a fresh contributor Mac (CI uses a
   preprovisioned image), launching an unsigned build, the deployment matrix
   (T02) and versions for the unrecorded entries (T06).
-- **T-T02 — Release packaging (P1).** Inspect archived contents, provide library
+- **T-T02 — Release packaging (P1, partial).** Inspect archived contents, provide library
   selection/relocation, and verify all app resources on a clean user profile.
   Accept when the app works outside the checkout and no private recovered files
-  are embedded unintentionally.
+  are embedded unintentionally. First slice implemented 2026-10-23.
+  `Tools/verification/inspect_app_bundle.py` (stdlib) checks a built `.app`
+  against `Tools/verification/app-bundle-rules.json`, a reviewable list of
+  required and forbidden contents, and writes a JSON report. Required are the
+  metallib with its signature, `catalog.json`, `Assets.car`, every
+  catalog-referenced asset, the expected Info.plist identity and an `arm64`
+  slice in every Mach-O file. Every other file must be a declared build
+  product or a tracked `Assets/` file at the path the synchronized group
+  copies it to. Private and original-game content fails, as listed under T05,
+  and so do absolute build-machine paths in Info.plist, text resources, PNG
+  text chunks and GLB JSON chunks. Compiled products only record their path
+  strings: the Swift 5 target's `#file`/`#filePath` strings embed the checkout
+  path in the executable. CI's `release-package` job builds Release unsigned
+  with `ARCHS=arm64` from the clean checkout. It round-trips the app through a
+  `ditto` zip into `$RUNNER_TEMP`, inspects that copy and uploads the
+  `release-bundle-report` artifact. The runtime's three `#filePath` source-tree
+  fallbacks print a `[ikkoku] source-tree fallback:` line when used, and
+  `IKKOKU_SOURCE_TREE_FALLBACKS=0` disables them. The fallbacks are the asset
+  root when the bundle has no `catalog.json`, and the `.local/reverse/` Maker
+  library and original bases. Defaults are unchanged in both configurations,
+  so the local lanes behave as before. The first dispatched CI run (run
+  39887901874, 2026-10-23) compiled the `EngineHost.swift` change and built
+  the Release app in 6 minutes. The inspector then failed it with 247 errors,
+  one for each file under `Packages/`: the app target listed `Packages/` as a
+  synchronized group, so the whole Engine package was copied into
+  `Contents/Resources/Engine/`. That covered `Package.swift`, every source and
+  test file, and the six test fixtures under `Tests/EngineTests/Fixtures/`.
+  Debug builds of the same target have the same membership. Nothing reads these
+  files at runtime; the app links Engine through its local package reference.
+  The branch removes `Packages` from the IkkokuCreator target's
+  `fileSystemSynchronizedGroups`, keeping it in the project navigator. A
+  `source-code` rule now names such files, and a test checks the target's group
+  list. Everything else in that run passed: 6 build products, all 201 shipped
+  tracked assets byte-identical to the checkout, an arm64 executable, all 137
+  catalog references, and no private-content or build-path finding. With the
+  fix, dispatched run 39888875495 (2026-10-23, head `802b351`) passed all four
+  jobs. The Release job built in 5.5 minutes and produced a 26 MB zip. The
+  inspector found 207 files (45.7 MB): 6 build products and 201 tracked assets,
+  an arm64 executable, and 0 errors and 0 warnings. After merging A06 (#118),
+  which put `IKKOKU_SOURCE_TREE_FALLBACKS` in `CaptureRequest.dataSources`,
+  run 39889709790 (head `738f98f`) passed all four jobs again. Its inspector
+  found 207 files (45.8 MB) with 0 errors and 0 warnings. Other evidence: 61
+  synthetic-bundle tests in `test_inspect_app_bundle.py` (`runner-self-tests`)
+  on Python 3.10–3.13 in a Linux container, and a clean pass on a simulated
+  bundle copied from the 205 tracked assets. The tests include consistency
+  checks against `Ikkoku.xcodeproj` and the checked-in catalog. Still open: the
+  documented launch outside the checkout with fallbacks disabled (CI never
+  launches the app), a clean user profile, `xcodebuild archive`, signing,
+  notarization, an installer and library selection/relocation (A-T02).
 - **T-T03 — Unified provenance/output policy (P2).** Standardize source hashes,
   converter versions, immutable outputs and atomic publication for converters.
   Accept when interrupted or changed inputs cannot be presented as complete,
