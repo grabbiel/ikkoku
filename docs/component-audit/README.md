@@ -101,7 +101,7 @@ camera/route active flags and card edits; undo/redo and native save/reload that
 keep a source scene's props, cameras, routes and light. Two app-level lanes now
 exercise much of the checklist below **headlessly**, through `StudioModel` /
 `MakerModel` calls and, for the FK guide, the real mouse handlers and GPU pick:
-`Tools/verification/lanes/studio-scenarios.json` (37 checks) and
+`Tools/verification/lanes/studio-scenarios.json` (39 checks) and
 `maker-scenarios.json` (4 checks); run them with
 `python3 Tools/verification/run.py --manifest <lane> --environment
 .local/verification/environment.json --strict`. GitHub Actions (PR #70) runs only
@@ -205,9 +205,22 @@ None of this wave has been run in the app; the seven app items below are still o
       (automated in part: `scenarios/neck-look-orbit.json` — character 65's FIX override
       ("FIX holds the saved neck rotation.") holds head and neck bone positions exactly
       still across orbiting the camera to both sides, and the state survives export →
-      reimport; no TARGET/AWAY-neck character exists in any scene under the fixture
-      root, so the follow/avoid half and the FK-untouched half stay unautomated;
-      passed 2026-09-30).
+      reimport; passed 2026-09-30; `scenarios/neck-target-orbit.json` — on
+      `scene-neck-target.png`, which the original CharaStudio authored from the synthetic
+      fixture card (key 0 neck TARGET, key 147 neck AWAY, both eyes TARGET), the live
+      TARGET/AWAY diagnostics are asserted and each character's hair-front bone 100 is
+      captured under the saved camera. TARGET's bone moves more than 0.05 m when the camera
+      orbits +60° and 0.1 m when it orbits back to −60°. AWAY's bone moves more than 0.15 m
+      from each earlier pose and returns within 0.01 m of its front pose at −60°. At both
+      orbit sides, AWAY's bone sits more than 0.15 m from TARGET's in the rig frame. After
+      export → reimport, with the view still at −60°, both bones hold within 0.01 m of
+      their pre-export poses. Under the saved camera, the
+      bearings are TARGET 6.698° and AWAY 59.879°; the original's settled head yaws are
+      6.699° and 59.862°. TARGET turns toward the camera's side and AWAY to the opposite
+      side, as in the original
+      ([fixture scenes](../reference/studio/scene-editing.md#charastudio-authored-route-children-and-neck-targetaway-fixtures)).
+      The FK-untouched half, rendered pixels and orbit-phase magnitudes stay unchecked;
+      passed 2026-10-22).
 - [ ] ST-T07 eye look: with `IKKOKU_STUDIO_LOOK_SETTINGS` set, select a source character
       with eyes pattern こっち; orbit the camera: the Eye look readout's H rates change
       sign across the face, raising the camera moves the V rate, and no eye bone moves
@@ -331,6 +344,16 @@ None of this wave has been run in the app; the seven app items below are still o
       Play/Stop, Play all, Replay all and Stop all controls behave as documented (runtime
       only; the route's saved `active` byte is exported only when its play state deviates
       from the record) (PRs #19–#39).
+      (automated in part: `scenarios/route-children-motion.json` — on
+      `scene-route-children.png`, which the original CharaStudio authored (route key 0
+      saved playing and looping over four points; children folder key 9 and the fixture
+      female key 10), both children's world positions move 1.205 m in a 2 s advance. The
+      positions are read through the placement walk `refresh()` renders with, and in the
+      original the route's `childRoot` moved 1.032 m in 1.56 s. The folder moves another
+      0.333 m in the next 0.5 s. Stopping the route pins both children back to point 0
+      within 1e-5, and they hold there through 2 s and export → reimport. Play all /
+      Replay all / Stop all, speed parity with the original tween and rendered pixels
+      stay unchecked; passed 2026-10-22.)
 - [ ] ST-A06 camera objects: loading a scene with an active camera object starts the view
       through it (reported in the source compatibility diagnostics); orbit/pan/zoom are
       refused with an explanation while it is active, and Look through / Stop looking

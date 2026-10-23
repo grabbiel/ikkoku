@@ -67,6 +67,31 @@ class AuthorStartTests(unittest.TestCase):
         self.assertEqual([e[0] for e in events],['upload','compile','upload','launch'])
         self.assertEqual(run['sceneSHA256'],{})
 
+    def test_author_scenes_upload_their_list_after_the_card(self):
+        events=[]
+        with tempfile.TemporaryDirectory() as tmp,\
+             patch('original_scene_reload_probe.player_root',return_value=ROOT_A),\
+             patch('original_scene_reload_probe.write_small',side_effect=lambda vm,path,data:events.append(('upload',path,data))),\
+             patch('original_scene_reload_probe.retry',side_effect=lambda vm,script,user=False:events.append(('launch' if user else 'compile',script)) or ('4321' if user else '')):
+            card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
+            run=probe.start('vm',Path(tmp),scenes={},card=card,author_scenes=['route-children','neck-target'])
+            recorded=json.loads((Path(tmp)/'run.json').read_text())
+        self.assertEqual([e[0] for e in events],['upload','compile','upload','upload','launch'])
+        self.assertEqual(events[2][1],ROOT_A+r'\BepInEx\plugins\author-card.png')
+        self.assertEqual(events[3][1],ROOT_A+r'\BepInEx\plugins\author-scenes.txt')
+        self.assertEqual(events[3][2],b'route-children\nneck-target\n')
+        self.assertEqual(run['authorScenes'],['route-children','neck-target']);self.assertEqual(recorded,run)
+
+    def test_plain_author_run_records_the_default_scene(self):
+        with tempfile.TemporaryDirectory() as tmp,\
+             patch('original_scene_reload_probe.player_root',return_value=ROOT_A),\
+             patch('original_scene_reload_probe.write_small') as upload,\
+             patch('original_scene_reload_probe.retry',side_effect=lambda vm,script,user=False:'4321' if user else ''):
+            card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
+            run=probe.start('vm',Path(tmp),scenes={},card=card)
+        self.assertEqual(run['authorScenes'],['char'])
+        self.assertNotIn(ROOT_A+r'\BepInEx\plugins\author-scenes.txt',[c.args[1] for c in upload.call_args_list]) # no list keeps the plugin's scene-char.png default
+
 class CollectTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.output=Path(self.tmp.name)
@@ -114,6 +139,25 @@ class CollectTests(unittest.TestCase):
         listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
         self.assertIn('scene-char.png',listed);self.assertEqual(result['files'],len(listed))
         self.assertEqual((self.output/'scene-char.png').read_bytes(),b'scene')
+
+    def test_author_scenes_run_fetches_each_authored_scene_from_its_folder(self):
+        (self.output/'run.json').write_text(json.dumps(dict(vm='vm',root=ROOT_A,processID=77,stopped=False,
+            authorCard='c',authorScenes=['route-children','neck-target'],sceneSHA256={})))
+        paths=[]
+        files={'status.json':json.dumps(dict(error=None)).encode(),'reload-trace.json':b'{}',
+               'scene-route-children.png':b'route','scene-neck-target.png':b'neck','unity.log':b'log'}
+        def fetch(vm,path,limit=None):
+            name=path.rsplit('\\',1)[1];paths.append(path)
+            if name not in files:raise RuntimeError('missing '+name)
+            return files[name]
+        with patch('original_scene_reload_probe.fetch',side_effect=fetch),patch('original_scene_reload_probe.stop_probe'):
+            probe.collect('vm',self.output)
+        for name in ('scene-route-children.png','scene-neck-target.png'):
+            self.assertIn(ROOT_A+'\\BepInEx\\plugins\\reload\\'+name,paths) # authored into the probe's folder
+            self.assertEqual((self.output/name).read_bytes(),files[name])
+        self.assertFalse(any(p.endswith('scene-char.png') for p in paths)) # only the listed scenes were authored
+        listed={f['file'] for f in json.loads((self.output/'manifest.json').read_text())['files']}
+        self.assertTrue({'scene-route-children.png','scene-neck-target.png'}<=listed)
 
     def test_failed_probe_status_is_saved_before_raising(self):
         def fetch(vm,path,limit=None):
@@ -172,6 +216,21 @@ class ArgumentTests(unittest.TestCase):
                                          '--charastudio-fk-source',str(inputs['charastudio-fk-source'])])
             self.assertEqual(set(start.call_args.args[3]),set(probe.FK_LABELS)) # a reload-only FK run uploads both records
             self.assertIsNone(start.call_args.args[4])
+
+    def test_author_scenes_need_the_card_and_known_distinct_names(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            card=Path(tmp)/'fixture-card.png';card.write_bytes(b'card')
+            with self.assertRaisesRegex(ValueError,'author-scenes needs --author-character'):
+                self.run_main(['--author-scenes','route-children'])
+            for bad in ('route-children,bogus','neck-target,neck-target',','):
+                with self.assertRaisesRegex(ValueError,'author-scenes takes distinct names'):
+                    self.run_main(['--author-character',str(card),'--author-scenes',bad])
+            start,collect=self.run_main(['--author-character',str(card),'--author-scenes','route-children, neck-target'])
+            self.assertEqual(start.call_args.args[5],['route-children','neck-target'])
+            start,collect=self.run_main(['--author-character',str(card)])
+            self.assertIsNone(start.call_args.args[5])
+            with self.assertRaisesRegex(ValueError,'collect does not take scene'):
+                self.run_main(['--collect','--author-scenes','char'])
 
     def test_collect_is_a_capture_step_without_scene_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:

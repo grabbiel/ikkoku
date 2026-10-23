@@ -21,7 +21,7 @@ struct StudioScenario: Decodable {
         /// `"setClothesState"`, `"setAccessoryVisible"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
-        /// `"captureBone"`, `"captureRender"`, `"advance"`, `"orbit"`,
+        /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
@@ -87,6 +87,10 @@ struct StudioScenario: Decodable {
         /// assert only: the FK edit on one guide bone, optionally plus its
         /// world displacement from a `captureBone` position.
         let fk: FKValue?
+        /// assert only: one object's world displacement from a `captureObject`
+        /// position (the placement `refresh()` renders it at, so a route
+        /// child's position follows its route's `childRoot`).
+        let position: PositionValue?
         /// advance: how many seconds of live animation to run. The op walks
         /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
         /// scenario exercises the app's live tick, not a re-implementation.
@@ -235,6 +239,14 @@ struct StudioScenario: Decodable {
             /// angle is not known in advance and cannot be matched exactly.
             let nonZero: Bool?
         }
+        struct PositionValue: Decodable {
+            let key: Int32
+            /// the `captureObject` label to measure against: by default the
+            /// object must have moved beyond the numeric tolerance; `within`
+            /// flips the check to "it is still within that bound", like `fk`.
+            let from: String
+            let within: Float?
+        }
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
             let items: Int?
@@ -247,7 +259,7 @@ struct StudioScenario: Decodable {
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains,
-                 group, category, no, speed, on, bone, rotation, animation, fk,
+                 group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, state, clothes
         }
@@ -292,6 +304,7 @@ struct StudioScenario: Decodable {
             rotation = try c.decodeIfPresent([Float].self, forKey: .rotation)
             animation = try c.decodeIfPresent(AnimationValue.self, forKey: .animation)
             fk = try c.decodeIfPresent(FKValue.self, forKey: .fk)
+            position = try c.decodeIfPresent(PositionValue.self, forKey: .position)
             seconds = try c.decodeIfPresent(Float.self, forKey: .seconds)
             dx = try c.decodeIfPresent(Float.self, forKey: .dx)
             dy = try c.decodeIfPresent(Float.self, forKey: .dy)
@@ -435,6 +448,8 @@ struct StudioScenario: Decodable {
         }
         /// Positions recorded by `captureBone` steps, keyed by step name.
         var capturedBonePositions: [String: Float3] = [:]
+        /// World positions recorded by `captureObject` steps, keyed by step name.
+        var capturedObjectPositions: [String: Float3] = [:]
         /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
         var capturedRenders: [String: (width: Int, height: Int, bytes: [UInt8])] = [:]
         /// The single headless render size every `captureRender` uses, so a
@@ -639,6 +654,34 @@ struct StudioScenario: Decodable {
             } else {
                 guard moved > tolerance else {
                     return "assert fk: bone \(edit.bone) moved only \(moved) from its captured position — the guide did not move"
+                }
+            }
+            return nil
+        }
+
+        /// An object's world displacement from a `captureObject` position, read
+        /// through `StudioModel.sourceObjectWorldMatrix` (the placement walk
+        /// `refresh()` renders with), so it measures what the view shows.
+        func assertPosition(_ step: Step) -> String? {
+            guard let check = step.position else { return nil }
+            guard let id = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id else {
+                return "assert position: no object with source key \(check.key)"
+            }
+            guard let base = capturedObjectPositions[check.from] else {
+                return "assert position: no captureObject position recorded under \"\(check.from)\""
+            }
+            let now: Float3
+            do { now = try studio.sourceObjectWorldMatrix(id).translation }
+            catch { return "assert position: object \(check.key) world position unavailable: \(error)" }
+            let dx = now.x - base.x, dy = now.y - base.y, dz = now.z - base.z
+            let moved = (dx * dx + dy * dy + dz * dz).squareRoot()
+            if let bound = check.within {
+                guard moved <= bound else {
+                    return "assert position: object \(check.key) sits \(moved) from \"\(check.from)\" at (\(now.x), \(now.y), \(now.z)), expected it held within \(bound)"
+                }
+            } else {
+                guard moved > tolerance else {
+                    return "assert position: object \(check.key) moved only \(moved) from \"\(check.from)\" — it did not move"
                 }
             }
             return nil
@@ -1156,6 +1199,16 @@ struct StudioScenario: Decodable {
                     capturedBonePositions[label] = position
                     record(step, true, "captured bone \(boneID) at (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureBone: \(error)") }
+            case "captureObject":
+                guard let id = object(step) else { record(step, false, "captureObject: no object with source key \(step.key ?? -1)"); continue }
+                guard let label = step.name, !label.isEmpty else {
+                    record(step, false, "captureObject: name (the capture label) is required"); continue
+                }
+                do {
+                    let position = try studio.sourceObjectWorldMatrix(id).translation
+                    capturedObjectPositions[label] = position
+                    record(step, true, "captured object \(step.key!) world position (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
+                } catch { record(step, false, "captureObject: \(error)") }
             case "captureRender":
                 guard let label = step.name, !label.isEmpty else {
                     record(step, false, "captureRender: name (the capture label) is required"); continue
@@ -1340,6 +1393,7 @@ struct StudioScenario: Decodable {
                 // The eye look, blink and hand-pattern checks resolve their
                 // own character by the source key inside the check value,
                 // like `animation`/`fk`.
+                if let problem = assertPosition(step) { problems.append(problem) }
                 if let problem = assertEyeLook(step) { problems.append(problem) }
                 if let problem = assertBlink(step) { problems.append(problem) }
                 if let problem = assertHandPattern(step) { problems.append(problem) }

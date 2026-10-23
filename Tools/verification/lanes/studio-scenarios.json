@@ -426,6 +426,40 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-route-children-motion",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_CHILDREN_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-children-motion.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-children-motion.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T11 route children: on the CharaStudio-authored scene-route-children.png (route key 0, saved playing and looping over four points; its children are folder key 9 and the fixture female key 10, which renders on the route) both children's world positions, read through the same placement walk refresh() renders with, move more than 0.5 m in a 2 s advance and the folder more than 0.1 m in the next 0.5 s; stopping the route pins both back to point 0 (within 1e-5 of their start) and they hold there through a further 2 s advance, and after export+reimport the route reads back stopped and both children still hold. Speed parity with the original tween, the Play all / Replay all / Stop all buttons and rendered pixels are not asserted.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-route-children-motion.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/route-children-motion.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-charastudio-hide-rename",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
@@ -991,6 +1025,44 @@
         },
         {
           "path": ".local/verification/scenario-exports/neck-look-orbit.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-neck-target-orbit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_NECK_TARGET_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/neck-target-orbit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-neck-target-orbit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T07 neck look TARGET/AWAY: on the CharaStudio-authored scene-neck-target.png, character 0 (neck pattern 1, TARGET) and character 147 (neck pattern 2, AWAY), both eyes pattern 1 (TARGET), get the live gaze runtime. The turn is measured on the front-hair root bone 100 (cf_J_hairF_00, a head child; a pure neck/head yaw leaves the head bone's own position unmoved) in each character's rig frame: orbiting the camera 60 degrees to one side moves the TARGET hair more than 0.05 and the AWAY hair more than 0.15, and the two end more than 0.15 apart (opposite sides); orbiting to the other side moves the TARGET hair more than 0.1 again while the AWAY hair returns within 0.01 of its front-camera pose and is again more than 0.15 from TARGET's. After export+reimport the gaze is live again and both poses reproduce within 0.01. Exact turn angles against the original are recorded in docs, not asserted; the FK-neck half of ST-T07 neck look stays unautomated.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-neck-target-orbit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/neck-target-orbit.png",
           "kind": "exported-scene"
         }
       ],

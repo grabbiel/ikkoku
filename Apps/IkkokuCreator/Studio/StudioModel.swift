@@ -1743,6 +1743,13 @@ final class StudioModel: ViewportInputHandler {
         try sourceWorldMatrix(of: id, document: document, previews: previews, visited: [])
     }
 
+    /// Read-only: the world matrix `refresh()` places one current-document
+    /// object at (route `childRoot`, attachment frames and the Studio scale
+    /// rule included), for the scenario runner's `captureObject`.
+    func sourceObjectWorldMatrix(_ id: UUID) throws -> float4x4 {
+        try sourceWorldMatrix(of: id, document: doc, previews: sourceInstances)
+    }
+
     /// The `GuideObject.LateUpdate` walk for source-scene objects (ST-A06):
     /// each object's world scale is its own authored scale when it is
     /// scalable and `(1, 1, 1)` otherwise, so scale never compounds down the
