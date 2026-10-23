@@ -518,11 +518,19 @@ one second of frames without a problem, the status it replaced comes back.
 If other code wrote the status line meanwhile, that text is kept.
 
 **Tests.** `CharacterLifetimeTests.swift` uses the bundled prototype assets and
-the production pipelines from `Shaders/` (CI-only, not compiled locally):
+the production pipelines from `Shaders/` (CI-only, not compiled locally). The
+character tests copy the bundled female body and the five bundled garments that
+embed no image into a temporary root without `Textures/`, and they wear no hair
+or accessories, so no texture is loaded. A first version that drew the fully
+textured bundled characters passed when each test ran alone on CI. In the
+parallel suite, however, its two tests stalled together in their first
+`build`, the first synchronous `MTKTextureLoader` loads, and the Engine run
+exceeded the lane's 600 s timeout. The cause was not isolated further. The GPU
+tests now also run one at a time (`@Suite(.serialized)`).
 
 - `characterCreateRemoveCyclesReturnTheResourceStoreToBaseline` runs four
-  female/male create–draw–remove cycles. It alternates the explicit release
-  with `deinit`. After each removal, the pending frame still renders with
+  create–draw–remove cycles, alternating five and two garments. It alternates
+  the explicit release with `deinit`. After each removal, the pending frame still renders with
   unchanged counts. The next submitted frame returns counts and bytes to the
   baseline, and a late copy of the old frame renders without re-creating
   anything.
