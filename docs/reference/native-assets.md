@@ -266,7 +266,11 @@ lookup reads, in order: its explicit variable (`IKKOKU_MAKER_LIBRARY`,
 `IKKOKU_SOURCE_AVATAR`, `IKKOKU_SOURCE_MALE_AVATAR`), then the selection, then
 the source-tree default under the checkout's `.local/reverse/` (see
 [Release packaging](../guides/build-and-test.md#package-and-inspect-a-release-build)).
-A selected library that fails to load is an error, not a fallback. The asset root
+A selected library that fails to load is an error, not a fallback. Automated
+runs ignore the selection: any capture or scenario mode, and `IKKOKU_CAPTURE_UI`
+(`CaptureRequest.isAutomated`). Their lookups go straight from the explicit
+variable to the source-tree default, so lane results never depend on this
+machine's user defaults. The asset root
 keeps its own order: `IKKOKU_ASSETS`, then the bundle, then the source tree; the
 selection does not change it. At startup the app prints the selection and any
 selected manifest whose bytes changed since it was chosen. File → Forget

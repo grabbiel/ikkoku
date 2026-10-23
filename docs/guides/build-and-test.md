@@ -206,9 +206,11 @@ defaults read com.grabbiel.IkkokuCreator ConvertedLibraryLocation
 defaults delete com.grabbiel.IkkokuCreator ConvertedLibraryLocation
 ```
 
-A saved selection also applies to automated runs, including the local lanes,
-wherever no explicit variable is set. Clear it before running a lane that relies
-on the source-tree defaults.
+Automated runs ignore a saved selection: any capture or scenario mode, and
+`IKKOKU_CAPTURE_UI`. Startup prints `the saved converted library selection is
+ignored in an automated run` instead, so a lane's inputs come only from its
+environment. Pass the explicit variables to point an automated run at a moved
+library.
 
 Scenes saved since A-T02 record each referenced file's SHA-256 and its path
 inside the library it came from. Opening such a scene after the library moved

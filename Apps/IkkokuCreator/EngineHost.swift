@@ -45,10 +45,19 @@ final class EngineHost {
     /// before its source-tree fallback.
     static let convertedLibraryDefaultsKey = "ConvertedLibraryLocation"
 
-    /// The saved selection, or nil when none is saved or it cannot be read (an
-    /// unreadable record is reported once at startup and otherwise ignored).
+    /// Automated runs (any capture or scenario mode, or `IKKOKU_CAPTURE_UI`) ignore the
+    /// saved selection, so a lane's inputs come only from its environment and never from
+    /// this machine's user defaults. Interactive launches use it.
+    static var savedSelectionApplies: Bool {
+        !((try? CaptureRequest.validate(ProcessInfo.processInfo.environment))?.isAutomated ?? false)
+    }
+
+    /// The saved selection, or nil when none is saved, it cannot be read (an
+    /// unreadable record is reported once at startup and otherwise ignored), or the
+    /// run is automated (`savedSelectionApplies`).
     static var selectedConvertedLibrary: ResourceLibraryLocation? {
-        guard let text = UserDefaults.standard.string(forKey: convertedLibraryDefaultsKey) else { return nil }
+        guard savedSelectionApplies,
+              let text = UserDefaults.standard.string(forKey: convertedLibraryDefaultsKey) else { return nil }
         return try? ResourceLibraryLocation.decode(Data(text.utf8))
     }
 
@@ -67,6 +76,7 @@ final class EngineHost {
     /// no longer has the identity it was selected with.
     static func convertedLibraryReport() -> [String] {
         guard let text = UserDefaults.standard.string(forKey: convertedLibraryDefaultsKey) else { return [] }
+        guard savedSelectionApplies else { return ["the saved converted library selection is ignored in an automated run"] }
         let location: ResourceLibraryLocation
         do { location = try ResourceLibraryLocation.decode(Data(text.utf8)) }
         catch { return ["the saved converted library selection is ignored: \(error)"] }
