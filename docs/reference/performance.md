@@ -692,7 +692,18 @@ in the worktree and `.local/app-perf/lanes`.
   - Default mode: its suite passed (690 tests, 2 skipped).
   - Under `--strict` it stops before running, on the optional
     `IKKOKU_APPEARANCE_REFERENCE_ROOT` that the fixture map does not supply.
-- **App lanes**, each `--strict` under the app lock: TBD-APP-LANES.
+- **App lanes**, each `--strict` under the app lock, on Debug and Release
+  apps built from the merged head:
+  - `studio-scenarios`: 45 of 45 passed.
+  - `app-smoke`: 5 of 7 passed. The two failures are `startup-mute-capture`
+    ("Original plugin target does not bind uniquely") and
+    `studio-inspector-validate` (nothing selected). They come from the
+    fixture map, which gained `IKKOKU_SOURCE_PLUGIN_PROFILE` on 2026-10-23.
+    That profile's target object does not bind in the map's
+    `IKKOKU_SOURCE_SCENE`, so Studio plugin execution fails at startup.
+    `main` `f5587f5`, built and run the same way, fails both checks
+    identically (`.local/app-perf/lanes/main-f5587f5`).
+  - TBD-APP-LANES-REST
 
 ## Limits of these numbers
 
