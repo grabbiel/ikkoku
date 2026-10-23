@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**795 files indexed; 795 assigned; 0 unassigned.**
+**796 files indexed; 796 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 70 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 71 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 178 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 301 |
@@ -42,7 +42,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 26 |
 | Runtime / shared shader declaration | 172 |
-| Test / validation | 155 |
+| Test / validation | 156 |
 
 ## App / gameplay / plugins
 
@@ -91,6 +91,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginRuntimeTests.swift) | Test / validation |
 | [Tools/reverse/analysis/accessory_names_oracle.py](../../Tools/reverse/analysis/accessory_names_oracle.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/adv_command_coverage.py](../../Tools/reverse/analysis/adv_command_coverage.py) | Conversion / recovery / verification tool |
