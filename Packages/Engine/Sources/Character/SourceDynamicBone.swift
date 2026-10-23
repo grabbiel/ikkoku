@@ -28,6 +28,10 @@ public struct SourceDynamicsDocument: Codable, Sendable {
         }
     }
     public struct Component: Codable, Sendable {
+        public enum Group: String, Codable, Sendable { case hair, skirt, clothes }
+        /// Schema 1 omits this field and is strictly hair-only.
+        public var group: Group?
+        public var clothesKind: Int?
         public var sourceID: String, ownerID: String
         public var updateRate: Float, gravity: Float3, force: Float3
         public var freezeAxis: Int
@@ -35,31 +39,55 @@ public struct SourceDynamicsDocument: Codable, Sendable {
         public var colliders: [Collider]
         public init(sourceID: String, ownerID: String, updateRate: Float = 60,
                     gravity: Float3 = .zero, force: Float3 = .zero, freezeAxis: Int = 0,
-                    particles: [Particle], colliders: [Collider] = []) {
+                    particles: [Particle], colliders: [Collider] = [], group: Group? = nil, clothesKind: Int? = nil) {
             self.sourceID = sourceID; self.ownerID = ownerID; self.updateRate = updateRate
             self.gravity = gravity; self.force = force; self.freezeAxis = freezeAxis
-            self.particles = particles; self.colliders = colliders
+            self.particles = particles; self.colliders = colliders; self.group = group; self.clothesKind = clothesKind
         }
     }
+    public struct Rejection: Codable, Sendable {
+        public let sourceID: String, ownerID: String?, reason: String, detail: String
+    }
+    public var rejected: [Rejection]?
     public var schemaVersion: Int, coordinateSpace: String
     public var components: [Component]
-    public init(components: [Component]) {
-        schemaVersion = 1; coordinateSpace = "native-right-handed-y-up"; self.components = components
+    public init(components: [Component], schemaVersion: Int = 1) {
+        self.schemaVersion = schemaVersion; coordinateSpace = "native-right-handed-y-up"; self.components = components
     }
     public static func load(url: URL) throws -> Self {
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
         let data = try handle.read(upToCount: 16 * 1024 * 1024 + 1) ?? Data()
         guard data.count <= 16 * 1024 * 1024 else { throw RigError.invalid("Dynamics document exceeds 16 MiB.") }
         let value = try JSONDecoder().decode(Self.self, from: data)
-        guard value.schemaVersion == 1, value.coordinateSpace == "native-right-handed-y-up",
-              value.components.count <= 256 else { throw RigError.invalid("Unsupported dynamics document.") }
+        guard (1...2).contains(value.schemaVersion), value.coordinateSpace == "native-right-handed-y-up",
+              value.components.count <= 256, (value.rejected?.count ?? 0) <= 4096 else { throw RigError.invalid("Unsupported dynamics document.") }
+        try value.validateGroups()
         return value
+    }
+    public func validateGroups() throws {
+        guard (1...2).contains(schemaVersion) else { throw RigError.invalid("Unsupported dynamics schema.") }
+        for component in components {
+            if schemaVersion == 1 {
+                guard component.group == nil || component.group == .hair, component.clothesKind == nil,
+                      component.ownerID.hasPrefix("hair-") else { throw RigError.invalid("Schema 1 dynamics is hair-only.") }
+            } else {
+                guard let group = component.group else { throw RigError.invalid("Schema 2 dynamics requires explicit groups.") }
+                switch group {
+                case .hair:
+                    guard component.clothesKind == nil, component.ownerID.hasPrefix("hair-") else { throw RigError.invalid("Invalid hair dynamics identity.") }
+                case .skirt, .clothes:
+                    guard let kind = component.clothesKind, (0...1).contains(kind),
+                          component.ownerID.hasPrefix("clothes-\(kind)/") else { throw RigError.invalid("Invalid clothes dynamics identity.") }
+                }
+            }
+        }
     }
 }
 
 /// Particle update and transform application from this installation's DynamicBone.
 /// This version supports real transforms with positive local TRS. Virtual ends,
-/// exclusion/notRoll topology and signed scales must be rejected by the exporter.
+/// exclusions, reparenting notRoll topology and signed scales must be rejected
+/// by the exporter. Truncated notRoll chains retain direct transform parents.
 public struct SourceDynamicBone: Sendable {
     public private(set) var positions: [Float3]
     public private(set) var previousPositions: [Float3]
@@ -69,6 +97,7 @@ public struct SourceDynamicBone: Sendable {
     public let definition: SourceDynamicsDocument.Component
     private let nodes: [Int], colliderNodes: [Int], owner: Int
     private let requiredNodes: Set<Int>
+    private let children: [[Int]], rigParents: [Int?]
     private let rigIDs: [String], initialPosition: [Float3], initialRotation: [simd_quatf]
     private let localGravity: Float3
     private var previousOwner: Float3
@@ -105,7 +134,13 @@ public struct SourceDynamicBone: Sendable {
         let owner = try resolve(definition.ownerID)
         var required = Set(nodes + colliderNodes + [owner])
         for node in required { var parent = rig.nodes[node].parent; while let index = parent { required.insert(index); parent = rig.nodes[index].parent } }
-        let state = try DynamicsTransforms(rig: rig, pose: pose ?? rig.restPose, requiredNodes: required)
+        // The hierarchy is immutable for a bound component. Rebuilding its
+        // adjacency lists for every component on every frame allocated hundreds
+        // of short arrays per character; share this cache across frame snapshots.
+        var children = [[Int]](repeating: [], count: rig.nodes.count)
+        for (i, node) in rig.nodes.enumerated() { if let parent = node.parent { children[parent].append(i) } }
+        self.children = children; rigParents = rig.nodes.map(\.parent)
+        let state = try DynamicsTransforms(rig: rig, pose: pose ?? rig.restPose, requiredNodes: required, children: children)
         self.definition = definition; self.nodes = nodes; self.colliderNodes = colliderNodes
         self.owner = owner; self.requiredNodes = required; rigIDs = rig.nodes.map(\.sourceID)
         positions = nodes.map { state.world[$0].translation }; previousPositions = positions
@@ -117,7 +152,7 @@ public struct SourceDynamicBone: Sendable {
     /// Source Update/OnDisable reset positions and rotations, retaining scale.
     public func resettingTransforms(rig: RigDefinition, pose: RigPose) throws -> RigPose {
         try validate(rig)
-        var state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes)
+        var state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes, children: children)
         for (i, node) in nodes.enumerated() {
             state.translations[node] = initialPosition[i]; state.rotations[node] = initialRotation[i]; state.changed.insert(node)
         }
@@ -126,7 +161,7 @@ public struct SourceDynamicBone: Sendable {
 
     public mutating func resetParticles(rig: RigDefinition, pose: RigPose) throws {
         try validate(rig)
-        let state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes)
+        let state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes, children: children)
         positions = nodes.map { state.world[$0].translation }; previousPositions = positions
         previousOwner = state.world[owner].translation
         // Source ResetParticlesPosition does not reset accumulated time.
@@ -154,11 +189,13 @@ public struct SourceDynamicBone: Sendable {
     }
 
     private func validate(_ rig: RigDefinition) throws {
-        guard rig.nodes.map(\.sourceID) == rigIDs else { throw RigError.invalid("Dynamics state belongs to a different rig.") }
+        guard rig.nodes.count == rigIDs.count, rig.nodes.indices.allSatisfy({
+            rig.nodes[$0].sourceID == rigIDs[$0] && rig.nodes[$0].parent == rigParents[$0]
+        }) else { throw RigError.invalid("Dynamics state belongs to a different rig.") }
     }
 
     private mutating func advance(deltaTime: Float, rig: RigDefinition, pose: RigPose) throws -> RigPose {
-        var state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes)
+        var state = try DynamicsTransforms(rig: rig, pose: pose, requiredNodes: requiredNodes, children: children)
         let objectScale = length(state.world[owner][0].xyz)
         var movement = state.world[owner].translation - previousOwner
         previousOwner = state.world[owner].translation
@@ -309,12 +346,12 @@ private struct DynamicsTransforms {
     var world: [float4x4], worldRotations: [simd_quatf]
     let original: [float4x4]
     var changed = Set<Int>()
-    var children: [[Int]]
-    init(rig: RigDefinition, pose: RigPose, requiredNodes: Set<Int>) throws {
+    let children: [[Int]]
+    init(rig: RigDefinition, pose: RigPose, requiredNodes: Set<Int>, children: [[Int]]) throws {
         guard pose.localMatrices.count == rig.nodes.count else { throw RigError.invalid("Dynamics pose count mismatch.") }
         translations = []; rotations = []; scales = []
-        original = pose.localMatrices; children = Array(repeating: [], count: rig.nodes.count)
-        for (i, node) in rig.nodes.enumerated() { if let parent = node.parent { children[parent].append(i) } }
+        translations.reserveCapacity(rig.nodes.count); rotations.reserveCapacity(rig.nodes.count); scales.reserveCapacity(rig.nodes.count)
+        original = pose.localMatrices; self.children = children
         for (i, m) in pose.localMatrices.enumerated() {
             let scale = m.scaleFactors
             // Unrelated authored matrices (for example a mirrored accessory) are
