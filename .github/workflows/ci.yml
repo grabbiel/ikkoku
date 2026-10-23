@@ -33,6 +33,11 @@ jobs:
           xcodebuild -version
           swift --version
           python3 --version
+      # T-T01: fail early, naming the fix, if a public prerequisite (Xcode,
+      # Metal compiler, Swift, python3, .NET SDK) is missing. Optional
+      # capabilities are reported but cannot fail this step.
+      - name: Prerequisite check (public)
+        run: python3 Tools/verification/doctor.py --require public --verbose
       # A cold Engine build can exceed the lane's 600 s check timeout on a
       # hosted runner, so build the tests first; the lane's `swift test`
       # then reuses the build.

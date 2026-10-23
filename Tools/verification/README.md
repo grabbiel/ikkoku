@@ -366,13 +366,49 @@ python3 Tools/verification/run.py \
   --environment .local/verification/environment.json --strict
 ```
 
+## Prerequisite checker (T-T01)
+
+```sh
+python3 Tools/verification/doctor.py                    # report only; exit 0
+python3 Tools/verification/doctor.py --require public   # exit 1 if a public capability is unmet
+python3 Tools/verification/doctor.py --require reverse-tools --tool reverse-python=python3.12
+python3 Tools/verification/doctor.py --json             # machine-readable report
+python3 Tools/verification/doctor.py --markdown         # regenerate the build-guide table
+```
+
+`doctor.py` is stdlib-only. `prerequisites.json` is the single record of tool
+versions, and the [build guide's table](../../docs/guides/build-and-test.md#prerequisites)
+is generated from it. Each tool is probed once with a `--version`-style
+command, or `importlib.metadata` in the documented interpreter, at its
+documented path. Those paths include the `.local/reverse/` venv and ILSpy
+shims. The checker never reads `.local/` data or fixtures, installs nothing and
+writes nothing. Every capability is reported. Only those selected by
+`--require` (`public`, `optional`, `all` or capability ids) affect the exit
+status: 1 when one is unmet, 2 for invalid arguments or an invalid
+prerequisites file. `--tool ID=PATH` substitutes an executable. A set `$PY` or
+`$BLENDER` is used exclusively, as `Tools/assets/run_all.sh` does.
+`--verbose` prints each probe and its raw output.
+
+Requirements are `>=V`, `V.*`, `==V` or `unrecorded`: presence only, because
+the repository documents no version. Reverse-tool pins are read from
+`Tools/reverse/requirements.txt` rather than restated. A tool is `ok` or
+`present` (satisfied), or `mismatch`, `unparsed`, `error` or `absent`.
+`test_doctor.py` runs in the `runner-self-tests` check. It evaluates every
+sample in `doctor-samples.json`, each marked `recorded` (captured from a named
+run) or `format sample` (layout only, illustrative numbers). It also fails
+when the generated table, a restated version (`statedIn`) or the public tier
+drifts from the prerequisites file.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request to `main`, every push to
 `main` and on manual dispatch. It runs three jobs on GitHub-hosted `macos-26`
 runners (the app's deployment target is macOS 26, so it needs Xcode 26):
 
-- `public-lane` builds the Engine tests (`swift build --build-tests`, so the
+- `public-lane` first runs `doctor.py --require public --verbose`, so a missing
+  Xcode, Metal compiler, Swift, `python3` or .NET SDK fails with the fix named
+  (10 s and 5/5 public capabilities met in the first dispatched run,
+  2026-10-23). It then builds the Engine tests (`swift build --build-tests`, so the
   lane's 600 s `swift test` timeout does not include a cold build), then runs
   `public.json` **without `--strict`**. Fixture-gated Swift tests report named
   skips instead of failing; the report and per-check logs are uploaded as the
