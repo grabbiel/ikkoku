@@ -35,12 +35,12 @@ func sourceRigPreviewReleasesMeshesAndDeformationBuffers() throws {
     let item = try #require(frame.items.first)
     let retainedMesh = try #require(resources.mesh(item.mesh))
     let key = try #require(item.deformKey)
-    let oldDeform = resources.deformBuffer(for: key, vertexCount: 3)
+    let oldDeform = try #require(resources.deformBuffer(for: key, vertexCount: 3))
     preview = nil
     #expect(weakPreview == nil)
     #expect(resources.mesh(item.mesh) == nil)
     #expect(retainedMesh.vertexCount == 3) // A prepared frame can still retain its mesh.
-    let replacement = resources.deformBuffer(for: key, vertexCount: 3)
+    let replacement = try #require(resources.deformBuffer(for: key, vertexCount: 3))
     #expect(oldDeform !== replacement)
     resources.releaseDeformBuffers(keys: [key])
 }
