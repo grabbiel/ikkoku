@@ -23,7 +23,7 @@ CLOTHES_KINDS = {105: 0, 106: 1}
 SKIRT_BONE_GROUP = 13
 REJECTION_REASONS = ('unsupported-version', 'prefab-disabled', 'inactive-object', 'owner-below-prefab-root',
                      'external-reference', 'root-not-in-body', 'exclusions', 'distant-disable', 'virtual-end',
-                     'notroll-reparent', 'unsupported-curve')
+                     'notroll-reparent', 'unsupported-curve', 'invalid-configuration')
 
 
 class Rejected(ValueError):
@@ -193,6 +193,14 @@ def clothes_component(data, class_name, owner, clothes_nodes, body, skirt_names,
     """
     if class_name != 'DynamicBone':
         raise Rejected('unsupported-version', class_name + ' is a separate DynamicBone system')
+    scalars = [data['m_EndLength'], *data['m_EndOffset'].values(),
+               *[data['m_' + field] for field in ['Damping', 'Elasticity', 'Stiffness', 'Inert', 'Radius']]]
+    for field in ['m_UpdateRate']:
+        if field in data: scalars.append(data[field])
+    for field in ['m_Gravity', 'm_Force']:
+        if field in data: scalars.extend(data[field].values())
+    if not all(math.isfinite(value) for value in scalars):
+        raise Rejected('invalid-configuration', 'nonfinite scalar/vector parameter')
     if not data['m_Enabled']:
         raise Rejected('prefab-disabled', 'Studio ActiveFKGroup would enable a disabled skirt component; not modelled')
     chain, cursor = [], owner
@@ -418,7 +426,8 @@ def extract(rigs: Path, maker_library: Path | None = None, pose_contract_path: P
                 fields = clothes_component(data, class_name, ni, nodes, body_rig, skirt_names, obj.assets_file.name)
             except Rejected as error:
                 rejected.append({'sourceAsset': asset_identity, 'sourceID': identity(obj), 'class': class_name,
-                                 'ownerName': nodes[ni]['name'], 'reason': error.reason, 'detail': error.detail})
+                                 'ownerName': nodes[ni]['name'], 'ownerID': f'clothes-{kind}/' + nodes[ni]['sourceID'],
+                                 'reason': error.reason, 'detail': error.detail})
                 continue
             result.append({'sourceAsset': asset_identity, 'sourceID': identity(obj), 'group': fields['group'], 'clothesKind': kind,
                 'rootName': fields['rootName'], 'notRolls': fields['notRolls'], 'ownerName': nodes[ni]['name'],

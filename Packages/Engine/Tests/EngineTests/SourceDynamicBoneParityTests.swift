@@ -185,3 +185,13 @@ func sourceStudioDynamicsOriginalPostPoseMatchesIndependentOracleWhenRequested()
     #expect(frameCount > 0)
     print("Studio dynamics independent original reference: \(frameCount) frames, maximum world error \(maximum)")
 }
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SKIRT_DYNAMICS_REFERENCE"]),
+               "Requires IKKOKU_SKIRT_DYNAMICS_REFERENCE"))
+func sourceDynamicsOriginalSkirtMatchesIndependentOracleWhenRequested() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS_REFERENCE")
+    let fixture = try JSONDecoder().decode(DynamicsReferenceFixture.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+    #expect(fixture.scenarios.count == 16)
+    #expect(fixture.scenarios.allSatisfy { $0.frames.count == 60 && $0.definition.group == .skirt })
+    try checkDynamicsReference(fixture, original: true)
+}

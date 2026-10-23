@@ -838,3 +838,19 @@ Reports and logs live under the git-ignored `.local/verification/`.
 `Tools/verification/environment.example.json` carries placeholder paths
 only; real values belong in your git-ignored `.local/verification/environment.json`.
 The `IKKOKU_IK_APP_ENVIRONMENT` fixture points to a JSON file path containing an object mapping `IKKOKU_SOURCE_SCENE`, `IKKOKU_EXPORT_SOURCE_SCENE`, and `IKKOKU_SAVE_SCENE` to files written by an earlier headless IK app capture, rather than to game data.
+
+### Selected skirt dynamics fixtures
+
+The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,
+`IKKOKU_SKIRT_DYNAMICS`, `IKKOKU_SKIRT_MAKER_LIBRARY` and
+`IKKOKU_SKIRT_DYNAMICS_REFERENCE`. These exercise the schema-2 garment path,
+independent 960-frame collider-on/off oracle and the native preview's FK, wear,
+outfit and rollback lifecycle. See [the dynamics reference](../../docs/reference/animation/dynamics.md#selected-skirt-and-garment-root-dynamics-st-t08e)
+for fixture generation and opt-in Release p50/p95 timing. This adds Engine checks;
+`studio-scenarios.json` adds the `reload-save-skirt-dynamics` and
+`reload-load-skirt-dynamics` checks (49 checks in this branch, previously 47). It aliases the source scene, Maker library and Studio
+dynamics contract from those explicit skirt fixture keys, leaving other checks'
+inputs unchanged. The pair drives live ticks, FK and garment-off controls, outfit
+switches and native save/load in a fresh process, records skirt bone displacement and captures
+rendered pixel differences. A complete app scenario rerun remains separate from
+the numerical and preview checks; the combined-app run is pending integration.

@@ -157,6 +157,9 @@ class ClothesDynamicsTests(unittest.TestCase):
         body = body_rig(); inactive = garment(); inactive[0]['active'] = False
         cases = [
             ('unsupported-version', dict(), 'DynamicBone_Ver02', 0, garment()),
+            ('unsupported-version', dict(), 'DynamicBone_Ver01', 0, garment()),
+            ('invalid-configuration', dict(m_EndLength=math.nan), 'DynamicBone', 0, garment()),
+            ('invalid-configuration', dict(m_Radius=math.inf), 'DynamicBone', 0, garment()),
             ('prefab-disabled', dict(m_Enabled=0), 'DynamicBone', 0, garment()),
             ('inactive-object', dict(), 'DynamicBone', 0, inactive),
             ('owner-below-prefab-root', dict(), 'DynamicBone', 7, garment()),

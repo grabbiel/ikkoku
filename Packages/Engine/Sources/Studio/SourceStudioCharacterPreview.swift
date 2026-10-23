@@ -124,6 +124,7 @@ public final class SourceStudioCharacterPreview {
     private let characterRoot: Int
     private let poseCatalog: [SourceStudioPose.Bone]
     private var ikSolver: SourceStudioIK?
+    private var dynamicsActiveClothes: UInt16 = 0x1ff
     private var dynamics: SourceStudioDynamics?
     private var dynamicsStep: (elapsed: Float, delta: Float)?
     /// Resolved FIX/FORWARD neck look override: the prefab settings, the saved
@@ -206,17 +207,19 @@ public final class SourceStudioCharacterPreview {
     private let appearanceBindingsURL: URL
     public struct DynamicsCheckpoint {
         fileprivate let owner: ObjectIdentifier
+        fileprivate let activeClothes: UInt16
         fileprivate let simulation: SourceStudioDynamics?
         fileprivate let step: (elapsed: Float, delta: Float)?
         fileprivate let evaluated: EvaluatedPose?
         fileprivate let animationPlayback: SourceStudioAnimation.Playback
     }
     public func captureDynamicsCheckpoint() -> DynamicsCheckpoint {
-        .init(owner: ObjectIdentifier(self), simulation: dynamics, step: dynamicsStep, evaluated: evaluatedCache, animationPlayback: animationPlayback)
+        .init(owner: ObjectIdentifier(self), activeClothes: dynamicsActiveClothes, simulation: dynamics, step: dynamicsStep, evaluated: evaluatedCache, animationPlayback: animationPlayback)
     }
     public func restoreDynamicsCheckpoint(_ checkpoint: DynamicsCheckpoint) throws {
         guard checkpoint.owner == ObjectIdentifier(self) else { throw RigError.invalid("Dynamics checkpoint belongs to another character instance.") }
-        dynamics = checkpoint.simulation; dynamicsStep = checkpoint.step; evaluatedCache = checkpoint.evaluated
+        dynamics = checkpoint.simulation; dynamicsStep = checkpoint.step
+        evaluatedCache = checkpoint.activeClothes == dynamicsActiveClothes ? checkpoint.evaluated : nil
         animationPlayback = checkpoint.animationPlayback
     }
     public func clearDynamicsStep() { dynamicsStep = nil; evaluatedCache = nil; dynamics?.resetHistory() }
@@ -324,6 +327,9 @@ public final class SourceStudioCharacterPreview {
         self.savedAccessorySlots = wearCatalog.accessories.keys.sorted()
         self.hideHairSlots = hideHairSlots
         clothesState = loadedClothesState
+        dynamicsActiveClothes = (0..<9).reduce(UInt16(0)) { mask, kind in
+            wearRules.visible(kind: kind, states: loadedClothesState, shoesType: savedWear.shoesType) ? mask | (1 << kind) : mask
+        }
         showAccessory = savedWear.showAccessory
         let wearEvaluation = wearLayout.evaluate(rules: wearRules, states: loadedClothesState, shoesType: savedWear.shoesType,
                                                  showAccessory: savedWear.showAccessory, hideHairSlots: hideHairSlots)
@@ -602,16 +608,16 @@ public final class SourceStudioCharacterPreview {
         var shapeDynamics: [SourceStudioDynamics.Binding]?
         if FileManager.default.fileExists(atPath: dynamicsURL.path) {
             do {
-                let bound = try SourceStudioDynamics.bindHair(SourceDynamicsDocument.load(url: dynamicsURL), rig: source.rig)
+                let bound = try SourceStudioDynamics.bind(SourceDynamicsDocument.load(url: dynamicsURL), rig: source.rig, clothingSlots: clothingSlots)
                 dynamics = try SourceStudioDynamics(rig: source.rig, initializationPose: baseline, bindings: bound.bindings)
                 shapeDynamics = bound.bindings
                 messages += bound.diagnostics
-                messages.append("\(bound.bindings.count) source hair DynamicBone components run after animation/FK/IK in character space; unrelated cloth/accessory dynamics and object-motion inertia are not restored.")
-            } catch { messages.append("Source hair dynamics unavailable: \(error)") }
-        } else { messages.append("Converted source hair dynamics are not configured.") }
+                messages.append("\(bound.bindings.count) source hair/clothes DynamicBone components run after animation/FK/IK in character space; unsupported variants and object-motion inertia are not restored.")
+            } catch { messages.append("Source dynamics unavailable: \(error)") }
+        } else { messages.append("Converted source dynamics are not configured.") }
         shapeDynamicsBindings = shapeDynamics
         let hasNativeIK = ikSolver != nil
-        diagnostics = ["Converted card assets, shape, static ABMX, expression settings and saved kinematics restored. Catalog-selected animation is evaluated before FK/IK and available source hair dynamics."]
+        diagnostics = ["Converted card assets, shape, static ABMX, expression settings and saved kinematics restored. Catalog-selected animation is evaluated before FK/IK and available source hair/clothes dynamics."]
             + messages + settings.diagnostics + restored.diagnostics.filter { !$0.hasPrefix("Character appearance,") && !(hasNativeIK && $0.hasPrefix("Source IK is enabled;")) }
     }
 
@@ -708,6 +714,15 @@ public final class SourceStudioCharacterPreview {
         guard clothes != self.clothesState || accessories != self.showAccessory else { return }
         wearEvaluation = wearLayout.evaluate(rules: wearRules, states: clothes, shoesType: savedWear.shoesType,
                                              showAccessory: accessories, hideHairSlots: hideHairSlots)
+        if clothes != self.clothesState {
+            dynamicsActiveClothes = (0..<9).reduce(UInt16(0)) { mask, kind in
+                wearRules.visible(kind: kind, states: clothes, shoesType: savedWear.shoesType) ? mask | (1 << kind) : mask
+            }
+            // A wear edit can change garment-root activity at the same clock.
+            // Keep particle history for unchanged components; evaluate handles
+            // OnEnable resets when a garment becomes active again.
+            evaluatedCache = nil
+        }
         self.clothesState = clothes
         self.showAccessory = accessories
     }
@@ -944,7 +959,7 @@ public final class SourceStudioCharacterPreview {
         if var simulation = dynamics, dynamicsStep?.elapsed == animationElapsed {
             result = try simulation.evaluate(time: animationElapsed, rig: preview.source.rig, upstream: result,
                 enableFK: effective.enableFK, activeFK: effective.activeFK,
-                deltaTime: dynamicsStep?.elapsed == animationElapsed ? dynamicsStep?.delta : nil)
+                deltaTime: dynamicsStep?.elapsed == animationElapsed ? dynamicsStep?.delta : nil, activeClothes: dynamicsActiveClothes)
             dynamics = simulation
         }
         evaluatedCache = (state, animationElapsed, fkRotations, ikTargets, kinematics, result, preOverride, guides)

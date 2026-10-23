@@ -1715,6 +1715,101 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-skirt-dynamics",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_SKIRT_DYNAMICS_FIXTURE"
+        },
+        {
+          "env": "IKKOKU_STUDIO_DYNAMICS",
+          "kind": "file",
+          "from": "IKKOKU_SKIRT_DYNAMICS"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file",
+          "from": "IKKOKU_SKIRT_MAKER_LIBRARY"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_POSE_CONTRACT",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-skirt-dynamics.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-skirt-dynamics.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Authored clothed bottom-4 fixture: exact selected schema-2 components; scripted live ticks move skirt bone 222 and rendered pixels; FK group 6 and garment-off controls keep the bone within 1e-5 world units. Re-enable, non-skirt outfit switch and native save/load restore motion. Pixel change includes hair motion; the skirt-bone control isolates the garment simulation. Independent numerical parity and collision ablation are separate Engine checks.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-skirt-dynamics.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/skirt-dynamics.png",
+          "kind": "native-document"
+        },
+        {
+          "path": ".local/verification/renders/skirt-dynamics-seed.png",
+          "kind": "render"
+        },
+        {
+          "path": ".local/verification/renders/skirt-dynamics-moving.png",
+          "kind": "render"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-skirt-dynamics",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_STUDIO_DYNAMICS",
+          "kind": "file",
+          "from": "IKKOKU_SKIRT_DYNAMICS"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file",
+          "from": "IKKOKU_SKIRT_MAKER_LIBRARY"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_POSE_CONTRACT",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-skirt-dynamics.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-skirt-dynamics.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Fresh-process native document load restores selected schema-2 skirt bindings and verifies live motion of skirt bone 222 beyond 1e-5 world units after scripted ticks. The preceding reload-save-skirt-dynamics check creates the file.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-skirt-dynamics.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

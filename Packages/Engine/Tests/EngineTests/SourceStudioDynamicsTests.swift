@@ -141,3 +141,187 @@ func sourceStudioDynamicsExpandedMakerHairIDsRetainSourceBindingsWhenSupplied() 
     }
     try JSONSerialization.data(withJSONObject:report,options:[.prettyPrinted,.sortedKeys]).write(to:folder.appendingPathComponent("maker-hair-coverage.json"))
 }
+
+private func skirtSpring() throws -> (RigDefinition, SourceDynamicsDocument.Component) {
+    let rig = try RigDefinition(nodes: [
+        .init(name: "body", sourceID: "body-master/CAB-body:0", parent: nil),
+        .init(name: "skirt", sourceID: "body-master/CAB-body:1", parent: 0),
+        .init(name: "tip", sourceID: "body-master/CAB-body:2", parent: 1, translation: Float3(0, -1, 0)),
+        .init(name: "garment", sourceID: "clothes-0/CAB-cloth:1", parent: 0)], skins: [])
+    let definition = SourceDynamicsDocument.Component(sourceID: "CAB-cloth:2", ownerID: "clothes-1/CAB-cloth:1",
+        force: Float3(0.02, 0, 0), particles: [.init(nodeID: "body-master/CAB-body:1", parent: nil),
+        .init(nodeID: "body-master/CAB-body:2", parent: 0)], group: .skirt, clothesKind: 1)
+    return (rig, definition)
+}
+
+@Test func sourceStudioDynamicsSkirtBindsCompactedGarmentAndRejectsWrongIdentity() throws {
+    let (rig, definition) = try skirtSpring()
+    let document = SourceDynamicsDocument(components: [definition], schemaVersion: 2)
+    let bindings = try SourceStudioDynamics.bind(document, rig: rig, clothingSlots: [1]).bindings
+    #expect(bindings.count == 1 && bindings[0].group == .skirt)
+    #expect(bindings[0].definition.ownerID == "clothes-0/CAB-cloth:1")
+    #expect(bindings[0].definition.particles[0].nodeID == definition.particles[0].nodeID)
+    #expect(throws: (any Error).self) { try SourceStudioDynamics.bind(document, rig: rig, clothingSlots: [0]) }
+    var wrong = definition; wrong.ownerID = "clothes-1/CAB-other:1"
+    let absent = try SourceStudioDynamics.bind(.init(components: [wrong], schemaVersion: 2), rig: rig, clothingSlots: [1])
+    #expect(absent.bindings.isEmpty && absent.diagnostics.count == 1)
+    wrong = definition; wrong.particles[1].nodeID = "body-master/CAB-other:2"
+    #expect(throws: (any Error).self) { try SourceStudioDynamics.bind(.init(components: [wrong], schemaVersion: 2), rig: rig, clothingSlots: [1]) }
+    #expect(throws: (any Error).self) { try SourceStudioDynamics.bind(.init(components: [definition]), rig: rig, clothingSlots: [1]) }
+    wrong = definition; wrong.group = nil
+    #expect(throws: (any Error).self) { try SourceStudioDynamics.bind(.init(components: [wrong], schemaVersion: 2), rig: rig, clothingSlots: [1]) }
+    let legacy = try studioSpring()
+    let migrated = SourceDynamicsDocument(components: [legacy.1], schemaVersion: 1)
+    #expect(try SourceStudioDynamics.bind(migrated, rig: legacy.0).bindings.count == 1)
+}
+
+@Test func sourceStudioDynamicsSkirtFKWearReenableAndCheckpointReplay() throws {
+    let (rig, definition) = try skirtSpring()
+    let bindings = try SourceStudioDynamics.bind(.init(components: [definition], schemaVersion: 2), rig: rig, clothingSlots: [1]).bindings
+    var session = try SourceStudioDynamics(rig: rig, initializationPose: rig.restPose, bindings: bindings)
+    var fk = [Bool](repeating: false, count: 7)
+    let moving = try session.evaluate(time: 1/30, rig: rig, upstream: rig.restPose, enableFK: false, activeFK: fk, deltaTime: 1/30)
+    #expect(moving.localMatrices != rig.restPose.localMatrices)
+    fk[6] = true
+    let frozen = try session.evaluate(time: 2/30, rig: rig, upstream: rig.restPose, enableFK: true, activeFK: fk, deltaTime: 1/30)
+    #expect(frozen.localMatrices == rig.restPose.localMatrices)
+    var moved = rig.restPose; moved.localMatrices[0].translation = Float3(3, 0, 0)
+    // Re-enable must seed particles at the current upstream pose, not carry
+    // the impulse from the old owner position through a disabled interval.
+    var fresh = try SourceDynamicBone(rig: rig, definition: bindings[0].definition)
+    try fresh.resetParticles(rig: rig, pose: moved)
+    let expected = try fresh.step(deltaTime: 1/30, rig: rig, pose: moved)
+    let resumed = try session.evaluate(time: 3/30, rig: rig, upstream: moved, enableFK: false, activeFK: fk, deltaTime: 1/30)
+    #expect(resumed.localMatrices == expected.localMatrices)
+    let checkpoint = session
+    let off = try session.evaluate(time: 4/30, rig: rig, upstream: moved, enableFK: false, activeFK: fk, deltaTime: 1/30, activeClothes: 0)
+    #expect(off.localMatrices == moved.localMatrices)
+    let on = try session.evaluate(time: 5/30, rig: rig, upstream: moved, enableFK: false, activeFK: fk, deltaTime: 1/30, activeClothes: 2)
+    #expect(on.localMatrices == expected.localMatrices)
+    session = checkpoint
+    _ = try session.evaluate(time: 4/30, rig: rig, upstream: moved, enableFK: false, activeFK: fk, deltaTime: 1/30, activeClothes: 0)
+    let replay = try session.evaluate(time: 5/30, rig: rig, upstream: moved, enableFK: false, activeFK: fk, deltaTime: 1/30, activeClothes: 2)
+    #expect(replay.localMatrices == on.localMatrices)
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SKIRT_DYNAMICS_FIXTURE", "IKKOKU_SKIRT_DYNAMICS", "IKKOKU_SKIRT_MAKER_LIBRARY", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]),
+               "Requires skirt fixture, dynamics, Maker library, source avatar and pose contract"))
+func sourceStudioDynamicsActualSkirtWearOutfitAndRollbackWhenSupplied() throws {
+    let path = try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS_FIXTURE")
+    let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+    let reference = SourceStudioCharacterReference(sceneFile: path, sceneSHA256: OriginalCardFixture.hash(bytes),
+        rigFile: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"),
+        boneCatalogFile: try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT"), objectKey: 10,
+        makerLibraryFile: try SourceFixtureSupport.require("IKKOKU_SKIRT_MAKER_LIBRARY"),
+        dynamicsFile: try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS"))
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let preview = try SourceStudioCharacterPreview(reference: reference, resources: resources)
+    #expect(preview.dynamicsComponentCount == 16, "\(preview.diagnostics)")
+    let rig = preview.preview.source.rig
+    let skirtIndices = rig.nodes.indices.filter { rig.nodes[$0].sourceID.hasPrefix("body-master/") && rig.nodes[$0].name.hasPrefix("cf_j_sk_") }
+    #expect(skirtIndices.count == 48)
+    var flags = [Bool](repeating: false, count: 7)
+    var kinematics = SourceStudioKinematicState(enableFK: false, enableIK: false, activeFK: flags, activeIK: [Bool](repeating: false, count: 5))
+    let upstream = try preview.editedPose(kinematics: kinematics)
+    var moving = upstream
+    for frame in 1...8 {
+        try preview.setDynamicsStep(elapsed: Float(frame)/60, deltaTime: 1/60)
+        moving = try preview.editedPose(kinematics: kinematics, animationElapsed: Float(frame)/60)
+    }
+    #expect(skirtIndices.contains { moving.localMatrices[$0] != upstream.localMatrices[$0] })
+    let checkpoint = preview.captureDynamicsCheckpoint()
+    try preview.setDynamicsStep(elapsed: 9/60, deltaTime: 1/60)
+    let advanced = try preview.editedPose(kinematics: kinematics, animationElapsed: 9/60)
+    try preview.restoreDynamicsCheckpoint(checkpoint)
+    try preview.setDynamicsStep(elapsed: 9/60, deltaTime: 1/60)
+    #expect(try preview.editedPose(kinematics: kinematics, animationElapsed: 9/60).localMatrices == advanced.localMatrices)
+    var wear = preview.clothesState; wear[1] = 3
+    try preview.setWear(clothesState: wear, showAccessory: nil)
+    let off = try preview.editedPose(kinematics: kinematics, animationElapsed: 9/60)
+    #expect(skirtIndices.allSatisfy { off.localMatrices[$0] == upstream.localMatrices[$0] })
+    // Half state changes renderer switches, but the garment root remains active.
+    wear[1] = 1; try preview.setWear(clothesState: wear, showAccessory: nil)
+    try preview.setDynamicsStep(elapsed: 10/60, deltaTime: 1/60)
+    let half = try preview.editedPose(kinematics: kinematics, animationElapsed: 10/60)
+    #expect(skirtIndices.contains { half.localMatrices[$0] != upstream.localMatrices[$0] })
+    flags[6] = true
+    kinematics = .init(enableFK: true, enableIK: false, activeFK: flags, activeIK: [Bool](repeating: false, count: 5))
+    try preview.setDynamicsStep(elapsed: 11/60, deltaTime: 1/60)
+    let frozen = try preview.editedPose(kinematics: kinematics, animationElapsed: 11/60)
+    #expect(skirtIndices.allSatisfy { frozen.localMatrices[$0] == upstream.localMatrices[$0] })
+    let plain = try SourceStudioCharacterPreview(reference: reference, resources: resources, coordinate: 1)
+    #expect(plain.dynamicsComponentCount == 8, "\(plain.diagnostics)")
+    let restored = try SourceStudioCharacterPreview(reference: reference, resources: resources, coordinate: 0)
+    #expect(restored.dynamicsComponentCount == 16)
+    #expect(preview.record.cardData == restored.record.cardData && plain.record.cardData == restored.record.cardData)
+    print("Skirt preview: 8 skirt + 8 hair components; motion, wear off/half, FK, checkpoint replay and 16→8→16 outfit rebuild verified")
+    if ProcessInfo.processInfo.environment["IKKOKU_SKIRT_PERF_OUTPUT"] != nil {
+        try writeSkirtReleaseTiming()
+    }
+}
+
+@Test func sourceStudioDynamicsRejectsChangedTopologyBeforeUsingCachedChildren() throws {
+    let (rig, definition) = try skirtSpring()
+    let bound = try SourceStudioDynamics.bind(.init(components: [definition], schemaVersion: 2), rig: rig, clothingSlots: [1]).bindings[0]
+    var state = try SourceDynamicBone(rig: rig, definition: bound.definition)
+    let before = state.positions
+    let changed = try RigDefinition(nodes: rig.nodes.enumerated().map { index, node in
+        .init(name: node.name, sourceID: node.sourceID, parent: index == 2 ? 0 : node.parent,
+              translation: node.translation, rotation: node.rotation, scale: node.scale)
+    }, skins: [])
+    #expect(throws: (any Error).self) { try state.step(deltaTime: 1/30, rig: changed, pose: changed.restPose) }
+    #expect(state.positions == before)
+}
+
+/// Opt-in timing only: excluded even from strict fixture mode unless requested.
+/// Run in Release with no other build/probe workload; this measures late-frame
+/// evaluate on complete rigs, with FK disabled and every garment active.
+private func writeSkirtReleaseTiming() throws {
+    let env = ProcessInfo.processInfo.environment
+    let output = try SourceFixtureSupport.require("IKKOKU_SKIRT_PERF_OUTPUT")
+    let fixture = try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS_FIXTURE")
+    let scene = try SourceFixtureSupport.require("IKKOKU_STUDIO_SCENARIO_SCENE")
+    let dynamicsURL = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SKIRT_DYNAMICS"))
+    let document = try SourceDynamicsDocument.load(url: dynamicsURL)
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    var report: [[String: Any]] = []
+    for (name, path) in [("skirt-fixture", fixture), ("character-scene", scene)] {
+        let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+        let decoded = try KoikatsuSceneReader.decodeDocument(bytes)
+        var stack = decoded.snapshot.roots, keys: [Int32] = []
+        while let object = stack.popLast() {
+            stack += object.children
+            if let character = object.character { keys.append(object.sourceKey); stack += character.accessoryChildren.values.flatMap { $0 } }
+        }
+        var inputs: [(RigDefinition, RigPose, [SourceStudioDynamics.Binding])] = []
+        for key in keys.sorted() {
+            let preview = try SourceStudioCharacterPreview(reference: .init(sceneFile: path, sceneSHA256: OriginalCardFixture.hash(bytes),
+                rigFile: try SourceFixtureSupport.require("IKKOKU_SOURCE_AVATAR"), boneCatalogFile: try SourceFixtureSupport.require("IKKOKU_STUDIO_POSE_CONTRACT"),
+                objectKey: key, makerLibraryFile: try SourceFixtureSupport.require("IKKOKU_SKIRT_MAKER_LIBRARY"), dynamicsFile: dynamicsURL.path), resources: resources)
+            let bindings = try SourceStudioDynamics.bind(document, rig: preview.preview.source.rig, clothingSlots: preview.wearLayout.clothingKinds).bindings
+            #expect(bindings.count == preview.dynamicsComponentCount)
+            inputs.append((preview.preview.source.rig, preview.pose, bindings))
+        }
+        for skirt in [false, true] {
+            let bindings = inputs.map { $0.2.filter { skirt || $0.group == .hair } }
+            var sessions = try inputs.enumerated().map { i, input in try SourceStudioDynamics(rig: input.0, initializationPose: input.1, bindings: bindings[i]) }
+            let flags = [Bool](repeating: false, count: 7)
+            var times: [Double] = []
+            for frame in 1...140 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                for i in inputs.indices {
+                    _ = try sessions[i].evaluate(time: Float(frame)/60, rig: inputs[i].0, upstream: inputs[i].1, enableFK: false, activeFK: flags, deltaTime: 1/60)
+                }
+                if frame > 20 { times.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000) }
+            }
+            times.sort()
+            report.append(["input": name, "sceneSHA256": OriginalCardFixture.hash(bytes), "characters": keys.count,
+                "mode": skirt ? "hair-and-clothes" : "hair-only", "components": bindings.map(\.count),
+                "samples": times.count, "warmup": 20, "p50Milliseconds": times[times.count / 2], "p95Milliseconds": times[Int(Double(times.count) * 0.95)]])
+        }
+    }
+    let result: [String: Any] = ["build": env["IKKOKU_SKIRT_PERF_BUILD"] ?? "unrecorded", "configuration": "Release; FK disabled; all garment roots active; static upstream; complete rigs; 1/60 delta",
+        "dynamicsSHA256": OriginalCardFixture.hash(try Data(contentsOf: dynamicsURL)), "measurements": report]
+    try JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: output))
+    print("Skirt Release dynamics timing: \(report)")
+}

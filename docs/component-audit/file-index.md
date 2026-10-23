@@ -13,8 +13,8 @@ source camera-object look-through files, the ST-A06 source scale rule files,
 the ST-T07 eye look reference and solver-port files, the ST-T07s eye look
 Studio preview runtime files, the ST-T07u iris rendering files and the ST-T04
 studio item shader contract and record color files and the ST-T08 first-slice
-original motion capture/replay files; it does not represent a
-new code audit. It lists every present Git-visible
+original motion capture/replay files. The 2026-10-23 ST-T08e skirt slice updates runtime, exporter, fixture, test and reference files and adds its paired
+Studio save/load scenarios; it does not represent a new code audit. It lists every present Git-visible
 tracked/untracked non-ignored repository file outside
 `docs/component-audit/`. It excludes private `.local/`, dependency/build caches
 and ignored intermediate assets. Binary assets are inventoried, not reviewed as
@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**860 files indexed; 860 assigned; 0 unassigned.**
+**862 files indexed; 862 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 118 |
 | [Studio / IK / animation](studio.md) | 181 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 313 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 152 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 154 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 182 |
+| Conversion / recovery / verification tool | 184 |
 | Documentation / historical evidence | 54 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
@@ -882,6 +882,8 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/route-children-motion.json](../../Tools/verification/scenarios/route-children-motion.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-play-state.json](../../Tools/verification/scenarios/route-play-state.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/shape-visual-reset.json](../../Tools/verification/scenarios/shape-visual-reset.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-skirt-dynamics.json](../../Tools/verification/scenarios/reload-save-skirt-dynamics.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-skirt-dynamics.json](../../Tools/verification/scenarios/reload-load-skirt-dynamics.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-props.json](../../Tools/verification/scenarios/undo-props.json) | Conversion / recovery / verification tool |

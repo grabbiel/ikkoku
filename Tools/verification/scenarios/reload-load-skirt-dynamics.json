@@ -1,0 +1,38 @@
+{
+  "steps": [
+    {
+      "op": "loadDocument",
+      "path": ".local/verification/scenario-exports/skirt-dynamics.png"
+    },
+    {
+      "op": "setAutomaticBlink",
+      "on": false
+    },
+    {
+      "op": "assert",
+      "outfit": {
+        "key": 10,
+        "coordinate": 0,
+        "saved": 0
+      }
+    },
+    {
+      "op": "captureBone",
+      "key": 10,
+      "bone": 222,
+      "name": "reloaded-skirt"
+    },
+    {
+      "op": "advance",
+      "seconds": 0.3
+    },
+    {
+      "op": "assert",
+      "fk": {
+        "key": 10,
+        "bone": 222,
+        "from": "reloaded-skirt"
+      }
+    }
+  ]
+}

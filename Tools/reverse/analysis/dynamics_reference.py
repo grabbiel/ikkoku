@@ -331,14 +331,81 @@ def original_document(directory):
                 scenarios=scenarios, collisions=[])
 
 
+def skirt_document(directory, contract_path, library_path, bottom=4):
+    """Independent body + garment-root assembly, scripted leg motion, collider ablation.
+
+    No native poses or particles seed this oracle. The exporter supplies only
+    recovered parameters/identities; raw rig locals cross the Z reflection once.
+    """
+    contract = json.loads(contract_path.read_text())
+    library = json.loads(library_path.read_text())
+    entry = next(e for e in library['entries'] if (e['category'], e['id']) == (106, bottom))
+    garment_path = library_path.parent / entry['rig']['file']
+    body_path = directory / 'body-skeleton.json'
+    raw_body, raw_garment = (json.loads(p.read_text()) for p in [body_path, garment_path])
+    nodes = [node('avatar:root')]
+    names = {}
+    for original in raw_body['nodes']:
+        t, q = list(original['translation']), list(original['rotation'])
+        t[2] = -t[2]; q[0] = -q[0]; q[1] = -q[1]
+        names[original['name']] = len(nodes)
+        nodes.append(node('body-master/' + original['sourceID'], 0 if original['parent'] is None else original['parent'] + 1,
+                          t, original['scale'], q))
+    root = next(n for n in raw_garment['nodes'] if n['parent'] is None)
+    t, q = list(root['translation']), list(root['rotation'])
+    t[2] = -t[2]; q[0] = -q[0]; q[1] = -q[1]
+    nodes.append(node('clothes-1/' + root['sourceID'], 0, t, root['scale'], q))
+    definitions = [c for c in contract['components'] if c.get('sourceAsset') == dict(category=106, id=bottom, modGUID=None)]
+    if not definitions or any(c['group'] != 'skirt' for c in definitions):
+        raise ValueError('Requested bottom has no supported skirt components')
+    frames = [dict(deltaTime=float(F(1/60)), overrides=[dict(sourceID=nodes[names['cf_j_thigh00_L']]['sourceID'],
+              rotation=axis_rotation(0, .45 * np.sin(step * .08)))]) for step in range(60)]
+    scenarios, clearances = [], {}
+    def clearance(position, particle_radius, collider, world, scale):
+        center = v(collider['center']); half = max(0., (collider['height'] - collider['radius']) * .5)
+        a, b = center.copy(), center.copy(); a[collider['direction']] -= half; b[collider['direction']] += half
+        a, b = point(world, a), point(world, b); edge = b - a
+        fraction = np.clip(np.dot(position-a, edge) / np.dot(edge, edge), 0, 1) if np.dot(edge, edge) > 0 else 0
+        return float(np.linalg.norm(position - a - fraction * edge) - collider['radius'] * length(world[:3, 2]) - particle_radius * scale)
+    ids = {n['sourceID']: i for i, n in enumerate(nodes)}
+    for enabled in [True, False]:
+        minimum = float('inf')
+        for index, definition in enumerate(definitions):
+            config = copy.deepcopy(definition)
+            if not enabled: config['colliders'] = []
+            scenario = make_scenario(f'skirt-{bottom}-{index}-colliders-{enabled}', nodes, config, copy.deepcopy(frames))
+            scenarios.append(scenario)
+            for frame in scenario['frames']:
+                current = copy.deepcopy(nodes)
+                for override in frame['overrides']: current[ids[override['sourceID']]].update(override)
+                worlds, _ = hierarchy(current); scale = length(worlds[ids[definition['ownerID']]][:3, 0])
+                for particle, position in zip(definition['particles'][1:], frame['expected']['positions'][1:]):
+                    for collider in definition['colliders']:
+                        if collider['enabled'] and collider['bound'] == 0:
+                            minimum = min(minimum, clearance(v(position), particle['radius'], collider, worlds[ids[collider['nodeID']]], scale))
+        clearances['collidersOn' if enabled else 'collidersOff'] = minimum
+    paths = [body_path, garment_path, contract_path, library_path]
+    return dict(schemaVersion=1, reference='independent recovered float32 skirt dynamics; raw body hierarchy and scripted leg motion',
+                evidence=[dict(path=str(p.resolve()), sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in paths],
+                managedAndBundleEvidence=[dict(e, path=str((REPO / e['path']).resolve())) for e in contract['evidence']],
+                colliderControl=dict(minimumSignedDistance=clearances, excludes='root particles; includes particle radius and source final length projection'),
+                scenarios=scenarios, collisions=[])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--original-rigs', type=Path)
+    parser.add_argument('--skirt-contract', type=Path)
+    parser.add_argument('--maker-library', type=Path)
+    parser.add_argument('--bottom', type=int, default=4)
     args = parser.parse_args()
+    if args.skirt_contract and (not args.original_rigs or not args.maker_library):
+        parser.error('--skirt-contract needs --original-rigs and --maker-library')
     if args.original_rigs and not args.output.resolve().is_relative_to((REPO / '.local').resolve()):
         parser.error('Original data must remain under .local')
-    result = original_document(args.original_rigs) if args.original_rigs else synthetic_document()
+    result = (skirt_document(args.original_rigs, args.skirt_contract, args.maker_library, args.bottom) if args.skirt_contract
+              else original_document(args.original_rigs) if args.original_rigs else synthetic_document())
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, separators=(',', ':'), allow_nan=False) + '\n')
     print(json.dumps(dict(scenarios=len(result['scenarios']), frames=sum(len(s['frames']) for s in result['scenarios']),
