@@ -5,9 +5,12 @@
 // first makes the player author scene-char.png from it: one female, FK disabled, default pose. An
 // author-scenes.txt beside the card (driver --author-scenes) instead lists which fixture scenes to author
 // from that card: "char" (scene-char.png), "route-children" (scene-route-children.png: one playing route
-// whose children are a folder and the fixture female) and "neck-target" (scene-neck-target.png: two
-// fixture females, neck pattern TARGET and AWAY, eyes pattern TARGET); each is read back into an emptied
-// scene and traced. No installed cards, saves, media or third-party plug-ins are read or written.
+// whose children are a folder and the fixture female), "neck-target" (scene-neck-target.png: two
+// fixture females, neck pattern TARGET and AWAY, eyes pattern TARGET) and "mirrored-camera"
+// (scene-mirrored-camera.png: a camera under a scalable item with scale (-1, 1, 1) and a control camera
+// under an unmirrored copy of that item; it needs no card, so author-scenes.txt alone starts author mode
+// when it lists only card-free scenes); each is read back into an emptied scene and traced. No installed
+// cards, saves, media or third-party plug-ins are read or written.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -41,12 +44,14 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         var files=new List<string>(Directory.GetFiles(dir,"reload-*.png"));files.Sort();
         var card=Path.Combine(dir,"author-card.png"); // an uploaded fixture card (driver --author-character) switches to author mode first
         var sceneList=Path.Combine(dir,"author-scenes.txt"); // driver --author-scenes: the fixture scenes to author; absent = scene-char.png only
-        if(error==null&&files.Count==0&&!File.Exists(card))error="no reload-*.png scene records and no author-card.png beside the plugin";
+        bool author=File.Exists(card)||File.Exists(sceneList); // a card-free scene list (mirrored-camera) starts author mode without a card
+        if(error==null&&files.Count==0&&!author)error="no reload-*.png scene records and no author-card.png or author-scenes.txt beside the plugin";
         var authored=new List<string>();
-        if(error==null&&File.Exists(card)) {
+        if(error==null&&author) {
             if(File.Exists(sceneList)){foreach(var line in File.ReadAllLines(sceneList)){var name=line.Trim();if(name.Length>0)authored.Add(name);}}
             else authored.Add("char");
             if(authored.Count==0)error="author-scenes.txt lists no fixture scene";
+            foreach(var name in authored)if(error==null&&name!="mirrored-camera"&&!File.Exists(card))error="author scene \""+name+"\" needs author-card.png beside the plugin";
         }
         foreach(var scene in authored) {
             if(error!=null)break;
@@ -55,7 +60,8 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 if(scene=="char")run=AuthorCase(card);
                 else if(scene=="route-children")run=AuthorRouteChildren(card);
                 else if(scene=="neck-target")run=AuthorNeckTarget(card);
-                else throw new Exception("unknown fixture scene \""+scene+"\" (char, route-children or neck-target)");
+                else if(scene=="mirrored-camera")run=AuthorMirroredCamera();
+                else throw new Exception("unknown fixture scene \""+scene+"\" (char, route-children, neck-target or mirrored-camera)");
             }catch(Exception e){error="author "+scene+": "+e;}
             while(error==null){bool more=false;object current=null;try{more=run.MoveNext();if(more)current=run.Current;}catch(Exception e){error="author "+scene+": "+e;}if(error!=null||!more)break;yield return current;}
         }
@@ -68,7 +74,7 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         try{File.WriteAllText(Path.Combine(folder,"reload-trace.json"),J(K("schemaVersion",1,"framesPerPhase",Frames,"cases",cases)));}catch(Exception e){if(error==null)error="trace write: "+e;}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"mode",mode,
             "voiceRepair",voiceRepair,"authorScenes",authored,
-            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent and world position, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees); this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
+            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent and world position, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees) and scene-mirrored-camera.png (camera objects under a scalable item with scale (-1, 1, 1) and under an unmirrored copy, the render camera recorded while each is active, after toggling off and after re-activating the mirrored one); this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();} // repeat until the player exits
     }
@@ -240,6 +246,123 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         }
         studio.cameraCtrl.Import(saved);
         cases["neck-target"]=K("label","neck-target","scene","scene-neck-target.png","afterLoad",afterLoad,"settled",((Dictionary<string,object>)phases[0])["snapshot"],"orbit",phases);
+    }
+    // R4 mirrored camera parent (ST-A06): two copies of the first scalable catalog item without a named child
+    // root (the camera probe's PickScalableItem rule, so the item itself is the child root), one with scale
+    // (-1, 1, 1) and one with (1, 1, 1), each holding one camera object at the same local placement. The scale
+    // goes through ChangeAmount.scale, the setter the Studio scale input (GuideInput.OnEndEditScale) and drag
+    // (GuideScale.OnDrag) call; both of those clamp every component to >= 0.01 first, so a mirrored item comes
+    // only from a scene file or code. The saved view is a distinct CameraControl.Import, the mirrored camera
+    // is activated with ChangeCamera (the tree-node toggle) and saved active, so the read-back loads with it
+    // as the view camera. The read-back then records the render camera (Camera.main) and both camera objects
+    // MirrorFrames end-of-frame snapshots per phase: as loaded, after switching to the control camera, after
+    // toggling the control off (the saved view), after re-activating the mirrored camera and after toggling it off.
+    const int MirrorFrames=8;
+    static readonly Vector3 MirrorScale=new Vector3(-1f,1f,1f);
+    static readonly Vector3 MirrorCameraPosition=new Vector3(0.3f,0.6f,-0.9f),MirrorCameraRotation=new Vector3(10f,70f,25f);
+    const string MirrorName="IKKOKU-MIRROR",ControlName="IKKOKU-CONTROL";
+    IEnumerator AuthorMirroredCamera() {
+        mode="author";
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("mirrored-camera expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
+        var view=new Studio.CameraControl.CameraData();
+        view.pos=new Vector3(0.2f,1.1f,0.3f);view.rotate=new Vector3(15f,200f,0f);view.distance=new Vector3(0f,0f,-3f);view.parse=35f;
+        studio.cameraCtrl.Import(view); // becomes the record's cameraSaveData, the view a toggle-off restores
+        int g,c,n;string picked=PickScalableItem(out g,out c,out n);
+        var mirror=AddScaledItem(g,c,n,new Vector3(-0.6f,0.3f,0.6f),MirrorScale);
+        var control=AddScaledItem(g,c,n,new Vector3(0.6f,0.3f,0.6f),Vector3.one);
+        foreach(var pair in new[]{new KeyValuePair<OCIItem,string>(mirror,MirrorName),new KeyValuePair<OCIItem,string>(control,ControlName)}) {
+            // The nested-record load path (OnLoadAttach with worldPositionStays false), so changeAmount is local.
+            var info=new OICameraInfo(Studio.Studio.GetNewIndex());info.changeAmount.pos=MirrorCameraPosition;info.changeAmount.rot=MirrorCameraRotation;
+            var cam=AddObjectCamera.Load(info,pair.Key,null,true,-1);if(cam==null)throw new Exception("camera icon asset failed to load");
+            cam.name=pair.Value;
+        }
+        studio.cameraSelector.Init(); // as Studio.AddCamera does; SetCamera needs its camera list
+        for(int i=0;i<2;i++)yield return new WaitForEndOfFrame(); // GuideObject.LateUpdate enforces each target's lossy scale
+        var mirrorCam=FindCamera(MirrorName);var controlCam=FindCamera(ControlName);
+        var items=new List<object>();
+        foreach(var item in new[]{mirror,control})
+            items.Add(K("dicKey",item.objectInfo.dicKey,"authoredPosition",V(item.itemInfo.changeAmount.pos),"authoredRotation",V(item.itemInfo.changeAmount.rot),
+                "authoredScale",V(item.itemInfo.changeAmount.scale),"guideEnableScale",item.guideObject.enableScale,"childRootIsObject",item.childRoot==item.objectItem.transform,
+                "object",Pose(item.objectItem.transform)));
+        var placed=new List<object>();var phase=MirrorPhase(placed,null);while(phase.MoveNext())yield return phase.Current;
+        studio.ChangeCamera(mirrorCam); // the tree-node toggle; the save then writes this camera's active flag
+        if(studio.ociCamera!=mirrorCam)throw new Exception("ChangeCamera did not make "+MirrorName+" the view camera");
+        var active=new List<object>();phase=MirrorPhase(active,null);while(phase.MoveNext())yield return phase.Current;
+        var authored=Record();
+        cases["mirrored-camera-author"]=K("label","mirrored-camera-author","scene","scene-mirrored-camera.png","catalogItem",picked,"items",items,
+            "savedCameraData",K("pos",V(view.pos),"rotate",V(view.rotate),"distance",V(view.distance),"parse",view.parse),
+            "placed",placed,"mirrorActive",active,"afterLoad",authored,"settled",authored);
+        string scene=SaveScene("scene-mirrored-camera.png");
+        studio.InitScene(false);
+        for(int i=0;i<3;i++)yield return null;
+        if(studio.dicObjectCtrl.Count!=0)throw new Exception("mirrored-camera expects an empty scene before the read-back, found "+studio.dicObjectCtrl.Count+" objects");
+        if(!studio.LoadScene(scene))throw new Exception("Studio.LoadScene returned false for "+scene);
+        var afterLoad=Record();
+        mirrorCam=FindCamera(MirrorName);controlCam=FindCamera(ControlName);
+        var phases=new List<object>();
+        var steps=new[]{new KeyValuePair<string,OCICamera>("loaded",null),new KeyValuePair<string,OCICamera>("control",controlCam),
+            new KeyValuePair<string,OCICamera>("control-off",controlCam),new KeyValuePair<string,OCICamera>("mirror-again",mirrorCam),
+            new KeyValuePair<string,OCICamera>("mirror-off",mirrorCam)};
+        foreach(var step in steps) {
+            if(step.Value!=null)studio.ChangeCamera(step.Value);
+            var snaps=new List<object>();phase=MirrorPhase(snaps,step.Key);while(phase.MoveNext())yield return phase.Current;
+            phases.Add(K("phase",step.Key,"toggled",step.Value==null?null:step.Value.cameraInfo.name,"snapshots",snaps));
+        }
+        cases["mirrored-camera"]=K("label","mirrored-camera","scene","scene-mirrored-camera.png","afterLoad",afterLoad,
+            "settled",((Dictionary<string,object>)((List<object>)((Dictionary<string,object>)phases[0])["snapshots"])[MirrorFrames-1])["record"],"phases",phases);
+    }
+    OCIItem AddScaledItem(int group,int category,int no,Vector3 position,Vector3 scale) {
+        var item=AddObjectItem.Add(group,category,no);if(item==null)throw new Exception("scalable item "+group+"/"+category+"/"+no+" failed to load");
+        var ca=item.itemInfo.changeAmount;ca.pos=position;ca.rot=new Vector3(0f,40f,15f);ca.scale=scale;ca.OnChange();
+        return item;
+    }
+    OCICamera FindCamera(string name) {
+        OCICamera found=null;
+        foreach(var entry in studio.dicObjectCtrl){var cam=entry.Value as OCICamera;if(cam!=null&&cam.cameraInfo.name==name){if(found!=null)throw new Exception("two cameras named "+name);found=cam;}}
+        if(found==null)throw new Exception("no camera named "+name);
+        return found;
+    }
+    static string PickScalableItem(out int group,out int category,out int no) { // OriginalCameraObjectProbe's rule: first scalable, non-animated item whose child root is the item itself
+        var info=Singleton<Studio.Info>.Instance.dicItemLoadInfo;
+        var groups=new List<int>(info.Keys);groups.Sort();
+        foreach(var gk in groups){var cats=new List<int>(info[gk].Keys);cats.Sort();
+            foreach(var ck in cats){var nos=new List<int>(info[gk][ck].Keys);nos.Sort();
+                foreach(var nk in nos){var e=info[gk][ck][nk];if(e.isScale&&!e.isAnime&&String.IsNullOrEmpty(e.childRoot)){group=gk;category=ck;no=nk;return gk+"/"+ck+"/"+nk;}}}}
+        throw new Exception("no scalable item without a named child root in the item catalog");
+    }
+    // MirrorFrames end-of-frame snapshots (after every LateUpdate of the frame) of the render camera and both camera objects.
+    IEnumerator MirrorPhase(List<object> sink,string phase) {
+        for(int i=0;i<MirrorFrames;i++) {
+            yield return new WaitForEndOfFrame();
+            var ctrl=studio.cameraCtrl;var main=Camera.main;var data=ctrl.Export();
+            var cameras=new List<object>();
+            foreach(var entry in studio.dicObjectCtrl){var cam=entry.Value as OCICamera;if(cam!=null)cameras.Add(CameraObject(cam));}
+            var snap=K("frame",Time.frameCount,"cameraCtrlEnabled",ctrl.enabled,"viewCameraName",studio.ociCamera==null?null:studio.ociCamera.cameraInfo.name,
+                "render",Pose(main.transform),"fov",main.fieldOfView,
+                "ctrlData",K("pos",V(data.pos),"rotate",V(data.rotate),"distance",V(data.distance),"parse",data.parse),"cameras",cameras);
+            if(phase!=null&&i==MirrorFrames-1)snap["record"]=Record();
+            sink.Add(snap);
+        }
+    }
+    // One camera object with Unity's own composition of its parent frame, for comparing the render camera against.
+    static Dictionary<string,object> CameraObject(OCICamera cam) {
+        var t=cam.objectItem.transform;var p=t.parent;var ca=cam.cameraInfo.changeAmount;
+        return K("name",cam.cameraInfo.name,"dicKey",cam.cameraInfo.dicKey,"infoActive",cam.cameraInfo.active,
+            "parentKey",cam.parentInfo==null?null:(object)cam.parentInfo.objectInfo.dicKey,
+            "changePosition",V(ca.pos),"changeRotation",V(ca.rot),"changeScale",V(ca.scale),
+            "object",Pose(t),"objectDeterminant",t.localToWorldMatrix.determinant,
+            "parent",p==null?null:Pose(p),"parentDeterminant",p==null?null:(object)p.localToWorldMatrix.determinant,
+            "parentTransformPoint",p==null?null:(object)V(p.TransformPoint(ca.pos)),
+            "parentRotationTimesEuler",p==null?null:(object)Q(p.rotation*Quaternion.Euler(ca.rot)));
+    }
+    // localToWorld lists Matrix4x4's sixteen entries in its own index order (column-major: m00, m10, m20, m30, m01, ...).
+    static Dictionary<string,object> Pose(Transform t) {
+        var m=t.localToWorldMatrix;var entries=new float[16];for(int i=0;i<16;i++)entries[i]=m[i];
+        return K("position",V(t.position),"rotation",Q(t.rotation),"euler",V(t.eulerAngles),"lossyScale",V(t.lossyScale),
+            "localPosition",V(t.localPosition),"localRotation",Q(t.localRotation),"localEuler",V(t.localEulerAngles),"localScale",V(t.localScale),
+            "localToWorld",entries);
     }
     // Each uploaded record is loaded into an emptied scene (the camera probe's InitScene(false)-then-load rule).
     // "afterLoad" is measured as soon as LoadScene returns, "settled" Frames frames later.
