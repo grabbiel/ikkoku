@@ -35,6 +35,9 @@ struct IkkokuApp: App {
                 Button("Export Edited Original Scene…") { app.exportSourceScene() }.disabled(app.studio?.doc.sourceSceneFile == nil)
                 Button("Save Scene…") { app.saveScene() }.keyboardShortcut("s", modifiers: [.command, .option])
                 Divider()
+                Button("Choose Converted Library…") { app.chooseConvertedLibrary() }
+                Button("Forget Converted Library") { app.forgetConvertedLibrary() }
+                Divider()
                 Button("Capture Screenshot…") { app.captureScreenshot() }.keyboardShortcut("p", modifiers: [.command, .shift])
             }
             CommandGroup(replacing: .undoRedo) {

@@ -202,9 +202,9 @@ struct StudioView: View {
             }.pickerStyle(.segmented).labelsHidden().padding(8)
                 .accessibilityIdentifier("studio.inspector.tabs")
             ScrollView {
-                if let diagnostics = model.doc.sourcePreviewDiagnostics, !diagnostics.isEmpty {
+                if !model.compatibilityDiagnostics.isEmpty {
                     DisclosureGroup("Source compatibility details") {
-                        ForEach(Array(diagnostics.enumerated()), id: \.offset) { _, text in
+                        ForEach(Array(model.compatibilityDiagnostics.enumerated()), id: \.offset) { _, text in
                             Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }.padding(12)

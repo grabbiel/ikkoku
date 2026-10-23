@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**828 files indexed; 828 assigned; 0 unassigned.**
+**832 files indexed; 832 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 83 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 87 |
 | [Character / Maker / mods](character-and-mods.md) | 116 |
 | [Studio / IK / animation](studio.md) | 180 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 303 |
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 53 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 27 |
-| Runtime / shared shader declaration | 179 |
-| Test / validation | 167 |
+| Runtime / shared shader declaration | 182 |
+| Test / validation | 168 |
 
 ## App / gameplay / plugins
 
@@ -74,6 +74,8 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Assets/ResourceRelocation.swift](../../Packages/Engine/Sources/Assets/ResourceRelocation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift](../../Packages/Engine/Sources/Gameplay/SourceADVArgumentParsing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift](../../Packages/Engine/Sources/Gameplay/SourceADVHostRequest.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift](../../Packages/Engine/Sources/Gameplay/SourceADVInterpreter.swift) | Runtime / shared shader declaration |
@@ -91,8 +93,10 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift](../../Packages/Engine/Sources/Gameplay/SourceTranslatedBehaviour.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/CaptureOutput.swift](../../Packages/Engine/Sources/Renderer/CaptureOutput.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/CaptureRequest.swift](../../Packages/Engine/Sources/Renderer/CaptureRequest.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/StudioResourceReferences.swift](../../Packages/Engine/Sources/Studio/StudioResourceReferences.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureOutputTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift](../../Packages/Engine/Tests/EngineTests/CaptureRequestTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift](../../Packages/Engine/Tests/EngineTests/ResourceRelocationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift](../../Packages/Engine/Tests/EngineTests/SourceADVHostRequestTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayCycleTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |

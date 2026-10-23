@@ -11,7 +11,9 @@ prerequisites and commands. Bone/material/morph names below define the native
 pipeline conventions; optional entries and the example JSON are not a complete
 inventory. The current catalog has 2 bodies, 16 hair styles, 24 garments,
 8 accessories and 15 items. The [renderer audit](../component-audit/renderer-and-foundation.md)
-tracks packaging and native-loader limitations (R3/R5/R8).
+tracks packaging and native-loader limitations (R3/R5/R8). How the app finds this
+library and the converted ones, and how saved scenes follow a moved library, is in
+[Library location and relocation](#library-location-and-relocation-a-t02).
 
 ## Conventions
 
@@ -229,3 +231,111 @@ and garment on the body, and a morph-target contact sheet to
   `GLBLoader.loadTrustedFile(url:)`/`AssetLibrary.importTrustedStaticAsset(url:)`
   without containment. The library's PNG texture, sidecar and body-mask reads are
   not glTF references and are not part of this check.
+
+## Library location and relocation (A-T02)
+
+Added 2026-10-23; compiled and unit-tested by CI only, never run in the app.
+Code: `ResourceLibrary.swift` and `ResourceRelocation.swift` in the Assets module,
+`StudioResourceReferences.swift` in Studio, `EngineHost.swift` and `StudioModel.swift`
+in the app; tests: `ResourceRelocationTests.swift`.
+
+**Libraries and their identity.** A `ResourceLibraryRecord` names one library by
+kind, absolute root, root-relative manifest, the manifest's SHA-256 and the
+manifest's own format version. Two records describe the same content when kind,
+manifest path, digest and version agree; the root may differ. The kinds and their
+conventional manifests are:
+
+| Kind | Manifest | Accepted format |
+| --- | --- | --- |
+| `assets` | `catalog.json` in the asset root | integer `version` |
+| `makerLibrary` | `maker-library/library.json` | `schemaVersion` 1 |
+| `femaleBase` | `rigs/source-avatar.json` | `schemaVersion` 1, kind `koikatsu-female-avatar` |
+| `maleBase` | `male/source-male-avatar.json` | `schemaVersion` 1, kind `koikatsu-male-avatar` |
+
+The converted paths are the layout the `Tools/reverse` exporters write under
+`.local/reverse/`. Recording a library reads at most 16 MiB (Maker library) or
+64 MiB, and the manifest must resolve inside the root after symlinks. A
+`ResourceLibraryLocation` is a versioned (`version` 1) set of at most one record per
+kind. Another version is refused, not reinterpreted.
+
+**Which libraries are in effect.** File → Choose Converted Library… records every
+converted manifest found in the chosen folder. It fails when a manifest present
+there is invalid, or when the folder holds none of them. The selection is saved
+in user defaults under `ConvertedLibraryLocation`, as a JSON string. Each converted
+lookup reads, in order: its explicit variable (`IKKOKU_MAKER_LIBRARY`,
+`IKKOKU_SOURCE_AVATAR`, `IKKOKU_SOURCE_MALE_AVATAR`), then the selection, then
+the source-tree default under the checkout's `.local/reverse/` (see
+[Release packaging](../guides/build-and-test.md#package-and-inspect-a-release-build)).
+A selected library that fails to load is an error, not a fallback. Automated
+runs ignore the selection: any capture or scenario mode, and `IKKOKU_CAPTURE_UI`
+(`CaptureRequest.isAutomated`). Their lookups go straight from the explicit
+variable to the source-tree default, so lane results never depend on this
+machine's user defaults. The asset root
+keeps its own order: `IKKOKU_ASSETS`, then the bundle, then the source tree; the
+selection does not change it. At startup the app prints the selection and any
+selected manifest whose bytes changed since it was chosen. File → Forget
+Converted Library removes the selection.
+
+**What a saved scene records.** On save, `recordingResourceBinding` writes a
+`resourceBinding` into the Studio document card. The binding lists, for every
+file the document names, the SHA-256 of the file's bytes. For the source scene,
+the document's own `sourceSceneSHA256` is used. When the file's realpath lies
+inside a library in effect, the binding also records that library's realpath root
+and the file's path relative to it. The longest containing root wins. The
+binding also keeps the records of the libraries that hold a recorded file. The
+file references are `sourceSceneFile`, `sourceVoiceCatalogFile`, an object's
+`assetFile`, and every path of a source character reference: scene, rig, bone
+catalog, Maker library, attachment, animation, dynamics, hand-pattern and
+look-setting files. When a file is missing, unreadable or changed at save time,
+the binding keeps the identity it was loaded with, so a save never adopts a
+changed file. A document with no file reference gets no binding and saves as
+before. Older documents decode it as nil.
+
+**What a load does.** `StudioModel.loadScene` resolves every reference before it
+reads anything (`resolvingResources`). A file the binding places in a library
+resolves only inside the one library in effect with the recorded content. It
+resolves at the recorded relative path, after R5's realpath containment check,
+and only when its bytes have the recorded digest. If a different root holds that
+library now, the reference is **relocated**: the document's path is replaced
+with the verified file. If no library in effect has that content, the file is
+checked at its saved path against the same digest. Other file references are
+checked at their saved paths, against a digest when one exists. A catalog item
+(`itemID` without `assetFile`) must have an entry in the current asset catalog
+whose file is inside the asset root. Its catalog ID is its identity, because the
+catalog records no digest.
+
+Everything else is **unresolved**, with a named reason:
+
+- a missing file;
+- a digest mismatch, naming the expected and actual SHA-256;
+- a non-canonical relative path, or a file that resolves outside its root
+  through a symlink (even with the right bytes);
+- the same content in effect at two roots;
+- no asset library in effect, or a catalog with no entry for the ID;
+- a binding version this build does not read.
+
+An unresolved reference keeps its saved path, and nothing else is substituted.
+Its object is blocked: `refresh()` skips the character or item, plugin attachment
+frames and the rehydration rig inputs ignore it, and an `IKKOKU_LOAD_SCENE` or
+`IKKOKU_CAPTURE_SCENE` item capture fails naming it. The source scene file keeps
+its own hash check in rehydration and export. A blocked voice catalog refuses
+playback. Blocks are kept per object ID and catalog path, so an undo back to an
+earlier opened scene keeps its blocks; reopening a scene checks it again. The
+status line shows the summary. One line per unresolved
+reference, naming the reference, its recorded SHA-256 and the library it was
+saved in, is listed under the inspector's "Source compatibility details" and
+printed as `[ikkoku] <scene>: …`. Import Scene… (merge) takes relocated paths and
+refuses a scene with an unresolved object reference, because the merge does not
+carry its binding.
+
+**Not covered.** Native character card catalog IDs and plugin profile and plugin
+library paths ([P-T02](mods/plugin-execution.md)) are not checked. Files a
+loader derives from a recorded path are not recorded separately: `ik-bindings.json`
+beside the bone catalog, `source-dynamics.json` and the appearance sidecar beside
+the rig, and Maker library entries (`SourceMakerLibrary` verifies those against
+their own SHA-256s). External glTF buffers and images of an `assetFile` are not
+hashed either. A document saved before A-T02 cannot be relocated, because it does
+not record which part of a path was its library root. Its paths are checked in
+place, unverified apart from the scene digest. The source-scene import still
+reads its item catalog and the other conversion inputs from environment
+variables. No moved library has been opened in the app yet.
