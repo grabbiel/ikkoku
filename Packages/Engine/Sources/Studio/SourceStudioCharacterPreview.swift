@@ -191,6 +191,19 @@ public final class SourceStudioCharacterPreview {
     /// Animator/FK/IK and before its own rotation write.
     fileprivate typealias EvaluatedPose = (state: SourceStudioAnimationState, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, preOverride: RigPose, guides: [SourceStudioIK.Guide])
     private var evaluatedCache: EvaluatedPose?
+    /// The animated, FK/IK-solved pose (`preOverride`) with the kinematic
+    /// state and guides it was solved with, for the same key as
+    /// `evaluatedCache` plus whether the animation was required. A Studio tick
+    /// asks for one elapsed time several times: the neck and eye gaze sample
+    /// it, then `setDynamicsStep` and `updateNeckLook` drop `evaluatedCache`
+    /// so the rendered pose gets that tick's neck rotations and hair
+    /// integration. Neither changes this stage, which depends only on the key,
+    /// the shape baseline and the solver (`setShapeValues` and the other
+    /// resets clear it), so it is solved once per tick (R7). The animation
+    /// clock returns the same time for a repeated elapsed value, and every
+    /// other step is a pure function of its inputs.
+    private typealias SolvedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, effective: SourceStudioKinematicState, guides: [SourceStudioIK.Guide])
+    private var solvedCache: SolvedPose?
     /// The import-time shape/binding inputs setShapeValues replays when the
     /// edited arrays replace the card's saved shape values.
     private let shapeBoneModifiers: SourceBoneModifiers?
@@ -217,9 +230,9 @@ public final class SourceStudioCharacterPreview {
     public func restoreDynamicsCheckpoint(_ checkpoint: DynamicsCheckpoint) throws {
         guard checkpoint.owner == ObjectIdentifier(self) else { throw RigError.invalid("Dynamics checkpoint belongs to another character instance.") }
         dynamics = checkpoint.simulation; dynamicsStep = checkpoint.step; evaluatedCache = checkpoint.evaluated
-        animationPlayback = checkpoint.animationPlayback
+        animationPlayback = checkpoint.animationPlayback; solvedCache = nil
     }
-    public func clearDynamicsStep() { dynamicsStep = nil; evaluatedCache = nil; dynamics?.resetHistory() }
+    public func clearDynamicsStep() { dynamicsStep = nil; evaluatedCache = nil; solvedCache = nil; dynamics?.resetHistory() }
 
     /// `coordinate` selects a saved outfit other than the card's
     /// Status.coordinateType (ST-C03): CharaStudio's OCIChar.SetCoordinateInfo
@@ -832,7 +845,30 @@ public final class SourceStudioCharacterPreview {
         if let cache = evaluatedCache, cache.state == state, cache.elapsed == animationElapsed, cache.fk == fkRotations, cache.ik == ikTargets, cache.kinematics == kinematics { return cache.pose }
         try SourceStudioIKEditing.validate(ikTargets); try kinematics?.validate()
         var result: RigPose
-        if let animation = try resolvedAnimation(state, required: animationState != nil) {
+        let effective: SourceStudioKinematicState
+        let guides: [SourceStudioIK.Guide]
+        let required = animationState != nil
+        if let solved = solvedCache, solved.state == state, solved.required == required, solved.elapsed == animationElapsed,
+           solved.fk == fkRotations, solved.ik == ikTargets, solved.kinematics == kinematics {
+            result = solved.pose; effective = solved.effective; guides = solved.guides
+        } else {
+            (result, effective, guides) = try solvedPose(state: state, required: required, fkRotations: fkRotations, ikTargets: ikTargets,
+                                                        kinematics: kinematics, animationElapsed: animationElapsed)
+            solvedCache = (state, required, animationElapsed, fkRotations, ikTargets, kinematics, result, effective, guides)
+        }
+        let preOverride = result
+        try applyLookAndDynamics(to: &result, preOverride: preOverride, effective: effective, animationElapsed: animationElapsed)
+        evaluatedCache = (state, animationElapsed, fkRotations, ikTargets, kinematics, result, preOverride, guides)
+        return result
+    }
+
+    /// The animation, saved hand patterns, FK/IK restore and IK solve of
+    /// `editedPose`: the pose before any look override, the effective
+    /// kinematic state and the IK guides.
+    private func solvedPose(state: SourceStudioAnimationState, required: Bool, fkRotations: [Int: Float3], ikTargets: [Int32: SourceStudioIKEdit],
+                            kinematics: SourceStudioKinematicState?, animationElapsed: Float) throws -> (RigPose, SourceStudioKinematicState, [SourceStudioIK.Guide]) {
+        var result: RigPose
+        if let animation = try resolvedAnimation(state, required: required) {
             result = try animation.pose(state: state, elapsed: animationElapsed, height: effectiveAnimationHeight, rig: preview.source.rig, baseline: baseline, playback: &animationPlayback)
         } else { result = baseline }
         // The hand Animator is independent of the body animation, so saved
@@ -867,7 +903,13 @@ public final class SourceStudioCharacterPreview {
                 enabled: edited.enableIK, activeGroups: edited.activeIK, characterRoot: characterRoot, guideOverrides: ikTargets.mapValues(\.transform))
             result = solved.pose; guides = solved.guides
         } else if !ikTargets.isEmpty { throw RigError.invalid("Source IK bindings are unavailable for guide editing.") }
-        let preOverride = result
+        return (result, effective, guides)
+    }
+
+    /// The neck look override and hair dynamics `editedPose` applies to the
+    /// solved pose for this tick's neck rotations and dynamics step.
+    private func applyLookAndDynamics(to result: inout RigPose, preOverride: RigPose, effective: SourceStudioKinematicState,
+                                      animationElapsed: Float) throws {
         // The NeckLookCalcVer2 override runs on the FK/IK-restored pose and
         // before hair dynamics, so dynamics sees the solved neck. The override
         // result depends on animationElapsed, which is already in the cache key.
@@ -927,8 +969,6 @@ public final class SourceStudioCharacterPreview {
                 deltaTime: dynamicsStep?.elapsed == animationElapsed ? dynamicsStep?.delta : nil)
             dynamics = simulation
         }
-        evaluatedCache = (state, animationElapsed, fkRotations, ikTargets, kinematics, result, preOverride, guides)
-        return result
     }
 
     /// Supply the actual source frame delta before requesting this elapsed pose.
@@ -960,7 +1000,7 @@ public final class SourceStudioCharacterPreview {
     }
 
     public func resetAnimationPlayback() {
-        animationPlayback.reset(); hasSteppedNeckLook = false; resetNeckLook(); resetEyeLook()
+        animationPlayback.reset(); solvedCache = nil; hasSteppedNeckLook = false; resetNeckLook(); resetEyeLook()
     }
 
     /// True when the effective neck pattern is TARGET or AWAY and the gaze
