@@ -686,6 +686,14 @@ class AppOutputArtifactTests(unittest.TestCase):
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI"], artifacts)
         self.assertIn(capture["env"]["IKKOKU_CAPTURE_UI_REPORT"], artifacts)
 
+    def test_ui_capture_does_not_discover_a_maker_library(self):
+        # The synthetic scene's minimal card exercises the source-pose inspector,
+        # not assembled hair/clothes. A developer's optional library, found through
+        # the source-tree fallback, made it import as no source character.
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        self.assertEqual(checks["studio-inspector-capture"]["env"].get("IKKOKU_MAKER_LIBRARY"), "none")
+
     def test_capture_only_plugin_evidence_runs_inside_a_capture(self):
         # A06: the app rejects IKKOKU_NATIVE_PLUGIN_REPORT and IKKOKU_APPLICATION_FOCUS
         # without IKKOKU_AUTOCAPTURE, the capture that ends the headless run; before,
