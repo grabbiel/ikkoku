@@ -111,7 +111,7 @@ passed, and ticked items say how they were checked. The ST-T03 items are ticked
 because the exported scenes were also reloaded in the real CharaStudio (PRs #78,
 #80, #81).
 
-**Merged 2026-10-23 (PRs #104–#110, #112):** a CI-verified wave of synthetic-fixture
+**Merged 2026-10-23 (PRs #104–#110, #112, #114–#116):** a CI-verified wave of synthetic-fixture
 slices, written without a local Swift toolchain. The macOS Actions jobs (Engine
 `swift test`, unsigned Debug app build, `Tools/reverse` suites) were each PR's first
 compile and its only Swift test run. Each slice's report row names its evidence.
@@ -132,8 +132,19 @@ compile and its only Swift test run. Each slice's report row names its evidence.
 - P-T02 ([#112](https://github.com/grabbiel/ikkoku/pull/112)): an immutable plugin
   library with generations and one IR/native-adapter dependency graph; saved
   selections never remap.
+- E-T02 ([#114](https://github.com/grabbiel/ikkoku/pull/114)): contract generators
+  that read recovered C# resolve it through `recovered_source.py`, which uses the
+  indexed project and clean per-type fallbacks and refuses the rest by name.
+  Generators that still read older narrow trees wait on a private rerun.
+- R4 ([#115](https://github.com/grabbiel/ikkoku/pull/115)): legacy two-bone IK no
+  longer applies the upper-bone delta twice to the lower bone. Synthetic tests now
+  assert that reachable targets are reached.
+- T-T01 ([#116](https://github.com/grabbiel/ikkoku/pull/116)): prerequisite versions
+  are recorded once in `Tools/verification/prerequisites.json`. `doctor.py` checks
+  them, and CI runs it with `--require public`. Unrecorded tools are only checked
+  for presence.
 
-None of this wave has been run in the app; the two app items below are still open.
+None of this wave has been run in the app; the three app items below are still open.
 
 - [ ] ST-T01: select a source character; the Pose, Face and Clothes tabs are reachable,
       FK/IK guide edits move bones, and prototype-only controls stay blocked (PR #5)
@@ -341,6 +352,8 @@ None of this wave has been run in the app; the two app items below are still ope
       status line names the unsolved chain and the pose is kept. A source camera
       under a mirrored parent falls back to the saved camera with a
       `reflectedFrame` message.
+- [ ] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
+      follows it, and re-solving the same target leaves the pose unchanged.
 
 | Order | Tasks | Concrete result required |
 | --- | --- | --- |
@@ -351,7 +364,7 @@ None of this wave has been run in the app; the two app items below are still ope
 | 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
 | 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. **2026-10-23:** G-T01's engine slice (`SourceGameplaySession`, #105) is merged; the app host (A-T01) and G-T02 bindings remain. |
 | 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. **2026-10-23:** P-T02's first slice is merged as #112 (library generations, one dependency graph, saved selections). App selection wiring, batch DLL triage and P-T01/03/05 remain. P-T04's Swift slice (#107) is also merged. |
-| 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. |
+| 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. **2026-10-23:** T-T01's first slice is merged as #116 (recorded prerequisites, `doctor.py`, a CI check). Versions for the unrecorded tools and the deployment matrix remain. |
 
 Do not resume these as one undifferentiated “finish the port” task. Each linked
 task states entry points and a measurable acceptance condition; preserve the
