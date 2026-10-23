@@ -144,15 +144,32 @@ public final class SourceShaderLiveAssembly: @unchecked Sendable {
             }
             switch materials[rendererIndex] {
             case .success(let material)?:
-                guard let vertexCount = resources.mesh(frame.items[index].mesh)?.vertexCount else { continue }
-                let candidates = (streams[renderer.mesh] ?? []).filter { $0.vertexCount == vertexCount }
-                let needsStreams = material.passes.contains { $0.vertexInputs.contains { ($0.semantic == "TEXCOORD" && $0.index == 3) || $0.semantic == "COLOR" } }
+                guard let mesh = resources.mesh(frame.items[index].mesh) else { continue }
+                let candidates = (streams[renderer.mesh] ?? []).filter { $0.vertexCount == mesh.vertexCount }
+                let reads = material.passes.flatMap(\.vertexInputs)
+                func readsUV(_ set: Int) -> Bool { reads.contains { $0.semantic == "TEXCOORD" && $0.index == set } }
+                // UV1/UV2 the converted mesh lacks would alias UV0; the source stream supplies them.
+                let missingUV = [1, 2].filter { readsUV($0) && !($0 == 1 ? mesh.carriesUV1 : mesh.carriesUV2) }
+                let needsStreams = readsUV(3) || reads.contains { $0.semantic == "COLOR" } || !missingUV.isEmpty
                 if needsStreams && candidates.count != 1 {
-                    report.fallbacks.append("\(slotLabel) (\(material.family)): " + (candidates.isEmpty ? "no source UV3/colour stream for this mesh" : "source vertex stream ambiguous")); continue
+                    let channels = (readsUV(3) ? ["UV3"] : []) + (reads.contains { $0.semantic == "COLOR" } ? ["COLOR"] : []) + missingUV.map { "UV\($0) (the converted mesh has none)" }
+                    report.fallbacks.append("\(slotLabel) (\(material.family)): " + (candidates.isEmpty ? "no source vertex stream for this mesh (reads \(channels.joined(separator: ", ")))"
+                                                                                         : "source vertex stream ambiguous (\(candidates.count) source meshes of this name and vertex count)")); continue
                 }
-                frame.items[index].sourceShader = SourceShaderLiveDraw(material: material, streams: candidates.count == 1 ? candidates[0] : nil,
+                let stream = candidates.count == 1 ? candidates[0] : nil
+                frame.items[index].sourceShader = SourceShaderLiveDraw(material: material, streams: stream,
                     vectorOverrides: overrides[renderer.mesh] ?? [:], sourceOrder: rendererIndex)
-                report.live.append("\(slotLabel) (\(material.family))")
+                var sources: [String] = [], conventions: [String] = []
+                if needsStreams, let stream {
+                    for set in missingUV {
+                        if (set == 1 ? stream.uv1 : stream.uv2) != nil { sources.append("TEXCOORD\(set) from the source stream") }
+                        else { conventions.append("TEXCOORD\(set) absent in the source mesh: zero") }
+                    }
+                    if stream.uv3 == nil && readsUV(3) { conventions.append("TEXCOORD3 absent in the source mesh: zero") }
+                    if stream.colors == nil && reads.contains(where: { $0.semantic == "COLOR" }) { conventions.append("COLOR absent in the source mesh: white") }
+                }
+                report.live.append("\(slotLabel) (\(material.family))" + (sources.isEmpty ? "" : "; " + sources.joined(separator: ", "))
+                                   + (conventions.isEmpty ? "" : "; convention (capture fixture default, Unity's missing-channel value unverified): " + conventions.joined(separator: ", ")))
             case .failure(let reason)?:
                 report.fallbacks.append("\(slotLabel) (\(SourceShaderLiveMaterial.family(of: renderer.material.shader) ?? "?")): \(reason.text)")
             case nil:

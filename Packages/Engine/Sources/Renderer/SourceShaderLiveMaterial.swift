@@ -213,19 +213,24 @@ public final class SourceShaderCaptureTextureProvider: SourceShaderLiveTexturePr
     }
 }
 
-/// Source vertex channels the converted rigs do not carry: Unity `TEXCOORD3`
-/// (`m_UV3`) and `COLOR` (`m_Colors`) of one source mesh, in the source
-/// vertex order the converted mesh keeps (`Tools/reverse/source_vertex_streams.py`).
+/// Source vertex channels the converted rigs do not (always) carry: Unity
+/// `TEXCOORD3` (`m_UV3`), `COLOR` (`m_Colors`) and `TEXCOORD1`/`TEXCOORD2`
+/// (`m_UV1`/`m_UV2`) of one source mesh, in the source vertex order the
+/// converted mesh keeps (`Tools/reverse/source_vertex_streams.py`). UV1/UV2
+/// are used only where the converted mesh carries none (it would alias UV0).
 public final class SourceVertexStreams: @unchecked Sendable {
     public let mesh: String
     public let vertexCount: Int
-    /// float2 per vertex, Unity convention (no V flip).
-    public let uv3: (any MTLBuffer)?
+    /// float2 per vertex, Unity convention (no V flip); nil when the source
+    /// mesh has no such channel.
+    public let uv1: (any MTLBuffer)?, uv2: (any MTLBuffer)?, uv3: (any MTLBuffer)?
     /// float4 per vertex.
     public let colors: (any MTLBuffer)?
     public let provenance: String
-    public init(mesh: String, vertexCount: Int, uv3: (any MTLBuffer)?, colors: (any MTLBuffer)?, provenance: String) {
-        self.mesh = mesh; self.vertexCount = vertexCount; self.uv3 = uv3; self.colors = colors; self.provenance = provenance
+    public init(mesh: String, vertexCount: Int, uv1: (any MTLBuffer)? = nil, uv2: (any MTLBuffer)? = nil,
+                uv3: (any MTLBuffer)?, colors: (any MTLBuffer)?, provenance: String) {
+        self.mesh = mesh; self.vertexCount = vertexCount; self.uv1 = uv1; self.uv2 = uv2; self.uv3 = uv3; self.colors = colors
+        self.provenance = provenance
     }
 
     public struct Manifest: Codable, Sendable {
@@ -235,7 +240,10 @@ public final class SourceVertexStreams: @unchecked Sendable {
             public let bundleSHA256: String
             public let pathID: String
             public let vertexCount: Int
-            /// `nil` when the source mesh has no such channel.
+            /// `nil` when the source mesh has no such channel (UV1/UV2 are
+            /// absent from schema 1 manifests).
+            public let uv1File: String?, uv1SHA256: String?
+            public let uv2File: String?, uv2SHA256: String?
             public let uv3File: String?, uv3SHA256: String?
             public let colorsFile: String?, colorsSHA256: String?
         }
@@ -246,7 +254,7 @@ public final class SourceVertexStreams: @unchecked Sendable {
     /// Loads every stream in `manifest.json` (hash-checked) for `device`.
     public static func load(manifest url: URL, device: any MTLDevice) throws -> [String: [SourceVertexStreams]] {
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: url))
-        guard manifest.schemaVersion == 1 else { throw SourceShaderLiveReason("Unsupported vertex stream manifest") }
+        guard (1...2).contains(manifest.schemaVersion) else { throw SourceShaderLiveReason("Unsupported vertex stream manifest") }
         var result: [String: [SourceVertexStreams]] = [:]
         func buffer(_ file: String?, _ digest: String?, stride: Int, count: Int) throws -> (any MTLBuffer)? {
             guard let file else { return nil }
@@ -259,6 +267,8 @@ public final class SourceVertexStreams: @unchecked Sendable {
         }
         for entry in manifest.entries {
             let streams = SourceVertexStreams(mesh: entry.mesh, vertexCount: entry.vertexCount,
+                uv1: try buffer(entry.uv1File, entry.uv1SHA256, stride: 8, count: entry.vertexCount),
+                uv2: try buffer(entry.uv2File, entry.uv2SHA256, stride: 8, count: entry.vertexCount),
                 uv3: try buffer(entry.uv3File, entry.uv3SHA256, stride: 8, count: entry.vertexCount),
                 colors: try buffer(entry.colorsFile, entry.colorsSHA256, stride: 16, count: entry.vertexCount),
                 provenance: "\(entry.bundle)#\(entry.pathID)")

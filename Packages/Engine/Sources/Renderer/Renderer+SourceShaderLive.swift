@@ -72,8 +72,18 @@ extension Renderer {
             var inputs: [[UInt32]: any MTLBuffer] = [:], jobs: [LiveInputJob] = [], failure: String?
             for program in draw.material.passes {
                 guard let layout = SourceShaderLiveEncoder.layout(program) else { failure = "\(program.name) reads an unsupported vertex input"; break }
-                if layout.contains(6) && draw.streams?.uv3 == nil { failure = "\(program.name) reads TEXCOORD3 and the mesh has no source UV3 stream"; break }
-                if layout.contains(7) && draw.streams?.colors == nil { failure = "\(program.name) reads COLOR and the mesh has no source colour stream"; break }
+                // TEXCOORD3/COLOR come from the source mesh's stream record; a
+                // channel the source mesh lacks is bound as the capture
+                // fixture's default (UV3 zero, COLOR white), which the
+                // assembly reports as a convention.
+                if (layout.contains(6) || layout.contains(7)) && draw.streams == nil {
+                    failure = "\(program.name) reads TEXCOORD3/COLOR and the mesh has no source vertex stream record"; break
+                }
+                // A converted mesh without UV1/UV2 aliases UV0: never bind
+                // that as the source channel.
+                if let set = [1, 2].first(where: { layout.contains(UInt32(3 + $0)) && SourceShaderLiveEncoder.uvSource(set: $0, mesh: mesh, streams: draw.streams) == nil }) {
+                    failure = "\(program.name) reads TEXCOORD\(set); the converted mesh carries no UV\(set) (it would alias UV0) and there is no source vertex stream record"; break
+                }
                 if inputs[layout] != nil { continue }
                 let key = SourceShaderLiveEncoder.BufferKey(vertices: source, layout: layout)
                 if let existing = seen[key] { inputs[layout] = existing; continue }
@@ -108,6 +118,9 @@ extension Renderer {
             params.hasSkin = job.skinBuffer != nil && job.mesh.skin != nil ? 1 : 0; params.boneCount = UInt32(job.boneCount)
             params.activeMorphCount = job.morphs != nil ? UInt32(job.morphCount) : 0; params.hasMorphNormals = job.mesh.morphNormals != nil ? 1 : 0
             params.hasUV3 = job.streams?.uv3 != nil ? 1 : 0; params.hasColors = job.streams?.colors != nil ? 1 : 0
+            let uv1 = SourceShaderLiveEncoder.uvSource(set: 1, mesh: job.mesh, streams: job.streams) ?? .zero
+            let uv2 = SourceShaderLiveEncoder.uvSource(set: 2, mesh: job.mesh, streams: job.streams) ?? .zero
+            params.uv1Mode = uv1.rawValue; params.uv2Mode = uv2.rawValue
             withUnsafeMutableBytes(of: &params.semantics) { raw in
                 let lanes = raw.bindMemory(to: UInt32.self)
                 for (index, code) in job.layout.enumerated() { lanes[index] = code }
@@ -119,8 +132,8 @@ extension Renderer {
             enc.setBuffer(job.morphs?.buffer ?? dummy, offset: job.morphs?.offset ?? 0, index: 4)
             enc.setBuffer(job.mesh.morphNormals ?? dummy, offset: 0, index: 5)
             enc.setBuffer(job.mesh.texcoords, offset: 0, index: 6)
-            enc.setBuffer(job.mesh.texcoords1, offset: 0, index: 7)
-            enc.setBuffer(job.mesh.texcoords2, offset: 0, index: 8)
+            enc.setBuffer(uv1 == .stream ? job.streams?.uv1 ?? dummy : job.mesh.texcoords1, offset: 0, index: 7)
+            enc.setBuffer(uv2 == .stream ? job.streams?.uv2 ?? dummy : job.mesh.texcoords2, offset: 0, index: 8)
             enc.setBuffer(job.streams?.uv3 ?? dummy, offset: 0, index: 9)
             enc.setBuffer(job.streams?.colors ?? dummy, offset: 0, index: 10)
             enc.setBuffer(job.output, offset: 0, index: 11)

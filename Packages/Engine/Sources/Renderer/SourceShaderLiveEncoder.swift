@@ -34,6 +34,21 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
         var vertexCount: UInt32 = 0, registerCount: UInt32 = 0, hasSkin: UInt32 = 0, boneCount: UInt32 = 0
         var activeMorphCount: UInt32 = 0, hasMorphNormals: UInt32 = 0, hasUV3: UInt32 = 0, hasColors: UInt32 = 0
         var semantics: (UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32, UInt32) = (0, 0, 0, 0, 0, 0, 0, 0)
+        /// TEXCOORD1 / TEXCOORD2 source: `UVSource` raw values.
+        var uv1Mode: UInt32 = 0, uv2Mode: UInt32 = 0
+    }
+
+    /// Where TEXCOORD1/TEXCOORD2 come from: the converted mesh (V flipped
+    /// back to Unity's), the source stream (Unity convention as stored), or
+    /// zero (the source mesh has no such channel: the capture fixture's value).
+    enum UVSource: UInt32 { case native = 0, stream = 1, zero = 2 }
+
+    /// The TEXCOORD1/TEXCOORD2 source for `mesh` with `streams`, or nil when
+    /// the converted mesh would alias UV0 and no source stream says otherwise.
+    static func uvSource(set: Int, mesh: GPUMesh, streams: SourceVertexStreams?) -> UVSource? {
+        if set == 1 ? mesh.carriesUV1 : mesh.carriesUV2 { return .native }
+        guard let streams else { return nil }
+        return (set == 1 ? streams.uv1 : streams.uv2) != nil ? .stream : .zero
     }
 
     struct BufferKey: Hashable { let vertices: UInt64; let layout: [UInt32] }
@@ -71,7 +86,9 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
     /// NORMAL recomputed from the rest normal plus active morph normal deltas,
     /// skinned linearly with the same normalized weights as `Deform.metal` and
     /// NOT renormalized (#96: Unity's skinned NORMAL keeps its magnitude, which
-    /// the outline passes scale by); TEXCOORD0–2 un-flipped back to Unity's V;
+    /// the outline passes scale by); TEXCOORD0–2 un-flipped back to Unity's V,
+    /// except a TEXCOORD1/2 the converted mesh lacks, which comes from the
+    /// source stream as stored (or zero when the source has none either);
     /// TEXCOORD3/COLOR from the source vertex streams.
     static let kernelSource = """
     #include <metal_stdlib>
@@ -83,7 +100,13 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
         uint vertexCount; uint registerCount; uint hasSkin; uint boneCount;
         uint activeMorphCount; uint hasMorphNormals; uint hasUV3; uint hasColors;
         uint semantics[8];
+        uint uv1Mode; uint uv2Mode;
     };
+    static float4 extraUV(device const float2 *uv, uint mode, uint vid) {
+        if (mode == 0) return float4(uv[vid].x, 1.0f - uv[vid].y, 0.0f, 0.0f);
+        if (mode == 1) return float4(uv[vid], 0.0f, 0.0f);
+        return float4(0.0f);
+    }
     kernel void source_vertex_inputs(uint vid [[thread_position_in_grid]],
         device const DeformedVertex *base [[buffer(0)]],
         device const DeformedVertex *deformed [[buffer(1)]],
@@ -128,8 +151,8 @@ final class SourceShaderLiveEncoder: @unchecked Sendable {
                 case 1: v = float4(n.x, n.y, -n.z, 0.0f); break;
                 case 2: v = float4(t, b.tangent.w); break;
                 case 3: v = float4(uv0[vid].x, 1.0f - uv0[vid].y, 0.0f, 0.0f); break;
-                case 4: v = float4(uv1[vid].x, 1.0f - uv1[vid].y, 0.0f, 0.0f); break;
-                case 5: v = float4(uv2[vid].x, 1.0f - uv2[vid].y, 0.0f, 0.0f); break;
+                case 4: v = extraUV(uv1, p.uv1Mode, vid); break;
+                case 5: v = extraUV(uv2, p.uv2Mode, vid); break;
                 case 6: v = p.hasUV3 != 0 ? float4(uv3[vid], 0.0f, 0.0f) : float4(0.0f); break;
                 case 7: v = p.hasColors != 0 ? colors[vid] : float4(1.0f); break;
             }
