@@ -17,9 +17,13 @@ beyond reading the report's summary block.
     python3 Tools/verification/perf_trace.py summarize .local/perf/debug [.local/perf/release ...]
 
 `--xctrace TEMPLATE` (for example "Time Profiler" or "Metal System Trace")
-launches each workload under `xcrun xctrace record` instead, writing
-`<workload>.<template>.trace` next to the report. The app still writes its own
-report and exits; xctrace stops recording when it does.
+also records each workload with `xcrun xctrace record`, writing
+`<workload>.<template>.trace` next to the report. The script starts the app
+itself and attaches xctrace to that process id: `xctrace record --launch` with
+an executable inside an `.app` resolves the bundle identifier through Launch
+Services and can start another registered copy of the app (another checkout's
+build) instead of the one named. The app still writes its own report and
+exits; xctrace stops recording when it does.
 
     python3 Tools/verification/perf_trace.py profile <workload>.time-profiler.trace [--thread "Main Thread"]
 
@@ -111,17 +115,12 @@ def run(args):
             # The timeout bounds the app run only, not the wait for the lock, so
             # the wrapper runs this script's own `_exec` guard around the app.
             target = [os.path.abspath(args.app)]
+            guard = [sys.executable, os.path.abspath(__file__), "_exec",
+                     "--timeout", str(warmup + seconds + args.startup_timeout)]
             if args.xctrace:
                 slug = args.xctrace.lower().replace(" ", "-")
-                trace = output[:-5] + "." + slug + ".trace"
-                # xctrace starts the target with only the variables passed to it.
-                passed = [item for key, value in sorted(env.items()) if key.startswith("IKKOKU_")
-                          for item in ("--env", "%s=%s" % (key, value))]
-                target = (["xcrun", "xctrace", "record", "--template", args.xctrace, "--output", trace, "--no-prompt", "--target-stdout", "-",
-                           "--time-limit", "%ds" % (warmup + seconds + args.startup_timeout)]
-                          + passed + ["--launch", "--"] + target)
-            guard = [sys.executable, os.path.abspath(__file__), "_exec",
-                     "--timeout", str(warmup + seconds + args.startup_timeout + (120 if args.xctrace else 0)), "--"] + target
+                guard += ["--xctrace", args.xctrace, "--trace", output[:-5] + "." + slug + ".trace"]
+            guard += ["--"] + target
             argv = ([args.wrap] if args.wrap else []) + guard
             log_path = output[:-5] + ".log"
             print("[perf] %s -> %s" % (workload, output), flush=True)
@@ -136,21 +135,42 @@ def run(args):
     return 0
 
 
-def guarded_exec(args):
-    """Runs one app launch, killing it if it outlives `--timeout` seconds."""
-    process = subprocess.Popen(args.argv)
+def stop(process, grace):
+    """SIGINT, then SIGKILL after `grace` seconds; xctrace finishes its trace on SIGINT."""
+    process.send_signal(signal.SIGINT)
     try:
-        return process.wait(timeout=args.timeout)
+        process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
-        # SIGINT first: xctrace then stops its target and finishes the trace.
-        process.send_signal(signal.SIGINT)
-        try:
-            process.wait(timeout=60)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+        process.kill()
+        process.wait()
+
+
+def guarded_exec(args):
+    """Runs one app launch, killing it if it outlives `--timeout` seconds.
+
+    With `--xctrace TEMPLATE --trace PATH` an `xctrace record --attach` of the
+    launched process id records it until it exits (see the module notes on
+    why the app is not launched by xctrace)."""
+    process = subprocess.Popen(args.argv)
+    recorder = None
+    if getattr(args, "xctrace", None):
+        recorder = subprocess.Popen(["xcrun", "xctrace", "record", "--template", args.xctrace, "--output", args.trace,
+                                     "--no-prompt", "--attach", str(process.pid), "--time-limit", "%ds" % (args.timeout + 60)])
+    try:
+        code = process.wait(timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        stop(process, 10)
         print("[perf] launch stopped after %d s" % args.timeout, flush=True)
-        return 124
+        code = 124
+    if recorder is not None:
+        # An attached recording ends when its process exits; give it time to save.
+        try:
+            recorder.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            stop(recorder, 60)
+        if recorder.returncode not in (0, None) and code == 0:
+            print("[perf] xctrace exited %s" % recorder.returncode, flush=True)
+    return code
 
 
 def load(directory):
@@ -237,7 +257,19 @@ def recording_window(trace):
     return begin, end
 
 
+def traced_processes(trace):
+    """The recorded target processes' paths from the trace's table of contents."""
+    import xml.etree.ElementTree as ElementTree
+    toc = subprocess.run(["xcrun", "xctrace", "export", "--input", trace, "--toc"], check=True, capture_output=True).stdout
+    return sorted({p.attrib["path"] for p in ElementTree.fromstring(toc).iter("process")
+                   if p.attrib.get("path") and p.attrib.get("pid") != "0"})
+
+
 def profile(args):
+    if not getattr(args, "skip_toc", False):
+        # A trace of the wrong executable would be silently misattributed.
+        for path in traced_processes(args.trace):
+            print("process: %s" % path)
     begin, end = (None, None) if args.whole else recording_window(args.trace)
     data = export_table(args.trace, "time-profile")
     stacks = {}
@@ -338,6 +370,8 @@ def main(argv=None):
     prof.add_argument("--focus", help="regular expression: keep samples inside a matching frame and list what it spends its time calling")
     guard = sub.add_parser("_exec", help=argparse.SUPPRESS)
     guard.add_argument("--timeout", type=int, required=True)
+    guard.add_argument("--xctrace")
+    guard.add_argument("--trace")
     guard.add_argument("argv", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.command == "run":

@@ -77,7 +77,7 @@ class PerfTraceTests(unittest.TestCase):
         self.assertTrue(line.endswith("| 512 |"))
 
     def test_profile_resolves_refs_and_charges_focus_callees(self):
-        args = argparse.Namespace(trace="unused.trace", whole=True, thread="Main Thread", top=10, binary="Ikkoku", focus="^hot$")
+        args = argparse.Namespace(trace="unused.trace", whole=True, thread="Main Thread", top=10, binary="Ikkoku", focus="^hot$", skip_toc=True)
         output = io.StringIO()
         with mock.patch.object(perf_trace, "export_table", return_value=PROFILE.encode()), contextlib.redirect_stdout(output):
             self.assertEqual(perf_trace.profile(args), 0)
@@ -99,6 +99,28 @@ class PerfTraceTests(unittest.TestCase):
             self.assertEqual(perf_trace.guarded_exec(args), 124)
         args = argparse.Namespace(timeout=30, argv=[sys.executable, "-c", "raise SystemExit(3)"])
         self.assertEqual(perf_trace.guarded_exec(args), 3)
+
+    def test_xctrace_attaches_to_the_launched_process_instead_of_launching_by_bundle(self):
+        launched = []
+
+        class FakeProcess:
+            def __init__(self, argv):
+                self.argv = argv
+                self.pid = 4242 if not launched else 99
+                self.returncode = 0
+                launched.append(self)
+
+            def wait(self, timeout=None):
+                return 0
+
+        args = argparse.Namespace(timeout=30, argv=["/apps/Ikkoku.app/Contents/MacOS/Ikkoku"], xctrace="Time Profiler", trace="/out/w.trace")
+        with mock.patch.object(perf_trace.subprocess, "Popen", FakeProcess):
+            self.assertEqual(perf_trace.guarded_exec(args), 0)
+        app, recorder = launched
+        self.assertEqual(app.argv, ["/apps/Ikkoku.app/Contents/MacOS/Ikkoku"])
+        self.assertIn("--attach", recorder.argv)
+        self.assertEqual(recorder.argv[recorder.argv.index("--attach") + 1], "4242")
+        self.assertNotIn("--launch", recorder.argv)
 
 
 if __name__ == "__main__":
