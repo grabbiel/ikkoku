@@ -1,6 +1,6 @@
 # Source gameplay control-state recovery
 
-Reviewed 2026-10-23 against the working tree (G-T01 session host, A-T01 gameplay host first slice). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract. The [native gameplay host](#gameplay-host-a-t01) drives the [session](#session-host-and-effect-inventory-g-t01) and one fixed event, and the app runs it only as a headless scenario (`IKKOKU_GAMEPLAY_SCENARIO`). There is no interactive gameplay mode.
+Reviewed 2026-10-23 against the working tree (G-T01 session host, A-T01 gameplay host first slice, G-T02 character bindings and host schema 2). The [Gameplay audit](../../component-audit/app-gameplay-and-plugins.md#g-gameplay-cycle-event-selection-and-adv) tracks completion and follow-up tasks. This is an engine/CLI contract. The [native gameplay host](#gameplay-host-a-t01) drives the [session](#session-host-and-effect-inventory-g-t01) and one fixed event, and the app runs it only as a headless scenario (`IKKOKU_GAMEPLAY_SCENARIO`). There is no interactive gameplay mode.
 
 The native `Gameplay` module translates the day/period and action-clock control
 state recovered from this installation's `ActionGame.Cycle`. It is an executable
@@ -325,18 +325,26 @@ that the session section above anticipates. It owns:
 - one `SourceGameplaySession`;
 - `SourceGameplayNativeState`, a versioned native save state. It holds the saved
   and shown weekday, the clock zone, the last sunlight map and period, the
-  minimap/camera flag, the active map number, a player next flag, heroine
-  placeholders (`id`, `fixCharaID`, `classIndex`, `isTaked`, `eventAfterDay` and
-  a count of applied daily increments) and the completed fixed-event asset IDs;
+  minimap/camera flag, the active map number, the player (a next flag and,
+  since G-T02, optional `SourcePlayerParameters`), the heroines (`id`,
+  `classIndex`, a count of applied daily increments and, since G-T02,
+  `SourceHeroineParameters`, the typed `SaveData.Heroine` members the ADV
+  bindings read and write; the scheduler reads `fixCharaID`, `isTaked` and
+  `eventAfterDay` from it) and the completed fixed-event asset IDs;
 - at most one running fixed event (heroine, scheduler selection and its
   `SourceADVInterpreter`) and at most one map load;
 - an immutable `SourceGameplayEventCatalog` (fixed-event table, ADV program per
-  event asset, map names and numbers, wait points). Every scheduled asset must
-  have exactly one program.
+  event asset, map names and numbers, wait points and, optionally, the
+  `ParameterFile` library and the character tables the bindings read; see
+  [character bindings](adv.md#character-bindings-g-t02)). Every scheduled asset
+  must have exactly one program.
 
-None of the state is original campaign data (G12). Each field is a native
-placeholder that changes only when the host performs the matching effect, and
-the original counters behind `advanceCharacterDays` are not modelled.
+None of the state is loaded from or written to original campaign data (G12).
+The heroine and player parameters have the source members' names, types and
+new-game values, but they start from the scenario's values, not from a save.
+The other fields are native placeholders that change only when the host
+performs the matching effect, and the original counters behind
+`advanceCharacterDays` are not modelled.
 
 **Commands and steps.** A caller stages one cycle operation with `perform(_:)`
 and advances the host with `step()`, one unit of host work at a time; `run()`
@@ -365,13 +373,21 @@ during an event reaches its ADV barrier. Each step does the first applicable ite
    - finish a started load: set the active map, then acknowledge the request with
      no ADV variables, because `Cycle.ADVVariables` is not recovered;
    - complete the event on Close or exhaustion, appending its asset ID to
-     `completedEvents`;
-   - otherwise tick the interpreter one `frameDelta` frame without Next.
+     `completedEvents` and setting the heroine's `eventAfterDay` to 0 (the
+     source's `Cycle.FixCharaEventStart` does this after the ADV);
+   - otherwise tick the interpreter one `frameDelta` frame without Next. With
+     character tables in the catalog, the interpreter's heroine and player are
+     then written back to the saved state, because the source binds the saved
+     `SaveData.Heroine` itself.
 5. Run the period routine's fixed-event check. Native policy: every period
    checks, heroines in saved order, and the first `SourceFixedEventScheduler`
    selection starts its program. Which source period bodies check events is not
-   translated (see the dependency map above). Completed events are skipped, so
-   an event runs once.
+   translated (see the dependency map above). Completed events, and assets in
+   the heroine's `talkEvent` (which `FixEventScheduler.Check` also skips), are
+   skipped, so an event runs once. With character tables the new interpreter is
+   bound to the heroine, the player and the catalog's library, and its
+   `SetADVParam(scenario)` seed (whose getters can clamp `lewdness` or cache
+   `voiceNo`) is written back at once.
 
 A barrier that waits while no event runs throws `barrierBlocked`. Every throwing
 command or step leaves the host unchanged, so a failed step is repeated
@@ -391,13 +407,22 @@ parameters, companions, player creation, the action count and the Saturday
 teachers, so `beginMapMove`, `finishMapMove` and `completeNightMenu` are rejected.
 
 **Persistence.** The whole host is `Codable`: format marker
-`ikkoku.native-gameplay-host`, `schemaVersion` 1, canonical sorted-key JSON
-from `snapshot()`, at most 16 MiB. `SourceGameplayHost.resume(_:catalog:)`
-rejects data by name:
+`ikkoku.native-gameplay-host`, `schemaVersion` 2 (G-T02), canonical sorted-key
+JSON from `snapshot()`, at most 16 MiB. Schema 2 stores each heroine's
+`parameters` and the player's `parameters`, the catalog's optional
+`parameterLibrary` and `characterTables`, and a bound interpreter's
+`character`, `insertions`, `replaces` and `parameterLibrary`.
+`SourceGameplayHost.resume(_:catalog:)` reads schemas 1 and 2. A schema-1
+snapshot migrates on decode: each placeholder heroine becomes the new-game
+`SourceHeroineParameters` with its `fixCharaID`, `isTaked` and `eventAfterDay`
+copied, and the next `snapshot()` writes schema 2. `resume` rejects data by name:
 
 - `unrecognizedSnapshot` for a missing or other format, including a bare session
   snapshot;
-- `unsupportedSchemaVersion` and `snapshotTooLarge`;
+- `unsupportedSchemaVersion` (other than 1 or 2) and `snapshotTooLarge`;
+- `inconsistentState` for a schema-1 snapshot that carries schema-2 data
+  (player parameters, catalog tables or library, a bound interpreter), a
+  schema-2 snapshot with placeholder heroines, or a heroine with both shapes;
 - `catalogMismatch` when the snapshot carries other content than the caller's
   catalog;
 - `invalidCatalog`;
@@ -423,7 +448,10 @@ steps.
   returns. The result must equal the persisted host and re-encode to the same
   bytes.
 - `assert` checks period, weekday, saved weekday, active map, completed events,
-  running event or idle.
+  running event or idle and, since G-T02, a saved heroine's parameters by
+  original key (read through the key's getter on a copy, as
+  `"System.Int32:4"`), the running event's ADV variables and its ParameterFile
+  insertion count. `run` also stops at `parameterInserted`.
 
 The report lists each step, every reload, the full trace and the final state. The
 app runs it behind `IKKOKU_GAMEPLAY_SCENARIO` with the required

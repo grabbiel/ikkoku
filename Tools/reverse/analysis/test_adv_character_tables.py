@@ -157,9 +157,9 @@ class ModelTests(unittest.TestCase):
             self.assertIsNone(tables.int32_parse(text), text)
 
     def test_library_effect_adds_clamps_and_writes(self):
-        triple = [cmd(3, "H_intimacy", "1", "6", multi=True), cmd(4, "H_intimacy", "H_intimacy", "0", "100"),
+        triple = [cmd(3, "H_intimacy", "1", "4", multi=True), cmd(4, "H_intimacy", "H_intimacy", "0", "100"),
                   cmd(165, "H_intimacy", "H_intimacy")]
-        self.assertEqual(tables.library_effect(triple, {"H_intimacy": 0}), {"H_intimacy": 6})
+        self.assertEqual(tables.library_effect(triple, {"H_intimacy": 0}), {"H_intimacy": 4})
         self.assertEqual(tables.library_effect(triple, {"H_intimacy": 98}), {"H_intimacy": 100})
         minus = [cmd(3, "H_intimacy", "2", "5", multi=True)] + triple[1:]
         self.assertEqual(tables.library_effect(minus, {"H_intimacy": 3}), {"H_intimacy": 0})

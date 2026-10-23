@@ -372,17 +372,17 @@ private func encodedRoundTrip(_ vm: SourceADVInterpreter) throws -> SourceADVInt
 }
 
 @Test func sourceOriginalParameterShapeFinishesWithSourceValues() throws {
-    // The shape of original parameter asset 301: Calc, Clamp, HeroineParam.
+    // The shape of original parameter asset 301 (Calc, Clamp, HeroineParam) with a synthetic amount.
     let library = SourceADVParameterLibrary(programs: ["301": [
-        command(3, ["H_intimacy", "1", "6"], multi: true),
+        command(3, ["H_intimacy", "1", "4"], multi: true),
         command(4, ["H_intimacy", "H_intimacy", "0", "100"]),
         command(165, ["H_intimacy", "H_intimacy"]),
     ]])
     let vm = try run([command(201, ["301"])], library: library)
     #expect(vm.fault == nil)
     #expect(vm.exhausted)
-    #expect(vm.character?.heroine.intimacy == 6)
-    #expect(vm.variables["H_intimacy"] == .integer(6)) // Clamp's Single 6 converted back to Int32.
+    #expect(vm.character?.heroine.intimacy == 4)
+    #expect(vm.variables["H_intimacy"] == .integer(4)) // Clamp's Single 4 converted back to Int32.
     // Clamp bounds the stored value.
     let high = try run([command(201, ["301"])], character: binding(heroine { $0.intimacy = 98 }), library: library)
     #expect(high.character?.heroine.intimacy == 100)

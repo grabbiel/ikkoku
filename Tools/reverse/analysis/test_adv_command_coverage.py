@@ -375,7 +375,7 @@ TABLES = dict(schemaVersion=1, callDefaultID=7, voiceNumbers=[0],
               callNames={"c00": [dict(name="A", id=1, category=2, bundle="b"), dict(name="S", id=5, category=0, bundle="b"),
                                  dict(name="D", id=7, category=2, bundle="b")],
                          "player": [dict(name="D", id=7, category=2, bundle="b")]})
-TRIPLE = [cmd(3, "H_intimacy", "1", "6", multi=True), cmd(4, "H_intimacy", "H_intimacy", "0", "100"), cmd(165, "H_intimacy", "H_intimacy")]
+TRIPLE = [cmd(3, "H_intimacy", "1", "4", multi=True), cmd(4, "H_intimacy", "H_intimacy", "0", "100"), cmd(165, "H_intimacy", "H_intimacy")]
 LIBRARY = {"lib": TRIPLE, "empty": [], "nest": [cmd(201, "lib")], "bad": [cmd(ICON)]}
 
 
@@ -443,8 +443,8 @@ class BindingTests(unittest.TestCase):
             expanded = coverage.expand(program)[0]
             self.assertEqual(coverage.modelled(expanded), {1, 2, 3, 5, 6, 7})
             self.assertTrue(coverage.straight_line(expanded, None))
-            self.assertEqual(coverage.expected_heroine(expanded, len(expanded)), {"intimacy": 12})
-            self.assertEqual(coverage.expected_heroine(expanded, 4), {"intimacy": 6})
+            self.assertEqual(coverage.expected_heroine(expanded, len(expanded)), {"intimacy": 8})
+            self.assertEqual(coverage.expected_heroine(expanded, 4), {"intimacy": 4})
             self.assertIsNone(coverage.expected_heroine(expanded, 3))  # Ends inside an inserted program.
             # A program write to the same key: the inserted Calc is value-dependent again.
             mixed = coverage.expand([cmd(1, "System.String", "H_intimacy", "x", multi=True), cmd(201, "lib"), cmd(22)])[0]
@@ -490,15 +490,15 @@ class BindingTests(unittest.TestCase):
             def run(snapshots, intimacy):
                 report = dict(cases=[dict(name="c00/00.unity3d#1", snapshots=snapshots, heroine=dict(intimacy=intimacy, callID=-1))])
                 return coverage.compare(result, [(trace, report)])["summary"]
-            summary = run(self.native_run(), 6)
+            summary = run(self.native_run(), 4)
             self.assertEqual(summary["categories"], {"match-no-halt": 1})
             self.assertEqual({k: summary["insertions"][k] for k in ("sequenceMatches", "heroineMatches", "heroineChanged")},
                              dict(sequenceMatches=1, heroineMatches=1, heroineChanged=1))
             self.assertEqual(summary["requestMismatchCases"], 0)
-            self.assertEqual(run(self.native_run(), 7)["requests"]["mismatch:heroine"], 1)
+            self.assertEqual(run(self.native_run(), 5)["requests"]["mismatch:heroine"], 1)
             tampered = self.native_run()
             tampered[0] = dict(tampered[0], insertions=[dict(tampered[0]["insertions"][0], count=4)])
-            self.assertEqual(run(tampered, 6)["categories"], {"unexplained": 1})
+            self.assertEqual(run(tampered, 4)["categories"], {"unexplained": 1})
 
     def test_sample_carries_the_binding_and_library_checks(self):
         program = [cmd(201, "lib"), cmd(16, "n", "t"), cmd(22)]
@@ -508,10 +508,10 @@ class BindingTests(unittest.TestCase):
         self.assertEqual((sample["schemaVersion"], sample["parameterLibraryPath"], sample["characterTablesPath"]),
                          (3, "parameter-library.json", "character-tables.json"))
         case = sample["cases"][0]
-        self.assertEqual((case["stratum"], case["exactPrediction"], case["expectedHeroine"]), ("parameter-file", True, {"intimacy": 6}))
+        self.assertEqual((case["stratum"], case["exactPrediction"], case["expectedHeroine"]), ("parameter-file", True, {"intimacy": 4}))
         self.assertEqual(case["predictedInsertions"], [dict(pc=0, asset="lib", count=3)])
         self.assertEqual(case["program"]["commands"], program)  # The native run inserts the library itself.
-        self.assertEqual(sample["libraryChecks"], [dict(asset="lib", expectedHeroine={"intimacy": 6})])
+        self.assertEqual(sample["libraryChecks"], [dict(asset="lib", expectedHeroine={"intimacy": 4})])
 
 if __name__ == "__main__":
     unittest.main()

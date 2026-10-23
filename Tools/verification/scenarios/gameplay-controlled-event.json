@@ -194,7 +194,7 @@
             "args": [
               "H_intimacy",
               "1",
-              "6"
+              "4"
             ],
             "multi": true,
             "hash": 0,
@@ -363,7 +363,7 @@
       "idle": true,
       "heroine": 1,
       "heroineParameters": {
-        "H_intimacy": "System.Int32:6",
+        "H_intimacy": "System.Int32:4",
         "H_callID": "System.Int32:3",
         "H_callName": "System.String:SyntheticCallC",
         "H_eventAfterDay": "System.Int32:0",
@@ -394,7 +394,7 @@
       "idle": true,
       "heroine": 1,
       "heroineParameters": {
-        "H_intimacy": "System.Int32:6",
+        "H_intimacy": "System.Int32:4",
         "H_eventAfterDay": "System.Int32:1"
       }
     }
