@@ -195,4 +195,4 @@ This needs push rights; the cloud session's proxy refused branch deletion.
 | L4 T-T01 versions | claimed (claude/local-wave-verify) |
 | L5 E-T02 rerun | claimed (claude/local-wave-verify) |
 | L6 texture-loader stall | claimed (claude/local-wave-verify) |
-| L7 branch cleanup | open |
+| L7 branch cleanup | done (orchestrator, 2026-10-23: rechecked against origin/main and each branch's merged PR, then deleted the 32 listed merged claude/* branches and the unmerged claude/r6-character-lifetime-diag; its two TEMP commits are kept privately as patches) |
