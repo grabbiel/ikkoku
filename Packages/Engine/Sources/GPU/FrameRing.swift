@@ -145,7 +145,7 @@ public final class FrameRing: @unchecked Sendable {
     /// then returned that pointer as a thrown error. This function did not check
     /// the register after a call that cannot throw, so it passed the pointer to
     /// its caller. `Renderer.prepare` crashed retaining it on the first skinned
-    /// frame (R6; docs/reference/renderer.md#frame-uniforms).
+    /// frame (R6; docs/reference/renderer.md#renderer-limits-and-resource-lifetime-r6-first-slice).
     public func allocate<T>(array: [T]) throws -> FrameAllocation {
         let byteCount = MemoryLayout<T>.stride * array.count
         let target = try allocate(byteCount: max(byteCount, 1))
