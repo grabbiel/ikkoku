@@ -86,8 +86,30 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
         handler?.viewportSize = SIMD2<Float>(Float(size.width), Float(size.height))
     }
 
+    /// The link runs on the main run loop (`viewDidMoveToWindow`), so the draw
+    /// shares the main thread with model updates and SwiftUI. `PerfTrace`
+    /// records each callback when `IKKOKU_PERF_TRACE` is set.
     nonisolated func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
-        renderer.draw(to: update.drawable, timestamp: update.targetPresentationTimestamp)
+        MainActor.assumeIsolated {
+            let trace = PerfTrace.active
+            var presentIndex = -1
+            if let trace {
+                let log = trace.presentLog
+                let index = log.register()
+                presentIndex = index
+                update.drawable.addPresentedHandler { drawable in log.presented(index, at: drawable.presentedTime) }
+            }
+            let start = CACurrentMediaTime()
+            PerfSignpost.interval("Draw") {
+                renderer.draw(to: update.drawable, timestamp: update.targetPresentationTimestamp)
+            }
+            if let trace {
+                let texture = update.drawable.texture
+                trace.didDraw(callback: start, end: CACurrentMediaTime(), targetPresentation: update.targetPresentationTimestamp,
+                              gpuSeconds: renderer.lastFrameGPUTime, presentIndex: presentIndex,
+                              drawable: CGSize(width: texture.width, height: texture.height))
+            }
+        }
     }
 
     // MARK: Input
@@ -101,10 +123,16 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let p = pixel(event); lastPoint = p
-        handler?.mouseDown(at: p, button: 0, modifiers: event.modifierFlags)
+        PerfTrace.input("mouseDown") { handler?.mouseDown(at: p, button: 0, modifiers: event.modifierFlags) }
     }
-    override func rightMouseDown(with event: NSEvent) { let p = pixel(event); lastPoint = p; handler?.mouseDown(at: p, button: 1, modifiers: event.modifierFlags) }
-    override func otherMouseDown(with event: NSEvent) { let p = pixel(event); lastPoint = p; handler?.mouseDown(at: p, button: 2, modifiers: event.modifierFlags) }
+    override func rightMouseDown(with event: NSEvent) {
+        let p = pixel(event); lastPoint = p
+        PerfTrace.input("mouseDown") { handler?.mouseDown(at: p, button: 1, modifiers: event.modifierFlags) }
+    }
+    override func otherMouseDown(with event: NSEvent) {
+        let p = pixel(event); lastPoint = p
+        PerfTrace.input("mouseDown") { handler?.mouseDown(at: p, button: 2, modifiers: event.modifierFlags) }
+    }
 
     override func mouseDragged(with event: NSEvent) { drag(event, button: 0) }
     override func rightMouseDragged(with event: NSEvent) { drag(event, button: 1) }
@@ -113,19 +141,30 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
         let p = pixel(event)
         let d = p - lastPoint
         lastPoint = p
-        handler?.mouseDragged(to: p, delta: d, button: button, modifiers: event.modifierFlags)
+        PerfTrace.input("mouseDragged") { handler?.mouseDragged(to: p, delta: d, button: button, modifiers: event.modifierFlags) }
     }
 
-    override func mouseUp(with event: NSEvent) { handler?.mouseUp(at: pixel(event), button: 0, modifiers: event.modifierFlags) }
-    override func rightMouseUp(with event: NSEvent) { handler?.mouseUp(at: pixel(event), button: 1, modifiers: event.modifierFlags) }
-    override func otherMouseUp(with event: NSEvent) { handler?.mouseUp(at: pixel(event), button: 2, modifiers: event.modifierFlags) }
-    override func mouseMoved(with event: NSEvent) { handler?.mouseMoved(to: pixel(event)) }
+    override func mouseUp(with event: NSEvent) { up(event, button: 0) }
+    override func rightMouseUp(with event: NSEvent) { up(event, button: 1) }
+    override func otherMouseUp(with event: NSEvent) { up(event, button: 2) }
+    private func up(_ event: NSEvent, button: Int) {
+        let p = pixel(event)
+        PerfTrace.input("mouseUp") { handler?.mouseUp(at: p, button: button, modifiers: event.modifierFlags) }
+    }
+    override func mouseMoved(with event: NSEvent) {
+        let p = pixel(event)
+        PerfTrace.input("mouseMoved") { handler?.mouseMoved(to: p) }
+    }
 
     override func scrollWheel(with event: NSEvent) {
         let scale: Float = event.hasPreciseScrollingDeltas ? 0.15 : 1.0
-        handler?.scrolled(delta: SIMD2<Float>(Float(event.scrollingDeltaX) * scale, Float(event.scrollingDeltaY) * scale), modifiers: event.modifierFlags)
+        let delta = SIMD2<Float>(Float(event.scrollingDeltaX) * scale, Float(event.scrollingDeltaY) * scale)
+        PerfTrace.input("scrolled") { handler?.scrolled(delta: delta, modifiers: event.modifierFlags) }
     }
-    override func magnify(with event: NSEvent) { handler?.magnified(by: Float(event.magnification)) }
+    override func magnify(with event: NSEvent) {
+        let amount = Float(event.magnification)
+        PerfTrace.input("magnified") { handler?.magnified(by: amount) }
+    }
     override func keyDown(with event: NSEvent) {
         if handler?.keyDown(event) != true { super.keyDown(with: event) }
     }

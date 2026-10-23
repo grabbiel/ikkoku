@@ -56,6 +56,10 @@ public struct CaptureRequest: Sendable, Equatable {
         /// frame, or the Studio frame with `IKKOKU_SOURCE_SCENE`,
         /// `IKKOKU_CAPTURE_STUDIO` or `IKKOKU_LOAD_SCENE`.
         case appCapture
+        /// `IKKOKU_PERF_TRACE`: the editor window opens, drives one workload
+        /// (`IKKOKU_PERF_WORKLOAD`) for a fixed time, writes the per-frame report
+        /// to the variable's path and exits (R7).
+        case perfTrace
 
         /// How messages name the mode, with the variable that selects it.
         public var label: String {
@@ -70,6 +74,7 @@ public struct CaptureRequest: Sendable, Equatable {
             case .gameplayScenario: return "the gameplay scenario (IKKOKU_GAMEPLAY_SCENARIO)"
             case .thumbnails: return "catalog thumbnails (IKKOKU_RENDER_THUMBS)"
             case .appCapture: return "the Maker/Studio app capture (IKKOKU_AUTOCAPTURE without a rig, model or scene capture)"
+            case .perfTrace: return "the performance trace (IKKOKU_PERF_TRACE)"
             }
         }
     }
@@ -161,9 +166,14 @@ public struct CaptureRequest: Sendable, Equatable {
         }
 
         // 4. The window capture needs the editor window, which only an interactive
-        // launch or an app capture that returns to it opens.
+        // launch or an app capture that returns to it opens. The performance trace
+        // keeps the window but drives it itself, so a snapshot would race it.
         let capturesWindow = isSet(windowCapture)
-        let closing = selected.filter { $0.mode != .appCapture }
+        let closing = selected.filter { $0.mode != .appCapture && $0.mode != .perfTrace }
+        if capturesWindow, let trace = selected.first(where: { $0.mode == .perfTrace }) {
+            report([windowCapture, trace.variable], "the performance trace drives the editor window for its whole run; "
+                       + "capture the window in a separate launch")
+        }
         if capturesWindow, !closing.isEmpty {
             let exiting = joinedList(closing.map { $0.mode.label }, "and")
             var variables: [String] = [windowCapture]
@@ -346,6 +356,7 @@ extension CaptureRequest {
         ModeSelector("IKKOKU_MAKER_SCENARIO", .makerScenario),
         ModeSelector("IKKOKU_STUDIO_SCENARIO", .studioScenario),
         ModeSelector("IKKOKU_RENDER_THUMBS", .thumbnails),
+        ModeSelector("IKKOKU_PERF_TRACE", .perfTrace),
     ]
 
     /// Capture options and the modes that read them; every other mode ignores them.
@@ -398,6 +409,13 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_BENCHMARK_OUTPUT", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_FRAMES", [.appCapture]),
         ScopedOption("IKKOKU_BENCHMARK_SIMULATION_FRAMES", [.appCapture]),
+        ScopedOption("IKKOKU_PERF_WORKLOAD", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_SECONDS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_WARMUP_SECONDS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_WINDOW_W", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_WINDOW_H", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_INPUT_HZ", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_CHARACTERS", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -431,7 +449,7 @@ extension CaptureRequest {
 
     /// Name prefixes used only by capture variables: an unknown name with one of
     /// these is a misspelling, not some other tool's fixture.
-    static let capturePrefixes: [String] = ["IKKOKU_CAPTURE_", "IKKOKU_ORIGINAL_FRAME_", "IKKOKU_BENCHMARK_"]
+    static let capturePrefixes: [String] = ["IKKOKU_CAPTURE_", "IKKOKU_ORIGINAL_FRAME_", "IKKOKU_BENCHMARK_", "IKKOKU_PERF_"]
 
     static let dependencies: [Dependency] = [
         Dependency("IKKOKU_CAPTURE_POSE", requires: "IKKOKU_CAPTURE_STUDIO"),
@@ -489,6 +507,19 @@ extension CaptureRequest {
         ValueRule("IKKOKU_CAPTURE_EXPR", .pairs(keys: ["eyes", "mouth", "brows", "head", "gaze"], integerValues: true)),
         ValueRule("IKKOKU_CAPTURE_SLIDERS", .pairs(keys: nil, integerValues: false)),
         ValueRule("IKKOKU_APPLICATION_FOCUS", .focusEvents),
+        ValueRule("IKKOKU_PERF_WORKLOAD", .oneOf(perfWorkloads)),
+        ValueRule("IKKOKU_PERF_SECONDS", .integer(1...600)),
+        ValueRule("IKKOKU_PERF_WARMUP_SECONDS", .integer(0...120)),
+        ValueRule("IKKOKU_PERF_WINDOW_W", .integer(640...8192)),
+        ValueRule("IKKOKU_PERF_WINDOW_H", .integer(480...8192)),
+        ValueRule("IKKOKU_PERF_INPUT_HZ", .integer(1...1000)),
+        ValueRule("IKKOKU_PERF_CHARACTERS", .integer(1...32)),
+    ]
+
+    /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
+    public static let perfWorkloads: [String] = [
+        "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
+        "studio-native", "startup",
     ]
 }
 

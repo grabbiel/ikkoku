@@ -119,7 +119,9 @@ final class MakerModel: ViewportInputHandler {
     }
 
     /// Idle animation tick (blink + breathing). Cheap: only rebuilds the frame when something moves.
-    private func tick() {
+    private func tick() { PerfTrace.measure(.makerTick, "MakerTick") { tickBody() } }
+
+    private func tickBody() {
         let now = ProcessInfo.processInfo.systemUptime
         let delta = Float(now - sourceLastTick); sourceLastTick = now
         if isActiveMode, let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
@@ -192,7 +194,9 @@ final class MakerModel: ViewportInputHandler {
 
     // MARK: Frame
 
-    func refresh() {
+    func refresh() { PerfTrace.measure(.makerRefresh, "MakerRefresh") { refreshFrame() } }
+
+    private func refreshFrame() {
         guard !updatingSource else { return }
         if let preview = sourceRigPreview {
             do {
