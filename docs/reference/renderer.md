@@ -1962,8 +1962,12 @@ Here `$L` is the primary checkout's `.local`, and `$R` is
 `$L/codex-renderer-maker-models-2026-10-23/renderer`. Generated texture pixels stay
 private. Set `IKKOKU_LIVE_SOURCE_TEXTURES=$R/textures/manifest.json` when running
 the app or the gated `liveSourceShadersMeetTheControlledOriginalFrameGates` test;
-that test now requires the complete asset store. Its manifest SHA-256 is
+that test now requires the complete asset store. The retained run's raw manifest
+SHA-256 (including conversion paths) is
 `faf4de5026eaa26f627c7429011e2e515be128136874c08e0c4cac18f8c71160`.
+The test pins 47 entries, zero unavailable assets and a canonical content hash
+(`b41ca624…2f73b4`) covering the entries and source binding report hash while
+excluding machine-specific roots and `source.file` paths.
 
 There are 71 base-level comparisons with retained same-name/size GPU readbacks:
 maximum error 0.0126953, maximum mean error 0.00113748 (linear half float).
@@ -1975,23 +1979,39 @@ assets account for 29 of those missing lower levels. Their authored mip counts,
 dimensions, byte counts and hashes are checked, but their lower mip pixels have
 no independent GPU oracle in this run. Capture frame and new bundle hashes are
 unchanged from the earlier sampler investigation and are retained in each report.
+The JSON summary separates `independentlyComparedMipLevels` (71 GPU base
+readbacks), `offlineComparedMipLevels` (430), and `uncomparedMipLevels` (47).
+`unverifiedMipLevels` includes every level without an independent GPU reference,
+including the offline comparisons; it does not count same-decoder agreement as
+independent validation.
 
 The runtime rejects zero/excessive mip counts, invalid dimensions, unsafe or
-aliased level paths, inconsistent file counts and mismatched level bytes/hashes.
+aliased level paths, inconsistent file counts, malformed SHA-256 digests and
+mismatched level bytes/hashes.
 Path-ID resolution still checks the requested name, serialized file, bundle
 hash, dimensions and mip count. A weak owner check distinguishes resource stores
 even when an object address is reused; a lock serializes cold uploads, and dead
-owner buckets are pruned when a new owner resolves a texture. Stores are immutable
-for their lifetime: editing their files requires a new store and resource store.
+owner buckets are pruned when a new owner resolves a texture. Cold uploads use
+the same buffers that were hashed, without reopening files. The resource cache
+key includes dimensions, mip count and every level digest; rebuilding a manifest
+at the same path and constructing a new store cannot reuse older texture content.
+Equivalent content can reuse an already verified GPU texture. No uncompressed
+CPU mip cache is retained. Existing assemblies keep their already resolved
+textures; replacing files does not implicitly rebuild an assembly.
 These checks run during assembly resolution, with no new per-frame texture work.
 
 The synthetic tests cover malformed manifests, wrong identities, damaged levels,
-row orientation, authored lower-mip preservation, resource-owner release and 16
-concurrent requests producing one upload. The 16 focused `liveSource` tests and
+row orientation, authored lower-mip preservation, resource-owner release, 16
+concurrent requests producing one upload, and a changed lower mip at the same
+path producing a new texture while the original remains intact. The 17 focused `liveSource` tests and
 14 exporter tests pass. Native family colour is checked only where the family is
 frontmost in both the complete capture-provider render and the native subset,
 because missing composites change occlusion. The existing colour limits and hair
 residual bounds are unchanged.
+The eyebrow/eyeline gate requires more than 250 shared-frontmost pixels (278
+observed). Tooth, tongue and nose are never frontmost in the complete controlled
+view: their material resolution is checked, but this fixture supplies no visible
+pixels to establish their native-store colour accuracy.
 
 **Release measurements.** On the M2 Ultra at 768×1024, three old/new-store pairs
 were interleaved under the shared app lock with other builds and captures paused.

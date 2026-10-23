@@ -226,7 +226,10 @@ def verify(manifest_path, frame_path):
                           bundle=entry.get('bundle'), bundleSHA256=entry.get('bundleSHA256'), pathID=entry.get('pathID'),
                           captureDecodedColorSpace=(row.get('authoredMipSource') or {}).get('decodedColorSpace'), levels=levels,
                           comparedMipLevels=sum(level['status'] == 'compared' for level in levels),
-                          unverifiedMipLevels=[level['level'] for level in levels if level['status'] != 'compared'])
+                          independentlyComparedMipLevels=sum(level.get('referenceKind') == 'GPU base readback' for level in levels),
+                          offlineComparedMipLevels=sum(level.get('referenceKind') == 'offline authored mip decode' for level in levels),
+                          uncomparedMipLevels=[level['level'] for level in levels if level['status'] != 'compared'],
+                          unverifiedMipLevels=[level['level'] for level in levels if level.get('referenceKind') != 'GPU base readback'])
             # Keep the existing base-level summary fields for report consumers.
             if levels and levels[0]['status'] == 'compared':
                 result.update({key: levels[0][key] for key in ('meanAbsoluteError', 'maximumError')})

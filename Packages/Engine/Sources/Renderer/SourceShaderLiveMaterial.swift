@@ -93,13 +93,13 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
             guard (1...4096).contains(entry.width), (1...4096).contains(entry.height),
                   (1...(1 + Int(log2(Double(max(entry.width, entry.height)))))).contains(entry.mipLevels),
                   entry.files.count == entry.mipLevels, entry.sha256.count == entry.mipLevels,
+                  entry.sha256.allSatisfy(Self.validDigest),
                   Self.safeComponent(entry.directory), entry.files.allSatisfy(Self.safeComponent),
                   Set(entry.files).count == entry.files.count else {
                 throw SourceShaderLiveReason("Malformed texture store entry \(entry.name)")
             }
             // The converter gives each asset its own directory. Reject
-            // aliases so path-only verification/upload caches cannot apply
-            // one entry's dimensions or digest to another entry's pixels.
+            // conflicting asset declarations for a single level file.
             guard entry.files.allSatisfy({ levelPaths.insert(entry.directory + "/" + $0).inserted }) else {
                 throw SourceShaderLiveReason("Shared level path in texture store entry \(entry.name)")
             }
@@ -152,26 +152,29 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         }
         if let cached = cache.textures[cacheKey] { return .success(cached) }
         do {
-            let folder = url.deletingLastPathComponent().appendingPathComponent(entry.directory)
-            let first = folder.appendingPathComponent(entry.files[0])
-            // Hash every level once per immutable store, then load through the probe's
-            // half-float loader (same bottom-up layout and authored-mip rule).
-            for (level, pair) in zip(entry.files, entry.sha256).enumerated() {
-                let (file, digest) = pair
-                let key = folder.appendingPathComponent(file).path
-                if verified.contains(key) { continue }
-                let data = try Data(contentsOf: folder.appendingPathComponent(file))
-                guard data.count == max(1, entry.width >> level) * max(1, entry.height >> level) * 8 else {
-                    return .failure(.init("\(entry.name) store level \(file) byte count differs"))
+            let contentKey = "source-native-linear-half-v1#\(entry.width)x\(entry.height)#\(entry.mipLevels)#" + entry.sha256.joined(separator: "#")
+            let handle: TextureHandle
+            if let existing = resources.lookup(key: contentKey) {
+                // A newly constructed store can reuse previously verified
+                // content even when its manifest lives at another path.
+                handle = existing
+            } else {
+                let folder = url.deletingLastPathComponent().appendingPathComponent(entry.directory)
+                var levels: [Data] = []
+                for (level, pair) in zip(entry.files, entry.sha256).enumerated() {
+                    let (file, digest) = pair
+                    let data = try Data(contentsOf: folder.appendingPathComponent(file))
+                    guard data.count == max(1, entry.width >> level) * max(1, entry.height >> level) * 8 else {
+                        return .failure(.init("\(entry.name) store level \(file) byte count differs"))
+                    }
+                    guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else {
+                        return .failure(.init("\(entry.name) store level \(file) does not match its SHA-256"))
+                    }
+                    levels.append(data)
                 }
-                guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else {
-                    return .failure(.init("\(entry.name) store level \(file) does not match its SHA-256"))
-                }
-                verified.insert(key)
+                handle = try uploadOriginalProbeTexture(levels: levels, width: entry.width, height: entry.height, mipLevels: entry.mipLevels,
+                                                       generateMips: false, cacheKey: contentKey, resources: resources)
             }
-            let handle = try loadOriginalProbeTexture(url: first, metadata: [
-                "exportEncoding": "linear-rgba16f-little-endian-bottom-up", "width": entry.width, "height": entry.height,
-                "mipLevels": entry.mipLevels, "mipFiles": entry.files], resources: resources)
             guard let texture = resources.texture(handle) else { return .failure(.init("\(entry.name) texture upload failed")) }
             let result = SourceShaderLiveTexture(texture: texture, filter: entry.filter, wrap: entry.wrap, aniso: entry.aniso,
                                                  provenance: "\(entry.bundle)#\(entry.pathID) (\(entry.colorSpace))")
@@ -182,13 +185,15 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
     private static func safeComponent(_ path: String) -> Bool {
         !path.isEmpty && path == (path as NSString).lastPathComponent && !path.hasPrefix(".")
     }
+    private static func validDigest(_ digest: String) -> Bool {
+        digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
     private final class Uploads {
         weak var owner: ResourceStore?
         var textures: [String: SourceShaderLiveTexture] = [:]
         init(owner: ResourceStore) { self.owner = owner }
     }
     private let lock = NSLock()
-    private var verified = Set<String>()
     private var uploaded: [ObjectIdentifier: Uploads] = [:]
 }
 

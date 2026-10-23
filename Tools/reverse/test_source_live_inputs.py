@@ -149,7 +149,10 @@ class TextureStoreTests(unittest.TestCase):
                 height=2, file=files[0], mipFiles=files[:2], authoredMipSource=dict(decodedColorSpace='linear'))])))
             [result] = store.verify(root / 'manifest.json', root / 'frame.json')
             self.assertEqual(result['comparedMipLevels'], 2)
-            self.assertEqual(result['unverifiedMipLevels'], [2])
+            self.assertEqual(result['independentlyComparedMipLevels'], 1)
+            self.assertEqual(result['offlineComparedMipLevels'], 1)
+            self.assertEqual(result['uncomparedMipLevels'], [2])
+            self.assertEqual(result['unverifiedMipLevels'], [1, 2])
             self.assertEqual(result['levels'][0]['referenceKind'], 'GPU base readback')
             self.assertEqual(result['levels'][1]['referenceKind'], 'offline authored mip decode')
             self.assertEqual(result['levels'][1]['maximumError'], 0.5)
@@ -165,6 +168,9 @@ class TextureStoreTests(unittest.TestCase):
             (root / 'frame.json').write_text(json.dumps(dict(textures=[])))
             [result] = store.verify(root / 'manifest.json', root / 'frame.json')
             self.assertEqual(result['comparedMipLevels'], 0)
+            self.assertEqual(result['independentlyComparedMipLevels'], 0)
+            self.assertEqual(result['offlineComparedMipLevels'], 0)
+            self.assertEqual(result['uncomparedMipLevels'], [0])
             self.assertEqual(result['unverifiedMipLevels'], [0])
 
 
