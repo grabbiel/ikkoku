@@ -1,5 +1,5 @@
 import unittest
-from source_shader_translation import translate,emit_stage,read
+from source_shader_translation import translate,emit_stage,read,input_semantics
 
 class ShaderTranslationTests(unittest.TestCase):
  def test_unknown_opcodes_and_dynamic_buffers_fail_closed(self):
@@ -25,5 +25,10 @@ class ShaderTranslationTests(unittest.TestCase):
   self.assertEqual(body[0],'float4 sincosInput0 = float4(r0.x);')
   self.assertIn('sin(sincosInput0)',body[1]);self.assertIn('cos(sincosInput0)',body[2])
   self.assertEqual(len(body),5);self.assertIn('cos(sincosInput3)',body[4])
+ def test_fragment_input_semantics_come_from_the_input_signature_only(self):
+  asm='\n'.join(['// Input signature:','//','// Name                 Index   Mask Register SysValue  Format   Used','// -------------------- ----- ------ -------- -------- ------- ------',
+   '// SV_POSITION              0   xyzw        0      POS   float       ','// TEXCOORD                 0   xy          1     NONE   float   xy  ','//','//','// Output signature:','//',
+   '// SV_Target                0   xyzw        0   TARGET   float   xyzw','ps_4_0'])
+  self.assertEqual(input_semantics(asm),{0:dict(name='SV_POSITION',index=0,mask='xyzw'),1:dict(name='TEXCOORD',index=0,mask='xy')})
 
 if __name__=='__main__':unittest.main()

@@ -26,7 +26,7 @@ program cannot be exported is listed under `unavailableComposites`.
 Outputs must stay under a `.local` folder.
 """
 from __future__ import annotations
-import argparse, hashlib, json
+import argparse, hashlib, json, shutil
 from pathlib import Path
 import numpy as np
 
@@ -114,8 +114,10 @@ def export_composites(report, roots, output, caches):
         try:
             program = extract_fragment(path, recipe['pathID'], recipe['material'], output / key, caches, expected_sha=recipe['programSHA256'])
         except Exception as error:  # no retained disassembly, differing variants, wrong identity
+            shutil.rmtree(output / key, ignore_errors=True)
             unavailable.append(dict(record, reason=str(error))); continue
         if program['name'] != recipe['shader'] or (recipe.get('serializedFile') and program['serializedFile'] != recipe['serializedFile']):
+            shutil.rmtree(output / key, ignore_errors=True)
             unavailable.append(dict(record, reason='bundle material shader or serialized file differs from the recipe')); continue
         files = ['program.json', 'source.metal']
         composites.append(dict(material=recipe['material'], bundle=recipe['bundle'], bundleSHA256=program['bundleSHA256'],
