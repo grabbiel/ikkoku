@@ -505,8 +505,8 @@ analysis corrections. The remaining responsiveness work stays in #192.
 Merged after all four CI checks pass at `0bcd33c`. Removing the AlphaMask/combine
 and predicate/discard blocks together makes the
 retained MainTex-only program repeat exactly, while the fresh prefix control
-still varies with both providers. All 16 draws keep the same 2,948 visible pixels,
-primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
+still varies with both providers. For each provider, all eight draws keep the same
+2,948 visible pixels, primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
 hashes, exact MainTex-only repeated outputs and the recorded unchanged mip inputs.
 The actual pipelines retain MSL 4.0 with fast math and preserve-invariance disabled.
 An initial launch rejected a private card symlink before drawing; its failure is
