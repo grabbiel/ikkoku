@@ -56,14 +56,15 @@ extension StudioModel {
         let native = restoreNativeAdapters ? try prepareSourceNativePlugins(document.sourceNativePlugins ?? [])
             : PreparedNativePlugins(muteEnabled: nil, accessoryNames: false)
         let session: SourceStudioPluginSession?
+        let access = PluginAttachmentAccess()
         if let saved = document.sourcePluginState {
             guard let path = saved.profileFile, saved.libraryConfigurationSHA256 == nil else {
                 throw SourcePluginError.invalid("Saved converted plugin state has no profile or library selection.")
             }
             session = try SourceStudioPluginSession(profileURL: URL(fileURLWithPath: path), document: document,
-                restoring: saved, attachment: pluginAttachmentResolver())
+                restoring: saved, attachment: pluginAttachmentResolver(access: access))
         } else { session = nil }
-        return .init(document: document, session: session, native: native, attachmentAccess: nil)
+        return .init(document: document, session: session, native: native, attachmentAccess: access)
     }
 
     func restoreSourcePlugins(restoreNativeAdapters: Bool = true) throws {

@@ -229,7 +229,7 @@ and mounts or unloads that selection. Reading the latest generation only changes
 the available choices. Mount is the explicit replacement operation; it starts a
 new selected runtime. Mounting the identical selection and bindings is a no-op.
 
-Package bytes, hashes and IR decode are prepared off the UI thread. One mount is
+For a UI mount, package bytes, hashes and IR decode are prepared off the UI thread. One mount is
 prepared at a time. The existing runtime may keep stepping; owner-thread binding
 and commit use the current document after verifying that the user has not edited
 the scene or left Studio. Cancellation, invalid bindings, missing revisions and
@@ -250,6 +250,10 @@ A library selection must be unloaded before mounting an individual adapter.
 Native save/reload resolves the recorded generation; a new publication never
 upgrades it. Load and undo/redo stage restoration before replacing the live
 session or history. Missing/changed files produce named errors. Plugin-library
+restoration during native open or undo/redo still resolves files synchronously;
+this slice does not move scene loading off the UI thread. Staged legacy-profile
+restoration uses the same attachment-read gate, while a fresh legacy profile load
+keeps its existing live resolver behavior. Plugin-library
 root relocation is not supported by the asset-library relocation system; keep
 the recorded root or explicitly mount a selection from its new location.
 

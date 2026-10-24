@@ -2,6 +2,8 @@ import Foundation
 import Gameplay
 import Studio
 import Renderer
+import CryptoKit
+import simd
 
 /// Deterministic app-level checks entered through the existing Studio scenario
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
@@ -69,6 +71,12 @@ struct PluginLibraryScenario: Decodable {
             try check("runningReplacement", studio.doc.sourcePluginLibraryConfiguration == configuration(11)
                 && firstSession !== studio.sourcePluginSession)
 
+            // Static ownership assertions must not race either editor's normal
+            // 30 Hz timer. Running replacement above advances the old runtime
+            // explicitly through the same production step path.
+            studio.sourcePluginsRunning = false
+            app.maker?.liveAnimation = false
+
             for boundary in ["modeExit", "modeExitAndReturn", "documentEditAndReturn"] {
                 let before = studio.doc, session = studio.sourcePluginSession, adapter = studio.sourceFocus.adapter
                 let resources = resourceCounts()
@@ -134,6 +142,22 @@ struct PluginLibraryScenario: Decodable {
             try check("unavailableUndoRollback", studio.doc == beforeFailure && session === studio.sourcePluginSession
                 && adapter === studio.sourceFocus.adapter && studio.status.contains("Plugin restore:"), studio.status)
 
+            // Restore runs field initializers before saved fields are installed.
+            // The candidate shares object UUIDs with the current scene, but its
+            // attached transform must never consult current live preview state.
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-plugin-restore-" + UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: scratch) }
+            let legacy = try legacyAttachmentSnapshot(document: beforeFailure, directory: scratch)
+            studio.doc = legacy; studio.pushUndo(force: true); studio.doc = beforeFailure
+            let previews = studio.sourceInstances.mapValues { ObjectIdentifier($0) }
+            let legacyFrame = studio.host.renderer.currentFrame()
+            studio.undo()
+            try check("legacyAttachmentUndoRollback", studio.status.contains("attachment reads during plugin installation are unsupported")
+                && studio.doc == beforeFailure && session === studio.sourcePluginSession && adapter === studio.sourceFocus.adapter
+                && gain == studio.sourceAudioBus.masterVolume && resources == resourceCounts()
+                && previews == studio.sourceInstances.mapValues { ObjectIdentifier($0) }
+                && sameFrame(legacyFrame, studio.host.renderer.currentFrame()), studio.status)
+
             // A successful retry after cancellation still mounts through the UI path.
             try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10))
             try check("retry", studio.doc.sourcePluginLibraryConfiguration == configuration(10))
@@ -152,5 +176,39 @@ struct PluginLibraryScenario: Decodable {
         }
         studio.sourcePluginPreparationHook = nil
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+
+    /// A public synthetic profile whose initializer reads an attached world
+    /// position. Its valid saved state is produced with an isolated identity
+    /// resolver, then restored through Studio's real history path.
+    private func legacyAttachmentSnapshot(document: StudioDocument, directory: URL) throws -> StudioDocument {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let hash = String(repeating: "a", count: 64), guid = "Ikkoku.Validation.AttachmentRestore"
+        let transform: [String: Any] = ["kind": "api", "type": "Transform", "name": "transform", "children": []]
+        let program: [String: Any] = ["schemaVersion": 1, "status": "ready", "mode": "component", "type": "AttachmentRestore",
+            "source": ["sha256": hash], "identity": ["sourceSHA256": hash, "type": "AttachmentRestore",
+                "symbols": ["M:AttachmentRestore.Awake"], "pluginGUID": guid],
+            "semanticSurfaceSHA256": hash, "bridgeSHA256": hash, "emitterSHA256": hash,
+            "fields": [["name": "position", "type": "Vector3", "serialized": true,
+                "initializer": ["kind": "api", "type": "Vector3", "name": "position", "children": [transform]]]],
+            "methods": [["name": "Awake", "symbol": "M:AttachmentRestore.Awake", "static": false,
+                "returnType": "Void", "parameters": [], "body": ["kind": "block", "children": []], "lifecycle": "Awake"]]]
+        let bytes = try JSONSerialization.data(withJSONObject: program)
+        try bytes.write(to: directory.appendingPathComponent("program.json"))
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let manifest: [String: Any] = ["schemaVersion": 1, "kind": "ikkoku-translated-plugin",
+            "identity": ["guid": guid, "version": "1.0", "name": "Attachment restore fixture"],
+            "processes": ["CharaStudio"], "dependencies": [], "incompatibilities": [],
+            "components": [["type": "AttachmentRestore", "program": ["file": "program.json", "sha256": digest]]]]
+        let manifestURL = directory.appendingPathComponent("manifest.json"), profile = directory.appendingPathComponent("profile.json")
+        try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
+            "packages": [["manifest": manifestURL.path, "bindings": [["type": "AttachmentRestore", "sourceObjectKey": 10]]]]]).write(to: profile)
+        var candidate = document
+        candidate.sourcePluginLibrary = nil; candidate.sourcePluginLibraryConfiguration = nil; candidate.sourcePluginState = nil
+        candidate.objects[0].parent = candidate.objects[1].id; candidate.objects[0].sourceAttachmentPoint = 17
+        let session = try SourceStudioPluginSession(profileURL: profile, document: candidate,
+            attachment: { _, _ in (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))) })
+        return try session.savedDocument()
     }
 }
