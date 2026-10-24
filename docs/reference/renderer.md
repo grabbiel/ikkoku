@@ -3433,7 +3433,7 @@ The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
 
 ### Native normal inner-shoe composite (R1/CMT-04 #177, 2026-10-24)
 
-The next bounded normal-clothes recipe is inner shoe slot 7, selected through
+The bounded normal-clothes recipe supports inner shoe slot 7, selected through
 `ChaControl.ChangeClothesShoesAsync(type: 0)` and the normal `rendNormal01`
 creator. The explicit supported slots are 0, 1 and 7; outer slot 8 remains
 unresolved. Patterned, secondary, alpha, emblem, accessory and special-male
@@ -3479,10 +3479,70 @@ composite keys are retained, with the existing shared iris/eye-white hits.
 Hair, eye, top and bottom gates retain their thresholds and pass. Each shoe
 recolor releases its target; 15 edits retain two uploaded asset textures, one
 default texture and one sampler, and revert returns the original target.
-Release cost and default-off app acceptance are pending; no frame-time or FPS
-claim follows from these functional checks. Private evidence is under
+The Release app was built from clean `d63d601` (binary SHA-256
+`7e092c7366e7819b27190bde145a2e4db46d4e58fb453320fe5a92b8b5cebfc6`).
+The later `03d7c09` merge changes no app, Engine source or shader bytes relative
+to that measured source. Seven launches used that same binary in the order
+old54/new56/new56/old54/old54/new56/capture. Each measures the live native rig
+at a held camera/time, 768×1024, with three warmup and twenty measured offscreen
+frames; original captured meshes are not drawn. Median run-p50 costs (range of
+three run p50s), in milliseconds, were:
+
+| Work | Old 54-entry store, 17 live slots | New 56-entry store, 18 live slots |
+| --- | ---: | ---: |
+| CPU encode | 0.278 (0.277–0.287) | 0.312 (0.310–0.325) |
+| GPU | 0.617 (0.611–0.696) | 0.662 (0.661–0.700) |
+| Completion | 1.240 (1.238–1.338) | 1.321 (1.318–1.388) |
+
+The additional live material increases registered textures from 81 to 85 and
+Metal allocated bytes from 561,725,440 to 570,540,032. This is additional coverage,
+not a speedup or an interactive FPS result. The capture-provider launch resolves
+20/20 slots but is a correctness control, not an equal-work performance baseline.
+Three isolated Release processes measured first-composition totals of
+12.081/11.995/12.152 ms (CPU encode 2.190/2.136/2.211 ms, GPU
+8.480/8.518/8.605 ms), including first pipeline creation; driver caches may
+already be warm. Their fifteen warmed edits each had median total costs
+0.837/0.437/0.445 ms and unchanged hits 0.100/0.106/0.106 ms. Each target uses
+1,425,408 bytes. Repeated edits remain bounded by the resource checks above.
+
+Six default-off launches compare source Studio, native Studio and Maker at
+960×880 against the preserved historical `f52cfa8` app (binary `04e314a8…`).
+All three baseline/current image pairs are byte-identical. That historical app
+is an output control, not a newly built current-main performance baseline.
+
+**Separate translated-draw repeatability limit.** Two same-provider opaque
+captures in each process use the same frame and textures:
+`native-translated-main_opaque.png` and `native-main_opaque.png`; neither is an
+untranslated-renderer control. The current native provider differs by
+29/28/47 shoe-local pixels (maximum channel delta 5/8/27) across the three
+processes; the current captured provider differs by 19 pixels, maximum 8.
+An unchanged pre-PR app, built at `f52cfa8` with binary `04e314a8…`, also draws
+20/20 captured-provider slots, including the shoe, and differs by 17 shoe-local
+pixels, maximum 5, between its duplicate captures. Its input hashes match the
+current captured-provider run. This establishes that a draw repeatability gap
+predates the new compositor; it does not equate the magnitudes or prove their
+complete cause. Whole-frame repeat equality and full source-color parity are
+not claimed.
+
+Private diagnostics read all ten target mip levels before/after repeated draws
+and recompose base/distinct targets under three fresh owners: every level is
+stable. This is native determinism evidence, not independent source-GPU parity
+for uncaptured mip levels. Fixed-LOD-zero sampling removes repeated-draw
+variation, whereas postponing discard with its predicate preserved does not.
+Those altered shaders are diagnostic only; production sampling and every source
+gate remain unchanged. The remaining sampling behavior is tracked separately.
+The diagnostic host is Apple M2 Ultra, macOS 27.0.1, effective Metal language 4.1,
+with fast math disabled; no obsolete pre-Metal-2.3 discard rule is assumed.
+
+Private evidence, exact per-run values and pixel coordinates are under
 `.local/codex-continue-2026-10-24/rolling/materials-shoes/`; the private fixture key
-is `IKKOKU_INNER_SHOE_COMPOSITE_PROBE`.
+is `IKKOKU_INNER_SHOE_COMPOSITE_PROBE`. The original-player pixel evidence remains
+pinned to producer `c8188d…`. After merging the accepted `03d7c09` model probe,
+the combined producer `c4df9bf4460f995d84dd240bb2e5bf64ad791ae6c1e82c3fa2cfa3d5d519f85e`
+compiles against the original managed runtime with no diagnostics and no player
+launch; it does not relabel the captured evidence. The affected merged Python
+suites pass 78/78; Debug and Release derivation each pass seven tests with ten
+parameter cases, and the verification Python suite passes 191/191.
 
 ### Native pose gate
 
