@@ -10,7 +10,7 @@ import Studio
 /// Drives one `IKKOKU_PERF_WORKLOAD` in the real editor window and writes the
 /// `PerfTrace` report (R7). Every action calls the method the UI calls: the
 /// viewport's `ViewportInputHandler` methods for mouse input, the Maker slider
-/// binding's array element for shape sliders, and the Studio model's own
+/// row binding's slot setter for shape sliders, and the Studio model's own
 /// selection, pose-mode and scene commands. Nothing is re-implemented.
 ///
 /// Timeline: the window is sized to `IKKOKU_PERF_WINDOW_W`×`_H` points (default
@@ -250,8 +250,9 @@ final class PerfWorkloadDriver {
         return maker
     }
 
-    /// Writes one body slider the way its binding does
-    /// (`$model.sourceBodyValues[slot.index]`), sweeping it with a sine.
+    /// Writes one body slider the way its row binding does
+    /// (`model[shapeSlot:]`, which writes `sourceBodyValues[slot.index]`),
+    /// sweeping it with a sine.
     private func prepareMakerSlider() throws {
         let maker = try prepareMaker()
         guard let preview = maker.sourceRigPreview, preview.supportsBodyCustomization,
@@ -266,7 +267,7 @@ final class PerfWorkloadDriver {
         let base = maker.sourceBodyValues[index]
         inject = { t in
             let value = Float(min(1, max(0, Double(base) + 0.3 * sin(t * 3))))
-            PerfTrace.input("bodySlider") { maker.sourceBodyValues[index] = value }
+            PerfTrace.input("bodySlider") { maker[shapeSlot: .init(face: false, index: index)] = value }
         }
         trace.details["gesture"] = "body slider '\(slot.label)' (slot \(index)) swept around \(base)"
     }

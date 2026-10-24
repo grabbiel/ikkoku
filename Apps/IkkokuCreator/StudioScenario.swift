@@ -106,7 +106,8 @@ struct StudioScenario: Decodable {
         /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
         /// scenario exercises the app's live tick, not a re-implementation.
         let seconds: Float?
-        /// orbit: the mouse-drag deltas handed to `doc.camera.orbit(dx:dy:)`
+        /// orbit: the mouse-drag deltas handed to `StudioModel.orbitCamera(dx:dy:)`,
+        /// the method the viewport's orbit drag calls
         /// (yaw -= dx, pitch += dy, radians).
         let dx: Float?
         let dy: Float?
@@ -1602,7 +1603,7 @@ struct StudioScenario: Decodable {
                 guard studio.activeSourceCamera == nil else {
                     record(step, false, "orbit: camera \"\(studio.activeSourceCameraName ?? "?")\" is looked through; the drag is refused"); continue
                 }
-                studio.doc.camera.orbit(dx: dx, dy: dy)
+                studio.orbitCamera(dx: dx, dy: dy)
                 record(step, true, "orbit dx=\(dx) dy=\(dy): yaw \(studio.doc.camera.yaw), pitch \(studio.doc.camera.pitch)")
             case "setAutomaticBlink":
                 guard let on = step.on else { record(step, false, "setAutomaticBlink: on is required"); continue }

@@ -6,45 +6,86 @@ import Renderer
 import Character
 import Studio
 
+/// The Studio window. Each panel is its own view that reads only the model
+/// state it shows, so an edit re-evaluates the panels that display it rather
+/// than the whole window (R7 phase 2, item 1). A panel that must read the
+/// document to find its values (the workspace tree, toolbar and timeline)
+/// computes them in a small outer view and hands them to an equatable content
+/// view, which SwiftUI skips while the values are unchanged; its controls'
+/// bindings read those values and write through the same model calls as
+/// before.
 struct StudioView: View {
-    @Bindable var model: StudioModel
-    @Environment(AppState.self) private var app
+    let model: StudioModel
 
     var body: some View {
         let _ = PerfTrace.body(.studioWindow)
         HStack(spacing: 0) {
-            workspace.frame(width: 250)
+            StudioWorkspacePanel(model: model).frame(width: 250)
             Divider()
             VStack(spacing: 0) {
                 ViewportView(renderer: model.host.renderer, handler: model)
-                    .overlay(alignment: .top) { toolbar }
-                if model.showTimeline { Divider(); timelineBar }
+                    .overlay(alignment: .top) { StudioToolbar(model: model) }
+                if model.showTimeline { Divider(); StudioTimelineBar(model: model) }
             }
             Divider()
-            inspector.frame(width: 350)
+            StudioInspectorPanel(model: model).frame(width: 350)
         }
     }
+}
 
-    // MARK: Workspace
+// MARK: Workspace
 
-    private var workspace: some View {
-        PerfTrace.body(.studioWorkspace)
-        return VStack(spacing: 0) {
+/// One workspace tree row as displayed.
+struct WorkspaceEntry: Equatable, Identifiable {
+    let id: UUID
+    let name: String
+    let kind: StudioObjectKind
+    let visible: Bool
+    let depth: Int
+    let selected: Bool
+    let cameraPlaceholder: Bool
+}
+
+/// Reads the document for the tree rows and the object count.
+struct StudioWorkspacePanel: View {
+    let model: StudioModel
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioWorkspace)
+        let selection = model.selection
+        let entries = model.doc.flattened().map { entry in
+            WorkspaceEntry(id: entry.object.id, name: entry.object.name, kind: entry.object.kind, visible: entry.object.visible,
+                           depth: entry.depth, selected: selection == entry.object.id,
+                           cameraPlaceholder: model.isSourceCameraPlaceholder(entry.object.id))
+        }
+        StudioWorkspaceContent(model: model, entries: entries, objectCount: model.doc.objects.count).equatable()
+    }
+}
+
+struct StudioWorkspaceContent: View, Equatable {
+    let model: StudioModel
+    let entries: [WorkspaceEntry]
+    let objectCount: Int
+
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.entries == b.entries && a.objectCount == b.objectCount }
+
+    var body: some View {
+        VStack(spacing: 0) {
             HStack {
                 Text("Workspace").font(.headline)
                 Spacer()
-                addMenu
+                StudioAddMenu(model: model)
             }.padding(8)
             Divider()
             ScrollView {
                 LazyVStack(spacing: 1) {
-                    ForEach(model.doc.flattened(), id: \.object.id) { entry in
-                        WorkspaceRow(object: entry.object, depth: entry.depth, selected: model.selection == entry.object.id,
-                                    cameraPlaceholder: model.isSourceCameraPlaceholder(entry.object.id)) {
-                            model.selection = entry.object.id
+                    ForEach(entries) { entry in
+                        WorkspaceRow(entry: entry) {
+                            model.selection = entry.id
                         } toggleVisible: {
-                            model.update(entry.object.id) { $0.visible.toggle() }
+                            model.update(entry.id) { $0.visible.toggle() }
                         }
+                        .equatable()
                     }
                 }.padding(4)
             }
@@ -53,12 +94,18 @@ struct StudioView: View {
                 Button { model.duplicateSelection() } label: { Image(systemName: "plus.square.on.square") }.help("Duplicate")
                 Button { model.deleteSelection() } label: { Image(systemName: "trash") }.help("Delete")
                 Spacer()
-                Text("\(model.doc.objects.count) objects").font(.caption).foregroundStyle(.secondary)
+                Text("\(objectCount) objects").font(.caption).foregroundStyle(.secondary)
             }.padding(6).controlSize(.small)
         }
     }
+}
 
-    private var addMenu: some View {
+/// The workspace Add menu. It reads no observed state, so it is built once.
+struct StudioAddMenu: View {
+    let model: StudioModel
+    @Environment(AppState.self) private var app
+
+    var body: some View {
         Menu {
             Menu("Character") {
                 Button("Female") { model.addCharacter(sex: .female) }
@@ -90,13 +137,44 @@ struct StudioView: View {
         } label: { Label("Add", systemImage: "plus") }
         .controlSize(.small).fixedSize()
     }
+}
 
-    // MARK: Toolbar
+// MARK: Toolbar
 
-    private var toolbar: some View {
+/// The toolbar's displayed state.
+struct StudioToolbarState: Equatable {
+    var gizmoMode: GizmoMode
+    var localSpace: Bool
+    var selectedIsCharacter: Bool
+    var poseMode: PoseMode
+    var fkGroup: FKGroup
+    var cameraSlotsFilled: [Bool]
+    var hasSourceRoutes: Bool
+    var canUndo: Bool
+    var canRedo: Bool
+    var showGizmos: Bool
+    var liveAnimation: Bool
+    var showTimeline: Bool
+    var showGrid: Bool
+}
+
+struct StudioToolbar: View {
+    let model: StudioModel
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioToolbar)
+        let slots = model.doc.cameraSlots
+        let state = StudioToolbarState(
+            gizmoMode: model.gizmoMode, localSpace: model.localSpace,
+            selectedIsCharacter: model.selectedObject?.kind == .character,
+            poseMode: model.poseMode, fkGroup: model.fkGroup,
+            cameraSlotsFilled: slots.map { $0 != nil }, hasSourceRoutes: model.hasSourceRoutes,
+            canUndo: !model.undoStack.isEmpty, canRedo: !model.redoStack.isEmpty,
+            showGizmos: model.showGizmos, liveAnimation: model.liveAnimation, showTimeline: model.showTimeline,
+            showGrid: model.doc.effects.showGrid)
         // Overlay content must fit the viewport without widening either side panel.
         ScrollView(.horizontal) {
-            toolbarControls
+            StudioToolbarControls(model: model, state: state).equatable()
         }
         .fixedSize(horizontal: false, vertical: true)
         .controlSize(.small)
@@ -105,38 +183,46 @@ struct StudioView: View {
         .padding(10)
         .accessibilityIdentifier("studio.toolbar")
     }
+}
 
-    private var toolbarControls: some View {
-        PerfTrace.body(.studioToolbar)
-        return HStack(spacing: 8) {
-            Picker("", selection: $model.gizmoMode) {
+struct StudioToolbarControls: View, Equatable {
+    let model: StudioModel
+    let state: StudioToolbarState
+    @Environment(AppState.self) private var app
+
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+
+    var body: some View {
+        let state = state
+        HStack(spacing: 8) {
+            Picker("", selection: Binding(get: { state.gizmoMode }, set: { model.gizmoMode = $0 })) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").tag(GizmoMode.translate)
                 Image(systemName: "arrow.triangle.2.circlepath").tag(GizmoMode.rotate)
                 Image(systemName: "arrow.up.left.and.arrow.down.right").tag(GizmoMode.scale)
             }.pickerStyle(.segmented).frame(width: 120).help("Gizmo: T / R / S")
-            Toggle(isOn: $model.localSpace) { Text(model.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
-            if model.selectedObject?.kind == .character {
+            Toggle(isOn: Binding(get: { state.localSpace }, set: { model.localSpace = $0 })) { Text(state.localSpace ? "Local" : "World").frame(width: 42) }.toggleStyle(.button)
+            if state.selectedIsCharacter {
                 Divider().frame(height: 18)
-                Picker("", selection: $model.poseMode) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
-                if model.poseMode == .fk {
-                    Picker("", selection: $model.fkGroup) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
+                Picker("", selection: Binding(get: { state.poseMode }, set: { model.poseMode = $0 })) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented).frame(width: 150)
+                if state.poseMode == .fk {
+                    Picker("", selection: Binding(get: { state.fkGroup }, set: { model.fkGroup = $0 })) { ForEach(FKGroup.allCases) { Text($0.rawValue).tag($0) } }.frame(width: 120)
                 }
             }
             Divider().frame(height: 18)
             ForEach(0..<5, id: \.self) { i in
                 Button { model.loadCameraSlot(i) } label: { Text("\(i + 1)").frame(width: 14) }
-                    .foregroundStyle(model.doc.cameraSlots[i] == nil ? .secondary : .primary)
+                    .foregroundStyle(state.cameraSlotsFilled[i] ? .primary : .secondary)
                     .help("Camera slot \(i + 1) (Shift+\(i + 1) saves)")
             }
             Menu {
                 ForEach(0..<10, id: \.self) { i in Button("Save slot \(i + 1)") { model.saveCameraSlot(i) } }
                 Divider()
-                ForEach(0..<10, id: \.self) { i in Button("Load slot \(i + 1)") { model.loadCameraSlot(i) }.disabled(model.doc.cameraSlots[i] == nil) }
+                ForEach(0..<10, id: \.self) { i in Button("Load slot \(i + 1)") { model.loadCameraSlot(i) }.disabled(!state.cameraSlotsFilled[i]) }
                 Divider()
                 Button("Focus selection (F)") { model.focusSelection() }
                 Button("Reset camera") { model.resetCamera() }
             } label: { Image(systemName: "camera") }.fixedSize()
-            if model.hasSourceRoutes {
+            if state.hasSourceRoutes {
                 Menu {
                     Button("Play all routes") { model.playAllSourceRoutes() }
                     Button("Replay all routes") { model.replayAllSourceRoutes() }
@@ -148,111 +234,201 @@ struct StudioView: View {
                 .help("Route playback (Play all starts the stopped routes, Replay all restarts every route)")
             }
             Spacer()
-            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }.disabled(model.undoStack.isEmpty)
-            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(model.redoStack.isEmpty)
-            Toggle(isOn: $model.showGizmos) { Image(systemName: "scope") }.toggleStyle(.button).help("Show gizmos (H)")
-            Toggle(isOn: $model.liveAnimation) { Image(systemName: "wind") }.toggleStyle(.button).help("Idle animation (blink, breathing)")
-            Toggle(isOn: $model.showTimeline) { Image(systemName: "timeline.selection") }.toggleStyle(.button).help("Timeline")
-            Toggle(isOn: $model.doc.effects.showGrid) { Image(systemName: "grid") }.toggleStyle(.button).help("Grid (G)")
+            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }.disabled(!state.canUndo)
+            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(!state.canRedo)
+            Toggle(isOn: Binding(get: { state.showGizmos }, set: { model.showGizmos = $0 })) { Image(systemName: "scope") }.toggleStyle(.button).help("Show gizmos (H)")
+            Toggle(isOn: Binding(get: { state.liveAnimation }, set: { model.liveAnimation = $0 })) { Image(systemName: "wind") }.toggleStyle(.button).help("Idle animation (blink, breathing)")
+            Toggle(isOn: Binding(get: { state.showTimeline }, set: { model.showTimeline = $0 })) { Image(systemName: "timeline.selection") }.toggleStyle(.button).help("Timeline")
+            Toggle(isOn: Binding(get: { state.showGrid }, set: { model.doc.effects.showGrid = $0 })) { Image(systemName: "grid") }.toggleStyle(.button).help("Grid (G)")
             Button { app.captureScreenshot() } label: { Label("Capture", systemImage: "camera.viewfinder") }
         }
         .fixedSize(horizontal: true, vertical: true)
     }
+}
 
-    // MARK: Timeline
+// MARK: Timeline
 
-    private var timelineBar: some View {
-        PerfTrace.body(.studioTimeline)
-        return HStack(spacing: 10) {
-            Button { model.timelinePlaying.toggle() } label: { Image(systemName: model.timelinePlaying ? "pause.fill" : "play.fill") }
+/// The timeline bar's displayed state; keys are the selection's keyframes.
+struct StudioTimelineState: Equatable {
+    struct Key: Equatable, Identifiable { let id: UUID; let time: Float }
+    var playing: Bool
+    var time: Float
+    var duration: Float
+    var loop: Bool
+    var keys: [Key]
+    var keyCount: Int
+    var hasSelection: Bool
+}
+
+struct StudioTimelineBar: View {
+    let model: StudioModel
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioTimeline)
+        let timeline = model.doc.timeline
+        let state = StudioTimelineState(
+            playing: model.timelinePlaying, time: model.timelineTime, duration: timeline.duration, loop: timeline.loop,
+            keys: model.selectedKeyframes.map { .init(id: $0.id, time: $0.time) }, keyCount: timeline.keyframes.count,
+            hasSelection: model.selectedObject != nil)
+        StudioTimelineControls(model: model, state: state).equatable()
+    }
+}
+
+struct StudioTimelineControls: View, Equatable {
+    let model: StudioModel
+    let state: StudioTimelineState
+
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+
+    var body: some View {
+        let state = state
+        HStack(spacing: 10) {
+            Button { model.timelinePlaying.toggle() } label: { Image(systemName: state.playing ? "pause.fill" : "play.fill") }
                 .help("Play / pause (Space in the viewport)")
             Button { model.timelinePlaying = false; model.timelineTime = 0 } label: { Image(systemName: "backward.end.fill") }
-            Text(String(format: "%.2f s", model.timelineTime)).font(.caption.monospacedDigit()).frame(width: 52)
-            Slider(value: $model.timelineTime, in: 0...max(model.doc.timeline.duration, 0.1))
+            Text(String(format: "%.2f s", state.time)).font(.caption.monospacedDigit()).frame(width: 52)
+            Slider(value: Binding(get: { state.time }, set: { model.timelineTime = $0 }), in: 0...max(state.duration, 0.1))
                 .overlay(alignment: .leading) {
                     // Key markers use the slider's height; a sibling GeometryReader
                     // would expand the entire timeline into the viewport.
                     GeometryReader { geo in
-                        ForEach(model.selectedKeyframes) { k in
-                            let x = CGFloat(k.time / max(model.doc.timeline.duration, 0.1)) * geo.size.width
+                        ForEach(state.keys) { k in
+                            let x = CGFloat(k.time / max(state.duration, 0.1)) * geo.size.width
                             Rectangle().fill(Color.accentColor).frame(width: 3, height: 10).position(x: x, y: geo.size.height - 3)
                         }
                     }.allowsHitTesting(false)
                 }
             Text("Length").font(.caption)
-            TextField("", value: $model.doc.timeline.duration, format: .number.precision(.fractionLength(1))).textFieldStyle(.roundedBorder).frame(width: 48).font(.caption)
-            Toggle("Loop", isOn: $model.doc.timeline.loop).font(.caption)
+            TextField("", value: Binding(get: { state.duration }, set: { model.doc.timeline.duration = $0 }), format: .number.precision(.fractionLength(1))).textFieldStyle(.roundedBorder).frame(width: 48).font(.caption)
+            Toggle("Loop", isOn: Binding(get: { state.loop }, set: { model.doc.timeline.loop = $0 })).font(.caption)
             Divider().frame(height: 16)
             Button { model.addKeyframe() } label: { Label("Key", systemImage: "diamond.fill").labelStyle(.titleAndIcon).fixedSize() }.help("Add keyframe for the selected object at the current time (K in the viewport)")
-                .disabled(model.selectedObject == nil)
+                .disabled(!state.hasSelection)
             Menu {
-                ForEach(model.selectedKeyframes) { k in Button("Delete key at \(String(format: "%.2f", k.time)) s") { model.deleteKeyframe(k.id) } }
+                ForEach(state.keys) { k in Button("Delete key at \(String(format: "%.2f", k.time)) s") { model.deleteKeyframe(k.id) } }
                 Divider()
                 Button("Clear timeline") { model.clearTimeline() }
             } label: { Image(systemName: "diamond") }.fixedSize()
-            Text("\(model.doc.timeline.keyframes.count) keys").font(.caption).foregroundStyle(.secondary)
+            Text("\(state.keyCount) keys").font(.caption).foregroundStyle(.secondary)
         }
         .controlSize(.small)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(.bar)
     }
+}
 
-    // MARK: Inspector
+// MARK: Inspector
 
-    private var inspector: some View {
-        PerfTrace.body(.studioInspector)
-        PerfTrace.body(.studioStatus)
-        return VStack(spacing: 0) {
-            Picker("", selection: $model.inspectorTab) {
-                ForEach(StudioModel.InspectorTab.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented).labelsHidden().padding(8)
-                .accessibilityIdentifier("studio.inspector.tabs")
+/// The inspector column. Its body reads nothing; each part observes its own state.
+struct StudioInspectorPanel: View {
+    let model: StudioModel
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioInspector)
+        VStack(spacing: 0) {
+            StudioInspectorTabPicker(model: model)
             ScrollView {
-                if !model.compatibilityDiagnostics.isEmpty {
-                    DisclosureGroup("Source compatibility details") {
-                        ForEach(Array(model.compatibilityDiagnostics.enumerated()), id: \.offset) { _, text in
-                            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }.padding(12)
-                }
-                if model.liveSourceShaders {
-                    DisclosureGroup("Live source shaders") {
-                        ForEach(Array(model.liveSourceShaderStatus.enumerated()), id: \.offset) { _, text in
-                            Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                        }
-                    }.padding(12).accessibilityIdentifier("studio.inspector.liveSourceShaders")
-                }
-                Group {
-                    switch model.inspectorTab {
-                    case .object: ObjectInspector(model: model)
-                    case .pose: PoseInspector(model: model)
-                    case .face: FaceInspector(model: model)
-                    case .clothes: ClothesInspector(model: model)
-                    case .scene: SceneInspector(model: model)
-                    }
-                }.padding(12)
+                StudioCompatibilityDetails(model: model)
+                StudioLiveShaderDetails(model: model)
+                StudioInspectorTab(model: model).padding(12)
             }
             Divider()
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                if let cameraName = model.activeSourceCameraName {
-                    Text("Viewing through source camera \"\(cameraName)\" (runtime only)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }.padding(6)
+            StudioStatusLine(model: model)
         }
     }
 }
 
-struct WorkspaceRow: View {
-    let object: StudioObject
-    let depth: Int
-    let selected: Bool
-    var cameraPlaceholder = false
+struct StudioInspectorTabPicker: View {
+    @Bindable var model: StudioModel
+
+    var body: some View {
+        Picker("", selection: $model.inspectorTab) {
+            ForEach(StudioModel.InspectorTab.allCases) { Text($0.rawValue).tag($0) }
+        }.pickerStyle(.segmented).labelsHidden().padding(8)
+            .accessibilityIdentifier("studio.inspector.tabs")
+    }
+}
+
+/// Reads the document's source diagnostics; the details list itself only
+/// re-evaluates when the lines change.
+struct StudioCompatibilityDetails: View {
+    let model: StudioModel
+
+    var body: some View {
+        StudioCompatibilityLines(lines: model.compatibilityDiagnostics).equatable()
+    }
+}
+
+struct StudioCompatibilityLines: View, Equatable {
+    let lines: [String]
+
+    var body: some View {
+        if !lines.isEmpty {
+            DisclosureGroup("Source compatibility details") {
+                ForEach(Array(lines.enumerated()), id: \.offset) { _, text in
+                    Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }.padding(12)
+        }
+    }
+}
+
+struct StudioLiveShaderDetails: View {
+    let model: StudioModel
+
+    var body: some View {
+        if model.liveSourceShaders {
+            DisclosureGroup("Live source shaders") {
+                ForEach(Array(model.liveSourceShaderStatus.enumerated()), id: \.offset) { _, text in
+                    Text(text).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                }
+            }.padding(12).accessibilityIdentifier("studio.inspector.liveSourceShaders")
+        }
+    }
+}
+
+struct StudioInspectorTab: View {
+    let model: StudioModel
+
+    var body: some View {
+        Group {
+            switch model.inspectorTab {
+            case .object: ObjectInspector(model: model)
+            case .pose: PoseInspector(model: model)
+            case .face: FaceInspector(model: model)
+            case .clothes: ClothesInspector(model: model)
+            case .scene: SceneInspector(model: model)
+            }
+        }
+    }
+}
+
+/// The status line under the inspector.
+struct StudioStatusLine: View {
+    let model: StudioModel
+
+    var body: some View {
+        let _ = PerfTrace.body(.studioStatus)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            if let cameraName = model.activeSourceCameraName {
+                Text("Viewing through source camera \"\(cameraName)\" (runtime only)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }.padding(6)
+    }
+}
+
+struct WorkspaceRow: View, Equatable {
+    let entry: WorkspaceEntry
     let select: () -> Void
     let toggleVisible: () -> Void
+
+    /// The actions call the model with the row's id, so the entry decides equality.
+    static func == (a: Self, b: Self) -> Bool { a.entry == b.entry }
+
     var icon: String {
-        if cameraPlaceholder { return "camera.fill" }
-        switch object.kind {
+        if entry.cameraPlaceholder { return "camera.fill" }
+        switch entry.kind {
         case .character: return "person.fill"; case .item: return "cube.fill"; case .light: return "lightbulb.fill"
         case .camera: return "camera.fill"; case .folder: return "folder.fill"
         }
@@ -260,14 +436,14 @@ struct WorkspaceRow: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspaceRow)
         HStack(spacing: 6) {
-            Spacer().frame(width: CGFloat(depth) * 14)
-            Image(systemName: icon).foregroundStyle(object.kind == .light ? .yellow : .secondary).frame(width: 16)
-            Text(object.name).lineLimit(1).font(.callout)
+            Spacer().frame(width: CGFloat(entry.depth) * 14)
+            Image(systemName: icon).foregroundStyle(entry.kind == .light ? .yellow : .secondary).frame(width: 16)
+            Text(entry.name).lineLimit(1).font(.callout)
             Spacer()
-            Button(action: toggleVisible) { Image(systemName: object.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
+            Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
         }
         .padding(.vertical, 3).padding(.horizontal, 6)
-        .background(RoundedRectangle(cornerRadius: 5).fill(selected ? Color.accentColor.opacity(0.3) : .clear))
+        .background(RoundedRectangle(cornerRadius: 5).fill(entry.selected ? Color.accentColor.opacity(0.3) : .clear))
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
     }
@@ -275,112 +451,167 @@ struct WorkspaceRow: View {
 
 // MARK: - Inspector panels
 
+/// The Object tab. It reads the selected object and hands the fields it
+/// shows to `ObjectInspectorContent`, so an edit that changes nothing shown
+/// here (an FK drag, say) skips the content.
 struct ObjectInspector: View {
-    @Bindable var model: StudioModel
-    @Environment(AppState.self) private var app
+    let model: StudioModel
+
     var body: some View {
         let _ = PerfTrace.body(.objectInspector)
-        if let o = model.selectedObject, let i = model.doc.index(of: o.id) {
-            VStack(alignment: .leading, spacing: 10) {
-                TextField("Name", text: Binding(get: { o.name }, set: { v in model.update(o.id) { $0.name = v } }))
-                HStack {
-                    Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in model.update(o.id) { $0.visible = v } }))
-                    Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in model.update(o.id) { $0.locked = v } }))
-                }
-                Picker("Parent", selection: Binding(get: { o.parent }, set: { model.setParent(o.id, to: $0) })) {
-                    Text("None").tag(UUID?.none)
-                    ForEach(model.doc.objects.filter { $0.id != o.id && !model.doc.isDescendant($0.id, of: o.id) }) { p in Text(p.name).tag(UUID?.some(p.id)) }
-                }
-                SectionBox(title: "Transform") {
-                    VectorRow(label: "Position", value: Binding(get: { model.doc.objects[i].transform.position }, set: { v in model.update(o.id) { $0.transform.position = v } }), step: 0.05, format: "%.3f")
-                    VectorRow(label: "Rotation", value: Binding(get: { model.doc.objects[i].transform.rotation }, set: { v in model.update(o.id) { $0.transform.rotation = v } }), step: 5, format: "%.0f")
-                    VectorRow(label: "Scale", value: Binding(get: { model.doc.objects[i].transform.scale }, set: { v in model.update(o.id) { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
-                    Button("Reset transform") { model.update(o.id) { $0.transform = StudioTransform() } }
-                }
-                switch o.kind {
-                case .character:
-                    SectionBox(title: "Character") {
-                        Text(o.card?.profile.name ?? "").font(.callout)
-                        if o.sourceCharacter == nil {
-                            HStack {
-                                Button("Edit in Maker") { if let c = o.card { app.maker?.load(card: c); app.mode = .maker } }
-                                Button("Replace from Maker") { if let c = app.maker?.card { model.update(o.id) { $0.card = c; $0.name = c.profile.name } } }
-                            }
-                            Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(o.id) { $0.clothingVisible = v } }))
-                            Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(o.id) { $0.accessoriesVisible = v } }))
-                        } else {
-                            Text("Original character: name, transform and voice are editable here. Maker editing, replacement and the prototype clothing/accessory toggles only affect unused native fields and are not available for this reference avatar.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    if model.selectedIsSourceCharacter {
-                        SectionBox(title: "Voice") {
-                            HStack {
-                                Button("Play playlist") { model.playSourceVoice(o.id) }
-                                Button("Stop") { model.stopSourceVoice(o.id) }
-                                Menu("Repeat") {
-                                    Button("Play once") { model.setSourceVoiceRepeat(o.id, mode: 0) }
-                                    Button("Repeat playlist") { model.setSourceVoiceRepeat(o.id, mode: 1) }
-                                    Button("Repeat selected") { model.setSourceVoiceRepeat(o.id, mode: 2) }
-                                }
-                            }
-                        }
-                    }
-                case .item:
-                    SectionBox(title: "Item") {
-                        ColorRow(label: "Tint", color: Binding(get: { o.tint ?? .white }, set: { v in model.update(o.id) { $0.tint = v } }))
-                        FloatRow(label: "Emissive", value: Binding(get: { o.emissive }, set: { v in model.update(o.id) { $0.emissive = v } }), range: 0...2)
-                        Button("Clear tint") { model.update(o.id) { $0.tint = nil } }
-                    }
-                case .light:
-                    if let l = o.light {
-                        SectionBox(title: "Light") {
-                            Toggle("Enabled", isOn: Binding(get: { l.enabled }, set: { v in model.update(o.id) { $0.light?.enabled = v } }))
-                            ColorRow(label: "Colour", color: Binding(get: { RGB(l.color.x, l.color.y, l.color.z) }, set: { v in model.update(o.id) { $0.light?.color = v.float3 } }))
-                            FloatRow(label: "Intensity", value: Binding(get: { l.intensity }, set: { v in model.update(o.id) { $0.light?.intensity = v } }), range: 0...4)
-                            if l.kind != .directional { FloatRow(label: "Range", value: Binding(get: { l.range }, set: { v in model.update(o.id) { $0.light?.range = v } }), range: 0.1...20) }
-                            if l.kind == .spot {
-                                FloatRow(label: "Spot angle", value: Binding(get: { l.spotAngle }, set: { v in model.update(o.id) { $0.light?.spotAngle = v } }), range: 5...120)
-                                FloatRow(label: "Spot blend", value: Binding(get: { l.spotBlend }, set: { v in model.update(o.id) { $0.light?.spotBlend = v } }))
-                            }
-                            Text("Position and direction come from the transform above.").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                case .camera:
-                    SectionBox(title: "Camera") {
-                        HStack {
-                            Button("Look through") { model.lookThrough(o.id) }
-                            Button("Update from view") { model.updateCameraObject(o.id) }
-                        }
-                    }
-                case .folder: EmptyView()
-                }
-                if let cameraName = model.selectedSourceCameraName {
-                    SectionBox(title: "Camera") {
-                        Text("Source camera: \(cameraName)").font(.callout)
-                        HStack {
-                            Button(model.activeSourceCamera == o.id ? "Stop looking through" : "Look through") { model.toggleSourceCamera(o.id) }
-                                .help(model.activeSourceCamera == o.id ? "Deactivate this camera object (the saved scene camera returns)" : "Look through this camera object (the orbit controller is disabled while it is active)")
-                        }
-                        Text(model.activeSourceCamera == o.id ? "Active" : "Inactive").font(.callout)
-                        Text("Runtime only — original export keeps the saved camera and active flag.").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if model.selectedRouteIsSource {
-                    SectionBox(title: "Route") {
-                        Text("Route: \(model.selectedRoutePlaying ? "Playing" : "Stopped")").font(.callout)
-                        HStack {
-                            Button(model.selectedRoutePlaying ? "Stop" : "Play") { model.toggleSourceRoute(o.id) }
-                                .help(model.selectedRoutePlaying ? "Stop this route (Stop pins its children to point 0)" : "Play this route from the current time")
-                        }
-                        Text("Runtime only — original export keeps the saved route state.").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .onAppear { model.displayedInspectorView = "ObjectInspector" }
-            .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
+        if let o = model.selectedObject, model.doc.index(of: o.id) != nil {
+            ObjectInspectorContent(model: model, state: ObjectInspectorState(model: model, object: o)).equatable()
+                .onAppear { model.displayedInspectorView = "ObjectInspector" }
+                .onDisappear { if model.displayedInspectorView == "ObjectInspector" { model.displayedInspectorView = "none" } }
         } else {
             ContentUnavailableView("Nothing selected", systemImage: "cursorarrow.click", description: Text("Click an object in the viewport or the workspace."))
+        }
+    }
+}
+
+/// Everything the Object tab shows for one object.
+struct ObjectInspectorState: Equatable {
+    struct Parent: Equatable, Identifiable { let id: UUID; let name: String }
+    var id: UUID
+    var name: String
+    var visible: Bool
+    var locked: Bool
+    var parent: UUID?
+    var parents: [Parent]
+    var transform: StudioTransform
+    var kind: StudioObjectKind
+    var cardName: String
+    var isSourceCharacter: Bool
+    var clothingVisible: Bool
+    var accessoriesVisible: Bool
+    var tint: RGB?
+    var emissive: Float
+    var light: SceneLight?
+    var sourceCameraName: String?
+    var lookingThroughSourceCamera: Bool
+    var routeIsSource: Bool
+    var routePlaying: Bool
+
+    @MainActor init(model: StudioModel, object o: StudioObject) {
+        let doc = model.doc
+        id = o.id; name = o.name; visible = o.visible; locked = o.locked; parent = o.parent
+        parents = doc.objects.filter { $0.id != o.id && !doc.isDescendant($0.id, of: o.id) }.map { Parent(id: $0.id, name: $0.name) }
+        transform = o.transform; kind = o.kind
+        cardName = o.card?.profile.name ?? ""
+        isSourceCharacter = o.sourceCharacter != nil
+        clothingVisible = o.clothingVisible; accessoriesVisible = o.accessoriesVisible
+        tint = o.tint; emissive = o.emissive; light = o.light
+        sourceCameraName = model.selectedSourceCameraName
+        lookingThroughSourceCamera = model.activeSourceCamera == o.id
+        routeIsSource = model.selectedRouteIsSource
+        routePlaying = model.selectedRoutePlaying
+    }
+}
+
+struct ObjectInspectorContent: View, Equatable {
+    let model: StudioModel
+    let state: ObjectInspectorState
+    @Environment(AppState.self) private var app
+
+    static func == (a: Self, b: Self) -> Bool { a.model === b.model && a.state == b.state }
+
+    var body: some View {
+        let o = state, id = state.id
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("Name", text: Binding(get: { o.name }, set: { v in model.update(id) { $0.name = v } }))
+            HStack {
+                Toggle("Visible", isOn: Binding(get: { o.visible }, set: { v in model.update(id) { $0.visible = v } }))
+                Toggle("Locked", isOn: Binding(get: { o.locked }, set: { v in model.update(id) { $0.locked = v } }))
+            }
+            Picker("Parent", selection: Binding(get: { o.parent }, set: { model.setParent(id, to: $0) })) {
+                Text("None").tag(UUID?.none)
+                ForEach(o.parents) { p in Text(p.name).tag(UUID?.some(p.id)) }
+            }
+            SectionBox(title: "Transform") {
+                VectorRow(label: "Position", value: Binding(get: { o.transform.position }, set: { v in model.update(id) { $0.transform.position = v } }), step: 0.05, format: "%.3f")
+                VectorRow(label: "Rotation", value: Binding(get: { o.transform.rotation }, set: { v in model.update(id) { $0.transform.rotation = v } }), step: 5, format: "%.0f")
+                VectorRow(label: "Scale", value: Binding(get: { o.transform.scale }, set: { v in model.update(id) { $0.transform.scale = v } }), step: 0.1, format: "%.2f")
+                Button("Reset transform") { model.update(id) { $0.transform = StudioTransform() } }
+            }
+            switch o.kind {
+            case .character:
+                SectionBox(title: "Character") {
+                    Text(o.cardName).font(.callout)
+                    if !o.isSourceCharacter {
+                        HStack {
+                            Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.maker?.load(card: c); app.mode = .maker } }
+                            Button("Replace from Maker") { if let c = app.maker?.card { model.update(id) { $0.card = c; $0.name = c.profile.name } } }
+                        }
+                        Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(id) { $0.clothingVisible = v } }))
+                        Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(id) { $0.accessoriesVisible = v } }))
+                    } else {
+                        Text("Original character: name, transform and voice are editable here. Maker editing, replacement and the prototype clothing/accessory toggles only affect unused native fields and are not available for this reference avatar.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if o.isSourceCharacter {
+                    SectionBox(title: "Voice") {
+                        HStack {
+                            Button("Play playlist") { model.playSourceVoice(id) }
+                            Button("Stop") { model.stopSourceVoice(id) }
+                            Menu("Repeat") {
+                                Button("Play once") { model.setSourceVoiceRepeat(id, mode: 0) }
+                                Button("Repeat playlist") { model.setSourceVoiceRepeat(id, mode: 1) }
+                                Button("Repeat selected") { model.setSourceVoiceRepeat(id, mode: 2) }
+                            }
+                        }
+                    }
+                }
+            case .item:
+                SectionBox(title: "Item") {
+                    ColorRow(label: "Tint", color: Binding(get: { o.tint ?? .white }, set: { v in model.update(id) { $0.tint = v } }))
+                    FloatRow(label: "Emissive", value: Binding(get: { o.emissive }, set: { v in model.update(id) { $0.emissive = v } }), range: 0...2)
+                    Button("Clear tint") { model.update(id) { $0.tint = nil } }
+                }
+            case .light:
+                if let l = o.light {
+                    SectionBox(title: "Light") {
+                        Toggle("Enabled", isOn: Binding(get: { l.enabled }, set: { v in model.update(id) { $0.light?.enabled = v } }))
+                        ColorRow(label: "Colour", color: Binding(get: { RGB(l.color.x, l.color.y, l.color.z) }, set: { v in model.update(id) { $0.light?.color = v.float3 } }))
+                        FloatRow(label: "Intensity", value: Binding(get: { l.intensity }, set: { v in model.update(id) { $0.light?.intensity = v } }), range: 0...4)
+                        if l.kind != .directional { FloatRow(label: "Range", value: Binding(get: { l.range }, set: { v in model.update(id) { $0.light?.range = v } }), range: 0.1...20) }
+                        if l.kind == .spot {
+                            FloatRow(label: "Spot angle", value: Binding(get: { l.spotAngle }, set: { v in model.update(id) { $0.light?.spotAngle = v } }), range: 5...120)
+                            FloatRow(label: "Spot blend", value: Binding(get: { l.spotBlend }, set: { v in model.update(id) { $0.light?.spotBlend = v } }))
+                        }
+                        Text("Position and direction come from the transform above.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            case .camera:
+                SectionBox(title: "Camera") {
+                    HStack {
+                        Button("Look through") { model.lookThrough(id) }
+                        Button("Update from view") { model.updateCameraObject(id) }
+                    }
+                }
+            case .folder: EmptyView()
+            }
+            if let cameraName = o.sourceCameraName {
+                SectionBox(title: "Camera") {
+                    Text("Source camera: \(cameraName)").font(.callout)
+                    HStack {
+                        Button(o.lookingThroughSourceCamera ? "Stop looking through" : "Look through") { model.toggleSourceCamera(id) }
+                            .help(o.lookingThroughSourceCamera ? "Deactivate this camera object (the saved scene camera returns)" : "Look through this camera object (the orbit controller is disabled while it is active)")
+                    }
+                    Text(o.lookingThroughSourceCamera ? "Active" : "Inactive").font(.callout)
+                    Text("Runtime only — original export keeps the saved camera and active flag.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            if o.routeIsSource {
+                SectionBox(title: "Route") {
+                    Text("Route: \(o.routePlaying ? "Playing" : "Stopped")").font(.callout)
+                    HStack {
+                        Button(o.routePlaying ? "Stop" : "Play") { model.toggleSourceRoute(id) }
+                            .help(o.routePlaying ? "Stop this route (Stop pins its children to point 0)" : "Play this route from the current time")
+                    }
+                    Text("Runtime only — original export keeps the saved route state.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
     }
 }
