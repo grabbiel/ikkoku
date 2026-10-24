@@ -466,6 +466,7 @@ struct StudioScenario: Decodable {
     }
 
     let steps: [Step]
+    let pluginLibrary: PluginLibraryScenario?
 
     struct Report: Encodable {
         struct StepResult: Encodable {

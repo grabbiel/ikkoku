@@ -68,6 +68,25 @@ private enum PluginLibraryFixture {
                 "converter": ["id": "ikkoku.native-adapter", "adapterID": "bepinex-mute-in-background-v1", "sourceSHA256": muteSource],
                 "sources": []]
     }
+    static func existingPackage(_ root: URL, manifestURL: URL) throws -> [String: Any] {
+        let data = try Data(contentsOf: manifestURL), manifest = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let identity = manifest["identity"] as! [String: String], digest = sha(data)
+        try FileManager.default.copyItem(at: manifestURL.deletingLastPathComponent(), to: root.appendingPathComponent("revisions/\(digest)"))
+        let kind = manifest["kind"] as! String
+        let types: [String], converter: [String: String]
+        if kind == "ikkoku-translated-plugin" {
+            let package = try SourcePluginPackage.load(url: manifestURL), program = try #require(package.programs.first)
+            types = package.programs.map(\.type)
+            converter = ["emitterSHA256": program.emitterSHA256, "bridgeSHA256": program.bridgeSHA256, "semanticSurfaceSHA256": program.semanticSurfaceSHA256]
+        } else {
+            let package = try SourceNativePluginPackage.load(url: manifestURL)
+            types = [package.manifest.type]; converter = ["adapterID": package.manifest.adapterID]
+        }
+        return ["kind": kind, "guid": identity["guid"]!, "version": identity["version"]!, "name": identity["name"]!,
+            "manifest": "revisions/\(digest)/manifest.json", "manifestSHA256": digest, "packageSHA256": hash,
+            "processes": manifest["processes"]!, "dependencies": manifest["dependencies"] ?? [], "incompatibilities": manifest["incompatibilities"] ?? [],
+            "types": types, "converter": converter, "sources": []]
+    }
     /// Appends the next numbered generation and commits it in `library.json`.
     @discardableResult
     static func publish(_ library: URL, revisions: [[String: Any]], conflicts explicit: [[String: Any]]? = nil) throws -> Int {
@@ -378,4 +397,108 @@ private enum PluginLibraryFixture {
     #expect(resolution.generation == 1)
     #expect(resolution.translated.map { PluginLibraryFixture.sha($0.manifestData) } == [revision.manifestSHA256])
     #expect(try SourcePluginLibraryIndex.load(libraryURL: library.appendingPathComponent("library.json")).current == 2)
+}
+
+@Test func sourceStudioLibrarySessionPersistsBindingsWithoutExternalProfile() throws {
+    let root = try PluginLibraryFixture.directory("bound-session")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let first = try PluginLibraryFixture.translated(root, guid: "Creator.Motion", salt: "first")
+    try PluginLibraryFixture.publish(root, revisions: [first])
+    let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+    let selection = try index.select(guids: ["Creator.Motion"])
+    var object = StudioObject(name: "Source target", kind: .folder); object.sourceObjectKey = 42
+    var document = StudioDocument(); document.objects = [object]; document.sourceSceneSHA256 = PluginLibraryFixture.hash
+    let configuration = SourceStudioPluginConfiguration(bindings: [.init(guid: "Creator.Motion", type: "Fixture", sourceObjectKey: 42)])
+    document.sourcePluginLibrary = selection; document.sourcePluginLibraryConfiguration = configuration
+    let resolution = try selection.resolve()
+    let session = try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: configuration, document: document)
+    let stepped = try session.step(document: session.savedDocument(), deltaTime: 0.05)
+    let state = try #require(stepped.sourcePluginState)
+    #expect(state.profileFile == nil && state.profileSHA256 == nil)
+    #expect(state.libraryConfigurationSHA256?.count == 64)
+    #expect(state.bindings[0].objectIdentity == "source:\(PluginLibraryFixture.hash)/object/42")
+    // A new publication cannot change a document pinned to generation one.
+    try PluginLibraryFixture.publish(root, revisions: [PluginLibraryFixture.translated(root, guid: "Creator.Motion", salt: "new")])
+    let saved = try JSONEncoder().encode(stepped)
+    let reopened = try JSONDecoder().decode(StudioDocument.self, from: saved)
+    let restoredSelection = try #require(reopened.sourcePluginLibrary)
+    let restored = try SourceStudioPluginSession(selection: restoredSelection, resolution: restoredSelection.resolve(),
+        configuration: #require(reopened.sourcePluginLibraryConfiguration), document: reopened, restoring: state)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    #expect(try restored.savedDocument() == stepped)
+    #expect(restored.runtime.savedClock() == session.runtime.savedClock())
+    #expect(try restored.runtime.savedBindings() == session.runtime.savedBindings())
+    // Cached evaluation/snapshot needs no library access after installation.
+    try FileManager.default.removeItem(at: root)
+    let next = try restored.step(document: restored.savedDocument(), deltaTime: 0.02)
+    #expect(next.sourcePluginLibrary == selection)
+    #expect(throws: (any Error).self) { try selection.resolve() }
+}
+
+@Test func sourceStudioLibrarySessionRejectsChangedBindingsOrResolution() throws {
+    let root = try PluginLibraryFixture.directory("bound-rejections")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try PluginLibraryFixture.publish(root, revisions: [PluginLibraryFixture.translated(root, guid: "Creator.Motion")])
+    let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+    let selection = try index.select(guids: ["Creator.Motion"]), resolution = try selection.resolve()
+    let object = StudioObject(name: "Target", kind: .folder), other = StudioObject(name: "Other", kind: .folder)
+    var document = StudioDocument(); document.objects = [object, other]
+    let configuration = SourceStudioPluginConfiguration(bindings: [.init(guid: "Creator.Motion", type: "Fixture", objectID: object.id)])
+    let session = try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: configuration, document: document)
+    let saved = try session.savedDocument(), state = try #require(saved.sourcePluginState)
+    let changed = SourceStudioPluginConfiguration(bindings: [.init(guid: "Creator.Motion", type: "Fixture", objectID: other.id)])
+    #expect(throws: SourcePluginError.self) {
+        try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: changed, document: saved, restoring: state)
+    }
+    for bindings in [[], configuration.bindings + configuration.bindings,
+                     [.init(guid: "Absent", type: "Fixture", objectID: object.id)],
+                     [.init(guid: "Creator.Motion", type: "Fixture", sourceObjectKey: 42, objectID: object.id)]] {
+        #expect(throws: SourcePluginError.self) {
+            try SourceStudioPluginSession(selection: selection, resolution: resolution,
+                configuration: .init(bindings: bindings), document: document)
+        }
+    }
+    let empty = try index.select(guids: [])
+    #expect(throws: SourcePluginError.self) {
+        try SourceStudioPluginSession(selection: empty, resolution: resolution, configuration: configuration, document: document)
+    }
+    #expect(try session.savedDocument() == saved)
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_NATIVE_PLUGIN_PACKAGES", "IKKOKU_PLUGIN_FIXTURE"]), "Requires original adapter packages and controlled lifecycle fixture"))
+func sourceStudioLibraryMixedAdaptersCloneAndDestroyedBindingRoundTrip() throws {
+    let root = try PluginLibraryFixture.directory("mixed-clones")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("revisions"), withIntermediateDirectories: true)
+    let packages = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_NATIVE_PLUGIN_PACKAGES"))
+    let lifecycle = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_PLUGIN_FIXTURE"))
+    let records = try [lifecycle, packages.appendingPathComponent("mute-original-v1/manifest.json"),
+        packages.appendingPathComponent("accessory-names-original-v1/manifest.json")].map {
+            try PluginLibraryFixture.existingPackage(root, manifestURL: $0)
+        }
+    try PluginLibraryFixture.publish(root, revisions: records)
+    let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+    let selection = try index.select(guids: records.map { $0["guid"] as! String }), resolution = try selection.resolve()
+    #expect(resolution.nativeAdapters.count == 2 && resolution.translated.count == 1)
+    let program = try #require(resolution.translated.first?.programs.first)
+    var target = StudioObject(name: "Original source target", kind: .folder); target.sourceObjectKey = 42
+    var document = StudioDocument(); document.objects = [target]; document.sourceSceneSHA256 = PluginLibraryFixture.hash
+    let configuration = SourceStudioPluginConfiguration(bindings: [.init(guid: program.identity.pluginGUID!, type: program.type, sourceObjectKey: 42)])
+    document.sourcePluginLibrary = selection; document.sourcePluginLibraryConfiguration = configuration
+    document.sourceNativePlugins = resolution.nativeAdapters.map { .init(package: $0) }
+    let session = try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: configuration, document: document)
+    let cloned = try session.step(document: session.savedDocument(), deltaTime: 0.01)
+    #expect(cloned.objects.count == 2)
+    #expect(cloned.sourcePluginState?.bindings[1].objectIdentity.contains("source:\(PluginLibraryFixture.hash)/object/42/clone/") == true)
+    let decoded = try JSONDecoder().decode(StudioDocument.self, from: JSONEncoder().encode(cloned))
+    let restored = try SourceStudioPluginSession(selection: selection, resolution: selection.resolve(), configuration: configuration,
+        document: decoded, restoring: decoded.sourcePluginState)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    #expect(try restored.savedDocument() == cloned)
+    let destroyed = try restored.step(document: decoded, deltaTime: 0.01)
+    #expect(destroyed.objects.count == 1 && destroyed.sourcePluginState?.bindings[1].destroyed == true)
+    let final = try SourceStudioPluginSession(selection: selection, resolution: selection.resolve(), configuration: configuration,
+        document: destroyed, restoring: destroyed.sourcePluginState)
+    #expect(try final.savedDocument() == destroyed)
+    #expect(destroyed.sourceNativePlugins == document.sourceNativePlugins)
 }

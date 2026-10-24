@@ -4,9 +4,27 @@ import Gameplay
 
 public struct SourceStudioPluginState: Codable, Sendable, Equatable {
     public struct PackageIdentity: Codable, Sendable, Equatable { public let guid: String, manifestSHA256: String }
-    public let profileFile: String, profileSHA256: String
+    public let profileFile: String?, profileSHA256: String?
+    public let libraryConfigurationSHA256: String?
     public let packages: [PackageIdentity], bindings: [SourcePluginBindingState], clock: SourcePluginClockState
     public let objectIdentities: [UUID: String], cloneSerial: UInt64
+}
+
+/// Bindings chosen in Studio for an immutable library selection. Saved inside the
+/// scene, so reopening needs no generated external profile or positional IDs.
+public struct SourceStudioPluginConfiguration: Codable, Sendable, Equatable {
+    public struct Binding: Codable, Sendable, Equatable {
+        public let guid: String, type: String
+        public let sourceObjectKey: Int32?
+        public let objectID: UUID?
+        public init(guid: String, type: String, sourceObjectKey: Int32? = nil, objectID: UUID? = nil) {
+            self.guid = guid; self.type = type; self.sourceObjectKey = sourceObjectKey; self.objectID = objectID
+        }
+    }
+    public let fixedDeltaTime: Float, bindings: [Binding]
+    public init(fixedDeltaTime: Float = 0.02, bindings: [Binding]) {
+        self.fixedDeltaTime = fixedDeltaTime; self.bindings = bindings
+    }
 }
 
 public final class SourceStudioPluginSession {
@@ -18,23 +36,17 @@ public final class SourceStudioPluginSession {
         let schemaVersion: Int, fixedDeltaTime: Float, packages: [Package]
     }
     public let world: SourceStudioPluginWorld, runtime: SourcePluginRuntime, library: SourcePluginLibrary
-    public let profileURL: URL, profileSHA256: String
+    public let profileURL: URL?, profileSHA256: String?
+    public let libraryConfigurationSHA256: String?
     private let packageIdentities: [SourceStudioPluginState.PackageIdentity]
 
-    public init(profileURL: URL, document: StudioDocument, restoring saved: SourceStudioPluginState? = nil,
+    public convenience init(profileURL: URL, document: StudioDocument, restoring saved: SourceStudioPluginState? = nil,
                 attachment: SourceStudioPluginWorld.AttachmentResolver? = nil) throws {
         let handle = try FileHandle(forReadingFrom: profileURL); defer { try? handle.close() }
         let data = try handle.read(upToCount: 1024 * 1024 + 1) ?? Data()
         guard data.count <= 1024 * 1024 else { throw SourcePluginError.invalid("Plugin profile exceeds 1 MiB.") }
         let profile = try JSONDecoder().decode(Profile.self, from: data)
         guard profile.schemaVersion == 1, profile.packages.count <= 256 else { throw SourcePluginError.invalid("Unsupported plugin profile.") }
-        self.profileURL = profileURL.resolvingSymlinksInPath()
-        profileSHA256 = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        if let saved {
-            guard saved.profileFile.utf8.elementsEqual(self.profileURL.path.utf8), saved.profileSHA256 == profileSHA256 else {
-                throw SourcePluginError.invalid("Saved plugin profile changed; explicit reinstallation is required.")
-            }
-        }
         var loaded: [SourcePluginPackage] = [], requested: [Data: Profile.Package] = [:]
         for package in profile.packages {
             guard !package.manifest.isEmpty, package.bindings.count <= 1024 else { throw SourcePluginError.invalid("Invalid package bindings.") }
@@ -44,7 +56,53 @@ public final class SourceStudioPluginSession {
             guard requested.updateValue(package, forKey: value.ordinalGUID) == nil else { throw SourcePluginError.invalid("Duplicate plugin package identity.") }
             requested[value.ordinalGUID] = package; loaded.append(value)
         }
-        library = try SourcePluginLibrary(packages: loaded)
+        try self.init(profileURL: profileURL, profileSHA256: Self.hash(data), libraryConfigurationSHA256: nil,
+            library: SourcePluginLibrary(packages: loaded), fixedDeltaTime: profile.fixedDeltaTime,
+            requested: requested.mapValues { $0.bindings }, document: document, restoring: saved, attachment: attachment)
+    }
+
+    /// Uses packages already verified against the saved generation. No package or
+    /// filesystem reads occur in construction, stepping or snapshotting this path.
+    public convenience init(selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution,
+                            configuration: SourceStudioPluginConfiguration, document: StudioDocument,
+                            restoring saved: SourceStudioPluginState? = nil,
+                            attachment: SourceStudioPluginWorld.AttachmentResolver? = nil) throws {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(selection) == encoder.encode(resolution.selection),
+              configuration.bindings.count <= 1024 else {
+            throw SourcePluginError.invalid("Plugin library selection or bindings differ from the verified resolution.")
+        }
+        let library = SourcePluginLibrary(resolution: resolution)
+        var requested: [Data: [Profile.Package.Binding]] = [:]
+        for binding in configuration.bindings {
+            let guid = Data(binding.guid.utf8)
+            guard library.packages.contains(where: { $0.ordinalGUID == guid }) else {
+                throw SourcePluginError.invalid("Binding names an unselected converted plugin: \(binding.guid).")
+            }
+            requested[guid, default: []].append(.init(type: binding.type, sourceObjectKey: binding.sourceObjectKey, objectID: binding.objectID))
+        }
+        guard library.packages.allSatisfy({ requested[$0.ordinalGUID]?.isEmpty == false }) else {
+            throw SourcePluginError.invalid("Every selected converted plugin requires a scene-object binding.")
+        }
+        try self.init(profileURL: nil, profileSHA256: nil,
+            libraryConfigurationSHA256: Self.hash(encoder.encode(configuration)), library: library,
+            fixedDeltaTime: configuration.fixedDeltaTime, requested: requested,
+            document: document, restoring: saved, attachment: attachment)
+    }
+
+    private static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+
+    private init(profileURL: URL?, profileSHA256: String?, libraryConfigurationSHA256: String?, library: SourcePluginLibrary, fixedDeltaTime: Float,
+                 requested: [Data: [Profile.Package.Binding]], document: StudioDocument,
+                 restoring saved: SourceStudioPluginState?, attachment: SourceStudioPluginWorld.AttachmentResolver?) throws {
+        self.profileURL = profileURL?.resolvingSymlinksInPath(); self.profileSHA256 = profileSHA256
+        self.libraryConfigurationSHA256 = libraryConfigurationSHA256; self.library = library
+        if let saved {
+            guard saved.profileFile.map({ Data($0.utf8) }) == self.profileURL.map({ Data($0.path.utf8) }),
+                  saved.profileSHA256 == profileSHA256, saved.libraryConfigurationSHA256 == libraryConfigurationSHA256 else {
+                throw SourcePluginError.invalid("Saved plugin profile or library bindings changed; explicit reinstallation is required.")
+            }
+        }
         packageIdentities = library.packages.map { .init(guid: $0.manifest.identity.guid,
             manifestSHA256: SHA256.hash(data: $0.manifestData).map { String(format: "%02x", $0) }.joined()) }
         if let saved {
@@ -54,11 +112,11 @@ public final class SourceStudioPluginSession {
             }
         }
         world = try SourceStudioPluginWorld(document: document, identities: saved?.objectIdentities ?? [:], cloneSerial: saved?.cloneSerial ?? 0, attachment: attachment)
-        runtime = try SourcePluginRuntime(world: world, fixedDeltaTime: profile.fixedDeltaTime)
+        runtime = try SourcePluginRuntime(world: world, fixedDeltaTime: fixedDeltaTime)
         if let saved { try runtime.restoreClock(saved.clock) }
         var bindingCount = 0, identities = Set<Data>()
         for package in library.packages {
-            for binding in requested[package.ordinalGUID]!.bindings {
+            for binding in requested[package.ordinalGUID] ?? [] {
                 guard let program = package.programs.first(where: { $0.type.utf8.elementsEqual(binding.type.utf8) }),
                       (binding.sourceObjectKey == nil) != (binding.objectID == nil) else { throw SourcePluginError.invalid("Plugin component requires one unambiguous scene target.") }
                 let state: SourcePluginBindingState?
@@ -104,7 +162,7 @@ public final class SourceStudioPluginSession {
     }
     public func savedDocument() throws -> StudioDocument {
         var document = world.document
-        document.sourcePluginState = .init(profileFile: profileURL.path, profileSHA256: profileSHA256,
+        document.sourcePluginState = .init(profileFile: profileURL?.path, profileSHA256: profileSHA256, libraryConfigurationSHA256: libraryConfigurationSHA256,
             packages: packageIdentities, bindings: try runtime.savedBindings(), clock: runtime.savedClock(),
             objectIdentities: world.identities, cloneSerial: world.cloneSerial)
         return document

@@ -58,6 +58,9 @@ public struct SourcePluginPackage: Sendable {
 /// selections; profile loads keep reporting `SourcePluginError`.
 public struct SourcePluginLibrary: Sendable {
     public let packages: [SourcePluginPackage]
+    /// A mixed selection has already passed the graph, including dependencies
+    /// supplied by native adapters. Preserve that order for its executable subset.
+    public init(resolution: SourcePluginLibraryResolution) { packages = resolution.translated }
     public init(packages requested: [SourcePluginPackage], process: String = "CharaStudio") throws {
         do {
             let nodes = requested.map { SourcePluginGraph.Node(package: $0) }

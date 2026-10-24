@@ -221,21 +221,88 @@ selections of both kinds:
 
 ### Saved scenes and migration
 
-`StudioDocument.sourcePluginLibrary` is an optional selection. Documents saved
-before it existed decode it as nil, and the `sourcePluginState` and
-`sourceNativePlugins` formats are unchanged, so no migration is required. A
-translated-plugin profile may name `<library>/revisions/<manifestSHA256>/manifest.json`
-as a package `manifest`. That path is immutable, so a saved `sourcePluginState`
-keeps restoring after newer generations are published.
-`SourcePluginLibraryTests.swift` covers this, together with the graph, selection,
-conflict and byte-verification rules above. `test_plugin_library.py` covers the
-scanner.
+`StudioDocument.sourcePluginLibrary` records the exact generation and revisions;
+`sourcePluginLibraryConfiguration` records each converted component's source-key
+or native-UUID target and fixed timestep. The Mods → Show Mod Library → Studio
+Plugins tab inspects a published library, chooses exact versions and targets,
+and mounts or unloads that selection. Reading the latest generation only changes
+the available choices. Mount is the explicit replacement operation; it starts a
+new selected runtime. Mounting the identical selection and bindings is a no-op.
 
-Not yet implemented:
+For a UI mount, package bytes, hashes and IR decode are prepared off the UI thread. One mount is
+prepared at a time. The existing runtime may keep stepping; owner-thread binding
+and commit use the current document after verifying that the user has not edited
+the scene or left Studio. Cancellation, invalid bindings, missing revisions and
+failed installation leave the previous session, document and native adapters
+intact. Unload is disabled outside Studio. Installation callbacks operate on an
+isolated document; source-character attachment reads during installation are
+explicitly unsupported because their live resolver can allocate previews. Those
+reads use the existing resolver after commit. No package resolution, filesystem
+reads or hashing occur in frame ticks or runtime snapshots.
 
-- App wiring: no menu or environment path creates, restores or upgrades
-  `sourcePluginLibrary`. The app still mounts adapters from individual manifests
-  and IR packages from profiles, and merging a scene with a selection is refused.
+Library-backed `SourceStudioPluginState` stores `libraryConfigurationSHA256` and
+omits the external-profile fields. Its exact package identities, runtime fields,
+clocks, source/native object identities, clone serial and tombstones retain their
+existing representation. Legacy state keeps `profileFile`/`profileSHA256`; those
+fields are now optional so both origins are explicit, and older documents still
+decode. Profiles and individual native manifests remain supported separately.
+A library selection must be unloaded before mounting an individual adapter.
+Native save/reload resolves the recorded generation; a new publication never
+upgrades it. Load and undo/redo stage restoration before replacing the live
+session or history. Missing/changed files produce named errors. Plugin-library
+restoration during native open or undo/redo still resolves files synchronously;
+this slice does not move scene loading off the UI thread. Staged legacy-profile
+restoration uses the same attachment-read gate, while a fresh legacy profile load
+keeps its existing live resolver behavior. Plugin-library
+root relocation is not supported by the asset-library relocation system; keep
+the recorded root or explicitly mount a selection from its new location.
+
+For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
+`selection` and `configuration`, the same typed values the UI passes to Studio.
+It cannot be combined with a legacy profile or separate adapter manifests. This
+request file is an input convenience, not a new persistence dependency: the
+native scene stores both values directly. A Studio scenario may run the bounded
+`pluginLibrary` checks with a `requestFile` and no ordinary steps. Its barrier
+holds the real background preparation for mode/document-change and rollback
+checks; normal Studio scenarios keep their synchronous execution.
+
+The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
+including a rejected legacy restore whose field initializer tries to read an
+attached world transform. Repeating undo and trying redo preserve the old
+document, session, adapters, rendered-preview identities and exact frame/resource
+state. That rollback fixture uses two folders and no character previews. Normal
+editor timers are paused for static cancellation assertions; a separate running
+replacement check advances the old session during preparation.
+
+The three-process mixed-library probe retained generation 1 with generation 2
+available, exact fields/clocks/object bindings, and both registered adapters.
+Run/reload pixels are identical with `--animation-time 0`, explicitly held in
+every phase. This verifies plugin persistence under a controlled source-hand
+clock, not general source-animation clock persistence. The historical probe
+default remains import-only 0.5 seconds; the unequal-clock failure is retained
+as evidence. The legacy startup capture also passes after declaring its required
+source scene instead of attempting to bind object 10 in an empty document.
+
+Visible UI acceptance on the same build opened the actual library, selected its
+three generation-2 revisions, bound Source character 10, mounted, paused,
+and unloaded. Reading the latest generation reset the browsing choices while
+retaining the mounted selection. The new panel's Run/Unload controls were
+disabled in Maker and enabled again in Studio; the legacy menubar Run command
+was outside that control check. Generation 2 offered its current motion revision,
+not the older generation-1 revision; old-selection restoration is the separate
+automated proof. GUI save/reopen was not tested in this pass.
+
+Functional timing diagnostics on that Release build: one initial mount took
+112.88 ms end to end (preparation, scheduling and commit combined); 120 synthetic
+two-folder steps averaged 0.01855 ms and snapshots 0.000642 ms. Whole-process
+run/reload/continue took 3.268/1.149/1.205 seconds, including startup, assets,
+rendering and PNG I/O. These ran alongside other development work and are not a
+quiet performance comparison, isolated main-thread commit cost, or scene-open
+responsiveness claim. No library/hash I/O occurs in the measured tick/snapshot
+path; native open and history restoration still resolve synchronously.
+
+Remaining work:
+
 - Batch DLL triage that recovers each entry type, assembly-level dependencies,
   packages with several types, and converter migrations.
 - Adapter dependency metadata in the registry, for when a registered plugin

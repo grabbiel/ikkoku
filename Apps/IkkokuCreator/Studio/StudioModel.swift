@@ -60,6 +60,7 @@ final class StudioModel: ViewportInputHandler {
     var doc: StudioDocument {
         get { access(keyPath: \.doc); return documentStorage }
         set {
+            if sourcePluginLibraryPending && !sourcePluginTickInProgress { cancelSourcePluginLibraryMount() }
             let camera = documentStorage.camera, sceneFile = documentStorage.sourceSceneFile
             if documentStorage != newValue { withMutation(keyPath: \.doc) { documentStorage = newValue } }
             else { documentStorage = newValue }
@@ -67,6 +68,7 @@ final class StudioModel: ViewportInputHandler {
         }
         _modify {
             access(keyPath: \.doc)
+            if sourcePluginLibraryPending && !sourcePluginTickInProgress { cancelSourcePluginLibraryMount() }
             let camera = documentStorage.camera, sceneFile = documentStorage.sourceSceneFile
             _$observationRegistrar.willSet(self, keyPath: \.doc)
             defer {
@@ -428,10 +430,14 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored var sourceFocusObservers: [NSObjectProtocol] = []
     @ObservationIgnored var sourceLaunchObserver: NSObjectProtocol?
     var sourcePluginsRunning = false
+    var sourcePluginLibraryPending = false
+    @ObservationIgnored var sourcePluginMountGeneration: UInt64 = 0
+    @ObservationIgnored var sourcePluginTickInProgress = false
+    @ObservationIgnored var sourcePluginPreparationHook: (@Sendable () async -> Void)?
     var sourceAccessoryNamesEnabled = false
     var liveAnimation = true
     var sourceAutomaticBlink = true { didSet { for preview in sourceInstances.values { preview.automaticBlink = sourceAutomaticBlink }; refresh() } }
-    var isActiveMode = false
+    var isActiveMode = false { didSet { if oldValue && !isActiveMode { cancelSourcePluginLibraryMount() } } }
     // Timeline
     var timelinePlaying = false
     var timelineTime: Float = 0 { didSet { refresh() } }
@@ -1206,7 +1212,7 @@ final class StudioModel: ViewportInputHandler {
 
     // MARK: Object management
 
-    private func pushUndo(force: Bool = false) {
+    func pushUndo(force: Bool = false) {
         if !force && Date().timeIntervalSince(lastUndoPush) < 0.4 { return }
         undoStack.append(doc)
         if undoStack.count > 60 { undoStack.removeFirst() }
@@ -1239,8 +1245,30 @@ final class StudioModel: ViewportInputHandler {
     /// the scene file is not re-read. Limitation: an import REPLACES the
     /// caches, so undoing past an import of a different scene still loses
     /// the earlier scene's runtime until it is imported again.
-    func undo() { guard let d = undoStack.popLast() else { return }; redoStack.append(doc); sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; if let id = activeSourceCamera, d.object(id) == nil { activeSourceCamera = nil }; doc = d; rehydrateSourceRuntime(); do { try restoreSourcePlugins(); status = "Undo" } catch { status = "Plugin restore: \(error)" } }
-    func redo() { guard let d = redoStack.popLast() else { return }; undoStack.append(doc); sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil; if let id = activeSourceCamera, d.object(id) == nil { activeSourceCamera = nil }; doc = d; rehydrateSourceRuntime(); do { try restoreSourcePlugins(); status = "Redo" } catch { status = "Plugin restore: \(error)" } }
+    func undo() {
+        guard let next = undoStack.last else { return }
+        do {
+            let plugins = try prepareSourcePlugins(document: next)
+            undoStack.removeLast(); redoStack.append(doc)
+            applyHistoryDocument(next, plugins: plugins)
+            status = "Undo"
+        } catch { status = "Plugin restore: \(error)" }
+    }
+    func redo() {
+        guard let next = redoStack.last else { return }
+        do {
+            let plugins = try prepareSourcePlugins(document: next)
+            redoStack.removeLast(); undoStack.append(doc)
+            applyHistoryDocument(next, plugins: plugins)
+            status = "Redo"
+        } catch { status = "Plugin restore: \(error)" }
+    }
+    private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins) {
+        sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil
+        if let id = activeSourceCamera, next.object(id) == nil { activeSourceCamera = nil }
+        doc = next; rehydrateSourceRuntime()
+        commitSourcePlugins(plugins, running: false, replaceDocument: false)
+    }
 
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
@@ -1637,6 +1665,7 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func saveScene(to url: URL) throws {
+        cancelSourcePluginLibraryMount()
         var savedDocument = doc
         if let session = sourcePluginSession {
             try session.world.replaceDocument(doc)
@@ -1956,6 +1985,7 @@ final class StudioModel: ViewportInputHandler {
         try decoded.validateCameras()
         let resources = decoded.resolvingResources(current: host.libraryLocation(), catalog: library.catalog)
         let d = resources.document
+        let preparedPlugins = try prepareSourcePlugins(document: d)
         for line in resources.diagnostics { print("[ikkoku] \(url.lastPathComponent): \(line)") }
         pushUndo(force: true)
         stopSourceVoices()
@@ -1966,7 +1996,7 @@ final class StudioModel: ViewportInputHandler {
         applyResourceCheck(resources)
         doc = d
         rehydrateSourceRuntime()
-        try restoreSourcePlugins()
+        commitSourcePlugins(preparedPlugins, running: false, replaceDocument: false)
         // The document's didSet rendered before the rehydrated cameras,
         // props and scene light existed; render once more so the first frame
         // after a load (a capture, an export thumbnail) shows them.

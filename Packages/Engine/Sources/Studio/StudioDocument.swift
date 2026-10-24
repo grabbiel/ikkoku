@@ -154,6 +154,7 @@ public struct StudioDocument: Codable, Sendable, Equatable {
     /// generation, never a newer one. Documents saved before this field existed
     /// decode it as nil; their profile state and adapter references are unchanged.
     public var sourcePluginLibrary: SourcePluginLibrarySelection?
+    public var sourcePluginLibraryConfiguration: SourceStudioPluginConfiguration?
     /// The libraries and file digests this document's paths were saved against
     /// (A-T02). `resolvingResources(current:catalog:)` relocates the paths of a
     /// moved library from it and reports every reference it cannot verify.

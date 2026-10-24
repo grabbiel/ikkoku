@@ -7,7 +7,7 @@ struct ContentView: View {
         @Bindable var app = app
         let _ = PerfTrace.body(.contentView)
         Group {
-            if app.runsHeadlessMakerScenario {
+            if app.runsHeadlessEditorScenario {
                 EmptyView()
             } else if app.host == nil {
                 ContentUnavailableView("Metal is unavailable", systemImage: "exclamationmark.triangle", description: Text(app.errorMessage ?? ""))
