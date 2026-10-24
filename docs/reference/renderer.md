@@ -797,6 +797,178 @@ offset.
   retirement completes through the next submitted frame. Since item 5 the
   test thread also requests 16 asynchronous picks, and every one completes.
 
+### Studio live step threads (R7 phase 2, item 3)
+
+**Who runs what.** The Studio's 30 Hz timer still fires on the main run
+loop and calls `StudioModel.stepLive`. For a scene with source characters,
+the step now runs in three parts:
+
+1. **Start (main actor).** `startParallelLiveTick` copies every input the
+   step reads into value types (`SourceStudioLiveTick.Input`):
+   - the new clock value and the 1/30 s step;
+   - the automatic blink flag;
+   - for each neck or eye gaze, the view camera in the rig's model space and
+     the document edits;
+   - the frame the refresh will merge for each visible character: its world
+     matrix, object id, edits, wear and face state, read from the timeline
+     state as the refresh reads them.
+
+   It writes no observed state. It then hands each preview to a
+   `SourceStudioLiveTickLease` and starts a `SourceStudioLiveTickJob`.
+2. **Workers.** The job runs `DispatchQueue.concurrentPerform` from a
+   user-interactive global queue, one iteration per lease. Each iteration
+   runs `SourceStudioLiveTick.step` for one preview, in the serial step's
+   order: blink, neck gaze, eye gaze, dynamics clock, then the refresh's wear,
+   face state and frame. Characters never read each other there.
+3. **Commit (main actor).** The job's completion is `DispatchGroup.notify`
+   on the main queue. It settles the step (below) and calls `refresh()`,
+   which merges the frames in document order and submits them.
+
+The main actor keeps the snapshot, the commit, the merge and `submit`. Route
+character previews, native characters, gizmos and the live source-shader
+attach still run in the refresh on the main actor, as before.
+
+**Ownership.** `SourceStudioCharacterPreview` is a mutable class (caches,
+clocks, dynamics state) and is not `Sendable`. A lease moves one preview to
+one worker for one step. It is the only new `@unchecked Sendable` type, and
+its invariant is written on the type:
+
+- The job rejects two leases of one preview (`init?` returns nil), so each
+  preview has exactly one owner per step.
+- From `start` until `wait()` returns, the main actor neither calls a leased
+  preview nor reads its mutable state. `StudioModel` enforces this in one
+  place: `sourceInstances` is a computed property whose getter and setter
+  settle the step first. Only `startParallelLiveTick` reads the storage
+  directly, before `start`.
+- The dispatch happens before a worker's first access, and the group's leave
+  happens after its last, so the main actor sees every write once `wait()` or
+  the completion returns. `wait()` also drops the job's references to the
+  previews.
+- Outputs, timings and the lease array sit behind an `OSAllocatedUnfairLock`.
+  The job itself is `Sendable` without `@unchecked`.
+
+**Settling.** Settling waits for the job if it is still running, then
+commits it in the serial step's order:
+
+1. the animation clock (with an observation mutation);
+2. the neck gaze errors, in lease order, then the eye gaze errors (lease
+   order is the order the serial loops iterated `sourceInstances` in);
+3. the route clocks (`stepSourceRouteClocks`).
+
+The step's frames then wait for the next refresh. Three kinds of access
+settle:
+
+| Access | Frames |
+| --- | --- |
+| `refresh()`, and reads or writes of `sourceAnimationTime` | kept for the next refresh |
+| any read or write of `sourceInstances` | dropped; the next refresh evaluates every character on the main actor |
+
+A refresh takes a step's frame for a character only when all of these hold:
+it is the same preview object (`===`), the clock matches bit for bit, and
+`FrameRequest.matches` holds. That needs the world matrix bit for bit, and
+the edits, wear and face state equal under the comparisons the preview makes
+before it reuses its cached pose. A second `frame` call with such a request
+returns the same frame, so taking the step's frame cannot change a byte.
+Otherwise the refresh applies wear and face state and calls `frame` on the
+main actor, as before.
+
+**Edits during a step.** An edit made while a step runs (a document write,
+an FK drag event, undo or redo) lands after the step: "step, then edit".
+The edit's own refresh settles the step, keeps the frames whose requests
+still match and evaluates the rest. A write that replaces or reaches into a
+preview drops all of them. The step's snapshot never sees the edit. That
+is the order the serial step had, since an edit could only run between two
+main-thread steps. The `live-step-edit` Studio scenario checks the five cases
+in the app (no edit, an object move, an FK edit, undo, redo). For each one it
+checks the clock and the number of reused frames, and that the presented
+render is byte-identical to a main-thread rebuild.
+
+**When the timer fires during a step.** A fire while a step is running, or
+has settled but not yet refreshed, is skipped (`studioLiveTickSkipped`). The
+clock does not move for it. Every step that runs advances the clock by
+exactly 1/30 s. Under load the live animation therefore slows down instead
+of jumping, as it did when a main-thread step outlasted the timer period.
+Steps never overlap or queue. If the main thread is busy when the workers
+finish, the completion waits for it, and the frame presents late. The
+`studioLiveWait` phase records how long a settle blocked on unfinished
+workers.
+
+**Serial fallback.** The step runs on the main actor, unchanged
+(`advanceLiveFrameSerially`, event `studioLiveTickSerial`), when:
+
+- the scene has no source previews (native-only scenes);
+- a character with a live neck or eye gaze hangs on an attachment point or
+  under a route with a runtime, because its world matrix would read another
+  preview's pose or a route clock that the step itself changes;
+- the looked-through source camera is on such a chain or does not resolve.
+  The serial step resolves it and reports the fallback as before.
+
+A character whose frame world reads an attachment point or a route clock
+gets no frame request. The refresh builds its frame on the main actor after
+the step, as before.
+
+**Scenarios stay deterministic.** `advanceLiveFrame` (the scenario runner's
+`advance`) completes any step in flight, starts one, and completes it before
+it returns. The `editDuringAdvance` op starts a step the way the timer does,
+applies its edit while the step is in flight, then completes it.
+
+**Views that hold previews.** `SourceExpressionInspector` and the Studio
+Face and Clothes panels keep a preview reference from `sourceShapePreview`.
+They read immutable fields, or the wear and face state. A worker only
+compares those: `setWear` and `setExpressionState` return early when the
+values are unchanged. They are unchanged because every document write
+refreshes on the main actor, and that refresh applies the same values before
+any later step's snapshot. The views' edits go through model methods, which
+settle.
+
+**Rule for new code.** Anything that reads or changes a source preview goes
+through `sourceInstances`, or calls `settleLiveTick` first.
+
+**The hover pick ([item 5](#picks-r7-phase-2-item-5)).** The hover pick
+never touches a preview. It picks a copy of the model's last built `frame`
+on the pick queue. `finishHoverPicks` applies the result on the main actor,
+and a changed highlight calls `refresh()`, which settles like any other
+refresh. `frame` is assigned only in the refresh. That refresh runs on the
+main actor even when a live step's completion triggers it, so `frame`'s
+`didSet` still counts every assignment (`frameSerial`) on the main actor. A
+live step replaces `frame` at most 30 times a second, as the serial step
+did. A click's `settleHoverPicks` and a live-step settle can block the main
+thread one after the other. Neither the pick queue nor the live-step
+workers ever wait for the main thread, so neither wait can deadlock.
+
+**Concurrency checking.** `SourceStudioLiveTick.swift` is in the Engine
+package (Swift 6 language mode). `Edits`, `Gaze`, `FrameRequest`, `Input`
+and `Output` are `Sendable` value types. The blink draws are a `Sendable`
+protocol (`SourceStudioBlinkRandom`) carried in the lease. The app target
+(Swift 5 mode, `MainActor` default isolation) runs the completion through
+`MainActor.assumeIsolated` on the main queue.
+
+**Tests.** `SourceStudioLiveTickTests.swift` checks the contract against the
+7-character scenario scene:
+
+- `sourceStudioLiveTickDigestIsReproducibleWhenSupplied` hashes 180 serial
+  steps. `IKKOKU_LIVE_TICK_DIGEST` pins the hash.
+- `sourceStudioParallelLiveTickMatchesTheSerialDigest` runs the same steps
+  through `SourceStudioLiveTickJob` and must give the serial hash. It also
+  checks that a job refuses two leases of one preview.
+- `sourceStudioEditDuringAParallelTickMatchesTheSerialOrder` lands an FK
+  edit after every third step ("step, then edit") and compares the parallel
+  and serial orders bit for bit. It also checks that an unchanged frame
+  request reuses the step's own frame.
+- `sourceStudioEmptyLiveTickJobJoinsAtOnce` covers the job with no leases.
+
+The three fixture tests form one serialized suite. Each one loads the 7
+characters and steps them on a thread of its own (`liveTickOffPool`), and its
+checks run in the test's task. Building a preview blocks its thread in
+MetalKit's synchronous texture load. When these tests ran on the test pool,
+a parallel `swift test` hung with every pool thread blocked there (see
+[performance](performance.md#correctness-2)).
+The Studio scenario check `studio-scenario-live-step-edit` lands document,
+FK, undo and redo edits while a step is in flight in the app. ThreadSanitizer
+runs the Engine tests with `swift test --sanitize=thread --filter
+SourceStudioLiveTick`, and the app check on a Debug build with
+`-enableThreadSanitizer YES`.
+
 ### Picks (R7 phase 2, item 5)
 
 A pick returns the object id that the pick pass writes at one pixel of a

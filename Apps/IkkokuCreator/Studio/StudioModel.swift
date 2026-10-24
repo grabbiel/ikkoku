@@ -142,7 +142,16 @@ final class StudioModel: ViewportInputHandler {
     private(set) var redoStack: [StudioDocument] = []
     @ObservationIgnored private var instances: [UUID: CharacterInstance] = [:]
     @ObservationIgnored private var renderStatus = RenderStatusReporter()
-    @ObservationIgnored private var sourceInstances: [UUID: SourceStudioCharacterPreview] = [:]
+    @ObservationIgnored private var sourceInstanceStorage: [UUID: SourceStudioCharacterPreview] = [:]
+    /// The source characters' previews. While a live step runs, its workers
+    /// own them (R7 phase 2, item 3), so every read or write here first
+    /// settles that step, and drops its frames: the caller may change a
+    /// preview before the next refresh, which then evaluates on the main
+    /// actor again (`settleLiveTick`).
+    private var sourceInstances: [UUID: SourceStudioCharacterPreview] {
+        get { settleLiveTick(keepFrames: false); return sourceInstanceStorage }
+        set { settleLiveTick(keepFrames: false); sourceInstanceStorage = newValue }
+    }
     /// Imported route objects with their authored point transforms, so each
     /// frame's world-matrix walks replace a route parent's authored transform
     /// with `childRoot` — the node route children hang under
@@ -349,12 +358,7 @@ final class StudioModel: ViewportInputHandler {
     var viewCamera: OrbitCamera {
         guard let id = activeSourceCamera, let entry = sourceCameraEntry(of: id) else { return doc.camera }
         do {
-            let (object, parentFrame) = try sourceParentFrame(of: id, document: doc, previews: sourceInstances, visited: [])
-            // Same composition as `sourceWorldMatrix`, whose native branch has no Studio rule.
-            let camera = try object.sourceObjectKey == nil
-                ? SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
-                : SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
-                                                       localRotation: object.transform.quaternion, base: doc.camera)
+            let camera = try solvedSourceCamera(id, previews: sourceInstances)
             sourceCameraFallbackReason = nil
             return camera
         } catch {
@@ -363,6 +367,16 @@ final class StudioModel: ViewportInputHandler {
             if status != message { status = message }
             return doc.camera
         }
+    }
+    /// The camera object `id` looked through, solved from its parent frame:
+    /// `viewCamera` without its fallback bookkeeping.
+    private func solvedSourceCamera(_ id: UUID, previews: [UUID: SourceStudioCharacterPreview]) throws -> OrbitCamera {
+        let (object, parentFrame) = try sourceParentFrame(of: id, document: doc, previews: previews, visited: [])
+        // Same composition as `sourceWorldMatrix`, whose native branch has no Studio rule.
+        return try object.sourceObjectKey == nil
+            ? SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
+            : SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
+                                                   localRotation: object.transform.quaternion, base: doc.camera)
     }
     /// The selected source camera placeholder's title, so the Camera controls
     /// appear only where they can do something.
@@ -391,7 +405,14 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var startTime = CFAbsoluteTimeGetCurrent()
     @ObservationIgnored private var animTime: Double = 0
-    private(set) var sourceAnimationTime: Float = 0
+    @ObservationIgnored private var sourceAnimationClock: Float = 0
+    /// The Studio animation clock. A live step running off the main thread
+    /// commits its clock advance when it settles, so reads and writes settle
+    /// it first: a read sees every started step and a write lands after it.
+    private(set) var sourceAnimationTime: Float {
+        get { access(keyPath: \.sourceAnimationTime); settleLiveTick(keepFrames: true); return sourceAnimationClock }
+        set { settleLiveTick(keepFrames: true); withMutation(keyPath: \.sourceAnimationTime) { sourceAnimationClock = newValue } }
+    }
     /// Loaded from `IKKOKU_STUDIO_ANIMATION_CATALOG` at source-scene import; nil when unset.
     private(set) var sourceAnimationCatalog: SourceStudioAnimationCatalog?
     private(set) var sourceAnimationCatalogError: String?
@@ -460,13 +481,254 @@ final class StudioModel: ViewportInputHandler {
             return
         }
         guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
-        advanceLiveFrame()
+        // A live step still running, or settled but not yet refreshed, when
+        // the timer fires is not overlapped: this fire is skipped and the
+        // clock does not move, as when a main-thread step longer than the
+        // period made the timer skip fires. Every step that runs advances the
+        // clock by exactly 1/30 s.
+        guard liveTick == nil, liveRefreshPending == nil else { PerfTrace.event(.studioLiveTickSkipped); return }
+        beginLiveFrame(deltaTime: 1 / 30)
     }
 
     /// One live step of the source animation: blink clocks, TARGET/AWAY neck
     /// gaze, eye gaze, dynamics and route clocks, then a refresh. The scenario
     /// runner drives the same method so its lane exercises the app's own step.
+    /// It returns once the step's frame is submitted (a timer step still in
+    /// flight completes first), so stepping stays deterministic.
     func advanceLiveFrame(deltaTime: Float = 1 / 30) {
+        completeLiveTick()
+        beginLiveFrame(deltaTime: deltaTime)
+        completeLiveTick()
+    }
+
+    // MARK: Live step off the main thread (R7 phase 2, item 3)
+
+    /// A live step whose source characters run on background workers. The
+    /// main actor snapshotted every input; the step commits when it settles.
+    private struct LiveTick {
+        let job: SourceStudioLiveTickJob
+        let elapsed: Float
+        let deltaTime: Float
+        /// Per lease (the order `sourceInstances` iterated in, the serial
+        /// gaze loops' order): the object, its preview, the frame it asked
+        /// for, and a gaze error the snapshot itself hit (its world matrix).
+        let ids: [UUID]
+        let previews: [SourceStudioCharacterPreview]
+        let requests: [SourceStudioLiveTick.FrameRequest?]
+        let neckErrors: [(any Error)?]
+        let eyeErrors: [(any Error)?]
+    }
+
+    /// A settled step's frames, for the refresh that commits it.
+    private struct LivePrepared {
+        let elapsed: Float
+        let frames: [UUID: (preview: SourceStudioCharacterPreview, request: SourceStudioLiveTick.FrameRequest, output: SourceStudioLiveTick.Output)]
+
+        /// The step's output for the character the refresh is at, when the
+        /// refresh asks the same preview for the same frame at the same clock.
+        func output(for id: UUID, preview: SourceStudioCharacterPreview, elapsed: Float,
+                    request: () -> SourceStudioLiveTick.FrameRequest) -> SourceStudioLiveTick.Output? {
+            guard elapsed.bitPattern == self.elapsed.bitPattern, let entry = frames[id], entry.preview === preview,
+                  entry.output.frame != nil, entry.request.matches(request()) else { return nil }
+            return entry.output
+        }
+    }
+
+    /// The step running off the main thread, if any.
+    @ObservationIgnored private var liveTick: LiveTick?
+    /// How many frames the last started parallel step was asked for, and how
+    /// many of them the last refresh took (the scenario's race check).
+    @ObservationIgnored private(set) var lastLiveStepFrameRequests = 0
+    @ObservationIgnored private(set) var lastRefreshLiveFramesReused = 0
+    /// The settled step's frames, until the next refresh or preview access.
+    @ObservationIgnored private var livePrepared: LivePrepared?
+    /// The settled step whose frame no refresh has submitted yet.
+    @ObservationIgnored private var liveRefreshPending: SourceStudioLiveTickJob?
+
+    /// The scenario's handle on the timer's path: starts one live step as the
+    /// timer does and returns whether it runs off the main thread (in flight
+    /// until something settles it). A serial step has already refreshed.
+    func startLiveFrameAsTimer(deltaTime: Float = 1 / 30) -> Bool {
+        completeLiveTick()
+        beginLiveFrame(deltaTime: deltaTime)
+        return liveTick != nil
+    }
+
+    /// Completes the step in flight as its completion handler does.
+    func completeLiveFrame() { completeLiveTick() }
+
+    /// Starts one live step: on background workers when the snapshot holds
+    /// (`startParallelLiveTick`), else the serial step, which refreshes
+    /// before it returns.
+    private func beginLiveFrame(deltaTime: Float) {
+        guard let tick = startParallelLiveTick(deltaTime: deltaTime) else {
+            PerfTrace.event(.studioLiveTickSerial)
+            advanceLiveFrameSerially(deltaTime: deltaTime)
+            return
+        }
+        liveTick = tick
+        let job = tick.job
+        job.start { [weak self] in MainActor.assumeIsolated { self?.liveTickFinished(job) } }
+    }
+
+    /// The workers of `job` finished: commit and refresh it, unless something
+    /// already did.
+    private func liveTickFinished(_ job: SourceStudioLiveTickJob) {
+        guard liveTick?.job === job || liveRefreshPending === job else { return }
+        completeLiveTick()
+    }
+
+    /// Completes the live step in flight, if any: waits for its workers,
+    /// commits it and refreshes with its frames.
+    private func completeLiveTick() {
+        settleLiveTick(keepFrames: true)
+        if liveRefreshPending != nil { refresh() }
+    }
+
+    /// Waits for the live step in flight, if any, and commits it on the main
+    /// actor in the serial step's order: the clocks, the neck and eye gaze
+    /// errors in the serial loops' order, the route clocks. With `keepFrames`
+    /// its frames wait for the next refresh; otherwise (a preview access)
+    /// they are dropped and that refresh evaluates every character again.
+    /// Either way that refresh is the step's own: the timer starts no new step
+    /// before it.
+    private func settleLiveTick(keepFrames: Bool) {
+        guard let tick = liveTick else {
+            if !keepFrames, livePrepared != nil { livePrepared = nil; PerfTrace.event(.studioLiveTickDiscarded) }
+            return
+        }
+        liveTick = nil
+        let finished = tick.job.isFinished, waitStart = CACurrentMediaTime()
+        let result = tick.job.wait()
+        if let trace = PerfTrace.active {
+            if !finished { trace.record(.studioLiveWait, start: waitStart, end: CACurrentMediaTime()) }
+            trace.record(.studioLiveJob, start: result.startSeconds, end: result.endSeconds)
+            trace.record(.studioLiveCPU, start: result.startSeconds, end: result.startSeconds + result.cpuSeconds)
+        }
+        withMutation(keyPath: \.sourceAnimationTime) { sourceAnimationClock = tick.elapsed }
+        for (index, output) in result.outputs.enumerated() {
+            if let error = tick.neckErrors[index] ?? output.neckError { status = "Source neck gaze: \(error)" }
+        }
+        for (index, output) in result.outputs.enumerated() {
+            if let error = tick.eyeErrors[index] ?? output.eyeError { status = "Source eye gaze: \(error)" }
+        }
+        stepSourceRouteClocks(delta: tick.deltaTime)
+        liveRefreshPending = tick.job
+        if keepFrames {
+            var frames: [UUID: (preview: SourceStudioCharacterPreview, request: SourceStudioLiveTick.FrameRequest, output: SourceStudioLiveTick.Output)] = [:]
+            for (index, output) in result.outputs.enumerated() {
+                if let request = tick.requests[index] { frames[tick.ids[index]] = (tick.previews[index], request, output) }
+            }
+            livePrepared = LivePrepared(elapsed: tick.elapsed, frames: frames)
+        } else {
+            PerfTrace.event(.studioLiveTickDiscarded)
+        }
+    }
+
+    /// The parallel live step's snapshot, taken on the main actor at the
+    /// step's start, and its job; nil for the serial step.
+    ///
+    /// Per preview it records whether the blink clock steps, the neck and eye
+    /// gaze inputs (the view camera in rig model space and the document
+    /// edits) and the frame `refreshFrame` will merge for it (its world
+    /// matrix, object id, edits, wear and face state, from the timeline
+    /// state, as the refresh reads them). Nothing here changes observed
+    /// state: the step commits when it settles.
+    ///
+    /// The step stays serial when a gaze would read something the step itself
+    /// changes: a gaze character whose world matrix goes through an
+    /// attachment point (another preview's pose) or a route (its clock), or a
+    /// looked-through camera on such a chain or that does not resolve (the
+    /// serial step reports it as before). A character whose
+    /// frame would read one gets no frame request: the refresh builds it on
+    /// the main actor after the step, as before. Native-only scenes have no
+    /// previews and keep the serial step.
+    private func startParallelLiveTick(deltaTime: Float) -> LiveTick? {
+        let previews = sourceInstanceStorage
+        guard !previews.isEmpty, let cameraPosition = liveTickCameraPosition(previews: previews) else { return nil }
+        let document = doc
+        let elapsed = sourceAnimationClock + deltaTime
+        var animated = document
+        if !document.timeline.keyframes.isEmpty {
+            for i in animated.objects.indices { animated.objects[i] = timelineState(animated.objects[i]) }
+        }
+        var requests: [UUID: SourceStudioLiveTick.FrameRequest] = [:]
+        for (index, o) in animated.objects.enumerated() where o.kind == .character {
+            guard let reference = o.sourceCharacter, document.isVisible(o.id), !resourceBlockedObjects.contains(o.id),
+                  let preview = previews[o.id], preview.reference == reference,
+                  preview.coordinate == (o.sourceOutfit ?? preview.savedCoordinate),
+                  worldReadsNoRuntime(o.id, document: animated),
+                  let world = try? sourceWorldMatrix(of: o.id, document: animated, previews: previews) else { continue }
+            requests[o.id] = SourceStudioLiveTick.FrameRequest(world: world, objectID: UInt32(index + 1),
+                edits: Self.liveEdits(o), clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory,
+                expression: o.sourceExpression)
+        }
+        var leases: [SourceStudioLiveTickLease] = [], ids: [UUID] = [], members: [SourceStudioCharacterPreview] = []
+        var frameRequests: [SourceStudioLiveTick.FrameRequest?] = [], neckErrors: [(any Error)?] = [], eyeErrors: [(any Error)?] = []
+        for (id, preview) in previews {
+            let wantsNeck = preview.hasLiveNeckLook, wantsEye = preview.hasLiveEyeLook
+            var neck: SourceStudioLiveTick.Gaze?, eye: SourceStudioLiveTick.Gaze?
+            var neckError: (any Error)?, eyeError: (any Error)?
+            if wantsNeck || wantsEye, let object = document.object(id), object.kind == .character,
+               object.sourceCharacter != nil, document.isVisible(id) {
+                guard worldReadsNoRuntime(id, document: document) else { return nil }
+                do {
+                    let world = try sourceWorldMatrix(of: id, document: document, previews: previews)
+                    let gaze = SourceStudioLiveTick.Gaze(
+                        cameraModelPosition: UnityCoordinates.position(world.inverse.transformPoint(cameraPosition)),
+                        edits: Self.liveEdits(object))
+                    if wantsNeck { neck = gaze }
+                    if wantsEye { eye = gaze }
+                } catch {
+                    if wantsNeck { neckError = error }
+                    if wantsEye { eyeError = error }
+                }
+            }
+            let input = SourceStudioLiveTick.Input(elapsed: elapsed, deltaTime: deltaTime, blink: sourceAutomaticBlink,
+                                                   neck: neck, eye: eye, frame: requests[id])
+            leases.append(SourceStudioLiveTickLease(preview: preview, input: input))
+            ids.append(id); members.append(preview); frameRequests.append(requests[id])
+            neckErrors.append(neckError); eyeErrors.append(eyeError)
+        }
+        guard let job = SourceStudioLiveTickJob(leases: leases) else { return nil }
+        animTime = CFAbsoluteTimeGetCurrent() - startTime
+        lastLiveStepFrameRequests = requests.count
+        return LiveTick(job: job, elapsed: elapsed, deltaTime: deltaTime, ids: ids, previews: members,
+                        requests: frameRequests, neckErrors: neckErrors, eyeErrors: eyeErrors)
+    }
+
+    /// The document edits a source character is posed with.
+    private static func liveEdits(_ o: StudioObject) -> SourceStudioLiveTick.Edits {
+        SourceStudioLiveTick.Edits(fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues,
+            bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics,
+            animationState: o.sourceAnimation)
+    }
+
+    /// Whether `sourceWorldMatrix(of: id, document:)` reads neither a preview
+    /// nor a route clock: every parent exists, and no link up to the root
+    /// hangs on an attachment point or under a route with a runtime.
+    private func worldReadsNoRuntime(_ id: UUID, document: StudioDocument) -> Bool {
+        var current = id, visited: Set<UUID> = []
+        while visited.insert(current).inserted, let object = document.object(current) {
+            guard let parent = object.parent else { return true }
+            guard object.sourceAttachmentPoint == nil, sourceRouteRuntime(id: parent, document: document) == nil else { return false }
+            current = parent
+        }
+        return false
+    }
+
+    /// `viewCamera.position` for the gaze snapshot, without the fallback
+    /// bookkeeping; nil when a looked-through camera hangs on a chain that
+    /// reads a preview or route clock, or does not resolve, so the serial
+    /// step resolves and reports it as before.
+    private func liveTickCameraPosition(previews: [UUID: SourceStudioCharacterPreview]) -> Float3? {
+        guard let id = activeSourceCamera, sourceCameraEntry(of: id) != nil else { return doc.camera.position }
+        guard worldReadsNoRuntime(id, document: doc) else { return nil }
+        return (try? solvedSourceCamera(id, previews: previews))?.position
+    }
+
+    /// The serial live step, unchanged: what the parallel step reproduces.
+    private func advanceLiveFrameSerially(deltaTime: Float) {
         animTime = CFAbsoluteTimeGetCurrent() - startTime
         sourceAnimationTime += deltaTime
         // Each card's saved eyesBlink flag decides whether its blink clock
@@ -1766,7 +2028,11 @@ final class StudioModel: ViewportInputHandler {
         return inst
     }
 
-    func refresh() { PerfTrace.measure(.studioRefresh, "StudioRefresh") { refreshFrame() } }
+    func refresh() {
+        // A live step in flight settles first; its frames go to this refresh.
+        settleLiveTick(keepFrames: true)
+        PerfTrace.measure(.studioRefresh, "StudioRefresh") { refreshFrame() }
+    }
 
     /// What `refreshFrame` built that the view camera does not change, kept
     /// for the rest of an orbit or pan drag (C6). Items, skin palettes, lights,
@@ -1827,6 +2093,14 @@ final class StudioModel: ViewportInputHandler {
     }
 
     private func refreshFrame() {
+        // The settled live step's frames, taken before anything here reaches
+        // the previews (an access drops them); every later refresh evaluates
+        // on the main actor.
+        let prepared = livePrepared
+        livePrepared = nil
+        liveRefreshPending = nil
+        var reusedLiveFrames = 0
+        defer { lastRefreshLiveFramesReused = reusedLiveFrames }
         let statusWritesBefore = statusWrites
         // The camera drag's reuse (see `CameraReuse`): kept only for a frame
         // without native characters (their gaze reads the camera and their
@@ -1908,16 +2182,30 @@ final class StudioModel: ViewportInputHandler {
                             if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
                             sourceInstances[o.id] = fresh; preview = fresh
                         }
-                        // The document's wear (scene reload, undo/redo); a
-                        // repeat of the rendered values is a comparison only.
-                        do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory) }
-                        catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
-                        // The document's face state (scene reload, undo/redo),
-                        // stored settled; a repeat is a comparison only.
-                        do { try preview.setExpressionState(o.sourceExpression) }
-                        catch { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
-                        var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
-                            world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
+                        var rendered: RenderFrame
+                        if let ready = prepared?.output(for: o.id, preview: preview, elapsed: sourceAnimationTime, request: {
+                            SourceStudioLiveTick.FrameRequest(world: world, objectID: objectID, edits: Self.liveEdits(o),
+                                clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory, expression: o.sourceExpression)
+                        }), let built = ready.frame {
+                            // The live step applied this wear and face state and
+                            // built this frame off the main thread; its reports
+                            // land here, in the serial order.
+                            if let error = ready.wearError { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
+                            if let error = ready.faceError { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
+                            rendered = try built.get()
+                            reusedLiveFrames += 1
+                        } else {
+                            // The document's wear (scene reload, undo/redo); a
+                            // repeat of the rendered values is a comparison only.
+                            do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory) }
+                            catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
+                            // The document's face state (scene reload, undo/redo),
+                            // stored settled; a repeat is a comparison only.
+                            do { try preview.setExpressionState(o.sourceExpression) }
+                            catch { status = "Source character \(o.sourceObjectKey ?? 0) face state: \(error)" }
+                            rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
+                                world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
+                        }
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
                         if showGizmos, selection == o.id {
                             gizmos += try sourceCharacterGizmos(o, preview: preview, world: world)

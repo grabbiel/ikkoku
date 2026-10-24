@@ -82,6 +82,7 @@ public struct SourceStudioPose: Sendable {
     private var pvEnabled = [true, true, true, true]
     private let sourceIDs: [String]
     private let sourceParents: [Int?]
+    private let rigIdentity: RigDefinition.Identity
 
     /// Combines AddObjectAssist.InitBone with FKCtrl.InitBones. Missing targets
     /// are skipped. Female level-2 entries get no guide or new record; an existing
@@ -149,6 +150,7 @@ public struct SourceStudioPose: Sendable {
         }
         sourceIDs = rig.nodes.map(\.sourceID)
         sourceParents = rig.nodes.map(\.parent)
+        rigIdentity = rig.identity
         self.neckLookPattern = neckLookPattern; previousNeckLookPattern = neckLookPattern
     }
 
@@ -269,8 +271,39 @@ public struct SourceStudioPose: Sendable {
         return result
     }
 
+    /// `applying(ik)`, `applying(fk)` and `applyingLateUpdate`, in the order
+    /// `KoikatsuCharacterRecord.makePose` runs them, with their checks in
+    /// the same order. Each of the three calls validates its input, which is
+    /// the previous call's already evaluated output: with one rig that
+    /// repeats the same hierarchy check and the same `rig.evaluate`, which
+    /// pass again, so here each distinct pose is evaluated once (one to four
+    /// evaluations instead of six). Throws exactly when, and with the
+    /// message, the three calls would; returns the same pose.
+    public func applyingActivations(ik: Transition, fk: Transition, rig: RigDefinition, pose: RigPose) throws -> RigPose {
+        try validate(rig: rig, pose: pose)
+        var result = pose
+        for transition in [ik, fk] where !transition.identityResetNodes.isEmpty {
+            for node in transition.identityResetNodes {
+                guard rig.nodes.indices.contains(node) else { throw RigError.invalid("Studio transition targets a different rig.") }
+                result.localMatrices[node] = try replacingRotation(.identity, node: node, rig: rig, matrix: result.localMatrices[node])
+            }
+            _ = try rig.evaluate(result)
+        }
+        guard enableFK else { return result }
+        for target in targets where target.enabled {
+            result.localMatrices[target.node] = try replacingRotation(UnityCoordinates.eulerDegrees(target.rotation),
+                node: target.node, rig: rig, matrix: result.localMatrices[target.node])
+        }
+        _ = try rig.evaluate(result)
+        return result
+    }
+
     private func validate(rig: RigDefinition, pose: RigPose) throws {
-        guard rig.nodes.map(\.sourceID) == sourceIDs, rig.nodes.map(\.parent) == sourceParents else {
+        // The rig this controller was bound to has the same hierarchy by
+        // construction; any other rig compares IDs and parents element-wise.
+        guard rig.identity === rigIdentity || rig.nodes.count == sourceIDs.count && rig.nodes.indices.allSatisfy({
+            rig.nodes[$0].sourceID == sourceIDs[$0] && rig.nodes[$0].parent == sourceParents[$0]
+        }) else {
             throw RigError.invalid("Studio FK is bound to a different hierarchy.")
         }
         _ = try rig.evaluate(pose)

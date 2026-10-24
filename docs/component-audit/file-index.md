@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**892 files indexed; 892 assigned; 0 unassigned.**
+**895 files indexed; 895 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 99 |
 | [Character / Maker / mods](character-and-mods.md) | 122 |
-| [Studio / IK / animation](studio.md) | 187 |
+| [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 320 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 164 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 165 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 190 |
+| Conversion / recovery / verification tool | 191 |
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 205 |
-| Test / validation | 183 |
+| Runtime / shared shader declaration | 206 |
+| Test / validation | 184 |
 
 ## App / gameplay / plugins
 
@@ -323,6 +323,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisOffset.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift](../../Packages/Engine/Sources/Studio/SourceStudioIrisRendering.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioItemColor.swift](../../Packages/Engine/Sources/Studio/SourceStudioItemColor.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift](../../Packages/Engine/Sources/Studio/SourceStudioLiveTick.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioLookData.swift](../../Packages/Engine/Sources/Studio/SourceStudioLookData.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLook.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift](../../Packages/Engine/Sources/Studio/SourceStudioNeckLookRuntime.swift) | Runtime / shared shader declaration |
@@ -373,6 +374,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioIrisOffsetTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIrisOffsetTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioIrisRenderingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioIrisRenderingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioItemColorTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLiveTickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioLookDataTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioNeckLookTests.swift) | Test / validation |
@@ -880,6 +882,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/item-props.json](../../Tools/verification/scenarios/item-props.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/live-step-edit.json](../../Tools/verification/scenarios/live-step-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-color-roundtrip.json](../../Tools/verification/scenarios/maker-color-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-outfit-colors.json](../../Tools/verification/scenarios/maker-outfit-colors.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-reset-shapes.json](../../Tools/verification/scenarios/maker-reset-shapes.json) | Conversion / recovery / verification tool |

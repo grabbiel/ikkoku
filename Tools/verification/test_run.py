@@ -633,7 +633,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "setClothesState", "setAccessoryVisible", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "hoverGizmo", "captureBone", "captureObject", "captureRender",
-                "advance", "orbit", "setAutomaticBlink",
+                "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected"}
 
@@ -804,7 +804,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 52)
+        self.assertEqual(len(self.checks), 53)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]

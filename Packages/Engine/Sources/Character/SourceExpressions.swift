@@ -3,6 +3,7 @@ import Scene
 
 /// Inputs to the recovered source expression controllers. Rates are normalized;
 /// the controller quantizes openness to an integer percentage before blending.
+/// `SourceRigPreview.ExpressionKey` lists every field: extend it with any new one.
 public struct SourceExpressionInputs: Codable, Sendable, Equatable {
     public var eyebrowPattern: Int, eyesPattern: Int, mouthPattern: Int
     public var eyebrowOpenRate: Float, eyesOpenRate: Float, mouthOpenRate: Float
