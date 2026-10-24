@@ -323,8 +323,13 @@ leave/return and unload rejection checks through those production methods,
 comparing runtime snapshots, document/session identity, sampled shared-frame
 fields and resource counts. It separately exercises active Run/Pause, successful
 profile load, a normal missing-file failure and the inactive programmatic startup
-path. Build, scenario and visible-menu acceptance for this follow-up are pending;
-the earlier results above are not attributed to the new command checks.
+path. Release build `14579b8` passed, and all 34 checks executed successfully
+(24 retained plus ten new ownership checks), with zero failures or skips. The
+executable SHA-256 is
+`64bc93179a7f81454733c6645d8c677c086c2645d6c9112050a623e01839653f`.
+This uses a synthetic two-folder Studio fixture; it is not a loaded-scene pixel or
+latency measurement. Visible-menu acceptance remains a separate pending check;
+no earlier GUI result is attributed to these new commands.
 
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
