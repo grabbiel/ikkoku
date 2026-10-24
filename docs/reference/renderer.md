@@ -1303,7 +1303,9 @@ texture, and `_low` is appended unless `hiPoly`. Head-specific variants for a
 head other than 0 are reported as unresolved. `CustomTextureCreate` render
 targets are recorded as runtime composites: their sizes, full mip chains
 (`useMipMap`) and Unity's `RenderTexture` sampler defaults (Bilinear, Clamp,
-aniso 1; the game sets none). Scene globals are not character data: the fixture
+aniso 1; the game sets none). The iris composites also carry their full recipe
+(create material, verified program, inputs and vectors; see
+[native iris composites](#native-iris-composites-r1-2026-10-23)). Scene globals are not character data: the fixture
 uses the harness constants that `OriginalCharacterProbe.Capture` sets —
 `ChangeLineColor(1)`, `ChangeLineWidth(.307)`, `_ambientshadowG`
 (0.5, 0.5, 0.5, 0.74) and `mt_ramp` row 1. Globals that no recovered method sets
@@ -1579,7 +1581,8 @@ set above, the live deformed vertices, and the live camera and light. It is OFF 
 default, and the toon path stays the production renderer. On one controlled
 fixture it meets the frozen probe's gates with capture texture pixels (numbers
 below). The initial native texture store drew one material; the completed asset
-store draws 11 of 20 slots ([native asset completion](#native-asset-completion-r1-137-2026-10-23)).
+store draws 11 of 20 slots ([native asset completion](#native-asset-completion-r1-137-2026-10-23)),
+and with natively composed irises 13 of 20 ([native iris composites](#native-iris-composites-r1-2026-10-23)).
 This is not a production-parity claim.
 
 **Opt-in and inputs.** `IKKOKU_LIVE_SOURCE_SHADERS=1` starts the app with the
@@ -2049,6 +2052,162 @@ scripts are in `$R/reviewed-*` and `$R/reviewed-summary.json`; the initial
 pre-cache-fix runs remain in `$R/release-*` and `$R/summary.json`. The independent
 review and follow-up are retained as `$R/claude-*-review.json`. No new
 original-player capture was made.
+
+### Native iris composites (R1, 2026-10-23)
+
+The live path now composes one family of `CustomTextureCreate` render targets
+itself: the irises (`ctCreateEyeL`/`ctCreateEyeR`, the `_MainTex` of
+`cf_Ohitomi_L02`/`R02`). With the schema-2 native store the controlled fixture
+resolves **13 of 20 slots** live, up from 11. Seven runtime composites still
+fall back with their explicit reason: the body and face `CustomTextureControl`
+textures, the two `ctCreateEyeW` eye whites and the three `ChangeCustomClothes`
+garments. No capture pixels are rendered; the retained original composites
+are the comparison oracle only. Scene globals stay unresolved in Studio, so
+this is controlled-card coverage, not Studio or production parity.
+
+**Recipe.** Citations are to the recovered `Koikatu/ChaControl.cs`,
+`Koikatu/CustomTextureCreate.cs`, `ChaInfo.cs` and `ChaCustom/CvsEye02.cs`.
+
+- *Target.* `InitBaseCustomTextureEtc` (ChaControl.cs:8902) creates both
+  targets with `CustomTextureCreate.Initialize("chara/mm_base.unity3d",
+  "cf_m_eye_create", "", n, n)`, n = 512 when `hiPoly`, else 256.
+  `Initialize` (CustomTextureCreate.cs:27) clones the create material and makes
+  `new RenderTexture(n, n, 0, ARGB32)` with `useMipMap = true` (line 40):
+  sRGB in the linear-space player, the full chain (10 levels at 512) filled
+  by Unity's default `autoGenerateMips`, and the `RenderTexture` sampler
+  defaults (Bilinear, Clamp, aniso 1; the game sets none).
+- *Inputs, in order* (`ChangeSettingEye(lr, updateBaseTex, updateMaskTex,
+  updateColorAndOffset)`, ChaControl.cs:3859). `SetCreateTexture(main: true)`
+  (line 3432) loads `mt_eye[face.pupil[i].id]` `MainAB`/`EyeTex` (`_low`
+  appended unless `hiPoly`; a `"0"` row loads null) as `texMain`.
+  `SetCreateTexture(main: false)` loads `mt_eye_gradation[pupil.gradMaskId]`
+  `ColorMaskAB`/`ColorMaskTex` into `_ColorMask`. Then `SetColor(_Color,
+  pupil.baseColor)`, `SetColor(_Color2, pupil.subColor)`, `SetFloat(_Blend,
+  pupil.gradBlend)` and `SetVector4(_grad, (0, Lerp(-0.5, 0.5, gradOffsetY), 0,
+  Lerp(-1, 1, gradScale)))` (lines 3897–3903). Every other value is the
+  create material's own `m_SavedProperties` (`head-materials/contract.json`
+  `createMaterials`); the textures keep the saved `[1, 1, 0, 0]` transforms
+  because `Graphics.Blit` sets only the texture.
+- *Pass.* `RebuildTextureAndSetMaterial` (CustomTextureCreate.cs:175) sets
+  `GL.sRGBWrite = true`, clears to `Color.clear` and runs
+  `Graphics.Blit(texMain, createTex, matCreate, 0)`. The result is bound as
+  `rendEye[i].material` `_MainTex`. Pass 0 of `Shader Forge/create_eye` is one
+  `FORWARD` pass (Blend SrcAlpha OneMinusSrcAlpha for colour and alpha, ZTest
+  LEqual, ZWrite On, Cull Back). Its two D3D11 fragment variants are
+  byte-identical (DXBC SHA-256 `c4bd7e1e…4fece`, the program
+  `head_material_contract.py` verifies). Per texel, with `t` = `texMain.r` and
+  `m` = `_ColorMask.r` sampled at `((uv + _grad.xy)·2(1 − _grad.w) + 0.5 −
+  (1 − _grad.w))·_ColorMask_ST`: `c = lerp(_Color2, _Color, m)`, overlay =
+  `saturate(t > 0.5 ? c / 2(1 − t) : 1 − (1 − c) / 2t)`, rgb = `_Blend ·
+  (overlay − t·c) + t·c`, a = `texMain.a · _Color.a`. Blending over the
+  cleared target stores `(rgb·a, a²)`. This is `create_eye_base` in
+  `head_material_contract.py`.
+- *Reruns.* `ChangeHeadAsync` (line 6931) runs the full recipe for both eyes
+  on every head load and card reload. Maker iris edits rerun parts of it
+  (`CvsEye02.cs` 398–515 and 707–770: base texture, mask, or colours and
+  offsets for one or both eyes). Maker, H scenes and thumbnails keep the
+  inputs (`releaseCustomInputTexture = false`), which the default
+  (`ChaInfo.cs`:391, true) otherwise releases after each rebuild.
+  `ChangeSettingEye` returns early only for `sex == 0 && exType == 1`, so it
+  always runs for the female fixture. Expressions,
+  outfit changes and gaze do not rerun it; gaze moves the draw material's
+  `_MainTex_ST` (`EyeLookMaterialControll`) instead.
+
+**Native composition.** `SourceShaderBindingDerivation` now writes the recipe
+into the composite identity (`TextureIdentity.composite`: create material
+identity and verified program hash, the two input asset identities, every
+vector with its cited source). `source_texture_store.py` stores the inputs like
+any other asset (`cw_t_hitomi_000`, `cw_t_hitomigrad_000`) and, with
+`--create-shader-cache`, re-extracts the create pass's fragment program from the
+local `mm_base` bundle. It requires the recipe's hash and byte-identical
+variants, translates the retained disassembly (no VM) with the #127 translator,
+and lists the program under schema-2 `composites`. `SourceShaderTextureStore`
+then composes the target the first time an assembly resolves the slot:
+
+- every input through the same identity-checked, hash-verified store path as
+  material textures, or the program's Unity default where the recipe binds
+  none; colours linearized at bind as the player does;
+- `SourceShaderCompositor` draws the translated fragment over a native
+  full-target quad (`TEXCOORD0` (0, 0) bottom-left, as `Graphics.Blit`'s quad)
+  into a private `rgba8Unorm_srgb` texture cleared to transparent, with the
+  pass's blend state, then generates the full mip chain with the blit encoder;
+- the content key hashes the recipe version (`source-composite-v1`), the DXBC
+  and MSL hashes, `program.json`, the target size, mip count and format, each
+  input's content key (dimensions, mips and every level digest) with its
+  sampler, and every vector's bit pattern;
+- composites are not registered in the `ResourceStore`. The materials that
+  bind them own them; the store's per-owner cache holds them weakly, so a
+  rebuilt assembly with the same recipe shares the texture and a released
+  assembly frees it. Both irises of the fixture card have one recipe and
+  share one composite;
+- all-or-nothing: an unresolved recipe, a program missing from the store, a
+  changed program file, an input that is not in the store, an unresolved or
+  undeclared vector each keep the slot toon with that reason. Body, face,
+  eye-white and garment composites carry no recipe and keep
+  "is not composed natively for the live path".
+
+Metal's `saturate` returns 0 for NaN, as D3D's does, so the overlay's 0/0
+case (t = 0, c = 1) matches; a synthetic test pins it.
+
+**Evidence (offline vs GPU-independent).** The retained original composites
+(`texture-21`/`texture-24` in `.local/r1c/probe`) are GPU readbacks of
+the original targets' base level, exported by `Graphics.Blit` into ARGBHalf
+(bottom-up). Lower mips were not read back; they have no independent oracle.
+The fixture's iris is black over a white sub colour with `_Blend` 0, so this
+oracle checks coverage (a²), orientation, sampling and the blend, not the overlay
+colours. Native level 0 against both readbacks: max 1 byte (|linear| 0.00407),
+15 of 1,048,576 channels differ, all alpha rounding; mean |linear| 5.3e-7.
+The real translated program with synthetic, non-degenerate colours
+(`_Color` (0.8, 0.3, 0.2, 0.9), `_Color2` (0.1, 0.5, 0.9, 1), `_Blend` 0.6,
+`_grad.w` 0.5 for a 1:1 mask) matches the CPU reference within 1 byte over all
+262,144 texels (31,620 in the `t > 0.5` branch). That is a check against our
+reading of the program, not an independent original observation. The two input
+textures have no retained readback of their own: they are `Blit` inputs, not draw
+textures. The oracle observes `cw_t_hitomi_000`'s alpha (through a²) and the
+mask only on the edge that `_grad` samples.
+
+In the gated live test (`IKKOKU_LIVE_SOURCE_TEXTURES` =
+`.local/r1-composite/textures/manifest.json`), the store pins 49 entries, one
+composite program, zero unavailable assets or composites, and the canonical
+content hash `12aaa646…78b65`. 13 slots draw live and 7 fall back. On pixels
+where `toon_eye_lod0` is frontmost in both the complete capture-provider frame
+and the native subset, native-store irises give 368 px, mean 0.00996, p99 0.
+The limits are unchanged (mean ≤ 1, p99 ≤ 4, > 250 px). The capture-provider
+irises measure 368 px, mean 0.00906, p99 0. The store is rebuilt with:
+
+```sh
+swift build --package-path Packages/Engine --product ikkoku-inspect
+Packages/Engine/.build/debug/ikkoku-inspect shader-bindings .local/r1c/probe/fixture-card.png \
+  .local/reverse/maker-library/library.json .local/reverse/rigs/head-materials/contract.json \
+  .local/r1c/probe/shaders .local/r1c/probe/frame-mips.json \
+  --supplement .local/r1-sampler-bundles/supplement.json > .local/r1-composite/shader-bindings.json
+.local/reverse/unitypy-venv/bin/python Tools/reverse/source_texture_store.py \
+  .local/r1-composite/shader-bindings.json .local/r1-composite/textures \
+  --bundle-root .local/reverse/rigs/source/abdata \
+  --create-shader-cache .local/reverse/rigs/head-materials/shaders \
+  --verify-frame .local/r1c/probe/frame-mips.json --require-complete
+```
+
+`--require-complete` now also fails on an unavailable composite program. The
+verifier's counts are unchanged except for the two new inputs: 71 independent
+GPU base comparisons, 430 offline lower-level comparisons, and 49 levels without
+retained pixels (47 before, plus the two inputs).
+
+**Tests.** `SourceShaderCompositeTests.swift` (synthetic store, hand-written
+`create_eye` fragment): GPU result against the CPU reference (≤ 1 byte) and the
+mip chain against a linear box filter (≤ 2 bytes); the NaN overlay; a new
+content key and target for each change of `_Color`, `_Color.a`, `_Color2`,
+`_Blend`, `_grad`, either `_ST`, either input texture, a default input, the
+input sampler and the target size; cache hits, per-owner composition and
+release with the owner; the exact reason for 13 missing or mismatched inputs;
+a material that binds the composite or falls back with its reason; and the
+fragment-only program and manifest validation. Mutation controls fail them: a
+flipped quad V or disabled blending fails the reference test; dropping vectors
+from the content key fails the cache test. The gated
+`liveSourceIrisCompositesMatchTheRetainedOriginalComposites` runs the oracle and
+CPU-reference checks above. `test_source_live_inputs.py` and
+`test_source_shader_translation.py` cover the recipe inputs, recipe sharing,
+program export failures (no partial output) and input-signature parsing.
 
 ### Native pose gate
 
