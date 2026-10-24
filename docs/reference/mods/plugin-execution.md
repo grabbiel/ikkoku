@@ -338,6 +338,24 @@ menu/action observations, not pixels or UI latency. Pending replacement and stal
 dialog concurrency remain deterministic model checks. The mounted summary/Unload
 for direct native or profile routes is a separate UI follow-up.
 
+The mounted-panel follow-up displays all existing origins. A library selection
+retains its exact generation and revision list. A translated profile has its own
+section, including an empty-package session; individual native plugins have a
+separate section with saved GUID, version and enabled state. Mixed profile/native
+mounts retain both sections, without deduplication across origins or an invented
+generation. The summary uses resident document pins and loaded session metadata,
+with no manifest reads, digest computation or runtime snapshots. Its text area is
+height-limited so Unload remains reachable for a larger package list.
+
+Every mounted origin exposes the same Run/Pause and Unload controls. Run/Pause
+still requires an executable session, while adapter-only mounts can unload.
+An interactive Unload guard rejects inactive/pending actions before delegating to
+the existing teardown; the programmatic method is unchanged. The deterministic
+checklist compares the presentation value used by SwiftUI, including ordinal
+identity, direct native save/fresh reload and fallback labels after unloading.
+These assertions do not substitute for an AX check of visible controls. Build,
+focused scenario and root-visible acceptance for this follow-up are pending.
+
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
 attached world transform. Repeating undo and trying redo preserve the old

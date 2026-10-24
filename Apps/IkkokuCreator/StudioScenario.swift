@@ -154,6 +154,8 @@ struct StudioScenario: Decodable {
         /// Exact labels consumed by ClothesInspector, compared as UTF-8 bytes.
         /// This model assertion does not stand in for a displayed AX/UI check.
         let accessoryLabels: AccessoryLabelsValue?
+        /// Exact resident metadata consumed by the plugin panel, not AX evidence.
+        let pluginMount: [PluginMountSummary.Section]?
 
         struct AccessoryLabelsValue: Decodable {
             let key: Int32
@@ -379,7 +381,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
-                 render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, state, clothes, expression,
+                 render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
                  sex, character, chain, delta, ik, edit
         }
 
@@ -446,6 +448,7 @@ struct StudioScenario: Decodable {
             errorContains = try c.decodeIfPresent(String.self, forKey: .errorContains)
             outfit = try c.decodeIfPresent(OutfitValue.self, forKey: .outfit)
             accessoryLabels = try c.decodeIfPresent(AccessoryLabelsValue.self, forKey: .accessoryLabels)
+            pluginMount = try c.decodeIfPresent([PluginMountSummary.Section].self, forKey: .pluginMount)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
             expression = try c.decodeIfPresent(ExpressionValue.self, forKey: .expression)
@@ -1088,6 +1091,19 @@ struct StudioScenario: Decodable {
             return nil
         }
 
+        func assertPluginMount(_ step: Step, details: inout [String]) -> String? {
+            guard let expected = step.pluginMount else { return nil }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            do {
+                let actual = try encoder.encode(studio.sourcePluginMountSummary?.sections ?? [])
+                guard actual == (try encoder.encode(expected)) else {
+                    return "assert pluginMount: resident sections differ: \(String(decoding: actual, as: UTF8.self))"
+                }
+                details.append("pluginMount: \(String(decoding: actual, as: UTF8.self))")
+                return nil
+            } catch { return "assert pluginMount: \(error)" }
+        }
+
         func assertAccessoryLabels(_ step: Step, details: inout [String]) -> String? {
             guard let check = step.accessoryLabels else { return nil }
             guard check.labels.count == 20 else { return "assert accessoryLabels: expected exactly 20 labels" }
@@ -1336,7 +1352,7 @@ struct StudioScenario: Decodable {
                 } catch { record(step, false, "loadNativePlugin: \(error)") }
             case "unloadPlugins":
                 guard studio.isActiveMode else { record(step, false, "unloadPlugins: Studio must be active"); continue }
-                studio.unloadSourcePluginLibrary()
+                studio.unloadSourcePluginsInteractively()
                 record(step, studio.doc.sourceNativePlugins == nil && !studio.sourceAccessoryNamesEnabled, studio.status)
             case "measureAccessoryLabels":
                 measureAccessoryLabels(step)
@@ -2036,6 +2052,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
                 if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
                 if let problem = assertAccessoryLabels(step, details: &details) { problems.append(problem) }
+                if let problem = assertPluginMount(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
                 if let problem = assertExpression(step, details: &details) { problems.append(problem) }
                 if let problem = assertIK(step, details: &details) { problems.append(problem) }
