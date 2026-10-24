@@ -51,12 +51,17 @@ private struct Mesh {
     let name: String, vertices: [Vertex]
     var bytes: Data { vertices.withUnsafeBytes { Data($0) } }
     var triangleCount: Int { vertices.count / 3 }
+    var hasVaryingTriangleW: Bool {
+        stride(from: 0, to: vertices.count, by: 3).contains { index in
+            vertices[index].position.w != vertices[index + 1].position.w || vertices[index].position.w != vertices[index + 2].position.w
+        }
+    }
 }
 private func vertex(_ x: Float, _ y: Float, _ u: Float, _ v: Float) -> Vertex {
     Vertex(position: SIMD4(x / 64 - 1, 1 - y / 64, 0.5, 1), uv: SIMD4(u, v, 0, 0))
 }
 private func screen(_ vertex: Vertex) -> SIMD2<Float> {
-    SIMD2((vertex.position.x + 1) * 64, (1 - vertex.position.y) * 64)
+    SIMD2((vertex.position.x / vertex.position.w + 1) * 64, (1 - vertex.position.y / vertex.position.w) * 64)
 }
 private func meshes() -> [Mesh] {
     let corners: [SIMD2<Float>] = [SIMD2(0, 0), SIMD2(1, 0), SIMD2(1, 1), SIMD2(0, 1)]
@@ -92,10 +97,21 @@ private func meshes() -> [Mesh] {
             return result
         }
     }
+    let sheared = transformed(shear: 3.0 / 16)
+    func scaledClip(varying: Bool) -> [Vertex] {
+        let factors: [Float] = [0.5, 1, 2]
+        return sheared.enumerated().map { index, original in
+            var result = original
+            result.position *= factors[(varying ? index : index / 3) % 3]
+            return result
+        }
+    }
     return [Mesh(name: "large-continuous", vertices: large), Mesh(name: "small-continuous", vertices: continuous),
             Mesh(name: "small-discontinuous", vertices: discontinuous),
             Mesh(name: "small-discontinuous-translated", vertices: transformed(shear: 0)),
-            Mesh(name: "small-discontinuous-sheared", vertices: transformed(shear: 3.0 / 16))]
+            Mesh(name: "small-discontinuous-sheared", vertices: sheared),
+            Mesh(name: "small-discontinuous-triangle-w", vertices: scaledClip(varying: false)),
+            Mesh(name: "small-discontinuous-vertex-w", vertices: scaledClip(varying: true))]
 }
 private struct Mip { let size: Int; let bytes: Data }
 private func mips() -> [Mip] {
@@ -121,6 +137,48 @@ private func gradients(_ mesh: Mesh) -> [SIMD4<Float>] {
         return SIMD4(dx.x, dx.y, dy.x, dy.y)
     }
 }
+// Independent screen-barycentric reference: UV = sum(lambda*UV/w) / sum(lambda/w).
+// Cache projected triangle coefficients once; this does not model quad derivatives.
+private struct UVReference {
+    private let origin, edge1, edge2: SIMD2<Double>
+    private let determinant: Double
+    private let inverseW, uOverW, vOverW: SIMD3<Double>
+
+    init(_ a: Vertex, _ b: Vertex, _ c: Vertex) throws {
+        let vertices = [a, b, c]
+        for v in vertices {
+            try require(v.position.x.isFinite && v.position.y.isFinite && v.position.z.isFinite && v.position.w.isFinite && v.position.w > 0,
+                        "Rational UV requires finite clip positions and positive w")
+            try require(v.uv.x.isFinite && v.uv.y.isFinite, "Rational UV requires finite UVs")
+        }
+        // Project in Double independently of the Float coverage/mesh helper.
+        let points = vertices.map { v in
+            SIMD2((Double(v.position.x) / Double(v.position.w) + 1) * 64,
+                  (1 - Double(v.position.y) / Double(v.position.w)) * 64)
+        }
+        let e1 = points[1] - points[0], e2 = points[2] - points[0]
+        let det = e1.x * e2.y - e1.y * e2.x
+        try require(det.isFinite && det != 0, "Degenerate rational UV triangle")
+        let reciprocalW = SIMD3(1 / Double(a.position.w), 1 / Double(b.position.w), 1 / Double(c.position.w))
+        origin = points[0]; edge1 = e1; edge2 = e2; determinant = det; inverseW = reciprocalW
+        uOverW = SIMD3(Double(a.uv.x), Double(b.uv.x), Double(c.uv.x)) * reciprocalW
+        vOverW = SIMD3(Double(a.uv.y), Double(b.uv.y), Double(c.uv.y)) * reciprocalW
+    }
+
+    func at(_ point: SIMD2<Double>) throws -> SIMD2<Double> {
+        try require(point.x.isFinite && point.y.isFinite, "Nonfinite rational UV sample")
+        let p = point - origin
+        let b = (p.x * edge2.y - p.y * edge2.x) / determinant
+        let c = (edge1.x * p.y - edge1.y * p.x) / determinant
+        let lambda = SIMD3(1 - b - c, b, c), weights = lambda * inverseW
+        let denominator = weights.x + weights.y + weights.z
+        try require(denominator.isFinite && denominator > 0, "Invalid rational UV denominator")
+        let u = lambda * uOverW, v = lambda * vOverW
+        let result = SIMD2((u.x + u.y + u.z) / denominator, (v.x + v.y + v.z) / denominator)
+        try require(result.x.isFinite && result.y.isFinite, "Nonfinite rational UV result")
+        return result
+    }
+}
 // Inclusive triangle union, not a general Metal rasterizer: these fixture outer
 // edges never cross pixel centers. Shared-edge ownership is irrelevant to union.
 private func coverage(_ mesh: Mesh) throws -> [Bool] {
@@ -128,7 +186,7 @@ private func coverage(_ mesh: Mesh) throws -> [Bool] {
     var covered = [Bool](repeating: false, count: width * height)
     func point(_ vertex: Vertex) throws -> SIMD2<Double> {
         let p = screen(vertex)
-        try require(p.x.isFinite && p.y.isFinite && vertex.position.w == 1, "Coverage requires finite affine positions")
+        try require(p.x.isFinite && p.y.isFinite && vertex.position.w.isFinite && vertex.position.w > 0, "Coverage requires finite projected positions")
         return SIMD2(Double(p.x), Double(p.y))
     }
     func edge(_ a: SIMD2<Double>, _ b: SIMD2<Double>, _ p: SIMD2<Double>) -> Double {
@@ -185,10 +243,10 @@ private func compare(_ current: [UInt32], _ baseline: [UInt32], channels: Range<
 private func selfCheck() throws {
     try require(MemoryLayout<Vertex>.stride == 32 && MemoryLayout<Vertex>.offset(of: \.uv) == 16, "Swift/MSL vertex layout mismatch")
     let all = meshes(), levels = mips()
-    try require(all.map(\.triangleCount) == [2, 2048, 2048, 2048, 2048], "Triangle count mismatch")
+    try require(all.map(\.triangleCount) == [2, 2048, 2048, 2048, 2048, 2048, 2048], "Triangle count mismatch")
     try require(zip(all[1].vertices, all[2].vertices).allSatisfy { pair in pair.0.position == pair.1.position }, "UV cases have different geometry")
     try require(zip(all[1].vertices, all[2].vertices).contains { pair in pair.0.uv != pair.1.uv }, "Missing UV discontinuity")
-    try require(all.allSatisfy { $0.vertices.allSatisfy { $0.position.z == 0.5 && $0.position.w == 1 } }, "Unexpected depth/perspective")
+    try require(all.prefix(5).allSatisfy { $0.vertices.allSatisfy { $0.position.z == 0.5 && $0.position.w == 1 } }, "Original controls changed depth/perspective")
     try require(gradients(all[0]).allSatisfy { $0 == SIMD4(1.0/64, 0, 0, 1.0/64) }, "Large-quad analytic gradient")
     try require(gradients(all[2])[0] == SIMD4(0.09375, 0.03125, 0.03125, 0.15625), "First discontinuous triangle gradient")
     let translatedPositions: [SIMD2<Float>] = [SIMD2(32.3125, 32.1875), SIMD2(34.3125, 32.1875), SIMD2(32.3125, 34.1875)]
@@ -198,10 +256,47 @@ private func selfCheck() throws {
     try require(gradients(all[3])[0] == SIMD4(0.09375, 0.03125, 0.03125, 0.15625), "Literal translated gradient")
     // x' = x + 3y/16: dUV/dy' = dUV/dy - 3*dUV/dx/16.
     try require(gradients(all[4])[0] == SIMD4(0.09375, 0.03125, 0.013671875, 0.150390625), "Literal sheared gradient")
-    for mesh in all.suffix(2) {
+    for mesh in all[3...4] {
         try require(zip(all[2].vertices, mesh.vertices).allSatisfy { pair in
             pair.0.uv == pair.1.uv && pair.0.position.z == pair.1.position.z && pair.0.position.w == pair.1.position.w
         }, "Transforms must preserve ordered UVs, depth and clip w")
+    }
+    let triangleWPositions: [SIMD4<Float>] = [SIMD4(-0.29443359375, 0.24853515625, 0.25, 0.5),
+        SIMD4(-0.27880859375, 0.24853515625, 0.25, 0.5), SIMD4(-0.29150390625, 0.23291015625, 0.25, 0.5)]
+    let vertexWPositions: [SIMD4<Float>] = [SIMD4(-0.29443359375, 0.24853515625, 0.25, 0.5),
+        SIMD4(-0.5576171875, 0.4970703125, 0.5, 1), SIMD4(-1.166015625, 0.931640625, 1, 2)]
+    try require(all[5].vertices.prefix(3).map(\.position) == triangleWPositions, "Literal triangle-w clip positions")
+    try require(all[6].vertices.prefix(3).map(\.position) == vertexWPositions, "Literal vertex-w clip positions")
+    for mesh in all.suffix(2) {
+        try require(zip(all[4].vertices, mesh.vertices).allSatisfy { pair in
+            pair.0.uv == pair.1.uv && screen(pair.0) == screen(pair.1) && pair.1.position.z / pair.1.position.w == 0.5
+        }, "Clip-w scaling must preserve projected geometry, ordered UVs and NDC depth")
+    }
+    try require(all.map(\.hasVaryingTriangleW) == [false, false, false, false, false, false, true], "Clip-w reference mode")
+    let referenceVertices = [vertex(0, 0, 0, 0), vertex(2, 0, 1, 0), vertex(0, 2, 0, 1)]
+    let referenceW: [Float] = [0.5, 1, 2]
+    let varyingVertices = referenceVertices.enumerated().map { index, original in
+        var result = original; result.position *= referenceW[index]; return result
+    }
+    let rational = try UVReference(varyingVertices[0], varyingVertices[1], varyingVertices[2])
+    // lambda=(1/2,1/4,1/4), lambda/w=(1,1/4,1/8): denominator=11/8.
+    try require(try rational.at(SIMD2(0.5, 0.5)) == SIMD2(2.0 / 11, 1.0 / 11), "Literal reciprocal-w UV")
+    try require(try rational.at(SIMD2(1, 0)) == SIMD2(1.0 / 3, 0), "Literal edge rational UV")
+    let endpoints: [(SIMD2<Double>, SIMD2<Double>)] = [(SIMD2(0, 0), SIMD2(0, 0)), (SIMD2(2, 0), SIMD2(1, 0)), (SIMD2(0, 2), SIMD2(0, 1))]
+    for (point, uv) in endpoints { try require(try rational.at(point) == uv, "Literal vertex-endpoint UV") }
+    for factor in referenceW {
+        let v = referenceVertices.map { original in var result = original; result.position *= factor; return result }
+        try require(try UVReference(v[0], v[1], v[2]).at(SIMD2(0.5, 0.5)) == SIMD2(0.25, 0.25), "Constant-w rational UV")
+    }
+    let first = all[6].vertices
+    try require(try UVReference(first[0], first[1], first[2]).at(SIMD2(26.5, 32.5)) == SIMD2(139.0 / 13936, 233.0 / 13936), "Literal sheared rational UV")
+    var zeroW = referenceVertices[0]; zeroW.position.w = 0
+    var nonfiniteUV = referenceVertices[0]; nonfiniteUV.uv.x = .nan
+    for (a, b, c) in [(zeroW, referenceVertices[1], referenceVertices[2]), (referenceVertices[0], referenceVertices[0], referenceVertices[2]),
+                      (nonfiniteUV, referenceVertices[1], referenceVertices[2])] {
+        var rejected = false
+        do { _ = try UVReference(a, b, c) } catch { rejected = true }
+        try require(rejected, "Invalid rational UV triangle accepted")
     }
     func literalCoverage(_ points: [SIMD2<Float>]) throws -> [Bool] {
         try coverage(Mesh(name: "coverage-self-check", vertices: points.map { vertex($0.x, $0.y, 0, 0) }))
@@ -307,7 +402,11 @@ private func run(output: URL, repeats: Int) throws {
     try save(Data(shader.utf8), "shader.metal")
     var cases: [[String: Any]] = [], allStable = true, allFinite = true
     for mesh in meshes() {
-        let vertices = mesh.bytes, expected = gradients(mesh)
+        let vertices = mesh.bytes
+        let expected: [SIMD4<Float>]? = mesh.hasVaryingTriangleW ? nil : gradients(mesh)
+        let uvReferences = try stride(from: 0, to: mesh.vertices.count, by: 3).map { index in
+            try UVReference(mesh.vertices[index], mesh.vertices[index + 1], mesh.vertices[index + 2])
+        }
         let expectedCoverage = try coverage(mesh), expectedVisible = expectedCoverage.filter { $0 }.count
         let buffer = vertices.withUnsafeBytes { device.makeBuffer(bytes: $0.baseAddress!, length: vertices.count, options: .storageModeShared) }
         guard let buffer else { throw Failure("Vertex buffer allocation") }
@@ -340,7 +439,7 @@ private func run(output: URL, repeats: Int) throws {
                 try save(bytes, "\(mesh.name)-\(iteration)-color\(index).raw")
             }
             let floatPlanes = try planes.dropFirst().map(words)
-            var visible = 0, nonfinite = 0, maximumGradientError = 0.0
+            var visible = 0, nonfinite = 0, maximumGradientError = 0.0, maximumUVError = 0.0
             for pixel in 0..<(width * height) {
                 let id = Float(bitPattern: floatPlanes[1][pixel * 4 + 2])
                 let valid = Float(bitPattern: floatPlanes[1][pixel * 4 + 3])
@@ -350,16 +449,25 @@ private func run(output: URL, repeats: Int) throws {
                 try require(valid == 1 && id.isFinite && id >= 1 && id <= Float(mesh.triangleCount) && id.rounded(.towardZero) == id, "Invalid primitive ID")
                 visible += 1
                 for plane in floatPlanes { for channel in 0..<4 where !Float(bitPattern: plane[pixel * 4 + channel]).isFinite { nonfinite += 1 } }
-                let actual = [floatPlanes[0][pixel * 4 + 2], floatPlanes[0][pixel * 4 + 3], floatPlanes[1][pixel * 4], floatPlanes[1][pixel * 4 + 1]]
-                for channel in 0..<4 {
-                    let value = Float(bitPattern: actual[channel])
-                    if value.isFinite { maximumGradientError = max(maximumGradientError, abs(Double(value) - Double(expected[Int(id) - 1][channel]))) }
+                let referenceUV = try uvReferences[Int(id) - 1].at(SIMD2(Double(pixel % width) + 0.5, Double(pixel / width) + 0.5))
+                for channel in 0..<2 {
+                    let value = Float(bitPattern: floatPlanes[0][pixel * 4 + channel])
+                    if value.isFinite { maximumUVError = max(maximumUVError, abs(Double(value) - referenceUV[channel])) }
+                }
+                if let expected {
+                    let actual = [floatPlanes[0][pixel * 4 + 2], floatPlanes[0][pixel * 4 + 3], floatPlanes[1][pixel * 4], floatPlanes[1][pixel * 4 + 1]]
+                    for channel in 0..<4 {
+                        let value = Float(bitPattern: actual[channel])
+                        if value.isFinite { maximumGradientError = max(maximumGradientError, abs(Double(value) - Double(expected[Int(id) - 1][channel]))) }
+                    }
                 }
             }
             if nonfinite > 0 { allFinite = false }
             try require(visible == expectedVisible, "Unexpected visible pixel count \(visible), CPU union expects \(expectedVisible)")
             var row: [String: Any] = ["iteration": iteration, "visiblePixels": visible, "nonfiniteVisibleComponents": nonfinite,
-                                     "maximumAbsAnalyticGradientError": maximumGradientError]
+                                     "maximumAbsRationalUVError": maximumUVError]
+            if expected == nil { row["maximumAbsAnalyticGradientError"] = NSNull() }
+            else { row["maximumAbsAnalyticGradientError"] = maximumGradientError }
             if iteration == 0 { baseline = planes; baselineWords = floatPlanes }
             else {
                 var colorMask = [Bool](repeating: false, count: width * height), maxByte = 0
@@ -376,7 +484,8 @@ private func run(output: URL, repeats: Int) throws {
             }
             draws.append(row)
         }
-        cases.append(["name": mesh.name, "triangles": mesh.triangleCount, "verticesSHA256": sha(vertices), "expectedCoveredPixels": expectedVisible, "draws": draws])
+        cases.append(["name": mesh.name, "triangles": mesh.triangleCount, "verticesSHA256": sha(vertices), "expectedCoveredPixels": expectedVisible,
+                      "hasVaryingTriangleW": mesh.hasVaryingTriangleW, "draws": draws])
     }
     // Check every input mip remained unchanged after all draws.
     for (level, mip) in levels.enumerated() {
@@ -392,7 +501,7 @@ private func run(output: URL, repeats: Int) throws {
         "compiler": ["languageVersionRaw": options.languageVersion.rawValue, "fastMathEnabled": options.fastMathEnabled, "preserveInvariance": options.preserveInvariance],
         "sampler": ["minFilter": "linear", "magFilter": "linear", "mipFilter": "linear", "address": "repeat", "maxAnisotropy": 9],
         "inputMipsUnchanged": true,
-        "limits": "MRT instrumentation may perturb execution. Affine synthetic UVs, two triangles or a regular grid, one texture and no branch/discard do not establish parity or explain the recovered shader. No performance measurement. Exit0 means collection completed, not repeatability passed."]
+        "limits": "MRT instrumentation may perturb execution. Synthetic affine/perspective UVs, two triangles or a regular grid, one texture and no branch/discard do not establish parity or explain the recovered shader. Rational UV error is a numerical diagnostic conditioned on the reported primitive ID. Analytic affine-gradient error is null for varying triangle w; no hardware derivative rule is assumed. No performance measurement. Exit0 means collection completed, not repeatability passed."]
     let json = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
     try json.write(to: output.appendingPathComponent("report.json"), options: .withoutOverwriting)
     try require(allFinite, "Nonfinite visible values recorded; see report.json")

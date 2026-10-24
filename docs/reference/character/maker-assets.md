@@ -415,8 +415,11 @@ cooperative pool. Hosted runs of the original tests repeatedly timed out while
 their appearance tests were outstanding. The first hosted diagnostic identified
 `swiftpm-testing-helper` as the test process but missed its stack because it
 only matched older executable names; the sampler now includes that helper.
-Worker starvation remains a hypothesis pending hosted evidence. This is test
-isolation, with no production runtime or performance claim.
+The isolation change passed hosted run `40135675480`: all five public checks
+passed, with Engine taking 42.722 s, and Debug, Release packaging and reverse
+checks passed too. No captured stack proves worker starvation, so that cause
+remains a hypothesis. This is test isolation, with no production runtime or
+performance claim.
 
 
 ### Prepared head appearance inputs (#192)

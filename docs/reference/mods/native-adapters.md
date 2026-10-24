@@ -271,10 +271,21 @@ noninteractive text. Both owned processes exited normally.
 This fixture uses the same glasses in every outfit, so it does not establish
 distinct-name outfit switching. Missing-conversion fallback is covered by the
 automated phase below, not by this GUI run. A direct converted-manifest mount saves
-`sourceNativePlugins` without `sourcePluginLibrary`; the current Studio Plugins
-panel therefore omits its mounted summary and Unload control. Visible unload is
-not claimed on that route and remains a separate UI follow-up; automated unload
-uses the real model method. Unicode edge cases remain recovered-code oracle
+`sourceNativePlugins` without `sourcePluginLibrary`; that GUI build's Studio
+Plugins panel therefore omitted its mounted summary and Unload control. Visible
+unload is not claimed for that run. The mounted-panel follow-up now presents
+individual references separately from library generations and delegates its
+guarded Unload to the existing model method. Its clean Release `71e1309` passed
+42 plugin/session checks and the extended 18-step save/9-step fresh-load pair,
+including exact native identity and fallback labels after unloading. Visible
+acceptance on that binary opened the retained GUI-save scene, showed its exact
+individual-plugin identity without a generation, disabled Run for the native-only
+mount and enabled Unload. Maker disabled both actions; switching back to Studio
+and unloading restored `スロット01`, visibility off and outfit 2. The same run also
+checked profile-only Pause/Run and Unload. Mixed origins and pending ownership
+remain automated coverage; this does not relabel the earlier GUI run as having
+an Unload control.
+Unicode edge cases remain recovered-code oracle
 coverage rather than displayed fixture observations.
 
 The `studio-scenarios` lane has a bounded accessory-label checklist:

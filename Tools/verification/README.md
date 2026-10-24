@@ -25,13 +25,17 @@ swiftc -O Tools/verification/metal_derivative_repro.swift \
 ```
 
 The output directory must not exist, and its parent must exist. Collection
-creates five 128×128 cases: a large continuous quad, the same region split
+creates seven 128×128 cases: a large continuous quad, the same region split
 into 2-pixel triangles with continuous UVs, and identical small-triangle
 geometry with discontinuous per-triangle UVs, followed by translated and
 sheared copies of the discontinuous grid. Both copies shift by (5/16, 3/16)
 screen pixels; the sheared copy additionally applies `x += (y - 64) * 3/16`
 using the original screen position. UVs, primitive order, depth and clip `w`
-remain unchanged. Eight CPU-authored sRGB8 mips
+remain unchanged. Two further copies of the sheared grid multiply the complete
+clip position by factors 0.5/1/2: a common factor per triangle in one case and
+a different factor at each vertex in the other. Projected geometry, NDC depth
+and ordered UVs stay fixed while the latter adds perspective interpolation.
+Eight CPU-authored sRGB8 mips
 are uploaded once and checked unchanged after all draws. Every draw preserves
 color0 and records UV, derivatives, sampled RGBA and primitive ID in three
 additional float32 attachments. Compilation uses the default Metal language
@@ -53,6 +57,16 @@ Per-case repeats compare bit changes and finite numerical differences
 separately, retain unchanged nonfinite values as errors, and report overlap
 with color changes. Analytic affine-gradient errors are diagnostics with no
 new tolerance or parity gate.
+
+The UV reference independently projects in Double, computes screen
+barycentrics and evaluates `sum(lambda * UV / w) / sum(lambda / w)`. Triangle
+coefficients are cached once. `maximumAbsRationalUVError` reports the difference
+at pixel centers, conditioned on the GPU-reported primitive ID, without a new
+tolerance. Literal fractions, endpoint values and unchanged geometry/depth
+checks validate the reference. `maximumAbsAnalyticGradientError` is JSON null
+when vertex `w` varies inside a triangle; the tool does not equate an analytic
+local derivative to Metal's hardware derivative operation. Raw derivative
+repeat comparisons remain available for every case.
 
 Exit zero means collection completed; inspect `renderingStable` in the report
 for the numerical result. Nonfinite visible values retain the report and
