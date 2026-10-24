@@ -238,3 +238,51 @@ its strict resource checks. Main-actor timers can now advance while preparation
 runs, so elapsed timings still include a scheduling difference and must not be
 presented as a pure decoder speedup. Separate visible UI verification is needed
 for pending controls and interactive editing responsiveness.
+
+Validation on 2026-10-24 passed 39 focused Engine tests with no skips (including
+four deterministic queue tests), 81 runner tests, and the 55-step async scenario.
+The scenario covers current shape/color/mode edits, precise late pose rejection,
+explicit cancellation, supersession, export, outfit/library/import replacement
+and source close. Its state and resource comparisons remain strict. The existing
+46-step selection scenario also passed; its original-format export is byte-equal
+to the baseline. An independent audit of the async export found exactly seven
+intended scalar leaves changed (face/body rates, two selection IDs and three color
+components), with unrelated records/tokens, other outfits and trailer preserved.
+
+The quiet Release comparison alternated baseline `72e7af6` and candidate `a987e4f`
+three times, using the same synthetic card and preserved pre-half-state library.
+All six runs passed 46/46 steps, with 15 successful changed selections per run;
+the initial seed no-op, explicit no-op and rejected selections are excluded from
+these timing distributions. The library SHA-256 was
+`d898fea155e53abd30226d0633c832649a60570cffbcbbf1f47dc4c474cbb609`.
+The fixture map was promoted during this window, but both launcher snapshots and
+the preserved input files had identical hashes; all six runs used that same old
+library. This comparison does not measure half-state assembly performance.
+
+| Metric (ms) | Baseline | Async candidate |
+| --- | --- | --- |
+| Total selection, median of three run medians | 658.36 | 653.60 |
+| Total selection, individual run medians | 646.91 / 672.64 / 658.36 | 637.35 / 653.60 / 656.24 |
+| Snapshot, median of run medians | not instrumented | 0.28 |
+| CPU preparation wait, median of run medians | not instrumented | 543.86 |
+| Owner-thread commit including refresh, median of run medians | not instrumented | 110.47 |
+| Maximum main-actor heartbeat gap per selection, median of run medians | not instrumented | 112.42 |
+
+The baseline's entire selection call ran synchronously on the main actor. The
+candidate's longest individual heartbeat gap was 131.90 ms; heartbeats advanced
+during CPU preparation. Total completion time remained similar, and the candidate
+has different scheduling and heartbeat instrumentation, so this is evidence for
+a shorter main-thread stall, not a decoder or whole-selection throughput gain.
+The roughly 110 ms synchronous commit remains a responsiveness limit. Every
+per-step resource snapshot and all six exported cards matched exactly. Baseline
+and candidate executable SHA-256 hashes were
+`5e4d1d9cd4143dd71eaba4df14cfdd8b4f26fed2a871b087c3d27ee5f7502fd2`
+and `19e37c16884738345244b4b9311bc65f0099f952569adf30c56c76afe9d5b62b`.
+Reports, input hashes and byte audits remain private under
+`.local/codex-continue-2026-10-24/maker/`.
+
+Integrated visible UI verification changed back hair 2 → 0 → 9, edited height to
+0.63 and checked hide/show recovery. The transient pending panel completed before
+the UI capture could observe it. Editing/cancelling while pending is therefore
+verified through deterministic production-path scenarios, not yet by a captured
+interactive workflow; no whole-character or original-player parity is claimed.
