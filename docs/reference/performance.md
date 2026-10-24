@@ -1033,6 +1033,10 @@ TBD-REMAINS
   computed the eye rates. Three alternating launches per build gave both
   variants for each build (base: without, with, without; this change: with,
   with, without), so it is not a difference between them.
+- **Native-scene byte control.** `synthetic-current.png` with
+  `IKKOKU_MAKER_LIBRARY=none` (see the control note under
+  [quick wins](#quick-wins-in-this-change)): base and the merged head both
+  give `6837cd63…`.
 - **Thread lifetime.** `viewport-lifecycle` (three Studio/Maker switches,
   resize, minimize and restore, quit through `NSApp.terminate` while the link
   draws) ran three times on the Release build: one render thread before every
