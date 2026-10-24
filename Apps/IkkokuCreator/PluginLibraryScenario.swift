@@ -72,7 +72,6 @@ struct PluginLibraryScenario: Decodable {
             for boundary in ["modeExit", "modeExitAndReturn", "documentEditAndReturn"] {
                 let before = studio.doc, session = studio.sourcePluginSession, adapter = studio.sourceFocus.adapter
                 let resources = resourceCounts()
-                let focus = studio.sourceFocusState().description
                 let barrier = Barrier()
                 studio.sourcePluginPreparationHook = { await barrier.hold() }
                 let pending = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10)) }
@@ -88,10 +87,13 @@ struct PluginLibraryScenario: Decodable {
                 var cancelled = false
                 do { try await pending.value } catch is CancellationError { cancelled = true }
                 studio.sourcePluginPreparationHook = nil
-                try check(boundary, cancelled && studio.doc == before && studio.sourcePluginSession === session
-                    && studio.sourceFocus.adapter === adapter && !studio.sourcePluginLibraryPending
-                    && resources == resourceCounts()
-                    && sameFrame(frame, studio.host.renderer.currentFrame()), focus)
+                let invariants = ["cancelled": cancelled, "document": studio.doc == before,
+                    "session": studio.sourcePluginSession === session, "adapter": studio.sourceFocus.adapter === adapter,
+                    "notPending": !studio.sourcePluginLibraryPending, "resources": resources == resourceCounts(),
+                    "frame": sameFrame(frame, studio.host.renderer.currentFrame())]
+                let detail = invariants.keys.sorted().map { "\($0)=\(invariants[$0]!)" }.joined(separator: ", ")
+                    + "; resources before=\(resources), after=\(resourceCounts())"
+                try check(boundary, invariants.values.allSatisfy { $0 }, detail)
                 app.mode = .studio
             }
 
