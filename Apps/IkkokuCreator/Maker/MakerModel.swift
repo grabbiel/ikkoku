@@ -55,6 +55,14 @@ final class MakerModel: ViewportInputHandler {
     @ObservationIgnored private(set) var sourceAvatarFailure: String?
     @ObservationIgnored private var sourceMakerLibrary: SourceMakerLibrary?
     @ObservationIgnored private var sourcePreparedAssets: SourceMakerLibrary.Prepared?
+    @ObservationIgnored private let sourcePreparation = SourceMakerPreparationQueue<SourceMakerLibrary.Prepared>()
+    @ObservationIgnored private var sourceSelectionGeneration: UInt64 = 0
+    /// Only asset pickers are disabled while preparing; shape/color controls stay live.
+    private(set) var sourceSelectionPending: String?
+    struct SourceSelectionTiming: Encodable {
+        let snapshotMilliseconds: Double, preparationMilliseconds: Double, commitMilliseconds: Double
+    }
+    @ObservationIgnored private(set) var sourceSelectionTiming: SourceSelectionTiming?
     var sourceAssetSelections: [SourceMakerLibrary.Selection] = []
     struct SourceSelectionRow: Identifiable {
         struct Choice: Identifiable { let id: Int; let name: String }
@@ -326,6 +334,7 @@ final class MakerModel: ViewportInputHandler {
     // MARK: Commands
 
     func newCharacter(sex: Sex) {
+        cancelSourceSelection()
         importedSourceCard = nil; importedSourceCardURL = nil
         sourceRigPreview = nil
         card = sex == .female ? .defaultFemale() : .defaultMale()
@@ -346,11 +355,12 @@ final class MakerModel: ViewportInputHandler {
         }
     }
 
-    func load(card: CharacterCard) { importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
+    func load(card: CharacterCard) { cancelSourceSelection(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
 
     func openSourceRig(url: URL) throws { try openSourceRig(url: url, importing: nil, cardURL: nil) }
 
     private func openSourceRig(url: URL, importing imported: SourceCharacterCard?, cardURL: URL?) throws {
+        cancelSourceSelection()
         let manifest = try? JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
         let sex = manifest?.sex ?? (manifest?.kind == "koikatsu-male-avatar" ? 0 : 1)
         let identity = try imported?.customization()
@@ -465,10 +475,11 @@ final class MakerModel: ViewportInputHandler {
         frameSourceRig()
     }
 
-    func closeSourceRig() { sourceSelectionRows = []; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
+    func closeSourceRig() { cancelSourceSelection(); sourceSelectionRows = []; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
 
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
+        cancelSourceSelection()
         let replacement: SourceRigPreview?
         var cardApplication: SourcePreviewAppearance.CardApplication?
         if let current = sourceRigPreview, let url = sourceRigURL {
@@ -549,6 +560,7 @@ final class MakerModel: ViewportInputHandler {
     func clearBoneModifiers() { sourceBoneModifiers = nil; refresh(); status = "Bone modifiers cleared" }
 
     func importSourceCardSettings(url: URL) throws {
+        cancelSourceSelection()
         let imported = try SourceCharacterCard.load(url: url)
         try SourceMakerLibrary.validateAssemblyIdentity(card: imported)
         let identity = try imported.customization()
@@ -624,6 +636,7 @@ final class MakerModel: ViewportInputHandler {
             throw RigError.invalid("This card does not contain the selected supported outfit.")
         }
         guard coordinate != sourceBoneModifierCoordinate else { return }
+        cancelSourceSelection()
         let colors = try pendingSourceColors(card: importedSourceCard)
         var draft = try SourceCardAppearance(card: importedSourceCard, coordinate: coordinate)
         for color in draft.colors {
@@ -682,37 +695,79 @@ final class MakerModel: ViewportInputHandler {
         }
     }
 
-    /// All fallible work precedes the commit. In particular, pending colors are
-    /// copied into the candidate rather than applied to the visible preview.
-    func selectSourceAsset(_ slot: SourceMakerSelectionSlot, id: Int) throws {
-        guard let card = importedSourceCard, let current = sourceRigPreview,
+    /// Invalidates the generation before resuming any cancelled caller. Export
+    /// deliberately saves the visible, committed card, never an in-flight choice.
+    func cancelSourceSelection() {
+        sourceSelectionGeneration &+= 1
+        sourcePreparation.cancel()
+        if sourceSelectionPending != nil { status = "Selection cancelled. Current edits are kept." }
+        sourceSelectionPending = nil
+    }
+
+    /// Scenario verification waits for discarded decodes before comparing state.
+    func waitForSourceSelectionPreparation() async { await sourcePreparation.drain() }
+
+    /// The queue receives immutable card/library values only. After it returns,
+    /// current colors/shapes/pose are validated in one non-suspending transaction.
+    /// `beforePreparation` is the scenario runner's deterministic worker barrier;
+    /// UI callers never supply it and it cannot bypass any preparation checks.
+    func selectSourceAsset(_ slot: SourceMakerSelectionSlot, id: Int,
+                           beforePreparation: (@Sendable () -> Void)? = nil) async throws {
+        try Task.checkCancellation()
+        cancelSourceSelection()
+        sourceSelectionTiming = nil
+        let generation = sourceSelectionGeneration
+        let started = ProcessInfo.processInfo.systemUptime
+        guard let card = importedSourceCard, sourceRigPreview != nil,
               let library = sourceMakerLibrary, let url = sourceRigURL else {
             throw RigError.invalid("Import an original card with a converted Maker library before selecting assets.")
         }
+        let coordinate = sourceBoneModifierCoordinate
         let destination = try slot.destination()
-        if let coordinate = destination.record.coordinate, coordinate != sourceBoneModifierCoordinate {
+        if let selectedCoordinate = destination.record.coordinate, selectedCoordinate != coordinate {
             throw RigError.invalid("Select clothing in the currently displayed outfit.")
         }
         guard library.entries.contains(where: { $0.category == destination.category && $0.id == id && $0.modGUID == nil }) else {
             throw RigError.invalid("This vanilla source selection has no converted Maker entry.")
         }
-        // Rows are built from validated, resolved identities. A saved mod with
-        // the same numeric local ID has no selectedID and must still be edited.
-        // An effective vanilla no-op keeps even shadowed metadata untouched.
+        // A saved mod with the same numeric local ID is not a vanilla no-op.
         if sourceSelectionRows.first(where: { $0.id == destination.property })?.selectedID == id { return }
         if let reason = selectionUnavailableReason(draft: sourceAppearanceDraft, url: url) { throw RigError.invalid(reason) }
         let bytes = try card.selectingVanillaAsset(id, at: slot)
         guard bytes != card.preservedData else { return }
         let candidate = try SourceCharacterCard.decode(bytes)
-        let colors = try pendingSourceColors(card: card)
-        var draft = try SourceCardAppearance(card: candidate, coordinate: sourceBoneModifierCoordinate)
-        for color in draft.colors {
-            if let edit = colors[colorEditKey(color)] { try draft.setColor(color.id, rgba: Float4(edit.rgba)) }
+        let pending = "Preparing \(sourceSelectionRows.first(where: { $0.id == destination.property })?.label ?? "asset") · ID \(id)"
+        sourceSelectionPending = pending
+        status = pending
+        defer { if generation == sourceSelectionGeneration { sourceSelectionPending = nil } }
+        let snapshotFinished = ProcessInfo.processInfo.systemUptime
+        let prepared: SourceMakerLibrary.Prepared
+        do {
+            prepared = try await sourcePreparation.prepare {
+                beforePreparation?()
+                return try library.prepare(card: candidate, coordinate: coordinate, baseURL: url)
+            }
+        } catch {
+            if generation != sourceSelectionGeneration || Task.isCancelled { throw CancellationError() }
+            throw error
         }
-        let prepared = try library.prepare(card: candidate, coordinate: sourceBoneModifierCoordinate, baseURL: url)
+        let preparationFinished = ProcessInfo.processInfo.systemUptime
+        try Task.checkCancellation()
+        guard generation == sourceSelectionGeneration,
+              sourceBoneModifierCoordinate == coordinate,
+              importedSourceCard?.preservedData == card.preservedData,
+              let current = sourceRigPreview else { throw CancellationError() }
         guard let selected = prepared.selections.first(where: { $0.property == destination.property }),
               selected.entry != nil, selected.modGUID == nil, selected.sourceID == id else {
             throw RigError.invalid("The selected source asset could not be assembled.")
+        }
+        // Editing colors or shapes while decoding is allowed. Read the latest
+        // draft here, not a stale snapshot from before the await. Nothing below
+        // suspends, so validation and replacement are atomic on the owner thread.
+        let colors = try pendingSourceColors(card: card)
+        var draft = try SourceCardAppearance(card: candidate, coordinate: coordinate)
+        for color in draft.colors {
+            if let edit = colors[colorEditKey(color)] { try draft.setColor(color.id, rgba: Float4(edit.rgba)) }
         }
         let base = try SourcePreviewAppearance.load(url: url.deletingPathExtension().appendingPathExtension("appearance.json"),
             resources: host.renderer.resources, modLibrary: sourceModLibrary)
@@ -728,7 +783,13 @@ final class MakerModel: ViewportInputHandler {
         }
         let rows = selectionRows(card: candidate, library: library, coordinate: sourceBoneModifierCoordinate, unavailableReason: nil)
         updatingSource = true
-        defer { updatingSource = false; refresh() }
+        defer {
+            updatingSource = false
+            refresh()
+            sourceSelectionTiming = SourceSelectionTiming(snapshotMilliseconds: (snapshotFinished - started) * 1000,
+                preparationMilliseconds: (preparationFinished - snapshotFinished) * 1000,
+                commitMilliseconds: (ProcessInfo.processInfo.systemUptime - preparationFinished) * 1000)
+        }
         importedSourceCard = candidate
         sourceColorEdits = colors
         sourceAppearanceDraft = draft
@@ -772,6 +833,7 @@ final class MakerModel: ViewportInputHandler {
     }
 
     func exportSourceCard(to url: URL) throws {
+        cancelSourceSelection()
         guard let importedSourceCard, let preview = sourceRigPreview, applySourceCustomization else {
             throw RigError.invalid("Import an original card and enable customization before exporting an edited copy.")
         }
