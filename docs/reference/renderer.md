@@ -3862,6 +3862,64 @@ there. Private executable SHA-256 is
 report SHA-256 is
 `58e019865fc79c6d2ce1eb1907797f94f09623158f0b96a399fbc3ff939caabf`.
 
+A **private discard-only split** retains the mask sampling, combination and
+original comparison operations. Both variants add an `rg32Float` attachment
+that records the combined mask immediately before MainTex's independent UV
+assignment and converts the original comparison bits to numeric 0/1. It does
+not recompute the floating-point threshold. The attachment keeps this input
+chain observable when the discard is removed. The two instrumented programs
+differ by exactly one original discard statement; all other source bytes,
+including vertex paths, are identical. Program metadata changes only its source
+hash. Color0, the existing float attachments and pass state are preserved.
+
+The private Release bundle builds at `0bcd33c` plus a temporary test snippet;
+tracked test source is restored exactly afterward. One locked process passes
+four draws × observed-prefix/no-discard × native-store/captured providers.
+Actual pipeline creation accepts all five attachments, whose logical color
+payload is 60 bytes per pixel. The actual options remain MSL 4.0, fast math
+disabled and `preserveInvariance = false` on the same M2 Ultra/macOS host.
+
+**The fresh observed-prefix controls vary, while no-discard is bit-stable:**
+
+| Changed pixels against the first draw | Native observed prefix | Native no-discard | Captured observed prefix | Captured no-discard |
+| --- | ---: | ---: | ---: | ---: |
+| Color0 | 74 / 67 / 65 | 0 / 0 / 0 | 18 / 10 / 15 | 0 / 0 / 0 |
+| `dfdx` | 105 / 94 / 96 | 0 / 0 / 0 | 11 / 11 / 15 | 0 / 0 / 0 |
+| `dfdy` | 116 / 106 / 116 | 0 / 0 / 0 | 27 / 15 / 23 | 0 / 0 / 0 |
+| First MainTex sample | 93 / 84 / 83 | 0 / 0 / 0 | 23 / 17 / 22 | 0 / 0 / 0 |
+
+All sixteen draws retain the same 2,948-pixel coverage, primitive/pass IDs, alpha
+and visible UVs. The fixed common-ID mask includes all visible pixels for each
+provider, so the repeat counts hold on that mask too. Every visible mask value
+is exactly 1 and every observed predicate is 0, with no bit changes within or
+between variants. These visible-pixel observations do **not** observe helper
+invocations or prove that no invocation executes discard. All visible values
+are finite. Eighty full-plane attachment hashes verify; all 148 bound mip-level
+instances are unchanged, twenty texture chains match across variants, and ten
+packed constant-buffer hashes match.
+
+Twenty-one synthetic RG readback tests, eight transformer checks and eighteen
+combined audit checks pass. They cover bounded decompression, exact packing,
+visible predicate domain, signed-zero bits, fixed-coordinate comparisons and
+empty common coverage. One initial static readiness assertion mistakenly counted
+the outline's retained vertex sample as a fragment sample; that failed assertion
+and its correction are retained, with no shader/proxy change. The GPU run has no
+failed or skipped draws.
+
+This associates the observed difference with the presence of the discard
+statement in these compiled, instrumented programs. It does not establish a
+source-semantic violation, compiler/driver defect or general derivative rule.
+Removing discard remains unacceptable as a production fix without preserving
+source alpha testing. No production shader, source gate, material coverage or
+timing claim changes; #188 remains open.
+
+Evidence and reviewed helper proposals are under
+`.local/codex-continue-2026-10-24/rolling/materials-discard-observability/`.
+Private executable SHA-256 is
+`af9c5a3c9efdf0e1b8e5babdd5416917d84bf3e399dfe822920632a99f4e191c`;
+report SHA-256 is
+`6becf5cec5e4a1a99d0d096b9cf93fcaa70c7528f9a1fa94e00877131b7df3c6`.
+
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
 correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
