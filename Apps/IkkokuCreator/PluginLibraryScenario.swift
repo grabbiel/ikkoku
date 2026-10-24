@@ -83,6 +83,7 @@ struct PluginLibraryScenario: Decodable {
                     studio.doc.name = "Changed during preparation"; studio.doc = before
                 }
                 let frame = studio.host.renderer.currentFrame()
+                let boundaryResources = resourceCounts()
                 await barrier.finish()
                 var cancelled = false
                 do { try await pending.value } catch is CancellationError { cancelled = true }
@@ -92,7 +93,8 @@ struct PluginLibraryScenario: Decodable {
                     "notPending": !studio.sourcePluginLibraryPending, "resources": resources == resourceCounts(),
                     "frame": sameFrame(frame, studio.host.renderer.currentFrame())]
                 let detail = invariants.keys.sorted().map { "\($0)=\(invariants[$0]!)" }.joined(separator: ", ")
-                    + "; resources before=\(resources), after=\(resourceCounts())"
+                    + "; resources before=\(resources), boundary=\(boundaryResources), after=\(resourceCounts())"
+                    + "; Maker live=\(app.maker?.liveAnimation ?? false), skinSets equal=\(frame.skinSets == studio.host.renderer.currentFrame().skinSets)"
                 try check(boundary, invariants.values.allSatisfy { $0 }, detail)
                 app.mode = .studio
             }
