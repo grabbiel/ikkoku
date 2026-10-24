@@ -3665,6 +3665,43 @@ Its `run-1/report.json` hashes all 60 shader/vertex/mip/raw-output artifacts;
 those hashes were checked after the process exited. These synthetic results
 are separate from the private original-shader MRT evidence above.
 
+A subsequent bounded control adds two copies of the discontinuous grid while
+retaining the original three cases. One shifts screen coordinates by
+`(5/16, 3/16)` pixels; the other adds the same shift and the shear
+`x += (originalY - 64) * 3/16`. Both preserve UVs, primitive order, depth and
+clip `w = 1`. The shader, mip generator and original mesh-generation blocks
+remain byte-identical. CPU checks independently pin the first three transformed
+positions and the first-triangle gradients; shear changes `dUV/dy` by
+`-3*dUV/dx/16`, so its expected gradient is not copied from the aligned case.
+
+The coverage reference computes the union of triangle interiors at pixel
+centers using clipped per-triangle bounds. It has literal duplicate/shared-edge,
+viewport-clipping, empty and degenerate checks. Each GPU validity and alpha
+pixel must match that plane, rather than assuming the shear leaves coverage
+unchanged. Inclusive shared-edge membership is sufficient for these opaque
+fixtures, whose outer boundaries avoid pixel centers; it is not a general
+Metal rasterizer or a primitive-ownership oracle.
+
+The optimized build and CPU checks pass at clean `b2bc839`. One locked process
+collects five cases × four draws with the same MSL 4.1 options/device. **The two
+added cases also do not reproduce the variation:** every repeat is bit-stable
+for color, UV, derivatives, sampled values and primitive IDs; all visible
+values are finite and affine-gradient error is zero. Computed and GPU coverage
+agree at every pixel and yield 4,096 pixels per case. All 99 saved artifact
+hashes verify; all 60 artifacts from the earlier three-case run, including its
+48 color/float outputs, are byte-identical. The authored input mip chain is
+unchanged after drawing.
+
+This control covers only the stated subpixel offset and shear of a regular
+affine grid. It does not test perspective interpolation, arbitrary irregular
+geometry or the recovered shader body, and it does not establish the cause of
+the private MRT variation. No production change, relaxed source gate or
+performance claim follows. Evidence and both reviewed coding-helper proposals
+are under `.local/codex-continue-2026-10-24/rolling/materials-sampling-subpixel/`.
+Source SHA-256 is `ddc6dd37ec1ffd2f9518314674612aaa27643187507b1ec7e62ee0e35e037ecd`;
+the executable is `66d8dbd646ea548ba1d3aa68cbc07537ee2399eba18b4a1eb5b2477f545545a2`;
+the report is `bfd362c16de2a01cbe5324b1b1678b8d1b3f1d16af1d1f85f773f4e8df56f232`.
+
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
 correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
