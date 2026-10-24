@@ -24,6 +24,11 @@ public final class SourceRigPreview {
     private let meshes: [MeshHandle]
     private let keyBase: UInt64
     private var liveBounds: SourceRigBounds
+    /// The last expression input with its weights (R7 phase 2, item 3, C5).
+    /// `expressionWeights` is a pure function of the input for this preview's
+    /// fixed source and contract, and a live tick asks for the same input
+    /// until a blink or an edit changes it. Keyed by the input's bit patterns.
+    private var expressionCache: (key: ExpressionKey, weights: [String: [(index: Int, weight: Float)]])?
 
     public init(source: SourceRig, contract: SourceShapeContract?, resources: ResourceStore, appearance: SourcePreviewAppearance? = nil,
                 expressionContract: SourceExpressionContract? = nil,
@@ -139,13 +144,26 @@ public final class SourceRigPreview {
     public func expressionWeights(_ input: SourceExpressionInputs?) throws -> [String: [(index: Int, weight: Float)]] {
         guard let input else { return [:] }
         guard supportsExpressions, let expressionContract else { throw RigError.invalid("This source model has no supported expression contract.") }
+        let key = ExpressionKey(input)
+        if let expressionCache, expressionCache.key == key { return expressionCache.weights }
         let weights = try expressionContract.weights(source: source, inputs: input)
         for part in source.parts {
             let entries = weights[part.mesh.name] ?? []
             guard entries.count <= Int(IK_MAX_ACTIVE_MORPHS) else { throw RigError.invalid("Source expression exceeds the active morph capacity.") }
             try SourceRig.validateMorphWeights(entries, mesh: part.mesh)
         }
+        expressionCache = (key, weights)
         return weights
+    }
+
+    private struct ExpressionKey: Equatable {
+        let patterns: SIMD3<Int>, rates: SIMD8<UInt32>
+        init(_ input: SourceExpressionInputs) {
+            patterns = SIMD3(input.eyebrowPattern, input.eyesPattern, input.mouthPattern)
+            rates = SIMD8(input.eyebrowOpenRate.bitPattern, input.eyesOpenRate.bitPattern, input.mouthOpenRate.bitPattern,
+                          input.eyebrowOpenMax.bitPattern, input.eyesOpenMax.bitPattern, input.mouthOpenMax.bitPattern,
+                          input.blinkRate.bitPattern, input.mouthFixedRate.bitPattern)
+        }
     }
 
     public func frame(camera: OrbitCamera, mainLight: MainLight = MainLight(), effects: SceneEffects = SceneEffects(),

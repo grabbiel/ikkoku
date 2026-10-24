@@ -173,6 +173,7 @@ func sourceStudioLiveTickDigestIsReproducibleWhenSupplied() throws {
     #expect(previews.filter(\.hasLiveNeckLook).count >= 1)
     var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
     var digest = LiveTickDigest()
+    let clock = ContinuousClock(), start = clock.now
     for tick in 1...liveTickCount {
         if tick == liveTickSeek { for preview in previews { preview.clearDynamicsStep(); preview.resetAnimationPlayback() } }
         for (character, preview) in previews.enumerated() {
@@ -180,8 +181,11 @@ func sourceStudioLiveTickDigestIsReproducibleWhenSupplied() throws {
                              random: &randoms[character], digest: &digest)
         }
     }
+    let elapsed = clock.now - start
     let value = digest.finish()
+    let milliseconds = Double(elapsed.components.seconds) * 1e3 + Double(elapsed.components.attoseconds) * 1e-15
     print("[live-tick-digest] \(value) characters=\(previews.count) ticks=\(liveTickCount)"
+        + " ms/tick=\(String(format: "%.3f", milliseconds / Double(liveTickCount)))"
         + " neck=\(previews.filter(\.hasLiveNeckLook).count) eye=\(previews.filter(\.hasLiveEyeLook).count)"
         + " dynamics=\(previews.map(\.dynamicsComponentCount))")
     if let expected = ProcessInfo.processInfo.environment["IKKOKU_LIVE_TICK_DIGEST"], !expected.isEmpty {
