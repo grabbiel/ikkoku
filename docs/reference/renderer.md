@@ -1582,7 +1582,8 @@ default, and the toon path stays the production renderer. On one controlled
 fixture it meets the frozen probe's gates with capture texture pixels (numbers
 below). The initial native texture store drew one material; the completed asset
 store draws 11 of 20 slots ([native asset completion](#native-asset-completion-r1-137-2026-10-23)),
-and with natively composed irises 13 of 20 ([native iris composites](#native-iris-composites-r1-2026-10-23)).
+with natively composed irises 13 of 20 ([native iris composites](#native-iris-composites-r1-2026-10-23)),
+and with the eye whites 15 of 20 ([native eye-white composites](#native-eye-white-composites-r1-2026-10-23)).
 This is not a production-parity claim.
 
 **Opt-in and inputs.** `IKKOKU_LIVE_SOURCE_SHADERS=1` starts the app with the
@@ -1924,8 +1925,9 @@ asset-store result below. The
 private-source lane declares its fixtures: `IKKOKU_SHADER_BINDING_PROBE`,
 `IKKOKU_SOURCE_AVATAR`, `IKKOKU_MAKER_LIBRARY`, `IKKOKU_HEAD_MATERIAL_CONTRACT`,
 `IKKOKU_SHADER_BINDING_SUPPLEMENT`, `IKKOKU_STUDIO_HAND_POSE`,
-`IKKOKU_STUDIO_LOOK_SETTINGS`, `IKKOKU_LIVE_SOURCE_STREAMS` and
-`IKKOKU_LIVE_SOURCE_TEXTURES`. `Tools/reverse/test_source_live_inputs.py` covers
+`IKKOKU_STUDIO_LOOK_SETTINGS`, `IKKOKU_LIVE_SOURCE_STREAMS`,
+`IKKOKU_LIVE_SOURCE_TEXTURES` and (since the eye-white composites)
+`IKKOKU_COMPOSITE_COLOUR_PROBE`. `Tools/reverse/test_source_live_inputs.py` covers
 the exporters' pure parts.
 
 **Limits.** One controlled card, one pose and one frame. Live drawing needs
@@ -2272,7 +2274,8 @@ scene capture whose characters all fail exits 1.
 
 The eye whites are the nearest. They are `CustomTextureCreate` targets like the
 irises, so the same machinery applies: a recipe in the derivation, the program
-in the store and an oracle check of their own. The body, face and garment
+in the store and an oracle check of their own. They are now composed natively
+([native eye-white composites](#native-eye-white-composites-r1-2026-10-23)). The body, face and garment
 targets are `CustomTextureControl`/`ChangeCustomClothes` composites with more
 inputs; their recipes are not recovered here.
 
