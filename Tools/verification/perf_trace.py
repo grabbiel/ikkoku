@@ -12,7 +12,8 @@ beyond reading the report's summary block.
     python3 Tools/verification/perf_trace.py run \
         --app .local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku \
         --environment /path/to/environment.json --out .local/perf/debug \
-        [--workloads studio-idle,studio-orbit] [--seconds 10] [--wrap /path/to/lock.sh]
+        [--workloads studio-idle,studio-orbit] [--seconds 10] [--wrap /path/to/lock.sh] \
+        [--main-load-ms 20 [--main-load-hz 30]]
 
     python3 Tools/verification/perf_trace.py summarize .local/perf/debug [.local/perf/release ...]
 
@@ -30,6 +31,11 @@ exits; xctrace stops recording when it does.
 aggregates a Time Profiler trace's samples between the app's `recordingBegin`
 and `recordingEnd` marks: time per binary, the heaviest functions by self
 time and by inclusive time.
+
+`--main-load-ms N` busy-waits N ms on the app's main thread
+`--main-load-hz` (default 30) times per second while recording, so the
+summary's presented-interval p95 shows whether presentation keeps pace with
+a busy main thread. Its reports are named `<workload>+load<N>.json`.
 """
 
 import argparse
@@ -42,7 +48,7 @@ import subprocess
 import sys
 
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
-             "maker-slider", "maker-idle", "studio-native", "startup"]
+             "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup"]
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
@@ -72,7 +78,7 @@ NATIVE_FIXTURES = {
 def fixtures_for(workload):
     if workload.startswith("maker-"):
         return MAKER_FIXTURES
-    if workload == "studio-native":
+    if workload in ("studio-native", "viewport-lifecycle"):
         return NATIVE_FIXTURES
     # Startup measures the full source-scene startup.
     return STUDIO_FIXTURES
@@ -103,11 +109,15 @@ def run(args):
     if unknown:
         raise SystemExit("unknown workloads: %s" % ", ".join(unknown))
     extra = dict(pair.split("=", 1) for pair in args.set or [])
+    load_ms = getattr(args, "main_load_ms", 0) or 0
+    if load_ms:
+        extra["IKKOKU_PERF_MAIN_LOAD_MS"] = str(load_ms)
+        extra["IKKOKU_PERF_MAIN_LOAD_HZ"] = str(getattr(args, "main_load_hz", 30) or 30)
     os.makedirs(args.out, exist_ok=True)
     failures = []
     for repeat in range(args.repeat):
         for workload in workloads:
-            suffix = "" if args.repeat == 1 else ".%d" % (repeat + 1)
+            suffix = ("+load%d" % load_ms if load_ms else "") + ("" if args.repeat == 1 else ".%d" % (repeat + 1))
             output = os.path.abspath(os.path.join(args.out, workload + suffix + ".json"))
             seconds = 2 if workload == "startup" else args.seconds
             warmup = 0 if workload == "startup" else args.warmup
@@ -134,7 +144,7 @@ def run(args):
                 with open(log_path, "w", encoding="utf-8") as log:
                     code = subprocess.run(argv, env=env, stdout=log, stderr=subprocess.STDOUT).returncode
                 reason = None
-                if code == 0 and os.path.exists(output):
+                if code == 0 and os.path.exists(output) and workload not in PRESENTATION_EXEMPT:
                     with open(output, encoding="utf-8") as handle:
                         reason = uncomposited(json.load(handle))
                 if not reason:
@@ -198,7 +208,14 @@ def load(directory):
     return reports
 
 
+HEADER = ("| report | app/engine | draw thread | main load | presented FPS | hitches (/s) | presented interval ms p50/p95 "
+          "| draw ms p50/p95 | GPU ms p50/p95 | main busy ms/s | main draw ms/s | model ms/s | load ms/s | other ms/s "
+          "| render-thread draw ms/s | model phases ms p50/p95 × rate | peak footprint MiB |")
+
+
 def row(name, report):
+    """One summary line. Schema 2 reports (before the render thread) lack the
+    draw thread, load and render-thread fields; their draws ran on the main thread."""
     summary = report["summary"]
     phases = summary["phases"]
     main = summary["mainThread"]
@@ -207,14 +224,25 @@ def row(name, report):
         entry = phases.get(key)
         return "%.2f" % entry[field] if entry else "-"
 
+    def stat(entry, field):
+        return "%.2f" % entry[field] if entry and field in entry else "-"
+
     model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "makerTick", "makerRefresh", "input") if k in phases]
     model_text = ", ".join("%s %s/%s ×%.0f/s" % (k, phase(k), phase(k, "p95"), phases[k]["perSecond"]) for k in model) or "-"
     build = report["build"]
-    return "| %s | %s/%s | %.1f | %d | %s/%s | %s/%s | %.0f | %.0f | %.0f | %.0f | %s | %.0f |" % (
-        name, build["appAssertConfiguration"], build["engineAssertConfiguration"],
-        summary["presentedFPS"], summary["hitches"],
+    configuration = report.get("configuration", {})
+    load = configuration.get("mainLoadMs", 0)
+    load_text = "%g ms × %g/s" % (load, configuration.get("mainLoadHz", 30)) if load else "-"
+    seconds = summary.get("recordedSeconds")
+    hitches = "%d (%.1f/s)" % (summary["hitches"], summary["hitches"] / seconds) if seconds else "%d" % summary["hitches"]
+    interval = summary.get("presentedIntervalMs")
+    render = summary.get("renderThread", {})
+    return "| %s | %s/%s | %s | %s | %.1f | %s | %s/%s | %s/%s | %s/%s | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f | %s | %.0f |" % (
+        name, build["appAssertConfiguration"], build["engineAssertConfiguration"], summary.get("drawThread", "main"), load_text,
+        summary["presentedFPS"], hitches, stat(interval, "p50"), stat(interval, "p95"),
         phase("draw"), phase("draw", "p95"), phase("gpu"), phase("gpu", "p95"),
-        main["busyMsPerSecond"], main["drawMsPerSecond"], main["modelMsPerSecond"], main["otherMsPerSecond"],
+        main["busyMsPerSecond"], main["drawMsPerSecond"], main["modelMsPerSecond"], main.get("loadMsPerSecond", 0),
+        main["otherMsPerSecond"], render.get("drawMsPerSecond", 0),
         model_text, summary["memory"]["peakFootprintBytes"] / 1048576)
 
 
@@ -258,7 +286,51 @@ def uncomposited(report):
 
 
 # Workloads that send no viewport input, so any input call came from a person.
-INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "startup"}
+INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup"}
+
+# Workloads whose window is minimized on purpose: their drawables are not all
+# shown, so the composited check does not apply and their frame rates are not cited.
+PRESENTATION_EXEMPT = {"viewport-lifecycle"}
+
+
+def lifecycle_problem(report):
+    """Why a `viewport-lifecycle` run failed its own checks, or None: render
+    threads left over after the viewport was replaced (more at the end than
+    before the first step), or no frame presented after the window was restored."""
+    lifecycle = report.get("details", {}).get("lifecycle")
+    if report.get("workload") != "viewport-lifecycle" or lifecycle is None:
+        return None
+    steps = lifecycle.get("steps", [])
+    if not steps:
+        return "the lifecycle steps did not run"
+    start, end = steps[0]["renderThreadsBefore"], lifecycle["renderThreadsAtEnd"]
+    peak = max([s["renderThreadsBefore"] for s in steps] + [end])
+    problems = []
+    if end > start or peak > max(start, 1):
+        problems.append("render threads %d before, %d at most, %d at the end" % (start, peak, end))
+    if lifecycle.get("presentedAfterRestore", 0) == 0:
+        problems.append("no frame presented after the window was restored")
+    if lifecycle.get("windowMiniaturized"):
+        problems.append("the window was still minimized at the end")
+    return "; ".join(problems) or None
+
+
+def lifecycle_line(name, report):
+    lifecycle = report["details"]["lifecycle"]
+    steps = lifecycle.get("steps", [])
+    return "[perf] %s: %d steps, render threads before each step %s, at the end %d; %d draws and %d presented frames after the restore" % (
+        name, len(steps), [s["renderThreadsBefore"] for s in steps], lifecycle.get("renderThreadsAtEnd", -1),
+        lifecycle.get("drawsAfterRestore", 0), lifecycle.get("presentedAfterRestore", 0))
+
+
+def ring_line(name, report):
+    """The frame ring's per-draw skin palettes (G4), or None for a report without them."""
+    ring = report["summary"].get("frameRing")
+    if not ring or not ring.get("skinPalettesPerDraw", {}).get("count"):
+        return None
+    return "[perf] %s: frame ring %g skin palettes and %g KiB per draw (p50), %d palette buffers created, %d draws with overflow" % (
+        name, ring["skinPalettesPerDraw"]["p50"], ring["paletteKiBPerDraw"]["p50"], ring.get("paletteBuffersCreated", 0),
+        ring.get("drawsWithOverflow", 0))
 
 
 def stray_input(report):
@@ -272,10 +344,12 @@ def stray_input(report):
 
 
 def summarize(directories):
-    print("| report | app/engine | presented FPS | hitches | draw ms p50/p95 | GPU ms p50/p95 | main busy ms/s | draw ms/s | model ms/s | other ms/s | model phases ms p50/p95 × rate | peak footprint MiB |")
-    print("|---|---|---:|---:|---|---|---:|---:|---:|---:|---|---:|")
+    print(HEADER)
+    print("|---|---|---|---|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|")
     warnings = []
     attributed = []
+    lifecycles = []
+    rings = []
     for directory in directories:
         for name, report in load(directory).items():
             if "summary" not in report:
@@ -284,7 +358,15 @@ def summarize(directories):
             print(row(label, report))
             if "viewBodies" in report["summary"] or "events" in report["summary"]:
                 attributed.append(attribution_row(label, report))
-            reason = uncomposited(report)
+            ring = ring_line(label, report)
+            if ring:
+                rings.append(ring)
+            if report.get("workload") == "viewport-lifecycle" and "lifecycle" in report.get("details", {}):
+                lifecycles.append(lifecycle_line(label, report))
+                problem = lifecycle_problem(report)
+                if problem:
+                    warnings.append("%s: %s" % (label, problem))
+            reason = None if report.get("workload") in PRESENTATION_EXEMPT else uncomposited(report)
             if reason:
                 warnings.append("%s: %s; the window was probably not on screen, rerun it" % (label, reason))
             stray = stray_input(report)
@@ -296,6 +378,8 @@ def summarize(directories):
         print("|---|---:|---|---|")
         for line in attributed:
             print(line)
+    for line in rings + lifecycles:
+        print(line)
     for warning in warnings:
         print("[perf] WARNING " + warning)
     return 0
@@ -478,6 +562,8 @@ def main(argv=None):
     runner.add_argument("--wrap", help="command each launch runs under, e.g. a machine-wide app lock script")
     runner.add_argument("--set", action="append", metavar="IKKOKU_PERF_X=VALUE", help="extra launch variable")
     runner.add_argument("--xctrace", metavar="TEMPLATE", help="record each launch with this xctrace template")
+    runner.add_argument("--main-load-ms", type=int, default=0, help="busy-wait this many ms on the main thread per load tick while recording")
+    runner.add_argument("--main-load-hz", type=int, default=30, help="load ticks per second (with --main-load-ms)")
     summary = sub.add_parser("summarize", help="print a table for report directories")
     summary.add_argument("directories", nargs="+")
     prof = sub.add_parser("profile", help="aggregate a Time Profiler trace over the recording window")

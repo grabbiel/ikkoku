@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**889 files indexed; 889 assigned; 0 unassigned.**
+**890 files indexed; 890 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 98 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 99 |
 | [Character / Maker / mods](character-and-mods.md) | 122 |
 | [Studio / IK / animation](studio.md) | 187 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 318 |
@@ -41,7 +41,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 203 |
+| Runtime / shared shader declaration | 204 |
 | Test / validation | 182 |
 
 ## App / gameplay / plugins
@@ -76,6 +76,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/ViewportRenderThread.swift](../../Apps/IkkokuCreator/ViewportRenderThread.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceRelocation.swift](../../Packages/Engine/Sources/Assets/ResourceRelocation.swift) | Runtime / shared shader declaration |

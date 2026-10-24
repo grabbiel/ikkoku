@@ -430,6 +430,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_WINDOW_H", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_INPUT_HZ", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_CHARACTERS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_MAIN_LOAD_MS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_MAIN_LOAD_HZ", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -535,12 +537,14 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_WINDOW_H", .integer(480...8192)),
         ValueRule("IKKOKU_PERF_INPUT_HZ", .integer(1...1000)),
         ValueRule("IKKOKU_PERF_CHARACTERS", .integer(1...32)),
+        ValueRule("IKKOKU_PERF_MAIN_LOAD_MS", .integer(0...1000)),
+        ValueRule("IKKOKU_PERF_MAIN_LOAD_HZ", .integer(1...240)),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
     public static let perfWorkloads: [String] = [
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
-        "studio-native", "startup",
+        "studio-native", "viewport-lifecycle", "startup",
     ]
 }
 

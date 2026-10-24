@@ -30,16 +30,19 @@ enum PerfSignpost {
 /// `docs/reference/performance.md`). Nil unless that variable is set, so the
 /// hooks below cost one optional check in a normal launch.
 ///
-/// It records, on the main thread:
-/// - every `CAMetalDisplayLink` callback: when it ran, the frame it targeted,
-///   how long `Renderer.draw` took (preparation + encoding + any wait for a
-///   frame slot) and the renderer's most recent GPU time
-///   (`gpuEndTime - gpuStartTime` of the last completed command buffer);
+/// It records:
+/// - every `CAMetalDisplayLink` callback, on the thread that runs it
+///   (`PerfDrawLog`): when it ran, the frame it targeted, how long
+///   `Renderer.draw` took (preparation + encoding + any wait for a frame
+///   slot), the renderer's most recent GPU time (`gpuEndTime - gpuStartTime`
+///   of the last completed command buffer) and whether it ran on the main
+///   thread;
 /// - when each drawable was actually presented (`addPresentedHandler`), which
 ///   yields presented-frame intervals and hitches;
-/// - each main run-loop busy period (after-waiting to before-waiting), so
-///   main-thread time not spent drawing or in the model is visible as "other"
-///   (SwiftUI updates, layout, AppKit event handling);
+/// - on the main thread, each main run-loop busy period (after-waiting to
+///   before-waiting), so main-thread time not spent drawing, in the model or
+///   in the optional synthetic load (`IKKOKU_PERF_MAIN_LOAD_MS`) is visible
+///   as "other" (SwiftUI updates, layout, AppKit event handling);
 /// - model work: Maker and Studio ticks and refreshes, the Studio's camera-only
 ///   frame rebuilds (explicit hooks in `MakerModel` and `StudioModel`) and
 ///   every input handler call;
@@ -54,6 +57,11 @@ final class PerfTrace {
     /// Phases with their own sample lists.
     enum Phase: String, CaseIterable {
         case draw, studioTick, studioRefresh, studioCameraRefresh, makerTick, makerRefresh, input
+        /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
+        case mainLoad
+
+        /// Model phases: ticks, refreshes and input calls (they nest).
+        var isModel: Bool { self != .draw && self != .mainLoad }
     }
 
     /// Model events counted per recording (no duration).
@@ -87,6 +95,12 @@ final class PerfTrace {
         let windowPoints: CGSize
         let inputHz: Double
         let nativeCharacters: Int
+        /// Busy-waits this long on the main thread `mainLoadHz` times per
+        /// second while recording (0: no load). It stands for main-thread work
+        /// such as a slow tick or layout pass, so a report can show whether
+        /// presentation still keeps pace when the main thread is busy.
+        let mainLoadMilliseconds: Double
+        let mainLoadHz: Double
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -99,7 +113,9 @@ final class PerfTrace {
                 warmupSeconds: Double(int("IKKOKU_PERF_WARMUP_SECONDS", 3)),
                 windowPoints: CGSize(width: int("IKKOKU_PERF_WINDOW_W", 1600), height: int("IKKOKU_PERF_WINDOW_H", 1000)),
                 inputHz: Double(int("IKKOKU_PERF_INPUT_HZ", 120)),
-                nativeCharacters: int("IKKOKU_PERF_CHARACTERS", 6))
+                nativeCharacters: int("IKKOKU_PERF_CHARACTERS", 6),
+                mainLoadMilliseconds: Double(int("IKKOKU_PERF_MAIN_LOAD_MS", 0)),
+                mainLoadHz: Double(int("IKKOKU_PERF_MAIN_LOAD_HZ", 30)))
         }
     }
 
@@ -115,14 +131,6 @@ final class PerfTrace {
     private var recordStart: CFTimeInterval = 0
     private var recordEnd: CFTimeInterval = 0
 
-    struct FrameSample {
-        var callback: CFTimeInterval
-        var targetPresentation: CFTimeInterval
-        var drawMilliseconds: Double
-        var gpuMilliseconds: Double
-        var presentLogIndex: Int
-    }
-    private(set) var frames: [FrameSample] = []
     private var intervals: [Phase: [(start: CFTimeInterval, end: CFTimeInterval)]] = [:]
     private var inputNames: [String: Int] = [:]
     private var eventCounts: [Event: Int] = [:]
@@ -137,10 +145,9 @@ final class PerfTrace {
     private var cpuAtEnd: (process: Double, main: Double) = (0, 0)
     private var occludedSamples = 0
     private var memorySamples = 0
-    private var firstDrawMarked = false
-    let presentLog = PresentLog()
+    /// Display-link draws, recorded by the thread that runs the callback.
+    nonisolated let drawLog = PerfDrawLog()
     var device: (any MTLDevice)?
-    var drawableSize: CGSize = .zero
     /// Free-form facts the workload driver adds (inputs, selections, hashes).
     var details: [String: Any] = [:]
 
@@ -168,8 +175,11 @@ final class PerfTrace {
         active?.mark(name)
     }
     private func mark(_ name: String) {
-        let wall = originWall + (CACurrentMediaTime() - originMedia)
-        marks.append((name, wall - processStartWall))
+        marks.append((name, secondsSinceProcessStart(media: CACurrentMediaTime())))
+    }
+
+    private func secondsSinceProcessStart(media: CFTimeInterval) -> Double {
+        originWall + (media - originMedia) - processStartWall
     }
 
     /// Times one startup step as a mark pair and a signpost interval.
@@ -228,21 +238,11 @@ final class PerfTrace {
         trace.bodyCounts[view.rawValue] += 1
     }
 
-    /// Called by `ViewportNSView` around `Renderer.draw`.
-    func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
-                 gpuSeconds: Double, presentIndex: Int, drawable: CGSize) {
-        if !firstDrawMarked { firstDrawMarked = true; mark("firstDraw") }
-        drawableSize = drawable
-        guard recording else { return }
-        frames.append(FrameSample(callback: callback, targetPresentation: targetPresentation,
-                                  drawMilliseconds: (end - callback) * 1000, gpuMilliseconds: gpuSeconds * 1000,
-                                  presentLogIndex: presentIndex))
-    }
-
     // MARK: Recording window
 
     func beginRecording() {
-        frames = []; intervals = [:]; inputNames = [:]; busy = []
+        drawLog.setRecording(true)
+        intervals = [:]; inputNames = [:]; busy = []
         eventCounts = [:]; bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
         peakFootprint = PerfTrace.footprint(); peakMetal = device?.currentAllocatedSize ?? 0
         cpuAtStart = PerfTrace.cpuSeconds()
@@ -260,6 +260,7 @@ final class PerfTrace {
     func endRecording() {
         guard recording else { return }
         recording = false
+        drawLog.setRecording(false)
         recordEnd = CACurrentMediaTime()
         cpuAtEnd = PerfTrace.cpuSeconds()
         sampleMemory()
@@ -308,7 +309,9 @@ final class PerfTrace {
         let screen = NSApp.windows.first(where: { $0.isVisible })?.screen ?? NSScreen.main
         let refreshHz = Double(screen?.maximumFramesPerSecond ?? 60)
         let period = 1 / refreshHz
-        let presented = presentLog.snapshot()
+        let drawn = drawLog.snapshot()
+        let frames = drawn.samples
+        let presented = drawLog.presentLog.snapshot()
         var presentedTimes: [Double] = []
         var dropped = 0
         for frame in frames {
@@ -331,11 +334,16 @@ final class PerfTrace {
         let draw = frames.map(\.drawMilliseconds)
         let gpu = frames.map(\.gpuMilliseconds).filter { $0 > 0 }
         let busyTotal = busy.reduce(0) { $0 + ($1.end - $1.start) } * 1000
-        let drawTotal = draw.reduce(0, +)
+        // Only callbacks that ran on the main thread take main run-loop time;
+        // a render thread's draws are reported on their own.
+        let mainDrawTotal = frames.filter(\.onMainThread).reduce(0) { $0 + $1.drawMilliseconds }
+        let renderDraws = frames.filter { !$0.onMainThread }
+        let renderDrawTotal = renderDraws.reduce(0) { $0 + $1.drawMilliseconds }
         // Model time: the union of every model phase (ticks, refreshes and
         // input calls nest), so nothing counts twice.
-        let modelTotal = PerfTrace.unionSeconds(Phase.allCases.filter { $0 != .draw }.flatMap { intervals[$0] ?? [] }) * 1000
-        let other = max(0, busyTotal - drawTotal - modelTotal)
+        let modelTotal = PerfTrace.unionSeconds(Phase.allCases.filter(\.isModel).flatMap { intervals[$0] ?? [] }) * 1000
+        let loadTotal = durations(.mainLoad).reduce(0, +)
+        let other = max(0, busyTotal - mainDrawTotal - modelTotal - loadTotal)
 
         var phases: [String: Any] = [:]
         for phase in Phase.allCases {
@@ -365,10 +373,26 @@ final class PerfTrace {
             "mainThread": [
                 "busyRatio": busyTotal / 1000 / window,
                 "busyMsPerSecond": busyTotal / window,
-                "drawMsPerSecond": drawTotal / window,
+                "drawMsPerSecond": mainDrawTotal / window,
                 "modelMsPerSecond": modelTotal / window,
+                "loadMsPerSecond": loadTotal / window,
                 "otherMsPerSecond": other / window,
                 "cpuRatio": (cpuAtEnd.main - cpuAtStart.main) / window,
+            ] as [String: Any],
+            // Display-link callbacks that ran off the main thread (the
+            // viewport's render thread): their draw time per second.
+            "renderThread": [
+                "callbacks": renderDraws.count,
+                "drawMsPerSecond": renderDrawTotal / window,
+            ] as [String: Any],
+            "drawThread": renderDraws.isEmpty ? "main" : (renderDraws.count == frames.count ? "render" : "mixed"),
+            // Per-draw frame-ring use (G4): skin palettes written, and the
+            // buffers created while recording (none once the ring is warm).
+            "frameRing": [
+                "skinPalettesPerDraw": PerfTrace.statistics(frames.map { Double($0.skinPalettes) }),
+                "paletteKiBPerDraw": PerfTrace.statistics(frames.map { Double($0.ring.paletteBytes) / 1024 }),
+                "paletteBuffersCreated": frames.reduce(0) { $0 + $1.ring.paletteBuffersCreated },
+                "drawsWithOverflow": frames.filter { $0.ring.overflowBuffers > 0 }.count,
             ] as [String: Any],
             "processCPUCores": (cpuAtEnd.process - cpuAtStart.process) / window,
             "inputCalls": inputNames,
@@ -393,9 +417,10 @@ final class PerfTrace {
         let frameRows = frames.map { frame -> [Double] in
             let presentedAt = frame.presentLogIndex < presented.count ? presented[frame.presentLogIndex] : 0
             return [PerfTrace.round(frame.callback - recordStart), PerfTrace.round(frame.drawMilliseconds),
-                    PerfTrace.round(frame.gpuMilliseconds), presentedAt > 0 ? PerfTrace.round(presentedAt - recordStart) : -1]
+                    PerfTrace.round(frame.gpuMilliseconds), presentedAt > 0 ? PerfTrace.round(presentedAt - recordStart) : -1,
+                    frame.onMainThread ? 1 : 0]
         }
-        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds"], "rows": frameRows]]
+        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread"], "rows": frameRows]]
         for phase in Phase.allCases where phase != .draw {
             guard let list = intervals[phase], !list.isEmpty else { continue }
             samples[phase.rawValue] = list.map { [PerfTrace.round($0.start - recordStart), PerfTrace.round(($0.end - $0.start) * 1000)] }
@@ -403,12 +428,15 @@ final class PerfTrace {
         samples["mainBusy"] = busy.map { [PerfTrace.round($0.start - recordStart), PerfTrace.round(($0.end - $0.start) * 1000)] }
 
         let window0 = NSApp.windows.first(where: { $0.isVisible })
+        var startup = marks
+        if let first = drawn.firstDraw { startup.append(("firstDraw", secondsSinceProcessStart(media: first))) }
         return [
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "workload": configuration.workload,
             "configuration": [
                 "seconds": configuration.seconds, "warmupSeconds": configuration.warmupSeconds,
                 "inputHz": configuration.inputHz, "nativeCharacters": configuration.nativeCharacters,
+                "mainLoadMs": configuration.mainLoadMilliseconds, "mainLoadHz": configuration.mainLoadHz,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
@@ -417,9 +445,9 @@ final class PerfTrace {
                 "backingScaleFactor": screen?.backingScaleFactor ?? 0,
                 "screenPoints": [screen?.frame.width ?? 0, screen?.frame.height ?? 0],
                 "windowContentPoints": [window0?.contentLayoutRect.width ?? 0, window0?.contentLayoutRect.height ?? 0],
-                "drawablePixels": [drawableSize.width, drawableSize.height],
+                "drawablePixels": [drawn.drawable.width, drawn.drawable.height],
             ] as [String: Any],
-            "startupSeconds": Dictionary(marks.map { ($0.name, PerfTrace.round($0.seconds)) }, uniquingKeysWith: { first, _ in first }),
+            "startupSeconds": Dictionary(startup.map { ($0.name, PerfTrace.round($0.seconds)) }, uniquingKeysWith: { first, _ in first }),
             "details": details,
             "summary": summary,
             "samples": samples,
@@ -497,6 +525,23 @@ final class PerfTrace {
         return Double(start.tv_sec) + Double(start.tv_usec) / 1_000_000
     }
 
+    /// Names of the process's threads (`pthread_setname_np`; unnamed threads
+    /// give ""). The viewport lifecycle workload counts render threads with it.
+    static func threadNames() -> [String] {
+        let pid = getpid()
+        var handles = [UInt64](repeating: 0, count: 1024)
+        let bytes = handles.withUnsafeMutableBytes { proc_pidinfo(pid, PROC_PIDLISTTHREADS, 0, $0.baseAddress, Int32($0.count)) }
+        guard bytes > 0 else { return [] }
+        return handles.prefix(Int(bytes) / MemoryLayout<UInt64>.stride).compactMap { handle -> String? in
+            var info = proc_threadinfo()
+            let size = Int32(MemoryLayout<proc_threadinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTHREADINFO, handle, &info, size) == size else { return nil }
+            return withUnsafeBytes(of: info.pth_name) { raw in
+                String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
+            }
+        }
+    }
+
     /// `phys_footprint`: the number Activity Monitor and jetsam use.
     static func footprint() -> UInt64 {
         var info = task_vm_info_data_t()
@@ -535,7 +580,9 @@ final class PerfTrace {
 /// Presentation times reported by `CAMetalDrawable.addPresentedHandler`, which
 /// runs on a Metal thread. Index = order of `register()` calls; 0 = not
 /// presented (dropped) or not reported yet.
-final class PresentLog: @unchecked Sendable {
+///
+/// Sendable invariant: `times` is only read or written while `lock` is held.
+nonisolated final class PresentLog: @unchecked Sendable {
     private let lock = NSLock()
     private var times: [Double] = []
 
@@ -554,5 +601,104 @@ final class PresentLog: @unchecked Sendable {
     func snapshot() -> [Double] {
         lock.lock(); defer { lock.unlock() }
         return times
+    }
+}
+
+/// The display-link draws of one run, recorded by whichever thread runs the
+/// callback: the viewport's render thread, or the main thread in builds
+/// before R7 phase 2, item 2. All of its state sits behind its own lock, so
+/// it is Sendable without an unchecked conformance.
+nonisolated final class PerfDrawLog: Sendable {
+    struct Sample: Sendable {
+        var callback: CFTimeInterval
+        var end: CFTimeInterval
+        var targetPresentation: CFTimeInterval
+        var gpuMilliseconds: Double
+        var presentLogIndex: Int
+        var onMainThread: Bool
+        /// The frame ring's counters for this draw (`lastFrameStatistics`,
+        /// read right after it; a pick or capture in between replaces them).
+        var ring = FrameRing.Statistics()
+        var skinPalettes = 0
+        /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
+        var drawMilliseconds: Double { (end - callback) * 1000 }
+    }
+
+    struct Snapshot: Sendable {
+        /// Draws made while recording.
+        var samples: [Sample] = []
+        /// Media time of the end of the first draw of the process.
+        var firstDraw: CFTimeInterval?
+        /// The most recent drawable's size in pixels.
+        var drawable: CGSize = .zero
+    }
+
+    private struct State: Sendable {
+        var recording = false
+        var snapshot = Snapshot()
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    let presentLog = PresentLog()
+
+    /// Records one callback around `Renderer.draw`. Returns true for the
+    /// process's first draw, which the caller marks.
+    @discardableResult
+    func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
+                 gpuSeconds: Double, presentIndex: Int, drawable: CGSize, statistics: RenderFrameStatistics) -> Bool {
+        let sample = Sample(callback: callback, end: end, targetPresentation: targetPresentation,
+                            gpuMilliseconds: gpuSeconds * 1000, presentLogIndex: presentIndex,
+                            onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
+                            skinPalettes: statistics.skinPalettes)
+        return state.withLock { state in
+            let first = state.snapshot.firstDraw == nil
+            if first { state.snapshot.firstDraw = end }
+            state.snapshot.drawable = drawable
+            if state.recording { state.snapshot.samples.append(sample) }
+            return first
+        }
+    }
+
+    /// Starts (clearing earlier samples) or stops keeping samples.
+    func setRecording(_ on: Bool) {
+        state.withLock { state in
+            if on { state.snapshot.samples = [] }
+            state.recording = on
+        }
+    }
+
+    func snapshot() -> Snapshot { state.withLock { $0.snapshot } }
+}
+
+/// One display-link frame: `Renderer.draw` for the update's drawable inside a
+/// `Draw` signpost and, while a performance trace runs, its sample. Runs on
+/// the thread that runs the display link.
+nonisolated enum ViewportFrame {
+    /// Name of the thread that runs a viewport's display link
+    /// (`pthread_setname_np`); the `viewport-lifecycle` workload counts them.
+    static let renderThreadName = "com.grabbiel.Ikkoku.viewport-render"
+
+    static func draw(_ update: CAMetalDisplayLink.Update, renderer: Renderer, log: PerfDrawLog?) {
+        let drawable = update.drawable
+        var presentIndex = -1
+        if let log {
+            let presents = log.presentLog
+            let index = presents.register()
+            presentIndex = index
+            drawable.addPresentedHandler { shown in presents.presented(index, at: shown.presentedTime) }
+        }
+        let start = CACurrentMediaTime()
+        PerfSignpost.interval("Draw") {
+            renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp)
+        }
+        guard let log else { return }
+        let end = CACurrentMediaTime()
+        let texture = drawable.texture
+        if log.didDraw(callback: start, end: end, targetPresentation: update.targetPresentationTimestamp,
+                       gpuSeconds: renderer.lastFrameGPUTime, presentIndex: presentIndex,
+                       drawable: CGSize(width: texture.width, height: texture.height),
+                       statistics: renderer.lastFrameStatistics) {
+            PerfSignpost.signposter.emitEvent("Mark", "firstDraw")
+        }
     }
 }

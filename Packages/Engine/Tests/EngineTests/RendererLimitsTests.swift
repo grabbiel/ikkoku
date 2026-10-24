@@ -13,7 +13,8 @@ import GPU
 // R6: renderer limits and resource lifetime are recoverable and observable.
 
 /// Completed handlers can run after `waitUntilCompleted` returns; poll briefly.
-private func eventually(_ condition: () -> Bool) -> Bool {
+/// Shared with `CharacterLifetimeTests`.
+func eventually(_ condition: () -> Bool) -> Bool {
     let deadline = Date().addingTimeInterval(5)
     while !condition() {
         if Date() > deadline { return false }
@@ -190,6 +191,137 @@ func frameRingRecyclesOverflowBuffersOnlyAfterCompletion() throws {
     }
     // One overflow buffer serves every frame once its command buffer has completed.
     #expect(ring.overflowBuffersCreated == 1)
+}
+
+/// A palette of `count` distinct matrices.
+private func testPalette(_ count: Int, _ seed: Float) -> [float4x4] {
+    (0..<count).map { float4x4(diagonal: SIMD4<Float>(repeating: seed + Float($0))) }
+}
+
+private func readPalette(_ allocation: FrameAllocation, _ count: Int) -> [float4x4] {
+    Array(UnsafeBufferPointer(start: allocation.buffer.contents().advanced(by: allocation.offset)
+        .assumingMemoryBound(to: float4x4.self), count: count))
+}
+
+/// G4 (R7 phase 2): skin palettes go to one growable buffer per ring region.
+/// It grows by doubling, earlier allocations keep their bytes, it follows the
+/// region's in-flight rule, and once the largest frame has been seen, frames
+/// allocate no buffer.
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func frameRingPalettesGrowByDoublingAndStopAllocatingOnceWarm() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let queue = try #require(device.makeCommandQueue())
+    let ring = try #require(FrameRing(device: device, regionSize: 1024, regionCount: 2))
+    #expect(throws: FrameRingError.noOpenFrame) { _ = try ring.allocatePalettes([testPalette(1, 0)]) }
+
+    // Three palettes share one new minimum-size buffer, 256-byte aligned, in order.
+    ring.beginFrame(0)
+    let sets = [testPalette(100, 1), testPalette(3, 1000), testPalette(57, 2000)]
+    let first = try ring.allocatePalettes(sets)
+    let firstID = ObjectIdentifier(first[0].buffer)
+    let oneBuffer = first.allSatisfy { ObjectIdentifier($0.buffer) == firstID }
+    #expect(oneBuffer)
+    #expect(first[0].buffer.length == FrameRing.minimumPaletteCapacity)
+    #expect(first.map(\.offset) == [0, 6400, 6656])
+    for (allocation, set) in zip(first, sets) { #expect(readPalette(allocation, set.count) == set) }
+    #expect(ring.frameStatistics.paletteBytes == 6400 + 256 + 3840)
+    #expect(ring.frameStatistics.paletteBuffersCreated == 1)
+    #expect(ring.frameStatistics.regionBytes == 0)   // the uniform region is untouched
+
+    // A later call that does not fit doubles the buffer. The first call's
+    // palettes keep the buffer they were written to, with their bytes.
+    let big = testPalette(1500, 5000)   // 96,000 bytes
+    let grown = try ring.allocatePalettes([big])
+    #expect(grown[0].buffer.length == 2 * FrameRing.minimumPaletteCapacity)
+    #expect(grown[0].offset == 0)
+    #expect(ObjectIdentifier(grown[0].buffer) != firstID)
+    #expect(readPalette(grown[0], big.count) == big)
+    for (allocation, set) in zip(first, sets) { #expect(readPalette(allocation, set.count) == set) }
+    #expect(ring.frameStatistics.paletteBuffersCreated == 2)
+    let pendingFirst = try #require(queue.makeCommandBuffer())
+    ring.endFrame(retainedUntilCompletionOf: pendingFirst)
+
+    // While region 0's command buffer is pending, the next frame takes region 1
+    // and its own palette buffer; region 0's palettes are not rewritten.
+    ring.beginFrame(2)
+    #expect(ring.frameStatistics.region == 1)
+    let other = try ring.allocatePalettes([testPalette(1500, 9000)])
+    #expect(ObjectIdentifier(other[0].buffer) != ObjectIdentifier(grown[0].buffer))
+    #expect(readPalette(grown[0], big.count) == big)
+    let pendingSecond = try #require(queue.makeCommandBuffer())
+    ring.endFrame(retainedUntilCompletionOf: pendingSecond)
+
+    // With every region in flight, palettes go to overflow storage like any
+    // other allocation, and no palette buffer is written.
+    ring.beginFrame(4)
+    let overflowOnly = ring.frameStatistics.region == nil
+    #expect(overflowOnly)
+    let spilled = try ring.allocatePalettes([testPalette(2, 7), testPalette(1, 8)])
+    let spilledApart = spilled.allSatisfy {
+        ObjectIdentifier($0.buffer) != ObjectIdentifier(grown[0].buffer) && ObjectIdentifier($0.buffer) != ObjectIdentifier(other[0].buffer)
+    }
+    #expect(spilledApart)
+    #expect(readPalette(spilled[0], 2) == testPalette(2, 7))
+    #expect(readPalette(spilled[1], 1) == testPalette(1, 8))
+    #expect(ring.frameStatistics.paletteBytes == 0)
+    #expect(ring.frameStatistics.overflowBuffers == 1)
+    ring.abandonFrame()
+    pendingFirst.commit(); pendingSecond.commit()
+    pendingFirst.waitUntilCompleted(); pendingSecond.waitUntilCompleted()
+    let retired = eventually { !ring.isRegionInFlight(0) && !ring.isRegionInFlight(1) }
+    #expect(retired)
+
+    // Steady state: same-size frames alternate regions and create no buffer.
+    let created = ring.paletteBuffersCreated
+    #expect(created == 3)
+    for frame in 0..<12 {
+        ring.beginFrame(frame)
+        let current = testPalette(1500, Float(frame))
+        let allocations = try ring.allocatePalettes([current, testPalette(100, 1)])
+        #expect(ring.frameStatistics.paletteBuffersCreated == 0)
+        #expect(readPalette(allocations[0], current.count) == current)
+        let command = try #require(queue.makeCommandBuffer())
+        ring.endFrame(retainedUntilCompletionOf: command)
+        command.commit()
+        command.waitUntilCompleted()
+        let completed = eventually { !ring.isRegionInFlight(0) && !ring.isRegionInFlight(1) }
+        #expect(completed)
+    }
+    #expect(ring.paletteBuffersCreated == created)
+
+    // One frame far larger than the buffer doubles it as often as needed.
+    ring.beginFrame(0)
+    let huge = testPalette(10_000, 3)   // 640,000 bytes: 128 KiB → 1 MiB
+    let hugeAllocation = try ring.allocatePalettes([huge])
+    #expect(hugeAllocation[0].buffer.length == 16 * FrameRing.minimumPaletteCapacity)
+    #expect(readPalette(hugeAllocation[0], huge.count) == huge)
+    #expect(ring.frameStatistics.paletteBuffersCreated == 1)
+    ring.abandonFrame()
+}
+
+/// The vectorized finiteness check of skin matrices accepts and rejects
+/// exactly what the former per-element `isFinite` check did.
+@Test func skinMatrixFinitenessMatchesThePerElementCheck() {
+    func reference(_ matrices: [float4x4]) -> Bool {
+        matrices.allSatisfy { m in (0..<4).allSatisfy { c in (0..<4).allSatisfy { r in m[c][r].isFinite } } }
+    }
+    let nonfinite: [Float] = [.nan, -.nan, .signalingNaN, .infinity, -.infinity]
+    let finite: [Float] = [0, -0.0, 1, -1, .greatestFiniteMagnitude, -.greatestFiniteMagnitude,
+                           .leastNonzeroMagnitude, -.leastNormalMagnitude]
+    var cases: [[float4x4]] = [[], [matrix_identity_float4x4]]
+    for value in nonfinite + finite {
+        for element in 0..<16 {
+            var m = float4x4(diagonal: SIMD4<Float>(2, 3, 4, 5))
+            m[element / 4][element % 4] = value
+            cases.append([matrix_identity_float4x4, m])
+        }
+    }
+    var rejected = 0
+    for matrices in cases {
+        #expect(Renderer.allFinite(matrices) == reference(matrices))
+        if !reference(matrices) { rejected += 1 }
+    }
+    #expect(rejected == nonfinite.count * 16)
 }
 
 @Test func lightPackingKeepsTheFirstEightEnabledLightsAndCountsTheRest() {
