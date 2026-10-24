@@ -376,6 +376,74 @@ the document fields and the rule tables.
 - CharaStudio reload of a changed export, mouse-driven use of the new
   controls, and original-player appearance parity.
 
+The [third slice](#half-state-meshes-and-indoor-shoes-st-c03-third-slice)
+closes the half-state meshes and the indoor shoes.
+
+## Half-state meshes and indoor shoes (ST-C03 third slice)
+
+Reviewed 2026-10-24. Before this slice, a visible half state of a top,
+bottom, bra, shorts or pantyhose drew the dressed meshes and the dressed body
+mask with a fallback diagnostic, and with `shoesType` 0 the outdoor shoes
+stood in for the indoor ones.
+
+**Recovered rules.** Sources: the private decompiled `ChaControl`
+(`ChaControl.Koikatu.cs`), `ChaReference`, `Studio.OCIChar` and the managed
+recovery of `Studio.MPCharCtrl` under `.local/reverse`; none of it is
+committed.
+
+- **Switch nodes.** `ChaReference.CreateReferenceInfo` looks up, inside each
+  loaded garment, the GameObjects `ChaControl.UpdateVisible` switches:
+  top `S_CTOP_T_DEF`/`_NUGE` = `n_top_a`/`n_top_b` and `S_CTOP_B_DEF`/`_NUGE` =
+  `n_bot_a`/`n_bot_b`; bottom `S_CBOT_B_DEF`/`_NUGE` = `n_bot_a`/`n_bot_b` and
+  `S_CBOT_T_DEF`/`_NUGE` = `n_top_a`/`n_top_b`; bra `S_UWT_T_DEF`/`_NUGE` =
+  `n_top_a`/`n_top_b` and `S_UWT_B_DEF`/`_NUGE` = `n_bot_a`/`n_bot_b`; shorts
+  `S_UWB_B_DEF`/`_NUGE`/`_NUGE2` = `n_bot_a`/`n_bot_b`/`n_bot_c`; pantyhose
+  `S_PANST_DEF`/`_NUGE` = `n_panst_a`/`n_panst_b`. The shorts' `S_UWB_T_*`
+  nodes are mapped but never switched.
+- **Mesh selection.** `UpdateVisible` calls `YS_Assist.SetActiveControl` on
+  each node with these conditions. A renderer draws only while its garment
+  object (`objClothes[kind]`) and every switch node above it are active.
+
+  | Garment | Node | Active while |
+  | --- | --- | --- |
+  | top (0) | `n_top_a` | top on |
+  | top (0) | `n_top_b` | top half |
+  | top (0) | `n_bot_a` | bottom on and top not off |
+  | top (0) | `n_bot_b` | bottom not on and top not off |
+  | bottom (1) | `n_bot_a` | bottom on |
+  | bottom (1) | `n_bot_b` | bottom half |
+  | bottom (1) | `n_top_a` | top on and bottom not half 2 |
+  | bottom (1) | `n_top_b` | top not on and bottom not half 2 |
+  | bra (2) | `n_top_a` / `n_top_b` | bra on / bra half |
+  | bra (2) | `n_bot_a` / `n_bot_b` | shorts on / shorts not on, and bra not off |
+  | shorts (3) | `n_bot_a` / `n_bot_b` / `n_bot_c` | shorts on / half / half 2 |
+  | pantyhose (5) | `n_panst_a` / `n_panst_b` | pantyhose on / half |
+
+  So half state 1 swaps the `_a` meshes for the `_b` meshes. Half 2 is
+  allowed only for `StateType` 2; no top, bottom or bra row of the installed
+  vanilla catalog has it, while most shorts do. Half 2 leaves neither `_a` nor
+  `_b` active for a top, bottom or bra, and selects `n_bot_c` for the shorts.
+  The pantyhose object itself hides at half 2 and off.
+- **Body mask.** `ChaControl.ChangeAlphaMask(a, b)` writes `_alpha_a` and
+  `_alpha_b` to the body material (`customMatBody`) and to the bra
+  (`rendBra`) and top-part inner (`rendInner`) materials. `UpdateVisible`
+  calls it with row `top state` of `{ {1,1}, {0,1}, {0,1}, {0,0} }` whenever a
+  top switch node changed activity, or when `updateAlphaMask` is set after
+  `ChangeClothesTop`. Half and half 2 therefore keep only the `_alpha_b`
+  channel of the top's `OverBodyMask`.
+- **Shoes.** `ChangeClothes(kind 7)` calls `ChangeClothesShoesAsync(0, id)`,
+  which loads `ct_shoes_inner` into `objClothes[7]`; kind 8 calls
+  `ChangeClothesShoesAsync(1, id)`, which loads `ct_shoes_outer` into
+  `objClothes[8]`. Both read catalog category 112 (504 for a male with
+  `exType` 1) by their own slot's saved ID, and each slot keeps its own
+  `ChaFileClothes.parts[7/8]` colors. `UpdateVisible` activates
+  `objClothes[7]` only while `shoesType` is 0 and kind 7 is on, and
+  `objClothes[8]` only while `shoesType` is 1 and kind 8 is on. There is no
+  `ChangeShoesType`. CharaStudio's `MPCharCtrl.StateInfo.OnClickShoesType`
+  calls `OCIChar.SetShoesType(type)`, which only writes
+  `fileStatus.shoesType`, then refreshes the clothing-detail rows.
+  `ChaControl.IsShoesStateKind` reads kind 7 or 8 by `shoesType`.
+
 ## Source face-state editing (ST-C04)
 
 The source Face tab now exposes an Expression section. Its controls, Reset to
