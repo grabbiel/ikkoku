@@ -1,11 +1,46 @@
 import Foundation
 import Metal
 import CoreMath
+import Scene
 
 /// The same recovered albedo equations have CPU and MSL implementations. The
 /// Recipes explicitly select the measured source material color conversion.
 /// Original texture filtering and full lighting remain separate contracts.
 public enum SourceAppearanceCompositionBackend: Sendable { case cpu, metal }
+
+/// Logical retained input pixel bytes for one Metal applying batch. This is not
+/// Metal heap size or process RSS; each real upload and each first-time fallback
+/// texel counts separately even when source pixels are reused.
+enum SourceMaterialMetalInputBudget {
+    static let defaultMaximumBytes = 128 * 1024 * 1024
+
+    static func validateMaximumBytes(_ value: Int) throws {
+        guard (0...defaultMaximumBytes).contains(value) else {
+            throw RigError.invalid("Invalid Metal appearance input byte limit.")
+        }
+    }
+
+    static func logicalBytes(width: Int, height: Int) throws -> Int {
+        let pixels = width.multipliedReportingOverflow(by: height)
+        guard (1...4096).contains(width), (1...4096).contains(height),
+              !pixels.overflow, pixels.partialValue <= 4_194_304 else {
+            throw RigError.invalid("Invalid bounded appearance texture.")
+        }
+        let bytes = pixels.partialValue.multipliedReportingOverflow(by: 4)
+        guard !bytes.overflow, bytes.partialValue > 0 else {
+            throw RigError.invalid("Invalid bounded appearance texture.")
+        }
+        return bytes.partialValue
+    }
+
+    static func accumulate(_ total: inout Int, adding bytes: Int, maximum: Int) throws {
+        let next = total.addingReportingOverflow(bytes)
+        guard bytes >= 0, total >= 0, !next.overflow, next.partialValue <= maximum else {
+            throw RigError.invalid("Composed appearance Metal inputs exceed \(maximum) bytes.")
+        }
+        total = next.partialValue
+    }
+}
 
 struct SourceMaterialImage {
     let width: Int, height: Int, repeating: Bool, bytes: [UInt8]
@@ -33,94 +68,22 @@ final class SourceMaterialCompositor {
         self.pipeline = try device.makeComputePipelineState(function: function); self.queue = queue
     }
 
-    func compose(kind: SourceColorComposition.Kind, width: Int, height: Int,
-                 main: SourceMaterialImage?, mask: SourceMaterialImage?, colors: [Float4], blend: Float, encodeSRGB: Bool,
-                 patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer],
-                 timings: SourceAppearanceTimings? = nil) throws -> any MTLTexture {
-        var phase: SourceAppearanceTimings.CompositionPhase = .allocationUpload
-        var phaseStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
-        func advance(to next: SourceAppearanceTimings.CompositionPhase) {
-            guard let timings, let start = phaseStart else { return }
-            let now = ProcessInfo.processInfo.systemUptime
-            timings.recordComposition(phase, milliseconds: (now - start) * 1000)
-            phase = next; phaseStart = now
-        }
-        defer {
-            if let start = phaseStart {
-                timings?.recordComposition(phase, milliseconds: (ProcessInfo.processInfo.systemUptime - start) * 1000)
-            }
-        }
-        let kinds: [SourceColorComposition.Kind] = [.head, .eye, .eyeWhite, .clothes, .hair]
-        var parameters = [Float4](repeating: .zero, count: 1 + 3 + 3 * 2 + 8 * 4)
-        parameters[0] = Float4(Float(kinds.firstIndex(of: kind)!), Float(layers.count), blend, encodeSRGB ? 1 : 0)
-        for (index, color) in colors.enumerated() { parameters[1 + index] = color }
-        var inputImages = [SourceMaterialImage?](repeating: nil, count: 21)
-        inputImages[0] = main; inputImages[1] = mask
-        for pattern in patterns {
-            inputImages[2 + pattern.channel] = pattern.image
-            parameters[4 + pattern.channel * 2] = pattern.color
-            parameters[5 + pattern.channel * 2] = Float4(pattern.tiling.x, pattern.tiling.y, pattern.image.repeating ? 1 : 0, 1)
-        }
-        for (index, layer) in layers.enumerated() {
-            inputImages[5 + index] = layer.image; inputImages[13 + index] = layer.mask
-            let start = 10 + index * 4
-            parameters[start] = layer.color
-            parameters[start + 1] = Float4(layer.image.repeating ? 1 : 0, layer.mask == nil ? 0 : 1,
-                                           layer.layout == nil ? 0 : layer.kind == "mole" ? 2 : 1,
-                                           layer.transform == nil ? 0 : 1)
-            parameters[start + 2] = layer.layout ?? .zero
-            parameters[start + 3] = layer.transform.map(Float4.init) ?? .zero
-        }
-        // Missing main is white; all other absent inputs are zero. Kernels branch
-        // on metadata before sampling inactive pattern/layer slots.
-        var inputs: [any MTLTexture] = []
-        for (index, optional) in inputImages.enumerated() {
-            guard let image = optional else {
-                inputs.append(try fallbackTexture(white: index == 0, timings: timings))
-                timings?.recordFallbackBinding()
-                continue
-            }
-            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
-                width: image.width, height: image.height, mipmapped: false)
-            descriptor.storageMode = .shared; descriptor.usage = .shaderRead
-            guard let texture = device.makeTexture(descriptor: descriptor) else { throw SourceCharacterCardError.invalid("Unable to allocate source material input.") }
-            timings?.recordInputAllocation(fallback: false)
-            image.bytes.withUnsafeBytes { texture.replace(region: MTLRegionMake2D(0,0,image.width,image.height), mipmapLevel: 0,
-                withBytes: $0.baseAddress!, bytesPerRow: image.width * 4) }
-            inputs.append(texture)
-        }
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false)
-        descriptor.storageMode = .shared; descriptor.usage = [.shaderWrite, .shaderRead, .pixelFormatView]
-        guard let output = device.makeTexture(descriptor: descriptor), let buffer = queue.makeCommandBuffer(), let encoder = buffer.makeComputeCommandEncoder() else {
-            throw SourceCharacterCardError.invalid("Unable to allocate source material output.")
-        }
-        advance(to: .encodeSubmit)
-        encoder.setComputePipelineState(pipeline)
-        parameters.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
-        for (index, texture) in inputs.enumerated() { encoder.setTexture(texture, index: index) }
-        encoder.setTexture(output, index: 21)
-        let groupWidth = pipeline.threadExecutionWidth
-        encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1), threadsPerThreadgroup: MTLSize(width: groupWidth,
-            height: max(1, min(8, pipeline.maxTotalThreadsPerThreadgroup / groupWidth)), depth: 1))
-        encoder.endEncoding(); buffer.commit()
-        advance(to: .waitAndView)
-        buffer.waitUntilCompleted()
-        guard buffer.status == .completed, let display = output.makeTextureView(pixelFormat: .rgba8Unorm_srgb) else {
-            throw SourceCharacterCardError.invalid("Source material Metal dispatch failed: \(buffer.error?.localizedDescription ?? "texture view unavailable").")
-        }
-        return display
+    func makeBatch(maximumLogicalInputBytes: Int, timings: SourceAppearanceTimings?) throws -> SourceMaterialMetalBatch {
+        try SourceMaterialMetalBatch(compositor: self, maximumLogicalInputBytes: maximumLogicalInputBytes, timings: timings)
     }
 
-    private func fallbackTexture(white: Bool, timings: SourceAppearanceTimings?) throws -> any MTLTexture {
+    fileprivate func fallbackTextureForBatch(white: Bool, logicalInputBytes: inout Int,
+                                            maximum: Int, timings: SourceAppearanceTimings?) throws -> any MTLTexture {
         if let texture = white ? fallbackWhite : fallbackZero { return texture }
+        try SourceMaterialMetalInputBudget.accumulate(&logicalInputBytes, adding: 4, maximum: maximum)
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
         descriptor.storageMode = .shared; descriptor.usage = .shaderRead
         guard let texture = device.makeTexture(descriptor: descriptor) else {
             throw SourceCharacterCardError.invalid("Unable to allocate source material input.")
         }
         timings?.recordInputAllocation(fallback: true)
-        let bytes: [UInt8] = white ? [255,255,255,255] : [0,0,0,0]
-        bytes.withUnsafeBytes { texture.replace(region: MTLRegionMake2D(0,0,1,1), mipmapLevel: 0,
+        let bytes: [UInt8] = white ? [255, 255, 255, 255] : [0, 0, 0, 0]
+        bytes.withUnsafeBytes { texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0,
             withBytes: $0.baseAddress!, bytesPerRow: 4) }
         if white { fallbackWhite = texture } else { fallbackZero = texture }
         return texture
@@ -190,4 +153,134 @@ final class SourceMaterialCompositor {
         output.write(clamp(result,0.0f,1.0f),gid);
     }
     """#
+}
+
+final class SourceMaterialMetalBatch {
+    private let compositor: SourceMaterialCompositor
+    private let maximumLogicalInputBytes: Int
+    private let timings: SourceAppearanceTimings?
+    private var logicalInputBytes = 0
+
+    private struct PreparedRecipe {
+        let parameters: [Float4]
+        let inputs: [any MTLTexture]
+        let output: any MTLTexture
+        let width: Int
+        let height: Int
+    }
+    private var prepared: [PreparedRecipe] = []
+
+    init(compositor: SourceMaterialCompositor, maximumLogicalInputBytes: Int, timings: SourceAppearanceTimings?) throws {
+        try SourceMaterialMetalInputBudget.validateMaximumBytes(maximumLogicalInputBytes)
+        self.compositor = compositor
+        self.maximumLogicalInputBytes = maximumLogicalInputBytes
+        self.timings = timings
+    }
+
+    // All potentially throwing allocations finish before an encoder is opened.
+    // PreparedRecipe retains every input and output until synchronous completion.
+    func prepare(kind: SourceColorComposition.Kind, width: Int, height: Int,
+                main: SourceMaterialImage?, mask: SourceMaterialImage?, colors: [Float4], blend: Float, encodeSRGB: Bool,
+                patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer]) throws {
+        let allocStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
+        let kinds: [SourceColorComposition.Kind] = [.head, .eye, .eyeWhite, .clothes, .hair]
+        var parameters = [Float4](repeating: .zero, count: 1 + 3 + 3 * 2 + 8 * 4)
+        parameters[0] = Float4(Float(kinds.firstIndex(of: kind)!), Float(layers.count), blend, encodeSRGB ? 1 : 0)
+        for (index, color) in colors.enumerated() { parameters[1 + index] = color }
+        var inputImages = [SourceMaterialImage?](repeating: nil, count: 21)
+        inputImages[0] = main; inputImages[1] = mask
+        for pattern in patterns {
+            inputImages[2 + pattern.channel] = pattern.image
+            parameters[4 + pattern.channel * 2] = pattern.color
+            parameters[5 + pattern.channel * 2] = Float4(pattern.tiling.x, pattern.tiling.y, pattern.image.repeating ? 1 : 0, 1)
+        }
+        for (index, layer) in layers.enumerated() {
+            inputImages[5 + index] = layer.image; inputImages[13 + index] = layer.mask
+            let start = 10 + index * 4
+            parameters[start] = layer.color
+            parameters[start + 1] = Float4(layer.image.repeating ? 1 : 0, layer.mask == nil ? 0 : 1,
+                                           layer.layout == nil ? 0 : layer.kind == "mole" ? 2 : 1,
+                                           layer.transform == nil ? 0 : 1)
+            parameters[start + 2] = layer.layout ?? .zero
+            parameters[start + 3] = layer.transform.map(Float4.init) ?? .zero
+        }
+        var inputs: [any MTLTexture] = []
+        for (index, optional) in inputImages.enumerated() {
+            if let image = optional {
+                let bytes = try SourceMaterialMetalInputBudget.logicalBytes(width: image.width, height: image.height)
+                guard image.bytes.count == bytes else { throw RigError.invalid("Invalid bounded appearance texture.") }
+                try SourceMaterialMetalInputBudget.accumulate(&logicalInputBytes, adding: bytes, maximum: maximumLogicalInputBytes)
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
+                    width: image.width, height: image.height, mipmapped: false)
+                descriptor.storageMode = .shared; descriptor.usage = .shaderRead
+                guard let texture = compositor.device.makeTexture(descriptor: descriptor) else {
+                    throw SourceCharacterCardError.invalid("Unable to allocate source material input.")
+                }
+                timings?.recordInputAllocation(fallback: false)
+                image.bytes.withUnsafeBytes {
+                    texture.replace(region: MTLRegionMake2D(0, 0, image.width, image.height), mipmapLevel: 0,
+                        withBytes: $0.baseAddress!, bytesPerRow: image.width * 4)
+                }
+                inputs.append(texture)
+            } else {
+                let texture = try compositor.fallbackTextureForBatch(white: index == 0,
+                    logicalInputBytes: &logicalInputBytes, maximum: maximumLogicalInputBytes, timings: timings)
+                timings?.recordFallbackBinding()
+                inputs.append(texture)
+            }
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.storageMode = .shared; descriptor.usage = [.shaderWrite, .shaderRead, .pixelFormatView]
+        guard let output = compositor.device.makeTexture(descriptor: descriptor) else {
+            throw SourceCharacterCardError.invalid("Unable to allocate source material output.")
+        }
+        prepared.append(PreparedRecipe(parameters: parameters, inputs: inputs, output: output, width: width, height: height))
+        if let allocStart {
+            timings?.recordComposition(.allocationUpload, milliseconds: (ProcessInfo.processInfo.systemUptime - allocStart) * 1000)
+        }
+    }
+
+    func complete() throws -> [any MTLTexture] {
+        guard !prepared.isEmpty else { return [] }
+        let encodeStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
+        guard let buffer = compositor.queue.makeCommandBuffer(),
+              let encoder = buffer.makeComputeCommandEncoder() else {
+            throw SourceCharacterCardError.invalid("Unable to allocate source material output.")
+        }
+        encoder.setComputePipelineState(compositor.pipeline)
+        let groupWidth = compositor.pipeline.threadExecutionWidth
+        for recipe in prepared {
+            recipe.parameters.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
+            for (index, texture) in recipe.inputs.enumerated() { encoder.setTexture(texture, index: index) }
+            encoder.setTexture(recipe.output, index: 21)
+            encoder.dispatchThreads(MTLSize(width: recipe.width, height: recipe.height, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: groupWidth,
+                    height: max(1, min(8, compositor.pipeline.maxTotalThreadsPerThreadgroup / groupWidth)), depth: 1))
+            timings?.recordMetalEncodeDispatch()
+        }
+        encoder.endEncoding()
+        buffer.commit()
+        if let encodeStart {
+            let now = ProcessInfo.processInfo.systemUptime
+            timings?.recordComposition(.encodeSubmit, milliseconds: (now - encodeStart) * 1000)
+        }
+        let waitStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
+        buffer.waitUntilCompleted()
+        timings?.recordMetalBatchCompletion()
+        guard buffer.status == .completed else {
+            throw SourceCharacterCardError.invalid(
+                "Source material Metal dispatch failed: \(buffer.error?.localizedDescription ?? "command buffer failed").")
+        }
+        var views: [any MTLTexture] = []
+        for recipe in prepared {
+            guard let display = recipe.output.makeTextureView(pixelFormat: .rgba8Unorm_srgb) else {
+                throw SourceCharacterCardError.invalid("Source material Metal dispatch failed: texture view unavailable.")
+            }
+            views.append(display)
+        }
+        if let waitStart {
+            timings?.recordComposition(.waitAndView, milliseconds: (ProcessInfo.processInfo.systemUptime - waitStart) * 1000)
+        }
+        return views
+    }
 }
