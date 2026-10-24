@@ -66,6 +66,15 @@ final class MakerModel: ViewportInputHandler {
     private(set) var sourceSelectionPending: String?
     struct SourceSelectionTiming: Encodable {
         let snapshotMilliseconds: Double, preparationMilliseconds: Double, commitMilliseconds: Double
+        var headOwnerStages: HeadOwnerStages? = nil
+
+        /// Consecutive owner intervals, including the final refresh. These are
+        /// per-selection wall times, not CPU samples or animation-frame work.
+        struct HeadOwnerStages: Encodable {
+            let draftMilliseconds: Double, baseAppearanceMilliseconds: Double
+            let cardAppearanceMilliseconds: Double, previewMilliseconds: Double
+            let poseFrameMilliseconds: Double, commitRefreshMilliseconds: Double
+        }
     }
     @ObservationIgnored private(set) var sourceSelectionTiming: SourceSelectionTiming?
     var sourceAssetSelections: [SourceMakerLibrary.Selection] = []
@@ -898,15 +907,19 @@ final class MakerModel: ViewportInputHandler {
         for color in draft.colors {
             if let edit = colors[colorEditKey(color)] { try draft.setColor(color.id, rgba: Float4(edit.rgba)) }
         }
+        let draftFinished = ProcessInfo.processInfo.systemUptime
         let url = head.manifestURL
         let appearanceTransaction = SourceAppearanceLoadTransaction(resources: host.renderer.resources)
         let base = try SourcePreviewAppearance.load(url: url.deletingPathExtension().appendingPathExtension("appearance.json"),
             resources: host.renderer.resources, modLibrary: sourceModLibrary, transaction: appearanceTransaction)
+        let baseAppearanceFinished = ProcessInfo.processInfo.systemUptime
         let application = try applyCardAppearance(draft, base: base, url: url, prepared: head.assets, modLibrary: sourceModLibrary,
             transaction: appearanceTransaction)
+        let cardAppearanceFinished = ProcessInfo.processInfo.systemUptime
         let preview = try SourceRigPreview(source: head.assets.source, contract: head.contract, resources: host.renderer.resources,
             appearance: application?.appearance ?? base, expressionContract: head.expressions, bodyOptions: head.bodyOptions,
             lateCorrectionOptions: current.lateCorrectionOptions, doubleTooth: try SourceRigPreview.savedDoubleTooth(in: candidate))
+        let previewFinished = ProcessInfo.processInfo.systemUptime
         guard preview.supportsFaceCustomization, preview.supportsExpressions,
               preview.bodyCoverage?.completeSlots.count == 44 else {
             throw RigError.invalid("Selected head assembly has incomplete shape or expression bindings.")
@@ -917,6 +930,7 @@ final class MakerModel: ViewportInputHandler {
         guard !frame.sceneBounds.isEmpty, frame.sceneBounds.radius.isFinite else {
             throw RigError.invalid("Selected head assembly has no finite rendered bounds.")
         }
+        let poseFrameFinished = ProcessInfo.processInfo.systemUptime
         let rows = selectionRows(card: candidate, library: library, coordinate: coordinate, unavailableReason: nil)
         var diagnostics = try candidate.previewSettings(contract: head.contract, sex: head.sex,
             headID: head.headID, boneType: head.boneType).diagnostics
@@ -926,9 +940,16 @@ final class MakerModel: ViewportInputHandler {
         defer {
             updatingSource = false
             refresh()
+            let commitFinished = ProcessInfo.processInfo.systemUptime
             sourceSelectionTiming = SourceSelectionTiming(snapshotMilliseconds: (snapshotFinished - started) * 1000,
                 preparationMilliseconds: (preparationFinished - snapshotFinished) * 1000,
-                commitMilliseconds: (ProcessInfo.processInfo.systemUptime - preparationFinished) * 1000)
+                commitMilliseconds: (commitFinished - preparationFinished) * 1000,
+                headOwnerStages: .init(draftMilliseconds: (draftFinished - preparationFinished) * 1000,
+                    baseAppearanceMilliseconds: (baseAppearanceFinished - draftFinished) * 1000,
+                    cardAppearanceMilliseconds: (cardAppearanceFinished - baseAppearanceFinished) * 1000,
+                    previewMilliseconds: (previewFinished - cardAppearanceFinished) * 1000,
+                    poseFrameMilliseconds: (poseFrameFinished - previewFinished) * 1000,
+                    commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000))
         }
         importedSourceCard = candidate
         sourceRigURL = url; sourceHeadID = head.headID
