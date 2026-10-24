@@ -328,8 +328,15 @@ path. Release build `14579b8` passed, and all 34 checks executed successfully
 executable SHA-256 is
 `64bc93179a7f81454733c6645d8c677c086c2645d6c9112050a623e01839653f`.
 This uses a synthetic two-folder Studio fixture; it is not a loaded-scene pixel or
-latency measurement. Visible-menu acceptance remains a separate pending check;
-no earlier GUI result is attributed to these new commands.
+latency measurement. A separate visible check on this same executable confirmed
+active translated-profile Load and Pause, Pause → Run, disabled plugin commands
+in Maker with its original inspector still visible, and restored enabled commands
+in Studio without resuming the paused session. Run and Pause both remained usable.
+The actual translated-profile dialog loaded the controlled profile and reported
+one converted package; the owned process exited normally. These are accessibility
+menu/action observations, not pixels or UI latency. Pending replacement and stale
+dialog concurrency remain deterministic model checks. The mounted summary/Unload
+for direct native or profile routes is a separate UI follow-up.
 
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
