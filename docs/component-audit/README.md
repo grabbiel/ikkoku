@@ -436,8 +436,9 @@ reruns, and branch cleanup) is handed off in
       is fixed (st-ux-ik-camera, 2026-10-23): after the target returns to X = 0.3
       the status line reads "Left hand IK solved again.", two chains failing at
       once are both named and clear independently, and a status written since
-      ("Added Kai") survives (`reload-save-ik` 36/36 on the Debug build of
-      `04a1816`; 6 of those 36 steps fail on main `c3e83fa`).
+      ("Added Kai") survives (`reload-save-ik` 36/36 in the full strict studio
+      lane, 52/52, on the Debug build of `34e3e4e`; 6 of those 36 steps fail on
+      main `c3e83fa`).
       [Native IK](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
       The visible status bar is not asserted headlessly.
       User, 2026-10-23, Debug build of main `c9df5df`: typing X =
@@ -460,9 +461,10 @@ reruns, and branch cleanup) is handed off in
       fallback the indicator reads "Saved
       camera shown: source camera "IKKOKU-MIRROR" (camera 2) has a mirrored
       parent" instead of "Viewing through". `mirrored-camera` asserts the
-      indicator and the tree labels (24/24). The two item folders keep
-      "Unrendered source item 0/1": their catalog key 0/0/0 is not in the
-      converted catalog and item records carry no name. An item whose key the
+      indicator and the tree labels (25/25; 7 of the 25 fail on main
+      `c3e83fa`). The two item folders keep "Unrendered source item 0/1":
+      their catalog key 0/0/0 is not in the converted catalog and item records
+      carry no name. An item whose key the
       catalog maps but whose asset does not load now shows the catalog name with
       "(unrendered source item N)". See
       [Source camera labels](../../Tools/verification/README.md#source-camera-labels-st-ux-ik-camera).

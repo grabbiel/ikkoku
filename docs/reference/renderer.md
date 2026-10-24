@@ -866,7 +866,7 @@ narrows the message as chains solve, writes "Left hand IK solved again." when
 the last one does, and leaves any status written since alone.
 `reload-save-ik` asserts this for one chain, for two chains failing and
 recovering independently, and for an "Added Kai" status that must survive
-(36/36 on the Debug build of `04a1816`; 6 of the 36 fail on main `c3e83fa`).
+(36/36 on the Debug build of `34e3e4e`; 6 of the 36 fail on main `c3e83fa`).
 A failed chain still shows its pre-IK pose, not its last solved pose: the
 pre-IK pose follows from the document alone, while the last solved pose would
 depend on edit history and is not saved. See

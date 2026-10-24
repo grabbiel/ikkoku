@@ -692,9 +692,9 @@ formula. Evidence: `.local/local-wave-verify/ik-scenario/` (`run1/`,
 status bar stay manual, and only the Left hand chain of the default native
 female is exercised.
 
-Recorded 2026-10-23 (st-ux-ik-camera, Debug build of `04a1816`, app SHA-256
-`94933fb1…`): a cut of the lane ran `--strict` and passed 8/8, with
-`reload-save-ik` at 36/36 and `reload-load-ik` at 7/7. Every number above
+Recorded 2026-10-23 (st-ux-ik-camera, Debug build of `34e3e4e`, app SHA-256
+`149d8b0b…`): the full studio lane ran `--strict` and passed 52/52 (1,650.9 s),
+with `reload-save-ik` at 36/36 and `reload-load-ik` at 7/7. Every number above
 reproduced: the end within 1.37e-7 m of the target, the bit-identical round
 trip, and at 1e20 the arm bit-identical to `fk`. At X = 0.3 the status line
 read "Left hand IK solved again." With both hands at 1e20 it named both chains;
@@ -702,10 +702,10 @@ after the left hand's 0.3 it read "Right hand IK left unsolved: IK reach is not
 finite." The right hand at −0.3 sat 1.44e-7 m from its target, and the status
 line kept "Added Kai". Negative control: the same scenario on the Debug build
 of the base, main `c3e83fa` (app SHA-256 `26c58b05…`), failed 6 of 36 steps.
-These were the cleared-status pair after X = 0.3, the two-chain message (the
-base names only the first unsolved chain), both "Added Kai" asserts (the base
-re-wrote "Right hand IK left unsolved" over it), and the final cleared-status
-control. Evidence: `.local/st-ux-ik-camera/lanes/` (`head-cut/`,
+These were the cleared-status pair after X = 0.3 (steps 18–19), the two-chain
+message (26; the base names only the first unsolved chain), both "Added Kai"
+asserts (33 and 36; the base re-wrote "Right hand IK left unsolved" over it),
+and the last cleared-status control (35). Evidence: `.local/st-ux-ik-camera/lanes/` (`head-cut/`,
 `base-control/`).
 
 ### Mirrored camera parent (R4, ST-A06)
@@ -805,16 +805,29 @@ reimport, and renaming camera 2 to "Renamed camera" changes both its tree
 label, `Renamed camera (camera 2)`, and the indicator. Without the catalog,
 the same scenario fails exactly the 3 item-label steps.
 
-Recorded 2026-10-23 (Debug build of `04a1816`): the lane cut passed 8/8
-`--strict`, with `mirrored-camera` at 24/24 and the five camera checks
-(`camera-load-winner`, `camera-deactivate`, `camera-rename`,
-`charastudio-camera-switch`, `undo-camera`) passing unchanged. The view
-positions above reproduced exactly. The same scenario on the base build
-(`c3e83fa`) failed 6 of 24 steps: the three status asserts (old wording) and
-the three indicator `assertRejected` controls. The base runner ignores the new
-keys, so the positive indicator and tree-label asserts pass there trivially;
-the controls are what fail. Window captures before and after are listed in the
-PR; they are private evidence under `.local/st-ux-ik-camera/captures/`.
+Recorded 2026-10-23 (Debug build of `34e3e4e`, app SHA-256 `149d8b0b…`):
+the full studio lane passed 52/52 `--strict`, with `mirrored-camera` at 25/25
+and the five camera checks (`camera-load-winner`, `camera-deactivate`,
+`camera-rename`, `charastudio-camera-switch`, `undo-camera`) passing
+unchanged; `maker-scenarios.json --strict` passed 5/5. The view positions
+above reproduced exactly. The same scenario on the base build (`c3e83fa`)
+failed 7 of 25 steps: the three fallback status asserts and the deactivate
+status (old wording), and the three indicator `assertRejected` controls. The
+base runner ignores the new keys, so the positive indicator and tree-label
+asserts pass there trivially; the controls are what fail. Evidence:
+`.local/st-ux-ik-camera/lanes/` (`head-full/`, `base-control/`).
+
+Window captures (`IKKOKU_CAPTURE_UI` and `IKKOKU_AUTOCAPTURE`, 15 per build:
+the source, native and mirrored Studio windows, two Maker windows and four
+renders) of the base and the same HEAD build, taken back to back: all four
+renders, all 15 UI reports and 9 of the 11 UI windows without a source
+camera are byte-identical. The two mirrored-scene windows differ on purpose,
+in the tree rows and the status area only. The native Object tab differed in
+the Transform fields' text baselines: the base build draws those both ways,
+and two more base runs matched HEAD's capture byte for byte. Crops:
+`.local/st-ux-ik-camera/crops/` (`tree-before.png`, `tree-after.png`,
+`status-before.png`, `status-after.png`); hashes in
+`.local/st-ux-ik-camera/captures/{before2,after3,base-rerun1,base-rerun2}/summary.json`.
 
 ## Maker scenario hook (T-T04)
 
