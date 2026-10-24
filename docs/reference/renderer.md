@@ -3292,6 +3292,23 @@ the colour edit retains max 1 byte with 1,235 differing channels. Existing hair
 and eye limits are unchanged, and controlled native coverage stays 16/20.
 This slice adds no UI behavior and makes no new app/VM capture claim.
 
+**Later combined application check.** The Release build at `6ff81db` has the
+merged #165/#166 runtime sources (identical to `b302a27`) and passes all 24 plugin
+scenario checks. Replaying the retained live-material probe keeps its 16 live
+and four fallback slots, attachment report and composite content keys unchanged.
+Ten native output PNGs covering toon, geometry, opaque garments, eyes, nose and
+items are byte-identical to the retained run and a fresh pre-change/new pair.
+
+Strict equality of every live image is not established. Three retained runs of
+the same pre-change executable already vary by four to five hair pixels (maximum
+one to two byte levels) and one full-frame pixel (maximum two). A fresh pair and
+a repeat of the new executable reproduce small differences; one front-hair pixel
+also varies within the new executable. The arithmetic cause remains unassigned.
+This is a live-capture repeatability gap, not evidence for a new tolerance or an
+all-pixels-identical claim. Existing source comparison limits are unchanged.
+The private `wave-three/integration` evidence retains both the initial strict
+comparison failure and the repeat measurements. These runs do not measure speed.
+
 ### Native pose gate
 
 The R2 transform gate compares original-player local bone transforms composed into

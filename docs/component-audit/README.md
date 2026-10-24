@@ -93,6 +93,14 @@ four CI jobs at their merged heads and the separate local checks above; the
 earlier combined run is not evidence for those later changes. Each completed row
 retains its exact scope: these results do not mark an entire component fully ported.
 
+A later combined Release build of #165/#166 passes all 24 plugin checks and
+retains 16 live material slots with unchanged composite keys. Toon, geometry,
+top and eye outputs remain byte-identical in the controlled replay. Small hair
+image differences also occur between runs of the same pre-change executable;
+strict whole-live-image repeatability remains open. The
+[renderer reference](../reference/renderer.md#composite-sampler-allocation-r1cmt-04-2026-10-24)
+records the measured scope and limitations.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
