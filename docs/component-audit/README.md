@@ -162,7 +162,7 @@ matches in this pair. Five hair pixels (maximum channel difference 2) and one
 front-hair pixel (maximum 1) still vary. This bounded integration check adds no
 source-parity or performance claim.
 
-**Implementation handed to final acceptance — HideAllUI, [#185](https://github.com/grabbiel/ikkoku/pull/185):**
+**Local acceptance — HideAllUI, [#185](https://github.com/grabbiel/ikkoku/pull/185):**
 The third exact-revision native adapter implements Studio interface visibility
 with session-local state, viewport-owned Space, and recovery that preserves host
 preferences. Sixteen focused Engine tests and 21 native app checks plus four
@@ -181,9 +181,9 @@ maximum; this excludes deferred layout, display and GPU completion. The initial
 wrong-fixture launch failed before the scenario and remains separately retained. No per-frame callback was
 added; the native panel mapping does not establish general Unity Canvas, input
 or Harmony compatibility. Private evidence is retained under
-`wave-three/plugins/hide-studio-ui/`; this task is not yet marked fully accepted.
+`wave-three/plugins/hide-studio-ui/`; the visible menu and unload checks remain open.
 
-**Implementation handed to final acceptance — normal head selection, [#187](https://github.com/grabbiel/ikkoku/pull/187):**
+**Local acceptance — normal head selection, [#187](https://github.com/grabbiel/ikkoku/pull/187):**
 Character Maker can prepare normal heads 0, 200 and 201 on the shared selection
 queue and atomically replace the card identity, geometry and shape/expression
 contracts while preserving current edits. Exact candidate texture ownership
@@ -197,11 +197,11 @@ interleaved rounds pass eight further selection/reload checks. Measured owner
 commit cost remains 109–155 ms; no-op calls take 0.285–0.396 ms and warmed resource
 counts stay fixed. Appearance reads/uploads still run on the owner, so UI-owner
 latency remains a performance task. This is neither full original Maker preset
-behavior nor source appearance parity. Final-head CI remains pending.
+behavior nor source appearance parity.
 The [transaction contract](../reference/character/maker-assets.md#normal-head-selection-182)
 records the exact scope, resource counts and remaining limits.
 
-**Implementation handed to final acceptance — inner-shoe composition, [#183](https://github.com/grabbiel/ikkoku/pull/183):**
+**Local acceptance — inner-shoe composition, [#183](https://github.com/grabbiel/ikkoku/pull/183):**
 The normal inner-shoe slot 7 now has an independently captured GPU composite
 recipe. Seven strict GPU checks pass, live material coverage rises from 17 to 18
 of 20 slots, and three default-off app image pairs remain byte-identical. The
@@ -212,7 +212,7 @@ owners. Separate shoe-local translated-draw variation also occurs in the
 pre-change executable, but current and historical magnitudes differ; whole-frame
 repeat equality and source-color parity remain open. Final combined source-probe
 compilation passes without launching a player or relabeling captured evidence.
-Final-head CI is pending. The [renderer evidence](../reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24)
+The [renderer evidence](../reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24)
 retains the costs, source gates and diagnostic limits; sampling repeatability is
 the owner's next bounded task.
 
