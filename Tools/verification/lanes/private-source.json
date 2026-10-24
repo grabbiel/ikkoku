@@ -314,6 +314,11 @@
           "env": "IKKOKU_LIVE_SOURCE_TEXTURES",
           "kind": "file",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_COMPOSITE_COLOUR_PROBE",
+          "kind": "directory",
+          "optional": true
         }
       ],
       "env": {},

@@ -133,6 +133,10 @@ rejected together with `--collect`. The accepted keys:
 | `pupilWidth` / `pupilHeight` | `custom.face.pupilWidth` / `.pupilHeight` | Pupil size (float) the `ChangeSettingEye*` setters lerp into the iris texture scale |
 | `hlUpY` / `hlDownY` | `custom.face.hlUpY` / `.hlDownY` | Iris highlight vertical offset (float) the `ChangeSettingEye*` setters lerp into the highlight offsets |
 | `faceShape33` | `custom.face.shapeValueFace[33]` | Eye tilt shape value (float) `ChangeSettingEyeTilt` turns into the iris `_rotation` |
+| `whiteId` | `custom.face.whiteId` | Eye-white catalog ID (`mt_eye_white`, category 407): the `_MainTex` input of the `ctCreateEyeW` composite |
+| `whiteBaseColor` / `whiteSubColor` | `custom.face.whiteBaseColor` / `.whiteSubColor` | Eye-white RGBA pair `ChangeSettingWhiteOfEye` sets as the composite's `_Color` / `_Color2` |
+| `pupilBaseColor` / `pupilSubColor` | `custom.face.pupil[0..1].baseColor` / `.subColor` | Iris RGBA pair (`ChangeSettingEye` `_Color` / `_Color2`), set on both eyes |
+| `gradBlend` / `gradOffsetY` / `gradScale` | `custom.face.pupil[0..1].gradBlend` / `.gradOffsetY` / `.gradScale` | Iris gradient blend, offset and scale (floats) behind the composite's `_Blend` and `_grad`, set on both eyes |
 
 **Combined-mode run.** On 2026-09-30 `--settings`, `--hand-patterns` and
 `--look-patterns` were supplied together to one capture

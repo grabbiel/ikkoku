@@ -208,6 +208,16 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 case "hlUpY": face.hlUpY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 case "hlDownY": face.hlDownY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 case "faceShape33": face.shapeValueFace[33]=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                // Runtime composite inputs: ChangeSettingWhiteOfEye (eye whites) and,
+                // for both eyes, ChangeSettingEye's colours and gradient.
+                case "whiteId": face.whiteId=Int32.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "whiteBaseColor": face.whiteBaseColor=ParseColor(fields[1]);break;
+                case "whiteSubColor": face.whiteSubColor=ParseColor(fields[1]);break;
+                case "pupilBaseColor": foreach(var pupil in face.pupil) pupil.baseColor=ParseColor(fields[1]);break;
+                case "pupilSubColor": foreach(var pupil in face.pupil) pupil.subColor=ParseColor(fields[1]);break;
+                case "gradBlend": foreach(var pupil in face.pupil) pupil.gradBlend=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "gradOffsetY": foreach(var pupil in face.pupil) pupil.gradOffsetY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                case "gradScale": foreach(var pupil in face.pupil) pupil.gradScale=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 default: throw new Exception("Unknown character-settings key: "+fields[0]);
             }
         }

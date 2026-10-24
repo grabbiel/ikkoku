@@ -11,6 +11,7 @@
   "IKKOKU_APPEARANCE_REFERENCE_ROOT": "/absolute/path/to",
   "IKKOKU_BODY_SHAPE_REFERENCE": "/absolute/path/to/reverse/body-completion/reference/reference.json",
   "IKKOKU_CARD_EDIT_OUTPUT": "/absolute/path/to/reverse/cards/edited-roundtrip",
+  "IKKOKU_COMPOSITE_COLOUR_PROBE": "/absolute/path/to/r1-eyewhite/colour",
   "IKKOKU_EXPRESSION_CONTRACT": "/absolute/path/to/reverse/rigs/source-expression-contract.json",
   "IKKOKU_EXPRESSION_REFERENCE": "/absolute/path/to/reverse/rigs/source-expression-expected-weights.json",
   "IKKOKU_FULLBODY_REFERENCE": "/absolute/path/to/studio-fullbody/reference.json",

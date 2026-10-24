@@ -1747,7 +1747,8 @@ default, and the toon path stays the production renderer. On one controlled
 fixture it meets the frozen probe's gates with capture texture pixels (numbers
 below). The initial native texture store drew one material; the completed asset
 store draws 11 of 20 slots ([native asset completion](#native-asset-completion-r1-137-2026-10-23)),
-and with natively composed irises 13 of 20 ([native iris composites](#native-iris-composites-r1-2026-10-23)).
+with natively composed irises 13 of 20 ([native iris composites](#native-iris-composites-r1-2026-10-23)),
+and with the eye whites 15 of 20 ([native eye-white composites](#native-eye-white-composites-r1-2026-10-23)).
 This is not a production-parity claim.
 
 **Opt-in and inputs.** `IKKOKU_LIVE_SOURCE_SHADERS=1` starts the app with the
@@ -2089,8 +2090,9 @@ asset-store result below. The
 private-source lane declares its fixtures: `IKKOKU_SHADER_BINDING_PROBE`,
 `IKKOKU_SOURCE_AVATAR`, `IKKOKU_MAKER_LIBRARY`, `IKKOKU_HEAD_MATERIAL_CONTRACT`,
 `IKKOKU_SHADER_BINDING_SUPPLEMENT`, `IKKOKU_STUDIO_HAND_POSE`,
-`IKKOKU_STUDIO_LOOK_SETTINGS`, `IKKOKU_LIVE_SOURCE_STREAMS` and
-`IKKOKU_LIVE_SOURCE_TEXTURES`. `Tools/reverse/test_source_live_inputs.py` covers
+`IKKOKU_STUDIO_LOOK_SETTINGS`, `IKKOKU_LIVE_SOURCE_STREAMS`,
+`IKKOKU_LIVE_SOURCE_TEXTURES` and (since the eye-white composites)
+`IKKOKU_COMPOSITE_COLOUR_PROBE`. `Tools/reverse/test_source_live_inputs.py` covers
 the exporters' pure parts.
 
 **Limits.** One controlled card, one pose and one frame. Live drawing needs
@@ -2437,7 +2439,8 @@ scene capture whose characters all fail exits 1.
 
 The eye whites are the nearest. They are `CustomTextureCreate` targets like the
 irises, so the same machinery applies: a recipe in the derivation, the program
-in the store and an oracle check of their own. The body, face and garment
+in the store and an oracle check of their own. They are now composed natively
+([native eye-white composites](#native-eye-white-composites-r1-2026-10-23)). The body, face and garment
 targets are `CustomTextureControl`/`ChangeCustomClothes` composites with more
 inputs; their recipes are not recovered here.
 
@@ -2456,6 +2459,260 @@ from the content key fails the cache test. The gated
 CPU-reference checks above. `test_source_live_inputs.py` and
 `test_source_shader_translation.py` cover the recipe inputs, recipe sharing,
 program export failures (no partial output) and input-signature parsing.
+
+### Native eye-white composites (R1, 2026-10-23)
+
+The live path now also composes the eye whites itself (`ctCreateEyeW`, the
+`_MainTex` of `cf_Ohitomi_L`/`R`), the second `CustomTextureCreate` family after
+the [irises](#native-iris-composites-r1-2026-10-23). With the schema-2 native
+store the controlled fixture resolves **15 of 20 slots** live, up from 13. Five
+runtime composites still fall back with "is not composed natively for the live
+path": the body and face `CustomTextureControl` textures and the three
+`ChangeCustomClothes` garments. As before, no capture pixels are rendered, the
+retained original composites are the comparison oracle only, and Studio scene
+globals stay unresolved, so this is controlled-card coverage, not Studio or
+production parity.
+
+**Recipe.** Citations are to the same recovered `Koikatu/ChaControl.cs`,
+`Koikatu/CustomTextureCreate.cs` and `ChaCustom/CvsEye02.cs`.
+
+- *Target.* `InitBaseCustomTextureEtc` (ChaControl.cs:8902–8915) creates
+  `ctCreateEyeW` just before the two iris targets, with
+  `Initialize("chara/mm_base.unity3d", "cf_m_eyewhite_create", "", n, n)`, n =
+  512 when `hiPoly`, else 256. It is the same target as the irises' (ARGB32 sRGB
+  `RenderTexture`, full mip chain of 10 levels at 512, Bilinear/Clamp/aniso 1).
+- *Inputs* (`ChangeSettingWhiteOfEye(updateTex, updateColor)`,
+  ChaControl.cs:3795). `SetCreateTexture(ctCreateEyeW, main: true, mt_eye_white,
+  face.whiteId, MainAB, EyeWhiteTex, _MainTex)` (line 3810; `_low` appended unless
+  `hiPoly`), then `SetColor(_Color, whiteBaseColor)` and `SetColor(_Color2,
+  whiteSubColor)` (lines 3816–3817). Every other value is the create material's
+  own saved properties. One target serves both eyes: the result goes to
+  `rendEyeW[0].material` and `rendEyeW[1].material = rendEyeW[0].material`
+  (lines 3824–3825).
+- *Pass.* `RebuildTextureAndSetMaterial` as for the irises: clear to
+  `Color.clear`, then `Graphics.Blit(texMain, createTex, matCreate, 0)`. Pass 0
+  of `Shader Forge/create_eyewhite` is one `FORWARD` pass with Blend One Zero for
+  colour and alpha, so the clear never shows. Its two D3D11 fragment variants
+  are byte-identical (DXBC SHA-256 `4f4f69fd…95b1f9`). Per texel, with `t` =
+  `_MainTex.r` at the `_MainTex_ST` UV: rgb = `t·(_Color − _Color2) + _Color2`
+  (that is, `lerp(_Color2, _Color, t)`), a = 1.
+- *Reruns.* `ChangeHeadAsync` (line 6930) runs it with both flags on every head
+  load and card reload, right before the iris recipe. Maker reruns the texture
+  alone on an eye-white ID change (`CvsEye02.cs`:344) and the colours alone on
+  either colour edit (lines 454 and 461). Maker keeps the input
+  (`releaseCustomInputTexture = false`), so each rerun rebuilds the same full
+  recipe. It returns early only for `sex == 0 && exType == 1`; like the iris
+  recipe, the derivation does not model that branch.
+- *Catalog.* `mt_eye_white` (category 407, `chara/mt_eye_white_00.unity3d`) has
+  five rows, `cw_t_sirome_kage_000` to `_004`. Row 0 is 8×8 with 4 mips and
+  Repeat, and is 1 in every channel. Row 1 is 512² Repeat, rows 2–4 are 512²
+  Clamp. The head contract's catalog rows hold only the fixture's ID 0; a card
+  with another ID needs a supplement built with `--category 407 --bundle
+  chara/mt_eye_white_00.unity3d`.
+
+**Native composition.** The machinery is the irises': the derivation writes the
+recipe (`eyeWhiteComposite()`), the store's `--create-shader-cache` exports the
+eye-white program next to the iris program, and `SourceShaderTextureStore`
+composes it with the input's own sampler (Repeat for row 0). The shared
+`rendEyeW` material means both slots bind one recipe and share one composite.
+
+**Evidence.** Three checks, from weakest to strongest:
+
+1. *Retained oracle (degenerate).* The fixture card has `whiteId` 0 with white
+   base and sub colours, so `texture-20` in `.local/r1c/probe` is constant
+   (1, 1, 1, 1). Native level 0 matches it exactly (max byte 0, 0 differing
+   channels). This checks coverage and alpha only, not sampling, orientation or
+   colour.
+2. *Program against the CPU reference.* The real translated program with
+   synthetic colours over a non-uniform store texture (the iris pattern
+   `cw_t_hitomi_000`, 512² Clamp, 176 distinct reds) matches the CPU reference
+   within 1 byte. A synthetic store test also checks that the input's own
+   sampler is used: the Repeat and Clamp variants of one input each match their
+   own reference within 1 byte and differ from the other by more than 8 bytes.
+   Both are checks against our reading of the program.
+3. *Distinct-colour capture (independent).* One read-only capture through the
+   isolated probe player (`original_character_probe.py --settings`, probe source
+   SHA-256 `4324ce7b…e1120e`; Unity 5.6.2f1, D3D11, linear colour space,
+   `status.json` error null). Its settings file (SHA-256 `a4293361…4d9f4b`) sets
+   `whiteId` 3 (`cw_t_sirome_kage_003`: 512² Clamp, 253 distinct reds, sampled
+   1:1 by the 512² target, so a flipped or shifted texel shows), distinct
+   eye-white base and sub colours, distinct iris base and sub colours with base
+   alpha below 1, and non-default `gradBlend`, `gradOffsetY` and `gradScale`.
+   The values stay in `.local`. The card the probe saved (`fixture-card.png`,
+   SHA-256 `5a8cc15a…a5a331`) is derived, stored and composed from the card
+   alone, with its own supplement (85 catalog rows, 1,660 textures) and store;
+   the capture's readbacks are only compared. Its binding comparison has the
+   same counts as the fixture's (texture 100 exact and 9 within tolerance of
+   109, vector 191 exact and 18 within of 211, 0 differing). Level 0:
+
+   | Target | Readback (SHA-256) | Max byte | Differing channels of 1,048,576 | Mean byte | Distinct original colours |
+   | --- | --- | ---: | ---: | ---: | ---: |
+   | eye white L, R (one composite) | `texture-20` (`c8ac18ae…e65c70`) | 1 | 9,349 | 0.0089 | 213 |
+   | iris L, R (one composite) | `texture-21` = `texture-24` (`8e137f89…d5dab362`) | 1 | 1,503 | 0.0014 | 743 |
+
+   The iris row closes #143's untested colour mixing: a non-black base colour
+   with alpha below 1, a non-zero `_Blend` and a non-default `_grad`, against the
+   original. VM hygiene: the Parallels `errno: 24` count was 5 before and after;
+   the probe root `C:\Temp\IkkokuShaderProbe-63023098…` was removed and no game
+   process was left; nothing in the game install changed. Of the 129 capture
+   files only the card, `frame.json`, the three readbacks, the settings and
+   `status.json` are kept (with a SHA-256 list of all 129) in
+   `.local/r1-eyewhite/colour/`.
+
+The gated `liveSourceCompositesMatchTheDistinctColourCapture` runs check 3 when
+`IKKOKU_COMPOSITE_COLOUR_PROBE` names that folder (`fixture-card.png`,
+`frame.json`, the readbacks, `supplement.json`, `textures/manifest.json`). The
+folder is rebuilt with:
+
+```sh
+L=.local; C=$L/r1-eyewhite/colour
+.local/reverse/unitypy-venv/bin/python Tools/reverse/source_binding_supplement.py \
+  --source $L/reverse/rigs/source/abdata --output $C/supplement.json \
+  --bundle chara/bo_hair_b_00.unity3d --bundle chara/bo_hair_f_00.unity3d --bundle chara/co_top_00.unity3d \
+  --bundle chara/co_bot_00.unity3d --bundle chara/co_shoes_00.unity3d --bundle chara/bo_head_00.unity3d \
+  --bundle chara/mt_eyebrow_00.unity3d --bundle chara/mt_eyeline_up_00.unity3d --bundle chara/mt_eyeline_down_00.unity3d \
+  --bundle chara/mt_nose_00.unity3d --bundle chara/mt_eye_hi_up_00.unity3d --bundle chara/mt_eye_hi_down_00.unity3d \
+  --bundle chara/mt_mask_body_00.unity3d --bundle chara/mt_hairgloss_00.unity3d --bundle chara/mt_nip_00.unity3d \
+  --bundle chara/mt_body_detail_00.unity3d --bundle chara/mt_ramp_00.unity3d --bundle chara/mt_eye_white_00.unity3d \
+  --draw-material chara/mm_base.unity3d:cf_m_body \
+  --category 2 --category 407 --category 420 --category 423 --category 424 --category 432 --category 433
+Packages/Engine/.build/debug/ikkoku-inspect shader-bindings $C/fixture-card.png \
+  $L/reverse/maker-library/library.json $L/reverse/rigs/head-materials/contract.json \
+  $L/r1c/probe/shaders $C/frame.json --supplement $C/supplement.json > $C/shader-bindings.json
+.local/reverse/unitypy-venv/bin/python Tools/reverse/source_texture_store.py \
+  $C/shader-bindings.json $C/textures --bundle-root $L/reverse/rigs/source/abdata \
+  --create-shader-cache $L/reverse/rigs/head-materials/shaders --require-complete
+```
+
+The store was built once with `--verify-frame` on the capture's `frame.json`
+before the bulk of the capture was deleted: 71 independent GPU base
+comparisons, maximum 0.0127, as for the fixture store. It holds 50 entries
+(`cw_t_sirome_kage_003` in place of `_000`) and the same two programs; 314 of
+its 324 files are APFS clones of the fixture store's.
+
+**Fixture gates.** In the gated live test (`IKKOKU_LIVE_SOURCE_TEXTURES` =
+`.local/r1-eyewhite/textures/manifest.json`, built like #143's store from
+`.local/r1-eyewhite/shader-bindings.json`), the store pins 50 entries, the two
+composite programs, zero unavailable assets or composites, and the content hash
+`4bf874a3…dbbb5ca`. 15 slots draw live and 5 fall back; each composite is
+composed once and hit once. On pixels frontmost in both the complete
+capture-provider frame and the native subset, with the limits unchanged
+(mean ≤ 1, p99 ≤ 4, > 250 px; hair bounds as before):
+
+| Family | 13 live (r1-composite store) | 15 live (this store) | Capture provider |
+| --- | --- | --- | --- |
+| `toon_eyew_lod0` (eye whites, eyebrows, eyelines) | 278 px, mean 0.7098, p99 0 | 327 px, mean 0.6035, p99 0 | 327 px, mean 0.6137, p99 1 |
+| `toon_eye_lod0` (irises) | 368 px, mean 0.00996, p99 0 | 366 px, mean 0.00455, p99 0 | 368 px, mean 0.00906, p99 0 |
+| `main_hair` | 3,524 px, mean 0.9886, p99 23 | 3,524 px, mean 0.9886, p99 23 | 3,527 px, mean 0.9960, p99 24 |
+| `main_hair_front` | 6,151 px, mean 0.6703, p99 22 | 6,151 px, mean 0.6703, p99 22 | 6,187 px, mean 0.8480, p99 22 |
+
+In this full-body view the eye whites add only 49 shared-frontmost pixels. The
+verifier gives 71 independent GPU base comparisons, 430 offline lower-level
+comparisons (maximum 0.0127, largest mean 0.00114) and 53 levels without
+retained pixels (49 before, plus the 4 levels of `cw_t_sirome_kage_000`, a
+`Blit` input with no readback of its own).
+
+**Whole-character colour.** The capture-provider control does not move: it
+draws 20 of 20 slots live with capture textures (the eye whites were already
+live there), translated character IoU 0.9999798, mean 0.19160, p99 4, and its
+production colour still fails at mean 2.2565, p99 69. With the native store,
+whole-frame production colour (`color` in `frame-comparison.json`, all 99,750
+character pixels) moves from mean 87.95, p99 204 with 13 slots live to mean
+87.08, p99 203 with 15, the same in all three launches of each store. The rest
+of that gap is the five toon fallbacks (body and face skin and three garments),
+which cover most of the character. The eye whites are a small part of this
+full-body view: 49 more shared-frontmost pixels, as above.
+
+**Cost (Release, M2 Ultra).** Composition runs once per assembly and once per
+recipe edit, never per frame. In the live probe (the head Release binary, three
+launches) the eye white is now the first composite of each launch and the iris
+the second. The first composite carries the launch's first GPU pass and its
+Metal compile: 99.3 ms CPU on the first launch after the build, then 1.30 and
+1.22 ms CPU, 8.75 and 9.05 ms GPU, and 11.4 and 11.7 ms in total. The iris that
+follows takes 0.20–0.26 ms CPU, 0.085–0.098 ms GPU and 0.64–0.76 ms in total,
+its own pipeline compile included. So the eye whites add about 0.2 ms CPU and
+0.1 ms GPU of composition at load. The ~9 ms GPU is a one-time cost of
+whichever composite runs first; with the old store the iris paid it (9.73 and
+8.65 ms). In the Release gated test (3 runs), an eye-white edit (median of 15
+`_Color` changes, pipeline cached) takes 0.037–0.052 ms CPU encode, 0.050 ms GPU
+and 0.39–0.42 ms until completion, and a cache hit 0.052–0.061 ms. The first
+eye-white composition of a test store takes 2.30–2.36 ms CPU and 11.0–12.5 ms
+GPU. The composite is 1,425,408 bytes (512², 10 mips); its row-0 input is 8×8.
+
+Per frame, the two eye-white slots now draw the translated program instead of
+toon. The probe's interleaved Release pairs (one binary, #143's store vs this
+store, 3 launches each, 3 warm-up and 20 measured frames at 768×1024, median of
+each run's p50) give:
+
+| Store | Live / toon slots | CPU encode p50 | GPU p50 / p95 | Completion p50 | Registered textures | Metal allocation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| r1-composite (#143), 49 assets + iris program | 13 / 7 | 0.2943 ms | 0.5816 / 0.6144 ms | 1.2478 ms | 69 | 471.44 MiB |
+| r1-eyewhite, 50 assets + iris and eye-white programs | 15 / 5 | 0.3000 ms | 0.5980 / 0.6321 ms | 1.2499 ms | 70 | 472.80 MiB |
+
+The two added slots cost 0.006 ms CPU encode and 0.016 ms GPU at p50, inside
+the new store's run-to-run GPU spread (0.534–0.601 ms). This is added rendering
+work, not a regression in an equal-output path. The new registered texture is
+the 8×8 input; the allocation grows by the composite (1.36 MiB). The six toon
+renders stay byte-identical (`5762dd7c…`). The probe's family colours repeat the
+gated test: eye whites, eyebrows and eyelines 327 px, mean 0.6035, p99 0;
+irises 366 px, mean 0.0046, p99 0; back hair 3,527 px, mean 0.9899, p99 23;
+front hair 6,134 px, mean 0.6686, p99 22 (hair unchanged). The Release test
+numbers come from:
+
+```sh
+swift build -c release --build-tests -Xswiftc -enable-testing --package-path Packages/Engine \
+  --scratch-path .local/build/engine-release
+swift test -c release -Xswiftc -enable-testing --package-path Packages/Engine \
+  --scratch-path .local/build/engine-release --skip-build \
+  --filter "liveSourceEyeWhiteComposites|liveSourceIrisComposites"
+```
+
+with `.local/verification/environment.json` exported and
+`IKKOKU_LIVE_SOURCE_TEXTURES` set to the new store. The launch scripts, raw runs
+and `release-summary.json` stay in the git-ignored `.local/r1-eyewhite/`.
+
+**Regression (opt-in OFF).** Base `origin/main` `9baebcb` and this branch's
+Release binaries, interleaved for three rounds, each launch with only its own
+`IKKOKU_*` variables. Every case's captures were byte-identical across all six
+launches:
+
+| Case | Capture SHA-256 | CPU encode p50 base / head | GPU p50 base / head |
+| --- | --- | ---: | ---: |
+| `koikatu_cs0002591.png` (`IKKOKU_SOURCE_SCENE`, `IKKOKU_BENCHMARK_OUTPUT`) | `cac034c1…` | 0.7282 / 0.7536 ms | 1.2702 / 1.2719 ms |
+| fixture card, Maker app capture (`IKKOKU_BENCHMARK_OUTPUT`) | `26742344…` | 0.1765 / 0.1763 ms | 0.4643 / 0.4567 ms |
+| rig and fixture card (`IKKOKU_CAPTURE_RIG`, no benchmark output) | `9d973e21…` | — | — |
+
+The only code change is in the binding derivation, which does not run with the
+opt-in OFF, so the scene's 0.025 ms CPU difference (base 0.709–0.738, head
+0.744–0.755 ms) is not attributable to it; #143 measured 0.7284 / 0.7329 ms on
+the same case. As there, `synthetic-current.png` is not a control: its only
+character has no supported hair `parts` array, and since #133 an automated scene
+capture whose characters all fail exits 1.
+
+**Remaining composites.** Five slots of the fixture still fall back:
+
+| Slot | Creator | Inputs named by the derivation |
+| --- | --- | --- |
+| `o_body_a` (`main_skin`) | `CustomTextureControl` body, `cf_m_body_create` | body base, skin and paint inputs |
+| `cf_O_face` (`main_skin`) | `CustomTextureControl` face, `cf_m_face_create` | head `MainTex`, skin and makeup inputs |
+| `o_top_tsyats_a`, `o_bot_pants03`, `o_shoes_run01` (`main_opaque`) | `ChangeCustomClothes`, `cf_m_clothesN_create` | each garment's `_t` texture and the card's `colorInfo` |
+
+None of them is a `CustomTextureCreate` target, so each needs its own recipe
+recovery (more inputs, layered passes) before the same store and compositor
+can take it.
+
+**Tests.** `SourceShaderCompositeTests.swift` gains a hand-written
+`create_eyewhite` fragment (Blend One Zero) and checks it against the CPU
+reference with a Repeat and a Clamp input, as above. The fixture store is
+generalised over the program layout and blend. The gated
+`liveSourceEyeWhiteCompositesMatchTheRetainedOriginalComposite` runs checks 1
+and 2, confirms the uniform row-0 input and both slots sharing one texture, and
+measures the edit cost. `liveSourceCompositesMatchTheDistinctColourCapture` runs
+check 3 for all four eye slots, and `liveSourceShadersMeetTheControlledOriginalFrameGates`
+pins the store and the 15/5 split. `OriginalCharacterProbe.cs` accepts the new
+settings keys (`whiteId`, `whiteBaseColor`, `whiteSubColor`, `pupilBaseColor`,
+`pupilSubColor`, `gradBlend`, `gradOffsetY`, `gradScale`; see
+[material expansion](character/material-expansion.md)).
 
 ### Native pose gate
 
