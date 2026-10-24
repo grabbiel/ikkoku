@@ -1213,11 +1213,87 @@ final class StudioModel: ViewportInputHandler {
         }
     }
 
-    private func makePluginAttachmentPreview(parent: StudioObject, appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws -> SourceStudioCharacterPreview {
+    /// Native open/history callbacks belong to a different document. Even a
+    /// matching UUID cannot borrow the old document's preview, clock or policy.
+    @MainActor final class PluginAttachmentRestorePreparation {
+        private weak var studio: StudioModel?
+        private var document: StudioDocument?
+        private let blockedObjects: Set<UUID>
+        private let animationElapsed: Float
+        private var cold: [UUID: SourceStudioCharacterPreview] = [:]
+        private var appearance: SourceAppearanceLoadTransaction?
+        private var committed = false, aborted = false
+
+        init(studio: StudioModel, document: StudioDocument, blockedObjects: Set<UUID>, animationElapsed: Float) throws {
+            guard animationElapsed.isFinite, animationElapsed >= 0 else {
+                throw SourcePluginError.invalid("Invalid candidate attachment animation clock.")
+            }
+            self.studio = studio; self.document = document; self.blockedObjects = blockedObjects
+            self.animationElapsed = animationElapsed
+            appearance = SourceAppearanceLoadTransaction(resources: studio.host.renderer.resources)
+        }
+
+        func frame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
+            guard let studio else { throw SourcePluginError.runtime("Studio closed during a plugin callback.") }
+            if committed { return try studio.pluginAttachmentFrame(child: child, parent: parent) }
+            guard !aborted, let document else { throw SourcePluginError.runtime("Plugin restoration was abandoned.") }
+            guard let reference = parent.sourceCharacter else {
+                throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
+            }
+            // A restored binding uses its candidate object. An initializer can
+            // also clone that object; clones may inherit only a verified source
+            // reference/outfit already present in this candidate, never a live
+            // object's same-UUID authorization.
+            let original = document.object(parent.id) ?? document.objects.first {
+                !blockedObjects.contains($0.id) && $0.sourceCharacter == reference && $0.sourceOutfit == parent.sourceOutfit
+            }
+            guard let original, original.sourceCharacter == reference, original.sourceOutfit == parent.sourceOutfit else {
+                throw SourcePluginError.invalid("Plugin attachment parent differs from the candidate reference or outfit.")
+            }
+            guard !blockedObjects.contains(original.id) else {
+                throw RigError.invalid("Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")
+            }
+            let preview: SourceStudioCharacterPreview
+            if let cached = cold[parent.id] {
+                guard cached.reference == reference, cached.coordinate == (parent.sourceOutfit ?? cached.savedCoordinate) else {
+                    throw SourcePluginError.invalid("Plugin attachment candidate changed during restoration.")
+                }
+                preview = cached
+            } else {
+                preview = try studio.makePluginAttachmentPreview(parent: parent, appearanceTransaction: appearance, blockedObjects: blockedObjects)
+                cold[parent.id] = preview
+            }
+            return try studio.pluginAttachmentFrame(child: child, parent: parent, preview: preview, animationElapsed: animationElapsed)
+        }
+
+        /// Called after old-cache teardown and before assigning the candidate
+        /// document. Its refresh reuses these exact previews. All fallible
+        /// session/state validation has finished before this non-suspending step.
+        func commit(document: StudioDocument) {
+            precondition(!committed && !aborted)
+            guard let studio else { preconditionFailure("Studio must own synchronous plugin restoration.") }
+            appearance?.commit()
+            for (id, preview) in cold {
+                if let object = document.object(id), object.sourceCharacter == preview.reference,
+                   (object.sourceOutfit ?? preview.savedCoordinate) == preview.coordinate {
+                    studio.sourceInstances[id] = preview
+                }
+            }
+            committed = true; cold.removeAll(); appearance = nil; self.document = nil
+        }
+
+        func abort() {
+            guard !committed && !aborted else { return }
+            cold.removeAll(); appearance = nil; document = nil; aborted = true
+        }
+    }
+
+    private func makePluginAttachmentPreview(parent: StudioObject, appearanceTransaction: SourceAppearanceLoadTransaction? = nil,
+                                             blockedObjects: Set<UUID>? = nil) throws -> SourceStudioCharacterPreview {
         guard let reference = parent.sourceCharacter else {
             throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
         }
-        guard !resourceBlockedObjects.contains(parent.id) else {
+        guard !(blockedObjects ?? resourceBlockedObjects).contains(parent.id) else {
             throw RigError.invalid("Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")
         }
         let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources,
@@ -1235,12 +1311,14 @@ final class StudioModel: ViewportInputHandler {
         return try pluginAttachmentFrame(child: child, parent: parent, preview: preview)
     }
 
-    private func pluginAttachmentFrame(child: StudioObject, parent: StudioObject, preview: SourceStudioCharacterPreview) throws -> SourceStudioPluginWorld.AttachmentFrame {
+    private func pluginAttachmentFrame(child: StudioObject, parent: StudioObject, preview: SourceStudioCharacterPreview,
+                                       animationElapsed: Float? = nil) throws -> SourceStudioPluginWorld.AttachmentFrame {
         guard let point = child.sourceAttachmentPoint else {
             throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
         }
-        return try (preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime),
-            preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime))
+        let elapsed = animationElapsed ?? sourceAnimationTime
+        return try (preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: elapsed),
+            preview.attachmentRotation(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: elapsed))
     }
 
     // MARK: Timeline
@@ -1346,24 +1424,44 @@ final class StudioModel: ViewportInputHandler {
     func undo() {
         guard let next = undoStack.last else { return }
         do {
-            let plugins = try prepareSourcePlugins(document: next)
+            let resources = historyPluginResources(next)
+            let candidate = resources?.document ?? next
+            let plugins = try prepareSourcePlugins(document: candidate, attachmentRestore: resources.map {
+                .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
+            })
+            defer { plugins.abort() }
             undoStack.removeLast(); redoStack.append(doc)
-            applyHistoryDocument(next, plugins: plugins)
+            applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Undo"
         } catch { status = "Plugin restore: \(error)" }
     }
     func redo() {
         guard let next = redoStack.last else { return }
         do {
-            let plugins = try prepareSourcePlugins(document: next)
+            let resources = historyPluginResources(next)
+            let candidate = resources?.document ?? next
+            let plugins = try prepareSourcePlugins(document: candidate, attachmentRestore: resources.map {
+                .init(blockedObjects: $0.blockedObjects, animationElapsed: sourceAnimationTime)
+            })
+            defer { plugins.abort() }
             redoStack.removeLast(); undoStack.append(doc)
-            applyHistoryDocument(next, plugins: plugins)
+            applyHistoryDocument(candidate, plugins: plugins, resources: resources)
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
     }
-    private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins) {
+    /// Legacy profile callbacks can touch hidden source objects while restoring.
+    /// Resolve this target's references before its stacks or live policy change;
+    /// an old document's same UUID is not its resource authorization.
+    private func historyPluginResources(_ target: StudioDocument) -> StudioResourceResolution? {
+        guard target.sourcePluginState != nil, target.sourcePluginLibrary == nil else { return nil }
+        return target.resolvingResources(current: host.libraryLocation(), catalog: library.catalog)
+    }
+    private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins,
+                                      resources: StudioResourceResolution?) {
         sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil
         if let id = activeSourceCamera, next.object(id) == nil { activeSourceCamera = nil }
+        if let resources { applyResourceCheck(resources) }
+        plugins.restoredAttachments?.commit(document: next)
         doc = next; rehydrateSourceRuntime()
         commitSourcePlugins(plugins, running: false, replaceDocument: false)
     }
@@ -2084,7 +2182,9 @@ final class StudioModel: ViewportInputHandler {
         try decoded.validateCameras()
         let resources = decoded.resolvingResources(current: host.libraryLocation(), catalog: library.catalog)
         let d = resources.document
-        let preparedPlugins = try prepareSourcePlugins(document: d)
+        let preparedPlugins = try prepareSourcePlugins(document: d,
+            attachmentRestore: .init(blockedObjects: resources.blockedObjects, animationElapsed: 0))
+        defer { preparedPlugins.abort() }
         for line in resources.diagnostics { print("[ikkoku] \(url.lastPathComponent): \(line)") }
         pushUndo(force: true)
         stopSourceVoices()
@@ -2093,6 +2193,7 @@ final class StudioModel: ViewportInputHandler {
         sourceAnimationTime = 0
         selection = nil
         applyResourceCheck(resources)
+        preparedPlugins.restoredAttachments?.commit(document: d)
         doc = d
         rehydrateSourceRuntime()
         commitSourcePlugins(preparedPlugins, running: false, replaceDocument: false)

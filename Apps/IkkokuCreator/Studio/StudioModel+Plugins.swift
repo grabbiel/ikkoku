@@ -10,11 +10,17 @@ extension StudioModel {
     /// configurations validate. Reading a source attachment can lazily construct
     /// live previews, so it is permitted only after this candidate commits.
     final class PluginAttachmentAccess { var committed = false }
+    struct PluginAttachmentRestoreInputs {
+        let blockedObjects: Set<UUID>
+        let animationElapsed: Float
+    }
     struct PreparedSourcePlugins {
         let document: StudioDocument
         let session: SourceStudioPluginSession?
         let native: PreparedNativePlugins
         let attachmentAccess: PluginAttachmentAccess?
+        var restoredAttachments: PluginAttachmentRestorePreparation? = nil
+        func abort() { restoredAttachments?.abort() }
     }
     struct PreparedNativePlugins {
         let muteEnabled: Bool?
@@ -51,7 +57,8 @@ extension StudioModel {
         }
     }
 
-    func prepareSourcePlugins(document: StudioDocument, restoreNativeAdapters: Bool = true) throws -> PreparedSourcePlugins {
+    func prepareSourcePlugins(document: StudioDocument, restoreNativeAdapters: Bool = true,
+                              attachmentRestore: PluginAttachmentRestoreInputs? = nil) throws -> PreparedSourcePlugins {
         if let selection = document.sourcePluginLibrary {
             guard let configuration = document.sourcePluginLibraryConfiguration else {
                 throw SourcePluginError.invalid("Saved plugin library has no scene binding configuration.")
@@ -64,14 +71,30 @@ extension StudioModel {
             : PreparedNativePlugins(muteEnabled: nil, accessoryNames: false)
         let session: SourceStudioPluginSession?
         let access = PluginAttachmentAccess()
+        var attachments: PluginAttachmentRestorePreparation?
+        var prepared = false
+        defer { if !prepared { attachments?.abort() } }
         if let saved = document.sourcePluginState {
             guard let path = saved.profileFile, saved.libraryConfigurationSHA256 == nil else {
                 throw SourcePluginError.invalid("Saved converted plugin state has no profile or library selection.")
             }
+            let resolver: SourceStudioPluginWorld.AttachmentResolver
+            if let attachmentRestore {
+                let candidate = try PluginAttachmentRestorePreparation(studio: self, document: document,
+                    blockedObjects: attachmentRestore.blockedObjects, animationElapsed: attachmentRestore.animationElapsed)
+                attachments = candidate
+                resolver = { child, parent in
+                    try MainActor.assumeIsolated { try candidate.frame(child: child, parent: parent) }
+                }
+            } else { resolver = pluginAttachmentResolver(access: access) }
             session = try SourceStudioPluginSession(profileURL: URL(fileURLWithPath: path), document: document,
-                restoring: saved, attachment: pluginAttachmentResolver(access: access))
+                restoring: saved, attachment: resolver)
+            // Validate callback-produced field state before any owner mutates
+            // its document/history or publishes candidate resources.
+            if attachments != nil { _ = try session?.savedDocument() }
         } else { session = nil }
-        return .init(document: document, session: session, native: native, attachmentAccess: access)
+        prepared = true
+        return .init(document: document, session: session, native: native, attachmentAccess: access, restoredAttachments: attachments)
     }
 
     func restoreSourcePlugins(restoreNativeAdapters: Bool = true) throws {

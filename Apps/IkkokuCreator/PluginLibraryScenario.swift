@@ -294,7 +294,7 @@ struct PluginLibraryScenario: Decodable {
             // rejection must not create a redo entry for the unchanged scene.
             studio.undo()
             studio.redo()
-            try check("legacyAttachmentUndoRollback", studio.status.contains("attachment reads during plugin installation are unsupported")
+            try check("legacyAttachmentUndoRollback", studio.status.contains("Source plugin attachment has no converted character parent.")
                 && studio.doc == beforeFailure && session === studio.sourcePluginSession && adapter === studio.sourceFocus.adapter
                 && gain == studio.sourceAudioBus.masterVolume && resources == resourceCounts()
                 && previews == Set(studio.renderedSourceCharacterPreviews.map { ObjectIdentifier($0) })
@@ -475,8 +475,8 @@ struct PluginLibraryScenario: Decodable {
 // Source-backed installation regression; the original failing report is retained
 // separately. Both supported callbacks and rejected candidates use the real loader.
 extension PluginLibraryScenario {
-    /// Records the existing unsupported restore policy without changing it.
-    /// The durable profiles and native cards survive the save process; a second
+    /// Native restore acceptance; the original policy-rejection reports remain
+    /// recorded separately. Durable profiles survive the save process; a second
     /// process invokes the ordinary native loader against a retained live scene.
     @MainActor private func reproduceNativeRestore(_ configuration: NativeProfileRestore,
                                                     app: AppState, studio: StudioModel) async -> StudioScenario.Report {
@@ -577,7 +577,6 @@ extension PluginLibraryScenario {
                 try check("RetainedSessionPrecondition", studio.sourcePluginSession != nil && studio.sourceFocus.adapter != nil
                     && !previews().isEmpty && !studio.undoStack.isEmpty)
                 for (name, expected) in [
-                    ("attachment", "Source-character attachment reads during plugin installation are unsupported; no live preview was changed."),
                     ("changed", "Saved plugin profile or library bindings changed; explicit reinstallation is required.")] {
                     let document = studio.doc, session = studio.sourcePluginSession
                     let runtime = try session?.savedDocument(), adapter = studio.sourceFocus.adapter
@@ -605,6 +604,21 @@ extension PluginLibraryScenario {
                     try check(name + "RejectedResourcesRetained", resources() == beforeResources && previews() == beforePreviews,
                         "Resources before=\(beforeResources), after=\(resources()); observable cached preview identities unchanged")
                 }
+                let attached = try decoded("attachment")
+                let parent = attached.objects.first { $0.sourceCharacter != nil }!
+                try studio.loadScene(from: scene("attachment"))
+                let restoredAttachment = try studio.sourcePluginSession?.savedDocument()
+                let committedPreview = studio.sourceShapePreview(for: parent.id)
+                try check("AttachmentNativeReopen", studio.doc.sourcePluginState == attached.sourcePluginState
+                    && restoredAttachment?.sourcePluginState == attached.sourcePluginState
+                    && committedPreview?.reference == parent.sourceCharacter && !studio.sourcePluginsRunning
+                    && studio.sourceAnimationTime == 0,
+                    "Fresh-process native restore preserves profile/package/field/clock/binding identities and transfers hidden preview")
+                try studio.stepSourcePlugins(deltaTime: 0.02)
+                try check("AttachmentNextStepReusesPreview", studio.sourceShapePreview(for: parent.id) === committedPreview
+                    && studio.doc.sourcePluginState?.bindings == attached.sourcePluginState?.bindings
+                    && studio.doc.sourcePluginState?.clock.elapsedTime == (attached.sourcePluginState?.clock.elapsedTime ?? 0) + Double(Float(0.02)))
+                try verifyRestoreOwnership(studio: studio, saved: attached, directory: directory, record: check)
                 let saved = try decoded("plain")
                 try studio.loadScene(from: scene("plain"))
                 let restored = try studio.sourcePluginSession?.savedDocument()
@@ -620,6 +634,174 @@ extension PluginLibraryScenario {
         } catch { rows.append(.init(op: "nativeRestoreReproductionFailure", ok: false, detail: String(describing: error))) }
         studio.cancelSourcePluginLibraryMount(); await studio.sourcePluginLibraryPreparationQueue.drain()
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+
+    /// Exercises the same context used by native open, with an independent
+    /// matrix oracle: persisted fields alone cannot reveal a wrong initializer
+    /// read because restoration replaces them after the initializer runs.
+    @MainActor private func verifyRestoreOwnership(studio: StudioModel, saved: StudioDocument,
+                                                   directory: URL, record: (String, Bool, String) throws -> Void) throws {
+        func check(_ name: String, _ okay: Bool, _ detail: String = "") throws { try record(name, okay, detail) }
+        func resources() -> [Int] {
+            let s = studio.host.renderer.resources.statistics()
+            return [s.meshes, s.textures, s.deformBuffers, s.hiddenBuffers,
+                    s.meshBufferBytes, s.deformBufferBytes, s.hiddenBufferBytes, s.retiring]
+        }
+        func previews() -> Set<ObjectIdentifier> { Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)) }
+        func frameData(_ frame: RenderFrame) -> [SIMD4<Float>] {
+            frame.items.flatMap { [$0.model.columns.0, $0.model.columns.1, $0.model.columns.2, $0.model.columns.3] }
+        }
+        func difference(_ a: float4x4, _ b: float4x4) -> Float {
+            (0..<4).flatMap { i in (0..<4).map { j in abs(a[i][j] - b[i][j]) } }.max() ?? 0
+        }
+        let parentIndex = saved.objects.firstIndex { $0.sourceCharacter != nil }!
+        let original = saved.objects[parentIndex], reference = original.sourceCharacter!
+        let child = saved.objects.first { $0.parent == original.id && $0.sourceAttachmentPoint != nil }!
+        func changedReference(attachment: String? = nil, animation: String? = nil) -> SourceStudioCharacterReference {
+            .init(sceneFile: reference.sceneFile, sceneSHA256: reference.sceneSHA256, rigFile: reference.rigFile,
+                boneCatalogFile: reference.boneCatalogFile, objectKey: reference.objectKey, makerLibraryFile: reference.makerLibraryFile,
+                attachmentCatalogFile: attachment ?? reference.attachmentCatalogFile,
+                animationCatalogFile: animation ?? reference.animationCatalogFile, dynamicsFile: reference.dynamicsFile,
+                handPatternsFile: reference.handPatternsFile, lookSettingsFile: reference.lookSettingsFile)
+        }
+        let alternateAttachment = directory.appendingPathComponent("same-bytes-attachments.json")
+        try Data(contentsOf: URL(fileURLWithPath: reference.attachmentCatalogFile!)).write(to: alternateAttachment)
+        let baseline = studio.sourceShapePreview(for: original.id)!
+        try check("MultipleOutfitsPrecondition", baseline.outfitCount > 1)
+        var candidate = saved, old = saved
+        var body = baseline.savedBodyValues; body[0] = 0.85
+        candidate.objects[parentIndex].sourceBodyValues = body
+        let parent = candidate.objects[parentIndex]
+        old.objects[parentIndex].sourceCharacter = changedReference(attachment: alternateAttachment.path)
+        old.objects[parentIndex].sourceOutfit = (baseline.coordinate + 1) % baseline.outfitCount
+        body[0] = 0.15; old.objects[parentIndex].sourceBodyValues = body; old.objects[parentIndex].visible = true
+        studio.doc = old; try studio.setSourceAnimationTime(0.7)
+        let warm = studio.sourceShapePreview(for: original.id)!
+        let warmPose = try warm.editedPose(bodyValues: body, animationElapsed: 0.7), warmInputs = warm.sourceBodyValues
+        let oracle = try SourceStudioCharacterPreview(reference: reference, resources: studio.host.renderer.resources, coordinate: parent.sourceOutfit)
+        let point = child.sourceAttachmentPoint!
+        func attachment(_ preview: SourceStudioCharacterPreview, _ object: StudioObject, _ time: Float) throws -> SourceStudioPluginWorld.AttachmentFrame {
+            try (preview.attachmentMatrix(pointID: point, fkRotations: object.sourceFKRotations ?? [:],
+                faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
+                kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: time),
+                preview.attachmentRotation(pointID: point, fkRotations: object.sourceFKRotations ?? [:],
+                faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
+                kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: time))
+        }
+        let expected = try attachment(oracle, parent, 0), oldFrame = try attachment(warm, old.objects[parentIndex], 0.7)
+        try check("SameUUIDInputsDistinguish", difference(expected.matrix, oldFrame.matrix) > 0.0001
+            && warm.reference != reference && warm.coordinate != oracle.coordinate,
+            "One UUID, different reference/outfit/shape/clock; independent candidate and current matrices must differ")
+        let counts = resources()
+        let context = try StudioModel.PluginAttachmentRestorePreparation(studio: studio, document: candidate, blockedObjects: [], animationElapsed: 0)
+        defer { context.abort() }
+        let actual = try context.frame(child: child, parent: parent), afterFirst = resources()
+        let again = try context.frame(child: child, parent: parent)
+        try check("CandidateMatrixAndRepeat", difference(actual.matrix, expected.matrix) < 0.000001
+            && actual.rotation.vector == expected.rotation.vector && actual.matrix == again.matrix && resources() == afterFirst
+            && studio.sourceShapePreview(for: parent.id) === warm,
+            "Production restore context uses candidate matrix/rotation; repeated reads reuse its private preview")
+        var altered = parent; altered.sourceOutfit = warm.coordinate
+        var mismatch = ""
+        do { _ = try context.frame(child: child, parent: altered) }
+        catch SourcePluginError.invalid(let reason) { mismatch = reason }
+        try check("CandidateCoordinateGuard", mismatch == "Plugin attachment parent differs from the candidate reference or outfit.")
+        context.abort()
+        try check("CandidateAbortRetainsWarm", resources() == counts && studio.sourceShapePreview(for: parent.id) === warm
+            && warm.sourceBodyValues == warmInputs
+            && (try warm.editedPose(bodyValues: body, animationElapsed: 0.7)).localMatrices == warmPose.localMatrices,
+            "Only candidate meshes/texture leases drop; old warm pose and resources remain")
+        let blocked = try StudioModel.PluginAttachmentRestorePreparation(studio: studio, document: candidate,
+            blockedObjects: [parent.id], animationElapsed: 0)
+        defer { blocked.abort() }
+        var blockedError = ""
+        do { _ = try blocked.frame(child: child, parent: parent) }
+        catch RigError.invalid(let reason) { blockedError = reason }
+        blocked.abort()
+        try check("CandidateBlockedOverridesWarm", blockedError.contains("unresolved resource reference")
+            && resources() == counts && studio.sourceShapePreview(for: parent.id) === warm)
+
+        func write(_ document: StudioDocument, _ name: String) throws -> URL {
+            let url = directory.appendingPathComponent(name + ".png")
+            try CardIO.encode(document, keyword: CardIO.sceneKeyword, thumbnail: nil).write(to: url)
+            return url
+        }
+        // A fixture with a later failing initializer still carries matching
+        // profile/package pins. Its first position initializer must execute
+        // through the real candidate resolver before the named Int32 error.
+        let poisonProfile = try freshProfileFixture(directory: directory.appendingPathComponent("restore-poison"), phase: "initializer", fail: true)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(candidate)) as! [String: Any]
+        var state = json["sourcePluginState"] as! [String: Any]
+        let poisonPackage = try SourcePluginPackage.load(url: poisonProfile.deletingLastPathComponent().appendingPathComponent("manifest.json"))
+        state["profileFile"] = poisonProfile.path
+        state["profileSHA256"] = SHA256.hash(data: try Data(contentsOf: poisonProfile)).map { String(format: "%02x", $0) }.joined()
+        state["packages"] = [["guid": poisonPackage.manifest.identity.guid,
+            "manifestSHA256": SHA256.hash(data: poisonPackage.manifestData).map { String(format: "%02x", $0) }.joined()]]
+        json["sourcePluginState"] = state
+        let poison = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
+        let invalidCatalog = directory.appendingPathComponent("restore-invalid-animation.json")
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "kind": "ikkoku-studio-animation-catalog",
+            "catalogSHA256": String(repeating: "0", count: 64), "entries": []]).write(to: invalidCatalog)
+        var partial = candidate; partial.objects[parentIndex].sourceCharacter = changedReference(animation: invalidCatalog.path)
+        var missing = candidate; missing.objects[parentIndex].sourceCharacter = changedReference(attachment: directory.appendingPathComponent("absent-attachments.json").path)
+        let failures: [(String, StudioDocument, String)] = [
+            ("LateInitializer", poison, "Unsupported arithmetic operator or Int32 arithmetic."),
+            ("PartialConstructor", partial, "Invalid or ambiguous Studio animation catalog."),
+            ("MissingCandidateAsset", missing, "Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")]
+        for (name, rejected, expectedError) in failures {
+            let url = try write(rejected, "reject-" + name)
+            for attempt in 1...2 {
+                let before = studio.doc, session = studio.sourcePluginSession, runtime = try session?.savedDocument()
+                let undo = studio.undoStack, redo = studio.redoStack, beforeCounts = resources(), beforePreviews = previews()
+                let frame = studio.host.renderer.currentFrame(), status = studio.status, clock = studio.sourceAnimationTime
+                let adapter = studio.sourceFocus.adapter, gain = studio.sourceAudioBus.masterVolume
+                var reason = ""
+                do { try studio.loadScene(from: url) }
+                catch SourcePluginError.runtime(let value) { reason = value }
+                catch RigError.invalid(let value) { reason = value }
+                let afterRuntime = try studio.sourcePluginSession?.savedDocument()
+                let afterFrame = studio.host.renderer.currentFrame()
+                try check(name + "Rollback\(attempt)", reason == expectedError && studio.doc == before
+                    && studio.sourcePluginSession === session && afterRuntime == runtime && studio.undoStack == undo && studio.redoStack == redo
+                    && resources() == beforeCounts && previews() == beforePreviews && studio.sourceAnimationTime == clock
+                    && studio.status == status && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
+                    && frame.camera == afterFrame.camera && frame.sceneBounds == afterFrame.sceneBounds && frame.time == afterFrame.time
+                    && frame.skinSets == afterFrame.skinSets && frameData(frame) == frameData(afterFrame), reason)
+            }
+        }
+        // Real history failures must leave their target at the top of the stack.
+        studio.doc = poison; studio.pushUndo(force: true); studio.doc = old
+        let historySession = studio.sourcePluginSession, historyResources = resources(), historyPreviews = previews()
+        let undo = studio.undoStack, redo = studio.redoStack
+        studio.undo(); studio.undo(); studio.redo()
+        try check("FailedHistoryRetainsStacks", studio.doc == old && studio.sourcePluginSession === historySession
+            && studio.undoStack == undo && studio.redoStack == redo && resources() == historyResources && previews() == historyPreviews
+            && studio.status.contains("Unsupported arithmetic operator or Int32 arithmetic."), studio.status)
+        // Put the valid target above the retained failing entry. Both directions
+        // go through real candidate preparation; the held history clock survives.
+        studio.doc = candidate; studio.pushUndo(force: true); studio.doc = old
+        studio.undo()
+        let historyPreview = studio.sourceShapePreview(for: parent.id)
+        try check("HistoryCandidateSuccess", studio.doc.objects == candidate.objects && studio.sourceAnimationTime == 0.7
+            && historyPreview?.reference == reference && historyPreview?.coordinate == oracle.coordinate && historyPreview !== warm
+            && studio.doc.sourcePluginState == candidate.sourcePluginState, studio.status)
+        studio.redo()
+        try check("HistoryRedoSuccess", studio.doc.objects == old.objects && studio.sourceAnimationTime == 0.7
+            && studio.sourceShapePreview(for: parent.id)?.reference == old.objects[parentIndex].sourceCharacter, studio.status)
+
+        // A non-plugin native load establishes a blocked old UUID. A valid
+        // candidate with that same UUID must use its own resolution and succeed.
+        var blockedOld = missing; blockedOld.sourcePluginState = nil
+        try studio.loadScene(from: write(blockedOld, "blocked-old"))
+        try check("OldBlockedUUIDPrecondition", studio.resourceBlockedObjects.contains(parent.id))
+        try studio.loadScene(from: write(candidate, "candidate-valid"))
+        let committed = studio.sourceShapePreview(for: parent.id)
+        try check("ValidCandidateOverridesOldBlock", !studio.resourceBlockedObjects.contains(parent.id)
+            && committed?.reference == reference && committed?.coordinate == oracle.coordinate && studio.sourceAnimationTime == 0)
+        studio.update(parent.id) { $0.visible = true }
+        try studio.stepSourcePlugins(deltaTime: 0.02)
+        try check("TransferredPreviewSurvivesShowAndStep", studio.sourceShapePreview(for: parent.id) === committed
+            && studio.doc.sourcePluginState?.bindings.first?.awake == true && studio.doc.sourcePluginState?.bindings.first?.started == true)
     }
 
     @MainActor private func reproduceFreshLoad(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
