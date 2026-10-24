@@ -3790,7 +3790,7 @@ cross-context statements are qualified accordingly. This result shows that
 later lighting/material shading is not required for the observed instrumented
 draw variation. It does not identify a compiler/driver defect or a source-semantic
 violation: removing code and adding MRT outputs can change compiled execution.
-The next proposed discriminator retains actual geometry and the MainTex
+The next discriminator below retains actual geometry and the MainTex
 coordinate/sample operations while removing AlphaMask/discard, comparing common
 visible primitive/pass pixels if coverage changes. It is not a production fix.
 
@@ -3800,6 +3800,67 @@ The private executable SHA-256 is `453b54565cd3850644167b756119359e9732ebcc5d028
 the report is `18530343b64474576d1927a08e2dd253ee9e8bce678205be04a55198a7b45c8b`.
 All recorded source/proxy/fixture hashes remain unchanged. No production shader,
 source tolerance, composite coverage or performance claim changes; #188 stays open.
+
+A **private MainTex-only discriminator** removes the AlphaMask coordinate/sample
+and mask-combination block, then the alpha predicate/discard block, from that
+prefix. MainTex's UV assignment overwrites its coordinate components from the
+interpolated UV and material transform; it does not depend on the removed mask
+value. The exact assignment, implicit sample, vertex paths, declarations, MRT
+outputs, input bindings and pass state remain unchanged. Both cases intentionally
+output diagnostic MainTex RGB with the original constant pass alpha. This is a
+two-block removal, not a production shader or a source-color equivalence test.
+
+At `18a61bc`, a private temporary Release test builds successfully, after which
+the tracked test file is restored byte for byte. The first launch stops before
+drawing because the strict card loader rejects a private proxy symlink. That
+failed attempt is retained; only the two private card paths become regular
+copies with identical bytes and hashes. The same frozen binary then collects
+four draws × prefix/MainTex-only × native-store/captured providers in one locked
+process. No loader validation is relaxed and no source input changes.
+
+The fresh prefix remains variable with both providers, while **MainTex-only is
+bit-stable in all three repeats**:
+
+| Changed pixels against the first draw | Native prefix | Native MainTex-only | Captured prefix | Captured MainTex-only |
+| --- | ---: | ---: | ---: | ---: |
+| Color0 | 73 / 74 / 71 | 0 / 0 / 0 | 5 / 21 / 12 | 0 / 0 / 0 |
+| `dfdx` | 103 / 101 / 100 | 0 / 0 / 0 | 3 / 18 / 13 | 0 / 0 / 0 |
+| `dfdy` | 118 / 109 / 101 | 0 / 0 / 0 | 7 / 38 / 33 | 0 / 0 / 0 |
+| First MainTex sample | 93 / 94 / 90 | 0 / 0 / 0 | 7 / 30 / 20 | 0 / 0 / 0 |
+
+All sixteen draws have identical 2,948-pixel coverage, primitive/pass identity
+and alpha. Within-case and cross-case UVs are bit-identical. The fixed common
+mask across all eight draws for each provider therefore retains all 2,948 visible
+pixels; the repeat counts above also hold on that mask. Whole-plane coverage,
+identity and alpha comparisons are reported separately, rather than assuming
+that removing discard preserves them. All visible values are finite.
+
+The audit verifies 64 complete attachment hashes. Float targets are retained as
+losslessly compressed full planes, avoiding a fixed-region assumption when
+discard is removed. All 148 bound mip-level instances are unchanged before and
+after drawing; twenty provider/property chains and ten packed constant-buffer
+hashes match across cases. All four actual pipelines report MSL 4.0, fast math
+disabled and `preserveInvariance = false` on the same M2 Ultra/macOS host. Seven
+literal transformer checks and fourteen independent readback/common-mask checks
+pass, including signed-zero bits, empty common coverage, invalid IDs and corrupt
+compressed input.
+
+This localizes the difference to the combined mask/predicate/discard removal or
+its effect on compilation. It does not identify which removed operation matters,
+prove a compiler/driver defect, or establish a general derivative rule. Removing
+alpha testing would change source behavior even though this fixture's visible
+coverage is unchanged. A subsequent split control must keep mask/predicate work
+observable if it removes discard, so dead-code elimination does not silently
+turn it into another MainTex-only case. No production workaround, relaxed source
+gate, added material coverage or timing claim follows; #188 remains open.
+
+Evidence, the retained failed attempt and both reviewed coding-helper proposals
+are under `.local/codex-continue-2026-10-24/rolling/materials-sampling-maintex/`.
+The successful outputs are in `run-2`; the frozen harness's `run-1` path points
+there. Private executable SHA-256 is
+`2c92001a8ca1439208d1394737849f50f65006317ca3976dd510015438cd1f10`;
+report SHA-256 is
+`58e019865fc79c6d2ce1eb1907797f94f09623158f0b96a399fbc3ff939caabf`.
 
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
