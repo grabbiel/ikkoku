@@ -453,8 +453,11 @@ reruns, and branch cleanup) is handed off in
       the fallback, so it is hard to tell which camera is which and which view is
       shown. Addressed by st-ux-ik-camera (2026-10-23): the tree, status line,
       view indicator and Object tab all name the camera `IKKOKU-MIRROR (camera 2)`
-      (in sentences `source camera "IKKOKU-MIRROR" (camera 2)`), the tree marks
-      the active camera, and during the fallback the indicator reads "Saved
+      (in sentences `source camera "IKKOKU-MIRROR" (camera 2)`; the tree row
+      puts "camera 2" on a second line so the narrow panel never cuts the key),
+      the tree marks the active camera ("camera 2 · active" and a camera icon
+      that is orange and struck through during a fallback), and during the
+      fallback the indicator reads "Saved
       camera shown: source camera "IKKOKU-MIRROR" (camera 2) has a mirrored
       parent" instead of "Viewing through". `mirrored-camera` asserts the
       indicator and the tree labels (24/24). The two item folders keep

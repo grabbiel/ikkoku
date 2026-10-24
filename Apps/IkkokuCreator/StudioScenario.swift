@@ -1672,7 +1672,7 @@ struct StudioScenario: Decodable {
                     || step.treeLabel != nil
                 var id: UUID?
                 if needsObject, step.key == nil {
-                    problems.append("assert: name/visible/face/color need a key")
+                    problems.append("assert: name/visible/face/color/treeLabel need a key")
                 } else if needsObject {
                     if let found = object(step) {
                         id = found

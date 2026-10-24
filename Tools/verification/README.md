@@ -796,6 +796,15 @@ source item 0/1". Naming them would need the Studio item list extracted from
 the game's info bundles (`Tools/reverse/catalog.py`), which this slice did not
 do.
 
+Recorded 2026-10-23 (Debug build of `c5b563c`): a private 8-step scenario
+(`.local/st-ux-ik-camera/item-label/`, not a lane check because it needs a
+synthetic catalog) ran this scene with a one-entry catalog that maps 0/0/0 to
+"Test cube" in a missing package, and passed 8/8. Both item rows read "Test
+cube (unrendered source item 0)" and "… 1)" before and after export →
+reimport, and renaming camera 2 to "Renamed camera" changes both its tree
+label, `Renamed camera (camera 2)`, and the indicator. Without the catalog,
+the same scenario fails exactly the 3 item-label steps.
+
 Recorded 2026-10-23 (Debug build of `04a1816`): the lane cut passed 8/8
 `--strict`, with `mirrored-camera` at 24/24 and the five camera checks
 (`camera-load-winner`, `camera-deactivate`, `camera-rename`,

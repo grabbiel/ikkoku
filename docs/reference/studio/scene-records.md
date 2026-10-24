@@ -888,7 +888,7 @@ source camera "IKKOKU-MIRROR" (camera 2) has a mirrored parent", never
 again falls back again; the same holds after export → reimport. (Before
 st-ux-ik-camera the status line named the camera "Source camera 2" and the
 indicator said "Viewing through" during the fallback; see "Source camera
-labels" in [the verification README](../../../Tools/verification/README.md#mirrored-camera-parent-r4-st-a06).) Measured against the capture after the Unity
+labels" in [the verification README](../../../Tools/verification/README.md#source-camera-labels-st-ux-ik-camera).) Measured against the capture after the Unity
 → engine z flip, our control view is within 1.7e-7 m and 7.3e-7° of the
 original's control render camera, and our fallback view is within 5.0e-7 m and
 2.8e-6° of the original's saved view. The original's mirrored pose is not
