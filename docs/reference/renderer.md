@@ -3544,6 +3544,102 @@ launch; it does not relabel the captured evidence. The affected merged Python
 suites pass 78/78; Debug and Release derivation each pass seven tests with ten
 parameter cases, and the verification Python suite passes 191/191.
 
+### Translated sampling repeatability investigation (#188)
+
+[Issue #188](https://github.com/grabbiel/ikkoku/issues/188) tracks the separate
+held-frame draw variation above. Production sampling, source tolerances and
+composite coverage are unchanged. The following are private numerical
+diagnostics on the same Apple M2 Ultra / macOS 27.0.1 host, effective MSL 4.1,
+with fast math disabled; none is a performance measurement or a proposed
+quality-reducing workaround.
+
+The first controls use the same retained private Release test binary
+`eabc8275…`, immutable shader proxies, native shoe geometry and held frame.
+Replacing the affected fragment samplers with equivalent constexpr samplers
+at effective anisotropy 9 still produces variation. A paired version changes
+only anisotropy to 1 and also varies. Across three repeats, store-provider
+changed-pixel counts are 89/95/111 (maximum byte differences 18/18/27) at 9 and
+81/95/77 (80/80/80) at 1. Captured-provider results are 26/29/29 (8/27/8) and
+19/25/17 (80/80/12), respectively. All ten target mip levels remain stable.
+Anisotropy above one is therefore not required for this observed gap; the
+constexpr representation does not remove it.
+
+A second control encodes primitive/pass IDs into final RGB while preserving
+the original alpha, discard, geometry, draw order, depth and blend state. Its
+7,704 possible IDs remain unique through sRGB8 quantization. Every observed ID
+decodes exactly: 2,604 forward pixels cover 988 primitives, and 344 outline
+pixels cover 272 primitives. All eight images (four per texture provider),
+including alpha and coverage, are byte-identical. This rules out changing
+visible primitive selection in that control; unused shading may be optimized
+away, so it does not establish interpolation or derivative stability.
+
+A third, temporary test-only MRT capture retains the original color output and
+adds three float32 attachments. At the exact first `_MainTex` instruction it
+records UV, `dfdx`, `dfdy`, sampled RGBA and primitive/pass ID in the same draw.
+The source rewrite preserves every original sample statement, discard and the
+original `o0` color expression; extra attachments have blending disabled while
+color0 retains the original state. Its private Release binary is
+`ca8da5ad171964efebb352855ef9f55d4748689542912be2bce6ae1e36ff41de`, built from
+`899e99a` plus the retained temporary test patch. The tracked test file was
+restored byte for byte after compilation; no runtime source was changed.
+
+| MRT result, three repeats against the first draw | Native store | Captured textures |
+| --- | ---: | ---: |
+| Changed color pixels | 90 / 87 / 86 | 11 / 5 / 3 |
+| Maximum color byte difference | 14 / 14 / 14 | 22 / 2 / 22 |
+| Changed UV or primitive/pass pixels | 0 / 0 / 0 | 0 / 0 / 0 |
+| Changed `dfdx` pixels | 87 / 85 / 84 | 9 / 4 / 3 |
+| Changed `dfdy` pixels | 124 / 120 / 115 | 16 / 12 / 5 |
+| Changed first MainTex sample pixels | 100 / 97 / 96 | 14 / 7 / 2 |
+
+The sampled-value changes overlap 79/76/75 and 10/5/2 color-changing pixels,
+respectively. Every observed value is finite, alpha is unchanged, and all
+2,948 primitive/pass IDs match the earlier ID control. The largest recorded
+absolute derivative difference is 0.111033 in normalized UV units. Thus this
+instrumented draw has stable visible UVs and primitive selection but varying
+derivatives and sampled values. The added outputs can perturb compilation and
+execution; this does not identify a driver/compiler fault or explain every
+downstream color change. Later nonlinear ramp/normal-map sampling remains
+outside this first-sample observation.
+
+The retained forward and outline fragments compute this MainTex coordinate
+from the interpolated UV and its affine material transform, after the first
+alpha-mask sample and **before** the discard instruction. No source branch
+precedes it. The current [Metal language specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
+(2026-06-04, §§6.10–6.13, pages 227–239) describes helper execution for
+derivatives, requires uniform control flow, and states that Metal 2.3+ discard
+does not change derivative validity. That rules out applying the obsolete
+pre-2.3 discard restriction to this MSL 4.1 result. Quad reads also require an
+active source lane, so an unchecked quad-shuffle replacement would not be a
+sound fix.
+
+The [Unity 5.6 shader semantics](https://docs.unity3d.com/560/Documentation/Manual/SL-ShaderSemantics.html)
+describe triangle-interpolated fragment inputs. Direct3D's
+[derivative definition](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/deriv-rtx--sm4---asm-)
+is hardware-dependent and describes off-primitive helper pixels in its
+reference rasterizer. Its [implicit sample instruction](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sample--sm4---asm-)
+may share LOD across a 2×2 stamp or compute it per pixel, whereas
+[explicit-gradient sampling](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sample-d--sm4---asm-)
+computes LOD per pixel. Replacing all source samples with explicit gradients
+would therefore require fresh source-output evidence, even if it stabilized
+one native capture. The [source discard instruction](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-)
+also preserves execution for derivative calculation.
+
+The next bounded investigation is an asset-free small-triangle/UV-discontinuity
+reproducer with deterministic mip contents, the same language/compiler options,
+and same-draw color/UV/derivative readback. It should first determine whether
+the gap survives without the recovered shader body; any eventual translation
+change must retain source sampling semantics and pass independent source-color
+and Release cost gates. This experiment is proposed, not run. Fixed LOD zero,
+reduced anisotropy and blanket explicit-gradient rewrites are not production
+changes.
+
+Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
+`.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
+correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
+forward pixels already lie on primitive boundaries in this small on-screen
+shoe. The investigation remains open, with no new FPS or source-parity claim.
+
 ### Native pose gate
 
 The R2 transform gate compares original-player local bone transforms composed into

@@ -6,6 +6,7 @@ import CryptoKit
 import Scene
 import Renderer
 import Character
+import Gameplay
 import Studio
 import ShaderTypes
 
@@ -150,6 +151,16 @@ struct StudioScenario: Decodable {
         /// assert only: the outfit the named character's live preview
         /// assembled, read from the rendered preview (not the document).
         let outfit: OutfitValue?
+        /// Exact labels consumed by ClothesInspector, compared as UTF-8 bytes.
+        /// This model assertion does not stand in for a displayed AX/UI check.
+        let accessoryLabels: AccessoryLabelsValue?
+
+        struct AccessoryLabelsValue: Decodable {
+            let key: Int32
+            let labels: [String]
+            let mounted: Bool
+            let loadedSlots: [Int]
+        }
         /// setClothesState: the clothes state 0...3 (on, half, half 2, off)
         /// for the CharaStudio row in `index` (0 top ... 7 shoes);
         /// setShoesType: the shoes type (0 indoor, 1 outdoor).
@@ -368,7 +379,7 @@ struct StudioScenario: Decodable {
                  activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
-                 render, exportIdenticalToSource, errorContains, outfit, state, clothes, expression,
+                 render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, state, clothes, expression,
                  sex, character, chain, delta, ik, edit
         }
 
@@ -434,6 +445,7 @@ struct StudioScenario: Decodable {
             exportIdenticalToSource = try c.decodeIfPresent(String.self, forKey: .exportIdenticalToSource)
             errorContains = try c.decodeIfPresent(String.self, forKey: .errorContains)
             outfit = try c.decodeIfPresent(OutfitValue.self, forKey: .outfit)
+            accessoryLabels = try c.decodeIfPresent(AccessoryLabelsValue.self, forKey: .accessoryLabels)
             state = try c.decodeIfPresent(Int.self, forKey: .state)
             clothes = try c.decodeIfPresent(ClothesValue.self, forKey: .clothes)
             expression = try c.decodeIfPresent(ExpressionValue.self, forKey: .expression)
@@ -1076,6 +1088,83 @@ struct StudioScenario: Decodable {
             return nil
         }
 
+        func assertAccessoryLabels(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.accessoryLabels else { return nil }
+            guard check.labels.count == 20 else { return "assert accessoryLabels: expected exactly 20 labels" }
+            guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key }),
+                  let preview = studio.sourceShapePreview(for: object.id) else {
+                return "assert accessoryLabels: source key \(check.key) is not a rendered character"
+            }
+            let actual = studio.sourceAccessoryLabels(for: object.id)
+            guard actual.count == 20 else { return "assert accessoryLabels: received \(actual.count) labels, expected 20" }
+            for (index, pair) in zip(actual, check.labels).enumerated() where !pair.0.utf8.elementsEqual(pair.1.utf8) {
+                return "assert accessoryLabels: row \(index) is \(String(reflecting: pair.0)), expected \(String(reflecting: pair.1)) (UTF-8)"
+            }
+            let refs = (studio.doc.sourceNativePlugins ?? []).filter { $0.adapterID == SourceNativePluginPackage.accessoryAdapter && $0.enabled }
+            guard studio.sourceAccessoryNamesEnabled == check.mounted, refs.count == (check.mounted ? 1 : 0) else {
+                return "assert accessoryLabels: runtime mounted=\(studio.sourceAccessoryNamesEnabled), saved enabled references=\(refs.count), expected mounted=\(check.mounted)"
+            }
+            guard check.loadedSlots == preview.savedAccessorySlots else {
+                return "assert accessoryLabels: loaded slots are \(preview.savedAccessorySlots), expected \(check.loadedSlots)"
+            }
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let references = (try? encoder.encode(refs)).flatMap { String(data: $0, encoding: .utf8) } ?? "<encoding failed>"
+            details.append("accessoryLabels \(check.key): \(actual.map { String(reflecting: $0) }); coordinate \(preview.coordinate), loaded slots \(preview.savedAccessorySlots); native references \(references)")
+            return nil
+        }
+
+        /// Synchronous label construction only: excludes SwiftUI layout/display,
+        /// package loading, frame refresh, GPU work and all validation below.
+        func measureAccessoryLabels(_ step: Step) {
+            guard let count = step.index, (100...2_000).contains(count),
+                  let id = object(step), let preview = studio.sourceShapePreview(for: id),
+                  step.accessoryLabels?.key == step.key else {
+                record(step, false, "measureAccessoryLabels: rendered key, matching accessoryLabels and index 100...2000 required"); return
+            }
+            do {
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+                let beforeDocument = try encoder.encode(studio.doc)
+                let beforeFrame = studio.host.renderer.currentFrame()
+                let beforeTime = studio.sourceAnimationTime
+                func resources() -> [Int] {
+                    let value = studio.host.renderer.resources.statistics()
+                    return [value.meshes, value.textures, value.deformBuffers, value.hiddenBuffers,
+                        value.meshBufferBytes, value.deformBufferBytes, value.hiddenBufferBytes, value.retiring]
+                }
+                let beforeResources = resources()
+                var samples: [Double] = []; samples.reserveCapacity(count)
+                var labels: [[String]] = []; labels.reserveCapacity(count)
+                for _ in 0..<count {
+                    let start = ProcessInfo.processInfo.systemUptime
+                    let value = studio.sourceAccessoryLabels(for: id)
+                    let elapsed = ProcessInfo.processInfo.systemUptime - start
+                    samples.append(elapsed * 1_000); labels.append(value)
+                }
+                // Consume every returned value after timing; no optimizer-only sink
+                // or validation/serialization cost enters the recorded interval.
+                let expected = step.accessoryLabels!.labels
+                let labelsMatch = labels.allSatisfy { value in
+                    value.count == expected.count && zip(value, expected).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+                }
+                let afterFrame = studio.host.renderer.currentFrame()
+                let sameFrame = beforeFrame.camera == afterFrame.camera && beforeFrame.mainLight == afterFrame.mainLight
+                    && beforeFrame.effects == afterFrame.effects && beforeFrame.lights == afterFrame.lights
+                    && beforeFrame.sceneBounds == afterFrame.sceneBounds && beforeFrame.time == afterFrame.time
+                    && beforeFrame.skinSets == afterFrame.skinSets && beforeFrame.gizmos.count == afterFrame.gizmos.count
+                    && beforeFrame.items.count == afterFrame.items.count && zip(beforeFrame.items, afterFrame.items).allSatisfy {
+                        $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID && $0.material == $1.material
+                    }
+                var details: [String] = []
+                let problem = assertAccessoryLabels(step, details: &details)
+                let unchanged = beforeDocument == (try encoder.encode(studio.doc))
+                    && studio.sourceShapePreview(for: id) === preview && resources() == beforeResources
+                    && studio.sourceAnimationTime == beforeTime && sameFrame
+                let sorted = Array(samples.dropFirst()).sorted()
+                let detail = "synchronous label construction ms: first=\(samples[0]), warm median=\(sorted[sorted.count / 2]), p95=\(sorted[Int(Double(sorted.count - 1) * 0.95)]), count=\(count); mounted=\(studio.sourceAccessoryNamesEnabled); all UTF-8 labels match=\(labelsMatch), document/preview/resources/sampled frame fields unchanged=\(unchanged); resources=\(beforeResources)"
+                record(step, problem == nil && labelsMatch && unchanged, detail + (problem.map { "; " + $0 } ?? ""))
+            } catch { record(step, false, "measureAccessoryLabels: \(error)") }
+        }
+
         /// The live wear readback (ST-C03): the rendered preview's clothes
         /// state, drawn garments/accessories and fallbacks, plus whether the
         /// document holds a wear edit.
@@ -1237,6 +1326,20 @@ struct StudioScenario: Decodable {
             case "newScene":
                 studio.newScene()
                 record(step, true, studio.status)
+            case "loadNativePlugin":
+                guard studio.isActiveMode, let path = step.path ?? ProcessInfo.processInfo.environment["IKKOKU_NATIVE_PLUGIN_MANIFEST"] else {
+                    record(step, false, "loadNativePlugin: active Studio and path or IKKOKU_NATIVE_PLUGIN_MANIFEST required"); continue
+                }
+                do {
+                    try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: path))
+                    record(step, true, studio.status)
+                } catch { record(step, false, "loadNativePlugin: \(error)") }
+            case "unloadPlugins":
+                guard studio.isActiveMode else { record(step, false, "unloadPlugins: Studio must be active"); continue }
+                studio.unloadSourcePluginLibrary()
+                record(step, studio.doc.sourceNativePlugins == nil && !studio.sourceAccessoryNamesEnabled, studio.status)
+            case "measureAccessoryLabels":
+                measureAccessoryLabels(step)
             case "saveDocument":
                 // Native save (StudioModel.saveScene), not an original-scene
                 // export: the file is a Studio document card. Unlike `export`
@@ -1932,6 +2035,7 @@ struct StudioScenario: Decodable {
                 if let problem = assertRender(step, details: &details) { problems.append(problem) }
                 if let problem = assertExportIdenticalToSource(step, details: &details) { problems.append(problem) }
                 if let problem = assertOutfit(step, details: &details) { problems.append(problem) }
+                if let problem = assertAccessoryLabels(step, details: &details) { problems.append(problem) }
                 if let problem = assertClothes(step, details: &details) { problems.append(problem) }
                 if let problem = assertExpression(step, details: &details) { problems.append(problem) }
                 if let problem = assertIK(step, details: &details) { problems.append(problem) }
