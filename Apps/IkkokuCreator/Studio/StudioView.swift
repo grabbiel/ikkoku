@@ -37,6 +37,14 @@ struct StudioView: View {
 
 /// One workspace tree row as displayed.
 struct WorkspaceEntry: Equatable, Identifiable {
+    /// How the row marks the active source camera.
+    enum CameraMarker: Equatable {
+        /// The view looks through this camera.
+        case viewing
+        /// The camera is active but the view shows the saved camera; the
+        /// reason completes "source camera … " ("has a mirrored parent").
+        case savedCameraShown(reason: String)
+    }
     let id: UUID
     let name: String
     let kind: StudioObjectKind
@@ -44,6 +52,28 @@ struct WorkspaceEntry: Equatable, Identifiable {
     let depth: Int
     let selected: Bool
     let cameraPlaceholder: Bool
+    var cameraMarker: CameraMarker? = nil
+}
+
+extension WorkspaceEntry.CameraMarker {
+    var symbol: String {
+        switch self {
+        case .viewing: return "video.fill"
+        case .savedCameraShown: return "video.slash.fill"
+        }
+    }
+    var color: Color {
+        switch self {
+        case .viewing: return .accentColor
+        case .savedCameraShown: return .orange
+        }
+    }
+    var help: String {
+        switch self {
+        case .viewing: return "Active: the view looks through this camera"
+        case .savedCameraShown(let reason): return "Active, but the saved camera is shown: this camera \(reason)"
+        }
+    }
 }
 
 /// Reads the document for the tree rows and the object count.
@@ -53,12 +83,21 @@ struct StudioWorkspacePanel: View {
     var body: some View {
         let _ = PerfTrace.body(.studioWorkspace)
         let selection = model.selection
-        let entries = model.doc.flattened().map { entry in
-            WorkspaceEntry(id: entry.object.id, name: entry.object.name, kind: entry.object.kind, visible: entry.object.visible,
-                           depth: entry.depth, selected: selection == entry.object.id,
-                           cameraPlaceholder: model.isSourceCameraPlaceholder(entry.object.id))
+        let doc = model.doc
+        let activeCamera = model.activeSourceCameraView
+        let entries = doc.flattened().map { entry in
+            // A source camera placeholder reads "IKKOKU-MIRROR (camera 2)",
+            // as the status line and the view indicator name it.
+            let label = model.workspaceLabel(of: entry.object, sceneSHA256: doc.sourceSceneSHA256)
+            var marker: WorkspaceEntry.CameraMarker?
+            if let activeCamera, activeCamera.id == entry.object.id {
+                marker = activeCamera.fallbackReason.map { .savedCameraShown(reason: $0) } ?? .viewing
+            }
+            return WorkspaceEntry(id: entry.object.id, name: label.title, kind: entry.object.kind,
+                                  visible: entry.object.visible, depth: entry.depth, selected: selection == entry.object.id,
+                                  cameraPlaceholder: label.sourceCamera, cameraMarker: marker)
         }
-        StudioWorkspaceContent(model: model, entries: entries, objectCount: model.doc.objects.count).equatable()
+        StudioWorkspaceContent(model: model, entries: entries, objectCount: doc.objects.count).equatable()
     }
 }
 
@@ -411,8 +450,10 @@ struct StudioStatusLine: View {
         let _ = PerfTrace.body(.studioStatus)
         VStack(alignment: .leading, spacing: 2) {
             Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            if let cameraName = model.activeSourceCameraName {
-                Text("Viewing through source camera \"\(cameraName)\" (runtime only)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            // Which view is shown: the camera looked through, or the saved
+            // camera and why (`SourceStudioCameraLabel.indicator`).
+            if let indicator = model.activeSourceCameraView?.indicator {
+                Text(indicator).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
         }.padding(6)
     }
@@ -440,6 +481,10 @@ struct WorkspaceRow: View, Equatable {
             Image(systemName: icon).foregroundStyle(entry.kind == .light ? .yellow : .secondary).frame(width: 16)
             Text(entry.name).lineLimit(1).font(.callout)
             Spacer()
+            if let marker = entry.cameraMarker {
+                Image(systemName: marker.symbol).foregroundStyle(marker.color)
+                    .help(marker.help).accessibilityLabel(marker.help)
+            }
             Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
         }
         .padding(.vertical, 3).padding(.horizontal, 6)
@@ -487,8 +532,11 @@ struct ObjectInspectorState: Equatable {
     var tint: RGB?
     var emissive: Float
     var light: SceneLight?
+    /// "IKKOKU-MIRROR (camera 2)" for a source camera placeholder.
     var sourceCameraName: String?
     var lookingThroughSourceCamera: Bool
+    /// Why the view shows the saved camera while this camera is active.
+    var sourceCameraFallbackReason: String?
     var routeIsSource: Bool
     var routePlaying: Bool
 
@@ -505,10 +553,25 @@ struct ObjectInspectorState: Equatable {
         // as the panel did: every frame rebuild rewrites the route play
         // state, so reading it for other objects would re-evaluate this view
         // on every live tick.
-        sourceCameraName = model.selectedSourceCameraName
+        sourceCameraName = model.selectedSourceCameraTitle
         lookingThroughSourceCamera = sourceCameraName != nil && model.activeSourceCamera == o.id
+        sourceCameraFallbackReason = lookingThroughSourceCamera && model.activeSourceCameraView?.id == o.id
+            ? model.activeSourceCameraView?.fallbackReason : nil
         routeIsSource = model.selectedRouteIsSource
         routePlaying = routeIsSource && model.selectedRoutePlaying
+    }
+
+    /// The Camera section's toggle: "Deactivate" while the camera is active
+    /// but the saved camera is shown, since nothing is looked through then.
+    var sourceCameraButtonTitle: String {
+        guard lookingThroughSourceCamera else { return "Look through" }
+        return sourceCameraFallbackReason == nil ? "Stop looking through" : "Deactivate"
+    }
+    /// The Camera section's state line, worded like the workspace marker.
+    var sourceCameraStateText: String {
+        guard lookingThroughSourceCamera else { return "Inactive" }
+        guard let reason = sourceCameraFallbackReason else { return "Active: the view looks through this camera" }
+        return "Active, but the saved camera is shown: this camera \(reason)"
     }
 }
 
@@ -599,10 +662,10 @@ struct ObjectInspectorContent: View, Equatable {
                 SectionBox(title: "Camera") {
                     Text("Source camera: \(cameraName)").font(.callout)
                     HStack {
-                        Button(o.lookingThroughSourceCamera ? "Stop looking through" : "Look through") { model.toggleSourceCamera(id) }
+                        Button(o.sourceCameraButtonTitle) { model.toggleSourceCamera(id) }
                             .help(o.lookingThroughSourceCamera ? "Deactivate this camera object (the saved scene camera returns)" : "Look through this camera object (the orbit controller is disabled while it is active)")
                     }
-                    Text(o.lookingThroughSourceCamera ? "Active" : "Inactive").font(.callout)
+                    Text(o.sourceCameraStateText).font(.callout)
                     Text("Runtime only — original export keeps the saved camera and active flag.").font(.caption).foregroundStyle(.secondary)
                 }
             }
