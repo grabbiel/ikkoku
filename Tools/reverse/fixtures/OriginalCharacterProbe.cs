@@ -48,7 +48,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // (clothes, clothesState, shoesType). Null when none is given; then the
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
-    bool captureTopCompositeInputs,captureBottomCompositeInputs;
+    bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -263,6 +263,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 // top's three base colours change, before the original load.
                 case "captureTopCompositeInputs": captureTopCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "captureBottomCompositeInputs": captureBottomCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureOuterShoeCompositeInputs": captureOuterShoeCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureInnerShoeCompositeInputs": captureInnerShoeCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "topBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[0].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[1].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[2].baseColor=ParseColor(fields[1]);break;
@@ -271,6 +273,14 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 case "bottomBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[0].baseColor=ParseColor(fields[1]);break;
                 case "bottomBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[1].baseColor=ParseColor(fields[1]);break;
                 case "bottomBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[2].baseColor=ParseColor(fields[1]);break;
+                // Outer shoes have their own saved slot; do not recolor the
+                // inner shoe selection, even when both use the same catalog.
+                case "outerShoeBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[8].colorInfo[0].baseColor=ParseColor(fields[1]);break;
+                case "outerShoeBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[8].colorInfo[1].baseColor=ParseColor(fields[1]);break;
+                case "outerShoeBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[8].colorInfo[2].baseColor=ParseColor(fields[1]);break;
+                case "innerShoeBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[7].colorInfo[0].baseColor=ParseColor(fields[1]);break;
+                case "innerShoeBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[7].colorInfo[1].baseColor=ParseColor(fields[1]);break;
+                case "innerShoeBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[7].colorInfo[2].baseColor=ParseColor(fields[1]);break;
                 // Wear: catalog IDs for every outfit's nine clothes slots, the
                 // saved ChaFileStatus.clothesState and shoesType. LoadAsync's
                 // UpdateClothesStateAll and the first UpdateVisible apply them.
@@ -427,10 +437,23 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 {"clothesIDs",Array.ConvertAll(character.nowCoordinate.clothes.parts,p=>p.id)},{"objClothesActive",active},{"customMatBodyAlpha",bodyAlpha},
                 {"rule","ChaControl.UpdateVisible after LoadAsync (UpdateClothesStateAll); no SetClothesStateAll(0) at capture"}};
         }
-        for(int slot=0;slot<2;slot++) {
-            if(!(slot==0?captureTopCompositeInputs:captureBottomCompositeInputs))continue;
+        foreach(int slot in new[]{0,1,7,8}) {
+            if(!(slot==0?captureTopCompositeInputs:slot==1?captureBottomCompositeInputs:slot==7?captureInnerShoeCompositeInputs:captureOuterShoeCompositeInputs))continue;
             var inputs=new Dictionary<string,object>();
             var info=character.infoClothes[slot];
+            if(slot==7 || slot==8) {
+                var clothes=character.objClothes[slot];
+                var component=clothes.GetComponent<ChaClothesComponent>();
+                if(component==null || component.rendNormal01==null)throw new Exception("Shoe normal renderer role missing for slot "+slot);
+                var shoeRenderers=new List<object>();
+                foreach(var renderer in component.rendNormal01) {
+                    if(renderer==null)throw new Exception("Shoe normal renderer missing for slot "+slot);
+                    var shoeTarget=renderer.material.GetTexture("_MainTex");
+                    if(shoeTarget==null)throw new Exception("Shoe normal target missing for slot "+slot);
+                    shoeRenderers.Add(new Dictionary<string,object>{{"name",renderer.name},{"path",RelativePath(renderer.transform)},{"enabled",renderer.enabled},{"active",renderer.gameObject.activeInHierarchy},{"mainTex",ExportTexture(shoeTarget)}});
+                }
+                inputs["selection"]=new Dictionary<string,object>{{"slot",slot},{"shoesType",character.fileStatus.shoesType},{"id",info.Id},{"object",clothes.name},{"active",clothes.activeInHierarchy},{"normalRenderers",shoeRenderers},{"MainData",info.GetInfo(ChaListDefine.KeyType.MainData)},{"MainAB",info.GetInfo(ChaListDefine.KeyType.MainAB)},{"MainManifest",info.GetInfo(ChaListDefine.KeyType.MainManifest)}};
+            }
             foreach(var keys in new[]{new[]{ChaListDefine.KeyType.MainTexAB,ChaListDefine.KeyType.MainTex},new[]{ChaListDefine.KeyType.ColorMaskAB,ChaListDefine.KeyType.ColorMaskTex}}) {
                 string bundle=info.GetInfo(keys[0]),name=info.GetInfo(keys[1]);
                 if(bundle=="0")bundle=info.GetInfo(ChaListDefine.KeyType.MainAB);
@@ -438,7 +461,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 if(texture==null)throw new Exception("Clothes slot "+slot+" composite input missing: "+bundle+"/"+name);
                 inputs[keys[1].ToString()]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",Sha256File(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath),"abdata"),bundle))},{"name",name},{"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},{"mipLevels",texture.mipmapCount},{"file",ExportTexture(texture)}};
             }
-            report[slot==0?"topCompositeInputs":"bottomCompositeInputs"]=inputs;
+            report[slot==0?"topCompositeInputs":slot==1?"bottomCompositeInputs":slot==7?"innerShoeCompositeInputs":"outerShoeCompositeInputs"]=inputs;
         }
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
