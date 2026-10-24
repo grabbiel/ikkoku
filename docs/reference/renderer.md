@@ -3531,8 +3531,11 @@ for uncaptured mip levels. Fixed-LOD-zero sampling removes repeated-draw
 variation, whereas postponing discard with its predicate preserved does not.
 Those altered shaders are diagnostic only; production sampling and every source
 gate remain unchanged. The remaining sampling behavior is tracked separately.
-The diagnostic host is Apple M2 Ultra, macOS 27.0.1, effective Metal language 4.1,
-with fast math disabled; no obsolete pre-Metal-2.3 discard rule is assumed.
+The diagnostic host is Apple M2 Ultra, macOS 27.0.1, with fast math disabled.
+A separate JavaScript/Objective-C options query reported MSL 4.1; it did not
+record the earlier test process's effective compiler options. The later
+in-harness prefix control below records MSL 4.0. Neither context supports
+applying the obsolete pre-Metal-2.3 discard rule.
 
 Private evidence, exact per-run values and pixel coordinates are under
 `.local/codex-continue-2026-10-24/rolling/materials-shoes/`; the private fixture key
@@ -3549,9 +3552,12 @@ parameter cases, and the verification Python suite passes 191/191.
 [Issue #188](https://github.com/grabbiel/ikkoku/issues/188) tracks the separate
 held-frame draw variation above. Production sampling, source tolerances and
 composite coverage are unchanged. The following are private numerical
-diagnostics on the same Apple M2 Ultra / macOS 27.0.1 host, effective MSL 4.1,
-with fast math disabled; none is a performance measurement or a proposed
-quality-reducing workaround.
+diagnostics on the same Apple M2 Ultra / macOS 27.0.1 host, with fast math
+disabled; none is a performance measurement or a proposed quality-reducing
+workaround. The earlier MSL 4.1 value came from a separate options-query process,
+not these private test pipelines. The standalone synthetic tool records 4.1;
+the later source-prefix test records 4.0 inside its actual pipeline creation.
+Cross-context compiler-version equivalence is not established.
 
 The first controls use the same retained private Release test binary
 `eabc8275…`, immutable shader proxies, native shoe geometry and held frame.
@@ -3609,9 +3615,9 @@ precedes it. The current [Metal language specification](https://developer.apple.
 (2026-06-04, §§6.10–6.13, pages 227–239) describes helper execution for
 derivatives, requires uniform control flow, and states that Metal 2.3+ discard
 does not change derivative validity. That rules out applying the obsolete
-pre-2.3 discard restriction to this MSL 4.1 result. Quad reads also require an
-active source lane, so an unchecked quad-shuffle replacement would not be a
-sound fix.
+pre-2.3 discard restriction to the later in-harness MSL 4.0 reproduction below.
+Quad reads also require an active source lane, so an unchecked quad-shuffle
+replacement would not be a sound fix.
 
 The [Unity 5.6 shader semantics](https://docs.unity3d.com/560/Documentation/Manual/SL-ShaderSemantics.html)
 describe triangle-interpolated fragment inputs. Direct3D's
@@ -3628,9 +3634,11 @@ also preserves execution for derivative calculation.
 An asset-free control is now available as
 [`metal_derivative_repro.swift`](../../Tools/verification/metal_derivative_repro.swift)
 with [build/run instructions](../../Tools/verification/README.md#standalone-metal-derivative-diagnostic).
-It uses eight deterministic CPU-authored sRGB8 mips, the same default language
-version/disabled-fast-math options, and same-draw color/UV/derivative/sample/ID
-readback. Three cases cover the same 64×64-pixel region of a 128×128 target:
+It uses eight deterministic CPU-authored sRGB8 mips, default language options
+with fast math disabled, and same-draw color/UV/derivative/sample/ID readback.
+The actual default is recorded per process; the standalone 4.1 result does not
+establish equivalence to the source-prefix test's 4.0 context. Three cases cover
+the same 64×64-pixel region of a 128×128 target:
 a two-triangle continuous quad, a regular grid of 2,048 small triangles with
 continuous UVs, and identical grid geometry with discontinuous per-triangle
 UVs. Constant clip `w = 1` makes each triangle's affine gradient independently
@@ -3731,14 +3739,67 @@ All 135 artifact hashes verify, and all 99 artifacts from the five-case control
 remain byte-identical. The input mips remain unchanged after drawing.
 
 These affine and perspective grid controls still do not reproduce the recovered
-shader's variation. The next discriminant is a bounded source-shader reduction
-with the original varying baseline retained, rather than further geometry
-variants. No production shader or source gate changes here. Evidence, exact
+shader's variation. The following control reduces the source shader while
+retaining its varying baseline; no further geometry variant is added. No
+production shader or source gate changes here. Evidence, exact
 commands and both reviewed helper proposals are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling-perspective/`.
 Source SHA-256 is `f2ef808f32d24d019a6130d11a5cbf73b159250ee1a401a32bdad1efd1809122`;
 the executable is `750f115553d92e77c404547e86482bfe36bf755f7f4e9c848534394990c35005`;
 the report is `193fa0d1f3578380f9c7ebd9690607b24620de601888566dea0a17073696ffaf`.
+
+A subsequent **private prefix reduction** retains the original shoe geometry,
+vertex paths, fragment declarations and exact instructions through the only
+discard. Both retained assembly programs have the same eleven-operation prefix:
+alpha-mask coordinates/sample, mask combination, MainTex coordinates/sample,
+then alpha comparison/discard. No branch precedes MainTex, and no later discard
+is removed. The reduction removes only subsequent shading. Its color0 is
+intentionally diagnostic MainTex RGB with the original constant pass alpha
+(forward 1, outline 0); the three float MRT attachments, original sample calls,
+depth/stencil/blend state and input bindings remain unchanged. Full color parity
+between these two variants is neither expected nor tested.
+
+The Release test bundle is built at `1ce8aef` plus a private temporary test
+snippet, then the tracked test file is restored byte for byte. One locked process
+collects four draws × full/reduced × native-store/captured providers. The fresh
+full baseline varies with both providers, and **the prefix reduction also
+varies**:
+
+| Changed pixels in three repeats | Native full | Native prefix | Captured full | Captured prefix |
+| --- | ---: | ---: | ---: | ---: |
+| Color0 | 89 / 89 / 89 | 14 / 18 / 11 | 26 / 26 / 11 | 29 / 29 / 19 |
+| `dfdx` | 86 / 86 / 86 | 16 / 16 / 11 | 20 / 23 / 9 | 29 / 29 / 18 |
+| `dfdy` | 125 / 120 / 120 | 19 / 30 / 15 | 39 / 31 / 16 | 51 / 51 / 34 |
+| First MainTex sample | 97 / 98 / 98 | 16 / 22 / 12 | 33 / 35 / 14 | 42 / 42 / 27 |
+
+Every repeat and full/prefix comparison has identical visible UVs, primitive/pass
+IDs, 2,948-pixel coverage and alpha; all observed visible values are finite.
+All 64 raw attachment hashes verify, reconstructing each full float target from
+its zero-cleared exterior and exact saved ROI. All 148 bound mip-level instances
+are unchanged before/after the four provider/variant groups, and all 20
+provider/property mip chains match across full/prefix variants. Ten packed
+constant-buffer hashes also match. Six transformer boundary checks and seven
+independent literal readback checks pass, including hash-scope/row placement,
+nonfinite rejection and signed-zero bit differences.
+
+All four pipelines report MSL **4.0** (`262144`), fast math disabled and
+`preserveInvariance = false` from inside the actual test process. The prior
+standalone tool and separate options query report 4.1; identical default-option
+construction is not proof of identical effective compiler context. Earlier
+cross-context statements are qualified accordingly. This result shows that
+later lighting/material shading is not required for the observed instrumented
+draw variation. It does not identify a compiler/driver defect or a source-semantic
+violation: removing code and adding MRT outputs can change compiled execution.
+The next proposed discriminator retains actual geometry and the MainTex
+coordinate/sample operations while removing AlphaMask/discard, comparing common
+visible primitive/pass pixels if coverage changes. It is not a production fix.
+
+Evidence and both reviewed helper proposals are under
+`.local/codex-continue-2026-10-24/rolling/materials-sampling-reduction/`.
+The private executable SHA-256 is `453b54565cd3850644167b756119359e9732ebcc5d0280e7174c9da12a678572`;
+the report is `18530343b64474576d1927a08e2dd253ee9e8bce678205be04a55198a7b45c8b`.
+All recorded source/proxy/fixture hashes remain unchanged. No production shader,
+source tolerance, composite coverage or performance claim changes; #188 stays open.
 
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
