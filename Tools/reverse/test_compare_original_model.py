@@ -70,9 +70,14 @@ class ModelComparisonTests(unittest.TestCase):
                                          loadedHeadName='ct_head', loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG))
         self.native['identity']['headID']=201;self.write()
 
-    def bone1(self):
-        self.frame['neutralModel'].update(variant='female00-bone1',boneType=1,requestedBoneType=1,
+    def bone1(self, sex=1):
+        self.frame['neutralModel'].update(variant='female00-bone1' if sex else 'male00-bone1',
+            sex=sex,requestedSex=sex,boneType=1,requestedBoneType=1,
             exType=0,requestedExType=0,loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG))
+        self.native['identity']['sex']=sex
+        if sex == 0:
+            self.frame['neutralModel']['actualBodyValues'][0]=.6
+            self.native['bodyValues'][0]=.6
         table=np.zeros((32,9),dtype='<f4');table[0,0]=-.25;table[2,7]=.25
         data=struct.pack('<i',32)+table.tobytes();sha=hashlib.sha256(data).hexdigest()
         (self.folder/'body-correction.bytes').write_bytes(data)
@@ -84,6 +89,47 @@ class ModelComparisonTests(unittest.TestCase):
         self.native['nodeNames'].append('cf_hit_head');self.native['nodeParents'].append(0)
         self.native['nodeWorldMatrices'].append(local);self.native['nodeLocalMatrices']=[self.identity,local]
         self.write()
+
+    def test_corrected_male_requires_table_and_collider_with_only_height_coercion(self):
+        self.bone1(sex=0);result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed'])
+        self.assertEqual([(r['domain'],r['index']) for r in result['shapeCoercions']],[('body',0)])
+        self.assertEqual(result['bodyCorrection']['sourceBodyType'],1) # typeBone, not sex
+        self.assertTrue(result['headColliderScale']['gatePassed'])
+        self.native['nodeLocalMatrices'][1][0]=1
+        result=model.compare(self.folder,self.native)
+        self.assertFalse(result['gatePassed']);self.assertEqual(result['parts'][0]['vertices']['maximum'],0)
+        self.native['nodeLocalMatrices'][1][0]=1.08
+        self.native['inputs']['bodyCorrectionSHA256']='0'*64
+        with self.assertRaisesRegex(ValueError,'table identity'):model.compare(self.folder,self.native)
+        self.native['inputs']['bodyCorrectionSHA256']=self.frame['neutralModel']['bodyCorrection']['sha256']
+        self.frame['neutralModel']['actualBodyValues'][1]=.6;self.write()
+        with self.assertRaisesRegex(ValueError,'unexpectedly changed requested body'):model.compare(self.folder,self.native)
+        self.frame['neutralModel']['actualBodyValues'][1]=.5
+        del self.frame['neutralModel']['bodyCorrection'];self.write()
+        with self.assertRaisesRegex(ValueError,'table metadata'):model.compare(self.folder,self.native)
+
+    def test_corrected_male_rejects_typed_source_native_and_controller_identity_mismatches(self):
+        self.bone1(sex=0);valid=copy.deepcopy(self.frame);native=copy.deepcopy(self.native)
+        for key,wrong in [('sex',1),('requestedSex',1),('headID',200),('requestedHeadID',200),
+                          ('boneType',0),('requestedBoneType',0),('exType',1),('requestedExType',1),
+                          ('loadedHeadCatalogID',200)]:
+            for value in (False,True,None,wrong):
+                self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+                with self.subTest(source=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key,value in [('variant','female00-bone1'),('variant','male00'),('loadedHeadName','p_cf_head_00'),
+                          ('loadedHeadCatalog',{})]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(source=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key in ('sourceBodyType','sourceFaceType'):
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['bodyCorrection'][key]=0;self.write()
+            with self.subTest(controller=key),self.assertRaisesRegex(ValueError,'table metadata'):model.compare(self.folder,self.native)
+        self.frame=valid;self.write()
+        for key,wrong in [('sex',1),('headID',200),('boneType',0),('exType',1)]:
+            for value in (False,True,None,wrong):
+                self.native=copy.deepcopy(native);self.native['identity'][key]=value
+                with self.subTest(native=key,value=value),self.assertRaisesRegex(ValueError,'Native corrected model identity'):
+                    model.compare(self.folder,self.native)
 
     def test_corrected_model_table_and_collider_pass_independently_of_skin(self):
         self.bone1();result=model.compare(self.folder,self.native)

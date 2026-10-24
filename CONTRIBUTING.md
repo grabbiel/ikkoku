@@ -123,11 +123,26 @@ separate branches/worktrees when practical. In a shared checkout, avoid concurre
 edits to the same files, preserve unrelated uncommitted work, and never reset or
 overwrite another contributor's changes to resolve your own conflict. Coordinate
 access to shared VM probes and output directories; use distinct outputs per run.
+Assign one owner at a time to GUI interaction and shared app/VM/GPU captures.
+Coordinate compiler concurrency and use the existing local app lock when present.
+Before a quiet timing run, obtain explicit no-heavy-work acknowledgments from all
+active owners and release the quiet window afterward. Functional checks performed
+alongside compilation do not establish comparative performance.
 
 Assign bounded tasks with an expected deliverable and validation criteria. The
 integrating contributor reviews the resulting diff, resolves interface conflicts
 and verifies the combined behavior; an agent's success report is not sufficient.
 Human and agent-authored contributions follow the same review and evidence rules.
+
+External coding helpers are optional dependencies of the assigned worker. If a
+helper reaches a rate limit, exhausts its quota, or loses authentication, disable
+that helper for the current task and continue with the worker's own model and
+available tools. Preserve its worktree, edits, evidence and next step; report the
+fallback without terminating the worker or repeatedly retrying the helper.
+Resume helper calls only after recovery is established. If the worker's own
+execution service is unavailable, the coordinator preserves the checkpoint and
+reassigns the work to an available worker. Keep the same ownership, concurrency,
+review and shared-resource rules during either fallback.
 
 A handoff should name the branch/commit, owned files, completed work, exact checks
 and results, local fixture/output paths, unresolved blockers and the next concrete
@@ -139,6 +154,20 @@ Update the owning technical reference and audit feature/task row with the change
 Keep status limited to the behavior actually implemented and verified; check app
 reachability and persistence separately where needed. Retain historical results
 as dated evidence rather than relabeling them as fresh test runs.
+
+At each task handoff, the integrating contributor or orchestrator checks the
+evidence and records a scoped completion note: the resulting behavior, tested
+commit/fixture, validation, performance cost or benefit, and remaining boundary.
+Keep pending PRs and local experiments distinct from merged support. Preserve
+failed attempts when they explain a finding; a later pass does not erase them.
+
+Keep general documentation continuous and small. Alongside a completed task,
+update only the affected README summary, audit overview, architecture boundary or
+usage instruction when it changes. If those statements remain accurate, the
+owning reference/audit update is sufficient; do not rewrite the overview or advance
+its review date merely because another test passed. A broad revamp is a separate,
+explicitly scoped review. Dated handoffs remain historical and link to the
+maintained entry points rather than becoming a second live backlog.
 
 Put instructions in `docs/guides/`, contracts in `docs/reference/`, status/tasks in
 `docs/component-audit/`, and superseded records in `docs/archive/`. Link new pages

@@ -16,17 +16,18 @@ for issues, branches, pull requests, collaboration and validation requirements.
 
 ## Build
 
-Use an Apple Silicon development host with Xcode 26, Swift 6 tooling and the
-Metal compiler. Deployment settings currently differ: app 14.6, engine package 14,
+Use an Apple Silicon development host with Xcode 26 or newer, Swift 6 tooling and
+the Metal compiler. The public test lane also needs Python 3 and .NET SDK 10 or
+newer. Deployment settings currently differ: app 14.6, engine package 14,
 shader target 26.0. Older-macOS runtime support still needs verification. Run commands from the repository root:
 
 ```sh
 python3 Tools/verification/doctor.py --require public
+python3 Tools/verification/run.py --manifest Tools/verification/lanes/public.json
 xcodebuild -project Ikkoku.xcodeproj -scheme IkkokuCreator \
   -configuration Debug -derivedDataPath .local/build \
   -destination 'platform=macOS,arch=arm64' build
 open .local/build/Build/Products/Debug/Ikkoku.app
-swift test --package-path Packages/Engine
 ```
 
 The checker reports which recorded prerequisites are present. The
@@ -40,33 +41,39 @@ fixtures and otherwise return without exercising source behavior.
 
 ## Current scope
 
-The baseline audit is dated 2026-09-25, with maintained follow-ups through merged
-`main` commit `d671aee` (2026-10-01). The
-[2026-10-17 REA check](docs/reference/managed-recovery.md#independent-rea-check--2026-10-17)
-corroborates the retained managed recovery; it does not certify runtime parity.
+Overview refreshed **2026-10-24**, including merged work through
+[#200](https://github.com/grabbiel/ikkoku/pull/200). Each linked reference retains
+its own measured commit, inputs and exclusions; this refresh is not a new
+all-project acceptance run. All eight priority components remain incomplete.
 
-- **Maker:** original normal male/female assemblies, heads 0/200/201, 52 face and
-  44 body controls, bounded card-selected hair/clothes/accessories, material
-  recipes, static ABMX and identity-preserving edited-card export. Catalog coverage
-  is limited; special assemblies and arbitrary mod assets remain unsupported.
-- **Studio:** source record decoding, selected character reconstruction, cameras,
-  FK/IK kernels, animation and bounded original-scene editing. Full-body IK has a
-  recovered-source oracle; source Pose/Face/Clothes inspectors are reachable and
-  selected editor workflows have headless scenario coverage. Full interactive
-  acceptance remains open. Many decoded scene objects and settings lack runtime consumers.
-- **Renderer:** native toon rendering and a separate source-shader diagnostic
-  pipeline. Frozen geometry and selected garment comparisons pass; full-character
-  silhouette parity fails, and color passes only for the mip-preserved fixture
-  variant. Diagnostic translations are not the production renderer.
-- **Gameplay and mods:** cycle and fixed-event eligibility kernels, bounded ADV and translated
-  plugin execution, archive/catalog resolution and two exact native plugin
-  adapters. No complete playable game host or general managed-plugin compatibility.
-  The Mute adapter's startup, persistence and focus-dependent audio gain passed
-  local Release acceptance. Broader plugin integration remains incomplete.
+| Component | Implemented and verified scope | Remaining work |
+| --- | --- | --- |
+| **Character Maker** | Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape/color editing, static ABMX and identity-preserving edited export. [Maker contract](docs/reference/character/maker-assets.md). | Wider catalogs, special/modded assemblies, remaining owner-thread selection stalls and complete original editing workflows. |
+| **Base Models** | All six converted normal sex/head assemblies have independent original-player neutral and one coupled-shape comparisons; head 0 also has bounded bone-type-1 checks for both sexes. [Model evidence](docs/reference/character/neutral-model-parity.md). | Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. |
+| **Base Shapes** | 52 face and 44 body controls with recovered destination/order rules and bounded numerical gates; normal male Maker height follows the source fixed value. [Shape contracts](docs/reference/character/contracts.md). | Broader model/shape combinations and unsupported transform cases; control count alone does not establish universal parity. |
+| **Renderer** | Native toon rendering plus opt-in live translated source shaders in Studio, with explicit toon fallbacks and resource ownership/caching. [Renderer contract](docs/reference/renderer.md). | Remaining material dispatch, source scene effects, resource limits and representative performance acceptance. |
+| **Materials** | Selected native GPU composites and strict independent image gates. The controlled inner-shoe fixture reaches 18 of 20 live slots, with body and face fallbacks. [Material evidence](docs/reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24). | Body/face composites, broader layers/patterns/states and whole-character shading. Coverage is fixture-specific. |
+| **Visual Fidelity** | Bounded geometry, pose, material and matched-frame gates; independent live comparisons and sampling diagnostics. [Fidelity audit](docs/component-audit/renderer-and-foundation.md). | Full-character silhouette/color parity and same-input live sampling repeatability ([#188](https://github.com/grabbiel/ikkoku/issues/188)). |
+| **Mods** | Incremental immutable archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation. [Mod guide](docs/guides/mod-library.md). | General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. |
+| **Plugins** | Bounded translated execution and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Mounted-session controls, cancellation, fresh-profile failure isolation and selected save/restore workflows are exercised. [Execution contract](docs/reference/mods/plugin-execution.md). | General DLL/Harmony/coroutine/Unity compatibility and saved-profile restoration with initializer attachment reads. |
 
-A parsed record, preserved plugin payload or successful decompilation does not mean
-that its behavior is rendered, interactive or ported. See the audit for those
-separate boundaries and the next implementation tasks.
+Studio supports selected original characters, cameras, FK/IK, animation,
+expression/shape/outfit/accessory edits and bounded scene export. Its source
+Pose, Face and Clothes inspectors are reachable; broader interactive acceptance,
+mixed scene objects, maps, lights and effects remain open. Gameplay has bounded
+cycle, event and ADV kernels and a headless host, with no complete playable mode.
+
+Performance is part of every component's acceptance. Record responsiveness, total
+latency, memory and GPU work separately. Prepared head-selection inputs reduce
+owner-thread stalls at a total-latency and retained-input cost. Fallback reuse and
+[bounded composition batches](docs/reference/character/maker-assets.md#bounded-synchronous-composition-batches-208)
+reduce allocations and waits; measured owner-thread timing remains mixed. Peak
+memory was not measured. Functional success alone does not establish a speedup.
+
+The [current work and evidence](docs/component-audit/README.md#current-work-and-evidence)
+section distinguishes merged support, active investigations and historical
+checkpoints. Parsing, preserving a payload or recovering source code does not
+establish native execution, UI support or source-game parity.
 
 ## Repository map
 
