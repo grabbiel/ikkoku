@@ -3150,18 +3150,19 @@ three create programs and zero unavailable entries. Its path-independent
 content fingerprint is `0539171774027e0902c25610b68c543d4889bc73d0bfb34647d8d18bf11fbe43`.
 The controlled native rig now resolves 16/20 live slots, with body, face, bottom
 and shoes still falling back. This uses native pose and vertex streams under
-the controlled capture camera, not the original's frozen vertices. On pixels
-frontmost in both the capture-provider and native subsets:
+the controlled capture camera, not the original's frozen vertices. In the final
+Release gate, on pixels frontmost in both capture-provider and native subsets:
 
 | Family | Shared pixels | Mean byte error | p99 |
 | --- | ---: | ---: | ---: |
 | Normal top (`main_opaque`) | 26,349 | 0.02908 | 1 |
 | Eye whites/eyebrows/eyelines | 327 | 0.60347 | 0 |
 | Irises | 366 | 0.00455 | 0 |
-| Back hair | 3,524 | 0.98874 | 23 |
+| Back hair | 3,528 | 0.98970 | 23 |
 | Front hair | 6,153 | 0.66737 | 22 |
 
-The prior hair and eye limits are unchanged. Hair retains its documented edge
+The prior hair and eye limits are unchanged. Tooth/nose slots have no frontmost
+reference pixels here and are checked for resolution only. Hair retains its documented edge
 residual; whole-character production colour and arbitrary animated scenes are
 not claimed to match. Each output is composed only at assembly or recipe edit.
 The store now also caches Unity-default textures and normalized sampler states
@@ -3176,14 +3177,61 @@ create-shader caches. Original captures remain validation inputs, never runtime
 textures. `IKKOKU_GARMENT_COMPOSITE_PROBE` points to the distinct-colour capture;
 see [the verification fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
 
-**Validation state before final Release acceptance.** The fixture-backed Engine
-suite passed 788 tests with two named skips (the opt-in expression timing probe
-and the unavailable independent raw appearance-reference root), plus 21 CoreMath
-tests. Reverse tooling passed 443 tests with six optional skips; verification
-tooling passed 190 tests. The focused converter suite passed 19 tests. Debug and
-Release Engine builds and the Release app build succeeded. These are correctness/build results; quiet Release
-cold/warm/edit/frame measurements and opt-in-off production captures remain
-pending and are not inferred from Debug timings.
+**Release costs and validation.** A clean Release app at commit `f52cfa87`
+(binary SHA-256 `04e314a8f1fc6406a85e536c01b75b27495c87d3b2096d9098414455359d8538`)
+ran seven quiet probes: old/new native stores interleaved three times, then a
+capture-texture control. At 768×1024 on M2 Ultra, each used three warmup frames
+and 20 measured synchronous offscreen frames with reused targets and no readback.
+Both native variants drew 20 items/57,717 triangles; live slots were 15/16 and
+the capture-provider control resolved 20. The native pose and source vertex
+streams use the controlled capture camera; this measures frame work, not displayed
+FPS or arbitrary animated Studio scenes. Old/new PNGs were deterministic within
+each three-run group. The new store also changes BC1 interpolation precision, so
+this is the complete store expansion cost, not a pure material-count experiment.
+
+| Metric (median of three run p50s) | Old store, 15 live | New store, 16 live |
+| --- | ---: | ---: |
+| CPU encode | 0.276 ms | 0.307 ms |
+| GPU | 0.536 ms | 0.623 ms |
+| Completion | 1.209 ms | 1.296 ms |
+| Registered textures | 70 | 76 |
+| Metal allocated bytes | 495,960,064 | 543,358,976 |
+
+Run GPU p95 ranges were 0.552–0.632 ms old and 0.658–0.669 ms new. Resolving
+the extra material increases work and inputs; no speedup is claimed. The first
+app composition of the top cost 113.199 ms total (102.915 ms CPU encode, including
+pipeline creation). Later process-first compositions cost 15.079 and 12.931 ms.
+These are assembly costs, not per-frame costs, and Metal driver caches were not
+purged between launches.
+
+Three separate Release regression runs each performed 15 warm recolours plus
+unchanged lookups and a revert. Their edit medians were CPU 0.051–0.052 ms,
+GPU 0.085–0.096 ms, total 0.626–0.846 ms; unchanged lookups were
+0.105–0.118 ms. Each target occupied 5,652,480 Metal bytes. The isolated
+process-first compositions cost 13.988–18.421 ms after the app probes; they do
+not supersede the larger first-use app result. Two asset uploads, one default
+and one sampler stayed constant across the edit loop; each released edited
+target expired, and reverting while the original target remained live reused
+that exact target and its pixels.
+
+The fixture-backed Engine suite before the accepted-main merge passed 788 tests
+with two named skips (the opt-in expression timing probe and the unavailable
+independent raw appearance-reference root), plus 21 CoreMath tests. Final merged
+Release checks passed the controlled live-family gate and distinct eye-colour
+gate, plus all three independent top cost/output runs. Reverse tooling passed
+444 tests with six optional skips; verification tooling passed 190 tests. The
+focused converter suite passed 20 tests, including explicit
+vertical-block/green-endpoint coverage. Debug/Release Engine and clean merged
+Release app builds succeeded. Quiet runs preserve whole-frame colour failures
+from the four fallbacks; family gates are not whole-character parity. Three opt-in-off production pairs
+(source Studio, native Studio and Maker, 960×880) produced byte-identical PNGs
+against the retained accepted-main Release app (built at `4e80d8c`, runtime-source
+identical to `b2dde03`; binary SHA-256
+`8c948933dee435e684bd73fa7bd959aaae41b2f66349d6d948d5f5dc7e6057ce`).
+All six launches exited successfully. Private head/store/bindings and both
+original captures are retained independently of the worker checkout with their
+relative payloads and a complete file-hash inventory; global fixture promotion
+is a separate maintainer step.
 
 ### Native pose gate
 

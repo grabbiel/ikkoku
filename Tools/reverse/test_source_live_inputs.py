@@ -59,6 +59,21 @@ class TextureStoreTests(unittest.TestCase):
         for data, width, height in [(block[:-1],4,4), (block,0,4), (block,5,4)]:
             with self.assertRaises(ValueError): store.decode_bc1(data,width,height)
 
+    def test_bc1_green_six_bit_expansion_and_vertical_block_crop(self):
+        # G=42 expands to170; G=21 expands to85. High endpoint first keeps
+        # four-colour mode, so selector2 is (2*170+85)/3 before normalization.
+        selectors = 2 << (2 * (1 * 4 + 1))
+        top = struct.pack('<HHI', 0x0540, 0x02a0, selectors)
+        bottom = struct.pack('<HHI', 0x0010, 0x001f, 0)  # B=16 expands to132.
+        pixels = store.decode_bc1(top + bottom, 4, 5)
+        self.assertEqual(pixels.shape, (5, 4, 4))
+        expected = np.zeros((5, 4, 4), dtype=np.float64)
+        expected[:, :, 3] = 1
+        expected[:4, :, 1] = 170 / 255
+        expected[1, 1, 1] = 425 / (3 * 255)
+        expected[4, :, 2] = 132 / 255
+        np.testing.assert_allclose(pixels, expected, rtol=1e-7)
+
     def test_bc1_authored_mip_offsets_and_truncation(self):
         data = b''.join(struct.pack('<HHI', colour, 0, 0) for colour in (0xf800, 0x07e0, 0x001f))
         texture = NS(m_Width=4, m_Height=4, m_MipCount=3, m_TextureFormat=10,
