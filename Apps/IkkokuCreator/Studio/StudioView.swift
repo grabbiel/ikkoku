@@ -1200,7 +1200,21 @@ extension ClothesInspector {
                     }
                 }
             }
-            Text("The shoes row follows the saved shoesType \(preview.savedWear.shoesType) (\(preview.savedWear.shoesType == 0 ? "indoor" : preview.savedWear.shoesType == 1 ? "outdoor" : "neither")). Export writes an edited state into the embedded card; the loaded state writes nothing.")
+            // CharaStudio's State panel shoes buttons (OnClickShoesType ->
+            // OCIChar.SetShoesType): which shoe slot the shoes row shows.
+            HStack {
+                Text("Shoes type").font(.callout).frame(width: 90, alignment: .leading)
+                Picker("Shoes type", selection: Binding(get: { preview.shoesType }, set: { value in
+                    do { try model.setSourceShoesType(o.id, type: value); model.status = value == 0 ? "Indoor shoes" : "Outdoor shoes" }
+                    catch { model.status = "Shoes type: \(error)" }
+                })) {
+                    Text("Indoor").tag(0)
+                    Text("Outdoor").tag(1)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+            }
+            .accessibilityIdentifier("studio.source.shoesType")
+            Text("The shoes row addresses the \(preview.shoesType == 0 ? "indoor" : preview.shoesType == 1 ? "outdoor" : "neither") shoes (shoesType \(preview.shoesType), saved \(preview.savedWear.shoesType)). Export writes an edited state or shoes type into the embedded card; the loaded values write nothing.")
                 .font(.caption).foregroundStyle(.secondary)
             let notes = preview.wearDiagnostics
             if !notes.isEmpty {

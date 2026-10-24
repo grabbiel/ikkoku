@@ -123,7 +123,7 @@ Three additional Studio checks cover the Face tab's shared model entry point:
 `expression-edit`, `reload-save-expression` and `reload-load-expression`. They
 require the existing scenario scene, source avatar, Maker library and Studio look
 settings fixtures. Native reload runs in a fresh process without a source scene
-environment variable. The lane now contains 53 checks, including the two skirt save/load checks and `live-step-edit`.
+environment variable. The lane now contains 56 checks, including the two skirt save/load checks, `live-step-edit` and the three half-state checks.
 
 The fixed 512×512 scene framing shows key 65's eyebrow/eye area but crops its
 mouth, so the mouth-only pattern and openness checks use fully visible key 0.
@@ -380,12 +380,15 @@ per-row state pickers. `index` is CharaStudio's row: 0 top … 6 socks, 7 shoes
 or 3 off; a state the garment does not allow advances the way
 `ChaControl.SetClothesState` does. `setAccessoryVisible`
 `{key,index,on,errorContains?}` calls `StudioModel.setSourceAccessoryVisible`
-for accessory slot `index`. With `errorContains` either op must be refused with
-that fragment, and the document's `sourceClothesState`/`sourceShowAccessory`,
-the preview instance and its wear must stay unchanged.
+for accessory slot `index`. `setShoesType` `{key,state,errorContains?}` calls
+`StudioModel.setSourceShoesType` (the Clothes tab's Indoor/Outdoor picker;
+`state` 0 indoor, 1 outdoor). With `errorContains` each op must be refused
+with that fragment, and the document's
+`sourceClothesState`/`sourceShowAccessory`/`sourceShoesType`, the preview
+instance and its wear must stay unchanged.
 
 `assert`/`assertRejected` accept
-`clothes: {key,state?,saved?,rendered?,accessories?,accessoriesOff?,edited?,fallbacks?,diagnosticContains?}`,
+`clothes: {key,state?,saved?,rendered?,accessories?,accessoriesOff?,edited?,fallbacks?,diagnosticContains?,shoesType?,savedShoesType?,drawn?,bodyAlpha?}`,
 read from the live preview:
 
 - `state` is the applied nine-kind state, and `saved` is the card's
@@ -394,6 +397,11 @@ read from the live preview:
 - `accessories` / `accessoriesOff` list the saved accessory slots drawn and
   hidden.
 - `edited` says whether the document carries a wear override.
+- `shoesType` / `savedShoesType` are the applied and the card's saved shoes
+  type.
+- `drawn` lists exactly the drawn clothing renderers by source mesh name
+  (`o_top_tsyats_b/0`), without the assembly's `clothes-<kind>/` prefix.
+- `bodyAlpha` is the `ChangeAlphaMask` pair the body renders with.
 - `fallbacks` is the number of undrawable-state diagnostics.
 - `diagnosticContains` must match one wear diagnostic.
 
@@ -427,9 +435,10 @@ The checks:
   - Toggling an empty slot must be refused. Hiding slot 0 must change at least
     100 pixels, with undo and redo exact.
   - On the converted garments, a `StateType` 1 bottom's half request must
-    advance to off, and the top's half must report the missing `n_top_b`
-    meshes. The shoes row must mirror to kind 8, and the gloves row (not a
-    state kind there) must be refused.
+    advance to off. Since the third slice the top's half draws the converted
+    `o_top_tsyats_b` with body mask (0,1) and no fallback, changing at least
+    2,000 pixels from the bottom-off capture. The shoes row must mirror to
+    kind 8, and the gloves row (not a state kind there) must be refused.
   - After restoring, the export must equal the source SHA before and after
     reimport. The glasses-off export must reimport with slot 0 hidden as the
     card's saved state.
@@ -458,6 +467,37 @@ Recorded 2026-10-22, on the Debug build of this change, the five checks passed
 These are headless model calls and production renders. The visible pickers,
 toggles and CharaStudio reload remain separate gates.
 
+### Half-state meshes and indoor shoes (ST-C03 third slice)
+
+Three checks follow `reload-load-clothes`. They need
+`IKKOKU_STUDIO_HALF_STATE_SCENE`, a Studio scene built from the
+original-player wear probe's fixture card
+(`Tools/reverse/studio_selection_fixture.py --card`; key 10 wears top
+105-38, bottom 106-1, pantyhose 110-1, indoor shoes 112-2 and outdoor shoes
+112-3 in saved state `1,1,0,0,0,1,0,0,0` with `shoesType` 0), aliased into
+`IKKOKU_SOURCE_SCENE`, plus `IKKOKU_SOURCE_AVATAR` and an
+`IKKOKU_MAKER_LIBRARY` that converts the half-state set:
+
+- `half-state.json` (42 steps): the saved half states must draw exactly
+  `o_top_tsyats_b`, `o_bot_pants01_b`, `o_panst_00_b` and the uwabaki with
+  body mask (0,1) and no fallback. Top, bottom and pantyhose on must change at
+  least 2,000, 100 and 3,000 pixels and draw the `_a` meshes; `shoesType` 1
+  must swap in the outdoor shoes (at least 300 pixels). Undo and redo are
+  exact. Editing back to the half states and indoor shoes must clear the edit
+  and export the source SHA; the changed export must differ and reimport
+  with clothes state all on and `shoesType` 1 saved.
+- `reload-save-half-state` / `reload-load-half-state`: a top-on,
+  outdoor-shoes edit (at least 2,000 pixels) survives a native save and a
+  fresh process; turning the top back to half there changes at least 2,000
+  pixels, and undo restores the loaded frame exactly.
+
+Recorded 2026-10-24 on the Debug build of this change: 42/42, 8/8 and 7/7
+steps. Top on changed 3,499 pixels, bottom on 134, pantyhose on 5,844 and
+`shoesType` 1 604; the save-side edit changed 4,107; every exact comparison
+had 0 differing pixels and channel delta 0. The restored export kept SHA-256
+`510e6af7…fa1e`, and the changed export differs from the source body in four
+bytes (three `clothesState` bytes and `shoesType`).
+
 No `studio-scenarios` check reads the environment file's own `IKKOKU_SOURCE_SCENE`
 (the `app-smoke` and `private-source` lanes use it for a different
 scene). Each check aliases it through the fixture `from` key instead.
@@ -485,10 +525,10 @@ camera/route scenarios take a probe scene: `camera-load-winner`,
 `camera-deactivate`, `camera-rename` and `undo-camera` run against the
 two-active-camera scene-x (`IKKOKU_CAMERA_OBJECT_PROBE_SCENE`),
 `route-play-state` and `undo-route` against the scene with two
-saved-active routes (`IKKOKU_ROUTE_PROBE_SCENE`). The ten `reload-*`
+saved-active routes (`IKKOKU_ROUTE_PROBE_SCENE`). The `reload-*`
 scenarios run as ordered save→load pairs (`test_run.py` pins the
-adjacency): `reload-save-props`/`reload-save-camera`/`reload-save-route`/`reload-save-outfit`/`reload-save-clothes`
-take the same scene as their character/camera/route/outfit/clothes counterparts and
+adjacency): `reload-save-props`/`reload-save-camera`/`reload-save-route`/`reload-save-outfit`/`reload-save-clothes`/`reload-save-half-state`
+take the same scene as their character/camera/route/outfit/clothes/half-state counterparts and
 `saveDocument` a native card under `.local/verification/scenario-exports/`,
 and the `reload-load-*` check immediately after each one loads that card
 back. The load-side checks deliberately declare NO scene fixture: with

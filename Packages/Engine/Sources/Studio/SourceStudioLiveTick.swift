@@ -61,12 +61,14 @@ public enum SourceStudioLiveTick {
         public var edits: Edits
         public var clothesState: [UInt8]?
         public var showAccessory: [Bool]?
+        /// The document's shoesType edit (ST-C03); nil keeps the saved one.
+        public var shoesType: Int?
         public var expression: SourceStudioExpressionState?
 
         public init(world: float4x4, objectID: UInt32, edits: Edits, clothesState: [UInt8]?, showAccessory: [Bool]?,
-                    expression: SourceStudioExpressionState?) {
+                    shoesType: Int? = nil, expression: SourceStudioExpressionState?) {
             self.world = world; self.objectID = objectID; self.edits = edits
-            self.clothesState = clothesState; self.showAccessory = showAccessory; self.expression = expression
+            self.clothesState = clothesState; self.showAccessory = showAccessory; self.shoesType = shoesType; self.expression = expression
         }
 
         /// Whether `other` asks the preview for the same frame: the world
@@ -78,7 +80,7 @@ public enum SourceStudioLiveTick {
             objectID == other.objectID && (0..<4).allSatisfy { column in
                 (0..<4).allSatisfy { world[column][$0].bitPattern == other.world[column][$0].bitPattern }
             } && edits == other.edits && clothesState == other.clothesState && showAccessory == other.showAccessory
-                && expression == other.expression
+                && shoesType == other.shoesType && expression == other.expression
         }
     }
 
@@ -151,7 +153,7 @@ public enum SourceStudioLiveTick {
         }
         try? preview.setDynamicsStep(elapsed: input.elapsed, deltaTime: input.deltaTime)
         if let request = input.frame {
-            do { try preview.setWear(clothesState: request.clothesState, showAccessory: request.showAccessory) }
+            do { try preview.setWear(clothesState: request.clothesState, showAccessory: request.showAccessory, shoesType: request.shoesType) }
             catch { output.wearError = error }
             do { try preview.setExpressionState(request.expression) }
             catch { output.faceError = error }

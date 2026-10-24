@@ -630,7 +630,7 @@ class CheckExecutionTests(unittest.TestCase):
 SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "undo", "redo", "newScene", "saveDocument", "loadDocument",
                 "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
-                "setClothesState", "setAccessoryVisible", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
+                "setClothesState", "setAccessoryVisible", "setShoesType", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "hoverGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
@@ -804,7 +804,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 53)
+        self.assertEqual(len(self.checks), 56)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -888,6 +888,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         self.assertIn(step["index"], range(8) if op == "setClothesState" else range(20))
                         if op == "setClothesState":
                             self.assertIn(step["state"], range(4))
+                if op == "setShoesType":
+                    self.assertIsInstance(step["key"], int)
+                    self.assertIn(step["state"], (0, 1))
                 if op == "captureRender":
                     self.assertTrue(step["name"])
                     if "path" in step:
@@ -1001,7 +1004,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         clothes = step["clothes"]
                         self.assertIsInstance(clothes["key"], int)
                         self.assertTrue({"state", "saved", "rendered", "accessories", "accessoriesOff",
-                                         "edited", "fallbacks", "diagnosticContains"} & set(clothes),
+                                         "edited", "fallbacks", "diagnosticContains", "shoesType",
+                                         "savedShoesType", "drawn", "bodyAlpha"} & set(clothes),
                                         "a clothes assert must name what it checks: %s" % path)
                         for name in ("state", "saved"):
                             if name in clothes:
@@ -1012,6 +1016,13 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         for name in ("accessories", "accessoriesOff"):
                             if name in clothes:
                                 self.assertTrue(all(v in range(20) for v in clothes[name]))
+                        for name in ("shoesType", "savedShoesType"):
+                            if name in clothes:
+                                self.assertIn(clothes[name], (0, 1))
+                        if "drawn" in clothes:
+                            self.assertTrue(all(isinstance(v, str) and v for v in clothes["drawn"]))
+                        if "bodyAlpha" in clothes:
+                            self.assertEqual(len(clothes["bodyAlpha"]), 2)
                     for slot in ("face", "body"):
                         if slot in step:
                             self.assertIsInstance(step[slot]["index"], int)
@@ -1069,7 +1080,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "ik", "expression", "skirt-dynamics")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]

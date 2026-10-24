@@ -160,7 +160,7 @@ func liveTickStep(_ preview: SourceStudioCharacterPreview, character: Int, tick:
                                       kinematics: edit.kinematics, animationElapsed: elapsed)
     }
     try preview.setDynamicsStep(elapsed: elapsed, deltaTime: delta)
-    try preview.setWear(clothesState: nil, showAccessory: nil)
+    try preview.setWear(clothesState: nil, showAccessory: nil, shoesType: nil)
     try preview.setExpressionState(expression)
     let frame = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(), world: liveTickWorld(character: character),
                                   objectID: UInt32(character + 1), fkRotations: edit.fk, kinematics: edit.kinematics, animationElapsed: elapsed)

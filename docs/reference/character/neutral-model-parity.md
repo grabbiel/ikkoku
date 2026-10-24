@@ -90,6 +90,13 @@ python Tools/reverse/compare_original_model.py <probe-folder> <native.json> \
   --repeat <independent-same-model-probe> --visual-output <silhouette.png>
 ```
 
+`card-model … --studio-wear` assembles the Studio wear set (half-state meshes
+and indoor shoes) and selects only the renderers the card's saved clothes state
+and `shoesType` draw, through `SourceStudioWearLayout.saved`; its report adds a
+`studioWear` block (saved and loaded state, body mask, drawn and switched-off
+parts). It is for settled-player captures that keep a saved wear state
+([half-state meshes](../studio/scene-editing.md#half-state-meshes-and-indoor-shoes-st-c03-third-slice)).
+
 Use the female `source-avatar.json` or male `source-male-avatar.json` from the
 matching converted head directory. The inspector requires exact selected
 assembly identity and all selected catalog entries to be converted. It records

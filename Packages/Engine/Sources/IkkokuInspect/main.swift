@@ -102,7 +102,7 @@ do {
     let studioPose = arguments.count == 3 && arguments[0] == "studio-fk"
     let boneSnapshot = arguments.count == 3 && arguments[0] == "bone-modifier-snapshot"
     let cardPose = (arguments.count == 3 || (arguments.count == 5 && arguments[3] == "--studio-hands")) && arguments[0] == "card-pose"
-    let cardModel = (arguments.count == 4 || (arguments.count == 6 && arguments[4] == "--benchmark")) && arguments[0] == "card-model"
+    let cardModel = (arguments.count == 4 || (arguments.count == 5 && arguments[4] == "--studio-wear") || (arguments.count == 6 && arguments[4] == "--benchmark")) && arguments[0] == "card-model"
     let converting = arguments.count == 4 && arguments[0] == "layout"
     let rigSnapshot = arguments.count == 4 && ["rig-snapshot", "face-snapshot", "body-snapshot"].contains(arguments[0])
     let expressionSnapshot = arguments.count == 4 && arguments[0] == "expression-snapshot"
@@ -124,7 +124,7 @@ do {
                    ikkoku-inspect studio-fk <rig-or-avatar.json> <pose-request.json>
                    ikkoku-inspect bone-modifier-snapshot <rig-or-avatar.json> <modifiers.json>
                    ikkoku-inspect card-pose <avatar.json> <card.png> [--studio-hands <pose.json>]
-                   ikkoku-inspect card-model <avatar.json> <card.png> <maker-library.json> [--benchmark <iterations>]
+                   ikkoku-inspect card-model <avatar.json> <card.png> <maker-library.json> [--benchmark <iterations> | --studio-wear]
                    ikkoku-inspect layout <source-scene.png> <converted-catalog.json> <native-scene.png>
                    ikkoku-inspect rig-snapshot <source-rig.json> <shape-contract.json> <rest|height-rate>
                    ikkoku-inspect <face-snapshot|body-snapshot> <rig-or-avatar.json> <shape-contract.json> <rest|defaults|all=rate|index=rate,...>
@@ -315,7 +315,7 @@ do {
         let handsURL = arguments.count == 5 ? URL(fileURLWithPath: arguments[4]).standardizedFileURL : nil
         report.merge(try inspectSourceCardPose(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL, studioHandURL: handsURL)) { _, new in new }
     case "card-model":
-        report.merge(try inspectSourceCardModel(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL, libraryURL: URL(fileURLWithPath: arguments[3]).standardizedFileURL, benchmarkIterations: arguments.count == 6 ? (Int(arguments[5]) ?? -1) : 0)) { _, new in new }
+        report.merge(try inspectSourceCardModel(avatarURL: url, cardURL: URL(fileURLWithPath: arguments[2]).standardizedFileURL, libraryURL: URL(fileURLWithPath: arguments[3]).standardizedFileURL, benchmarkIterations: arguments.count == 6 ? (Int(arguments[5]) ?? -1) : 0, studioWear: arguments.count == 5)) { _, new in new }
     case "mod":
         let package = try SourceModPackage.load(url: url)
         report["modGUID"] = package.source.guid

@@ -4,7 +4,10 @@
 The library does not rewrite card identities. Only exact installed catalog rows are
 accepted; original data and derived images stay under ignored .local/. No card
 thumbnail is decoded. The default selection consists of ordinary hair, shirts,
-long trousers, shoes and glasses, with clothes fixed to their fully dressed state.
+long trousers, shoes and glasses, plus the half-state set: bloomers,
+pantyhose and indoor shoes. `meshNames` lists each garment's fully dressed
+(state 0) meshes; `alternates` lists the half-state meshes under the alternate
+ChaReference switch nodes, tagged with the clothes states that show them.
 """
 from __future__ import annotations
 
@@ -28,6 +31,12 @@ TABLES = {101: 'bo_hair_b_00', 102: 'bo_hair_f_00', 103: 'bo_hair_s_00',
 DEFAULT_SELECTION = [(101, i) for i in (0, 2, 9)] + [(102, i) for i in (1, 2, 5)] + [
     (105, 38), (105, 3), (105, 39), (105, 13), (106, 3), (106, 25),
     (112, 1), (112, 3), (123, 0)]
+# ST-C03 third slice: a StateType 0 bottom with n_bot_b, pantyhose (n_panst_b)
+# and the indoor shoes (uwabaki). No bra or shorts: the original masks a bra
+# under the top with the top's OverBraMask, which is not converted, and the
+# Studio fixture's dressed character wears bra 1 and shorts 1, so converting
+# them would change its dressed render (scene-editing.md, third slice).
+HALF_STATE_SELECTION = [(106, 1), (110, 1), (112, 2)]
 IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
 
@@ -36,8 +45,10 @@ def digest(path: Path) -> str:
 
 
 def write_json(path: Path, value, compact=False):
+    # Compact rigs use rig_inventory's separators, the form the retained library has.
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=None if compact else 2, allow_nan=False) + '\n')
+    text = json.dumps(value, separators=(',', ':'), allow_nan=False) if compact else json.dumps(value, indent=2, allow_nan=False)
+    path.write_text(text + '\n')
 
 
 def local_output(path: Path):
@@ -82,6 +93,56 @@ def ancestors(nodes, index):
         visited.add(index)
         yield nodes[index]
         index = nodes[index]['parent']
+
+
+# ChaFileDefine.ClothesKind of each clothes-state garment category.
+CLOTHES_KIND = {105: 0, 106: 1, 107: 2, 108: 3, 110: 5}
+ALTERNATE_SWITCHES = {105: {'n_top_b', 'n_bot_b', 'n_bot_c'}, 106: {'n_top_b', 'n_bot_b', 'n_bot_c'},
+                      107: {'n_top_b', 'n_bot_b', 'n_bot_c'}, 108: {'n_top_b', 'n_bot_b', 'n_bot_c'},
+                      110: {'n_panst_b'}}
+# ChaControl.UpdateVisible's switch-node activity per (kind, node): every
+# clause (kind, states) must hold. Nodes it never switches are absent.
+SWITCH_RULES = {
+    (0, 'n_top_a'): [(0, {0})], (0, 'n_top_b'): [(0, {1})],
+    (0, 'n_bot_a'): [(1, {0}), (0, {0, 1, 2})], (0, 'n_bot_b'): [(1, {1, 2, 3}), (0, {0, 1, 2})],
+    (1, 'n_bot_a'): [(1, {0})], (1, 'n_bot_b'): [(1, {1})],
+    (1, 'n_top_a'): [(0, {0}), (1, {0, 1, 3})], (1, 'n_top_b'): [(0, {1, 2, 3}), (1, {0, 1, 3})],
+    (2, 'n_top_a'): [(2, {0})], (2, 'n_top_b'): [(2, {1})],
+    (2, 'n_bot_a'): [(3, {0}), (2, {0, 1, 2})], (2, 'n_bot_b'): [(3, {1, 2, 3}), (2, {0, 1, 2})],
+    (3, 'n_bot_a'): [(3, {0})], (3, 'n_bot_b'): [(3, {1})], (3, 'n_bot_c'): [(3, {2})],
+    (5, 'n_panst_a'): [(5, {0})], (5, 'n_panst_b'): [(5, {1})],
+}
+SWITCH_NAMES = {node for _, node in SWITCH_RULES}
+
+
+def drawable(nodes, mesh):
+    chain = list(ancestors(nodes, mesh['node']))
+    return mesh.get('rendererEnabled', True) and all(n.get('active', True) for n in chain), chain
+
+
+def alternate(nodes, mesh, category):
+    """The half-state tag of a mesh hidden only by alternate switch nodes, else None.
+
+    `switches` are the ChaReference switch nodes above the mesh (outermost
+    last); `activeWhen` is the conjunction of their UpdateVisible conditions,
+    one clause per clothes kind with the states that satisfy it.
+    """
+    ok, chain = drawable(nodes, mesh)
+    hidden = ALTERNATE_SWITCHES.get(category, set())
+    if not ok or not any(n['name'] in hidden for n in chain):
+        return None
+    kind = CLOTHES_KIND[category]
+    switches = [n['name'] for n in chain if n['name'] in SWITCH_NAMES]
+    clauses = {}
+    for name in switches:
+        if (kind, name) not in SWITCH_RULES:
+            raise ValueError(f'Alternate switch node {name} has no recovered UpdateVisible rule for kind {kind}')
+        for other, states in SWITCH_RULES[(kind, name)]:
+            clauses[other] = clauses.get(other, {0, 1, 2, 3}) & states
+    if any(not states for states in clauses.values()):
+        raise ValueError('Alternate mesh is under switch nodes that are never active together')
+    return dict(meshName=mesh['name'], switches=switches,
+                activeWhen=[dict(kind=k, states=sorted(v)) for k, v in sorted(clauses.items())])
 
 
 def fully_dressed(nodes, mesh, category):
@@ -214,7 +275,10 @@ class Builder:
         if not selected or len({m['name'] for m in selected}) != len(selected):
             raise ValueError('Selected catalog prefab requires nonempty unique drawable meshes')
         entry['meshNames'] = [m['name'] for m in selected]
-        neutral['sources'] = [dict(path=str(path.resolve()), bytes=path.stat().st_size, sha256=digest(path))]
+        alternates = [a for a in (alternate(neutral['nodes'], m, category) for m in neutral['meshes']) if a]
+        if len({a['meshName'] for a in alternates} | set(entry['meshNames'])) != len(alternates) + len(selected):
+            raise ValueError('Alternate meshes require unique names distinct from the dressed meshes')
+        neutral['sources'] = [dict(path=str(path.resolve()), sha256=digest(path), bytes=path.stat().st_size)]
         rig_path = directory / 'rig.json'; write_json(rig_path, neutral, compact=True)
         entry['rig'] = dict(file=str(rig_path.relative_to(self.output)), sha256=digest(rig_path))
         if category >= 120:
@@ -224,28 +288,31 @@ class Builder:
             entry['attachment'] = dict(parent=parent, positionScale=.01,
                                        moveNodes=['N_move', 'N_move2'],
                                        ignoreMoves=row.get('HideHair', '0') == '1')
-        materials = []
-        for node, renderer, mesh_name, kind in renderers:
-            if mesh_name not in entry['meshNames']:
-                continue
-            for slot, pointer in enumerate(renderer.m_Materials):
-                reader = pointer.deref(); info = material(reader)
-                textures = {}
-                for prop, saved in reader.read().m_SavedProperties.m_TexEnvs:
-                    if prop not in ('_MainTex', '_ColorMask', '_AlphaMask', '_LineMask') or not saved.m_Texture.path_id:
-                        continue
-                    if saved.m_Texture.type.name != 'Texture2D':
-                        raise ValueError('Selected appearance texture is not Texture2D')
-                    textures[prop] = dict(self.texture(saved.m_Texture.read(), directory),
-                                          scale=[saved.m_Scale.x, saved.m_Scale.y],
-                                          offset=[saved.m_Offset.x, saved.m_Offset.y])
-                shader_tree = reader.read().m_Shader.read_typetree()
-                shader_path = directory / ('shader-' + hashlib.sha256(info['shader'].encode()).hexdigest()[:12] + '.json')
-                write_json(shader_path, shader_tree)
-                materials.append(dict(meshName=mesh_name, nodeName=neutral['nodes'][node]['name'],
-                                      materialSlot=slot, rendererKind=kind, material=info,
-                                      materialTree=reader.read_typetree(), textures=textures,
-                                      shaderTree=dict(file=str(shader_path.relative_to(self.output)), sha256=digest(shader_path))))
+        def material_records(names):
+            records = []
+            for node, renderer, mesh_name, kind in renderers:
+                if mesh_name not in names:
+                    continue
+                for slot, pointer in enumerate(renderer.m_Materials):
+                    reader = pointer.deref(); info = material(reader)
+                    textures = {}
+                    for prop, saved in reader.read().m_SavedProperties.m_TexEnvs:
+                        if prop not in ('_MainTex', '_ColorMask', '_AlphaMask', '_LineMask') or not saved.m_Texture.path_id:
+                            continue
+                        if saved.m_Texture.type.name != 'Texture2D':
+                            raise ValueError('Selected appearance texture is not Texture2D')
+                        textures[prop] = dict(self.texture(saved.m_Texture.read(), directory),
+                                              scale=[saved.m_Scale.x, saved.m_Scale.y],
+                                              offset=[saved.m_Offset.x, saved.m_Offset.y])
+                    shader_tree = reader.read().m_Shader.read_typetree()
+                    shader_path = directory / ('shader-' + hashlib.sha256(info['shader'].encode()).hexdigest()[:12] + '.json')
+                    write_json(shader_path, shader_tree)
+                    records.append(dict(meshName=mesh_name, nodeName=neutral['nodes'][node]['name'],
+                                        materialSlot=slot, rendererKind=kind, material=info,
+                                        materialTree=reader.read_typetree(), textures=textures,
+                                        shaderTree=dict(file=str(shader_path.relative_to(self.output)), sha256=digest(shader_path))))
+            return records
+        materials = material_records(entry['meshNames'])
         component_trees = [c.component.read_typetree() for c in environment.container[prefabs[0]].read().m_Component
                            if c.component.type.name == 'MonoBehaviour']
         catalog_textures = {}
@@ -261,8 +328,18 @@ class Builder:
                         catalogTextures=catalog_textures, componentTrees=component_trees,
                         limits=['Only fully dressed state 0 meshes are selected; alternate clothes states remain unimplemented.',
                                 'Skin binding data are preserved; this exporter does not implement original cloth or accessory dynamics.'])
+        # The dressed limit text stays as it was so materials.json keeps its bytes;
+        # alternates.json carries the half-state renderers.
         material_path = directory / 'materials.json'; write_json(material_path, evidence)
         entry['materialEvidence'] = dict(file=str(material_path.relative_to(self.output)), sha256=digest(material_path))
+        if alternates:
+            entry['alternates'] = alternates
+            sidecar = dict(schemaVersion=1, category=category, id=item_id, source=source, alternates=alternates,
+                           renderers=material_records([a['meshName'] for a in alternates]),
+                           limits=['Half-state renderers under the alternate ChaReference switch nodes; '
+                                   'materials.json lists the fully dressed (state 0) renderers.'])
+            sidecar_path = directory / 'alternates.json'; write_json(sidecar_path, sidecar)
+            entry['alternateMaterialEvidence'] = dict(file=str(sidecar_path.relative_to(self.output)), sha256=digest(sidecar_path))
         return entry, evidence
 
     def build(self, selections):
@@ -303,9 +380,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shared', type=Path, default=ROOT / '.local/reverse/rigs')
     parser.add_argument('--output', type=Path, default=ROOT / '.local/reverse/maker-library')
-    parser.add_argument('--select', action='append', help='Exact vanilla CATEGORY:ID (repeatable); default explicit clothed reference expansion')
+    parser.add_argument('--select', action='append', help='Exact vanilla CATEGORY:ID (repeatable); default: the clothed reference expansion plus the half-state set')
     args = parser.parse_args()
-    selections = [tuple(map(int, s.split(':'))) for s in args.select] if args.select else DEFAULT_SELECTION
+    selections = [tuple(map(int, s.split(':'))) for s in args.select] if args.select else DEFAULT_SELECTION + HALF_STATE_SELECTION
     if any(len(s) != 2 or s[0] not in TABLES or s[1] < 0 for s in selections):
         parser.error('Each selection must be a supported CATEGORY:ID')
     result = Builder(args.shared, args.output).build(selections)

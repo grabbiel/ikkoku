@@ -97,6 +97,33 @@ private enum MakerLibraryFixture {
     try SourceMakerLibrary.validateAssemblyIdentity(card: AppearanceTestFixture.card(modProperty: "ChaFileFace.HeadId"))
 }
 
+@Test func sourceMakerLibraryRejectsUnconditionalOrAmbiguousHalfStateMetadata() throws {
+    let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let clause: [String: Any] = ["kind": 0, "states": [1]]
+    let nested: [String: Any] = ["meshName": "half", "switches": ["n_top_b", "n_bot_a"],
+                                 "activeWhen": [clause, ["kind": 1, "states": [0]]]]
+    let entry: [String: Any] = ["category": 105, "id": 1, "name": "shirt", "meshNames": ["dressed"],
+                               "rig": ["file": "rig.json", "sha256": String(repeating: "0", count: 64)],
+                               "alternates": [nested]]
+    // A real nested switch conjunction remains supported. The boundary does
+    // not replace the independent source-rule/rig checks in the fixture test.
+    let library = try MakerLibraryFixture.library([entry], directory: directory)
+    #expect(library.entries[0].alternates?[0].activeWhen.count == 2)
+    let invalidFields: [[String: Any]] = [
+        ["activeWhen": []], // allSatisfy on this used to make the alternate always visible
+        ["activeWhen": [clause, clause]],
+        ["activeWhen": [["kind": 0, "states": [1, 1]]]],
+        ["activeWhen": [["kind": 0, "states": []]]],
+        ["switches": [""]], ["meshName": ""], ["meshName": "dressed"],
+    ]
+    for fields in invalidFields {
+        var invalid = entry; invalid["alternates"] = [nested.merging(fields) { _, value in value }]
+        #expect(throws: RigError.self) { try MakerLibraryFixture.library([invalid], directory: directory) }
+    }
+    var gloves = entry; gloves["category"] = 109
+    #expect(throws: RigError.self) { try MakerLibraryFixture.library([gloves], directory: directory) }
+}
+
 @Test func sourceMakerLibraryValidatesUnusedReferencePathsAndSelectedAssetHashes() throws {
     let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
     let card = try AppearanceTestFixture.card()
