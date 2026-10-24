@@ -78,7 +78,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PluginLibraryScenario.swift](../../Apps/IkkokuCreator/PluginLibraryScenario.swift) | Runtime / deterministic plugin command ownership, cancellation and restore checks |
-| [Apps/IkkokuCreator/PluginLibraryView.swift](../../Apps/IkkokuCreator/PluginLibraryView.swift) | Runtime / Studio plugin selection panel and request-owned operation state |
+| [Apps/IkkokuCreator/PluginLibraryView.swift](../../Apps/IkkokuCreator/PluginLibraryView.swift) | Runtime / Studio plugin selection, mounted-origin presentation and request-owned operation state |
 | [Apps/IkkokuCreator/ViewportRenderThread.swift](../../Apps/IkkokuCreator/ViewportRenderThread.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |

@@ -338,6 +338,48 @@ menu/action observations, not pixels or UI latency. Pending replacement and stal
 dialog concurrency remain deterministic model checks. The mounted summary/Unload
 for direct native or profile routes is a separate UI follow-up.
 
+The mounted-panel follow-up displays all existing origins. A library selection
+retains its exact generation and revision list. A translated profile has its own
+section; individual native plugins have a
+separate section with saved GUID, version and enabled state. Mixed profile/native
+mounts retain both sections, without deduplication across origins or an invented
+generation. The summary uses resident document pins and loaded session metadata,
+with no manifest reads, digest computation or runtime snapshots. Its text area is
+height-limited so Unload remains reachable for a larger package list.
+
+Every mounted origin exposes the same Run/Pause and Unload controls. Run/Pause
+still requires an executable session, while adapter-only mounts can unload.
+An interactive Unload guard rejects inactive/pending actions before delegating to
+the existing teardown; the programmatic method is unchanged. The deterministic
+checklist compares the presentation value used by SwiftUI, including ordinal
+identity, direct native save/fresh reload and fallback labels after unloading.
+An empty-binding profile remains an explicit loader error; its rejected load
+must retain the current session and summary. Optional empty presentation inputs
+are checked separately without claiming that the loader accepts such a profile.
+These assertions do not substitute for an AX check of visible controls.
+
+The 2026-10-24 clean Release build at `71e1309` passed 42 plugin/session checks,
+18 native-save steps and 9 fresh-process load steps, with no failures or skips;
+the runner's 84 Python tests also passed. The saved native reference and exact
+presentation identity survived reload; interactive unload restored all 20 fallback
+labels while preserving the selected outfit and saved accessory visibility.
+The first attempt retained two harness failures: an invalid assumption that an
+empty-binding profile could load, and an ordinary fresh-load checklist still in
+Maker mode. The corrected checklist selects Studio through `AppState` before
+ordinary steps and preserves the loader and inactive-action guards. Special
+mode/cancellation scenarios retain their own activation paths.
+
+Visible acceptance on the same binary confirmed generation 1 with its three
+identities, then opened the retained native scene through the actual File dialog.
+Its individual-plugin summary had Run disabled and Unload enabled, without an
+invented generation. Maker disabled both controls; the panel's Switch to Studio
+button reenabled Unload. Actual unload restored `スロット01` with visibility off
+and outfit 2 retained. The translated-profile dialog then loaded the controlled
+profile; its separate summary, Pause → Run → Pause and Unload worked. Mixed-origin
+and concurrent pending/stale cases remain automated coverage. The visible run
+checked AX values/actions and readable layout; its screenshot was inspected but
+not retained. No throughput or UI-latency claim follows from these functional runs.
+
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
 attached world transform. Repeating undo and trying redo preserve the old
