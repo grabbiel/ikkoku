@@ -420,32 +420,50 @@ reruns, and branch cleanup) is handed off in
       `scene-mirrored-camera.png`, which the original CharaStudio authored (camera
       key 2 under an item scaled (−1, 1, 1), saved active; control camera key 3 under
       an unmirrored copy), `StudioModel.viewCamera` renders from exactly the saved
-      camera while camera 2 is active and the status line reads "Source camera 2
-      view unresolved: Source camera object parent frame is mirrored …; using the
-      saved camera."; the control camera looks through, and both hold after export →
-      reimport. The original itself looks through the mirrored camera (scene-records.md
+      camera while camera 2 is active and the status line reads "Source camera
+      "IKKOKU-MIRROR" (camera 2) view unresolved: Source camera object parent frame
+      is mirrored …; using the saved camera." ("Source camera 2 view unresolved"
+      before st-ux-ik-camera); the control camera looks through, and both hold
+      after export → reimport. The original itself looks through the mirrored camera (scene-records.md
       "Mirrored camera parent"). Passed 2026-10-23.
       The degenerate-IK half is automated too, in `scenarios/reload-save-ik.json`
       (2026-10-23, 20/20 steps on the Debug build). A native female's Left hand
       target at X = 1e20 sets the status line to "Left hand IK left unsolved: IK
       reach is not finite.", and the arm stays bit-identical to its pre-IK pose.
       "Kept" means the pose before IK, not the last solved pose, whose elbow sat
-      2.3 cm away. After the target returns to a reachable X, the status line keeps
-      the unsolved message; this is an open finding.
+      2.3 cm away; the pre-IK pose follows from the document alone, while the last
+      solved pose would depend on edit history and is not saved. The stale status
+      is fixed (st-ux-ik-camera, 2026-10-23): after the target returns to X = 0.3
+      the status line reads "Left hand IK solved again.", two chains failing at
+      once are both named and clear independently, and a status written since
+      ("Added Kai") survives (`reload-save-ik` 36/36 on the Debug build of
+      `04a1816`; 6 of those 36 steps fail on main `c3e83fa`).
       [Native IK](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
       The visible status bar is not asserted headlessly.
       User, 2026-10-23, Debug build of main `c9df5df`: typing X =
       100000000000000000000 on a native female's Left hand target showed the
       unsolved status line and returned the arm to its pre-IK pose. Typing 0.3
-      solved it again, while the status line kept the unsolved message (the open
-      finding above). On `scene-mirrored-camera.png`, camera 2 was active with the
+      solved it again, while the status line kept the unsolved message (fixed,
+      above). On `scene-mirrored-camera.png`, camera 2 was active with the
       saved-camera fallback message. Look through on camera 3 switched the view,
       and Look through on camera 2 restored the fallback. UI finding: the tree
       names the cameras (`IKKOKU-MIRROR`, `IKKOKU-CONTROL`) under folders labelled
       "Unrendered source item 0/1", while the status line names camera 2 by its
       source key and adds "Viewing through source camera "IKKOKU-MIRROR"" during
       the fallback, so it is hard to tell which camera is which and which view is
-      shown.)
+      shown. Addressed by st-ux-ik-camera (2026-10-23): the tree, status line,
+      view indicator and Object tab all name the camera `IKKOKU-MIRROR (camera 2)`
+      (in sentences `source camera "IKKOKU-MIRROR" (camera 2)`), the tree marks
+      the active camera, and during the fallback the indicator reads "Saved
+      camera shown: source camera "IKKOKU-MIRROR" (camera 2) has a mirrored
+      parent" instead of "Viewing through". `mirrored-camera` asserts the
+      indicator and the tree labels (24/24). The two item folders keep
+      "Unrendered source item 0/1": their catalog key 0/0/0 is not in the
+      converted catalog and item records carry no name. An item whose key the
+      catalog maps but whose asset does not load now shows the catalog name with
+      "(unrendered source item N)". See
+      [Source camera labels](../../Tools/verification/README.md#source-camera-labels-st-ux-ik-camera).
+      Not yet re-checked by hand.)
 - [x] R4 IK fix (PR #115): drag a native character's IK handle. The hand or foot
       follows it, and re-solving the same target leaves the pose unchanged.
       (User, 2026-10-23: the hand follows the handle. Automated re-solve half:
