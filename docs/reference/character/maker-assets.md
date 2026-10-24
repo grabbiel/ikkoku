@@ -704,3 +704,63 @@ for repeated references, shared-cache bypass of deliberately invalid image bytes
 and failed image/file loads that retain partial observations while releasing only
 private candidates. They use public synthetic inputs on dedicated threads and
 assert identities, counts and cleanup rather than elapsed-time thresholds.
+
+Acceptance used fresh Release builds of parent `35e70e9` and candidate `a54b44e`.
+Their complete 557-file build manifests differ only in the three instrumented
+production files and the focused test file. The older `825e631` binary predates
+unrelated integration changes and was not used as an overhead control. Four
+candidate functional processes passed the 55-step selection and seven-step fresh
+reload scenarios for both sexes; all four card exports match the prior accepted
+batch outputs exactly.
+
+The subsequent quiet comparison passed eight interleaved processes in 56.5 seconds
+(56.694 seconds including the watchdog), retaining 24 artifacts and 48 successful
+selection observations. Four exports per sex are byte-identical across the two
+arms. The 16 no-op checks retain their resources and took 0.210–0.330 ms. The
+selected head-201 cold/warm comparisons below have only two samples per arm and
+cell; they measure instrumentation overhead and run variation, not a speedup.
+
+| Selection | Parent owner commit (ms) | Instrumented owner commit (ms) | Parent base load (ms) | Instrumented base load (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Female cold | 115.208–116.164 | 114.146–124.712 | 35.453–36.664 | 34.151–41.108 |
+| Female warm | 79.858–81.241 | 79.332–81.322 | 0.905–0.971 | 1.000–1.042 |
+| Male cold | 115.452–123.501 | 116.695–117.875 | 38.264–43.007 | 38.918–40.820 |
+| Male warm | 74.640–83.998 | 77.221–78.151 | 0.873–0.949 | 0.929–1.031 |
+
+The new cold-load breakdown attributes 32.006–38.064 ms in female and
+36.470–38.533 ms in male to 17 synchronous MetalKit texture loads per selection.
+Image creation accounts for 0.641–0.940 ms, encoded texture-file reads for
+0.494–0.718 ms, and appearance-document read plus JSON decoding for
+0.155–0.203 ms across those cold samples. Each cold load registers 17 private
+textures. Female requests 24 textures with seven private reuses; male requests 22
+with five reuses. The second lookup for each miss creates no additional texture.
+Warm loads make 24 female or 22 male shared-cache hits, with no image creation,
+MetalKit load or registration. All observed API/load failure counters are zero.
+This identifies the existing synchronous MetalKit loading boundary as the next
+candidate for investigation; it does not isolate its CPU and GPU costs or prove
+that moving it to another executor is safe or beneficial.
+
+Each female load reads a 5,754-byte document and 417,477 encoded texture bytes;
+male reads 5,718 and 456,762 bytes respectively. Cold resource-level presentation
+counts are 336,761 female and 389,942 male bytes after private reuse; warm counts
+equal the full encoded-read totals because each request reaches the shared cache.
+For these selected-head samples, both arms retain exactly 43 meshes, 98 female or
+115 male textures, 12 retiring resources and one 14,517-byte hidden buffer. Mesh
+buffers are 28,189,528 female or 28,138,208 male bytes; deformation-buffer counts
+remain zero. The separate card-composition input snapshot remains 32,506,112 raw
+bytes in both arms. These are observed store counts and logical input bytes, not
+total Metal allocations or RSS.
+
+Owner-commit differences have mixed signs. Mean total API differences are
++13.335 ms female cold, +15.877 ms female warm, −3.723 ms male cold and +6.810 ms
+male warm, including worker variation outside the new diagnostic intervals.
+The sample cannot establish zero overhead, a consistent latency change or an FPS
+benefit. The remaining owner stalls keep #192 open.
+
+The original functional inputs and proof remain retained separately. Before the
+quiet launch, a v2 lane changed only the eight process timeouts from 600 to 30
+seconds and added a 120-second owned-process-group watchdog. Its first disposable
+termination self-test exposed a Darwin liveness-query error after both synthetic
+processes had exited; that attempt was preserved, and a corrected group-inventory
+test passed. No application rerun was needed. The one quiet collection exited
+normally with no timeout, signals or surviving group members.
