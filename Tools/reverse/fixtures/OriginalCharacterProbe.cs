@@ -61,6 +61,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         modelVariant=File.ReadAllText(path).Trim();
         if(modelVariant=="female00") { modelSex=1;modelHead=0; }
         else if(modelVariant=="female200") { modelSex=1;modelHead=200; }
+        else if(modelVariant=="female201") { modelSex=1;modelHead=201; }
         else if(modelVariant=="male200") { modelSex=0;modelHead=200; }
         else throw new Exception("Unsupported neutral model variant");
         if(handPatterns!=null || lookPhases.Count>0)throw new Exception("Neutral model mode cannot use hand/look phases");
@@ -375,9 +376,17 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var ramp=Shader.GetGlobalTexture("_RampG");if(ramp!=null) globals["_RampG"]=ExportTexture(ramp);
         var report=new Dictionary<string,object>{{"schemaVersion",1},{"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()},{"masterTextureLimit",QualitySettings.masterTextureLimit},{"lodBias",QualitySettings.lodBias},{"fixedDeltaTime",Time.fixedDeltaTime},{"maximumDeltaTime",Time.maximumDeltaTime},{"width",Width},{"height",Height},{"scope","Frozen original clothed character; source-evaluated geometry, source materials, dedicated camera/light; no Studio post-processing"},{"card","fixture-card.png"},{"color","original-color.png"},{"camera",new Dictionary<string,object>{{"position",V(camera.transform.position)},{"target",V(bounds.center)},{"rotation",V(camera.transform.rotation)},{"fov",camera.fieldOfView},{"near",camera.nearClipPlane},{"far",camera.farClipPlane},{"view",M(camera.worldToCameraMatrix)},{"projection",M(camera.projectionMatrix)}}},{"light",new Dictionary<string,object>{{"direction",V(key.transform.forward)},{"color",V(key.color)},{"intensity",key.intensity},{"ambient",V(RenderSettings.ambientLight)}}},{"bounds",new Dictionary<string,object>{{"min",V(bounds.min)},{"max",V(bounds.max)}}},{"background",V(camera.backgroundColor)},{"globals",globals},{"textures",textures},{"meshes",meshes},{"bones",bones},{"renderCPUMilliseconds",timer.Elapsed.TotalMilliseconds}};
         if(modelVariant!=null) {
-            if(character.sex!=modelSex || character.chaFile.custom.face.headId!=modelHead || character.chaFile.custom.body.typeBone!=0)
+            if(character.sex!=modelSex || character.chaFile.custom.face.headId!=modelHead || character.chaFile.custom.body.typeBone!=0 || character.infoHead==null || character.infoHead.Id!=modelHead)
                 throw new Exception("Loaded source model identity differs from request");
             report["neutralModel"]=new Dictionary<string,object>{{"variant",modelVariant},{"sex",character.sex},{"headID",character.chaFile.custom.face.headId},{"boneType",character.chaFile.custom.body.typeBone},{"requestedSex",modelSex},{"requestedHeadID",modelHead},{"requestedBoneType",0},{"hiPoly",character.hiPoly},{"enableCorrectArmSize",Manager.Character.Instance.enableCorrectArmSize},{"enableCorrectHandSize",Manager.Character.Instance.enableCorrectHandSize},{"loadedHeadName",character.objHead.name},{"loadedHeadCatalogID",character.infoHead.Id},{"eyeAngleHRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleHRate(EYE_LR.EYE_L)},{"eyeAngleVRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleVRate()},{"requestedBodyValues",modelRequestedBody},{"requestedFaceValues",modelRequestedFace},{"actualBodyValues",character.chaFile.custom.body.shapeValueBody},{"actualFaceValues",character.chaFile.custom.face.shapeValueFace},{"handControllerCounts",modelHandCounts},{"handPatterns",new[]{handPatterns["L"],handPatterns["R"]}},{"animators",modelAnimators},{"elapsedFramesAfterLoad",0},{"clock","no post-load Animator tick; source shape and neutral FBS setters evaluated once; loading-clock determinism must be checked separately"},{"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
+        }
+        if(modelVariant!=null) {
+            // Read the selected source catalog row, not the requested ID or
+            // renamed ct_head object, to distinguish exact prefab/shape data.
+            var catalog=new Dictionary<string,object>();
+            foreach(var catalogKey in new[]{ChaListDefine.KeyType.Name,ChaListDefine.KeyType.MainManifest,ChaListDefine.KeyType.MainAB,ChaListDefine.KeyType.MainData,ChaListDefine.KeyType.ShapeAnime})
+                catalog[catalogKey.ToString()]=character.infoHead.GetInfo(catalogKey);
+            ((Dictionary<string,object>)report["neutralModel"])["loadedHeadCatalog"]=catalog;
         }
         if(modelShapeRequest!=null)((Dictionary<string,object>)report["neutralModel"])["shapeRequest"]=modelShapeRequest;
         if(wearRequest!=null) {
