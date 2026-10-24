@@ -1,8 +1,12 @@
 # Claude handoff: Renderer, Character Maker and base models
 
-Written 2026-10-23 after the three-task Codex continuation. Start here for the
-latest state; the [older local-environment handoff](HANDOFF-2026-10-23-local-environment.md)
-retains earlier verification history and unrelated open findings.
+**Historical checkpoint, 2026-10-23.** For current support and work, read the
+[project overview](README.md#current-scope) and
+[maintained audit](docs/component-audit/README.md#current-work-and-evidence).
+The branch state, task limits and next steps below describe this session and
+have since changed; current user directions take precedence. The
+[older local-environment handoff](HANDOFF-2026-10-23-local-environment.md)
+retains earlier verification history.
 
 ## Start state
 

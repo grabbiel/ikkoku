@@ -237,7 +237,7 @@ public final class SourceStudioCharacterPreview {
     /// resets clear it), so it is solved once per tick (R7). The animation
     /// clock returns the same time for a repeated elapsed value, and every
     /// other step is a pure function of its inputs.
-    private typealias SolvedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, effective: SourceStudioKinematicState, guides: [SourceStudioIK.Guide])
+    fileprivate typealias SolvedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, effective: SourceStudioKinematicState, guides: [SourceStudioIK.Guide])
     private var solvedCache: SolvedPose?
     /// The bound Studio pose (`KoikatsuCharacterRecord.bindPose`) of the last
     /// solve, with what it was bound from: the rig, the effective kinematic
@@ -290,6 +290,55 @@ public final class SourceStudioCharacterPreview {
     }
     public func clearDynamicsStep() { dynamicsStep = nil; evaluatedCache = nil; solvedCache = nil; dynamics?.resetHistory() }
 
+    /// Only for a synchronous candidate's attachment reads. Unlike a dynamics
+    /// checkpoint this retains shape/solve inputs and gaze references too, so
+    /// rejecting installation restores the existing instance without rebuilding
+    /// geometry, allocating resources, resetting clocks or losing warm history.
+    public struct AttachmentReadCheckpoint {
+        fileprivate let owner: ObjectIdentifier
+        fileprivate let shapeRevision: UInt64, neckPoseRevision: UInt64
+        fileprivate let baseline: RigPose, pose: RigPose
+        fileprivate let latePoseCorrection: SourceBodyLateCorrection
+        fileprivate let controller: SourceStudioPose
+        fileprivate let ikGuides: [SourceStudioIK.Guide], ikSolver: SourceStudioIK?
+        fileprivate let face: [Float]?, body: [Float]?, irisRotations: [Double]
+        fileprivate let dynamics: SourceStudioDynamics?, dynamicsStep: (elapsed: Float, delta: Float)?
+        fileprivate let evaluated: EvaluatedPose?, solved: SolvedPose?
+        fileprivate let poseBinding: (rig: RigDefinition.Identity, kinematics: SourceStudioKinematicState, fk: [Int: Float3], binding: KoikatsuCharacterRecord.PoseBinding)?
+        fileprivate let animationCache: [String: SourceStudioAnimation], animationPlayback: SourceStudioAnimation.Playback
+        fileprivate let neckRuntime: SourceStudioNeckLookRuntime?, neckRotations: [simd_quatf]?
+        fileprivate let hasSteppedNeckLook: Bool, eyeRuntime: SourceStudioEyeLookRuntime?, eyeFailure: String?
+        fileprivate let reportedNeckLookFK: Set<SourceStudioNeckLookType>, diagnostics: [String]
+    }
+
+    public func captureAttachmentReadCheckpoint() -> AttachmentReadCheckpoint {
+        .init(owner: ObjectIdentifier(self), shapeRevision: shapeRevision, neckPoseRevision: neckPoseRevision,
+            baseline: baseline, pose: pose, latePoseCorrection: latePoseCorrection, controller: controller,
+            ikGuides: ikGuides, ikSolver: ikSolver, face: sourceFaceValues, body: sourceBodyValues, irisRotations: irisRotations,
+            dynamics: dynamics, dynamicsStep: dynamicsStep, evaluated: evaluatedCache, solved: solvedCache, poseBinding: poseBinding,
+            animationCache: animationCache, animationPlayback: animationPlayback, neckRuntime: neckLookRuntime,
+            neckRotations: neckLookRuntime?.lastLocalRotations, hasSteppedNeckLook: hasSteppedNeckLook,
+            eyeRuntime: eyeLookRuntime, eyeFailure: eyeLookFailure, reportedNeckLookFK: reportedNeckLookFK, diagnostics: diagnostics)
+    }
+
+    public func restoreAttachmentReadCheckpoint(_ checkpoint: AttachmentReadCheckpoint) {
+        precondition(checkpoint.owner == ObjectIdentifier(self), "Attachment checkpoint belongs to another character instance.")
+        shapeRevision = checkpoint.shapeRevision; neckPoseRevision = checkpoint.neckPoseRevision
+        baseline = checkpoint.baseline; pose = checkpoint.pose; latePoseCorrection = checkpoint.latePoseCorrection
+        controller = checkpoint.controller; ikGuides = checkpoint.ikGuides; ikSolver = checkpoint.ikSolver
+        sourceFaceValues = checkpoint.face; sourceBodyValues = checkpoint.body; irisRotations = checkpoint.irisRotations
+        dynamics = checkpoint.dynamics; dynamicsStep = checkpoint.dynamicsStep
+        evaluatedCache = checkpoint.evaluated; solvedCache = checkpoint.solved; poseBinding = checkpoint.poseBinding
+        animationCache = checkpoint.animationCache; animationPlayback = checkpoint.animationPlayback
+        // editedPose may clear this one property on the existing runtime after a
+        // malformed neck write. Shape resets replace the runtime instead; keep
+        // its original reference and value, without cloning an untouched solver.
+        checkpoint.neckRuntime?.lastLocalRotations = checkpoint.neckRotations
+        neckLookRuntime = checkpoint.neckRuntime; hasSteppedNeckLook = checkpoint.hasSteppedNeckLook
+        eyeLookRuntime = checkpoint.eyeRuntime; eyeLookFailure = checkpoint.eyeFailure
+        reportedNeckLookFK = checkpoint.reportedNeckLookFK; diagnostics = checkpoint.diagnostics
+    }
+
     /// `coordinate` selects a saved outfit other than the card's
     /// Status.coordinateType (ST-C03): CharaStudio's OCIChar.SetCoordinateInfo
     /// reloads the clothes from chaFile.coordinate[type], so the whole
@@ -297,7 +346,8 @@ public final class SourceStudioCharacterPreview {
     /// baseline, IK and dynamics bindings — is built for that outfit exactly
     /// as an import of a card saved with it. nil keeps the saved outfit; an
     /// index outside 0...6 or one the card does not save is rejected.
-    public init(reference: SourceStudioCharacterReference, resources: ResourceStore, coordinate selectedCoordinate: Int? = nil) throws {
+    public init(reference: SourceStudioCharacterReference, resources: ResourceStore, coordinate selectedCoordinate: Int? = nil,
+                appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws {
         self.reference = reference
         self.resources = resources
         attachments = try reference.attachmentCatalogFile.map { try SourceStudioAttachments.load(url: URL(fileURLWithPath: $0)) }
@@ -427,7 +477,7 @@ public final class SourceStudioCharacterPreview {
         }
         wearMessages += wearEvaluation.fallbacks
         let contract = try SourceShapeContract.decode(Self.read(directory.appendingPathComponent("character-shape-contract.json"), maximum: 32 * 1024 * 1024))
-        var appearance = try SourcePreviewAppearance.load(url: rigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
+        var appearance = try SourcePreviewAppearance.load(url: rigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources, transaction: appearanceTransaction)
         var messages: [String] = []
         if let blinkDiagnostic { messages.append(blinkDiagnostic) }
         messages += faceDiagnostics
@@ -449,7 +499,7 @@ public final class SourceStudioCharacterPreview {
             let applied = try appearance.applying(draft, bindings: bindings, directory: directory, resources: resources)
             appearance = applied.appearance; messages += applied.diagnostics; appearanceAppliedFields.formUnion(applied.appliedFields)
         }
-        if let draft, let applied = try prepared?.appearance(base: appearance, card: draft, resources: resources, modLibrary: nil) {
+        if let draft, let applied = try prepared?.appearance(base: appearance, card: draft, resources: resources, modLibrary: nil, transaction: appearanceTransaction) {
             appearance = applied.appearance; messages += applied.diagnostics; appearanceAppliedFields.formUnion(applied.appliedFields)
         }
         appearanceCard = card
@@ -995,7 +1045,7 @@ public final class SourceStudioCharacterPreview {
     /// is rebuilt; only the rendered `preview` instance is swapped and the
     /// next `frame` reflects it. Export diffs the document's colors against
     /// `savedColors` for the embedded-card writeback.
-    public func setColorEdits(_ edits: [String: Float4]?) throws {
+    public func setColorEdits(_ edits: [String: Float4]?, appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws {
         let edits = edits?.isEmpty == true ? nil : edits
         guard edits != sourceColorEdits else { return }
         guard !appliedColorFields.isEmpty else {
@@ -1010,7 +1060,7 @@ public final class SourceStudioCharacterPreview {
             do { try draft.setColor(id, rgba: rgba) }
             catch { throw RigError.invalid("Color \(id) must be finite and between 0 and 1.") }
         }
-        var appearance = try SourcePreviewAppearance.load(url: appearanceRigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
+        var appearance = try SourcePreviewAppearance.load(url: appearanceRigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources, transaction: appearanceTransaction)
         var messages: [String] = []
         var fields: Set<String> = []
         if FileManager.default.fileExists(atPath: appearanceBindingsURL.path) {
@@ -1019,7 +1069,7 @@ public final class SourceStudioCharacterPreview {
             let applied = try appearance.applying(draft, bindings: bindings, directory: appearanceDirectory, resources: resources)
             appearance = applied.appearance; messages += applied.diagnostics; fields.formUnion(applied.appliedFields)
         }
-        if let applied = try appearancePrepared?.appearance(base: appearance, card: draft, resources: resources, modLibrary: nil) {
+        if let applied = try appearancePrepared?.appearance(base: appearance, card: draft, resources: resources, modLibrary: nil, transaction: appearanceTransaction) {
             appearance = applied.appearance; messages += applied.diagnostics; fields.formUnion(applied.appliedFields)
         }
         // The Maker's Apply gate keeps unbound colors as reference materials;

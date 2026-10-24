@@ -1157,17 +1157,86 @@ final class StudioModel: ViewportInputHandler {
         return SourceStudioAccessoryNamesPlugin.update(rows, accessoryNames: names).compactMap(\.text)
     }
 
-    func pluginAttachmentFrame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
-        if sourceInstances[parent.id] == nil, let reference = parent.sourceCharacter {
-            guard !resourceBlockedObjects.contains(parent.id) else {
-                throw RigError.invalid("Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")
-            }
-            let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: parent.sourceOutfit)
-            preview.automaticBlink = sourceAutomaticBlink
-            if let edits = parent.sourceColorEdits { try? preview.setColorEdits(edits) }
-            sourceInstances[parent.id] = preview
+    /// Fresh-profile callbacks may read hidden characters before installation
+    /// succeeds. New previews/textures belong to this request; existing previews
+    /// keep their warm histories and are checkpointed only on first use.
+    @MainActor final class PluginAttachmentPreparation {
+        private weak var studio: StudioModel?
+        private var cold: [UUID: SourceStudioCharacterPreview] = [:]
+        private var warm: [UUID: (preview: SourceStudioCharacterPreview, checkpoint: SourceStudioCharacterPreview.AttachmentReadCheckpoint)] = [:]
+        private var appearance: SourceAppearanceLoadTransaction?
+        private var committed = false, aborted = false
+
+        init(studio: StudioModel) {
+            self.studio = studio
+            appearance = SourceAppearanceLoadTransaction(resources: studio.host.renderer.resources)
         }
-        guard let point = child.sourceAttachmentPoint, let preview = sourceInstances[parent.id] else {
+
+        func frame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
+            guard let studio else { throw SourcePluginError.runtime("Studio closed during a plugin callback.") }
+            if committed { return try studio.pluginAttachmentFrame(child: child, parent: parent) }
+            guard !aborted else { throw SourcePluginError.runtime("Plugin installation was abandoned.") }
+            let preview: SourceStudioCharacterPreview
+            if let staged = cold[parent.id] { preview = staged }
+            else if let existing = studio.sourceInstances[parent.id] {
+                if warm[parent.id] == nil { warm[parent.id] = (existing, existing.captureAttachmentReadCheckpoint()) }
+                preview = existing
+            } else {
+                preview = try studio.makePluginAttachmentPreview(parent: parent, appearanceTransaction: appearance)
+                cold[parent.id] = preview
+            }
+            return try studio.pluginAttachmentFrame(child: child, parent: parent, preview: preview)
+        }
+
+        /// All callbacks and saved-state validation have succeeded. No suspension
+        /// or fallible work follows. Only surviving matching objects enter the
+        /// live cache; future Start/step callbacks use its ordinary resolver.
+        func commit(document: StudioDocument) {
+            precondition(!committed && !aborted)
+            guard let studio else { preconditionFailure("Studio must own its synchronous plugin installation.") }
+            appearance?.commit()
+            for (id, preview) in cold {
+                if let object = document.object(id), object.sourceCharacter == preview.reference,
+                   (object.sourceOutfit ?? preview.savedCoordinate) == preview.coordinate {
+                    studio.sourceInstances[id] = preview
+                }
+            }
+            committed = true
+            cold.removeAll(); warm.removeAll(); appearance = nil
+        }
+
+        func abort() {
+            guard !committed && !aborted else { return }
+            for value in warm.values { value.preview.restoreAttachmentReadCheckpoint(value.checkpoint) }
+            cold.removeAll(); warm.removeAll(); appearance = nil
+            aborted = true
+        }
+    }
+
+    private func makePluginAttachmentPreview(parent: StudioObject, appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws -> SourceStudioCharacterPreview {
+        guard let reference = parent.sourceCharacter else {
+            throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
+        }
+        guard !resourceBlockedObjects.contains(parent.id) else {
+            throw RigError.invalid("Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")
+        }
+        let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources,
+            coordinate: parent.sourceOutfit, appearanceTransaction: appearanceTransaction)
+        preview.automaticBlink = sourceAutomaticBlink
+        if let edits = parent.sourceColorEdits { try? preview.setColorEdits(edits, appearanceTransaction: appearanceTransaction) }
+        return preview
+    }
+
+    func pluginAttachmentFrame(child: StudioObject, parent: StudioObject) throws -> SourceStudioPluginWorld.AttachmentFrame {
+        if sourceInstances[parent.id] == nil { sourceInstances[parent.id] = try makePluginAttachmentPreview(parent: parent) }
+        guard let preview = sourceInstances[parent.id] else {
+            throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
+        }
+        return try pluginAttachmentFrame(child: child, parent: parent, preview: preview)
+    }
+
+    private func pluginAttachmentFrame(child: StudioObject, parent: StudioObject, preview: SourceStudioCharacterPreview) throws -> SourceStudioPluginWorld.AttachmentFrame {
+        guard let point = child.sourceAttachmentPoint else {
             throw SourcePluginError.runtime("Source plugin attachment has no converted character parent.")
         }
         return try (preview.attachmentMatrix(pointID: point, fkRotations: parent.sourceFKRotations ?? [:], faceValues: parent.sourceFaceValues, bodyValues: parent.sourceBodyValues, ikTargets: parent.sourceIKOverrides ?? [:], kinematics: parent.sourceKinematics, animationState: parent.sourceAnimation, animationElapsed: sourceAnimationTime),

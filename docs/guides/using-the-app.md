@@ -1,7 +1,7 @@
 # Using Maker and Studio
 
-Reviewed 2026-09-25. Ikkoku has a bundled native prototype and an incomplete
-original-data path. Their card formats, controls and coverage differ. See the
+Commands and source controls refreshed 2026-10-24. Ikkoku has a bundled native
+prototype and an incomplete original-data path. Their card formats, controls and coverage differ. See the
 [feature audit](../component-audit/README.md) for exact completion status and the
 [build guide](build-and-test.md) to launch the app.
 
@@ -19,6 +19,10 @@ Ikkoku JSON in an `iTXt` chunk. ⇧⌘T sends a bundled character to Studio. Cho
 
 ## Original Maker and cards
 
+Use **File → Choose Converted Library…** to select a prepared local library;
+the [build guide](build-and-test.md) documents its manifest and precedence.
+Original data must be converted separately and is not included in the app.
+
 Maker discovers `.local/reverse/rigs/source-avatar.json` and its appearance
 sidecar. `IKKOKU_SOURCE_AVATAR` overrides the path; missing default content falls
 back to bundled assets, while malformed content reports an error. That default is
@@ -35,9 +39,17 @@ and arbitrary mod heads remain unsupported.
 
 Card-selected hair, clothes and accessories require entries in the converted Maker
 library. `IKKOKU_MAKER_LIBRARY` selects another `library.json`; `none` disables the
-library. Missing entries produce diagnostics. The reviewed fixture covers 15
-drawable selections and 11 empty entries, not the whole installed catalog. See
+library. Missing entries produce diagnostics. Converted entries are a bounded
+subset of the installed catalog, with fixture-specific counts in
 [coverage](../reference/character/maker-coverage.md).
+
+Under **Head, hair and clothing**, **Normal head** selects a converted head
+0/200/201 while retaining current shape and color edits. Available hair and
+clothing rows select converted entries for the current outfit. Preparation is
+asynchronous and cancellable; the displayed character stays editable. Export
+cancels a pending choice and saves the displayed selections and edits. These
+controls do not implement the original head preset's reset behavior or arbitrary
+mod-head selection. See the [selection contract](../reference/character/maker-assets.md).
 
 In **Card appearance**, select an outfit, change supported colors and use **Apply
 colors**. Pattern/makeup recipes apply supported saved selections; there is no
@@ -82,15 +94,21 @@ phase 0; speed and force-loop changes keep its current phase. Other characters
 keep their phase while the shared clock is rebased by baking each character's
 evaluated time.
 
-With a source character selected, the Pose, Face and Clothes tabs are
-reachable: Pose shows source FK/IK guides (position/rotation editing), Face shows
-a "not supported yet" note, and Clothes lists mounted accessory labels. The
-inspector controls that could write prototype-only fields — card editing,
-clothing/accessory visibility, animation presets, gestures, expressions and
-timeline keyframes — are gated for source characters; viewport gizmos still use
-the existing source callbacks. Mouse-driven guide editing, undo/redo,
-save/reload and original-scene export still have to be regression-tested — see
-ST-T01 in the [Studio audit](../component-audit/studio.md).
+With a converted source character selected, the source inspectors expose:
+
+- **Pose:** supported FK/IK guides and converted animation choices.
+- **Face:** source expression patterns, openness, blink/look settings, shape
+  controls and supported color edits. Diagnostics identify saved settings whose
+  visual/runtime behavior is incomplete; an editable field alone is not full
+  expression, lip-sync or material parity.
+- **Clothes:** saved outfits, allowed clothing states, indoor/outdoor shoes and
+  visibility toggles for loaded accessory slots. The native accessory-name
+  adapter supplies labels when mounted; fallback labels remain usable.
+
+These edits use source-specific paths. Prototype-only timeline keyframes and
+other unsupported operations remain gated. Selected editing, persistence and GUI
+workflows have acceptance evidence; broader mouse-driven regression coverage
+remains open in the [Studio audit](../component-audit/studio.md).
 
 **File → Export Edited Original Scene…** writes supported edits to a new source
 scene while preserving untouched records, embedded cards, mod identities and
@@ -119,9 +137,30 @@ Start with the [mod library guide](mod-library.md). Archive discovery, ID resolu
 converted assets, preserved plugin data and executable native behavior are separate
 capabilities.
 
-Bounded translated plugins and two exact native adapters exist. Arbitrary managed
-DLLs do not execute in the app. The Mute adapter's headless startup crash is fixed
-and passed Release mount/save/reload and focus-gain acceptance. The Source Clothes
-inspector now lists accessory labels; the previous gate hiding them is removed. See
-[plugin execution](../reference/mods/plugin-execution.md) for supported callbacks,
-installation paths and the remaining integration work.
+**Mods → Show Mod Library** includes a **Studio plugins** panel for the mounted
+session, whether loaded from a library, direct native package or translated
+profile. Use its Run/Pause and Unload controls in Studio. They are disabled in
+Maker; **Switch to Studio** returns to the owning mode without discarding the
+mounted session. Fresh translated profiles also load through
+**Mods → Load Translated Studio Plugins…**; direct native packages use
+**Mods → Load Converted Original Plugin…**.
+
+Three exact native adapters are supported: Mute In Background,
+StudioAccessoryNames and HideAllUI. HideAllUI's Space shortcut belongs to the
+viewport, so typing in a text field does not hide the interface.
+**View → Show Studio Interface** provides a recovery command. Adapter support is
+pinned to the documented original revisions; arbitrary managed DLLs do not run
+in the app. See [native adapters](../reference/mods/native-adapters.md) and
+[plugin execution](../reference/mods/plugin-execution.md) for callback, persistence
+and acceptance boundaries. A profile that reads a source attachment in its
+initializer can load fresh but is still rejected by saved-profile restoration.
+
+## Experimental source rendering
+
+In Studio, **View → Live Source Shaders (Experimental)** enables the translated
+source shader path when its converted inputs are available. Toon rendering is
+the default. The Studio status lists unsupported materials and their toon
+fallbacks; enabling the option does not provide complete character appearance
+or scene-effect parity. Material coverage and same-input sampling repeatability
+remain active work. See the [renderer reference](../reference/renderer.md) for
+required local inputs, supported fixtures and diagnostic versus live evidence.

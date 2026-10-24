@@ -61,16 +61,51 @@ have not been established. Current catalog counts state their actual denominator
 | Materials and source appearance | Mid-stage | Selected recipes applied; missing layers/states and complete draw-shader parity |
 | Asset mods/resolver/ABMX | Mid-stage | Immutable identities and static subset; migrations, dynamic callbacks and general mod geometry missing |
 | CoreMath/Scene rig foundation | Mid-stage | Verified basis/rig kernels; broader geometry/deformation and degenerate input contracts |
-| GPU/Metal renderer | Mid-stage | Live source shader integration, resource limits, original effects and representative performance |
-| Source shader translation/matched frames | Mid-stage | Garment diagnostic passes; full-character color fails; independent live app comparison pending |
-| Native Studio editor/timeline | Mid-stage | Source controls and tracks differ from native prototype controls; source UI gate is a defect |
+| GPU/Metal renderer | Mid-stage | Default toon and opt-in live source paths exist; remaining material dispatch, resource limits, original effects and representative performance |
+| Source shader translation/matched frames | Mid-stage | Bounded diagnostic and independent live gates exist; complete character silhouette/color parity and same-input sampling repeatability remain open |
+| Native Studio editor/timeline | Mid-stage | Source Pose/Face/Clothes controls are reachable; broader interactive regression coverage and source timeline tracks remain incomplete |
 | Original Studio scenes | Mid-stage | Broad parsing/preservation; mixed object/map/light/route/effect consumers and edit topology incomplete |
-| Full-body IK/guides | Mid-stage | Recovered solver tests exist; editor reachability and actual original-player full-body comparison remain |
+| Full-body IK/guides | Mid-stage | Recovered solver tests and source guide editing exist; broad GUI acceptance and actual original-player full-body comparison remain |
 | Animator/dynamics | Mid-stage | Selected normal states and hair chains; remaining controllers, loop correction, cloth and full sequence parity |
 | Voice/audio | Mid-stage | Scheduler/mixer subset; original waveform coverage, spatial/lip-sync and scene sound consumers |
 | Gameplay as a playable game | Infancy | A headless native host runs one synthetic fixed event across save/reload; NPC, scene, presentation, original save state and an interactive mode are missing |
 | General managed plugin compatibility | Infancy | Strict bounded AST subset and exact-revision native adapters; no general Harmony/coroutine/Unity host |
 | Recovery/build/test infrastructure | Mid-stage | Reproducibility, explicit fixture skips, automatic orchestration and release gating |
+
+## Current work and evidence
+
+Overview reconciled **2026-10-24** against merged work through
+[#200](https://github.com/grabbiel/ikkoku/pull/200). The
+[README's eight-component table](../../README.md#current-scope) is the concise
+support summary. The dated handoffs below retain each producer, fixture and
+acceptance boundary; their old “next” steps are historical, not a live queue.
+
+- **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
+  have bounded original-player gates, plus head-0 bone-type-1 checks for both
+  sexes. Asynchronous normal-head selection is merged. Prepared inputs reduce
+  owner-thread stalls at a total-latency cost. Fallback reuse is merged with a
+  verified allocation reduction, without consistent latency improvement.
+  Remaining stalls and bounded composition batching are tracked in
+  [#192](https://github.com/grabbiel/ikkoku/issues/192) and
+  [#208](https://github.com/grabbiel/ikkoku/issues/208).
+- **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
+  reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
+  variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
+  The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+  distinguishes diagnostic controls from production behavior; reductions are
+  evidence, not fixes or added material coverage.
+- **Mods / Plugins:** immutable library selection, bounded translated profiles
+  and three exact native adapters have selected app/save/restore acceptance.
+  Mounted-session controls and fresh-profile preview rollback are merged in
+  [#206](https://github.com/grabbiel/ikkoku/pull/206). Legacy saved-profile restore
+  still rejects initializer attachment reads; its loader has a separate policy.
+  General plugin compatibility remains outside the supported subset.
+
+Use the linked issue/PR state for work in review, and the owning reference for
+exact commands, commits, costs, failed attempts and exclusions. Public CI checks
+compilation and public fixtures; private original-player, app and GPU acceptance
+remain separate. A later integration build does not replace a recorded runtime
+measurement. Update this section only when the project-level boundary changes.
 
 ## Highest-priority handoff
 
@@ -340,6 +375,8 @@ until completion. This is a responsiveness tradeoff, with 90–144 ms owner stal
 still present, rather than a total speedup, peak-memory or FPS result. The
 [Maker reference](../reference/character/maker-assets.md#normal-head-selection-182)
 records the two-sample-per-sex/binary limits and remaining synchronous GPU wait.
+All four CI checks pass at `4aab6c78`; #200 is merged. #192 remains open for
+the remaining stalls; the final integration build is separate from the measured pair.
 The owner proceeds to measuring and reusing immutable fallback textures within
 each compositor, preserving its completion and failure semantics.
 
@@ -371,6 +408,96 @@ only the scenario harness; the owned process exits 1 and its failure artifacts
 are retained. This establishes a native ownership gap, not a source-parity or
 performance result. The next task evaluates candidate staging or precise cleanup
 while preserving successful attachment callbacks; no production fix is claimed.
+
+**Diagnostic handoff — recovered shader prefix, [#204](https://github.com/grabbiel/ikkoku/pull/204):**
+A fresh full-shader control and a reduction retaining the original vertex path
+and exact fragment prefix through alpha discard both reproduce derivative/sample
+variation with store and captured texture providers. Later shading is therefore
+not required for this particular reduced draw; shader compilation perturbation
+remains a limit. Sixteen draws retain equal UVs, primitive/pass IDs, coverage and
+alpha, with finite outputs. Reduced color is deliberately the first texture
+sample and is not a full-color equivalence gate. Root verifies all 64 attachment
+hashes, reconstructing the zero-cleared full float buffers from retained ROIs;
+the report retains equal before/after hashes for 148 mip instances, 20 matching
+provider/property chains and ten matching constant-buffer pairs. The harness
+records MSL 4.0 (`262144`), separately from the standalone controls' MSL 4.1;
+the earlier separate options query did not prove runtime compiler equivalence.
+No production shader, tolerance or performance claim changes. The
+[renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact scope. Next, the owner isolates the independent MainTex sample
+on the same geometry, reporting any coverage changes from removing alpha discard.
+
+**Local acceptance — fresh-profile preview isolation, [#206](https://github.com/grabbiel/ikkoku/pull/206):**
+The #203 fix stages cold attachment previews and newly loaded appearance inputs
+until initialization and saved-state validation succeed. A lazy checkpoint
+restores a touched warm preview's exact state on rejection; supported initializer
+and first-step Start reads remain available. At runtime `b6740b0`, six focused
+Engine checks, 32 isolation checks and the existing 42 plugin checks pass without
+skips. Cold rejection now preserves the complete active-resource vector and
+leaves no cached preview. Repeated failure after mesh/appearance construction
+reaches the named invalid-animation-catalog error and also releases its resources.
+Warm shape/clock restoration, later continuation and successful preview reuse
+pass. Root verifies all seven retained report/log hashes and the accepted
+`b9e0a6f2…c0f4` executable; the earlier 13/14 failure and binary remain retained.
+These are functional checks, not timing or GUI measurements. Resource generation
+and handle counters do not rewind; the malformed-neck alias branch is reviewed
+but not independently exercised. The pruning control directly uses the production
+preparation context, without claiming an installation-time Destroy barrier.
+Library installation and legacy restore retain their prior attachment policy.
+The [execution reference](../reference/mods/plugin-execution.md) records the
+scope. All four CI checks pass at `e73f121`; #206 is merged. The next bounded
+task reproduces the existing legacy-profile reopen limitation before choosing a fix.
+
+**Local acceptance — compositor fallback reuse, [#207](https://github.com/grabbiel/ikkoku/pull/207):**
+Each compositor now lazily reuses immutable white/zero input textures. The
+measured selection uses eight fallback allocations for 316 absent bindings,
+plus 20 real input allocations across 16 recipes: 308 fewer fallback allocations
+than the old loop. These transient inputs are separate from registered
+ResourceStore counts. Eight focused checks pass; both sexes pass 55 selection
+and seven fresh-reload checks. Eight quiet interleaved processes pass with all
+four exports per sex byte-identical across binaries. Root verifies both binaries,
+all 24 retained artifacts and the 48 stage records. Runtime `4e7b46c` is measured
+against control `8b799157`; the later integration head retains separate provenance.
+Timing directions are mixed, so no consistent latency improvement is established.
+Candidate child intervals attribute 7.426–8.563 ms to allocation/upload,
+0.182–0.282 ms to encode/submit and 51.152–55.855 ms to wait/view in the selected
+head-201 cases. The last interval includes scheduling/completion/view creation,
+not pure kernel time. Registered resources and 32,506,112 retained raw-input
+bytes match the control. All four CI checks pass at `45f355f`; #207 is merged.
+The [Maker reference](../reference/character/maker-assets.md)
+retains exact cases and limits. The next task evaluates bounded batching within
+one applying call while preserving synchronous completion and private failure
+cleanup; no batching improvement is claimed here.
+
+**Diagnostic handoff — MainTex-only sampling, [#209](https://github.com/grabbiel/ikkoku/pull/209):**
+Removing the AlphaMask/combine and predicate/discard blocks together makes the
+retained MainTex-only program repeat exactly, while the fresh prefix control
+still varies with both providers. All 16 draws keep the same 2,948 visible pixels,
+primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
+hashes, exact MainTex-only repeated outputs and the recorded unchanged mip inputs.
+The actual pipelines retain MSL 4.0 with fast math and preserve-invariance disabled.
+An initial launch rejected a private card symlink before drawing; its failure is
+retained, and the same binary succeeds with byte-identical regular card copies.
+The [renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+records the two-block scope, full-plane/common-mask checks and compiler-perturbation
+limit. This neither identifies the responsible operation nor authorizes removing
+production alpha testing. The next diagnostic keeps mask/predicate work observable
+and removes only discard, requiring a fresh varying baseline before interpretation.
+
+**Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
+A supported hidden attachment initializer loads fresh and saves successfully,
+but native reopen rejects it under the existing installation-read policy.
+The local regression-only checkpoint `6f999ea` passes ten save checks and ten
+reopen checks in distinct processes. Rejection preserves the prior scene,
+session, fields/clocks, adapters, undo/redo history, frame, preview identities
+and complete active-resource vector. A valid-JSON changed-profile control still
+rejects by identity; an attachment-free control restores and advances its next
+step. Root runs both processes against the frozen `7654f79b…1d6e` Release binary
+and retains seven hashed report/log/build records. This is a documented-policy
+gap, not a #206 regression, source parity or GUI acceptance. The scenario remains
+on the local `codex/plugin-profile-native-restore` branch for the bounded fix;
+it is not merged restore support. Candidate previews must use the new scene's
+references and resource policy, including when old and new UUIDs coincide.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
