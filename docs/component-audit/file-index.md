@@ -23,14 +23,14 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**890 files indexed; 890 assigned; 0 unassigned.**
+**892 files indexed; 892 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 99 |
 | [Character / Maker / mods](character-and-mods.md) | 122 |
 | [Studio / IK / animation](studio.md) | 187 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 318 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 320 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 164 |
 
 | File role | Files |
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 204 |
-| Test / validation | 182 |
+| Runtime / shared shader declaration | 205 |
+| Test / validation | 183 |
 
 ## App / gameplay / plugins
 
@@ -696,6 +696,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/GPU/EngineBuild.swift](../../Packages/Engine/Sources/GPU/EngineBuild.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/GPU/FrameRing.swift](../../Packages/Engine/Sources/GPU/FrameRing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/GPU/GPUContext.swift](../../Packages/Engine/Sources/GPU/GPUContext.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/LatestPickQueue.swift](../../Packages/Engine/Sources/Renderer/LatestPickQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift](../../Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalFrameProbe.swift](../../Packages/Engine/Sources/Renderer/OriginalFrameProbe.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalProbeTextureLoader.swift](../../Packages/Engine/Sources/Renderer/OriginalProbeTextureLoader.swift) | Runtime / shared shader declaration |
@@ -734,6 +735,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/GLTFTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/MaterialImportTests.swift](../../Packages/Engine/Tests/EngineTests/MaterialImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/PickTests.swift](../../Packages/Engine/Tests/EngineTests/PickTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
