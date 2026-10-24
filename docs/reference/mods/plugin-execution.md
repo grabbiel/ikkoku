@@ -281,9 +281,19 @@ rejected cold hidden-parent initializer retained one preview, 29 meshes, 18
 textures and 12,505,092 mesh bytes after the later named Int32 arithmetic error.
 The old document/session, runtime fields/clocks, adapters and sampled frame were
 unchanged; this was a host-cache ownership failure. Successful hidden-initializer
-and first-step Start controls passed separately. The fix's expanded source-backed
-and focused checkpoint/partial-constructor acceptance is pending; the original
-failure remains retained rather than relabeled as a pass.
+and first-step Start controls passed separately. Release acceptance at `b6740b0`
+(binary SHA-256 `b9e0a6f29808d3512160e6f7add72f6cb32f4512865b89b17a4e5b1da117c0f4`)
+passed all six focused Engine tests with strict fixtures and no skips, all 32
+source-backed isolation checks, and the 42 existing plugin checks. The cold
+failure now retains no preview and exactly preserves active resource counts;
+repeated partial constructors reach the named late animation-catalog error and
+release their textures/meshes. Warm shape/clock rollback and subsequent pose
+continuation preserve the existing rig and resources. The pre-commit pruned-object
+check directly exercises the production preparation context; it does not claim
+installation flushes the runtime's Destroy barrier. The malformed-neck-write
+alias branch is source-reviewed, not independently fixture-executed. These are
+functional results, with no quiet timing or speedup claim. The original failed
+report and binary remain retained separately.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
