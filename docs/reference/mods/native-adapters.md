@@ -260,10 +260,22 @@ and numbered fallback label, even though it has no rendered accessory mesh. Moun
 source names without changing source identities. The earlier placeholder no
 longer blocks this inspector.
 
-The accepted library-panel GUI run verifies selecting and mounting the accessory
-adapter, not the values displayed in the Clothes inspector. A visible mounted /
-unmounted label comparison, including outfit changes and unavailable slots, is
-still a separate P-T03 acceptance gate. Label-model tests alone do not close it.
+The 2026-10-24 visible check on the Release executable below used the actual
+converted-manifest command: slot 0 changed from `スロット01` to `01 スクエア`.
+Hiding that accessory retained its label, and choosing outfit 2 retained the label
+and hidden flag. File → Save Scene wrote a new native scene; a fresh process with
+no startup mount used File → Open Scene and restored outfit 2, the mounted label
+and hidden flag. Slots 1–19 displayed `スロット02` through `スロット20` as
+noninteractive text. Both owned processes exited normally.
+
+This fixture uses the same glasses in every outfit, so it does not establish
+distinct-name outfit switching. Missing-conversion fallback is covered by the
+automated phase below, not by this GUI run. A direct converted-manifest mount saves
+`sourceNativePlugins` without `sourcePluginLibrary`; the current Studio Plugins
+panel therefore omits its mounted summary and Unload control. Visible unload is
+not claimed on that route and remains a separate UI follow-up; automated unload
+uses the real model method. Unicode edge cases remain recovered-code oracle
+coverage rather than displayed fixture observations.
 
 The `studio-scenarios` lane has a bounded accessory-label checklist:
 `reload-save-accessory-labels`, `reload-load-accessory-labels` and
@@ -287,7 +299,8 @@ fallback label; no runtime behavior or comparison was weakened. The first report
 is retained. A private report-summary parser failure after the passing app exit
 was corrected offline; no app rerun was attributed to that parser correction.
 Both focused Engine tests executed, including the recovered-code oracle, with
-zero skips; 83 runner tests passed. Displayed AX label comparison remains pending.
+zero skips; 83 runner tests passed. The displayed-label check above used the same
+executable; no runtime label-generation change or cache was added.
 
 `measureAccessoryLabels` records the first timed call and repeated warm calls to
 `sourceAccessoryLabels(for:)`, with a fixed 100–2,000-call bound. Every returned
