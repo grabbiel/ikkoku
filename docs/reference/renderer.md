@@ -3772,8 +3772,9 @@ varies**:
 | `dfdy` | 125 / 120 / 120 | 19 / 30 / 15 | 39 / 31 / 16 | 51 / 51 / 34 |
 | First MainTex sample | 97 / 98 / 98 | 16 / 22 / 12 | 33 / 35 / 14 | 42 / 42 / 27 |
 
-Every repeat and full/prefix comparison has identical visible UVs, primitive/pass
-IDs, 2,948-pixel coverage and alpha; all observed visible values are finite.
+For each provider, every repeat and full/prefix comparison has identical visible
+UVs, primitive/pass IDs, 2,948-pixel coverage and alpha; all observed visible
+values are finite.
 All 64 raw attachment hashes verify, reconstructing each full float target from
 its zero-cleared exterior and exact saved ROI. All 148 bound mip-level instances
 are unchanged before/after the four provider/variant groups, and all 20
@@ -3828,9 +3829,9 @@ bit-stable in all three repeats**:
 | `dfdy` | 118 / 109 / 101 | 0 / 0 / 0 | 7 / 38 / 33 | 0 / 0 / 0 |
 | First MainTex sample | 93 / 94 / 90 | 0 / 0 / 0 | 7 / 30 / 20 | 0 / 0 / 0 |
 
-All sixteen draws have identical 2,948-pixel coverage, primitive/pass identity
-and alpha. Within-case and cross-case UVs are bit-identical. The fixed common
-mask across all eight draws for each provider therefore retains all 2,948 visible
+For each provider, all eight draws have identical 2,948-pixel coverage,
+primitive/pass identity and alpha. Within-case and cross-case UVs are bit-identical
+for that provider. Its fixed common mask therefore retains all 2,948 visible
 pixels; the repeat counts above also hold on that mask. Whole-plane coverage,
 identity and alpha comparisons are reported separately, rather than assuming
 that removing discard preserves them. All visible values are finite.
@@ -3888,9 +3889,9 @@ disabled and `preserveInvariance = false` on the same M2 Ultra/macOS host.
 | `dfdy` | 116 / 106 / 116 | 0 / 0 / 0 | 27 / 15 / 23 | 0 / 0 / 0 |
 | First MainTex sample | 93 / 84 / 83 | 0 / 0 / 0 | 23 / 17 / 22 | 0 / 0 / 0 |
 
-All sixteen draws retain the same 2,948-pixel coverage, primitive/pass IDs, alpha
-and visible UVs. The fixed common-ID mask includes all visible pixels for each
-provider, so the repeat counts hold on that mask too. Every visible mask value
+For each provider, all eight draws retain the same 2,948-pixel coverage,
+primitive/pass IDs, alpha and visible UVs. Its fixed common-ID mask includes all
+visible pixels, so the repeat counts hold on that mask too. Every visible mask value
 is exactly 1 and every observed predicate is 0, with no bit changes within or
 between variants. These visible-pixel observations do **not** observe helper
 invocations or prove that no invocation executes discard. All visible values
@@ -3919,6 +3920,63 @@ Private executable SHA-256 is
 `af9c5a3c9efdf0e1b8e5babdd5416917d84bf3e399dfe822920632a99f4e191c`;
 report SHA-256 is
 `6becf5cec5e4a1a99d0d096b9cf93fcaa70c7528f9a1fa94e00877131b7df3c6`.
+
+A **private explicit-language comparison** compiles the exact observed-prefix
+source and metadata above under MSL 4.0 and 4.1. Both cases use one fixture URL
+and separate immutable-version pipeline caches; neither shader is rewritten.
+Production `TranslatedSourcePipelineCache` sets `fastMathEnabled = false` but
+leaves language selection at its default. Its actual application-process
+language version remains unmeasured. The installed SDK exposes MSL 4.0 from
+macOS 26 and 4.1 from macOS 27; neither can become an unconditional requirement
+under the current app/Engine deployment targets of 14.6/14.
+
+The private Release bundle builds at `4eb198c` with temporary test instrumentation
+and exact source restoration. One locked process completes sixteen draws: four
+repeats × two versions × two providers. Each cache compiles both passes once.
+The recorded options passed to `makeLibrary` are 262144/262145 respectively,
+fast math disabled and `preserveInvariance = false`. The newer option getters
+are also equal in all four records: `mathMode = 0` and
+`mathFloatingPointFunctions = 1`. These are compiler-input records, not
+independent reflection of emitted machine code. The host is M2 Ultra/macOS
+27.0.1; the private availability guard changes no deployment setting.
+
+**The fresh MSL 4.0 controls vary, and MSL 4.1 also varies for both providers:**
+
+| Changed pixels against the first draw | Native MSL 4.0 | Native MSL 4.1 | Captured MSL 4.0 | Captured MSL 4.1 |
+| --- | ---: | ---: | ---: | ---: |
+| Color0 | 69 / 66 / 64 | 15 / 21 / 16 | 16 / 20 / 17 | 6 / 6 / 2 |
+| `dfdx` | 96 / 99 / 94 | 16 / 20 / 17 | 18 / 23 / 17 | 9 / 8 / 3 |
+| `dfdy` | 113 / 108 / 97 | 26 / 39 / 24 | 34 / 39 / 33 | 14 / 12 / 11 |
+| First MainTex sample | 87 / 84 / 80 | 19 / 28 / 21 | 28 / 33 / 28 | 13 / 14 / 6 |
+
+Native Color0 repeat maxima are 37 bytes under 4.0 and 20 under 4.1; both captured
+cases reach 20. All sixteen draws retain the same 2,948-pixel coverage,
+primitive/pass IDs and alpha. Visible UVs are stable within each provider,
+including across versions, and all visible pixels lie on its fixed eight-draw
+common-ID mask. A separate provider-to-provider comparison has a fixed 17-pixel
+UV difference (maximum 1.7881393432617188e-7); this is not a within-case repeat
+change. Every visible mask remains 1 and predicate 0, with no within/between
+version changes. Those observations still exclude helper invocations.
+
+Eighty full-plane attachment hashes verify, all 148 bound mip-level instances
+remain unchanged, twenty texture chains match across versions, and ten packed
+constant-buffer hashes match. Thirty-nine combined literal audit checks and
+21 RG readback tests pass, including independent per-version classification,
+empty common coverage, modern-option differences and malformed counts. Inputs
+remain unchanged; the GPU collection has no failed or skipped draws.
+
+Selecting MSL 4.1 does not eliminate this diagnostic's repeat gap. The four
+repeats do not establish a reliable reduction in its magnitude. This does not
+identify a compiler/driver defect or explain why the simpler standalone program
+was stable. No production language selection, shader, source gate, material
+coverage, parity or timing claim changes; #188 remains open.
+
+Evidence, retained Release bundle and corrected helper proposals are under
+`.local/codex-continue-2026-10-24/rolling/materials-language-version/`.
+Private executable SHA-256 is
+`7599b9831234cda27160a0deb9a251935ec9ce96d887584a147b067108233f4b`;
+report SHA-256 is
+`e66f35112cc6503a520631be8780362f432200db0d59d33f34e1ba0731b583d5`.
 
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
