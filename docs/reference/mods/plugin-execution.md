@@ -338,8 +338,11 @@ session, document, history, previews, frame and active resources. Changed-identi
 rejection and attachment-free restore remain separate passing controls. The
 original unsupported-policy reports and binary remain preserved independently.
 These are bounded functional results; no GUI, source-game parity or performance
-claim follows. Integration with subsequent shared appearance changes requires a
-separate exact-head acceptance run.
+claim follows. After integrating the prepared/fallback/batched appearance changes,
+Release `baa32ea` (binary SHA-256
+`ae11e3eb4cdba4d197859d18ab8aa4dbe95f46c6874d8aed6938973a2bbbca18`)
+also passes the same 117 checks in four fresh processes, with zero failures or
+skips. Its reports and input/build hashes are separate from the first acceptance.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
