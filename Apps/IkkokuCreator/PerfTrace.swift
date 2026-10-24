@@ -386,6 +386,14 @@ final class PerfTrace {
                 "drawMsPerSecond": renderDrawTotal / window,
             ] as [String: Any],
             "drawThread": renderDraws.isEmpty ? "main" : (renderDraws.count == frames.count ? "render" : "mixed"),
+            // Per-draw frame-ring use (G4): skin palettes written, and the
+            // buffers created while recording (none once the ring is warm).
+            "frameRing": [
+                "skinPalettesPerDraw": PerfTrace.statistics(frames.map { Double($0.skinPalettes) }),
+                "paletteKiBPerDraw": PerfTrace.statistics(frames.map { Double($0.ring.paletteBytes) / 1024 }),
+                "paletteBuffersCreated": frames.reduce(0) { $0 + $1.ring.paletteBuffersCreated },
+                "drawsWithOverflow": frames.filter { $0.ring.overflowBuffers > 0 }.count,
+            ] as [String: Any],
             "processCPUCores": (cpuAtEnd.process - cpuAtStart.process) / window,
             "inputCalls": inputNames,
             "events": Dictionary(uniqueKeysWithValues: Event.allCases.compactMap { event -> (String, Any)? in
@@ -608,6 +616,10 @@ nonisolated final class PerfDrawLog: Sendable {
         var gpuMilliseconds: Double
         var presentLogIndex: Int
         var onMainThread: Bool
+        /// The frame ring's counters for this draw (`lastFrameStatistics`,
+        /// read right after it; a pick or capture in between replaces them).
+        var ring = FrameRing.Statistics()
+        var skinPalettes = 0
         /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
         var drawMilliseconds: Double { (end - callback) * 1000 }
     }
@@ -633,10 +645,11 @@ nonisolated final class PerfDrawLog: Sendable {
     /// process's first draw, which the caller marks.
     @discardableResult
     func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
-                 gpuSeconds: Double, presentIndex: Int, drawable: CGSize) -> Bool {
+                 gpuSeconds: Double, presentIndex: Int, drawable: CGSize, statistics: RenderFrameStatistics) -> Bool {
         let sample = Sample(callback: callback, end: end, targetPresentation: targetPresentation,
                             gpuMilliseconds: gpuSeconds * 1000, presentLogIndex: presentIndex,
-                            onMainThread: pthread_main_np() != 0)
+                            onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
+                            skinPalettes: statistics.skinPalettes)
         return state.withLock { state in
             let first = state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }
@@ -679,10 +692,12 @@ nonisolated enum ViewportFrame {
             renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp)
         }
         guard let log else { return }
+        let end = CACurrentMediaTime()
         let texture = drawable.texture
-        if log.didDraw(callback: start, end: CACurrentMediaTime(), targetPresentation: update.targetPresentationTimestamp,
+        if log.didDraw(callback: start, end: end, targetPresentation: update.targetPresentationTimestamp,
                        gpuSeconds: renderer.lastFrameGPUTime, presentIndex: presentIndex,
-                       drawable: CGSize(width: texture.width, height: texture.height)) {
+                       drawable: CGSize(width: texture.width, height: texture.height),
+                       statistics: renderer.lastFrameStatistics) {
             PerfSignpost.signposter.emitEvent("Mark", "firstDraw")
         }
     }

@@ -323,6 +323,16 @@ def lifecycle_line(name, report):
         lifecycle.get("drawsAfterRestore", 0), lifecycle.get("presentedAfterRestore", 0))
 
 
+def ring_line(name, report):
+    """The frame ring's per-draw skin palettes (G4), or None for a report without them."""
+    ring = report["summary"].get("frameRing")
+    if not ring or not ring.get("skinPalettesPerDraw", {}).get("count"):
+        return None
+    return "[perf] %s: frame ring %g skin palettes and %g KiB per draw (p50), %d palette buffers created, %d draws with overflow" % (
+        name, ring["skinPalettesPerDraw"]["p50"], ring["paletteKiBPerDraw"]["p50"], ring.get("paletteBuffersCreated", 0),
+        ring.get("drawsWithOverflow", 0))
+
+
 def stray_input(report):
     """Input calls the workload did not send (someone moved the mouse over the window), or None."""
     if report.get("workload") not in INPUTLESS_WORKLOADS:
@@ -339,6 +349,7 @@ def summarize(directories):
     warnings = []
     attributed = []
     lifecycles = []
+    rings = []
     for directory in directories:
         for name, report in load(directory).items():
             if "summary" not in report:
@@ -347,6 +358,9 @@ def summarize(directories):
             print(row(label, report))
             if "viewBodies" in report["summary"] or "events" in report["summary"]:
                 attributed.append(attribution_row(label, report))
+            ring = ring_line(label, report)
+            if ring:
+                rings.append(ring)
             if report.get("workload") == "viewport-lifecycle" and "lifecycle" in report.get("details", {}):
                 lifecycles.append(lifecycle_line(label, report))
                 problem = lifecycle_problem(report)
@@ -364,7 +378,7 @@ def summarize(directories):
         print("|---|---:|---|---|")
         for line in attributed:
             print(line)
-    for line in lifecycles:
+    for line in rings + lifecycles:
         print(line)
     for warning in warnings:
         print("[perf] WARNING " + warning)

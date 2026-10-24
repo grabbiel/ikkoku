@@ -151,6 +151,17 @@ class PerfTraceTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(folder, "out", "studio-native+load20.json")))
         self.assertEqual((launches[0]["IKKOKU_PERF_MAIN_LOAD_MS"], launches[0]["IKKOKU_PERF_MAIN_LOAD_HZ"]), ("20", "60"))
 
+    def test_ring_line_reports_the_frame_ring_palettes_only_when_recorded(self):
+        report = {"summary": {"frameRing": {"skinPalettesPerDraw": {"count": 600, "p50": 6},
+                                            "paletteKiBPerDraw": {"count": 600, "p50": 87.5},
+                                            "paletteBuffersCreated": 0, "drawsWithOverflow": 0}}}
+        self.assertEqual(perf_trace.ring_line("after/studio-orbit", report),
+                         "[perf] after/studio-orbit: frame ring 6 skin palettes and 87.5 KiB per draw (p50), "
+                         "0 palette buffers created, 0 draws with overflow")
+        self.assertIsNone(perf_trace.ring_line("base/studio-orbit", {"summary": {}}))
+        empty = {"summary": {"frameRing": {"skinPalettesPerDraw": {"count": 0}}}}
+        self.assertIsNone(perf_trace.ring_line("after/maker-idle", empty))
+
     def test_lifecycle_run_checks_render_threads_and_presentation_after_restore(self):
         def lifecycle(before, end, presented=40, minimized=False):
             run = report()

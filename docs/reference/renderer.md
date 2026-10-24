@@ -328,8 +328,9 @@ every untilted iris bit-identical.
 
 ### Deformation safety
 
-The renderer uploads complete skin palettes to retained per-frame Metal buffers;
-the previous silent 256-matrix truncation is removed. The palette size is supplied
+The renderer writes complete skin palettes into the frame ring's palette
+storage ([G4](#renderer-threads-r7-phase-2-item-2)); the previous silent
+256-matrix truncation is removed. The palette size is supplied
 explicitly in `DeformParams.boneCount`. A mesh records the largest referenced joint
 across **all four lanes**, including zero-weight lanes, and checks it against each
 bound palette before dispatch. Missing referenced palettes, nonfinite matrices,
@@ -624,10 +625,167 @@ status line are only compiled in CI.
 
 Remaining R6 work:
 
-- An interactive draw, pick and capture stress run that submits concurrently.
+- An interactive draw, pick and capture stress run that submits concurrently:
+  covered at the Engine level by
+  `renderThreadDrawsWhileAnotherThreadSubmitsPicksCapturesAndRetires`
+  ([Renderer threads](#renderer-threads-r7-phase-2-item-2)), not yet through
+  the app's models.
 - App-level import/delete/capture/pick cycles through `StudioModel` and
   `MakerModel`, including original-source characters.
 - Allocation-failure injection beyond the oversized overflow request.
+
+### Renderer threads (R7 phase 2, item 2)
+
+**Who calls what.** Each viewport (`ViewportNSView`: one in the Studio, one in
+the Maker) owns a `ViewportRenderThread`. That is a `Thread` named
+`com.grabbiel.Ikkoku.viewport-render` (QoS user-interactive) whose run loop
+drives the viewport's `CAMetalDisplayLink` (`preferredFrameLatency` 2, as
+before). Its callback calls `Renderer.draw(to:timestamp:)`, which presents
+from that thread. Everything else stays on the main actor:
+
+- The models build frames and call `Renderer.submit`, `pick`, `capture` and
+  `benchmark`; their APIs are unchanged.
+- The 30 Hz editor timers poll the status line from `lastFrameError` and
+  `lastFrameStatistics`.
+- SwiftUI, AppKit and timer callbacks are unchanged.
+
+Before this change the link was added to the main run loop. Every frame then
+waited for whatever main-thread work was running: the Studio tick, input
+handlers, the hover pick, SwiftUI layout.
+
+**Locks and their order.**
+
+- `frameLock` guards the pending frame. `submit` replaces it and
+  `currentFrame()` copies it.
+- `renderLock` guards everything that preparing a frame touches: the
+  interactive render targets, `frameIndex`, the frame ring's open frame, and
+  the live encoder and its error. `draw`, `pick`, `capture`, `benchmark` and
+  the live captures prepare and encode under it.
+- `statusLock` guards what the last prepared frame published:
+  `lastFrameStatistics`, `lastFrameError`, `lastDeformationErrors` and
+  `lastSourceShaderLive`. It also guards `lastFrameGPUTime`, which the draw's
+  completion handler writes on a Metal thread.
+- The order is a frame slot (`GPUContext.waitForFrameSlot`, at most 3 in
+  flight), then `renderLock`, then `frameLock` or `statusLock`. Nothing waits
+  for a slot or for the GPU while it holds `renderLock`. The draw commits and
+  presents after releasing it, as before.
+- `ResourceStore` and the frame ring's completion state keep their own locks,
+  unchanged.
+
+**Which frame a draw prepares.** `draw` takes the pending frame once it holds
+`renderLock`. Before, it took the frame on entry, which was equivalent while
+everything ran on one thread. With two threads, taking it early would let a
+pick or capture prepare a newer submitted frame in between. That frame would
+complete a retirement ([R6](#character-and-import-lifetime-r6-second-slice))
+that the older frame still needs. A frame submitted while a draw is preparing
+is drawn by the next callback.
+
+**Command buffers from two threads.** Draws commit after releasing the render
+lock, and so do picks and captures. Commit order across threads is therefore
+arbitrary. That is safe because every command buffer is self-contained:
+
+- It runs the deform pass for every deformation key it draws before any pass
+  reads that buffer.
+- It writes its render targets before reading them.
+- Metal tracks hazards between command buffers on the one queue.
+- The frame ring never reuses a region still in flight, in any commit order
+  ([R6](#renderer-limits-and-resource-lifetime-r6-first-slice)).
+
+**Published diagnostics.** These describe the most recently prepared frame,
+on any thread. An offscreen caller that reads them after its own call
+returns may therefore see a draw that ran in between. Inside the renderer,
+`pick`, `capture`, `benchmark` and both live captures read
+`lastDeformationErrors` while they still hold `renderLock`, so each sees its
+own frame's errors. Before this change, the live captures read the value again
+after releasing the lock. A draw publishing in between could have cleared it,
+and the capture would then have waited on a command buffer it never committed.
+The app reads these values after an offscreen call in two kinds of place:
+
+- `AppState`'s launch paths (autocapture, the rig capture and the live probe).
+  These run before any viewport exists.
+- The status line, which only needs the latest frame.
+
+**Thread lifetime.**
+
+- `ViewportNSView` starts the thread when it enters a window. It stops it when
+  it leaves the window, when SwiftUI dismantles it (`dismantleNSView`), and in
+  `deinit`.
+- `stop` is thread-safe and returns at once. It sets a flag under a lock and
+  stops the thread's run loop. The thread finishes the draw in progress,
+  invalidates the link and exits. The run loop also returns every 0.25 s, so a
+  missed wake-up cannot keep the thread alive.
+- On `NSApplication.willTerminateNotification`, the view stops its thread and
+  waits for it, at most 0.5 s. Quitting during a draw therefore lets that draw
+  finish before the process exits.
+- When the window is minimized, the link stops calling. The thread waits in its
+  run loop, which a mach port keeps alive.
+- A Studio/Maker switch replaces the viewport. Each switch stops one thread and
+  starts another.
+- The app has one window (its New item is replaced), so at most one render
+  thread runs.
+
+**Concurrency checking.** The app target compiles in Swift 5 mode with
+`MainActor` default isolation. The types that cross threads are
+`nonisolated`:
+
+- `ViewportRenderThread` and the harness's `PresentLog` are `@unchecked
+  Sendable`, each with a written invariant.
+- `PerfDrawLog` is `Sendable`, behind an `OSAllocatedUnfairLock`.
+- The Engine package (Swift 6 mode) gains no `@unchecked Sendable`. `Renderer`
+  and `FrameRing` keep theirs, and their invariants are now written in the
+  source.
+
+**Skin palettes (G4).** Before this change, `buildContext` called
+`makeBuffer(bytes:length:options:)` for every referenced skin set, on every
+prepared frame: draws, picks and captures. Now `FrameRing.allocatePalettes`
+copies all of a frame's palettes into the frame's region's palette buffer.
+There is one shared buffer per region. Each palette starts at a 256-byte
+aligned offset, and the deform passes (native and live) bind that buffer and
+offset.
+
+- The palette buffer follows the region's in-flight rule. It is rewritten only
+  once every command buffer that read it has completed.
+- When a frame needs more than the buffer holds, the region gets a new buffer.
+  It is twice the old size, at least `FrameRing.minimumPaletteCapacity`
+  (64 KiB), and doubled until the frame fits. The old buffer stays alive for
+  the command buffers and allocations that still use it.
+- Once every region has seen the largest frame, palettes cost no allocation.
+- A frame that finds every region in flight puts its palettes in overflow
+  buffers, like its other allocations.
+- Validation is unchanged and still per element. Each referenced set must be
+  non-empty, at most `UInt32.max` matrices, and contain only finite elements.
+  The finiteness check now tests four lanes at a time
+  (`Renderer.allFinite`). The error text is the same.
+- A refused palette buffer adds "Could not allocate skin set N" for each set,
+  as a refused per-set buffer did, so their draws are skipped and captures
+  fail.
+- `RenderFrameStatistics.skinPalettes` counts the palettes written.
+  `uniforms.paletteBytes` and `uniforms.paletteBuffersCreated` report the
+  bytes and growth.
+
+**Tests.**
+
+- `frameRingPalettesGrowByDoublingAndStopAllocatingOnceWarm`
+  (`RendererLimitsTests.swift`) covers:
+  - alignment, order and read-back;
+  - growth within a frame, while the earlier palettes keep their bytes;
+  - the in-flight rule, with an uncommitted command buffer;
+  - the overflow path;
+  - twelve steady frames that create no buffer;
+  - a 640,000-byte frame that grows 128 KiB to 1 MiB.
+- `skinMatrixFinitenessMatchesThePerElementCheck` compares `allFinite` with
+  the former per-element check for every element position. The values tested
+  are NaN, signalling NaN, ±infinity, ±greatest finite, the least nonzero
+  (subnormal) magnitude and the least normal magnitude.
+- `skinPalettesComeFromTheFrameRingAndStopAllocatingOnceWarm`
+  (`CharacterLifetimeTests.swift`) captures a bundled skinned character 16
+  times. The ring stops creating palette buffers after the warm-up. A NaN
+  element or an empty set still fails the capture with the same message.
+- `renderThreadDrawsWhileAnotherThreadSubmitsPicksCapturesAndRetires` draws to
+  an offscreen `CAMetalLayer` from a dedicated thread. Meanwhile the test
+  thread runs 16 rounds of submit, pick and capture and reads the published
+  diagnostics, then retires the character. Every capture renders, and the
+  retirement completes through the next submitted frame.
 
 ## Checked math, legacy skeletons and cameras (R4)
 
