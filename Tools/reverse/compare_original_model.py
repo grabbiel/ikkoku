@@ -163,11 +163,16 @@ HEAD201_CATALOG = dict(Name='タイプ０３', MainManifest='add50', MainAB='cha
 
 def source_head_identity(mode):
     """Pin the new head's measured catalog; retain old capture compatibility."""
-    if mode.get('variant') == 'female201' or mode.get('headID') == 201:
-        expected = dict(sex=1, headID=201, boneType=0, requestedSex=1,
+    if mode.get('variant') in ('female201', 'male201') or mode.get('headID') == 201:
+        variant = mode.get('variant')
+        if variant not in ('female201', 'male201'):
+            raise ValueError('Head201 normal model variant differs')
+        sex = 1 if variant == 'female201' else 0
+        expected = dict(sex=sex, headID=201, boneType=0, requestedSex=sex,
                         requestedHeadID=201, requestedBoneType=0, loadedHeadCatalogID=201)
-        if mode.get('variant') != 'female201' or any(type(mode.get(k)) is not int or mode[k] != v for k, v in expected.items()):
-            raise ValueError('Head201 requested/loaded normal female identity differs')
+        if variant == 'male201': expected.update(exType=0, requestedExType=0)
+        if any(type(mode.get(k)) is not int or mode[k] != v for k, v in expected.items()):
+            raise ValueError('Head201 requested/loaded normal model identity differs')
         if mode.get('loadedHeadName') != 'ct_head' or mode.get('loadedHeadCatalog') != HEAD201_CATALOG:
             raise ValueError('Head201 loaded head name or catalog differs from the exact source prefab')
     return dict(loadedHeadName=mode.get('loadedHeadName'), loadedHeadCatalog=mode.get('loadedHeadCatalog'))
@@ -273,7 +278,7 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     mode = frame.get('neutralModel')
     if not mode or native.get('kind') != 'ikkoku-neutral-source-model': raise ValueError('Requires neutral source and native model captures')
     identity = native['identity']
-    variants = {'female00': (1, 0), 'female200': (1, 200), 'female201': (1, 201), 'male200': (0, 200)}
+    variants = {'female00': (1, 0), 'female200': (1, 200), 'female201': (1, 201), 'male200': (0, 200), 'male201': (0, 201)}
     if mode.get('variant') not in variants or (mode['sex'], mode['headID']) != variants[mode['variant']]:
         raise ValueError('Unsupported source neutral model identity')
     for key in ('Sex', 'HeadID', 'BoneType'):
