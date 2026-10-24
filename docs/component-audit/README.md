@@ -216,6 +216,21 @@ The [renderer evidence](../reference/renderer.md#native-normal-inner-shoe-compos
 retains the costs, source gates and diagnostic limits; sampling repeatability is
 the owner's next bounded task.
 
+**Local acceptance — corrected male head00, [#191](https://github.com/grabbiel/ikkoku/pull/191):**
+The Models handoff adds an independent source gate for normal male/head00 with
+bone type 1. Three original-player captures pass the unchanged geometry,
+matrix, morph, correction-table and head-collider tolerances; 61 focused Python
+checks and all earlier retained comparisons pass. Root independently verifies
+all 33 indexed evidence descriptors against their retained hashes and sizes.
+The neutral repeat preserves all 817 transform records and saved card bytes;
+maximum native/source vertex error is 8.35e-7. This changes offline capture and
+validation only, with no native runtime or per-frame cost. CPU silhouette equality
+does not establish GPU color parity, other corrected heads, arbitrary shape
+combinations or animation. The
+[corrected male evidence](../reference/character/neutral-model-parity.md#corrected-male-head00-skeleton-189)
+retains the exact identity, source routing and remaining limits. The owner moves
+next to measuring and reducing normal-head selection's owner-thread commit cost.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
