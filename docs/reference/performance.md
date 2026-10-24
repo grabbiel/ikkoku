@@ -998,11 +998,149 @@ TBD-SUMMARY
 
 ### Measurement
 
-TBD-MEASUREMENT
+The commands follow [measuring a change](#measuring-a-change). Release builds,
+arm64:
+
+| Label | Commit | Executable SHA-256 |
+| --- | --- | --- |
+| base | `0c51ca1` (`main` before this change) | `3d4aeb00…dc864c` |
+| harness | `8a2b7ed`: base plus the schema 3 harness (draw log off the main actor, main-thread load knob, lifecycle workload), renderer unchanged | `a3bd4e04…522fd0` |
+| after | `7a265f6`: this change with `main` `c3e83fa` merged | `23b1d10e…a4a26c` |
+
+All runs used the 4K display (M32UC) at 120 Hz and 2×, with a 1996×1824
+drawable, in a quiet window that the orchestrator granted on 2026-10-24.
+Every launch took the app lock, and the load average was 3.0–4.6. Base and
+after alternated per workload, and idle and hover ran twice. Each run had a
+3 s warmup and 10 s of recording. `summarize` flagged no run. Reports are in
+`.local/r7c-render-thread/perf/{base,after,harness}`.
+
+"Draw ms" is `Renderer.draw` CPU time per frame, p50, on the main thread for
+base and on the render thread for after.
+
+| Workload | Build | Presented FPS | Hitches/s | Presented interval p50 / p95 ms | Main busy ms/s | Draw ms p50 |
+| --- | --- | ---: | ---: | --- | ---: | ---: |
+| studio-orbit | base | 119.9 | 0.1 | 8.33 / 8.33 | 234 | 1.74 |
+| studio-orbit | after | 119.6 | 0.4 | 8.33 / 8.33 | 20 | 1.44 |
+| studio-fk-drag | base | 120.0 | 0 | 8.33 / 8.33 | 514 | 1.06 |
+| studio-fk-drag | after | 120.0 | 0 | 8.33 / 8.33 | 363 | 0.71 |
+| studio-hover | base | 119.6, 89.9 | 0.4, 30.0 | 8.33 / 8.33, 8.33 / 16.67 | 654, 675 | 0.96, 0.94 |
+| studio-hover | after | 119.7, 119.7 | 0.3, 0.3 | 8.33 / 8.33 | 545, 545 | 0.69, 0.69 |
+| studio-idle | base | 119.9, 120.0 | 0.1, 0 | 8.33 / 8.33 | 359, 357 | 1.02, 1.00 |
+| studio-idle | after | 119.9, 120.0 | 0.1, 0 | 8.33 / 8.33 | 249, 238 | 0.74, 0.71 |
+| maker-slider | base | 119.5 | 0.1 | 8.33 / 8.33 | 607 | 0.27 |
+| maker-slider | after | 120.0 | 0 | 8.33 / 8.33 | 566 | 0.22 |
+| maker-idle | base | 119.9 | 0.1 | 8.33 / 8.33 | 161 | 0.76 |
+| maker-idle | after | 119.9 | 0.1 | 8.33 / 8.33 | 51 | 0.59 |
+| studio-native | base | 119.8 | 0.2 | 8.33 / 8.33 | 191 | 1.03 |
+| studio-native | after | 119.6 | 0.4 | 8.33 / 8.33 | 57 | 0.96 |
+
+**Busy main thread (the item 2 acceptance case).** `--main-load-ms 20`
+busy-waits 20 ms on the main run loop 30 times a second, about 600 ms/s.
+Base has no load knob, so these rows compare the harness build (base
+renderer) with after:
+
+| Workload + 20 ms × 30/s | Build | Presented FPS | Hitches/s | Presented interval p50 / p95 ms | Draw ms p50 |
+| --- | --- | ---: | ---: | --- | ---: |
+| studio-idle | harness | 58.4 | 29.9 | 25.00 / 25.00 | 0.82 |
+| studio-idle | after | 119.8 | 0.2 | 8.33 / 8.33 | 0.55 |
+| studio-native | harness | 60.1 | 29.8 | 8.33 / 25.00 | 0.36 |
+| studio-native | after | 119.9 | 0.1 | 8.33 / 8.33 | 0.29 |
+| studio-orbit | harness | 60.2 | 29.9 | 8.33 / 25.00 | 0.81 |
+| studio-orbit | after | 120.0 | 0 | 8.33 / 8.33 | 0.53 |
+| studio-fk-drag | harness | 30.1 | 29.9 | 33.33 / 33.33 | 0.84 |
+| studio-fk-drag | after | 119.9 | 0.1 | 8.33 / 8.33 | 0.59 |
+
+Notes on the tables:
+
+- **Presentation no longer waits for the main thread.** With a busy main
+  thread, base presents at 30–60 FPS, with one hitch per load period and a
+  p95 interval of 25–33 ms. After presents at 120 FPS with a p95 of 8.33 ms,
+  the acceptance target. Without load, item 1 had already brought every
+  workload to about 120 FPS, so FPS changes little there. The exception is
+  hover, whose 7.7 ms tick made base alternate between 120 and 90 FPS
+  (bimodal, as in item 1); after presented 119.7 FPS in both runs.
+- **Main-thread time.** The draw left the main thread: 215 ms/s in orbit,
+  123 ms/s in native and 94 ms/s in maker-idle. Input and the FK and camera
+  refreshes cost the same per event (FK drag refresh 1.88 → 1.80 ms).
+- **The source-scene live tick is 3–7% slower.** Hover: 7.18 and 7.23 ms
+  in base, 7.61 and 7.69 ms in after. Idle: 7.75 and 7.76 ms in base, 7.89
+  and 8.27 ms in after. Idle with load: 5.49 ms in the harness build, 5.82 ms
+  in after. The native scene's tick is unchanged (1.74 → 1.71 ms). The cause
+  is not established. A candidate is that the draw now overlaps the tick on
+  another core. They share caches, and they touch the reference counts of
+  the same frame objects. The tick still fits a 30 Hz period, but it is the
+  largest main-thread cost left (item 3).
+- **Draw CPU per frame** fell 17–33% in the source-scene workloads and 7%
+  in the native scene, which has 6 palettes per draw instead of 122. These
+  numbers combine G4 with a CPU-clock effect, which the next section
+  separates.
+- **Busy-main FK drag also handles more input**: 86 against 69 events/s,
+  because the drag no longer shares the main thread with the draw.
+- **The harness build costs nothing measurable** against base: orbit 119.4
+  FPS and 1.78 ms draw (base 119.9 and 1.74), idle 119.8 FPS and 1.01 ms
+  (base 1.00–1.02), native 1.08 ms (base 1.03). Main busy time in orbit was
+  264 against 234 ms/s; base's own Time Profiler run of orbit had 262.
+- **Every after run drew on the render thread** (`drawThread: render`), and
+  the frame ring created no palette buffer while recording, with no overflow:
+  122 palettes (226.5 KiB) per draw in the source scene, 20 (51 KiB) in the
+  Maker and 6 (22.5 KiB) in the native scene.
+
+**Offscreen encode (G4 alone).** `IKKOKU_AUTOCAPTURE` with
+`IKKOKU_BENCHMARK_OUTPUT`, the source scene at 1200×1600 and 60 frames, three
+alternating runs per build. This path has no display link, so it isolates
+the renderer change:
+
+| Build | CPU encode p50 ms | GPU p50 ms | Completion p50 ms |
+| --- | --- | --- | --- |
+| base | 0.739, 0.742, 0.741 | 1.368, 1.369, 1.370 | 2.535, 2.517, 2.556 |
+| after | 0.437, 0.453, 0.423 | 1.364, 1.362, 1.363 | 2.195, 2.259, 2.169 |
+
+CPU encode fell by 0.30 ms per frame (41%), and the GPU time is unchanged.
+All six PNGs are byte-identical (`26f712b8…`).
 
 ### Why orbit took the slow allocation path (G4)
 
-TBD-G4
+Item 1 found orbit's draw at 1.83 ms p50 against 0.99 ms in FK drag at the
+same draw rate. Of that, the per-palette `newBufferWithBytes` calls took
+0.70 ms per draw in orbit against 0.31 ms in FK drag. The two workloads draw
+the same scene, with 122 skin palettes per draw. The Time Profiler traces
+of item 1 (`.local/r7c-render-thread/g4`, focused on `Renderer.draw`) show
+the same calls in both workloads: `IOGPUResourceCreate` and its
+`mach_msg2_trap` dominate either way. Orbit's calls just took about 2.2
+times longer each, and the rest of its draw was about 1.6 times slower too.
+
+The runs above show why. The draw is slow when the process is otherwise
+idle, and fast when the CPU is kept busy:
+
+| Draw ms p50 (idle without load: mean of two runs) | Orbit | FK drag | Idle | Native |
+| --- | ---: | ---: | ---: | ---: |
+| base renderer, no load (base build) | 1.74 | 1.06 | 1.01 | 1.03 |
+| base renderer, main thread loaded (harness build) | 0.81 | 0.84 | 0.82 | 0.36 |
+| after, no load | 1.44 | 0.71 | 0.73 | 0.96 |
+| after, main thread loaded | 0.53 | 0.59 | 0.55 | 0.29 |
+
+- In orbit, the draw is nearly all the process does: 234 ms/s of main-thread
+  time in base, 215 of them the draw. FK drag keeps the main thread about
+  half busy with its frame rebuilds.
+- The busy-wait load adds no work to the draw. Even so, it makes orbit's
+  draw 2.1 times faster in base (2.7 times in after), and native's 2.9 and
+  3.3 times.
+- With load, orbit and FK drag cost the same per draw, in both builds.
+
+So orbit did not take a slower path. The same work ran on a less busy CPU,
+most likely at lower clock speeds; the harness cannot read the clocks, so
+that part is inferred. Kernel calls such as buffer creation were hit
+hardest. This comes from the machine's power management, not from the
+renderer.
+
+Two consequences:
+
+- Per-draw CPU times from lightly loaded workloads overstate the work. The
+  offscreen benchmark, which renders frames back to back, is the steadier
+  measure of encode cost (0.44 ms after, against 0.74 ms in base).
+- G4 still matters for orbit, because the buffer creation it removed was
+  the part most hurt by the low clocks. Orbit's draw fell from 1.74 to
+  1.44 ms with no load, and from 0.81 to 0.53 ms with load.
 
 ### What remains
 
