@@ -41,6 +41,16 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     float[] modelRequestedBody,modelRequestedFace;
     readonly List<object> modelAnimators=new List<object>();
     readonly Dictionary<string,int> modelHandCounts=new Dictionary<string,int>{{"L",0},{"R",0}};
+    // ST-C03 third slice: optional wear keys in character-settings.tsv
+    // (clothes, clothesState, shoesType). Null when none is given; then the
+    // capture keeps every garment on as before.
+    Dictionary<string,object> wearRequest;
+    static int[] ParseBytes(string value,int count,int maximum) {
+        var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
+        var result=new int[count];
+        for(int i=0;i<count;i++){result[i]=Int32.Parse(parts[i],CultureInfo.InvariantCulture);if(result[i]<0||result[i]>maximum)throw new Exception("Value outside 0-"+maximum+": "+value);}
+        return result;
+    }
     void TryLoadModelVariant() {
         var path=Path.Combine(Path.GetDirectoryName(folder),"model-variant.txt");
         if(!File.Exists(path))return;
@@ -218,6 +228,24 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 case "gradBlend": foreach(var pupil in face.pupil) pupil.gradBlend=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 case "gradOffsetY": foreach(var pupil in face.pupil) pupil.gradOffsetY=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
                 case "gradScale": foreach(var pupil in face.pupil) pupil.gradScale=Single.Parse(fields[1],CultureInfo.InvariantCulture);break;
+                // Wear: catalog IDs for every outfit's nine clothes slots, the
+                // saved ChaFileStatus.clothesState and shoesType. LoadAsync's
+                // UpdateClothesStateAll and the first UpdateVisible apply them.
+                case "clothes": {
+                    var ids=ParseBytes(fields[1],9,Int32.MaxValue);
+                    foreach(var coordinate in file.coordinate) for(int i=0;i<9;i++) coordinate.clothes.parts[i].id=ids[i];
+                    if(wearRequest==null)wearRequest=new Dictionary<string,object>();wearRequest["clothes"]=ids;break;
+                }
+                case "clothesState": {
+                    var states=ParseBytes(fields[1],9,3);
+                    for(int i=0;i<9;i++) file.status.clothesState[i]=(byte)states[i];
+                    if(wearRequest==null)wearRequest=new Dictionary<string,object>();wearRequest["clothesState"]=states;break;
+                }
+                case "shoesType": {
+                    var type=ParseBytes(fields[1],1,1)[0];
+                    file.status.shoesType=(byte)type;
+                    if(wearRequest==null)wearRequest=new Dictionary<string,object>();wearRequest["shoesType"]=type;break;
+                }
                 default: throw new Exception("Unknown character-settings key: "+fields[0]);
             }
         }
@@ -230,7 +258,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         file.status.visibleSon=false;file.status.visibleSonAlways=false;
     }
     void Capture() {
-        character.SetClothesStateAll(0);
+        // A wear request keeps the saved states LoadAsync applied; otherwise every garment is on.
+        if(wearRequest==null)character.SetClothesStateAll(0);
         character.fileStatus.visibleSon=false;character.fileStatus.visibleSonAlways=false;character.UpdateForce();
         foreach(var renderer in character.GetComponentsInChildren<Renderer>())
             if(renderer.enabled && renderer.name.IndexOf("dankon",StringComparison.OrdinalIgnoreCase)>=0)
@@ -310,6 +339,15 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             if(character.sex!=modelSex || character.chaFile.custom.face.headId!=modelHead || character.chaFile.custom.body.typeBone!=0)
                 throw new Exception("Loaded source model identity differs from request");
             report["neutralModel"]=new Dictionary<string,object>{{"variant",modelVariant},{"sex",character.sex},{"headID",character.chaFile.custom.face.headId},{"boneType",character.chaFile.custom.body.typeBone},{"requestedSex",modelSex},{"requestedHeadID",modelHead},{"requestedBoneType",0},{"hiPoly",character.hiPoly},{"enableCorrectArmSize",Manager.Character.Instance.enableCorrectArmSize},{"enableCorrectHandSize",Manager.Character.Instance.enableCorrectHandSize},{"loadedHeadName",character.objHead.name},{"loadedHeadCatalogID",character.infoHead.Id},{"eyeAngleHRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleHRate(EYE_LR.EYE_L)},{"eyeAngleVRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleVRate()},{"requestedBodyValues",modelRequestedBody},{"requestedFaceValues",modelRequestedFace},{"actualBodyValues",character.chaFile.custom.body.shapeValueBody},{"actualFaceValues",character.chaFile.custom.face.shapeValueFace},{"handControllerCounts",modelHandCounts},{"handPatterns",new[]{handPatterns["L"],handPatterns["R"]}},{"animators",modelAnimators},{"elapsedFramesAfterLoad",0},{"clock","no post-load Animator tick; source shape and neutral FBS setters evaluated once; loading-clock determinism must be checked separately"},{"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
+        }
+        if(wearRequest!=null) {
+            var active=new List<object>();
+            for(int slot=0;slot<character.objClothes.Length;slot++)active.Add(character.objClothes[slot]!=null && character.objClothes[slot].activeInHierarchy);
+            var bodyAlpha=new List<object>();
+            foreach(var material in character.customMatBody==null?new Material[0]:new[]{character.customMatBody})bodyAlpha.Add(new[]{material.GetFloat("_alpha_a"),material.GetFloat("_alpha_b")});
+            report["wear"]=new Dictionary<string,object>{{"requested",wearRequest},{"clothesState",character.fileStatus.clothesState},{"shoesType",character.fileStatus.shoesType},
+                {"clothesIDs",Array.ConvertAll(character.nowCoordinate.clothes.parts,p=>p.id)},{"objClothesActive",active},{"customMatBodyAlpha",bodyAlpha},
+                {"rule","ChaControl.UpdateVisible after LoadAsync (UpdateClothesStateAll); no SetClothesStateAll(0) at capture"}};
         }
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
