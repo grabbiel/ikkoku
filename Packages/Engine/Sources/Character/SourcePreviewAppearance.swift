@@ -8,8 +8,8 @@ import Scene
 import Assets
 
 /// Opt-in diagnostics for one synchronous candidate. The top-level intervals do
-/// not overlap. Composition's nested breakdown partitions its existing aggregate;
-/// do not add those child intervals to the top-level total again.
+/// not overlap. Composition's nested intervals sit inside its existing aggregate;
+/// instrumentation/cleanup can remain outside them. Do not add child intervals again.
 public final class SourceAppearanceTimings {
     public enum Phase: String { case bindingPreparation, pixelReadHash, pipelineCreation, composeEncodeWait, componentLoad, bodyMaskLoad }
     enum CompositionPhase: String { case allocationUpload, encodeSubmit, waitAndView }

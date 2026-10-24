@@ -505,3 +505,74 @@ hashes and phase analysis are retained under
 `.local/codex-continue-2026-10-24/rolling/maker-head-owner-commit/`. This does not
 claim reduced peak memory, frame-rate improvement or wider source appearance
 parity.
+
+### Compositor fallback input reuse (#202)
+
+Each Metal material recipe has 21 input slots. An absent main image uses opaque
+white; other absent inputs use transparent zero. The compositor now creates each
+needed 1×1 fallback lazily and reuses it across its recipes. These textures retain
+the existing `rgba8Unorm`, shared-storage, shader-read-only, no-mipmap contract.
+They are uploaded once and retained only for that compositor's lifetime. Real
+images and composed outputs remain independently allocated; output leases,
+transaction rollback and the synchronous completion wait are unchanged.
+
+The optional appearance diagnostics keep the existing aggregate compose interval
+and add nested allocation/upload, encode/submit and wait/view intervals inside it.
+Instrumentation and return cleanup can remain outside those nested intervals; do
+not add them to the aggregate again. Counters distinguish actual real-input and
+fallback texture allocations from fallback slot bindings. These transient textures
+are not registered in `ResourceStore`, so unchanged store counts do not establish
+unchanged total Metal allocations. Default callers without diagnostics skip the
+additional clock reads and counters.
+
+Eight focused Engine checks passed with strict fixtures and no skips. The new
+synthetic production-path test covers mask-only, main-only and combined recipes,
+CPU/Metal pixels, lazy white allocation, reuse across recipes, independent output
+leases and cleanup. It observes four real input allocations and two fallback
+allocations for 59 absent bindings, then a new pair of fallback allocations for a
+separate compositor. The independent female/male raw-RGBA and expanded material
+image oracles still pass at the existing one-byte tolerance, including prepared
+and ordinary input paths; this is material-kernel evidence, not full appearance
+parity. Existing failure cleanup and derived-lease checks also pass.
+
+The 2026-10-24 Release acceptance used a fresh control at `8b79915`
+(binary `0b378e84f8f1126c03e29afa1abb62f4f6e4f60c0f367e2d1f27e6b2c569fc3f`)
+and candidate `4e7b46c`
+(`bbcf8bbedf9053dee90a7e4f173ad0118bbe16c34d073f289488e5c66a0a368f`).
+The 557-file source manifests differ only in the three implementation files and
+one focused test. Four functional processes passed the 55-step selection and
+7-step fresh reload scenarios for both sexes; all four exports are byte-identical
+to their matching previous accepted outputs. The separate quiet comparison passed
+eight 19-step processes in 59.754 seconds, female A/B/B/A then male B/A/A/B, with
+fixed shapes/colors and clock. All four exports per sex match across both binaries.
+
+The selected head-201 cold/warm intervals have two samples per binary and sex:
+
+| Input / state | Control owner ms | Reuse owner ms | Control API ms | Reuse API ms |
+| --- | --- | --- | --- | --- |
+| Female cold | 126.558–128.345 | 118.943–123.036 | 749.231–757.564 | 734.364–746.195 |
+| Female warm | 85.388–87.203 | 85.766–90.509 | 709.024–740.329 | 696.962–715.991 |
+| Male cold | 126.809–132.315 | 125.911–137.606 | 790.972–796.072 | 788.531–804.500 |
+| Male warm | 91.216–97.228 | 85.341–92.294 | 759.165–770.798 | 750.165–754.609 |
+
+These mixed directions and small sample counts establish **no consistent latency
+speedup**. The accepted benefit is bounded allocation reduction: each measured
+selection has 20 actual-image inputs and 316 absent bindings across 16 recipes in
+six compositors. The candidate records eight fallback allocations, versus 316
+allocations from the control's one-allocation-per-absent-slot loop. Outputs and
+completion semantics are unchanged. Candidate-only nested intervals measured
+7.426–8.563 ms allocation/upload, 0.182–0.282 ms encode/submit and
+51.152–55.855 ms wait/view. The last interval includes scheduling, synchronous
+completion and view creation, and is not pure GPU kernel time. Overall composition
+was 59.235–64.672 ms; these observations do not justify moving completion outside
+the transaction without separate validation.
+
+All selected head-201 samples retain the same 43 meshes, 98 female or 115 male
+registered textures, 12 retiring resources, one hidden buffer (14,517 bytes), and
+zero deformation buffers. Mesh bytes remain 28,189,528 female / 28,138,208 male.
+Prepared raw inputs remain 32,506,112 bytes under the existing 128 MiB per-call and
+aggregate caps. The 16 no-op checks retain their resource identities and take
+0.238–0.383 ms. Neither store statistics nor retained raw bytes measure peak RSS
+or total Metal allocation bytes; there is no FPS or percentile claim. Immutable
+binaries, inputs, logs and 24 paired artifacts are retained privately under
+`.local/codex-continue-2026-10-24/rolling/maker-compositor-fallbacks/`.
