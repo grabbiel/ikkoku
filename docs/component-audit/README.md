@@ -231,6 +231,23 @@ combinations or animation. The
 retains the exact identity, source routing and remaining limits. The owner moves
 next to measuring and reducing normal-head selection's owner-thread commit cost.
 
+**Local acceptance — accessory labels, [#193](https://github.com/grabbiel/ikkoku/pull/193):**
+The Plugins handoff adds 34 passing app checks for the existing exact-revision
+accessory-name adapter, plus 83 runner checks and two strict oracle checks.
+Root verifies the actual Clothes inspector changes slot 1 from `スロット01` to
+`01 スクエア` after mounting, retains that name while hidden and after an outfit
+change, and restores the label, selected outfit and hidden state through an
+actual save and fresh-process open. Unavailable rows remain noninteractive
+fallback text. The fixture uses the same glasses in every outfit; distinct-name
+outfit coverage is not established. Missing-conversion fallback and unload pass
+automated checks, but GUI inspection finds that a directly loaded converted
+manifest has no mounted-session or Unload controls in the library panel. That
+UI gap is queued separately after legacy Studio command ownership. Label
+construction diagnostics are below 0.1 ms, without isolated timing; no cache,
+runtime labeling change or per-frame work was added. The original fixture
+expectation and summary-parser failures remain retained alongside corrected
+passes. See the [adapter acceptance](../reference/mods/native-adapters.md).
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
