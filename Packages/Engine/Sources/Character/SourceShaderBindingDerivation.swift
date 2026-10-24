@@ -524,6 +524,26 @@ public enum SourceShaderBindingDerivation {
             identity.composite = recipe
             return identity
         }
+        /// `ctCreateEyeW`: `ChangeSettingWhiteOfEye(updateTex: true, updateColor:
+        /// true)` as `ChangeHeadAsync` calls it. Maker reruns it for the texture
+        /// or the colours alone (`releaseCustomInputTexture` off), so the full
+        /// recipe is the same.
+        func eyeWhiteComposite() -> Set_.TextureIdentity {
+            var identity = composite(hiPoly ? 512 : 256,
+                creator: "ctCreateEyeW: cf_m_eyewhite_create (chara/mm_base.unity3d) over mt_eye_white[face.whiteId] with whiteBaseColor/whiteSubColor")
+            var recipe = createRecipe(material: "cf_m_eyewhite_create",
+                method: "ChaControl.ChangeSettingWhiteOfEye(updateTex: true, updateColor: true)")
+            setCreateTexture(&recipe, "_MainTex", main: true,
+                catalogTexture(407, table: "mt_eye_white", id: "face.whiteId", key: "EyeWhiteTex"),
+                source: "mt_eye_white[face.whiteId] MainAB/EyeWhiteTex via ChaControl.SetCreateTexture (main)")
+            for (name, key) in [("_Color", "whiteBaseColor"), ("_Color2", "whiteSubColor")] {
+                if let rgba = card.color("face.\(key)") {
+                    recipe.vectors[name] = .init(rgba, source: "card face.\(key) via ChaControl.ChangeSettingWhiteOfEye → SetColor(\(name))")
+                } else { recipe.vectors[name] = .init(unresolved: card.missing("face.\(key)")) }
+            }
+            identity.composite = recipe
+            return identity
+        }
         // MARK: Hair (ChaControl.ChangeHairAsync → ChangeSettingHair*)
         if let parts = card.appearance.value("hair.parts")?.arrayValue {
             // ChaControl.LoadHairGlossMask: mt_hairgloss[hair.glossId] MainTexAB/MainTex (no _low suffix).
@@ -697,8 +717,7 @@ public enum SourceShaderBindingDerivation {
                         apply(&builder, texture: "_MainTex", catalogTexture(414, table: "mt_nose", id: "face.noseId", key: "NoseTex"), source: "ChaControl.ChangeSettingNose")
                     case "cf_Ohitomi_L", "cf_Ohitomi_R":
                         // rendEyeW[0/1] (ChaReference ObjEyeWL/WR) share one material.
-                        builder.setTexture("_MainTex", composite(hiPoly ? 512 : 256, creator: "ctCreateEyeW: cf_m_eyewhite_create (chara/mm_base.unity3d) over mt_eye_white[face.whiteId] with whiteBaseColor/whiteSubColor"),
-                                           source: "ChaControl.ChangeSettingWhiteOfEye")
+                        builder.setTexture("_MainTex", eyeWhiteComposite(), source: "ChaControl.ChangeSettingWhiteOfEye")
                     case "cf_Ohitomi_L02", "cf_Ohitomi_R02":
                         // rendEye[0] = ObjEyeL (cf_Ohitomi_L02), rendEye[1] = ObjEyeR.
                         let eye = renderer.nodeName == "cf_Ohitomi_L02" ? 0 : 1
