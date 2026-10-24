@@ -340,7 +340,7 @@ for direct native or profile routes is a separate UI follow-up.
 
 The mounted-panel follow-up displays all existing origins. A library selection
 retains its exact generation and revision list. A translated profile has its own
-section, including an empty-package session; individual native plugins have a
+section; individual native plugins have a
 separate section with saved GUID, version and enabled state. Mixed profile/native
 mounts retain both sections, without deduplication across origins or an invented
 generation. The summary uses resident document pins and loaded session metadata,
@@ -353,6 +353,9 @@ An interactive Unload guard rejects inactive/pending actions before delegating t
 the existing teardown; the programmatic method is unchanged. The deterministic
 checklist compares the presentation value used by SwiftUI, including ordinal
 identity, direct native save/fresh reload and fallback labels after unloading.
+An empty-binding profile remains an explicit loader error; its rejected load
+must retain the current session and summary. Optional empty presentation inputs
+are checked separately without claiming that the loader accepts such a profile.
 These assertions do not substitute for an AX check of visible controls. Build,
 focused scenario and root-visible acceptance for this follow-up are pending.
 

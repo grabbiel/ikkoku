@@ -187,6 +187,9 @@ final class AppState {
                         }
                         return
                     }
+                    // Fresh-load checklists may have no startup scene to select
+                    // Studio. Use the real mode path before interactive steps.
+                    mode = .studio
                     let report = StudioScenario.run(scenario, studio: studio)
                     let reportURL = URL(fileURLWithPath: reportPath)
                     try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)

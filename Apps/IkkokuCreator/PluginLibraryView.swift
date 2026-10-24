@@ -4,7 +4,7 @@ import Gameplay
 import Studio
 
 /// Presentation only: pinned identities already resident in the committed
-/// document/session. A profile with zero packages is distinct from no session.
+/// document/session. Optional profile metadata distinguishes an absent session.
 struct PluginMountSummary {
     struct Identity: Codable {
         let guid: String, version: String, manifestSHA256: String?

@@ -375,18 +375,29 @@ struct PluginLibraryScenario: Decodable {
 
             try studio.loadSourcePluginProfileInteractively(profileURL: profileURL, expectedGeneration: studio.sourcePluginMountGeneration)
             try checkMount("profileOnlySummary", [.init(origin: .profile, generation: nil, plugins: [profileIdentity])])
-            studio.unloadSourcePluginsInteractively()
             let emptyProfile = commandScratch.appendingPathComponent("empty-profile.json")
             try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02, "packages": []]).write(to: emptyProfile)
-            try studio.loadSourcePluginProfileInteractively(profileURL: emptyProfile, expectedGeneration: studio.sourcePluginMountGeneration)
-            try checkMount("emptyProfileSummary", [.init(origin: .profile, generation: nil, plugins: [])])
-            try check("emptyProfileHasSession", studio.hasSourcePluginSession && studio.canToggleSourcePluginPlayback)
-            let beforeEmptyUnload = studio.doc.objects
+            let profileDocument = studio.doc, profileSession = studio.sourcePluginSession
+            let profileRuntime = try profileSession?.savedDocument(), profileFrame = studio.host.renderer.currentFrame()
+            let profileResources = resourceCounts(), profileStatus = studio.status
+            let profileGeneration = studio.sourcePluginMountGeneration, profileRunning = studio.sourcePluginsRunning
+            var emptyRejected = false
+            do { try studio.loadSourcePluginProfileInteractively(profileURL: emptyProfile, expectedGeneration: profileGeneration) }
+            catch SourcePluginError.invalid(let reason) { emptyRejected = reason == "Plugin bindings are empty." }
+            let profileAfterRuntime = try studio.sourcePluginSession?.savedDocument()
+            try check("emptyProfileRejected", emptyRejected && studio.doc == profileDocument
+                && studio.sourcePluginSession === profileSession && profileAfterRuntime == profileRuntime
+                && studio.sourcePluginMountGeneration == profileGeneration && studio.sourcePluginsRunning == profileRunning
+                && studio.status == profileStatus && profileResources == resourceCounts()
+                && sameFrame(profileFrame, studio.host.renderer.currentFrame()),
+                "Plugin bindings are empty; current document, runtime, session, status, generation, frame and resources retained")
+            try checkMount("rejectedProfileRetainsSummary", [.init(origin: .profile, generation: nil, plugins: [profileIdentity])])
+            let beforeUnload = studio.doc.objects
             studio.unloadSourcePluginsInteractively()
             try check("interactiveUnloadTearsDown", studio.sourcePluginMountSummary == nil && studio.sourcePluginSession == nil
                 && studio.doc.sourcePluginState == nil && studio.doc.sourceNativePlugins == nil
                 && studio.sourceFocus.adapter == nil && studio.sourceFocusObservers.isEmpty && studio.sourceLaunchObserver == nil
-                && !studio.sourceAccessoryNamesEnabled && !studio.sourcePluginsRunning && studio.doc.objects == beforeEmptyUnload)
+                && !studio.sourceAccessoryNamesEnabled && !studio.sourcePluginsRunning && studio.doc.objects == beforeUnload)
 
             // Pure presentation inputs can exercise byte-distinct identities
             // without fabricating a registered executable native adapter.
@@ -397,11 +408,14 @@ struct PluginLibraryScenario: Decodable {
                 ["guid": composed, "version": "1", "manifestSHA256": String(repeating: "c", count: 64),
                  "manifestFile": "not-read.json", "adapterID": "presentation-only", "enabled": false]))
             let ordinal = PluginMountSummary(library: nil, profile: [a, b], native: [syntheticRef])!
+            let emptyPresentation = PluginMountSummary(library: nil, profile: [], native: [])
             try check("summaryPreservesOrdinalOrigins", ordinal.sections.map(\.origin) == [.profile, .native]
                 && ordinal.sections.allSatisfy { $0.generation == nil }
                 && ordinal.sections[0].plugins.map { Data($0.guid.utf8) } == [Data(composed.utf8), Data(decomposed.utf8)]
                 && ordinal.sections[1].plugins[0].guid.utf8.elementsEqual(composed.utf8)
-                && ordinal.sections[1].plugins[0].enabled == false && ordinal.sections[1].plugins[0].label.hasSuffix("(disabled)"))
+                && ordinal.sections[1].plugins[0].enabled == false && ordinal.sections[1].plugins[0].label.hasSuffix("(disabled)")
+                && emptyPresentation?.sections.count == 1 && emptyPresentation?.sections[0].plugins.isEmpty == true
+                && PluginMountSummary(library: nil, profile: nil, native: []) == nil)
         } catch {
             rows.append(.init(op: "failure", ok: false, detail: String(describing: error)))
         }
