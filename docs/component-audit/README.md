@@ -101,7 +101,7 @@ open. The measured producer and separately compiled merged
 producer retain distinct provenance. All four CI jobs pass at the reviewed head
 `78fcf76`; the change is merged. [Detailed scope and measurements](../reference/character/neutral-model-parity.md#corrected-female-head00-skeleton-176).
 
-The completed normal male/head-0 task [#179](https://github.com/grabbiel/ikkoku/issues/179)
+The completed normal male/head-0 task [#181](https://github.com/grabbiel/ikkoku/pull/181)
 adds three passing source/native comparisons over 35,573 selected vertices and
 773 skin bindings / 226 joints. The independent neutral repeat preserves 817
 transform records, all 20 geometry streams and saved card bytes. Its sole source
@@ -111,7 +111,8 @@ unchanged, and root verifies the 29 hashed summary descriptors. This completes
 neutral and one coupled-shape acceptance for the six converted normal
 female/male head 0/200/201 assemblies. No runtime formula, per-frame work or
 performance benchmark changes. Broader shapes, corrected male types, animation,
-full hierarchy and appearance remain open. Final CI and merge are pending.
+full hierarchy and appearance remain open. All four CI jobs pass at the reviewed
+head `4d7bb46`; the change is merged. [Detailed scope and measurements](../reference/character/neutral-model-parity.md#normal-male-head00-179).
 
 A later read-only snapshot covers all 243 installed DLLs (26,759,208 bytes),
 with identical before/after source manifests. Eight bounded shards per scan give
