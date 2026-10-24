@@ -4,7 +4,7 @@
 The library does not rewrite card identities. Only exact installed catalog rows are
 accepted; original data and derived images stay under ignored .local/. No card
 thumbnail is decoded. The default selection consists of ordinary hair, shirts,
-long trousers, shoes and glasses, plus the half-state set: bloomers, bra, shorts,
+long trousers, shoes and glasses, plus the half-state set: bloomers,
 pantyhose and indoor shoes. `meshNames` lists each garment's fully dressed
 (state 0) meshes; `alternates` lists the half-state meshes under the alternate
 ChaReference switch nodes, tagged with the clothes states that show them.

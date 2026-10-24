@@ -455,6 +455,11 @@ renderer under an alternate switch node (`n_top_b`, `n_bot_b`, `n_bot_c`,
 the conjunction of the table's conditions over those nodes (one clause per
 clothes kind with its allowed states). A node without a recovered rule, or
 nodes that are never active together, reject the build. The half-state
+library loader also rejects empty visibility conjunctions, duplicate clothes-kind
+clauses or states, empty mesh/switch names, and unsupported alternate categories.
+An empty conjunction must not make a half-state mesh unconditionally visible in
+the shader-binding derivation. These checks run when loading the library, not
+during frame updates. The half-state
 renderers' material evidence goes to a separate `alternates.json`, so each
 dressed entry's `materials.json`, rig and recipes keep their bytes.
 `maker_asset_materials.py` composes their `wearAppearance` /
@@ -536,7 +541,11 @@ before and after both phases. The captures remain under ignored `.local/`.
   shoes. The player's capture holds exactly those four garment meshes, with
   the outdoor-shoe object inactive and body `_alpha_a/_alpha_b` (0,1).
 - **Colour.** The live probe with `IKKOKU_LIVE_SOURCE_MAKER_WEAR=1`
-  (`compare_original_frame.py`): geometry IoU 1.0; depth-normals pass;
+  (`compare_original_frame.py`) uses captured texture pixels matched by native
+  material identity (`IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER=capture`), a validation
+  input. It verifies independently evaluated native geometry, wear/body-mask
+  selection and translated shaders; it does not establish native texture
+  production or production colour parity. Geometry IoU 1.0; depth-normals pass;
   translated garments (the half top, half bottom and uwabaki) mean 0.059,
   p99 1, maximum 19 channel bytes, pass; `main_opaque` mean 0.073, p99 1,
   pass. `main_skin` as a whole fails, because the untranslated pantyhose
@@ -574,6 +583,28 @@ before and after both phases. The captures remain under ignored `.local/`.
   (fixture), `sourceCardEditingShoesTypePatchesOrAppendsOnlyItsToken`; Python
   `test_maker_asset_library.py` (switch rules, alternate tagging, the compact
   rig writer), `test_original_wear_probe.py` and `test_compare_wear_frame.py`.
+
+**Continuation checks (2026-10-24).** A fresh Release build of `72e7af6`
+and the continued half-state branch reproduce the dressed control on three
+scenes, each with the retained and expanded library: all twelve RGBA8 captures
+are identical within their scene. Fresh independent native model evaluation
+again passes the two retained original-player captures (20 parts, 33,882
+vertices, maximum vertex error 7.1542e-7, skin-bone matrix error 7.2988e-7,
+silhouette IoU 1.0). The Release live capture uses the same validation-only
+texture provider described above: garment mean 0.0592 and p99 1 pass; the
+complete colour gate still fails. Outside the same 12,145-pixel pantyhose
+exclusion, skin mean 0.03845 and p99 1 pass on 53,886 pixels.
+
+The full Engine run reported 773 tests with two named skips (absent appearance
+oracle root and opt-in expression timing). Its only failure was an expansion
+fixture's stale 13-selection assertion: Studio now selects both saved shoe
+slots (14 selections). The corrected fixture passes separately and asserts
+both shoe properties; the other tests are unchanged. CoreMath's 21 tests pass.
+The new public malformed-alternate test passes, as do the 49 focused Python
+checks with the private geometry fixture, the reverse-tool suite (434 passed,
+six optional fixture skips), and verification tools (187 passed). Full Studio
+and Maker scenario lanes and quiet resource/performance acceptance are pending
+at this checkpoint; the earlier scenario evidence above is retained separately.
 
 **Fallbacks that remain.** These still draw dressed with a diagnostic:
 

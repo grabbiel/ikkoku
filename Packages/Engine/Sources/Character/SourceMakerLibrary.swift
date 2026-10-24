@@ -60,9 +60,20 @@ public struct SourceMakerLibrary: Sendable {
                   index.updateValue(i, forKey: key) == nil else { throw RigError.invalid("Invalid or duplicate Maker asset identity.") }
             if let alternates = entry.alternates {
                 let names = alternates.map(\.meshName)
-                guard entry.empty != true, (105...110).contains(entry.category), !alternates.isEmpty, alternates.count <= 64,
+                guard entry.empty != true, [105, 106, 107, 108, 110].contains(entry.category), !alternates.isEmpty, alternates.count <= 64,
                       Set(names).count == names.count, Set(names).isDisjoint(with: entry.meshNames ?? []),
-                      alternates.allSatisfy({ !$0.switches.isEmpty && $0.activeWhen.allSatisfy { (0..<9).contains($0.kind) && !$0.states.isEmpty && $0.states.allSatisfy { (0...3).contains($0) } } })
+                      alternates.allSatisfy({ alternate in
+                          // The converter emits one nonempty clause per clothes
+                          // kind. An empty conjunction would make the binding
+                          // derivation show an alternate in every wear state.
+                          !alternate.meshName.isEmpty && !alternate.switches.isEmpty && alternate.switches.allSatisfy { !$0.isEmpty }
+                              && !alternate.activeWhen.isEmpty && alternate.activeWhen.count <= 9
+                              && Set(alternate.activeWhen.map(\.kind)).count == alternate.activeWhen.count
+                              && alternate.activeWhen.allSatisfy {
+                                  (0..<9).contains($0.kind) && !$0.states.isEmpty && $0.states.count <= 4
+                                      && Set($0.states).count == $0.states.count && $0.states.allSatisfy { (0...3).contains($0) }
+                              }
+                      })
                 else { throw RigError.invalid("Invalid Maker half-state meshes.") }
             }
             guard entry.alternates != nil || (entry.wearAppearance == nil && entry.wearCardBindings == nil) else {
