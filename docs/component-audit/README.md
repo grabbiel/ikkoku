@@ -1,7 +1,8 @@
 # Component audit and implementation backlog
 
-**Reviewed 2026-09-25 · base commit `2cfb859` plus the current uncommitted working
-tree.** This is the current implementation assessment. The
+**Baseline review: 2026-09-25 · commit `2cfb859` and that review's working tree.
+Scoped acceptance updates through 2026-10-24 appear below.** Later entries update
+only their named behavior and evidence; the original audit was not rerun in full. The
 [documentation index](../README.md) links maintained guides and technical contracts. Older rebuild/checkpoint
 documents remain useful evidence of individual milestones, but their completion
 statements may no longer match the code.
@@ -76,6 +77,21 @@ have not been established. Current catalog counts state their actual denominator
 Priorities are local to this project: **P0** is a confirmed broken current
 workflow, **P1** closes a principal porting/integration gap, **P2** expands coverage
 or hardens the implementation. Task IDs in the reports are stable references.
+
+### Accepted Models, Materials and Plugins updates — 2026-10-24
+
+| Component | Completed scope and evidence | Remaining boundary |
+| --- | --- | --- |
+| Models / CM14 | [#163](https://github.com/grabbiel/ikkoku/pull/163) adds independent neutral-versus-mixed shape comparisons for normal female heads 0/200 and male head 200, with a separate female00 repeat. [#164](https://github.com/grabbiel/ikkoku/pull/164) rejects malformed sparse-native/dense-source morph metadata before indexing or broadcasting: four previously accepted malformed cases now fail, 43 focused Python tests pass, and retained neutral/mixed gates still pass with 1,266 input files unchanged. | Geometry and morph evidence covers these named assemblies and cases. Head 201, broader shape/expression/animation coverage and complete production appearance require separate acceptance. [Model evidence and tolerances](../reference/character/neutral-model-parity.md). |
+| Materials / R1, CMT-04 | [#162](https://github.com/grabbiel/ikkoku/pull/162) adds one normal-top GPU composite: independent base output is byte-exact and distinct colors differ by at most one byte. The controlled live fixture reaches 16/20 slots; three default-off capture pairs stay identical. [#165](https://github.com/grabbiel/ikkoku/pull/165) reduces sampler descriptor constructions from 48 to 4 in the measured cache workload. Each focused Debug/Release run executes nine passing tests with one named fixture skip; strict private Release separately passes all five gates, including that skipped case. | Body, face, bottom and shoes remain fallbacks in that fixture. Adding the top increased GPU work and memory. The sampler change establishes fewer allocations, with no demonstrated timing speedup: warm-hit median of run medians is 0.107 → 0.116 ms with overlapping ranges. [Renderer evidence and costs](../reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24). |
+| Plugins / P-T02, P-T03 | [#161](https://github.com/grabbiel/ikkoku/pull/161) connects exact library revisions and scene targets, with pinned native save/fresh-process restore and identical same-clock PNGs. [#166](https://github.com/grabbiel/ikkoku/pull/166) adds prompt mount cancellation and request-owned panel state: four queue tests and 24 production app checks pass with no skips. A separate diagnostic GUI run verifies Cancel before worker release, queued retry, no stale mount, then successful retry, Pause and Unload for two adapters plus one translated fixture. | GUI cancellation used a temporary worker gate, separately hashed from production; it establishes behavior, not latency. Scene-open restoration still resolves files synchronously. General DLL/Harmony/API compatibility and GUID-specific original save adapters remain open. [Execution and app evidence](../reference/mods/plugin-execution.md#saved-scenes-and-migration). |
+
+The combined Release runtime for #161–#163 passed all six Maker and 56 Studio
+scenario checks with no skips; final merged runtime sources matched the tested
+integration. #164 changes offline validation only. #165 and #166 each passed all
+four CI jobs at their merged heads and the separate local checks above; the
+earlier combined run is not evidence for those later changes. Each completed row
+retains its exact scope: these results do not mark an entire component fully ported.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
@@ -551,7 +567,7 @@ reruns, and branch cleanup) is handed off in
 | 4 | **ST-T04/05/06/07/08/10/11** | Complete the source Studio path: mixed objects, full-body player reference, editable cards, expression/look-at, dynamics, remaining Animator behavior and routes/cameras/effects. |
 | 5 | **CMT-01/02/03/05/09/10** | Expand Maker asset/state coverage, source selection edits, dynamic ABMX and mod resolution while preserving original IDs and unknown payloads. |
 | 6 | **G-T01/02/03/04** | Build real gameplay session/state bindings, complete a fixed event and ADV scenario, then add NPC/navigation and presentation commands. **2026-10-23:** G-T01's engine slice (`SourceGameplaySession`, #105) is merged. A-T01's first slice (`SourceGameplayHost` and the headless `IKKOKU_GAMEPLAY_SCENARIO` mode) is merged. G-T02 (character bindings) is done on its branch: the typed new-game heroine/player with original keys, `HeroineParam`, `ParameterFile` and host snapshot schema 2. Original scenario 301 finishes with values equal to the Python model and the original runtime (VM probe, 388 cases, 0 differences). The bound corpus rerun completes 4,370 of 10,463 assets with 0 unexplained. The Mac `gameplay-scenarios` lane runs the fixed event once across four reloads. Next: the transfer-list seed and `CharaChange`/`CharaEvent`, then G-T03 command families. |
-| 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. **2026-10-23:** P-T02's first slice is merged as #112 (library generations, one dependency graph, saved selections). App selection wiring, batch DLL triage and P-T01/03/05 remain. P-T04's Swift slice (#107) is also merged. |
+| 7 | **P-T01/02/03/05** | Measure plugin API coverage, unify immutable adapter/IR libraries, verify installed adapter UI behavior and add real original save callbacks. **2026-10-24:** P-T02's library generations/dependency graph (#112) and bounded app selection/save/restore wiring (#161) are merged; the accepted row above records the actual GUI and fixture scope. Batch DLL triage, broader P-T01/03 coverage and P-T05 source save adapters remain. P-T04's Swift slice (#107) is also merged. |
 | 8 | **R6/R7, T-T01/02/06, E-T04** | Enforce recoverable runtime limits, measure representative displayed scenes, provide a clean release/setup path and resumable conversion orchestration. **2026-10-23:** first slices merged: T-T01 (#116: recorded prerequisites, `doctor.py`, a CI check); R6 (#119: recoverable uniform ring, frame errors, morph and light limits); T-T02 (#120: Release bundle inspection in CI, source-tree fallback switch); A-T02 (#122: a selected converted library and identity-checked relocation of saved scenes). Remaining: versions for the unrecorded tools, the deployment matrix, an app run outside the checkout, character resource release, R7 budgets and E-T04. |
 
 Do not resume these as one undifferentiated “finish the port” task. Each linked

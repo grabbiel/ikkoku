@@ -478,7 +478,10 @@ Concrete Studio integration is covered in [Studio](studio.md).
   state from older completions. Release build, four existing queue tests and
   24 app checks passed at `fdf9fad` (2026-10-24), including held-worker cancellation,
   causal retry enqueue, unchanged frame/resources and panel cleanup. Visible
-  Cancel/retry acceptance remains pending; no decoder throughput claim.
+  Cancel/retry also passed in a separately hashed diagnostic Release build with
+  a temporary worker gate: controls recovered before worker release, the retry
+  waited for the discarded resolver, and only the retry mounted. Pause/Unload
+  passed. The exact patch was removed; no decoder throughput or GUI latency claim.
 - **P-T03 — Actual app regression (P1, depends on A-T04 and Studio inspector fix).**
   Run the existing three-stage capture probe with both installed adapters and the
   IR motion fixture. Then exercise focus gain/loss with generated audio and verify
