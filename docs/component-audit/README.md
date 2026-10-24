@@ -261,6 +261,21 @@ limits. No production sampling, source tolerance or per-frame work changed,
 and no speedup or source-color parity is claimed. The owner proceeds to an
 asset-free small-triangle reproducer; the repeatability issue remains open.
 
+**Local acceptance — Studio command ownership, [#196](https://github.com/grabbiel/ikkoku/pull/196):**
+Interactive translated-profile load and Run/Pause now require active Studio and
+no pending replacement. The load dialog retains its original mount generation,
+so a stale completion cannot claim a newer session. All 34 app checks pass,
+including inactive, pending and stale-generation rejection with unchanged
+session, clock, document, resources and sampled frame state. Root verifies the
+actual Mods menu disables these commands in Maker, restores them in Studio,
+retains pause through the mode round trip, toggles Run/Pause, and loads the
+retained translated profile through its real file dialog. The owned GUI process
+exits normally. These are event-only guards with no new frame work or throughput
+claim; programmatic startup loading keeps its existing behavior. Stale-dialog
+concurrency is automated-method evidence, not interactive modal evidence.
+The owner moves next to mounted-session summaries and Unload access for direct
+native and translated-profile origins in the existing library panel.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
