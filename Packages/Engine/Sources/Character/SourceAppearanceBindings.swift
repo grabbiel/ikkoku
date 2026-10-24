@@ -79,6 +79,24 @@ public struct SourceAppearanceBindings: Codable, Sendable {
         return try JSONDecoder().decode(Self.self, from: JSONSerialization.data(withJSONObject: rewrite(object)))
     }
 
+    /// Shoe entries (category 112) bind the outdoor slot, ChaFileClothes
+    /// parts[8]; the indoor shoes load the same catalog row by parts[7]'s ID
+    /// and color it from parts[7] (ChaControl.ChangeClothesShoesAsync), so
+    /// the indoor copy reads slot 7 and its ClothesShoesInner resolver scope.
+    public func contextualizedIndoorShoes() throws -> Self {
+        func rewrite(_ value: Any) -> Any {
+            if let string = value as? String {
+                let slot = string.hasPrefix("clothes.parts.8.") ? "clothes.parts.7." + string.dropFirst("clothes.parts.8.".count) : string
+                return slot.replacingOccurrences(of: ".ClothesShoesOuter", with: ".ClothesShoesInner")
+            }
+            if let array = value as? [Any] { return array.map(rewrite) }
+            if let map = value as? [String: Any] { return Dictionary(uniqueKeysWithValues: map.map { (rewrite($0.key) as! String, rewrite($0.value)) }) }
+            return value
+        }
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self))
+        return try JSONDecoder().decode(Self.self, from: JSONSerialization.data(withJSONObject: rewrite(object)))
+    }
+
     public static func load(url: URL) throws -> Self {
         let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
         let data = try file.read(upToCount: 1024 * 1024 + 1) ?? Data()

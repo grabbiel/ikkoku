@@ -13,6 +13,15 @@ public struct SourceMakerLibrary: Sendable {
         public let parent: String, positionScale: Float, moveNodes: [String]
         public let ignoreMoves: Bool?
     }
+    /// A half-state mesh of a garment (ST-C03): a renderer under an
+    /// alternate ChaReference switch node (n_top_b, n_bot_b, n_bot_c,
+    /// n_panst_b) that the dressed `meshNames` leave out. `activeWhen` is the
+    /// converter's conjunction of ChaControl.UpdateVisible conditions over
+    /// its `switches`: every clause's clothes kind must be in its states.
+    public struct Alternate: Decodable, Sendable, Equatable {
+        public struct Clause: Decodable, Sendable, Equatable { public let kind: Int, states: [Int] }
+        public let meshName: String, switches: [String], activeWhen: [Clause]
+    }
     public struct Entry: Decodable, Sendable {
         public let category: Int, id: Int, name: String
         public let modGUID: String?, empty: Bool?
@@ -22,6 +31,11 @@ public struct SourceMakerLibrary: Sendable {
         /// by KeyType name) of this entry.
         public let materialEvidence: File?
         public let meshNames: [String]?, attachment: Attachment?
+        /// Half-state meshes, their renderers' material evidence
+        /// (`alternates.json`), and the Studio wear appearance and bindings:
+        /// the dressed parts and recipes unchanged, then the alternate ones.
+        public let alternates: [Alternate]?
+        public let alternateMaterialEvidence: File?, wearAppearance: File?, wearCardBindings: File?
     }
     public struct Assembly: Decodable, Sendable {
         public let sex: Int, headID: Int, exType: Int
@@ -44,10 +58,21 @@ public struct SourceMakerLibrary: Sendable {
             guard entry.category >= 0, entry.id >= 0, entry.modGUID?.isEmpty != true,
                   entry.empty == true || (entry.rig != nil && entry.meshNames?.isEmpty == false),
                   index.updateValue(i, forKey: key) == nil else { throw RigError.invalid("Invalid or duplicate Maker asset identity.") }
+            if let alternates = entry.alternates {
+                let names = alternates.map(\.meshName)
+                guard entry.empty != true, (105...110).contains(entry.category), !alternates.isEmpty, alternates.count <= 64,
+                      Set(names).count == names.count, Set(names).isDisjoint(with: entry.meshNames ?? []),
+                      alternates.allSatisfy({ !$0.switches.isEmpty && $0.activeWhen.allSatisfy { (0..<9).contains($0.kind) && !$0.states.isEmpty && $0.states.allSatisfy { (0...3).contains($0) } } })
+                else { throw RigError.invalid("Invalid Maker half-state meshes.") }
+            }
+            guard entry.alternates != nil || (entry.wearAppearance == nil && entry.wearCardBindings == nil) else {
+                throw RigError.invalid("Maker wear appearance requires half-state meshes.")
+            }
         }
         let result = Self(sourceURL: url.resolvingSymlinksInPath(), directory: url.deletingLastPathComponent().resolvingSymlinksInPath(), entries: doc.entries, assemblies: doc.assemblies ?? [], entryIndex: index)
         for entry in result.entries {
-            for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask, entry.materialEvidence].compactMap({ $0 }) { _ = try result.contained(ref) }
+            for ref in [entry.rig, entry.appearance, entry.cardBindings, entry.bodyMask, entry.materialEvidence,
+                        entry.alternateMaterialEvidence, entry.wearAppearance, entry.wearCardBindings].compactMap({ $0 }) { _ = try result.contained(ref) }
         }
         var identities = Set<String>()
         for assembly in result.assemblies {
@@ -167,6 +192,18 @@ public struct SourceMakerLibrary: Sendable {
     }
     fileprivate struct MaterialComponent: Sendable {
         let appearance: URL, bindings: URL?, meshNames: Set<String>, prefix: String, accessorySlot: Int?
+        /// The indoor-shoe copy of a category 112 entry, whose recipes bind
+        /// the outdoor slot (8) and are rebound to slot 7.
+        var indoorShoes = false
+    }
+    /// How a Studio wear assembly resolved the indoor shoes (clothes kind 7).
+    public enum IndoorShoes: Sendable, Equatable {
+        /// Converted and assembled as its own garment.
+        case assembled
+        /// The selection is the catalog's empty row: shoesType 0 draws no shoe.
+        case empty
+        /// Not assembled: a Maker assembly, or a selection without a conversion.
+        case unconverted
     }
     public struct Prepared: Sendable {
         public let source: SourceRig, selections: [Selection], diagnostics: [String]
@@ -176,6 +213,8 @@ public struct SourceMakerLibrary: Sendable {
         /// Clothing kinds rendered by the base avatar's reference geometry
         /// because the card's selection has no conversion.
         public let referenceClothingSlots: Set<Int>
+        /// The indoor shoes of a Studio wear assembly; `.unconverted` for Maker.
+        public let indoorShoes: IndoorShoes
         fileprivate let components: [MaterialComponent]
         fileprivate let bodyMask: URL?
         fileprivate let clearBodyMask: Bool
@@ -188,6 +227,7 @@ public struct SourceMakerLibrary: Sendable {
                 if let url = component.bindings {
                     var bindings = try SourceAppearanceBindings.load(url: url)
                     if let slot = component.accessorySlot { bindings = try bindings.contextualized(accessorySlot: slot) }
+                    if component.indoorShoes { bindings = try bindings.contextualizedIndoorShoes() }
                     let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources)
                     appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
                 }
@@ -203,7 +243,12 @@ public struct SourceMakerLibrary: Sendable {
             return .init(appearance: combined, appliedFields: fields, diagnostics: messages)
         }
     }
-    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL) throws -> Prepared {
+    /// `wear` (CharaStudio) also assembles each converted garment's
+    /// half-state meshes with its wear appearance, and the converted indoor
+    /// shoes as clothing kind 7; UpdateVisible then selects among them per
+    /// clothes state and shoesType. The Maker assembly (`wear` false) keeps
+    /// only the fully dressed meshes and the outdoor shoes.
+    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false) throws -> Prepared {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
         try Self.validateAssemblyIdentity(card: card)
         let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL))
@@ -246,21 +291,27 @@ public struct SourceMakerLibrary: Sendable {
             guard let value = fields[name]?.integerValue, Int32(exactly: value) != nil else { throw RigError.invalid("Missing or invalid Maker selection \(name).") }
             return value
         }
-        func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil) throws -> (SourceRig, [String]?)? {
+        func selected(_ category: Int, _ id: Int, _ property: String, _ prefix: String, accessorySlot: Int? = nil,
+                      indoorShoes: Bool = false) throws -> (SourceRig, [String]?)? {
             let resolution = selection(category: category, savedID: id, property: property, references: references); selections.append(resolution)
             guard let entry = resolution.entry else {
                 diagnostics.append("\(property): \(resolution.status), source ID \(resolution.sourceID). Card identity preserved; reference geometry retained where available."); return nil
             }
             guard entry.empty != true else { return nil }
-            if let mask = entry.bodyMask { bodyMask = try verified(mask, maximumBytes: 32 * 1024 * 1024) }
+            // The indoor shoes never replace the top's body cut-out.
+            if !indoorShoes, let mask = entry.bodyMask { bodyMask = try verified(mask, maximumBytes: 32 * 1024 * 1024) }
             guard let rigFile = entry.rig else { throw RigError.invalid("Converted Maker geometry is absent.") }
             let rig = try SourceRig.load(url: verified(rigFile))
-            if let file = entry.appearance {
+            // Half-state meshes join only with their wear appearance (or when
+            // the whole garment is neutral), never as unmaterialed parts.
+            let halfStates = wear && entry.alternates != nil && (entry.appearance == nil || entry.wearAppearance != nil)
+            if let file = halfStates ? entry.wearAppearance ?? entry.appearance : entry.appearance {
+                let bindings = halfStates ? entry.wearCardBindings ?? entry.cardBindings : entry.cardBindings
                 materials.append(.init(appearance: try verified(file, maximumBytes: 1024 * 1024),
-                    bindings: try entry.cardBindings.map { try verified($0, maximumBytes: 1024 * 1024) },
-                    meshNames: Set(rig.parts.map { $0.mesh.name }), prefix: prefix, accessorySlot: accessorySlot))
+                    bindings: try bindings.map { try verified($0, maximumBytes: 1024 * 1024) },
+                    meshNames: Set(rig.parts.map { $0.mesh.name }), prefix: prefix, accessorySlot: accessorySlot, indoorShoes: indoorShoes))
             } else { diagnostics.append("\(property): converted geometry has a neutral material; shader conversion is missing.") }
-            return (rig.namespacingMeshes(prefix), entry.meshNames)
+            return (rig.namespacingMeshes(prefix), halfStates ? entry.meshNames.map { $0 + entry.alternates!.map(\.meshName) } : entry.meshNames)
         }
         let hairFields = try card.recordFields(.hair)
         guard let hairParts = hairFields["parts"]?.arrayValue, hairParts.count <= 4 else { throw RigError.invalid("Unsupported hair part array.") }
@@ -271,14 +322,20 @@ public struct SourceMakerLibrary: Sendable {
         }
         let clothesFields = try card.recordFields(.clothes(coordinate: coordinate))
         guard let parts = clothesFields["parts"]?.arrayValue, parts.count <= 9 else { throw RigError.invalid("Unsupported clothes array.") }
-        for (slot, part) in parts.enumerated() where slot != 7 {
+        var indoorShoes = IndoorShoes.unconverted
+        for (slot, part) in parts.enumerated() where slot != 7 || wear {
             let id = try integer(part.stringKeyedMap(), "id")
             let property = "outfit\(coordinate).ChaFileClothes.Clothes" + ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"][slot]
-            let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/")
+            let value = try selected(min(105 + slot, 112), id, property, "clothes-\(slot)/", indoorShoes: slot == 7)
             if selections.last?.entry != nil { clothesBySlot[slot] = value; referenceClothes[slot] = nil }
             if slot == 0, selections.last?.entry?.empty == true { clearBodyMask = true }
+            if slot == 7, let entry = selections.last?.entry { indoorShoes = entry.empty == true ? .empty : .assembled }
         }
-        diagnostics.append("Converted clothing assembles the outdoor shoes and only the fully-dressed meshes; the saved clothes state is preserved (Studio renders it on these meshes, the Maker preview does not).")
+        if wear {
+            diagnostics.append("Converted clothing assembles the dressed and half-state meshes and both shoe slots; the saved clothes state and shoesType select among them.")
+        } else {
+            diagnostics.append("Converted clothing assembles the outdoor shoes and only the fully-dressed meshes; the saved clothes state is preserved (Studio renders it on these meshes, the Maker preview does not).")
+        }
         let accessoryFields = try card.recordFields(.accessory(coordinate: coordinate))
         guard let parts = accessoryFields["parts"]?.arrayValue, parts.count <= 20 else { throw RigError.invalid("Accessory preview supports the original 20-slot array.") }
         var accessories: [SourceAvatar.Accessory] = []
@@ -312,7 +369,7 @@ public struct SourceMakerLibrary: Sendable {
             clothingMeshNames: clothes.map(\.1), hairMeshNames: hair.map(\.1), accessories: accessories)
         return Prepared(source: source, selections: selections, diagnostics: diagnostics,
             clothingSlots: clothesBySlot.keys.sorted(), referenceClothingSlots: Set(clothesBySlot.keys).subtracting(convertedSlots),
-            components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
+            indoorShoes: indoorShoes, components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
     }
 }
 

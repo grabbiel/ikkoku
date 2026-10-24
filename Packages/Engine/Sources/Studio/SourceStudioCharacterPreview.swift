@@ -73,6 +73,9 @@ public final class SourceStudioCharacterPreview {
     public private(set) var clothesState: [UInt8]
     /// The rendered accessory flags: the saved flags until `setWear`.
     public private(set) var showAccessory: [Bool]
+    /// The rendered ChaFileStatus.shoesType (0 indoor, 1 outdoor): the saved
+    /// value until `setWear`.
+    public private(set) var shoesType: Int
     /// The renderers the current wear hides, and its fallback report.
     public private(set) var wearEvaluation: SourceStudioWearLayout.Evaluation
     private let hideHairSlots: Set<Int>
@@ -342,7 +345,7 @@ public final class SourceStudioCharacterPreview {
             correctionData = try Self.read(correction, maximum: 1024 * 1024)
         }
         let options = try SourceMakerAssemblyOptions.body(sex: identity.sex, exType: identity.exType, boneType: identity.boneType, correctionData: correctionData)
-        let prepared = try library?.prepare(card: card, coordinate: coordinate, baseURL: rigURL)
+        let prepared = try library?.prepare(card: card, coordinate: coordinate, baseURL: rigURL, wear: true)
         selections = prepared?.selections ?? []
         let source = try prepared?.source ?? SourceRig.loadModel(url: rigURL)
         // ST-C03: the saved wear, the outfit's catalog rows and the assembled
@@ -365,7 +368,7 @@ public final class SourceStudioCharacterPreview {
         }
         let clothingSlots = prepared?.clothingSlots
             ?? selectedManifest.clothes.enumerated().map { $0.element.slot ?? ([0, 1, 8].indices.contains($0.offset) ? [0, 1, 8][$0.offset] : -1) }
-        let wearLayout = SourceStudioWearLayout(source: source, clothingSlots: clothingSlots)
+        let wearLayout = SourceStudioWearLayout(source: source, clothingSlots: clothingSlots, indoorShoes: prepared?.indoorShoes ?? .unconverted)
         let wearRules = SourceStudioWear(catalog: wearCatalog.clothes, switchNodes: (0..<9).map { kind in
             if case .row = wearCatalog.clothes[kind] { return wearLayout.switchNodes[kind] ?? [] }
             return []
@@ -386,6 +389,7 @@ public final class SourceStudioCharacterPreview {
         self.savedAccessorySlots = wearCatalog.accessories.keys.sorted()
         self.hideHairSlots = hideHairSlots
         clothesState = loadedClothesState
+        shoesType = savedWear.shoesType
         dynamicsActiveClothes = (0..<9).reduce(UInt16(0)) { mask, kind in
             wearRules.visible(kind: kind, states: loadedClothesState, shoesType: savedWear.shoesType) ? mask | (1 << kind) : mask
         }
@@ -404,12 +408,10 @@ public final class SourceStudioCharacterPreview {
         if wearRules.compositeTop {
             wearMessages.append("The top is a sailor/jacket composite whose unconverted sub-parts (ChaControl.ChangeClothesTopParts) can set notBra, so the bra and shorts clothes-state rules are unknown: every state is selectable and the saved bytes are kept.")
         }
-        if wearLayout.clothingKinds.contains(8) {
-            if savedWear.shoesType == 0 {
-                wearMessages.append("shoesType 0 shows the indoor shoes, which are not assembled; the outdoor shoe geometry stands in and follows the indoor shoes' state.")
-            } else if savedWear.shoesType != 1 {
-                wearMessages.append("shoesType \(savedWear.shoesType) shows neither shoe; the shoe geometry stays hidden.")
-            }
+        // An outdoor-shoe stand-in for unconverted indoor shoes is one of
+        // wearEvaluation.fallbacks, appended below.
+        if !(0...1).contains(savedWear.shoesType), !Set(wearLayout.clothingKinds).isDisjoint(with: [7, 8]) {
+            wearMessages.append("shoesType \(savedWear.shoesType) shows neither shoe; the shoe geometry stays hidden.")
         }
         for (field, standard) in [("visibleSimple", false), ("visibleHeadAlways", true), ("visibleBodyAlways", true)] {
             if case .bool(let value) = status[field], value != standard {
@@ -738,25 +740,29 @@ public final class SourceStudioCharacterPreview {
     }
 
     /// Applies the document's wear (ST-C03). `clothesState` nil renders the
-    /// loaded state of the card's saved bytes and `showAccessory` nil the
-    /// saved flags. Values render as given — the Studio model produces them
-    /// with `wearRules.setting`, the CharaStudio button path — so only their
-    /// shape is checked, and a rejected value leaves the rendered wear as it
-    /// was. Nothing is rebuilt: the next `frame` hides or shows the
-    /// assembled renderers and sets the body cut-out, and `wearDiagnostics`
-    /// reports any state drawn with the dressed meshes instead.
-    public func setWear(clothesState: [UInt8]?, showAccessory: [Bool]?) throws {
+    /// loaded state of the card's saved bytes, `showAccessory` nil the saved
+    /// flags and `shoesType` nil the saved shoesType. Values render as given
+    /// — the Studio model produces them with `wearRules.setting`, the
+    /// CharaStudio button path — so only their shape is checked, and a
+    /// rejected value leaves the rendered wear as it was. Nothing is rebuilt:
+    /// the next `frame` hides or shows the assembled renderers (dressed,
+    /// half-state and both shoe slots) and sets the body cut-out, and
+    /// `wearDiagnostics` reports any state drawn with the dressed meshes
+    /// instead.
+    public func setWear(clothesState: [UInt8]?, showAccessory: [Bool]?, shoesType: Int?) throws {
         let clothes = clothesState ?? loadedClothesState, accessories = showAccessory ?? savedWear.showAccessory
+        let shoes = shoesType ?? savedWear.shoesType
         guard clothes.count == 9, clothes.allSatisfy({ $0 <= 3 }) else {
             throw RigError.invalid("Clothes state must be nine ClothesKind values, each in 0...3.")
         }
         guard accessories.count == 20 else { throw RigError.invalid("Accessory visibility must contain exactly 20 slot flags.") }
-        guard clothes != self.clothesState || accessories != self.showAccessory else { return }
-        wearEvaluation = wearLayout.evaluate(rules: wearRules, states: clothes, shoesType: savedWear.shoesType,
+        guard (0...255).contains(shoes) else { throw RigError.invalid("shoesType must be a byte.") }
+        guard clothes != self.clothesState || accessories != self.showAccessory || shoes != self.shoesType else { return }
+        wearEvaluation = wearLayout.evaluate(rules: wearRules, states: clothes, shoesType: shoes,
                                              showAccessory: accessories, hideHairSlots: hideHairSlots)
-        if clothes != self.clothesState {
+        if clothes != self.clothesState || shoes != self.shoesType {
             dynamicsActiveClothes = (0..<9).reduce(UInt16(0)) { mask, kind in
-                wearRules.visible(kind: kind, states: clothes, shoesType: savedWear.shoesType) ? mask | (1 << kind) : mask
+                wearRules.visible(kind: kind, states: clothes, shoesType: shoes) ? mask | (1 << kind) : mask
             }
             // A wear edit can change garment-root activity at the same clock.
             // Keep particle history for unchanged components; evaluate handles
@@ -765,6 +771,20 @@ public final class SourceStudioCharacterPreview {
         }
         self.clothesState = clothes
         self.showAccessory = accessories
+        self.shoesType = shoes
+    }
+
+    /// The clothing renderers the current wear draws, by source mesh name
+    /// without the assembly's "clothes-<kind>/" prefix, sorted (readback
+    /// for the scenario lane; not used per frame).
+    public var drawnClothingMeshes: [String] {
+        let parts = preview.source.parts
+        return wearLayout.parts.indices.compactMap { index -> String? in
+            guard case .clothing = wearLayout.parts[index], !wearEvaluation.hiddenParts.contains(index),
+                  parts[index].rendererEnabled, preview.source.rig.activeNodes[parts[index].node] else { return nil }
+            let name = parts[index].mesh.name
+            return name.firstIndex(of: "/").map { String(name[name.index(after: $0)...]) } ?? name
+        }.sorted()
     }
 
     /// The current wear's fallback lines (empty when every state renders

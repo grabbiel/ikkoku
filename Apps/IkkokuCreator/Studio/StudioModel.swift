@@ -678,7 +678,7 @@ final class StudioModel: ViewportInputHandler {
         // per-outfit and carries over unchanged.
         let clothes = fresh.wearRules.normalized(current.clothesState)
         let storedClothes = clothes == fresh.loadedClothesState ? nil : clothes
-        try fresh.setWear(clothesState: storedClothes, showAccessory: object.sourceShowAccessory)
+        try fresh.setWear(clothesState: storedClothes, showAccessory: object.sourceShowAccessory, shoesType: object.sourceShoesType)
         // The face state is Status data independent of the outfit.
         try fresh.setExpressionState(object.sourceExpression)
         pushUndo(force: true)
@@ -731,7 +731,7 @@ final class StudioModel: ViewportInputHandler {
     private func storeSourceClothesState(_ i: Int, preview: SourceStudioCharacterPreview, _ next: [UInt8]) throws {
         guard next != preview.clothesState else { return }
         let stored = next == preview.loadedClothesState ? nil : next
-        try preview.setWear(clothesState: stored, showAccessory: doc.objects[i].sourceShowAccessory)
+        try preview.setWear(clothesState: stored, showAccessory: doc.objects[i].sourceShowAccessory, shoesType: doc.objects[i].sourceShoesType)
         pushUndo(force: true)
         doc.objects[i].sourceClothesState = stored
     }
@@ -753,9 +753,27 @@ final class StudioModel: ViewportInputHandler {
         guard flags[slot] != visible else { return }
         flags[slot] = visible
         let stored = flags == preview.savedWear.showAccessory ? nil : flags
-        try preview.setWear(clothesState: doc.objects[i].sourceClothesState, showAccessory: stored)
+        try preview.setWear(clothesState: doc.objects[i].sourceClothesState, showAccessory: stored, shoesType: doc.objects[i].sourceShoesType)
         pushUndo(force: true)
         doc.objects[i].sourceShowAccessory = stored
+    }
+
+    /// Shoes type (ST-C03), CharaStudio's State panel shoes buttons
+    /// (MPCharCtrl.StateInfo.OnClickShoesType -> OCIChar.SetShoesType, which
+    /// writes ChaFileStatus.shoesType only; UpdateVisible then shows the
+    /// indoor shoes for 0 and the outdoor shoes for 1). The clothes state is
+    /// unchanged. The document keeps nil for the card's saved value, so a
+    /// return to it exports byte-identical card bytes.
+    func setSourceShoesType(_ id: UUID, type: Int) throws {
+        guard let i = doc.index(of: id), let preview = sourceInstances[id] else {
+            throw RigError.invalid("Shoes type editing needs a loaded source character.")
+        }
+        guard (0...1).contains(type) else { throw RigError.invalid("Shoes type must be 0 (indoor) or 1 (outdoor).") }
+        guard type != preview.shoesType else { return }
+        let stored = type == preview.savedWear.shoesType ? nil : type
+        try preview.setWear(clothesState: doc.objects[i].sourceClothesState, showAccessory: doc.objects[i].sourceShowAccessory, shoesType: stored)
+        pushUndo(force: true)
+        doc.objects[i].sourceShoesType = stored
     }
 
     /// Face state (ST-C04), CharaStudio's State panel face controls
@@ -1478,7 +1496,7 @@ final class StudioModel: ViewportInputHandler {
                     let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: object.sourceOutfit)
                     try fresh.setShapeValues(face: object.sourceFaceValues, body: object.sourceBodyValues)
                     if let colors = object.sourceColorEdits { try fresh.setColorEdits(colors) }
-                    try fresh.setWear(clothesState: object.sourceClothesState, showAccessory: object.sourceShowAccessory)
+                    try fresh.setWear(clothesState: object.sourceClothesState, showAccessory: object.sourceShowAccessory, shoesType: object.sourceShoesType)
                     try fresh.setExpressionState(object.sourceExpression)
                     exportPreview = fresh
                 }
@@ -1514,7 +1532,7 @@ final class StudioModel: ViewportInputHandler {
                 if let mouth = expression.mouthEdit(from: preview.savedExpression) { edits.mouth[key] = mouth }
             }
             if object.sourceFaceValues != nil || object.sourceBodyValues != nil || object.sourceColorEdits != nil || object.sourceOutfit != nil
-                || object.sourceClothesState != nil || object.sourceShowAccessory != nil || !faceState.isEmpty {
+                || object.sourceClothesState != nil || object.sourceShowAccessory != nil || object.sourceShoesType != nil || !faceState.isEmpty {
                 // Export writes back only the arrays, colors and outfit that
                 // actually differ from the embedded card's saved values; a
                 // value edited back to the saved rate, color or outfit produces
@@ -1526,14 +1544,16 @@ final class StudioModel: ViewportInputHandler {
                     throw RigError.invalid("The rendered outfit differs from the document's outfit selection; let the preview rebuild before exporting.")
                 }
                 guard preview.clothesState == (object.sourceClothesState ?? preview.loadedClothesState),
-                      preview.showAccessory == (object.sourceShowAccessory ?? preview.savedWear.showAccessory) else {
-                    throw RigError.invalid("The rendered clothes state or accessory visibility differs from the document; let the preview refresh before exporting.")
+                      preview.showAccessory == (object.sourceShowAccessory ?? preview.savedWear.showAccessory),
+                      preview.shoesType == (object.sourceShoesType ?? preview.savedWear.shoesType) else {
+                    throw RigError.invalid("The rendered clothes state, accessory visibility or shoes type differs from the document; let the preview refresh before exporting.")
                 }
                 // Only a state that differs from the card's saved bytes is
                 // written (Status.clothesState / showAccessory, patched in
                 // place); nil and the saved values leave the card untouched.
                 let clothes = object.sourceClothesState.flatMap { $0 != preview.savedWear.clothesState ? $0 : nil }
                 let accessories = object.sourceShowAccessory.flatMap { $0 != preview.savedWear.showAccessory ? $0 : nil }
+                let shoes = object.sourceShoesType.flatMap { $0 != preview.savedWear.shoesType ? $0 : nil }
                 let outfit = preview.coordinate != preview.savedCoordinate ? preview.coordinate : nil
                 let face = object.sourceFaceValues != preview.savedFaceValues ? object.sourceFaceValues : nil
                 let body = object.sourceBodyValues != preview.savedBodyValues ? object.sourceBodyValues : nil
@@ -1545,9 +1565,9 @@ final class StudioModel: ViewportInputHandler {
                     // edit from the document's edited value explicitly.
                     colors.append(.init(record: color.record, path: color.path, rgba: [rgba.x, rgba.y, rgba.z, rgba.w]))
                 }
-                if face != nil || body != nil || !colors.isEmpty || outfit != nil || clothes != nil || accessories != nil || !faceState.isEmpty {
+                if face != nil || body != nil || !colors.isEmpty || outfit != nil || clothes != nil || accessories != nil || shoes != nil || !faceState.isEmpty {
                     edits.cards[key] = .init(faceValues: face, bodyValues: body, colors: colors, coordinateType: outfit,
-                                             clothesState: clothes, showAccessory: accessories, faceState: faceState)
+                                             clothesState: clothes, showAccessory: accessories, shoesType: shoes, faceState: faceState)
                 }
             }
             if let character = original.character {
@@ -1910,7 +1930,7 @@ final class StudioModel: ViewportInputHandler {
                         }
                         // The document's wear (scene reload, undo/redo); a
                         // repeat of the rendered values is a comparison only.
-                        do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory) }
+                        do { try preview.setWear(clothesState: o.sourceClothesState, showAccessory: o.sourceShowAccessory, shoesType: o.sourceShoesType) }
                         catch { status = "Source character \(o.sourceObjectKey ?? 0) wear: \(error)" }
                         // The document's face state (scene reload, undo/redo),
                         // stored settled; a repeat is a comparison only.

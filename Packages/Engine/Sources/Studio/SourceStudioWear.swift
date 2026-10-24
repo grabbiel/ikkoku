@@ -34,9 +34,9 @@ public struct SourceStudioWear: Equatable, Sendable {
     public static let studioKinds = Array(0..<8)
     /// ChaReference names the UpdateVisible switch nodes are looked up by.
     public static let switchNames: Set<String> = ["n_top_a", "n_top_b", "n_bot_a", "n_bot_b", "n_bot_c", "n_panst_a", "n_panst_b"]
-    /// Switch nodes whose meshes are the alternate (half/undressed) shapes;
-    /// the Maker conversion keeps only the dressed meshes, so these are
-    /// assembled without renderers.
+    /// Switch nodes whose meshes are the alternate (half/undressed) shapes.
+    /// The Maker assembly keeps only the dressed meshes; the Studio wear
+    /// assembly adds a converted garment's alternate meshes under them.
     public static let alternateSwitches: [Int: Set<String>] = [
         0: ["n_top_b", "n_bot_b", "n_bot_c"], 1: ["n_top_b", "n_bot_b", "n_bot_c"],
         2: ["n_top_b", "n_bot_b", "n_bot_c"], 3: ["n_top_b", "n_bot_b", "n_bot_c"], 5: ["n_panst_b"],
@@ -233,15 +233,18 @@ public struct SourceStudioWearLayout: Equatable, Sendable {
     public let parts: [Owner]
     /// Switch-node names each assembled clothing kind's prefab carries.
     public let switchNodes: [Int: Set<String>]
+    /// How the assembly resolved the indoor shoes (clothes kind 7).
+    public let indoorShoes: SourceMakerLibrary.IndoorShoes
 
-    public init(parts: [Owner], switchNodes: [Int: Set<String>]) {
-        self.parts = parts; self.switchNodes = switchNodes
+    public init(parts: [Owner], switchNodes: [Int: Set<String>], indoorShoes: SourceMakerLibrary.IndoorShoes = .unconverted) {
+        self.parts = parts; self.switchNodes = switchNodes; self.indoorShoes = indoorShoes
     }
 
     /// Reads the component prefixes SourceAvatar.assemble gives every node
     /// ("clothes-<index>/", "accessory-<slot>/", "hair-<index>/");
     /// `clothingSlots[index]` is the ClothesKind of clothing component index.
-    public init(source: SourceRig, clothingSlots: [Int]) {
+    public init(source: SourceRig, clothingSlots: [Int], indoorShoes: SourceMakerLibrary.IndoorShoes = .unconverted) {
+        self.indoorShoes = indoorShoes
         let nodes = source.rig.nodes
         func component(_ node: Int) -> (kind: String, index: Int)? {
             let id = nodes[node].sourceID
@@ -284,6 +287,12 @@ public struct SourceStudioWearLayout: Equatable, Sendable {
     public var accessorySlots: [Int] {
         Array(Set(parts.compactMap { if case .accessory(let slot) = $0 { return slot }; return nil })).sorted()
     }
+    /// The outdoor-shoe geometry stands in for indoor shoes that have no
+    /// conversion (and only then): converted indoor shoes are their own
+    /// garment, and an empty indoor-shoe row draws no shoe.
+    public var outdoorShoesStandIn: Bool {
+        indoorShoes == .unconverted && !clothingKinds.contains(7) && clothingKinds.contains(8)
+    }
 
     public struct Evaluation: Equatable, Sendable {
         public var hiddenParts: Set<Int> = []
@@ -296,28 +305,36 @@ public struct SourceStudioWearLayout: Equatable, Sendable {
         public var fallbacks: [String] = []
     }
 
-    /// UpdateVisible over the assembled renderers. A visible garment whose
-    /// state activates an alternate switch node (n_top_b, n_bot_b, n_bot_c,
-    /// n_panst_b) that carries no assembled renderer — the conversion keeps
-    /// only the dressed meshes — or whose half state belongs to an
-    /// unconverted (reference) garment renders its dressed meshes instead,
-    /// and the fallback is reported; it is never drawn silently wrong. The
-    /// outdoor-shoe geometry (the only shoe the assembly converts) follows
-    /// shoes_outer for shoesType 1 and stands in for the indoor shoes, under
-    /// shoes_inner, for shoesType 0. `hideHairSlots`: accessory slots whose
-    /// catalog HideHair is set (ChaControl.CheckHideHair).
+    /// UpdateVisible over the assembled renderers: a garment's renderers draw
+    /// while the garment is visible and every switch node above them is
+    /// active, so a half state draws the converted alternate meshes under
+    /// n_top_b, n_bot_b, n_bot_c or n_panst_b. A visible garment whose state
+    /// activates an alternate switch node that carries no assembled renderer
+    /// (a library without the garment's half-state meshes), or whose half
+    /// state belongs to an unconverted (reference) garment, renders its
+    /// dressed meshes instead, and the fallback is reported; it is never
+    /// drawn silently wrong. Converted indoor shoes follow shoes_inner and
+    /// the outdoor shoes shoes_outer, by shoesType; only when the indoor
+    /// shoes have no conversion does the outdoor-shoe geometry stand in for
+    /// them under shoes_inner for shoesType 0 (`outdoorShoesStandIn`).
+    /// `hideHairSlots`: accessory slots whose catalog HideHair is set
+    /// (ChaControl.CheckHideHair).
     public func evaluate(rules: SourceStudioWear, states s: [UInt8], shoesType: Int, showAccessory: [Bool],
                          hideHairSlots: Set<Int>) -> Evaluation {
         precondition(s.count == 9 && showAccessory.count == 20)
         var result = Evaluation()
         let dressed = [UInt8](repeating: 0, count: 9)
         var effective: [Int: [UInt8]] = [:], garmentVisible: [Int: Bool] = [:]
+        let standIn = outdoorShoesStandIn
         for kind in clothingKinds {
             let visible: Bool
-            if kind == 8 { visible = shoesType == 1 ? s[8] == 0 : shoesType == 0 ? s[7] == 0 : false }
+            if kind == 8, standIn { visible = shoesType == 1 ? s[8] == 0 : shoesType == 0 ? s[7] == 0 : false }
             else { visible = rules.visible(kind: kind, states: s, shoesType: shoesType) }
             garmentVisible[kind] = visible
             guard visible else { continue }
+            if kind == 8, standIn, shoesType == 0 {
+                result.fallbacks.append("shoesType 0 shows the indoor shoes, which have no conversion; the outdoor shoe geometry stands in and follows the indoor shoes' state.")
+            }
             let nodes = switchNodes[kind] ?? []
             let used = Set(parts.flatMap { owner -> Set<String> in
                 if case .clothing(kind, let switches) = owner { return switches }; return []

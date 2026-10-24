@@ -173,3 +173,166 @@ private func wearRig() throws -> SourceRig {
     let hairHidden = layout.evaluate(rules: wear, states: on, shoesType: 1, showAccessory: shown, hideHairSlots: [3])
     #expect(hairHidden.hiddenParts == [3] && hairHidden.hairHidden)
 }
+
+/// A Studio wear assembly with converted half-state meshes: top, bottom, bra,
+/// shorts (three states), pantyhose, and both shoe slots, each garment's
+/// meshes under its ChaReference switch nodes.
+private func halfStateRig() throws -> (SourceRig, [Int]) {
+    var names: [(String, String, Int?)] = [("root", "root", nil)]
+    var parts: [Int] = []
+    let garments: [(String, [(String?, String)])] = [
+        ("top", [("n_top_a", "top_a"), ("n_top_b", "top_b")]),
+        ("bot", [("n_bot_a", "bot_a"), ("n_bot_b", "bot_b")]),
+        ("bra", [("n_top_a", "bra_a"), ("n_top_b", "bra_b")]),
+        ("shorts", [("n_bot_a", "shorts_a"), ("n_bot_b", "shorts_b"), ("n_bot_c", "shorts_c")]),
+        ("panst", [("n_panst_a", "panst_a"), ("n_panst_b", "panst_b")]),
+        ("shoes_in", [(nil, "shoes_in")]), ("shoes_out", [(nil, "shoes_out")]),
+    ]
+    for (index, garment) in garments.enumerated() {
+        let prefix = "clothes-\(index)/p_\(garment.0)"
+        names.append(("p_" + garment.0, prefix, 0)); let root = names.count - 1
+        for (switchNode, mesh) in garment.1 {
+            var parent = root
+            if let switchNode { names.append((switchNode, prefix + "/" + switchNode, root)); parent = names.count - 1 }
+            names.append((mesh, prefix + "/" + mesh, parent)); parts.append(names.count - 1)
+        }
+    }
+    names.append(("body_mesh", "body/body_mesh", 0)); parts.append(names.count - 1)
+    let nodes = names.map { RigDefinition.Node(name: $0.0, sourceID: $0.1, parent: $0.2) }
+    let rig = SourceRig(sourcePrefab: "half", rig: try RigDefinition(nodes: nodes, skins: []), parts: parts.map { node in
+        .init(mesh: MeshData(name: names[node].0, positions: [Float3(0, 0, 0)], normals: [Float3(0, 1, 0)],
+                             joints: [SIMD4<UInt16>(0, 0, 0, 0)], weights: [Float4(1, 0, 0, 0)], indices: [0, 0, 0]),
+              node: node, skin: 0, rendererEnabled: true)
+    }, morphChannelCount: 0)
+    return (rig, [0, 1, 2, 3, 5, 7, 8])
+}
+
+@Test func sourceStudioWearHalfStateMeshesFollowUpdateVisible() throws {
+    let (source, slots) = try halfStateRig()
+    let layout = SourceStudioWearLayout(source: source, clothingSlots: slots, indoorShoes: .assembled)
+    #expect(layout.clothingKinds == [0, 1, 2, 3, 5, 7, 8] && !layout.outdoorShoesStandIn)
+    // Catalog rows: StateType 0 garments, StateType 2 shorts, StateType 1 shoes.
+    let wear = rules([3: row(2), 7: row(1), 8: row(1)])
+    let shown = [Bool](repeating: true, count: 20)
+    func drawn(_ s: [UInt8], _ shoesType: Int) -> (Set<String>, SIMD2<Float>, Int) {
+        let result = layout.evaluate(rules: wear, states: s, shoesType: shoesType, showAccessory: shown, hideHairSlots: [])
+        let names = Set(source.parts.indices.filter { index in
+            if case .clothing = layout.parts[index] { return !result.hiddenParts.contains(index) }; return false
+        }.map { source.parts[$0].mesh.name })
+        return (names, result.bodyAlpha, result.fallbacks.count)
+    }
+    // The recovered UpdateVisible table, restated per case (scene-editing.md):
+    // half (1) swaps _a for _b; half 2 shows neither for top/bottom/bra and
+    // n_bot_c for the shorts; pantyhose hides at half 2; shoes by shoesType.
+    let table: [([UInt8], Int, Set<String>, SIMD2<Float>)] = [
+        ([0, 0, 0, 0, 0, 0, 0, 0, 0], 1, ["top_a", "bot_a", "bra_a", "shorts_a", "panst_a", "shoes_out"], SIMD2(1, 1)),
+        ([0, 0, 0, 0, 0, 0, 0, 0, 0], 0, ["top_a", "bot_a", "bra_a", "shorts_a", "panst_a", "shoes_in"], SIMD2(1, 1)),
+        ([1, 1, 0, 0, 0, 1, 0, 0, 0], 0, ["top_b", "bot_b", "bra_a", "shorts_a", "panst_b", "shoes_in"], SIMD2(0, 1)),
+        ([0, 0, 1, 1, 0, 0, 0, 0, 0], 1, ["top_a", "bot_a", "bra_b", "shorts_b", "panst_a", "shoes_out"], SIMD2(1, 1)),
+        ([0, 0, 0, 2, 0, 2, 0, 0, 0], 1, ["top_a", "bot_a", "bra_a", "shorts_c", "shoes_out"], SIMD2(1, 1)),
+        ([2, 2, 2, 0, 0, 3, 0, 0, 0], 1, ["shorts_a", "shoes_out"], SIMD2(0, 1)),
+        ([3, 3, 3, 3, 0, 3, 0, 3, 3], 0, [], SIMD2(0, 0)),
+        ([0, 0, 0, 0, 0, 0, 0, 3, 0], 0, ["top_a", "bot_a", "bra_a", "shorts_a", "panst_a"], SIMD2(1, 1)),
+        ([0, 0, 0, 0, 0, 0, 0, 0, 3], 1, ["top_a", "bot_a", "bra_a", "shorts_a", "panst_a"], SIMD2(1, 1)),
+    ]
+    for (states, shoesType, expected, alpha) in table {
+        let (names, bodyAlpha, fallbacks) = drawn(states, shoesType)
+        #expect(names == expected, Comment(rawValue: "\(states) shoesType \(shoesType)"))
+        #expect(bodyAlpha == alpha && fallbacks == 0, Comment(rawValue: "\(states)"))
+    }
+    // Indoor shoes resolved to the catalog's empty row: shoesType 0 draws no
+    // shoe and reports nothing; unconverted ones keep the outdoor stand-in.
+    let (dressed, _) = try halfStateRig()
+    let withoutIndoor = SourceRig(sourcePrefab: "half", rig: dressed.rig,
+                                  parts: dressed.parts.filter { $0.mesh.name != "shoes_in" }, morphChannelCount: 0)
+    for (indoor, standIn) in [(SourceMakerLibrary.IndoorShoes.empty, false), (.unconverted, true)] {
+        let partial = SourceStudioWearLayout(source: withoutIndoor, clothingSlots: slots, indoorShoes: indoor)
+        #expect(partial.outdoorShoesStandIn == standIn && partial.clothingKinds == [0, 1, 2, 3, 5, 8])
+        let result = partial.evaluate(rules: wear, states: on, shoesType: 0, showAccessory: shown, hideHairSlots: [])
+        let shoes = withoutIndoor.parts.firstIndex { $0.mesh.name == "shoes_out" }!
+        #expect(result.hiddenParts.contains(shoes) != standIn)
+        #expect(result.fallbacks.count == (standIn ? 1 : 0))
+        #expect(!standIn || result.fallbacks[0].contains("outdoor shoe geometry stands in"))
+    }
+}
+
+@Test func sourceStudioWearAlternatesWithoutMeshesStillReportTheFallback() throws {
+    // The same garment assembled from a library without its half-state
+    // meshes (no alternates): n_top_b exists but carries no renderer.
+    let (source, slots) = try halfStateRig()
+    let dressedOnly = SourceRig(sourcePrefab: "half", rig: source.rig,
+                                parts: source.parts.filter { !$0.mesh.name.hasSuffix("_b") && !$0.mesh.name.hasSuffix("_c") }, morphChannelCount: 0)
+    let layout = SourceStudioWearLayout(source: dressedOnly, clothingSlots: slots, indoorShoes: .assembled)
+    let result = layout.evaluate(rules: rules([3: row(2)]), states: [1, 0, 0, 0, 0, 1, 0, 0, 0], shoesType: 1,
+                                 showAccessory: [Bool](repeating: true, count: 20), hideHairSlots: [])
+    #expect(result.fallbacks.count == 2 && result.bodyAlpha == SIMD2(1, 1))
+    #expect(result.fallbacks.contains { $0.contains("under n_top_b") } && result.fallbacks.contains { $0.contains("under n_panst_b") })
+}
+
+/// The converted library (`IKKOKU_MAKER_LIBRARY`) against the native rules:
+/// every half-state tag the converter wrote agrees with `switchActive`, and a
+/// Studio wear assembly of the half-state outfit draws exactly the Maker
+/// assembly's (dressed) parts, with identical geometry, when every garment
+/// is on with the outdoor shoes — the dressed identity — while its half
+/// states draw the converted alternate meshes with no fallback.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_LIBRARY", "IKKOKU_MAKER_SELECTION_FIXTURES"]),
+               "Requires IKKOKU_MAKER_LIBRARY and IKKOKU_MAKER_SELECTION_FIXTURES"))
+func sourceStudioWearLibraryAlternatesMatchUpdateVisibleAndKeepTheDressedParts() throws {
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")))
+    var tagged = 0
+    for entry in library.entries {
+        for alternate in entry.alternates ?? [] {
+            let kind = try #require([105: 0, 106: 1, 107: 2, 108: 3, 110: 5][entry.category])
+            let kinds = Array(Set(alternate.activeWhen.map(\.kind) + [kind])).sorted()
+            for combination in 0..<(1 << (2 * kinds.count)) {
+                var s = [UInt8](repeating: 0, count: 9)
+                for (i, k) in kinds.enumerated() { s[k] = UInt8((combination >> (2 * i)) & 3) }
+                let native = alternate.switches.allSatisfy { SourceStudioWear.switchActive(kind: kind, node: $0, states: s) == true }
+                let converted = alternate.activeWhen.allSatisfy { $0.states.contains(Int(s[$0.kind])) }
+                #expect(native == converted, Comment(rawValue: "\(entry.category)-\(entry.id) \(alternate.meshName) \(s)"))
+            }
+            tagged += 1
+        }
+    }
+    #expect(tagged >= 8, "IKKOKU_MAKER_LIBRARY must be a library converted with half-state alternates")
+
+    struct Fixtures: Decodable { let femaleBase: String }
+    let fixtureURL = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_SELECTION_FIXTURES"))
+    let base = URL(fileURLWithPath: try JSONDecoder().decode(Fixtures.self, from: Data(contentsOf: fixtureURL)).femaleBase)
+    var card = try SourceCharacterCard.load(url: fixtureURL.deletingLastPathComponent().appendingPathComponent("female-head0-bone0.png"))
+    // T-shirt, bloomers, bra, shorts, pantyhose and sneakers outdoor; the
+    // fixture's loafers stay indoor (Maker selection refuses slot 7).
+    for (slot, id) in [(0, 38), (1, 1), (2, 1), (3, 1), (5, 1), (8, 3)] {
+        card = try SourceCharacterCard.decode(card.selectingVanillaAsset(id, at: .clothes(coordinate: 0, slot: slot)))
+    }
+    let maker = try library.prepare(card: card, coordinate: 0, baseURL: base)
+    let studio = try library.prepare(card: card, coordinate: 0, baseURL: base, wear: true)
+    #expect(maker.clothingSlots == [0, 1, 2, 3, 5, 8] && maker.indoorShoes == .unconverted)
+    #expect(studio.clothingSlots == [0, 1, 2, 3, 5, 7, 8] && studio.indoorShoes == .assembled)
+    let layout = SourceStudioWearLayout(source: studio.source, clothingSlots: studio.clothingSlots, indoorShoes: studio.indoorShoes)
+    let catalog = try library.wearCatalog(card: card, coordinate: 0)
+    let rules = SourceStudioWear(catalog: catalog.clothes, switchNodes: (0..<9).map { layout.switchNodes[$0] ?? [] },
+                                 ids: catalog.clothesIDs, modded: catalog.clothesModded)
+    let shown = [Bool](repeating: true, count: 20)
+    func drawn(_ s: [UInt8], _ shoesType: Int) -> (parts: [SourceRig.Part], fallbacks: [String], alpha: SIMD2<Float>) {
+        let result = layout.evaluate(rules: rules, states: s, shoesType: shoesType, showAccessory: shown, hideHairSlots: [])
+        return (studio.source.parts.indices.filter { !result.hiddenParts.contains($0) }.map { studio.source.parts[$0] }, result.fallbacks, result.bodyAlpha)
+    }
+    let dressed = drawn(on, 1)
+    #expect(dressed.fallbacks.isEmpty && dressed.alpha == SIMD2(1, 1))
+    #expect(dressed.parts.map(\.mesh.name) == maker.source.parts.map(\.mesh.name))
+    for (left, right) in zip(dressed.parts, maker.source.parts) {
+        let x = left.mesh, y = right.mesh
+        #expect(x.positions == y.positions && x.normals == y.normals && x.uvs == y.uvs && x.indices == y.indices
+                && x.joints == y.joints && x.weights == y.weights, Comment(rawValue: x.name))
+        #expect(studio.source.rig.nodes[left.node].name == maker.source.rig.nodes[right.node].name)
+    }
+    // Top, bottom and pantyhose half with the indoor shoes.
+    let half = drawn([1, 1, 0, 0, 0, 1, 0, 0, 0], 0)
+    let names = Set(half.parts.map(\.mesh.name).filter { $0.hasPrefix("clothes-") })
+    #expect(names == ["clothes-0/o_top_tsyats_b/0", "clothes-1/o_bot_pants01_b/0", "clothes-2/o_bra_a/0", "clothes-3/o_shorts_a/0",
+                      "clothes-5/o_panst_00_b/0", "clothes-7/o_shoes_roafer01/0"])
+    #expect(half.fallbacks.isEmpty && half.alpha == SIMD2(0, 1))
+    #expect(Set(drawn([0, 0, 1, 2, 0, 0, 0, 0, 0], 1).parts.map(\.mesh.name).filter { $0.hasPrefix("clothes-2/") || $0.hasPrefix("clothes-3/") })
+            == ["clothes-2/o_bra_b/0", "clothes-3/o_shorts_c/0"])
+}
