@@ -89,7 +89,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   and reduces the selected case from 16 waits to six;
   its small timing comparison retains mixed owner-thread results. See
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
-  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192).
+  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192). New base-load
+  diagnostics attribute most cold base-appearance time to MetalKit texture
+  loading; this measures the remaining work without claiming a speedup.
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
@@ -500,6 +502,29 @@ API means improve by 7.769–10.595 ms, but male-warm owner time increases by
 The [Maker reference](../reference/character/maker-assets.md#bounded-synchronous-composition-batches-208)
 records full timing ranges, transient retention limits and the preserved offline
 analysis corrections. The remaining responsiveness work stays in #192.
+
+**Diagnostic acceptance — base-appearance loading, [#192](https://github.com/grabbiel/ikkoku/issues/192):**
+Optional caller-owned observations separate document/file reads, path resolution,
+transaction and shared-cache lookups, image creation, MetalKit texture loading and
+registration. Normal-head selection records these inside its existing inclusive
+base-appearance interval; other callers can omit them without added clock reads.
+Cache keys, texture options, publication and failure ownership remain unchanged.
+Seven focused tests and four female/male selection/reload processes pass without
+skips. Eight interleaved processes compare fresh `35e70e9` and `a54b44e` Release
+binaries whose source manifests differ only in the four scoped code/test files.
+Root verifies both binaries, all retained artifacts, 48 stage records and identical
+exports and selected resource vectors across the comparison.
+
+For the selected cold head-201 cases, MetalKit loading averages 35.035 ms for
+female and 37.501 ms for male out of 37.630/39.869 ms inclusive base loading.
+Each registers 17 textures. Warm base loading averages 1.021/0.980 ms, with all
+24/22 requests hitting the shared cache and no new registrations. MetalKit's
+interval includes its loading/decoding work, not isolated GPU execution. With
+only two samples per sex/state/binary, total API mean differences span
+−3.723 to +15.877 ms; neither a speedup nor isolated instrumentation overhead is
+established. Owner stalls and longer worker preparation remain open. The
+[Maker reference](../reference/character/maker-assets.md) records the exact
+counters, byte meanings, nested intervals and measurement limits.
 
 **Diagnostic handoff — MainTex-only sampling, [#209](https://github.com/grabbiel/ikkoku/pull/209):**
 Merged after all four CI checks pass at `0bcd33c`. Removing the AlphaMask/combine
