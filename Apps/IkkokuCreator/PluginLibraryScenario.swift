@@ -730,24 +730,33 @@ extension PluginLibraryScenario {
         // profile/package pins. Its first position initializer must execute
         // through the real candidate resolver before the named Int32 error.
         let poisonProfile = try freshProfileFixture(directory: directory.appendingPathComponent("restore-poison"), phase: "initializer", fail: true)
-        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(candidate)) as! [String: Any]
-        var state = json["sourcePluginState"] as! [String: Any]
-        let poisonPackage = try SourcePluginPackage.load(url: poisonProfile.deletingLastPathComponent().appendingPathComponent("manifest.json"))
-        state["profileFile"] = poisonProfile.path
-        state["profileSHA256"] = SHA256.hash(data: try Data(contentsOf: poisonProfile)).map { String(format: "%02x", $0) }.joined()
-        state["packages"] = [["guid": poisonPackage.manifest.identity.guid,
-            "manifestSHA256": SHA256.hash(data: poisonPackage.manifestData).map { String(format: "%02x", $0) }.joined()]]
-        json["sourcePluginState"] = state
-        let poison = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
+        func pinnedFailure(_ profile: URL) throws -> StudioDocument {
+            var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(candidate)) as! [String: Any]
+            var state = json["sourcePluginState"] as! [String: Any]
+            let package = try SourcePluginPackage.load(url: profile.deletingLastPathComponent().appendingPathComponent("manifest.json"))
+            state["profileFile"] = profile.path
+            state["profileSHA256"] = SHA256.hash(data: try Data(contentsOf: profile)).map { String(format: "%02x", $0) }.joined()
+            state["packages"] = [["guid": package.manifest.identity.guid,
+                "manifestSHA256": SHA256.hash(data: package.manifestData).map { String(format: "%02x", $0) }.joined()]]
+            json["sourcePluginState"] = state
+            return try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let poison = try pinnedFailure(poisonProfile)
         let invalidCatalog = directory.appendingPathComponent("restore-invalid-animation.json")
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "kind": "ikkoku-studio-animation-catalog",
             "catalogSHA256": String(repeating: "0", count: 64), "entries": []]).write(to: invalidCatalog)
         var partial = candidate; partial.objects[parentIndex].sourceCharacter = changedReference(animation: invalidCatalog.path)
         var missing = candidate; missing.objects[parentIndex].sourceCharacter = changedReference(attachment: directory.appendingPathComponent("absent-attachments.json").path)
-        let failures: [(String, StudioDocument, String)] = [
+        var failures: [(String, StudioDocument, String)] = [
             ("LateInitializer", poison, "Unsupported arithmetic operator or Int32 arithmetic."),
             ("PartialConstructor", partial, "Invalid or ambiguous Studio animation catalog."),
             ("MissingCandidateAsset", missing, "Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")]
+        for mutation in ["Instantiate", "SetActive", "Destroy"] {
+            let profile = try freshProfileFixture(directory: directory.appendingPathComponent("restore-" + mutation),
+                phase: "initializer", fail: false, mutation: mutation)
+            failures.append((mutation, try pinnedFailure(profile),
+                "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."))
+        }
         for (name, rejected, expectedError) in failures {
             let url = try write(rejected, "reject-" + name)
             for attempt in 1...2 {
@@ -758,6 +767,7 @@ extension PluginLibraryScenario {
                 var reason = ""
                 do { try studio.loadScene(from: url) }
                 catch SourcePluginError.runtime(let value) { reason = value }
+                catch SourcePluginError.invalid(let value) { reason = value }
                 catch RigError.invalid(let value) { reason = value }
                 let afterRuntime = try studio.sourcePluginSession?.savedDocument()
                 let afterFrame = studio.host.renderer.currentFrame()
@@ -971,7 +981,8 @@ extension PluginLibraryScenario {
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 
-    private func freshProfileFixture(directory: URL, phase: String, fail: Bool, attachmentRead: Bool = true) throws -> URL {
+    private func freshProfileFixture(directory: URL, phase: String, fail: Bool, attachmentRead: Bool = true,
+                                     mutation: String? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let type = "FreshAttachmentProbe", guid = "Ikkoku.Validation.FreshAttachmentProbe"
         let hash = String(repeating: "a", count: 64)
@@ -991,12 +1002,34 @@ extension PluginLibraryScenario {
             if fail { body.append(["kind": "expression", "children": [poison]]) }
         }
         let lifecycle = phase == "initializer" ? "Awake" : phase
+        var methods: [[String: Any]] = [["name": lifecycle, "symbol": "M:\(type).\(lifecycle)", "static": false,
+            "returnType": "Void", "parameters": [], "body": ["kind": "block", "children": body], "lifecycle": lifecycle]]
+        var symbols = ["M:\(type).\(lifecycle)"]
+        if let mutation {
+            precondition(phase == "initializer" && !fail)
+            let object: [String: Any] = ["kind": "api", "type": "Object", "name": "gameObject", "children": []]
+            let operation: [String: Any]
+            switch mutation {
+            case "Instantiate": operation = ["kind": "api", "type": "Object", "name": "world.Instantiate", "children": [object]]
+            case "SetActive": operation = ["kind": "api", "type": "Void", "name": "setActive", "children": [object,
+                ["kind": "literal", "type": "Bool", "value": false]]]
+            case "Destroy": operation = ["kind": "api", "type": "Void", "name": "world.Destroy", "children": [object]]
+            default: preconditionFailure("Unknown fixture mutation")
+            }
+            // The first field has already performed a successful attachment
+            // read. This second initializer mutates the candidate, then returns
+            // a serializable value so restore reaches its explicit policy gate.
+            fields[1]["initializer"] = ["kind": "call", "type": "Vector3", "name": "Mutate", "children": []]
+            symbols.append("M:\(type).Mutate")
+            methods.append(["name": "Mutate", "symbol": "M:\(type).Mutate", "static": false,
+                "returnType": "Vector3", "parameters": [], "body": ["kind": "block", "children": [
+                    ["kind": "expression", "children": [operation]], ["kind": "return", "children": [zero]]]]])
+        }
         let program: [String: Any] = ["schemaVersion": 1, "status": "ready", "mode": "component", "type": type,
             "source": ["sha256": hash], "identity": ["sourceSHA256": hash, "type": type,
-                "symbols": ["M:\(type).\(lifecycle)"], "pluginGUID": guid],
+                "symbols": symbols, "pluginGUID": guid],
             "semanticSurfaceSHA256": hash, "bridgeSHA256": hash, "emitterSHA256": hash,
-            "fields": fields, "methods": [["name": lifecycle, "symbol": "M:\(type).\(lifecycle)", "static": false,
-                "returnType": "Void", "parameters": [], "body": ["kind": "block", "children": body], "lifecycle": lifecycle]]]
+            "fields": fields, "methods": methods]
         let bytes = try JSONSerialization.data(withJSONObject: program)
         _ = try SourceIRProgram.decode(bytes) // Structural rejection is not the intended failure.
         try bytes.write(to: directory.appendingPathComponent("program.json"))

@@ -1223,6 +1223,7 @@ final class StudioModel: ViewportInputHandler {
         private var cold: [UUID: SourceStudioCharacterPreview] = [:]
         private var appearance: SourceAppearanceLoadTransaction?
         private var committed = false, aborted = false
+        private(set) var didReadAttachment = false
 
         init(studio: StudioModel, document: StudioDocument, blockedObjects: Set<UUID>, animationElapsed: Float) throws {
             guard animationElapsed.isFinite, animationElapsed >= 0 else {
@@ -1263,7 +1264,9 @@ final class StudioModel: ViewportInputHandler {
                 preview = try studio.makePluginAttachmentPreview(parent: parent, appearanceTransaction: appearance, blockedObjects: blockedObjects)
                 cold[parent.id] = preview
             }
-            return try studio.pluginAttachmentFrame(child: child, parent: parent, preview: preview, animationElapsed: animationElapsed)
+            let frame = try studio.pluginAttachmentFrame(child: child, parent: parent, preview: preview, animationElapsed: animationElapsed)
+            didReadAttachment = true
+            return frame
         }
 
         /// Called after old-cache teardown and before assigning the candidate

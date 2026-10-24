@@ -257,9 +257,10 @@ Native save/reload resolves the recorded generation; a new publication never
 upgrades it. Load and undo/redo stage restoration before replacing the live
 session or history. Missing/changed files produce named errors. Plugin-library
 restoration during native open or undo/redo still resolves files synchronously;
-this slice does not move scene loading off the UI thread. Staged legacy-profile
-restoration uses the same attachment-read gate. A fresh legacy profile load
-supports attachment reads through the installation transaction described below. Plugin-library
+this slice does not move scene loading off the UI thread. Plugin-library
+restoration retains its installation attachment-read gate. Legacy-profile native
+open and history restoration use the candidate-owned read-only preparation
+described below; fresh profile loading uses its separate installation transaction. Plugin-library
 root relocation is not supported by the asset-library relocation system; keep
 the recorded root or explicitly mount a selection from its new location.
 
@@ -308,6 +309,24 @@ gap, not implemented restore support or a new regression. The accepted local
 Release binary is `7654f79beeed754ff46c718668dc171522c0015cd5621ad5b039b908a63d1d6e`;
 private evidence is under the existing `profile-native-restore` directory. No GUI,
 performance or source-game parity claim follows.
+
+The #210 implementation prepares ordinary attachment previews exclusively from
+that native/history candidate's resolved references, coordinate and resource
+policy. A matching UUID never borrows the previous scene's preview. Native open
+uses animation time zero; history restoration uses the held history clock.
+Successful preparation transfers surviving previews before the document refresh;
+failure drops only candidate-owned preview and appearance leases. This uses the
+ordinary preview cache, independently of route-child runtime bundles.
+
+The newly supported restore path permits attachment reads only when initialization
+leaves the candidate scene, clone serial and pending destruction unchanged. After
+an actual successful attachment read, Instantiate, a visibility-changing SetActive,
+or pending Destroy produces the explicit unsupported-restoration error before
+history, cache or adapter commit. Saved fields/clocks keep their existing restore
+order, and the input candidate remains the committed scene. Attachment-free
+restoration and fresh-profile callback semantics are unchanged. The candidate
+acceptance harness covers these rejections alongside same-UUID reference/outfit,
+blocked-resource, explicit-clock and transfer controls; execution is pending.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.

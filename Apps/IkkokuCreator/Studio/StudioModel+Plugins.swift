@@ -92,6 +92,16 @@ extension StudioModel {
             // Validate callback-produced field state before any owner mutates
             // its document/history or publishes candidate resources.
             if attachments != nil { _ = try session?.savedDocument() }
+            // Native open historically commits the input scene, not constructor
+            // mutations. Newly supported attachment reads must not leave the
+            // staged runtime paired with another topology/visibility or a future
+            // pending destruction. Attachment-free restore keeps its old policy.
+            if attachments?.didReadAttachment == true, let session {
+                guard session.world.document == document, session.world.cloneSerial == saved.cloneSerial,
+                      session.world.pendingSourceDestruction().isEmpty else {
+                    throw SourcePluginError.invalid("Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization.")
+                }
+            }
         } else { session = nil }
         prepared = true
         return .init(document: document, session: session, native: native, attachmentAccess: access, restoredAttachments: attachments)
