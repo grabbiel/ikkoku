@@ -48,11 +48,31 @@ public enum FrameRingError: Error, Equatable, CustomStringConvertible {
 /// storage is never still being read by the GPU. Growth fails only when Metal
 /// refuses the buffer, as `FrameRingError.allocationFailed`.
 ///
+/// Skin palettes (G4). `allocatePalettes` places a frame's palettes in its
+/// region's palette buffer, one growable shared buffer per region. The buffer
+/// follows the region's in-flight rule above, so it is rewritten only after
+/// every command buffer that read it has completed. When a frame needs more
+/// than the buffer holds, the region gets a new buffer of twice the size (at
+/// least `minimumPaletteCapacity`, doubled until it fits); the old one stays
+/// alive for the command buffers and allocations that still reference it.
+/// After the largest frame has been seen, palettes cost no allocation. A
+/// frame without a region (every region in flight) places its palettes in
+/// overflow buffers like any other allocation.
+///
 /// Callers serialize one open frame at a time (`Renderer` holds its render lock).
 /// Completion handlers run on Metal threads and only touch lock-protected state.
+///
+/// Sendable invariant: the open-frame state (`isOpen`, `region`, the cursors,
+/// `overflow`, `frameStatistics` and `paletteBuffers`) is only touched by the
+/// one caller that holds the open frame, which the caller serializes; a
+/// region's palette buffer is only written while that region is the open
+/// frame's region, which is never in flight. Everything a completion handler
+/// touches (`inFlight`, `pool` and the creation counters) is behind `lock`.
 public final class FrameRing: @unchecked Sendable {
     public static let alignment = 256
     public static let defaultRegionSize = 8 * 1024 * 1024
+    /// Smallest palette buffer a region creates; growth doubles from here.
+    public static let minimumPaletteCapacity = 64 * 1024
 
     /// Where the open (or last closed) frame's bytes went.
     public struct Statistics: Sendable, Equatable {
@@ -64,6 +84,11 @@ public final class FrameRing: @unchecked Sendable {
         public var overflowBytes = 0
         /// Overflow buffers the frame used (fresh or recycled).
         public var overflowBuffers = 0
+        /// Aligned bytes of skin palettes placed in the region's palette buffer.
+        public var paletteBytes = 0
+        /// Palette buffers created for this frame: nonzero only while a
+        /// region's palette buffer grows to the largest frame so far.
+        public var paletteBuffersCreated = 0
         public init() {}
     }
 
@@ -80,6 +105,9 @@ public final class FrameRing: @unchecked Sendable {
     private var cursor = 0
     private var overflow: [any MTLBuffer] = []
     private var overflowCursor = 0
+    private var paletteCursor = 0
+    /// One palette buffer per region, created on first use.
+    private var paletteBuffers: [(any MTLBuffer)?]
     public private(set) var frameStatistics = Statistics()
 
     // Shared with completion handlers.
@@ -87,6 +115,7 @@ public final class FrameRing: @unchecked Sendable {
     private var inFlight: [Int]
     private var pool: [any MTLBuffer] = []
     private var createdOverflowBuffers = 0
+    private var createdPaletteBuffers = 0
 
     public init?(device: any MTLDevice,
                  regionSize: Int = FrameRing.defaultRegionSize,
@@ -104,6 +133,7 @@ public final class FrameRing: @unchecked Sendable {
         self.overflowChunkSize = FrameRing.align(min(max(overflowChunkSize ?? aligned, 1), Int.max - FrameRing.alignment))
         self.maxPooledOverflowBuffers = 2 * regionCount
         self.inFlight = Array(repeating: 0, count: regionCount)
+        self.paletteBuffers = Array(repeating: nil, count: regionCount)
     }
 
     /// Opens a frame. Call once per frame, before any allocation.
@@ -122,6 +152,7 @@ public final class FrameRing: @unchecked Sendable {
         region = chosen
         cursor = 0
         overflowCursor = 0
+        paletteCursor = 0
         frameStatistics = Statistics()
         frameStatistics.region = chosen
         isOpen = true
@@ -159,6 +190,62 @@ public final class FrameRing: @unchecked Sendable {
     /// (implicit array-to-pointer argument conversion).
     private static func copy<T>(_ elements: UnsafePointer<T>, byteCount: Int, to destination: UnsafeMutableRawPointer) {
         destination.copyMemory(from: elements, byteCount: byteCount)
+    }
+
+    /// Copies each palette into the open frame (see "Skin palettes" above) and
+    /// returns their allocations in the same order. Each allocation addresses
+    /// its palette's element 0 at a 256-byte aligned offset; an empty palette
+    /// takes one aligned slot. Throws `FrameRingError.allocationFailed` when
+    /// Metal refuses a grown buffer; earlier allocations stay valid.
+    public func allocatePalettes<T>(_ palettes: [[T]]) throws -> [FrameAllocation] {
+        guard isOpen else { throw FrameRingError.noOpenFrame }
+        guard let region else { return try palettes.map { try allocate(array: $0) } }
+        var total = 0
+        for palette in palettes {
+            let (bytes, overflowed) = MemoryLayout<T>.stride.multipliedReportingOverflow(by: palette.count)
+            guard !overflowed, bytes <= Int.max - FrameRing.alignment else { throw FrameRingError.invalidByteCount(bytes) }
+            let (sum, sumOverflowed) = total.addingReportingOverflow(FrameRing.align(max(bytes, 1)))
+            guard !sumOverflowed, sum <= Int.max - FrameRing.alignment else { throw FrameRingError.invalidByteCount(sum) }
+            total = sum
+        }
+        var buffer = paletteBuffers[region]
+        if buffer == nil || total > buffer!.length - paletteCursor {
+            // Earlier palettes of this frame keep the buffer they were written to.
+            buffer = try grownPaletteBuffer(from: buffer?.length ?? 0, minimumLength: total, region: region)
+            paletteBuffers[region] = buffer
+            paletteCursor = 0
+        }
+        let target = buffer!
+        var allocations: [FrameAllocation] = []
+        allocations.reserveCapacity(palettes.count)
+        for palette in palettes {
+            let bytes = MemoryLayout<T>.stride * palette.count
+            if bytes > 0 { FrameRing.copy(palette, byteCount: bytes, to: target.contents().advanced(by: paletteCursor)) }
+            allocations.append(FrameAllocation(buffer: target, offset: paletteCursor))
+            paletteCursor += FrameRing.align(max(bytes, 1))
+        }
+        frameStatistics.paletteBytes += total
+        return allocations
+    }
+
+    /// Palette buffers created over the ring's lifetime.
+    public var paletteBuffersCreated: Int { lock.lock(); defer { lock.unlock() }; return createdPaletteBuffers }
+
+    /// A new palette buffer for `region`: twice `length` (at least
+    /// `minimumPaletteCapacity`), doubled until `minimumLength` fits, capped at
+    /// the device's largest buffer.
+    private func grownPaletteBuffer(from length: Int, minimumLength: Int, region: Int) throws -> any MTLBuffer {
+        func doubled(_ value: Int) -> Int { value > Int.max / 2 ? Int.max : value * 2 }
+        var capacity = max(FrameRing.minimumPaletteCapacity, doubled(length))
+        while capacity < minimumLength { capacity = doubled(capacity) }
+        capacity = min(capacity, device.maxBufferLength)
+        guard capacity >= minimumLength, let created = device.makeBuffer(length: capacity, options: .storageModeShared) else {
+            throw FrameRingError.allocationFailed(bytes: max(capacity, minimumLength))
+        }
+        created.label = "FrameRing palettes \(region)"
+        lock.lock(); createdPaletteBuffers += 1; lock.unlock()
+        frameStatistics.paletteBuffersCreated += 1
+        return created
     }
 
     /// Reserves `byteCount` uninitialized bytes in the open frame.

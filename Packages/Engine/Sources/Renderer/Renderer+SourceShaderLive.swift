@@ -33,6 +33,7 @@ extension Renderer {
         let mesh: GPUMesh
         let deformed: any MTLBuffer
         let skinBuffer: (any MTLBuffer)?
+        let skinOffset: Int
         let boneCount: Int
         /// The deformation's morph entries (nil for a static mesh).
         let morphs: FrameAllocation?
@@ -90,7 +91,7 @@ extension Renderer {
                 guard let output = encoder.inputBuffer(key, vertexCount: mesh.vertexCount) else { failure = "vertex input buffer allocation failed"; break }
                 seen[key] = output; inputs[layout] = output
                 jobs.append(LiveInputJob(layout: layout, output: output, mesh: mesh, deformed: record.vertexBuffer,
-                                         skinBuffer: deform?.skinBuffer, boneCount: deform?.boneCount ?? 0,
+                                         skinBuffer: deform?.skinBuffer, skinOffset: deform?.skinOffset ?? 0, boneCount: deform?.boneCount ?? 0,
                                          morphs: deform?.morphs, morphCount: deform?.morphCount ?? 0, streams: draw.streams))
             }
             if let failure { fallBack(record, failure); continue }
@@ -128,7 +129,7 @@ extension Renderer {
             enc.setBuffer(job.mesh.baseVertices, offset: 0, index: 0)
             enc.setBuffer(job.deformed, offset: 0, index: 1)
             enc.setBuffer(job.mesh.skin ?? dummy, offset: 0, index: 2)
-            enc.setBuffer(job.skinBuffer ?? dummy, offset: 0, index: 3)
+            enc.setBuffer(job.skinBuffer ?? dummy, offset: job.skinBuffer != nil ? job.skinOffset : 0, index: 3)
             enc.setBuffer(job.morphs?.buffer ?? dummy, offset: job.morphs?.offset ?? 0, index: 4)
             enc.setBuffer(job.mesh.morphNormals ?? dummy, offset: 0, index: 5)
             enc.setBuffer(job.mesh.texcoords, offset: 0, index: 6)
@@ -193,7 +194,8 @@ public extension Renderer {
             frameRingBegin()
             let ctx: FrameContext
             do { ctx = try prepare(frame: frame, targets: targets) } catch { failure = error; frameRing.abandonFrame(); return }
-            guard lastDeformationErrors.isEmpty else { frameRing.abandonFrame(); return }
+            // Read under the render lock: a draw on the render thread publishes its own.
+            guard lastDeformationErrors.isEmpty else { failure = RenderBenchmarkError.deformation(lastDeformationErrors); frameRing.abandonFrame(); return }
             encodeDeform(ctx, cb)
             if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
             let pass = MTLRenderPassDescriptor()
@@ -209,7 +211,6 @@ public extension Renderer {
             cb.commit()
         }
         if let failure { throw failure }
-        guard lastDeformationErrors.isEmpty else { throw RenderBenchmarkError.deformation(lastDeformationErrors) }
         cb.waitUntilCompleted()
         guard cb.status == .completed else { throw RenderBenchmarkError.gpu(cb.error?.localizedDescription ?? "Command failed") }
         var bytes = [UInt8](repeating: 0, count: width * height * 4)
@@ -249,7 +250,8 @@ public extension Renderer {
             frameRingBegin()
             let ctx: FrameContext
             do { ctx = try prepare(frame: frame, targets: targets) } catch { failure = error; frameRing.abandonFrame(); return }
-            guard lastDeformationErrors.isEmpty else { frameRing.abandonFrame(); return }
+            // Read under the render lock: a draw on the render thread publishes its own.
+            guard lastDeformationErrors.isEmpty else { failure = RenderBenchmarkError.deformation(lastDeformationErrors); frameRing.abandonFrame(); return }
             encodeDeform(ctx, cb)
             let pass = MTLRenderPassDescriptor(); pass.colorAttachments[0].texture = color
             pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
@@ -274,7 +276,6 @@ public extension Renderer {
             cb.commit()
         }
         if let failure { throw failure }
-        guard lastDeformationErrors.isEmpty else { throw RenderBenchmarkError.deformation(lastDeformationErrors) }
         cb.waitUntilCompleted()
         guard cb.status == .completed else { throw RenderBenchmarkError.gpu(cb.error?.localizedDescription ?? "Command failed") }
         var bytes = [UInt8](repeating: 0, count: width * height * 4)

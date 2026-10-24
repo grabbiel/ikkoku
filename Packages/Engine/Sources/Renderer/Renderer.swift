@@ -24,6 +24,9 @@ public struct RenderFrameStatistics: Sendable, Equatable {
     /// Largest entry list of one dispatch. Lists above `IK_MAX_ACTIVE_MORPHS` are
     /// accumulated in full, not truncated.
     public var largestActiveMorphSet = 0
+    /// Skin palettes written to the frame ring: the referenced, valid
+    /// `RenderFrame.skinSets` (their bytes are `uniforms.paletteBytes`).
+    public var skinPalettes = 0
     /// Where the frame's uniforms were placed. Nonzero overflow means the frame
     /// needed more than its ring region, or found every region still in flight.
     public var uniforms = FrameRing.Statistics()
@@ -95,6 +98,28 @@ public struct RenderStatusReporter: Sendable {
 }
 
 /// Frame graph: deform → shadow → toon+outline → transparent → post → overlay.
+///
+/// Threads (R7 phase 2, item 2; docs/reference/renderer.md, "Renderer threads").
+/// Each viewport draws on its own render thread; the app's models call
+/// `submit`, `pick`, `capture` and `benchmark` from the main thread.
+/// - `submit` and `currentFrame` exchange the pending frame under `frameLock`.
+/// - Every frame is prepared and encoded under `renderLock`, which also guards
+///   the render targets, `frameIndex`, the frame ring's open frame and the
+///   live encoder. `draw` takes the pending frame only once it holds
+///   `renderLock`, so it always prepares the newest submitted frame, as when it
+///   ran on the main thread (resource retirement, R6). Lock order: a frame
+///   slot, then `renderLock`, then `frameLock` or `statusLock`.
+/// - What the last prepared frame reported (`lastFrameStatistics`,
+///   `lastFrameError`, `lastDeformationErrors`, `lastSourceShaderLive`) and
+///   `lastFrameGPUTime` are published under `statusLock`. They describe the
+///   most recent frame on any thread, so an offscreen caller reading them
+///   after its own call can see a draw that ran in between.
+///
+/// Sendable invariant: every mutable stored property is guarded by one of the
+/// locks above (`pendingFrame` by `frameLock`; `targets`, `frameIndex`,
+/// `liveEncoder` and `liveEncoderError` by `renderLock`; the published values
+/// by `statusLock`); everything else is immutable after `init` or a
+/// thread-safe Metal or store object.
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
 
@@ -109,18 +134,31 @@ public final class Renderer: @unchecked Sendable {
     private var pendingFrame = RenderFrame()
     private var targets: RenderTargets?
     private var frameIndex = 0
-    public private(set) var lastFrameGPUTime: Double = 0
-    /// Invalid skin bindings are skipped during interactive rendering; captures fail.
-    public private(set) var lastDeformationErrors: [String] = []
-    /// Live source-shader draws encoded by the last prepared frame, and any
-    /// item that fell back to its native toon draw at render time (with why).
-    public internal(set) var lastSourceShaderLive = SourceShaderLiveFrameReport()
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
 
     private let statusLock = NSLock()
     private var publishedStatistics = RenderFrameStatistics()
     private var publishedError: RenderFrameError?
+    private var publishedDeformationErrors: [String] = []
+    private var publishedSourceShaderLive = SourceShaderLiveFrameReport()
+    private var publishedGPUTime: Double = 0
+    /// GPU time (`gpuEndTime - gpuStartTime`) of the last completed interactive frame.
+    public var lastFrameGPUTime: Double {
+        statusLock.lock(); defer { statusLock.unlock() }; return publishedGPUTime
+    }
+    /// Invalid skin bindings of the most recently prepared frame. They are
+    /// skipped during interactive rendering; captures fail.
+    public var lastDeformationErrors: [String] {
+        statusLock.lock(); defer { statusLock.unlock() }; return publishedDeformationErrors
+    }
+    /// Live source-shader draws encoded by the last prepared frame, and any
+    /// item that fell back to its native toon draw at render time (with why).
+    /// Written only while preparing or encoding a frame, under the render lock.
+    public internal(set) var lastSourceShaderLive: SourceShaderLiveFrameReport {
+        get { statusLock.lock(); defer { statusLock.unlock() }; return publishedSourceShaderLive }
+        set { statusLock.lock(); publishedSourceShaderLive = newValue; statusLock.unlock() }
+    }
     /// Counters of the most recently prepared frame (see `RenderFrameStatistics`).
     public var lastFrameStatistics: RenderFrameStatistics {
         statusLock.lock(); defer { statusLock.unlock() }; return publishedStatistics
@@ -163,17 +201,21 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: - Drawing to the swapchain
 
+    /// Renders the pending frame into `drawable` and presents it. Called by a
+    /// viewport's display link on its render thread (any thread is safe).
     public func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval) {
         let tex = drawable.texture
         guard tex.width > 0, tex.height > 0 else { return }
-        var frame = currentFrame()
-        frame.time = timestamp
         gpu.waitForFrameSlot()
         guard let cb = gpu.commandQueue.makeCommandBuffer() else {
             publish(error: .commandBufferUnavailable); gpu.releaseFrameSlot(); return
         }
         cb.label = "Frame"
         renderLock.lock()
+        // Taken under the render lock: no pick or capture can complete a
+        // resource retirement between taking the frame and preparing it.
+        var frame = currentFrame()
+        frame.time = timestamp
         var encoded = false
         if let targets = ensureTargets(width: tex.width, height: tex.height) {
             frameRing.beginFrame(frameIndex); frameIndex &+= 1
@@ -193,7 +235,7 @@ public final class Renderer: @unchecked Sendable {
         // presenting a drawable nothing was rendered into.
         guard encoded else { gpu.releaseFrameSlot(); return }
         cb.addCompletedHandler { [weak self] c in
-            self?.lastFrameGPUTime = c.gpuEndTime - c.gpuStartTime
+            self?.publish(gpuTime: c.gpuEndTime - c.gpuStartTime)
         }
         gpu.releaseFrameSlot(onCompletionOf: cb)
         cb.present(drawable)
@@ -367,7 +409,9 @@ public final class Renderer: @unchecked Sendable {
         let key: UInt64
         let mesh: GPUMesh
         let buffer: any MTLBuffer
+        /// The skin palette's frame-ring buffer and offset (G4).
         let skinBuffer: (any MTLBuffer)?
+        let skinOffset: Int
         let boneCount: Int
         let morphs: FrameAllocation
         let morphCount: Int
@@ -439,6 +483,19 @@ public final class Renderer: @unchecked Sendable {
         return (lu, enabled)
     }
 
+    /// True when every element of every matrix is finite. `abs(x) <= max`
+    /// is false exactly for NaN and ±infinity, so this equals checking
+    /// `isFinite` per element, four lanes at a time.
+    static func allFinite(_ matrices: [float4x4]) -> Bool {
+        let limit = SIMD4<Float>(repeating: .greatestFiniteMagnitude)
+        for m in matrices {
+            let a = abs(m.columns.0) .<= limit, b = abs(m.columns.1) .<= limit
+            let c = abs(m.columns.2) .<= limit, d = abs(m.columns.3) .<= limit
+            guard all(a .& b .& c .& d) else { return false }
+        }
+        return true
+    }
+
     /// Meaningful morph entries in caller order: an index inside the mesh's targets
     /// and a finite weight above 1e-4 in magnitude. The deform kernel reads its
     /// entries from an unbounded device buffer, so one dispatch accumulates all of
@@ -455,6 +512,14 @@ public final class Renderer: @unchecked Sendable {
         if let statistics { publishedStatistics = statistics }
         publishedError = error
         statusLock.unlock()
+    }
+
+    private func publish(deformationErrors: [String]) {
+        statusLock.lock(); publishedDeformationErrors = deformationErrors; statusLock.unlock()
+    }
+
+    private func publish(gpuTime: Double) {
+        statusLock.lock(); publishedGPUTime = gpuTime; statusLock.unlock()
     }
 
     /// Prepares a frame and publishes its statistics and error. Throws only
@@ -480,7 +545,9 @@ public final class Renderer: @unchecked Sendable {
                               statistics: inout RenderFrameStatistics) throws -> FrameContext {
         var frame = input
         frame.retainTextures(from: resources)
-        lastDeformationErrors = []
+        // Published when the context is built or fails, like the statistics.
+        var deformationErrors: [String] = []
+        defer { publish(deformationErrors: deformationErrors) }
         let W = targets.width, H = targets.height
         let fw = Float(W), fh = Float(H)
         let cam = frame.camera
@@ -540,27 +607,33 @@ public final class Renderer: @unchecked Sendable {
             background = try frameRing.allocate(bgFrame)
         }
 
-        // Retained per-frame buffers preserve the complete palette without consuming
-        // the fixed-capacity uniform ring. Command buffers retain their resources.
-        var skinBuffers: [UInt64: (buffer: any MTLBuffer, count: Int)] = [:]
+        // Complete skin palettes go to the frame ring's palette storage (G4):
+        // one buffer per ring region, reused once its frames complete, so a
+        // steady scene allocates nothing per draw. Each referenced set is
+        // validated element by element first, as before.
+        var skinPalettes: [UInt64: (allocation: FrameAllocation, count: Int)] = [:]
         let referencedSkinSets = Set(frame.items.compactMap { item -> UInt64? in
             guard item.visible, resources.mesh(item.mesh)?.skin != nil else { return nil }
             return item.skinSet
         })
+        var paletteKeys: [UInt64] = [], palettes: [[float4x4]] = []
         for (key, mats) in frame.skinSets where referencedSkinSets.contains(key) {
-            guard !mats.isEmpty, mats.count <= Int(UInt32.max), mats.allSatisfy({ m in
-                (0..<4).allSatisfy { c in (0..<4).allSatisfy { r in m[c][r].isFinite } }
-            }) else {
-                lastDeformationErrors.append("Skin set \(key) is empty, oversized, or contains nonfinite matrices")
+            guard !mats.isEmpty, mats.count <= Int(UInt32.max), Renderer.allFinite(mats) else {
+                deformationErrors.append("Skin set \(key) is empty, oversized, or contains nonfinite matrices")
                 continue
             }
-            guard let buffer = gpu.device.makeBuffer(bytes: mats, length: MemoryLayout<float4x4>.stride * mats.count,
-                                                     options: .storageModeShared) else {
-                lastDeformationErrors.append("Could not allocate skin set \(key)")
-                continue
+            paletteKeys.append(key); palettes.append(mats)
+        }
+        if !palettes.isEmpty {
+            do {
+                for (index, allocation) in try frameRing.allocatePalettes(palettes).enumerated() {
+                    skinPalettes[paletteKeys[index]] = (allocation, palettes[index].count)
+                }
+                statistics.skinPalettes = palettes.count
+            } catch {
+                // As a refused per-set buffer did: the sets' draws are skipped.
+                deformationErrors += paletteKeys.map { "Could not allocate skin set \($0)" }
             }
-            buffer.label = "Skin set \(key)"
-            skinBuffers[key] = (buffer, mats.count)
         }
 
         var opaque: [DrawRecord] = []
@@ -572,7 +645,7 @@ public final class Renderer: @unchecked Sendable {
 
         for item in frame.items where item.visible {
             guard let mesh = resources.mesh(item.mesh) else { continue }
-            let palette = item.skinSet.flatMap { skinBuffers[$0] }
+            let palette = item.skinSet.flatMap { skinPalettes[$0] }
             if mesh.skin != nil, let key = item.skinSet {
                 do {
                     guard item.deformKey != nil, let palette else {
@@ -580,14 +653,14 @@ public final class Renderer: @unchecked Sendable {
                     }
                     try mesh.validateSkinPalette(boneCount: palette.count)
                 } catch {
-                    lastDeformationErrors.append(String(describing: error))
+                    deformationErrors.append(String(describing: error))
                     continue
                 }
             }
             var vb: any MTLBuffer = mesh.baseVertices
             if let key = item.deformKey, mesh.needsDeform {
                 guard let buf = resources.deformBuffer(for: key, vertexCount: mesh.vertexCount, frameCreatedAt: frame.createdAt) else {
-                    lastDeformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
+                    deformationErrors.append("\(mesh.name): could not allocate deformation buffer \(key)")
                     continue
                 }
                 vb = buf
@@ -596,7 +669,8 @@ public final class Renderer: @unchecked Sendable {
                     let entries = Renderer.activeMorphEntries(item.morphWeights, targetCount: mesh.morphNames.count)
                     let morphs = try frameRing.allocate(array: entries)
                     let skin = mesh.skin != nil ? palette : nil
-                    deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.buffer,
+                    deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.allocation.buffer,
+                                                skinOffset: skin?.allocation.offset ?? 0,
                                                 boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count))
                     statistics.deformDispatches += 1
                     statistics.activeMorphEntries += entries.count
@@ -703,7 +777,7 @@ public final class Renderer: @unchecked Sendable {
             enc.setBuffer(d.mesh.baseVertices, offset: 0, index: Int(BufferIndexBaseVertices.rawValue))
             enc.setBuffer(d.buffer, offset: 0, index: Int(BufferIndexVertices.rawValue))
             enc.setBuffer(d.mesh.skin ?? dummy, offset: 0, index: Int(BufferIndexSkinData.rawValue))
-            if let skin = d.skinBuffer { enc.setBuffer(skin, offset: 0, index: Int(BufferIndexSkinMatrices.rawValue)) }
+            if let skin = d.skinBuffer { enc.setBuffer(skin, offset: d.skinOffset, index: Int(BufferIndexSkinMatrices.rawValue)) }
             else { enc.setBuffer(dummy, offset: 0, index: Int(BufferIndexSkinMatrices.rawValue)) }
             enc.setBuffer(d.morphs.buffer, offset: d.morphs.offset, index: Int(BufferIndexMorphWeights.rawValue))
             enc.setBuffer(d.mesh.morphDeltas ?? dummy, offset: 0, index: Int(BufferIndexMorphDeltas.rawValue))

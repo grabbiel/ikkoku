@@ -1,6 +1,8 @@
 import Testing
 import Foundation
 import Metal
+import QuartzCore
+import os
 import simd
 import Assets
 import CoreMath
@@ -247,6 +249,108 @@ struct CharacterLifetimeTests {
         let completed = resources.statistics()
         #expect(completed.retiring == 0 && completed.meshes == 0 && completed.deformBuffers == 0 && completed.hiddenBuffers == 0,
                 "\(completed)")
+    }
+
+    /// G4 (R7 phase 2): a skinned character's palette is written to the frame
+    /// ring, which stops creating buffers once every region has seen the
+    /// frame. An invalid set is still rejected element by element, with the
+    /// same message, and a capture of it still fails.
+    @Test func skinPalettesComeFromTheFrameRingAndStopAllocatingOnceWarm() throws {
+        let assets = try UntexturedCharacterAssets()
+        defer { assets.remove() }
+        let renderer = try makeSourceShaderRenderer()
+        let library = AssetLibrary(resources: renderer.resources, root: assets.root)
+        let character = CharacterInstance(instanceID: 3, library: library, card: UntexturedCharacterAssets.card(garmentCount: 5))
+        let frame = characterFrame(character)
+        let bones = try #require(frame.skinSets[3]).count
+        for pass in 0..<4 { render(renderer, frame, "warm-up \(pass)") }
+        let warm = renderer.frameRing.paletteBuffersCreated
+        #expect(warm >= 1 && warm <= renderer.frameRing.regionCount, "\(warm)")
+        for pass in 0..<12 {
+            render(renderer, frame, "steady \(pass)")
+            let statistics = renderer.lastFrameStatistics
+            #expect(statistics.skinPalettes == 1)
+            #expect(statistics.uniforms.paletteBytes == (bones * 64 + 255) / 256 * 256)
+            #expect(statistics.uniforms.paletteBuffersCreated == 0)
+        }
+        #expect(renderer.frameRing.paletteBuffersCreated == warm)
+
+        var invalid = frame
+        invalid.skinSets[3]?[0][1][2] = .nan
+        #expect(renderer.capture(frame: invalid, width: 32, height: 32) == nil)
+        #expect(renderer.lastDeformationErrors.first == "Skin set 3 is empty, oversized, or contains nonfinite matrices")
+        #expect(renderer.lastFrameStatistics.skinPalettes == 0)
+        invalid.skinSets[3] = []
+        #expect(renderer.capture(frame: invalid, width: 32, height: 32) == nil)
+        #expect(renderer.lastDeformationErrors.first == "Skin set 3 is empty, oversized, or contains nonfinite matrices")
+    }
+
+    /// R7 phase 2, item 2: a viewport draws on its own render thread while
+    /// another thread submits, picks, captures, retires a character and reads
+    /// the published diagnostics, as the app's main thread does. Every capture
+    /// renders, and the retirement completes through the frame submitted
+    /// after it. Run it under `swift test --sanitize=thread` for the
+    /// data-race check.
+    @Test func renderThreadDrawsWhileAnotherThreadSubmitsPicksCapturesAndRetires() throws {
+        let assets = try UntexturedCharacterAssets()
+        defer { assets.remove() }
+        let renderer = try makeSourceShaderRenderer()
+        let resources = renderer.resources
+        let library = AssetLibrary(resources: resources, root: assets.root)
+        // Configured here, then used only by the render thread below.
+        nonisolated(unsafe) let layer = CAMetalLayer()
+        layer.device = renderer.gpu.device
+        layer.pixelFormat = .bgra8Unorm
+        layer.framebufferOnly = false
+        layer.drawableSize = CGSize(width: 64, height: 64)
+        try #require(layer.nextDrawable() != nil, "an offscreen CAMetalLayer provides drawables")
+
+        let stop = OSAllocatedUnfairLock(initialState: false)
+        let draws = OSAllocatedUnfairLock(initialState: 0)
+        let exited = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            while !stop.withLock({ $0 }) {
+                autoreleasepool {
+                    guard let drawable = layer.nextDrawable() else { return }
+                    renderer.draw(to: drawable, timestamp: CACurrentMediaTime())
+                    draws.withLock { $0 += 1 }
+                }
+            }
+            exited.signal()
+        }
+        thread.name = "test-render-thread"
+        thread.start()
+        defer {
+            stop.withLock { $0 = true }
+            _ = exited.wait(timeout: .now() + 5)
+        }
+
+        var character: CharacterInstance? = CharacterInstance(instanceID: 9, library: library,
+                                                              card: UntexturedCharacterAssets.card(garmentCount: 2))
+        var frame = characterFrame(try #require(character))
+        for step in 0..<16 {
+            frame.camera.yaw = Float(step) * 0.05
+            renderer.submit(frame)
+            _ = renderer.pick(frame: renderer.currentFrame(), pixel: Float2(32, 32), size: (64, 64))
+            render(renderer, renderer.currentFrame(), "step \(step)")
+            _ = (renderer.lastFrameStatistics, renderer.lastFrameError, renderer.lastDeformationErrors,
+                 renderer.lastSourceShaderLive, renderer.lastFrameGPUTime)
+        }
+        let drewWhileBusy = eventually { draws.withLock { $0 } > 0 }
+        #expect(drewWhileBusy)
+
+        // Retired while the render thread keeps drawing the pending frame.
+        character?.releaseGPUResources()
+        character = nil
+        #expect(resources.statistics().retiring > 0)
+        renderer.submit(RenderFrame())
+        let released = eventually { resources.statistics().retiring == 0 }
+        #expect(released, "\(resources.statistics())")
+        render(renderer, renderer.currentFrame(), "after removal")
+        stop.withLock { $0 = true }
+        let threadExited = exited.wait(timeout: .now() + 5) == .success
+        #expect(threadExited)
+        exited.signal()   // for the deferred wait
     }
 }
 
