@@ -470,6 +470,7 @@ private struct CaptureRecipe {
     let trace: [String: String] = ["IKKOKU_PERF_TRACE": "/perf/studio-idle.json", "IKKOKU_PERF_WORKLOAD": "studio-orbit",
                                    "IKKOKU_PERF_SECONDS": "10", "IKKOKU_PERF_WARMUP_SECONDS": "3", "IKKOKU_PERF_INPUT_HZ": "120",
                                    "IKKOKU_PERF_WINDOW_W": "1600", "IKKOKU_PERF_WINDOW_H": "1000", "IKKOKU_PERF_CHARACTERS": "6",
+                                   "IKKOKU_PERF_MAIN_LOAD_MS": "20", "IKKOKU_PERF_MAIN_LOAD_HZ": "30",
                                    "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
     let request = try CaptureRequest.validate(trace)
     #expect(request.mode == .perfTrace)
@@ -483,6 +484,8 @@ private struct CaptureRecipe {
 
     let outside: [[String]] = [["IKKOKU_PERF_SECONDS"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_SECONDS": "10"]) == outside)
+    let loadOutside: [[String]] = [["IKKOKU_PERF_MAIN_LOAD_MS"]]
+    #expect(captureRequestProblems(["IKKOKU_PERF_MAIN_LOAD_MS": "20"]) == loadOutside)
     let misspelled: [[String]] = [["IKKOKU_PERF_SECOND"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_PERF_SECOND": "10"]) == misspelled)
     let window: [[String]] = [["IKKOKU_CAPTURE_UI", "IKKOKU_PERF_TRACE"]]
@@ -490,7 +493,8 @@ private struct CaptureRecipe {
     let withCapture: [[String]] = [["IKKOKU_PERF_TRACE", "IKKOKU_AUTOCAPTURE"]]
     #expect(captureRequestProblems(["IKKOKU_PERF_TRACE": "/p.json", "IKKOKU_AUTOCAPTURE": "/out.png"]) == withCapture)
     for (variable, value) in [("IKKOKU_PERF_WORKLOAD", "studio"), ("IKKOKU_PERF_SECONDS", "0"), ("IKKOKU_PERF_SECONDS", "2.5"),
-                              ("IKKOKU_PERF_WINDOW_W", "100"), ("IKKOKU_PERF_INPUT_HZ", "0"), ("IKKOKU_PERF_CHARACTERS", "33")] {
+                              ("IKKOKU_PERF_WINDOW_W", "100"), ("IKKOKU_PERF_INPUT_HZ", "0"), ("IKKOKU_PERF_CHARACTERS", "33"),
+                              ("IKKOKU_PERF_MAIN_LOAD_MS", "-1"), ("IKKOKU_PERF_MAIN_LOAD_MS", "1001"), ("IKKOKU_PERF_MAIN_LOAD_HZ", "0")] {
         var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]
         environment[variable] = value
         let expected: [[String]] = [[variable]]

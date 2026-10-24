@@ -19,9 +19,12 @@ protocol ViewportInputHandler: AnyObject {
     func keyDown(_ event: NSEvent) -> Bool
 }
 
-final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
+/// The Metal viewport. Its display link runs on its own render thread
+/// (`ViewportRenderThread`) while the view is in a window; input is handled
+/// on the main thread and forwarded to the `handler`.
+final class ViewportNSView: NSView {
     private let renderer: Renderer
-    private var displayLink: CAMetalDisplayLink?
+    private var renderThread: ViewportRenderThread?
     weak var handler: (any ViewportInputHandler)?
     private var lastPoint = SIMD2<Float>(0, 0)
     private var tracking: NSTrackingArea?
@@ -33,6 +36,9 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .duringViewResize
+        // Removed automatically when the view deallocates.
+        NotificationCenter.default.addObserver(self, selector: #selector(applicationWillTerminate(_:)),
+                                               name: NSApplication.willTerminateNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not supported") }
@@ -52,20 +58,33 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else {
-            displayLink?.invalidate()
-            displayLink = nil
+            stopRendering()
             return
         }
         updateDrawableSize()
-        if displayLink == nil {
-            let link = CAMetalDisplayLink(metalLayer: metalLayer)
-            link.delegate = self
-            link.preferredFrameLatency = 2
-            link.add(to: .main, forMode: .common)
-            displayLink = link
+        if renderThread == nil {
+            let thread = ViewportRenderThread(layer: metalLayer, renderer: renderer, log: PerfTrace.active?.drawLog)
+            thread.start()
+            renderThread = thread
         }
         window?.makeFirstResponder(self)
     }
+
+    /// Stops the render thread (it exits after any draw in progress).
+    func stopRendering() {
+        renderThread?.stop()
+        renderThread = nil
+    }
+
+    /// Quitting while the link draws: let the draw in progress finish before
+    /// the process exits.
+    @objc private func applicationWillTerminate(_ notification: Notification) {
+        renderThread?.stopAndWait(ViewportRenderThread.terminationWait)
+    }
+
+    // `stop()` is thread-safe and idempotent; this covers a view released
+    // without leaving its window.
+    deinit { renderThread?.stop() }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -84,32 +103,6 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
         let size = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
         metalLayer.drawableSize = size
         handler?.viewportSize = SIMD2<Float>(Float(size.width), Float(size.height))
-    }
-
-    /// The link runs on the main run loop (`viewDidMoveToWindow`), so the draw
-    /// shares the main thread with model updates and SwiftUI. `PerfTrace`
-    /// records each callback when `IKKOKU_PERF_TRACE` is set.
-    nonisolated func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
-        MainActor.assumeIsolated {
-            let trace = PerfTrace.active
-            var presentIndex = -1
-            if let trace {
-                let log = trace.presentLog
-                let index = log.register()
-                presentIndex = index
-                update.drawable.addPresentedHandler { drawable in log.presented(index, at: drawable.presentedTime) }
-            }
-            let start = CACurrentMediaTime()
-            PerfSignpost.interval("Draw") {
-                renderer.draw(to: update.drawable, timestamp: update.targetPresentationTimestamp)
-            }
-            if let trace {
-                let texture = update.drawable.texture
-                trace.didDraw(callback: start, end: CACurrentMediaTime(), targetPresentation: update.targetPresentationTimestamp,
-                              gpuSeconds: renderer.lastFrameGPUTime, presentIndex: presentIndex,
-                              drawable: CGSize(width: texture.width, height: texture.height))
-            }
-        }
     }
 
     // MARK: Input
@@ -180,4 +173,5 @@ struct ViewportView: NSViewRepresentable {
         return v
     }
     func updateNSView(_ view: ViewportNSView, context: Context) { view.handler = handler }
+    static func dismantleNSView(_ view: ViewportNSView, coordinator: ()) { view.stopRendering() }
 }

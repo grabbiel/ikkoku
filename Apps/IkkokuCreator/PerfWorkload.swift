@@ -19,8 +19,11 @@ import Studio
 /// `IKKOKU_PERF_WARMUP_SECONDS` (default 3) pass so pipeline creation and
 /// first-use uploads settle, then `IKKOKU_PERF_SECONDS` (default 10) are
 /// recorded while input, if any, is injected at `IKKOKU_PERF_INPUT_HZ`
-/// (default 120, one event per refresh on a 120 Hz display). The app then
-/// writes the report and exits 0, or 1 when the workload cannot run.
+/// (default 120, one event per refresh on a 120 Hz display). With
+/// `IKKOKU_PERF_MAIN_LOAD_MS` > 0 a main-thread timer also busy-waits that long
+/// `IKKOKU_PERF_MAIN_LOAD_HZ` (default 30) times per second while recording,
+/// a stand-in for main-thread work that should not delay presentation. The
+/// app then writes the report and exits 0, or 1 when the workload cannot run.
 @MainActor
 final class PerfWorkloadDriver {
     private static var shared: PerfWorkloadDriver?
@@ -28,6 +31,11 @@ final class PerfWorkloadDriver {
     private let app: AppState
     private let trace: PerfTrace
     private var inputTimer: Timer?
+    private var loadTimer: Timer?
+    /// Timed window and viewport actions of `viewport-lifecycle`.
+    private var lifecycle: [(seconds: Double, name: String, action: () -> Void)] = []
+    private var lifecycleLog: [[String: Any]] = []
+    private var restoredAt: CFTimeInterval?
     private var recordingStart: CFTimeInterval = 0
     /// Called once per injected input tick with the seconds since recording began.
     private var inject: ((Double) -> Void)?
@@ -107,11 +115,31 @@ final class PerfWorkloadDriver {
             RunLoop.main.add(timer, forMode: .common)
             inputTimer = timer
         }
+        if configuration.mainLoadMilliseconds > 0 {
+            let seconds = configuration.mainLoadMilliseconds / 1000
+            let timer = Timer(timeInterval: 1 / configuration.mainLoadHz, repeats: true) { _ in
+                MainActor.assumeIsolated { PerfTrace.measure(.mainLoad, "MainLoad") { Self.busyWait(seconds) } }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            loadTimer = timer
+            trace.details["mainLoad"] = "busy-wait \(configuration.mainLoadMilliseconds) ms on the main thread \(configuration.mainLoadHz) times per second"
+        }
+        for step in lifecycle {
+            DispatchQueue.main.asyncAfter(deadline: .now() + step.seconds) { self.runLifecycleStep(step.name, step.action) }
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.seconds) { self.stop() }
+    }
+
+    /// Spins (rather than sleeps) so the load is CPU work on the main thread.
+    private static func busyWait(_ seconds: Double) {
+        let end = CACurrentMediaTime() + seconds
+        while CACurrentMediaTime() < end {}
     }
 
     private func stop() {
         inputTimer?.invalidate(); inputTimer = nil
+        loadTimer?.invalidate(); loadTimer = nil
+        if !lifecycle.isEmpty { finishLifecycle() }
         trace.endRecording()
         finishGesture?()
         // Presented handlers of the last frames arrive after their vsync.
@@ -119,7 +147,11 @@ final class PerfWorkloadDriver {
             do {
                 let url = try self.trace.writeReport()
                 print("[ikkoku] perf trace written to \(url.path)")
-                exit(0)
+                if self.lifecycle.isEmpty { exit(0) }
+                // Quit the way the menu does while the display link is still
+                // drawing; the process must exit 0 without a crash.
+                print("[ikkoku] perf trace: quitting through NSApp.terminate")
+                NSApp.terminate(nil)
             } catch { self.fail("could not write the report: \(error)") }
         }
     }
@@ -137,6 +169,7 @@ final class PerfWorkloadDriver {
         case "maker-slider": try prepareMakerSlider()
         case "maker-idle": try prepareMaker()
         case "studio-native": try prepareStudioNative()
+        case "viewport-lifecycle": try prepareViewportLifecycle()
         case "startup": break
         default: throw RigError.invalid("unknown workload \(workload)")
         }
@@ -284,6 +317,65 @@ final class PerfWorkloadDriver {
         studio.resetCamera()
         trace.details["nativeCharacters"] = configuration.nativeCharacters
         trace.details["documentObjects"] = studio.doc.objects.count
+    }
+
+    /// Tears the viewport down and builds it again (Maker and Studio each own
+    /// one, so a mode switch replaces it), resizes the window, minimizes and
+    /// restores it, all while the display link draws, then quits through
+    /// `NSApp.terminate`. The report's `details.lifecycle` records the
+    /// viewport render threads alive before each step and at the end, and the
+    /// frames drawn and presented after the restore.
+    private func prepareViewportLifecycle() throws {
+        guard app.maker != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
+        app.mode = .maker
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
+            throw RigError.invalid("no visible editor window")
+        }
+        let size = window.contentLayoutRect.size
+        var time = 0.5
+        func add(_ name: String, settle: Double = 0.5, _ action: @escaping () -> Void) {
+            lifecycle.append((time, name, action)); time += settle
+        }
+        for _ in 0..<3 {
+            add("studio") { self.app.mode = .studio }
+            add("maker") { self.app.mode = .maker }
+        }
+        add("resize-small") { window.setContentSize(NSSize(width: max(800, size.width * 0.7), height: max(560, size.height * 0.7))) }
+        add("resize-back") { window.setContentSize(size) }
+        add("miniaturize", settle: 1.5) { window.miniaturize(nil) }
+        add("deminiaturize", settle: 1.5) { window.deminiaturize(nil); self.restoredAt = CACurrentMediaTime() }
+        add("studio") { self.app.mode = .studio }
+        add("maker") { self.app.mode = .maker }
+        guard time + 0.5 <= configuration.seconds else {
+            throw RigError.invalid("viewport-lifecycle needs IKKOKU_PERF_SECONDS >= \(Int((time + 0.5).rounded(.up)))")
+        }
+        trace.details["gesture"] = "viewport teardown and rebuild (mode switches), resize, minimize and restore, then NSApp.terminate"
+    }
+
+    /// Viewport render threads alive now (none before R7 phase 2, item 2).
+    private static func renderThreadCount() -> Int {
+        PerfTrace.threadNames().filter { $0 == ViewportFrame.renderThreadName }.count
+    }
+
+    private func runLifecycleStep(_ name: String, _ action: () -> Void) {
+        guard trace.recording else { return }
+        // Counted before acting: the previous step has had its settle time.
+        lifecycleLog.append(["step": name, "seconds": PerfTrace.round(CACurrentMediaTime() - recordingStart),
+                             "renderThreadsBefore": Self.renderThreadCount()])
+        action()
+    }
+
+    private func finishLifecycle() {
+        var result: [String: Any] = ["steps": lifecycleLog, "renderThreadsAtEnd": Self.renderThreadCount(),
+                                     "windowMiniaturized": NSApp.windows.contains { $0.isMiniaturized }]
+        if let restoredAt {
+            // Drawables presented more than half a second after the restore:
+            // the display link kept running across minimize and restore.
+            let presented = trace.drawLog.presentLog.snapshot()
+            result["presentedAfterRestore"] = presented.filter { $0 > restoredAt + 0.5 }.count
+            result["drawsAfterRestore"] = trace.drawLog.snapshot().samples.filter { $0.callback > restoredAt + 0.5 }.count
+        }
+        trace.details["lifecycle"] = result
     }
 
     /// The scenario runner's ring search: a coarse 10 px scan of ±120 px, then a
