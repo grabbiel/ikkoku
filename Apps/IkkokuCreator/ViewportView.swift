@@ -91,24 +91,7 @@ final class ViewportNSView: NSView, CAMetalDisplayLinkDelegate {
     /// records each callback when `IKKOKU_PERF_TRACE` is set.
     nonisolated func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
         MainActor.assumeIsolated {
-            let trace = PerfTrace.active
-            var presentIndex = -1
-            if let trace {
-                let log = trace.presentLog
-                let index = log.register()
-                presentIndex = index
-                update.drawable.addPresentedHandler { drawable in log.presented(index, at: drawable.presentedTime) }
-            }
-            let start = CACurrentMediaTime()
-            PerfSignpost.interval("Draw") {
-                renderer.draw(to: update.drawable, timestamp: update.targetPresentationTimestamp)
-            }
-            if let trace {
-                let texture = update.drawable.texture
-                trace.didDraw(callback: start, end: CACurrentMediaTime(), targetPresentation: update.targetPresentationTimestamp,
-                              gpuSeconds: renderer.lastFrameGPUTime, presentIndex: presentIndex,
-                              drawable: CGSize(width: texture.width, height: texture.height))
-            }
+            ViewportFrame.draw(update, renderer: renderer, log: PerfTrace.active?.drawLog)
         }
     }
 

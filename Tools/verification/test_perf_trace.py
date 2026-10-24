@@ -103,13 +103,84 @@ class PerfTraceTests(unittest.TestCase):
                 perf_trace.launch_environment("studio-idle", paths, "/out.json", 10, 3, {})
 
     def test_row_reports_the_build_and_phase_percentiles(self):
+        # A schema 2 report: no draw thread, load or render-thread fields.
         line = perf_trace.row("release/studio-idle", report(app="Debug", engine="Release"))
-        self.assertTrue(line.startswith("| release/studio-idle | Debug/Release | 118.4 | 3 | 1.50/2.50 | 4.00/5.00 | 400 | 200 | 150 | 50 |"))
+        self.assertTrue(line.startswith("| release/studio-idle | Debug/Release | main | - | 118.4 | 3 | -/- | 1.50/2.50 | 4.00/5.00 | 400 | 200 | 150 | 0 | 50 | 0 |"), line)
         self.assertIn("studioTick 1.50/2.50 ×30/s", line)
         camera = report()
         camera["summary"]["phases"]["studioCameraRefresh"] = dict(camera["summary"]["phases"]["studioTick"], perSecond=118)
         self.assertIn("studioCameraRefresh 1.50/2.50 ×118/s", perf_trace.row("after/studio-orbit", camera))
         self.assertTrue(line.endswith("| 512 |"))
+
+    def test_row_reports_the_busy_main_thread_case_and_the_render_thread(self):
+        # Schema 3: the acceptance metric of R7 phase 2, item 2 is the
+        # presented-interval p95 while the main thread carries a load.
+        loaded = report()
+        loaded["configuration"] = {"mainLoadMs": 20, "mainLoadHz": 30}
+        loaded["summary"].update(recordedSeconds=10, hitches=12, drawThread="render",
+                                 presentedIntervalMs={"p50": 8.33, "p95": 8.34},
+                                 renderThread={"callbacks": 1200, "drawMsPerSecond": 210})
+        loaded["summary"]["mainThread"].update(drawMsPerSecond=0, loadMsPerSecond=600, otherMsPerSecond=20)
+        line = perf_trace.row("after/studio-native+load20", loaded)
+        self.assertTrue(line.startswith("| after/studio-native+load20 | Release/Release | render | 20 ms × 30/s | 118.4 | 12 (1.2/s) | 8.33/8.34 |"), line)
+        self.assertIn("| 400 | 0 | 150 | 600 | 20 | 210 |", line)
+        self.assertEqual(perf_trace.HEADER.count("|"), line.count("|"))
+
+    def test_main_load_sets_the_launch_variables_and_names_the_report(self):
+        launches = []
+
+        def launch(argv, env, **kwargs):
+            launches.append(env)
+            shown = report()
+            shown["summary"].update(displayLinkCallbacks=1200, droppedDrawables=0)
+            with open(env["IKKOKU_PERF_TRACE"], "w") as handle:
+                json.dump(shown, handle)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with tempfile.TemporaryDirectory() as folder:
+            fixture = os.path.join(folder, "fixture")
+            open(fixture, "w").close()
+            environment = os.path.join(folder, "environment.json")
+            with open(environment, "w") as handle:
+                json.dump({"IKKOKU_SOURCE_AVATAR": fixture, "IKKOKU_MAKER_LIBRARY": fixture}, handle)
+            args = argparse.Namespace(environment=environment, workloads="studio-native", out=os.path.join(folder, "out"),
+                                      repeat=1, retries=2, seconds=10, warmup=3, startup_timeout=180, set=None,
+                                      app="/apps/Ikkoku", xctrace=None, wrap=None, main_load_ms=20, main_load_hz=60)
+            with mock.patch.object(perf_trace.subprocess, "run", side_effect=launch), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(perf_trace.run(args), 0)
+            self.assertTrue(os.path.exists(os.path.join(folder, "out", "studio-native+load20.json")))
+        self.assertEqual((launches[0]["IKKOKU_PERF_MAIN_LOAD_MS"], launches[0]["IKKOKU_PERF_MAIN_LOAD_HZ"]), ("20", "60"))
+
+    def test_lifecycle_run_checks_render_threads_and_presentation_after_restore(self):
+        def lifecycle(before, end, presented=40, minimized=False):
+            run = report()
+            run["workload"] = "viewport-lifecycle"
+            run["details"] = {"lifecycle": {"steps": [{"step": "studio", "seconds": 0.5, "renderThreadsBefore": n} for n in before],
+                                            "renderThreadsAtEnd": end, "presentedAfterRestore": presented,
+                                            "drawsAfterRestore": presented, "windowMiniaturized": minimized}}
+            return run
+        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle([1, 1, 1], 1)))
+        self.assertIsNone(perf_trace.lifecycle_problem(lifecycle([0, 0], 0)))  # main-thread display link: no render thread
+        self.assertIn("1 before, 3 at most, 3 at the end", perf_trace.lifecycle_problem(lifecycle([1, 2, 3], 3)))
+        self.assertIn("2 at most", perf_trace.lifecycle_problem(lifecycle([1, 2, 1], 1)))
+        self.assertIn("no frame presented", perf_trace.lifecycle_problem(lifecycle([1, 1], 1, presented=0)))
+        self.assertIn("still minimized", perf_trace.lifecycle_problem(lifecycle([1, 1], 1, minimized=True)))
+        self.assertIsNone(perf_trace.lifecycle_problem(report()))
+        # A minimized window drops drawables on purpose: no composited warning.
+        hidden = lifecycle([1, 1], 1)
+        hidden["summary"].update(displayLinkCallbacks=1200, droppedDrawables=600)
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, "viewport-lifecycle.json"), "w") as handle:
+                json.dump(hidden, handle)
+            with open(os.path.join(folder, "leaky.json"), "w") as handle:
+                json.dump(lifecycle([1, 2], 2), handle)
+            with contextlib.redirect_stdout(output):
+                perf_trace.summarize([folder])
+        text = output.getvalue()
+        self.assertNotIn("not on screen", text)
+        self.assertIn("render threads before each step [1, 1], at the end 1", text)
+        self.assertIn("WARNING %s/leaky: render threads 1 before, 2 at most, 2 at the end" % os.path.basename(folder), text)
 
     def test_attribution_row_reports_events_and_view_bodies_per_input(self):
         orbit = report()
