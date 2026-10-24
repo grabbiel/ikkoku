@@ -351,18 +351,30 @@ final class PerfTrace {
         let drawn = drawLog.snapshot()
         let frames = drawn.samples
         let presented = drawLog.presentLog.snapshot()
+        let completions = drawLog.presentLog.completionSnapshot()
+        let rendered = frames.filter { $0.outcome == .rendered }
+        let unchanged = frames.filter { $0.outcome == .unchanged }
+        var presentations: [RenderPresentationSample] = []
         var presentedTimes: [Double] = []
         var dropped = 0
-        for frame in frames {
+        for frame in rendered {
             guard frame.presentLogIndex >= 0, frame.presentLogIndex < presented.count else { continue }
             let t = presented[frame.presentLogIndex]
-            if t > 0 { presentedTimes.append(t) } else { dropped += 1 }
+            if t > 0 {
+                presentedTimes.append(t)
+                presentations.append(RenderPresentationSample(target: frame.targetPresentation, presented: t))
+            } else { dropped += 1 }
         }
         presentedTimes.sort()
         let presentedIntervals = zip(presentedTimes.dropFirst(), presentedTimes).map { ($0 - $1) * 1000 }
-        // A hitch is a presented interval longer than 1.5 refresh periods; the
-        // frames it skipped are its length in periods minus one.
-        let hitchIntervals = presentedIntervals.filter { $0 > 1.5 * period * 1000 }
+        // Retain raw cadence above; remove only callbacks explicitly skipped as
+        // unchanged from the hitch calculation. Missing callbacks, failed draws,
+        // dropped presentations are not intentional skips. Absolute target-to-
+        // present lateness is reported separately: a late earlier frame can
+        // shorten the following adjusted interval.
+        let activeIntervals = RenderPresentationSample.activeIntervals(presentations,
+            unchangedTargets: unchanged.map(\.targetPresentation), period: period).map { $0 * 1000 }
+        let hitchIntervals = activeIntervals.filter { $0 > 1.5 * period * 1000 }
         let skippedRefreshes = hitchIntervals.reduce(0) { $0 + max(0, Int(($1 / (period * 1000)).rounded()) - 1) }
         let callbackIntervals = zip(frames.dropFirst(), frames).map { ($0.callback - $1.callback) * 1000 }
         let targetSkips = zip(frames.dropFirst(), frames).reduce(0) { total, pair in
@@ -370,8 +382,10 @@ final class PerfTrace {
         }
 
         func durations(_ phase: Phase) -> [Double] { (intervals[phase] ?? []).map { ($0.end - $0.start) * 1000 } }
-        let draw = frames.map(\.drawMilliseconds)
-        let gpu = frames.map(\.gpuMilliseconds).filter { $0 > 0 }
+        let draw = rendered.map(\.drawMilliseconds)
+        let completed = rendered.compactMap { completions[$0.presentLogIndex] }
+        let gpu = completed.map { $0.gpuTime * 1000 }
+        let failed = frames.filter { $0.outcome == .failed }
         let busyTotal = busy.reduce(0) { $0 + ($1.end - $1.start) } * 1000
         // Only callbacks that ran on the main thread take main run-loop time;
         // a render thread's draws are reported on their own.
@@ -393,12 +407,26 @@ final class PerfTrace {
             entry["msPerSecond"] = samples.reduce(0, +) / window
             phases[phase.rawValue] = entry
         }
-        if !gpu.isEmpty { phases["gpu"] = PerfTrace.statistics(gpu) }
+        for (name, values) in [("gpu", gpu), ("unchanged", unchanged.map(\.drawMilliseconds)), ("failedDraw", failed.map(\.drawMilliseconds))] {
+            var entry = PerfTrace.statistics(values)
+            entry["perSecond"] = Double(values.count) / window
+            entry["msPerSecond"] = values.reduce(0, +) / window
+            phases[name] = entry
+        }
 
         let summary: [String: Any] = [
             "recordedSeconds": window,
             "displayRefreshHz": refreshHz,
             "displayLinkCallbacks": frames.count,
+            "renderedDraws": rendered.count,
+            "unchangedCallbacks": unchanged.count,
+            "failedCallbacks": failed.count,
+            "gpuCompletedDraws": completed.count,
+            "gpuPendingDraws": rendered.count - completed.count,
+            "gpuFailedDraws": completed.filter { !$0.succeeded }.count,
+            "presentedBeforeRecording": presented.filter { $0 > 0 && $0 < recordStart }.count,
+            "activePresentedIntervalMs": PerfTrace.statistics(activeIntervals),
+            "presentationLatenessMs": PerfTrace.statistics(presentations.map { $0.lateness * 1000 }),
             "displayLinkIntervalMs": PerfTrace.statistics(callbackIntervals),
             "displayLinkTargetSkips": targetSkips,
             "presentedFrames": presentedTimes.count,
@@ -428,10 +456,10 @@ final class PerfTrace {
             // Per-draw frame-ring use (G4): skin palettes written, and the
             // buffers created while recording (none once the ring is warm).
             "frameRing": [
-                "skinPalettesPerDraw": PerfTrace.statistics(frames.map { Double($0.skinPalettes) }),
-                "paletteKiBPerDraw": PerfTrace.statistics(frames.map { Double($0.ring.paletteBytes) / 1024 }),
-                "paletteBuffersCreated": frames.reduce(0) { $0 + $1.ring.paletteBuffersCreated },
-                "drawsWithOverflow": frames.filter { $0.ring.overflowBuffers > 0 }.count,
+                "skinPalettesPerDraw": PerfTrace.statistics(rendered.map { Double($0.skinPalettes) }),
+                "paletteKiBPerDraw": PerfTrace.statistics(rendered.map { Double($0.ring.paletteBytes) / 1024 }),
+                "paletteBuffersCreated": rendered.reduce(0) { $0 + $1.ring.paletteBuffersCreated },
+                "drawsWithOverflow": rendered.filter { $0.ring.overflowBuffers > 0 }.count,
             ] as [String: Any],
             "processCPUCores": (cpuAtEnd.process - cpuAtStart.process) / window,
             "inputCalls": inputNames,
@@ -464,12 +492,14 @@ final class PerfTrace {
             "windowSamples": memorySamples,
         ]
         let frameRows = frames.map { frame -> [Double] in
-            let presentedAt = frame.presentLogIndex < presented.count ? presented[frame.presentLogIndex] : 0
+            let presentedAt = presented.indices.contains(frame.presentLogIndex) ? presented[frame.presentLogIndex] : 0
+            let gpuMs = completions[frame.presentLogIndex].map { $0.gpuTime * 1000 } ?? -1
             return [PerfTrace.round(frame.callback - recordStart), PerfTrace.round(frame.drawMilliseconds),
-                    PerfTrace.round(frame.gpuMilliseconds), presentedAt > 0 ? PerfTrace.round(presentedAt - recordStart) : -1,
-                    frame.onMainThread ? 1 : 0]
+                    PerfTrace.round(gpuMs), presentedAt > 0 ? PerfTrace.round(presentedAt - recordStart) : -1,
+                    frame.onMainThread ? 1 : 0, frame.outcome == .rendered ? 1 : (frame.outcome == .unchanged ? 0 : -1),
+                    PerfTrace.round(frame.targetPresentation - recordStart)]
         }
-        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread"], "rows": frameRows]]
+        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread", "rendered", "targetSeconds"], "rows": frameRows]]
         for phase in Phase.allCases where phase != .draw {
             guard let list = intervals[phase], !list.isEmpty else { continue }
             samples[phase.rawValue] = list.map { [PerfTrace.round($0.start - recordStart), PerfTrace.round(($0.end - $0.start) * 1000)] }
@@ -480,7 +510,7 @@ final class PerfTrace {
         var startup = marks
         if let first = drawn.firstDraw { startup.append(("firstDraw", secondsSinceProcessStart(media: first))) }
         return [
-            "schemaVersion": 4,
+            "schemaVersion": 5,
             "workload": configuration.workload,
             "configuration": [
                 "seconds": configuration.seconds, "warmupSeconds": configuration.warmupSeconds,
@@ -630,10 +660,20 @@ final class PerfTrace {
 /// runs on a Metal thread. Index = order of `register()` calls; 0 = not
 /// presented (dropped) or not reported yet.
 ///
-/// Sendable invariant: `times` is only read or written while `lock` is held.
+/// Sendable invariant: `times` and `completions` are accessed only under `lock`.
 nonisolated final class PresentLog: @unchecked Sendable {
     private let lock = NSLock()
     private var times: [Double] = []
+    private var completions: [Int: RenderDrawCompletion] = [:]
+
+    func completed(_ index: Int, result: RenderDrawCompletion) {
+        lock.lock(); defer { lock.unlock() }
+        completions[index] = result
+    }
+
+    func completionSnapshot() -> [Int: RenderDrawCompletion] {
+        lock.lock(); defer { lock.unlock() }; return completions
+    }
 
     /// Reserves a slot for the next drawable and returns its index.
     func register() -> Int {
@@ -662,11 +702,10 @@ nonisolated final class PerfDrawLog: Sendable {
         var callback: CFTimeInterval
         var end: CFTimeInterval
         var targetPresentation: CFTimeInterval
-        var gpuMilliseconds: Double
+        var outcome: RenderDrawResult.Outcome
         var presentLogIndex: Int
         var onMainThread: Bool
-        /// The frame ring's counters for this draw (`lastFrameStatistics`,
-        /// read right after it; a pick or capture in between replaces them).
+        /// The frame ring's counters returned by this exact draw under renderLock.
         var ring = FrameRing.Statistics()
         var skinPalettes = 0
         /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
@@ -694,13 +733,14 @@ nonisolated final class PerfDrawLog: Sendable {
     /// process's first draw, which the caller marks.
     @discardableResult
     func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
-                 gpuSeconds: Double, presentIndex: Int, drawable: CGSize, statistics: RenderFrameStatistics) -> Bool {
+                 result: RenderDrawResult, presentIndex: Int, drawable: CGSize) -> Bool {
+        let statistics = result.statistics
         let sample = Sample(callback: callback, end: end, targetPresentation: targetPresentation,
-                            gpuMilliseconds: gpuSeconds * 1000, presentLogIndex: presentIndex,
+                            outcome: result.outcome, presentLogIndex: presentIndex,
                             onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
                             skinPalettes: statistics.skinPalettes)
         return state.withLock { state in
-            let first = state.snapshot.firstDraw == nil
+            let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }
             state.snapshot.drawable = drawable
             if state.recording { state.snapshot.samples.append(sample) }
@@ -737,16 +777,21 @@ nonisolated enum ViewportFrame {
             drawable.addPresentedHandler { shown in presents.presented(index, at: shown.presentedTime) }
         }
         let start = CACurrentMediaTime()
-        PerfSignpost.interval("Draw") {
-            renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp)
+        let result = PerfSignpost.interval("Draw") {
+            if let log {
+                let index = presentIndex
+                return renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp) { completion in
+                    log.presentLog.completed(index, result: completion)
+                }
+            }
+            return renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp)
         }
         guard let log else { return }
         let end = CACurrentMediaTime()
         let texture = drawable.texture
         if log.didDraw(callback: start, end: end, targetPresentation: update.targetPresentationTimestamp,
-                       gpuSeconds: renderer.lastFrameGPUTime, presentIndex: presentIndex,
-                       drawable: CGSize(width: texture.width, height: texture.height),
-                       statistics: renderer.lastFrameStatistics) {
+                       result: result, presentIndex: presentIndex,
+                       drawable: CGSize(width: texture.width, height: texture.height)) {
             PerfSignpost.signposter.emitEvent("Mark", "firstDraw")
         }
     }

@@ -57,6 +57,44 @@ def signposts(*marks):
 
 
 class PerfTraceTests(unittest.TestCase):
+    def test_unchanged_callbacks_are_not_dropped_presentations(self):
+        data = report()
+        s = data["summary"]
+        s.update(displayLinkCallbacks=1200, renderedDraws=300, unchangedCallbacks=900,
+                 presentedFrames=300, droppedDrawables=0, gpuCompletedDraws=300,
+                 gpuPendingDraws=0, gpuFailedDraws=0, failedCallbacks=0, recordedSeconds=10)
+        self.assertIsNone(perf_trace.uncomposited(data))
+        s["droppedDrawables"] = 40
+        # Denominator is 300 GPU submissions, not 1,200 callbacks.
+        self.assertIn("40 of 300", perf_trace.uncomposited(data))
+        s.update(renderedDraws=0, unchangedCallbacks=1200, presentedFrames=0,
+                 droppedDrawables=0, gpuCompletedDraws=0, presentedBeforeRecording=1)
+        self.assertIsNone(perf_trace.uncomposited(data))
+        s["presentedBeforeRecording"] = 0
+        self.assertIn("no rendered", perf_trace.uncomposited(data))
+        s["renderedDraws"] = 1
+        self.assertIn("no rendered frame presented", perf_trace.uncomposited(data))
+        s.update(renderedDraws=300, presentedFrames=300, gpuPendingDraws=1)
+        self.assertIn("gpuPendingDraws", perf_trace.uncomposited(data))
+        s.update(gpuPendingDraws=0, gpuFailedDraws=1)
+        self.assertIn("gpuFailedDraws", perf_trace.uncomposited(data))
+        s.update(gpuFailedDraws=0, failedCallbacks=1)
+        self.assertIn("failedCallbacks", perf_trace.uncomposited(data))
+
+    def test_draw_line_reports_completed_work_without_repeating_cached_gpu_samples(self):
+        data = report()
+        self.assertIsNone(perf_trace.draw_line("old", data))
+        data["summary"].update(renderedDraws=300, unchangedCallbacks=900, recordedSeconds=10,
+                               gpuCompletedDraws=300, gpuPendingDraws=0, gpuFailedDraws=0,
+                               activePresentedIntervalMs={"p50": 8.33, "p95": 8.34})
+        data["summary"]["phases"]["gpu"]["msPerSecond"] = 60
+        text = perf_trace.draw_line("new", data)
+        self.assertIn("rendered 300 (30.0/s), unchanged 900", text)
+        self.assertIn("GPU completed 300, pending 0, failed 0, 60.00 ms/s", text)
+        self.assertIn("8.33/8.34", text)
+        data["summary"]["phases"]["gpu"] = {"count": 0, "perSecond": 0, "msPerSecond": 0}
+        self.assertIn("-/-", perf_trace.row("static", data))
+
     def test_recording_window_prefers_signposts_and_otherwise_aligns_the_report(self):
         with mock.patch.object(perf_trace, "export_table", return_value=signposts(
                 ("appStateReady", 4_000_000_000), ("recordingBegin", 7_000_000_000), ("recordingEnd", 15_000_000_000))):

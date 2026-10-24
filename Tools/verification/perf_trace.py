@@ -222,7 +222,7 @@ def row(name, report):
 
     def phase(key, field="p50"):
         entry = phases.get(key)
-        return "%.2f" % entry[field] if entry else "-"
+        return "%.2f" % entry[field] if entry and field in entry else "-"
 
     def stat(entry, field):
         return "%.2f" % entry[field] if entry and field in entry else "-"
@@ -277,6 +277,22 @@ def uncomposited(report):
     quarter of at least 100 drawables even when it is."""
     summary = report["summary"]
     callbacks = summary.get("displayLinkCallbacks", 0)
+    # Schema 5 separates untouched callbacks from attempted presentations. A
+    # static scene may present only during warmup; that is valid only with a
+    # recorded successful warmup presentation and continuing callbacks.
+    if "renderedDraws" in summary:
+        if not callbacks:
+            return "no display-link callbacks"
+        for name in ("failedCallbacks", "gpuFailedDraws", "gpuPendingDraws"):
+            if summary.get(name, 0):
+                return "%s: %d" % (name, summary[name])
+        callbacks = summary["renderedDraws"]
+        if not callbacks:
+            if summary.get("unchangedCallbacks", 0) and summary.get("presentedBeforeRecording", 0):
+                return None
+            return "no rendered or previously presented frame"
+        if not summary.get("presentedFrames", 0):
+            return "no rendered frame presented"
     dropped = summary.get("droppedDrawables", 0)
     busy = summary["mainThread"]["busyMsPerSecond"]
     idle_drops = callbacks >= 30 and dropped > 0.1 * callbacks and busy < 900
@@ -386,6 +402,30 @@ def stray_input(report):
     return None
 
 
+def draw_line(label, report):
+    """Schema 5: actual rendering and asynchronous GPU completion accounting."""
+    def stat(entry, field):
+        return "%.2f" % entry[field] if field in entry else "-"
+
+    summary = report["summary"]
+    if "renderedDraws" not in summary:
+        return None
+    seconds = summary.get("recordedSeconds", 0)
+    rate = summary["renderedDraws"] / seconds if seconds else 0
+    gpu = summary.get("phases", {}).get("gpu", {})
+    return ("[perf] %s: rendered %d (%.1f/s), unchanged %d, failed %d; "
+            "GPU completed %d, pending %d, failed %d, %.2f ms/s; active interval ms p50/p95 %s/%s; "
+            "target-to-present lateness ms p50/p95/max %s/%s/%s" % (
+                label, summary["renderedDraws"], rate, summary.get("unchangedCallbacks", 0),
+                summary.get("failedCallbacks", 0), summary.get("gpuCompletedDraws", 0),
+                summary.get("gpuPendingDraws", 0), summary.get("gpuFailedDraws", 0), gpu.get("msPerSecond", 0),
+                stat(summary.get("activePresentedIntervalMs", {}), "p50"),
+                stat(summary.get("activePresentedIntervalMs", {}), "p95"),
+                stat(summary.get("presentationLatenessMs", {}), "p50"),
+                stat(summary.get("presentationLatenessMs", {}), "p95"),
+                stat(summary.get("presentationLatenessMs", {}), "max")))
+
+
 def summarize(directories):
     print(HEADER)
     print("|---|---|---|---|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|")
@@ -401,6 +441,9 @@ def summarize(directories):
             print(row(label, report))
             if "viewBodies" in report["summary"] or "events" in report["summary"]:
                 attributed.append(attribution_row(label, report))
+            work = draw_line(label, report)
+            if work:
+                rings.append(work)
             ring = ring_line(label, report)
             if ring:
                 rings.append(ring)

@@ -106,17 +106,26 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
 
 - every `CAMetalDisplayLink` callback: callback time, target presentation time,
   `Renderer.draw` duration (frame preparation, deformation and pass encoding,
-  plus any wait for one of the three frame slots), the last completed
-  command buffer's GPU time (`gpuEndTime - gpuStartTime`), and whether it ran
-  on the main thread. `drawThread` is `main`, `render` or `mixed`. Only
+  plus any wait for one of the three frame slots), whether it rendered,
+  intentionally kept the previous image, or failed, and whether it ran on the
+  main thread. Since schema 5, GPU time (`gpuEndTime - gpuStartTime`) belongs
+  to that exact draw's asynchronous completion; skipped callbacks do not repeat
+  an older GPU sample. `drawThread` is `main`, `render` or `mixed`. Only
   main-thread callbacks count as main-thread draw time; render-thread draws
   are summed in `renderThread` (callbacks, draw ms/s);
-- the frame ring's counters after each draw (`frameRing`): skin palettes and
+- the frame ring's counters captured under the render lock for each encoded
+  draw (`frameRing`), excluding unchanged callbacks: skin palettes and
   palette KiB per draw, palette buffers created while recording (0 once the
   ring is warm), and draws that used overflow buffers;
 - when each drawable was really presented (`addPresentedHandler`), giving
-  presented FPS, presented-interval percentiles and hitches (an interval longer
-  than 1.5 refresh periods; `skippedRefreshes` counts the periods it lost);
+  actual presented FPS and raw presented-interval percentiles. Schema 5 also
+  reports `activePresentedIntervalMs`: adjacent presentation intervals minus
+  only callbacks explicitly skipped as unchanged. Hitches use this adjusted
+  cadence (longer than 1.5 refresh periods), with `skippedRefreshes` counting
+  its lost periods. Adjustment is not actual FPS or latency: an earlier late
+  presentation can shorten the next interval. `presentationLatenessMs` separately
+  reports nonnegative target-to-present delay p50/p95/max. Out-of-target-order
+  presentation pairs get no intentional-skip allowance;
 - main run-loop busy time (after-waiting to before-waiting observers), split
   into draw, model (ticks, refreshes and input handlers, nested intervals
   counted once) and other (SwiftUI updates, layout, AppKit event handling);
@@ -164,8 +173,14 @@ Studio hooks, events and view bodies were added, 3 since the draw log moved
 off the main actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad`
 phase and `configuration.mainLoadMs`/`mainLoadHz`), and 4 since the hover
 pick became asynchronous (`hoverPick`, the `studioHoverPick` phase and the two
-hover events). `perf_trace.py summarize` prints a hover line for a report with
-hover picks.
+hover events). Schema 5 adds rendered/unchanged/failed callback counts, exact
+GPU completion counts and GPU ms/s, adjusted presentation cadence, absolute
+presentation lateness and a successful-presentation count before recording.
+`perf_trace.py summarize` prints actual draw rate and completed GPU work separately
+from callback rate. Failed or pending GPU work is a warning. A completely static
+recording is valid only if a warmup drawable actually presented and display
+callbacks continued. Older schema GPU values are sampled last-completion values;
+they cannot establish an exact sum of command-buffer work.
 
 ### Running it
 
