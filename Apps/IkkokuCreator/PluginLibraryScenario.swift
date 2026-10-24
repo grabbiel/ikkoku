@@ -13,6 +13,13 @@ struct PluginLibraryScenario: Decodable {
     let requestFile: String
     /// Source-backed fresh-profile callback and failure-isolation checks.
     let reproduceFreshProfileFailure: Bool?
+    /// Reproduction only: save and reopen run in separate owned processes.
+    let nativeProfileRestore: NativeProfileRestore?
+    struct NativeProfileRestore: Decodable {
+        enum Phase: String, Decodable { case save, reopen }
+        let phase: Phase
+        let directory: String
+    }
     /// Stops only the dedicated CPU worker; the main actor remains responsive.
     private final class Barrier: @unchecked Sendable {
         private let condition = NSCondition()
@@ -36,6 +43,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let nativeProfileRestore { return await reproduceNativeRestore(nativeProfileRestore, app: app, studio: studio) }
         if reproduceFreshProfileFailure == true { return await reproduceFreshLoad(app: app, studio: studio) }
         var rows: [StudioScenario.Report.StepResult] = []
         func check(_ name: String, _ condition: Bool, _ detail: String = "") throws {
@@ -467,6 +475,153 @@ struct PluginLibraryScenario: Decodable {
 // Source-backed installation regression; the original failing report is retained
 // separately. Both supported callbacks and rejected candidates use the real loader.
 extension PluginLibraryScenario {
+    /// Records the existing unsupported restore policy without changing it.
+    /// The durable profiles and native cards survive the save process; a second
+    /// process invokes the ordinary native loader against a retained live scene.
+    @MainActor private func reproduceNativeRestore(_ configuration: NativeProfileRestore,
+                                                    app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        func check(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+            if !okay { throw SourcePluginError.runtime("Native restore reproduction assertion failed: \(name)") }
+        }
+        func resources() -> [Int] {
+            let s = studio.host.renderer.resources.statistics()
+            return [s.meshes, s.textures, s.deformBuffers, s.hiddenBuffers,
+                    s.meshBufferBytes, s.deformBufferBytes, s.hiddenBufferBytes, s.retiring]
+        }
+        func previews() -> Set<ObjectIdentifier> { Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)) }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
+        }
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        func scene(_ name: String) -> URL { directory.appendingPathComponent(name + ".png") }
+        func decoded(_ name: String) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: scene(name)))
+        }
+        do {
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            switch configuration.phase {
+            case .save:
+                // Refuse stale fixture reuse: profile paths themselves are part
+                // of the saved identity, so every pair owns one fresh directory.
+                guard !FileManager.default.fileExists(atPath: directory.path),
+                      let template = studio.doc.objects.first(where: { $0.sourceCharacter != nil }),
+                      template.sourceCharacter?.attachmentCatalogFile != nil else {
+                    throw SourcePluginError.invalid("Native restore save needs a fresh output directory and source character with attachments.")
+                }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let sourceFile = studio.doc.sourceSceneFile, sourceSHA = studio.doc.sourceSceneSHA256
+                for name in ["attachment", "plain", "changed"] {
+                    studio.newScene()
+                    var parent = template; parent.id = UUID(); parent.parent = nil; parent.visible = false
+                    var child = StudioObject(name: "Saved attachment target", kind: .folder)
+                    child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
+                    var candidate = studio.doc
+                    candidate.sourceSceneFile = sourceFile; candidate.sourceSceneSHA256 = sourceSHA
+                    candidate.objects = [parent, child]; studio.doc = candidate
+                    let profile = try freshProfileFixture(directory: directory.appendingPathComponent(name),
+                        phase: "initializer", fail: false, attachmentRead: name == "attachment")
+                    try check(name + "ColdBeforeMount", studio.sourceShapePreview(for: parent.id) == nil)
+                    try studio.loadSourcePluginProfileInteractively(profileURL: profile,
+                        expectedGeneration: studio.sourcePluginMountGeneration)
+                    studio.sourcePluginsRunning = false
+                    let state = studio.doc.sourcePluginState
+                    try check(name + "FreshMount", state?.bindings.count == 1
+                        && state?.bindings.first?.fields["position"] != nil
+                        && state?.bindings.first?.fields["position"] == state?.bindings.first?.fields["positionAgain"]
+                        && (studio.sourceShapePreview(for: parent.id) != nil) == (name == "attachment"),
+                        "Real interactive fresh load; hidden initializer reads create one cached preview only for attachment profile")
+                    try studio.stepSourcePlugins(deltaTime: 0.04)
+                    let expected = try studio.sourcePluginSession!.savedDocument().sourcePluginState
+                    try studio.saveScene(to: scene(name))
+                    let saved = try decoded(name)
+                    try check(name + "NativeSave", saved.sourcePluginState == expected
+                        && saved.sourcePluginState?.clock.elapsedTime == Double(Float(0.04))
+                        && saved.object(child.id)?.parent == parent.id
+                        && saved.object(child.id)?.sourceAttachmentPoint == 17
+                        && saved.object(parent.id)?.sourceCharacter == parent.sourceCharacter,
+                        "Native card retains exact profile/package identities, fields, clock, bindings and source attachment")
+                    if name == "changed" {
+                        var bytes = try Data(contentsOf: profile); bytes.append(contentsOf: [0x20, 0x0a])
+                        _ = try JSONSerialization.jsonObject(with: bytes)
+                        try bytes.write(to: profile)
+                        let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                        try check("ChangedValidJSONIdentity", hash != saved.sourcePluginState?.profileSHA256,
+                            "Only this dedicated control profile receives valid trailing JSON whitespace after native save")
+                    }
+                }
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("save-pid.txt"),
+                    atomically: true, encoding: .utf8)
+            case .reopen:
+                let savePID = try String(contentsOf: directory.appendingPathComponent("save-pid.txt"), encoding: .utf8)
+                try check("FreshProcessBoundary", savePID != String(ProcessInfo.processInfo.processIdentifier),
+                    "save PID=\(savePID), reopen PID=\(ProcessInfo.processInfo.processIdentifier)")
+                let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
+                guard let binding = request.configuration.bindings.first, request.configuration.bindings.count == 1 else {
+                    throw SourcePluginError.invalid("Native restore requires one unrelated retained library binding.")
+                }
+                // Keep the independently imported visible source scene so a
+                // failed candidate must preserve real cached previews/resources.
+                var target = StudioObject(name: "Retained unrelated plugin target", kind: .folder)
+                target.sourceObjectKey = 987654
+                studio.add(target)
+                try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: .init(
+                    fixedDeltaTime: request.configuration.fixedDeltaTime,
+                    bindings: [.init(guid: binding.guid, type: binding.type, sourceObjectKey: 987654)]))
+                studio.sourcePluginsRunning = false
+                try studio.stepSourcePlugins(deltaTime: 0.06)
+                try check("RetainedSessionPrecondition", studio.sourcePluginSession != nil && studio.sourceFocus.adapter != nil
+                    && !previews().isEmpty && !studio.undoStack.isEmpty)
+                for (name, expected) in [
+                    ("attachment", "Source-character attachment reads during plugin installation are unsupported; no live preview was changed."),
+                    ("changed", "Saved plugin profile or library bindings changed; explicit reinstallation is required.")] {
+                    let document = studio.doc, session = studio.sourcePluginSession
+                    let runtime = try session?.savedDocument(), adapter = studio.sourceFocus.adapter
+                    let frame = studio.host.renderer.currentFrame(), beforeResources = resources(), beforePreviews = previews()
+                    let undo = studio.undoStack, redo = studio.redoStack, status = studio.status, sceneURL = studio.sceneURL
+                    let generation = studio.sourcePluginMountGeneration, time = studio.sourceAnimationTime
+                    let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
+                    let launchObserver = studio.sourceLaunchObserver != nil, blocked = studio.resourceBlockedObjects
+                    let diagnostics = studio.resourceDiagnostics
+                    var rejection: String?
+                    do { try studio.loadScene(from: scene(name)) }
+                    catch SourcePluginError.invalid(let reason) { rejection = reason }
+                    catch { rejection = "UNEXPECTED: \(error)" }
+                    try check(name + "NativeReopenPolicy", rejection == expected, rejection ?? "Unexpectedly accepted")
+                    let afterRuntime = try studio.sourcePluginSession?.savedDocument()
+                    try check(name + "RejectedStateRetained", studio.doc == document && studio.sourcePluginSession === session
+                        && afterRuntime == runtime && studio.sourceFocus.adapter === adapter
+                        && studio.undoStack == undo && studio.redoStack == redo && studio.status == status && studio.sceneURL == sceneURL
+                        && studio.sourcePluginMountGeneration == generation && studio.sourceAnimationTime == time
+                        && studio.sourceAudioBus.masterVolume == gain && studio.sourceFocusObservers.count == observers
+                        && (studio.sourceLaunchObserver != nil) == launchObserver && !studio.sourcePluginsRunning
+                        && studio.resourceBlockedObjects == blocked && studio.resourceDiagnostics == diagnostics
+                        && sameFrame(frame, studio.host.renderer.currentFrame()),
+                        "Document/session/fields/clocks/adapters/history/status/scene URL/resource policy/frame unchanged")
+                    try check(name + "RejectedResourcesRetained", resources() == beforeResources && previews() == beforePreviews,
+                        "Resources before=\(beforeResources), after=\(resources()); observable cached preview identities unchanged")
+                }
+                let saved = try decoded("plain")
+                try studio.loadScene(from: scene("plain"))
+                let restored = try studio.sourcePluginSession?.savedDocument()
+                try check("AttachmentFreeReopen", studio.doc.sourcePluginState == saved.sourcePluginState
+                    && restored?.sourcePluginState == saved.sourcePluginState && !studio.sourcePluginsRunning,
+                    "Existing attachment-free native restore succeeds with exact profile/package/field/clock/binding identities")
+                try studio.stepSourcePlugins(deltaTime: 0.02)
+                try check("AttachmentFreeNextStep", studio.doc.sourcePluginState?.clock.elapsedTime
+                    == (saved.sourcePluginState?.clock.elapsedTime ?? 0) + Double(Float(0.02))
+                    && studio.doc.sourcePluginState?.bindings == saved.sourcePluginState?.bindings,
+                    "First resumed step advances clock while hidden target fields and lifecycle flags remain saved")
+            }
+        } catch { rows.append(.init(op: "nativeRestoreReproductionFailure", ok: false, detail: String(describing: error))) }
+        studio.cancelSourcePluginLibraryMount(); await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+
     @MainActor private func reproduceFreshLoad(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
         var rows: [StudioScenario.Report.StepResult] = []
         func record(_ name: String, _ okay: Bool, _ detail: String = "") {
@@ -634,7 +789,7 @@ extension PluginLibraryScenario {
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 
-    private func freshProfileFixture(directory: URL, phase: String, fail: Bool) throws -> URL {
+    private func freshProfileFixture(directory: URL, phase: String, fail: Bool, attachmentRead: Bool = true) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let type = "FreshAttachmentProbe", guid = "Ikkoku.Validation.FreshAttachmentProbe"
         let hash = String(repeating: "a", count: 64)
@@ -644,10 +799,10 @@ extension PluginLibraryScenario {
             ["kind": "literal", "type": "Int32", "value": 1], ["kind": "literal", "type": "Int32", "value": 1]]]
         let zero: [String: Any] = ["kind": "api", "type": "Vector3", "name": "vector.zero", "children": []]
         var fields: [[String: Any]] = [["name": "position", "type": "Vector3", "serialized": true,
-                                       "initializer": phase == "initializer" ? read : zero]]
+                                       "initializer": phase == "initializer" && attachmentRead ? read : zero]]
         var body: [[String: Any]] = []
         if phase == "initializer" {
-            fields.append(["name": "positionAgain", "type": "Vector3", "serialized": true, "initializer": read])
+            fields.append(["name": "positionAgain", "type": "Vector3", "serialized": true, "initializer": attachmentRead ? read : zero])
             if fail { fields.append(["name": "trip", "type": "Int32", "serialized": false, "initializer": poison]) }
         } else {
             body.append(["kind": "assign", "name": "=", "children": [["kind": "field", "type": "Vector3", "name": "position"], read]])
