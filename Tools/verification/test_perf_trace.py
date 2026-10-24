@@ -68,9 +68,14 @@ class PerfTraceTests(unittest.TestCase):
         # Denominator is 300 GPU submissions, not 1,200 callbacks.
         self.assertIn("40 of 300", perf_trace.uncomposited(data))
         s.update(renderedDraws=0, unchangedCallbacks=1200, presentedFrames=0,
-                 droppedDrawables=0, gpuCompletedDraws=0, presentedBeforeRecording=1)
+                 droppedDrawables=0, gpuCompletedDraws=0, presentedBeforeRecording=1,
+                 lastRenderedBeforeRecordingPresented=True, windowOccludedSamples=0)
         self.assertIsNone(perf_trace.uncomposited(data))
-        s["presentedBeforeRecording"] = 0
+        s["windowOccludedSamples"] = 1
+        self.assertIn("windowOccludedSamples", perf_trace.uncomposited(data))
+        s["windowOccludedSamples"] = 0
+        # An older viewport presented, but the current warmup image did not.
+        s["lastRenderedBeforeRecordingPresented"] = False
         self.assertIn("no rendered", perf_trace.uncomposited(data))
         s["renderedDraws"] = 1
         self.assertIn("no rendered frame presented", perf_trace.uncomposited(data))

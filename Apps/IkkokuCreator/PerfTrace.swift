@@ -352,6 +352,9 @@ final class PerfTrace {
         let frames = drawn.samples
         let presented = drawLog.presentLog.snapshot()
         let completions = drawLog.presentLog.completionSnapshot()
+        let priorIndex = drawn.lastRenderedBeforeRecordingIndex
+        let priorPresented = presented.indices.contains(priorIndex)
+            && presented[priorIndex] > 0 && presented[priorIndex] <= recordEnd
         let rendered = frames.filter { $0.outcome == .rendered }
         let unchanged = frames.filter { $0.outcome == .unchanged }
         var presentations: [RenderPresentationSample] = []
@@ -425,6 +428,7 @@ final class PerfTrace {
             "gpuPendingDraws": rendered.count - completed.count,
             "gpuFailedDraws": completed.filter { !$0.succeeded }.count,
             "presentedBeforeRecording": presented.filter { $0 > 0 && $0 < recordStart }.count,
+            "lastRenderedBeforeRecordingPresented": priorPresented,
             "activePresentedIntervalMs": PerfTrace.statistics(activeIntervals),
             "presentationLatenessMs": PerfTrace.statistics(presentations.map { $0.lateness * 1000 }),
             "displayLinkIntervalMs": PerfTrace.statistics(callbackIntervals),
@@ -717,12 +721,15 @@ nonisolated final class PerfDrawLog: Sendable {
         var samples: [Sample] = []
         /// Media time of the end of the first draw of the process.
         var firstDraw: CFTimeInterval?
+        /// The current image when recording starts, not any earlier viewport.
+        var lastRenderedBeforeRecordingIndex = -1
         /// The most recent drawable's size in pixels.
         var drawable: CGSize = .zero
     }
 
     private struct State: Sendable {
         var recording = false
+        var lastRenderedIndex = -1
         var snapshot = Snapshot()
     }
 
@@ -742,6 +749,7 @@ nonisolated final class PerfDrawLog: Sendable {
         return state.withLock { state in
             let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }
+            if result.outcome == .rendered { state.lastRenderedIndex = presentIndex }
             state.snapshot.drawable = drawable
             if state.recording { state.snapshot.samples.append(sample) }
             return first
@@ -751,7 +759,10 @@ nonisolated final class PerfDrawLog: Sendable {
     /// Starts (clearing earlier samples) or stops keeping samples.
     func setRecording(_ on: Bool) {
         state.withLock { state in
-            if on { state.snapshot.samples = [] }
+            if on {
+                state.snapshot.samples = []
+                state.snapshot.lastRenderedBeforeRecordingIndex = state.lastRenderedIndex
+            }
             state.recording = on
         }
     }

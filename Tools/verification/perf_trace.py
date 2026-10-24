@@ -279,16 +279,16 @@ def uncomposited(report):
     callbacks = summary.get("displayLinkCallbacks", 0)
     # Schema 5 separates untouched callbacks from attempted presentations. A
     # static scene may present only during warmup; that is valid only with a
-    # recorded successful warmup presentation and continuing callbacks.
+    # last rendered warmup presentation and continuing visible callbacks.
     if "renderedDraws" in summary:
         if not callbacks:
             return "no display-link callbacks"
-        for name in ("failedCallbacks", "gpuFailedDraws", "gpuPendingDraws"):
+        for name in ("failedCallbacks", "gpuFailedDraws", "gpuPendingDraws", "windowOccludedSamples"):
             if summary.get(name, 0):
                 return "%s: %d" % (name, summary[name])
         callbacks = summary["renderedDraws"]
         if not callbacks:
-            if summary.get("unchangedCallbacks", 0) and summary.get("presentedBeforeRecording", 0):
+            if summary.get("unchangedCallbacks", 0) and summary.get("lastRenderedBeforeRecordingPresented", False):
                 return None
             return "no rendered or previously presented frame"
         if not summary.get("presentedFrames", 0):

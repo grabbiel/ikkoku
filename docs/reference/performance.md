@@ -178,9 +178,11 @@ GPU completion counts and GPU ms/s, adjusted presentation cadence, absolute
 presentation lateness and a successful-presentation count before recording.
 `perf_trace.py summarize` prints actual draw rate and completed GPU work separately
 from callback rate. Failed or pending GPU work is a warning. A completely static
-recording is valid only if a warmup drawable actually presented and display
-callbacks continued. Older schema GPU values are sampled last-completion values;
-they cannot establish an exact sum of command-buffer work.
+recording is valid only if the last rendered warmup drawable presented by the
+recording end, display callbacks continued and no sampled window occlusion was
+recorded; a presentation from an earlier viewport is insufficient. Older schema
+GPU values are sampled last-completion values; they cannot establish an exact
+sum of command-buffer work.
 
 ### Running it
 
