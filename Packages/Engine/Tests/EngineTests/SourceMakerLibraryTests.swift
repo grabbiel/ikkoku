@@ -97,6 +97,39 @@ private enum MakerLibraryFixture {
     try SourceMakerLibrary.validateAssemblyIdentity(card: AppearanceTestFixture.card(modProperty: "ChaFileFace.HeadId"))
 }
 
+@Test func sourceMakerHeadPreparationRejectsMissingWrongAndEscapingInputs() throws {
+    let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let library = try MakerLibraryFixture.library([], directory: directory)
+    let card = try AppearanceTestFixture.card()
+    let url = directory.appendingPathComponent("source-avatar.json")
+    #expect(throws: (any Error).self) { try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 0, baseURL: nil) }
+    #expect(throws: (any Error).self) { try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 7, baseURL: url) }
+    let mod = try AppearanceTestFixture.card(modProperty: "ChaFileFace.headId")
+    #expect(throws: (any Error).self) { try SourceMakerHeadPreparation.prepare(card: mod, library: library, coordinate: 0, baseURL: url) }
+    let alternate = try SourceCharacterCard.decode(card.selectingVanillaHead(200))
+    // A missing alternate never silently uses the supplied base-0 manifest.
+    #expect(throws: (any Error).self) { try SourceMakerHeadPreparation.prepare(card: alternate, library: library, coordinate: 0, baseURL: url) }
+    let manifest: [String: Any] = ["schemaVersion": 1, "kind": "koikatsu-female-avatar", "name": "fixture", "sex": 1, "headID": 0,
+        "bodySkeleton": "body-master.json", "headSkeleton": "head-master.json", "body": ["file": "body.json"], "head": ["file": "head.json"],
+        "clothes": [], "hair": []]
+    for (key, value) in [("schemaVersion", 2 as Any), ("sex", 0 as Any), ("headID", 200 as Any), ("kind", "koikatsu-male-avatar" as Any)] {
+        var wrong = manifest; wrong[key] = value
+        try JSONSerialization.data(withJSONObject: wrong).write(to: url)
+        do {
+            _ = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 0, baseURL: url)
+            Issue.record("Wrong head manifest was accepted")
+        } catch RigError.invalid(let reason) { #expect(reason == "Selected card and head assembly identities differ.") }
+    }
+    try JSONSerialization.data(withJSONObject: manifest).write(to: url)
+    let outside = directory.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+    try Data("{}".utf8).write(to: outside); defer { try? FileManager.default.removeItem(at: outside) }
+    try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("character-shape-contract.json"), withDestinationURL: outside)
+    do {
+        _ = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 0, baseURL: url)
+        Issue.record("Escaping head companion was accepted")
+    } catch RigError.invalid(let reason) { #expect(reason == "Head assembly input escapes its folder.") }
+}
+
 @Test func sourceMakerLibraryRejectsUnconditionalOrAmbiguousHalfStateMetadata() throws {
     let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
     let clause: [String: Any] = ["kind": 0, "states": [1]]
@@ -166,6 +199,35 @@ private struct MakerSelectionCases: Decodable {
     static func load() throws -> (Self, URL) {
         let url = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_SELECTION_FIXTURES"))
         return (try JSONDecoder().decode(Self.self, from: Data(contentsOf: url)), url.deletingLastPathComponent())
+    }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
+func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    // Both sexes and standard/corrected cards use the selected assembly's own
+    // controllers; this is CPU preparation, without preview/GPU allocation.
+    for sample in fixtures.fixtures.prefix(6) {
+        let original = try SourceCharacterCard.load(url: directory.appendingPathComponent(sample.file))
+        let base = URL(fileURLWithPath: sample.sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
+        for id in [0, 200, 201] {
+            let card = try SourceCharacterCard.decode(original.selectingVanillaHead(id))
+            let bytes = card.preservedData
+            let value = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base)
+            #expect(value.sex == sample.sex && value.headID == id && value.boneType == sample.boneType && value.coordinate == 1)
+            #expect(value.bodyOptions.sex.rawValue == sample.sex)
+            let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: value.manifestURL))
+            #expect((manifest.headID ?? 0) == id)
+            #expect((value.manifestURL == base.resolvingSymlinksInPath()) == (id == 0))
+            #expect(value.contract.domain("face")?.valueCount == 52 && value.contract.domain("body")?.valueCount == 44)
+            let body = try #require(value.contract.domain("body")), face = try #require(value.contract.domain("face"))
+            let coverage = try SourceBodyShapePose.coverage(rig: value.assets.source.rig, domain: body, options: value.bodyOptions)
+            #expect(coverage.completeSlots.count == 44)
+            _ = try SourceFaceShapePose.make(rig: value.assets.source.rig, domain: face)
+            #expect(try !value.expressions.weights(source: value.assets.source, inputs: value.expressions.defaults).isEmpty)
+            #expect(card.preservedData == bytes)
+        }
     }
 }
 
@@ -388,4 +450,45 @@ func sourceMakerSelectedCardEditsKeepOpaqueTokensResolverAndAssetIdentity() thro
         #expect(try result.customization().headID == sample.headID)
         #expect(try result.customization().boneType == sample.boneType)
     }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil, "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
+func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContext() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    let base = URL(fileURLWithPath: fixtures.femaleBase)
+    let original = try SourceCharacterCard.load(url: directory.appendingPathComponent("female-head0-bone0.png"))
+    let card = try SourceCardAppearance(card: original)
+    let selected = try library.prepare(card: original, coordinate: 0, baseURL: base)
+    let inputs = try selected.prepareAppearanceInputs(card: card, baseURL: base)
+    let largestCall = try #require(inputs.perCallByteCounts.max())
+    #expect(largestCall > 0 && inputs.byteCount > largestCall)
+    // Every individual input call fits this limit, but their retained sum does
+    // not. The aggregate must reject using the remaining candidate allowance.
+    do {
+        _ = try selected.prepareAppearanceInputs(card: card, baseURL: base, maximumBytes: largestCall)
+        Issue.record("Independent per-call budgets bypassed the candidate cap.")
+    } catch { #expect(String(describing: error).contains("retained byte limit")) }
+    #expect(throws: (any Error).self) { try selected.prepareAppearanceInputs(card: card, baseURL: base, maximumBytes: 128 * 1024 * 1024 + 1) }
+
+    // A real unresolved hair selection uses its retained reference geometry,
+    // giving a different component set while the head/base assembly stays equal.
+    let fallbackCard = try SourceCharacterCard.decode(original.selectingVanillaAsset(Int(Int32.max), at: .hair(0)))
+    let fallback = try library.prepare(card: fallbackCard, coordinate: 0, baseURL: base)
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let before = resources.statistics().textures
+    do {
+        _ = try fallback.appearance(base: nil, card: SourceCardAppearance(card: fallbackCard), resources: resources, modLibrary: nil, inputs: inputs)
+        Issue.record("Prepared pixels crossed selected component contexts.")
+    } catch { #expect(String(describing: error).contains("different selected components")) }
+    #expect(resources.statistics().textures == before)
+    let temporary = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let preview = try AppearanceTestFixture.preview(directory: temporary, resources: resources)
+    do {
+        _ = try inputs.applyingBase(to: preview, card: card, baseURL: temporary.appendingPathComponent("other-head.json"), resources: resources)
+        Issue.record("Prepared pixels crossed base assembly contexts.")
+    } catch { #expect(String(describing: error).contains("different base assembly")) }
+    #expect(resources.statistics().textures == before)
+    #expect(try original.editedData(.init()) == original.preservedData)
 }

@@ -216,6 +216,162 @@ The [renderer evidence](../reference/renderer.md#native-normal-inner-shoe-compos
 retains the costs, source gates and diagnostic limits; sampling repeatability is
 the owner's next bounded task.
 
+**Local acceptance — corrected male head00, [#191](https://github.com/grabbiel/ikkoku/pull/191):**
+The Models handoff adds an independent source gate for normal male/head00 with
+bone type 1. Three original-player captures pass the unchanged geometry,
+matrix, morph, correction-table and head-collider tolerances; 61 focused Python
+checks and all earlier retained comparisons pass. Root independently verifies
+all 33 indexed evidence descriptors against their retained hashes and sizes.
+The neutral repeat preserves all 817 transform records and saved card bytes;
+maximum native/source vertex error is 8.35e-7. This changes offline capture and
+validation only, with no native runtime or per-frame cost. CPU silhouette equality
+does not establish GPU color parity, other corrected heads, arbitrary shape
+combinations or animation. The
+[corrected male evidence](../reference/character/neutral-model-parity.md#corrected-male-head00-skeleton-189)
+retains the exact identity, source routing and remaining limits. The owner moves
+next to measuring and reducing normal-head selection's owner-thread commit cost.
+
+**Local acceptance — accessory labels, [#193](https://github.com/grabbiel/ikkoku/pull/193):**
+The Plugins handoff adds 34 passing app checks for the existing exact-revision
+accessory-name adapter, plus 83 runner checks and two strict oracle checks.
+Root verifies the actual Clothes inspector changes slot 1 from `スロット01` to
+`01 スクエア` after mounting, retains that name while hidden and after an outfit
+change, and restores the label, selected outfit and hidden state through an
+actual save and fresh-process open. Unavailable rows remain noninteractive
+fallback text. The fixture uses the same glasses in every outfit; distinct-name
+outfit coverage is not established. Missing-conversion fallback and unload pass
+automated checks, but GUI inspection finds that a directly loaded converted
+manifest has no mounted-session or Unload controls in the library panel. That
+UI gap is queued separately after legacy Studio command ownership. Label
+construction diagnostics are below 0.1 ms, without isolated timing; no cache,
+runtime labeling change or per-frame work was added. The original fixture
+expectation and summary-parser failures remain retained alongside corrected
+passes. See the [adapter acceptance](../reference/mods/native-adapters.md).
+
+**Diagnostic handoff — translated sampling, [#188](https://github.com/grabbiel/ikkoku/issues/188):**
+The Materials owner completed controlled sampler, primitive-ID and simultaneous
+color/float-output experiments. All ten composite mip levels remain stable.
+In the instrumented draw, visible UVs and all 2,948 primitive/pass IDs stay equal,
+while first-texture-sample derivatives and returned values vary across repeats.
+This narrows the observed gap without identifying a compiler/driver cause;
+extra shader outputs can perturb execution, and later texture samples remain
+outside that measurement. The [renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+records the primary-source semantics, immutable private artifacts and numerical
+limits. No production sampling, source tolerance or per-frame work changed,
+and no speedup or source-color parity is claimed. The owner proceeds to an
+asset-free small-triangle reproducer; the repeatability issue remains open.
+
+**Local acceptance — Studio command ownership, [#196](https://github.com/grabbiel/ikkoku/pull/196):**
+Interactive translated-profile load and Run/Pause now require active Studio and
+no pending replacement. The load dialog retains its original mount generation,
+so a stale completion cannot claim a newer session. All 34 app checks pass,
+including inactive, pending and stale-generation rejection with unchanged
+session, clock, document, resources and sampled frame state. Root verifies the
+actual Mods menu disables these commands in Maker, restores them in Studio,
+retains pause through the mode round trip, toggles Run/Pause, and loads the
+retained translated profile through its real file dialog. The owned GUI process
+exits normally. These are event-only guards with no new frame work or throughput
+claim; programmatic startup loading keeps its existing behavior. Stale-dialog
+concurrency is automated-method evidence, not interactive modal evidence.
+The owner moves next to mounted-session summaries and Unload access for direct
+native and translated-profile origins in the existing library panel.
+
+**Diagnostic handoff — standalone sampling control, [#197](https://github.com/grabbiel/ikkoku/pull/197):**
+The Materials owner completed an asset-free Metal tool with authored mip levels,
+a large continuous quad, and identical tiny-triangle grids with continuous or
+discontinuous UVs. Four held draws per case are bit-identical across color,
+UV, derivatives, returned samples and primitive IDs; every case covers 4,096
+pixels with finite values and zero affine-gradient error. The continuous cases
+also produce identical color images, while the discontinuous case differs.
+CPU literal/layout checks pass and root independently verifies all 60 retained
+artifact hashes. The measured executable is `8aaf5ab9…8255` on M2 Ultra,
+macOS 27.0.1, default MSL 4.1 and fast math disabled. These regular-grid controls
+do not reproduce the recovered-shader variation and establish no production
+fix, source parity or timing improvement. [The renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the numerical scope; #188 remains open. The next bounded experiment
+changes subpixel placement and edge direction while retaining these controls.
+
+**Local acceptance — mounted plugin sessions, [#198](https://github.com/grabbiel/ikkoku/pull/198):**
+The library panel now identifies resident native plugins and translated profiles
+alongside library-mounted generations, with guarded Run/Pause and Unload access.
+All 42 plugin checks, 18 native-save checks, nine fresh-process checks and 84
+runner checks pass. Initial empty-profile and scenario-mode expectation failures
+remain retained; the corrected harness preserves the loader's empty-profile
+rejection and activates ordinary Studio scenarios through the real app mode.
+Root verifies the actual panel for all three origins, Maker-disabled commands,
+Switch to Studio, profile Pause/Run, and Unload. After native unload, outfit 2
+and slot 1's hidden state remain selected while its label returns to the fallback.
+The accepted executable is `1c516693…fc9` from runtime `71e1309`; its GUI process
+exits normally. Presentation reads resident metadata without file I/O or new
+frame work. Mixed-origin and concurrent pending/stale-dialog GUI cases remain
+outside this acceptance, and these overlapping functional runs support no
+timing claim. The [adapter reference](../reference/mods/native-adapters.md)
+retains exact fixtures and limits. The owner next investigates fresh-profile
+initialization failure isolation, beginning with a reproduction before changing
+supported callback behavior.
+
+**Diagnostic handoff — subpixel sampling controls, [#199](https://github.com/grabbiel/ikkoku/pull/199):**
+The standalone tool adds a translated discontinuous grid and a sheared copy,
+retaining its original three meshes, shader and eight authored mip levels.
+All five cases remain bit-identical over four draws across color, UV,
+derivatives, returned samples and primitive IDs. CPU triangle-union coverage
+matches all 4,096 visible pixels per case; values are finite and affine-gradient
+error is zero. Root verifies all 99 retained artifact hashes and byte equality
+of the earlier control's 60 artifacts. The measured executable is
+`66d8dbd6…45a2`; the retained report is `bfd362c1…f232`. These placement and edge
+direction controls still do not reproduce #188, establish a production fix or
+support a performance or source-parity claim. The
+[renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact mesh and coverage bounds. The owner next compares constant
+and varying clip-space w while preserving projected geometry and the controls.
+
+**Local acceptance — prepared head appearance inputs, [#200](https://github.com/grabbiel/ikkoku/pull/200):**
+Selected RGBA reads and hashes now run in the bounded preparation job, with
+immutable inputs checked against the exact base/component context and a 128 MiB
+aggregate candidate cap. Latest owner colors still drive composition; missing
+prepared inputs reject without owner-side file fallback. All 33 focused Engine
+checks pass across the initial 32-pass run and one fixture-configured rerun;
+the initial missing-environment failure is retained. Both sexes pass 55 selection
+and seven fresh-reload checks. Eight quiet interleaved launches preserve exported
+card bytes and GPU resource counts; root verifies both binaries and all 24
+retained artifacts. Mean owner commit falls by 19.672–32.976 ms, while total API
+latency rises by 4.582–30.054 ms. The candidate retains 32,506,112 raw input bytes
+until completion. This is a responsiveness tradeoff, with 90–144 ms owner stalls
+still present, rather than a total speedup, peak-memory or FPS result. The
+[Maker reference](../reference/character/maker-assets.md#normal-head-selection-182)
+records the two-sample-per-sex/binary limits and remaining synchronous GPU wait.
+The owner proceeds to measuring and reusing immutable fallback textures within
+each compositor, preserving its completion and failure semantics.
+
+**Diagnostic handoff — perspective sampling controls, [#201](https://github.com/grabbiel/ikkoku/pull/201):**
+The standalone tool adds constant-per-triangle and varying-per-vertex clip-space
+w while retaining projected geometry, depth, ordered UVs, shader and mip inputs.
+All seven cases remain bit-identical over four draws across the measured outputs.
+An independent reciprocal-w UV reference differs by at most 1.4997892061607843e-7
+in the varying case; its affine-gradient comparison is explicitly absent because
+no hardware quad-derivative rule was established. Root verifies all 135 artifact
+hashes and byte equality of the previous 99 control artifacts. These finite,
+coverage-matched results still do not reproduce #188 or establish source parity,
+a production fix or a performance improvement. The
+[renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact numerical scope. The owner moves next to a reduction of the
+recovered shader while preserving the existing varying-output baseline.
+
+**Reproduced gap — profile initialization rollback, [#203](https://github.com/grabbiel/ikkoku/issues/203):**
+A source-backed fresh-profile initializer reads a hidden character's attachment
+before a later named Int32 error rejects installation. The failed candidate
+leaves one new preview cached: meshes rise 37→66, textures 64→82 and mesh-buffer
+bytes rise by 12,505,092. The document, prior session, fields/clocks, adapters,
+status, generation, observers and sampled frame remain unchanged. Thirteen of
+14 reproduction checks pass; the sole failure is the intended cold-preview
+rollback assertion. Successful hidden-initializer and first-step Start controls
+pass, as does a cached active-parent Awake failure's resource/identity check.
+Start is first-step work, not an installation callback. Runtime `cdfc29e` changes
+only the scenario harness; the owned process exits 1 and its failure artifacts
+are retained. This establishes a native ownership gap, not a source-parity or
+performance result. The next task evaluates candidate staging or precise cleanup
+while preserving successful attachment callbacks; no production fix is claimed.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See

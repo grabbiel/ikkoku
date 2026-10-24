@@ -207,6 +207,35 @@ class ShapeCaptureTests(unittest.TestCase):
                 model.shape_request_gate(self.folder,self.frame,self.baseline)
             payload.assert_not_called()
 
+    def test_corrected_male_baseline_rejects_other_sex_type_or_table_before_card_payload(self):
+        authored.ModelComparisonTests.bone1(self, sex=0)
+        path=self.baseline/'frame.json';base=json.loads(path.read_text())
+        for key in ('variant','sex','requestedSex','boneType','requestedBoneType','exType','requestedExType',
+                    'loadedHeadName','loadedHeadCatalog','bodyCorrection'):
+            base['neutralModel'][key]=copy.deepcopy(self.frame['neutralModel'][key])
+        base['neutralModel']['actualBodyValues'][0]=.6
+        data=(self.folder/'body-correction.bytes').read_bytes()
+        (self.baseline/'body-correction.bytes').write_bytes(data)
+        for other in (dict(variant='female00-bone1',sex=1,requestedSex=1),
+                      dict(variant='male00',boneType=0,requestedBoneType=0)):
+            changed=copy.deepcopy(base);changed['neutralModel'].update(other);path.write_text(json.dumps(changed))
+            with patch.object(model,'shape_card_payload') as payload:
+                with self.subTest(other=other['variant']),self.assertRaisesRegex(ValueError,'source identity/context differs: variant'):
+                    model.shape_request_gate(self.folder,self.frame,self.baseline)
+                payload.assert_not_called()
+        path.write_text(json.dumps(base));(self.baseline/'body-correction.bytes').unlink()
+        with patch.object(model,'shape_card_payload') as payload:
+            with self.assertRaisesRegex(ValueError,'Missing corrected body table'):
+                model.shape_request_gate(self.folder,self.frame,self.baseline)
+            payload.assert_not_called()
+        changed=bytearray(data);struct.pack_into('<f',changed,4,-.5)
+        (self.baseline/'body-correction.bytes').write_bytes(changed)
+        base['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(changed).hexdigest();path.write_text(json.dumps(base))
+        with patch.object(model,'shape_card_payload') as payload:
+            with self.assertRaisesRegex(ValueError,'Shape baseline corrected body table differs'):
+                model.shape_request_gate(self.folder,self.frame,self.baseline)
+            payload.assert_not_called()
+
     def test_baseline_without_shape_request_rejects_retained_producer_input(self):
         request = self.frame['neutralModel']['shapeRequest']
         for marker in [dict(file=request['file'], sha256=request['sha256']), None]:

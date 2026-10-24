@@ -49,6 +49,37 @@ struct PluginLibraryScenario: Decodable {
                 && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
                 && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
         }
+        let commandScratch = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-plugin-commands-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: commandScratch) }
+        let absentProfile = commandScratch.appendingPathComponent("absent.json")
+        // The missing path distinguishes a pre-I/O ownership rejection from a
+        // normal loader error. Compare the real runtime snapshot, not just doc.
+        func rejectProfile(_ name: String, generation: UInt64, toggle: Bool) throws {
+            let document = studio.doc, session = studio.sourcePluginSession
+            let runtime = try session?.savedDocument(), adapter = studio.sourceFocus.adapter
+            let frame = studio.host.renderer.currentFrame(), resources = resourceCounts()
+            let status = studio.status, running = studio.sourcePluginsRunning
+            let pending = studio.sourcePluginLibraryPending, currentGeneration = studio.sourcePluginMountGeneration
+            let time = studio.sourceAnimationTime, gain = studio.sourceAudioBus.masterVolume
+            var cancelled = false
+            do { try studio.loadSourcePluginProfileInteractively(profileURL: absentProfile, expectedGeneration: generation) }
+            catch is CancellationError { cancelled = true }
+            if toggle { studio.toggleSourcePluginPlayback(); studio.unloadSourcePluginsInteractively() }
+            let afterRuntime = try studio.sourcePluginSession?.savedDocument()
+            try check(name, cancelled && (!toggle || !studio.canToggleSourcePluginPlayback)
+                && studio.doc == document && studio.sourcePluginSession === session && afterRuntime == runtime
+                && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
+                && studio.status == status && studio.sourcePluginsRunning == running
+                && studio.sourcePluginLibraryPending == pending && studio.sourcePluginMountGeneration == currentGeneration
+                && studio.sourceAnimationTime == time && resources == resourceCounts()
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Cancellation before absent-file I/O; document, runtime fields/clocks, session, focus adapter/gain, status, pending request, sampled frame and resources unchanged")
+        }
+        func checkMount(_ name: String, _ expected: [PluginMountSummary.Section]) throws {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            let actual = try encoder.encode(studio.sourcePluginMountSummary?.sections ?? [])
+            try check(name, actual == (try encoder.encode(expected)), String(decoding: actual, as: UTF8.self))
+        }
         do {
             let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
             let initial = request.configuration
@@ -66,6 +97,8 @@ struct PluginLibraryScenario: Decodable {
             try check("mount", studio.doc.sourcePluginLibrary == request.selection && studio.sourceAccessoryNamesEnabled
                 && studio.sourceFocus.adapter != nil && studio.sourcePluginSession != nil,
                 "Initial UI-path mount wall \((ProcessInfo.processInfo.systemUptime - mountStart) * 1000) ms; preparation, scheduling and commit combined")
+            try checkMount("libraryMountSummary", [.init(origin: .library, generation: request.selection.generation,
+                plugins: request.selection.revisions.map { .init(guid: $0.guid, version: $0.version, manifestSHA256: $0.manifestSHA256) })])
             try studio.stepSourcePlugins(deltaTime: 0.02)
             let firstSession = studio.sourcePluginSession, firstState = try firstSession?.savedDocument()
             try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10))
@@ -77,6 +110,7 @@ struct PluginLibraryScenario: Decodable {
             studio.sourcePluginPreparationHook = { runningBarrier.hold() }
             let replacement = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(11)) }
             await runningBarrier.wait()
+            try rejectProfile("pendingLegacyCommands", generation: studio.sourcePluginMountGeneration, toggle: true)
             try studio.stepSourcePlugins(deltaTime: 0.02)
             runningBarrier.finish(); try await replacement.value
             studio.sourcePluginPreparationHook = nil
@@ -199,6 +233,7 @@ struct PluginLibraryScenario: Decodable {
             // A UI Task queued before removal must reject entry before scheduling
             // preparation, changing status, or touching the shared Maker frame.
             let beforeQueue = studio.doc, queuedSession = studio.sourcePluginSession
+            let dialogGeneration = studio.sourcePluginMountGeneration
             let queued = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10)) }
             app.mode = .maker
             let makerFrame = studio.host.renderer.currentFrame()
@@ -206,10 +241,12 @@ struct PluginLibraryScenario: Decodable {
             do { try await queued.value } catch is CancellationError { rejected = true }
             try check("inactiveQueuedEntry", rejected && studio.doc == beforeQueue && queuedSession === studio.sourcePluginSession
                 && sameFrame(makerFrame, studio.host.renderer.currentFrame()) && !studio.sourcePluginLibraryPending)
+            try rejectProfile("inactiveLegacyCommands", generation: studio.sourcePluginMountGeneration, toggle: true)
             studio.unloadSourcePluginLibrary()
             try check("inactiveUnload", studio.doc == beforeQueue && queuedSession === studio.sourcePluginSession
                 && sameFrame(makerFrame, studio.host.renderer.currentFrame()))
             app.mode = .studio
+            try rejectProfile("staleLegacyDialogAfterModeReturn", generation: dialogGeneration, toggle: false)
 
             let beforeFailure = studio.doc, session = studio.sourcePluginSession, adapter = studio.sourceFocus.adapter
             let resources = resourceCounts(), gain = studio.sourceAudioBus.masterVolume
@@ -264,6 +301,121 @@ struct PluginLibraryScenario: Decodable {
                 snapshotTime += ProcessInfo.processInfo.systemUptime - time
             }
             try check("cachedStepSnapshot", true, "120 synthetic two-folder samples; step mean \(stepTime * 1000 / 120) ms; snapshot mean \(snapshotTime * 1000 / 120) ms")
+
+            // Both UI Run/Pause sites use this same guarded method. Neither
+            // action advances the runtime or rebuilds the shared frame itself.
+            studio.sourcePluginsRunning = false
+            let commandDocument = studio.doc, commandSession = studio.sourcePluginSession
+            let commandState = try commandSession?.savedDocument(), commandFrame = studio.host.renderer.currentFrame()
+            let commandResources = resourceCounts(), commandAdapter = studio.sourceFocus.adapter
+            func unchangedPlayback() throws -> Bool {
+                let state = try studio.sourcePluginSession?.savedDocument()
+                return studio.doc == commandDocument && studio.sourcePluginSession === commandSession
+                    && state == commandState && studio.sourceFocus.adapter === commandAdapter
+                    && resourceCounts() == commandResources && sameFrame(commandFrame, studio.host.renderer.currentFrame())
+            }
+            studio.toggleSourcePluginPlayback()
+            try check("activeLegacyRun", studio.canToggleSourcePluginPlayback && studio.sourcePluginsRunning && (try unchangedPlayback()))
+            studio.toggleSourcePluginPlayback()
+            try check("activeLegacyPause", studio.canToggleSourcePluginPlayback && !studio.sourcePluginsRunning && (try unchangedPlayback()))
+            var activeLoadError = ""
+            do { try studio.loadSourcePluginProfileInteractively(profileURL: absentProfile, expectedGeneration: studio.sourcePluginMountGeneration) }
+            catch is CancellationError { throw SourcePluginError.runtime("Active legacy profile load was incorrectly cancelled") }
+            catch { activeLoadError = String(describing: error) }
+            try check("activeLegacyLoadFailure", !activeLoadError.isEmpty && !studio.sourcePluginsRunning && (try unchangedPlayback()), activeLoadError)
+
+            // Reuse the exact immutable converted package already mounted by
+            // this checklist; no second IR program or fake session is introduced.
+            guard let package = commandSession?.library.packages.first,
+                  commandSession?.library.packages.count == 1,
+                  package.manifest.identity.guid.utf8.elementsEqual(binding.guid.utf8) else {
+                throw SourcePluginError.invalid("Legacy command check needs the controlled single-package fixture.")
+            }
+            try FileManager.default.createDirectory(at: commandScratch, withIntermediateDirectories: true)
+            let profileURL = commandScratch.appendingPathComponent("profile.json")
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": initial.fixedDeltaTime,
+                "packages": [["manifest": package.manifestURL.path,
+                    "bindings": [["type": binding.type, "sourceObjectKey": 10]]]]]).write(to: profileURL)
+            try studio.loadSourcePluginProfileInteractively(profileURL: profileURL, expectedGeneration: studio.sourcePluginMountGeneration)
+            try check("activeLegacyProfileLoad", studio.sourcePluginSession !== commandSession && studio.sourcePluginsRunning
+                && studio.doc.sourcePluginLibrary == nil && studio.doc.sourcePluginLibraryConfiguration == nil
+                && studio.doc.sourcePluginState?.profileFile == profileURL.resolvingSymlinksInPath().path
+                && studio.doc.sourcePluginState?.packages == commandDocument.sourcePluginState?.packages
+                && studio.doc.sourceNativePlugins == commandDocument.sourceNativePlugins
+                && studio.sourceFocus.adapter === commandAdapter && commandResources == resourceCounts())
+            let profileIdentity = PluginMountSummary.Identity(guid: package.manifest.identity.guid,
+                version: package.manifest.identity.version, manifestSHA256: commandDocument.sourcePluginState?.packages.first?.manifestSHA256)
+            let nativeIdentities = (commandDocument.sourceNativePlugins ?? []).map {
+                PluginMountSummary.Identity(guid: $0.guid, version: $0.version, manifestSHA256: $0.manifestSHA256, enabled: $0.enabled)
+            }
+            try checkMount("mixedProfileNativeSummary", [.init(origin: .profile, generation: nil, plugins: [profileIdentity]),
+                .init(origin: .native, generation: nil, plugins: nativeIdentities)])
+
+            // Startup/capture still uses the programmatic loader outside visible
+            // Studio. This deliberately does not assert inactive UI submission:
+            // only interactive entry owns that restriction.
+            studio.sourcePluginsRunning = false
+            let interactiveSession = studio.sourcePluginSession
+            app.mode = .maker
+            try studio.loadSourcePlugins(profileURL: profileURL)
+            try check("inactiveProgrammaticProfileLoad", !studio.isActiveMode && studio.sourcePluginsRunning
+                && studio.sourcePluginSession !== interactiveSession
+                && studio.doc.sourcePluginState?.profileFile == profileURL.resolvingSymlinksInPath().path
+                && studio.doc.sourcePluginState?.packages == commandDocument.sourcePluginState?.packages)
+            app.mode = .studio
+            let unloadGeneration = studio.sourcePluginMountGeneration
+            studio.unloadSourcePluginLibrary()
+            try rejectProfile("staleLegacyDialogAfterUnload", generation: unloadGeneration, toggle: false)
+            let emptyDocument = studio.doc, emptyFrame = studio.host.renderer.currentFrame(), emptyResources = resourceCounts()
+            studio.toggleSourcePluginPlayback()
+            try check("noSessionLegacyPlayback", studio.sourcePluginCommandsAvailable && !studio.canToggleSourcePluginPlayback
+                && !studio.sourcePluginsRunning && studio.sourcePluginSession == nil && studio.doc == emptyDocument
+                && emptyResources == resourceCounts() && sameFrame(emptyFrame, studio.host.renderer.currentFrame()))
+            try checkMount("unloadedMountSummary", [])
+
+            try studio.loadSourcePluginProfileInteractively(profileURL: profileURL, expectedGeneration: studio.sourcePluginMountGeneration)
+            try checkMount("profileOnlySummary", [.init(origin: .profile, generation: nil, plugins: [profileIdentity])])
+            let emptyProfile = commandScratch.appendingPathComponent("empty-profile.json")
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02, "packages": []]).write(to: emptyProfile)
+            let profileDocument = studio.doc, profileSession = studio.sourcePluginSession
+            let profileRuntime = try profileSession?.savedDocument(), profileFrame = studio.host.renderer.currentFrame()
+            let profileResources = resourceCounts(), profileStatus = studio.status
+            let profileGeneration = studio.sourcePluginMountGeneration, profileRunning = studio.sourcePluginsRunning
+            var emptyRejected = false
+            do { try studio.loadSourcePluginProfileInteractively(profileURL: emptyProfile, expectedGeneration: profileGeneration) }
+            catch SourcePluginError.invalid(let reason) { emptyRejected = reason == "Plugin bindings are empty." }
+            let profileAfterRuntime = try studio.sourcePluginSession?.savedDocument()
+            try check("emptyProfileRejected", emptyRejected && studio.doc == profileDocument
+                && studio.sourcePluginSession === profileSession && profileAfterRuntime == profileRuntime
+                && studio.sourcePluginMountGeneration == profileGeneration && studio.sourcePluginsRunning == profileRunning
+                && studio.status == profileStatus && profileResources == resourceCounts()
+                && sameFrame(profileFrame, studio.host.renderer.currentFrame()),
+                "Plugin bindings are empty; current document, runtime, session, status, generation, frame and resources retained")
+            try checkMount("rejectedProfileRetainsSummary", [.init(origin: .profile, generation: nil, plugins: [profileIdentity])])
+            let beforeUnload = studio.doc.objects
+            studio.unloadSourcePluginsInteractively()
+            try check("interactiveUnloadTearsDown", studio.sourcePluginMountSummary == nil && studio.sourcePluginSession == nil
+                && studio.doc.sourcePluginState == nil && studio.doc.sourceNativePlugins == nil
+                && studio.sourceFocus.adapter == nil && studio.sourceFocusObservers.isEmpty && studio.sourceLaunchObserver == nil
+                && !studio.sourceAccessoryNamesEnabled && !studio.sourcePluginsRunning && studio.doc.objects == beforeUnload)
+
+            // Pure presentation inputs can exercise byte-distinct identities
+            // without fabricating a registered executable native adapter.
+            let composed = "\u{00e9}", decomposed = "e\u{0301}"
+            let a = PluginMountSummary.Identity(guid: composed, version: "1", manifestSHA256: String(repeating: "a", count: 64))
+            let b = PluginMountSummary.Identity(guid: decomposed, version: "1", manifestSHA256: String(repeating: "b", count: 64))
+            let syntheticRef = try JSONDecoder().decode(SourceNativePluginReference.self, from: JSONSerialization.data(withJSONObject:
+                ["guid": composed, "version": "1", "manifestSHA256": String(repeating: "c", count: 64),
+                 "manifestFile": "not-read.json", "adapterID": "presentation-only", "enabled": false]))
+            let ordinal = PluginMountSummary(library: nil, profile: [a, b], native: [syntheticRef])!
+            let emptyPresentation = PluginMountSummary(library: nil, profile: [], native: [])
+            try check("summaryPreservesOrdinalOrigins", ordinal.sections.map(\.origin) == [.profile, .native]
+                && ordinal.sections.allSatisfy { $0.generation == nil }
+                && ordinal.sections[0].plugins.map { Data($0.guid.utf8) } == [Data(composed.utf8), Data(decomposed.utf8)]
+                && ordinal.sections[1].plugins[0].guid.utf8.elementsEqual(composed.utf8)
+                && ordinal.sections[1].plugins[0].enabled == false && ordinal.sections[1].plugins[0].label.hasSuffix("(disabled)")
+                && emptyPresentation?.sections.count == 1 && emptyPresentation?.sections[0].plugins.isEmpty == true
+                && PluginMountSummary(library: nil, profile: nil, native: []) == nil)
         } catch {
             rows.append(.init(op: "failure", ok: false, detail: String(describing: error)))
         }

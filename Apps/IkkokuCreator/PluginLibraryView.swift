@@ -3,6 +3,47 @@ import AppKit
 import Gameplay
 import Studio
 
+/// Presentation only: pinned identities already resident in the committed
+/// document/session. Optional profile metadata distinguishes an absent session.
+struct PluginMountSummary {
+    struct Identity: Codable {
+        let guid: String, version: String, manifestSHA256: String?
+        var enabled: Bool? = nil
+        var label: String { "\(guid) \(version)" + (enabled == false ? " (disabled)" : "") }
+    }
+    struct Section: Codable, Identifiable {
+        enum Origin: String, Codable { case library, profile, native }
+        let origin: Origin, generation: Int?, plugins: [Identity]
+        var id: Origin { origin }
+        var title: String {
+            switch origin {
+            case .library:
+                if let generation { "Mounted generation \(generation) · \(plugins.count) plugins" }
+                else { "Mounted plugin library · \(plugins.count) plugins" }
+            case .profile: "Mounted translated profile · \(plugins.count) packages"
+            case .native: "Mounted individual plugins · \(plugins.count)"
+            }
+        }
+    }
+    let sections: [Section]
+
+    init?(library: SourcePluginLibrarySelection?, profile: [Identity]?, native: [SourceNativePluginReference]) {
+        if let library {
+            sections = [.init(origin: .library, generation: library.generation,
+                plugins: library.revisions.map { .init(guid: $0.guid, version: $0.version, manifestSHA256: $0.manifestSHA256) })]
+            return
+        }
+        guard profile != nil || !native.isEmpty else { return nil }
+        var values: [Section] = []
+        if let profile { values.append(.init(origin: .profile, generation: nil, plugins: profile)) }
+        if !native.isEmpty {
+            values.append(.init(origin: .native, generation: nil,
+                plugins: native.map { .init(guid: $0.guid, version: $0.version, manifestSHA256: $0.manifestSHA256, enabled: $0.enabled) }))
+        }
+        sections = values
+    }
+}
+
 /// The library read and mount share one panel. A cancelled completion must not
 /// replace a successor's message, loading state, or cancellable task handle.
 @MainActor @Observable
@@ -64,15 +105,23 @@ struct PluginLibraryView: View {
                     Text("Switch to Studio to mount plugins in its current scene.")
                     Button("Switch to Studio") { app.mode = .studio }
                 }
-                if let mounted = studio.doc.sourcePluginLibrary {
-                    Text("Mounted generation \(mounted.generation) · \(mounted.revisions.count) plugins").font(.headline)
-                    Text(mounted.revisions.map { "\($0.guid) \($0.version)" }.joined(separator: " · "))
-                        .font(.caption).textSelection(.enabled)
+                if let mounted = studio.sourcePluginMountSummary {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(mounted.sections) { section in
+                                Text(section.title).font(.headline)
+                                if !section.plugins.isEmpty {
+                                    Text(section.plugins.map(\.label).joined(separator: " · "))
+                                        .font(.caption).textSelection(.enabled)
+                                }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(maxHeight: 140)
                     HStack {
-                        Button(studio.sourcePluginsRunning ? "Pause" : "Run") { studio.sourcePluginsRunning.toggle() }
-                            .disabled(!studio.hasSourcePluginSession)
-                        Button("Unload") { studio.unloadSourcePluginLibrary() }
-                    }.disabled(app.mode != .studio || studio.sourcePluginLibraryPending)
+                        Button(studio.sourcePluginsRunning ? "Pause" : "Run") { studio.toggleSourcePluginPlayback() }
+                            .disabled(!studio.canToggleSourcePluginPlayback)
+                        Button("Unload") { studio.unloadSourcePluginsInteractively() }
+                    }.disabled(!studio.sourcePluginCommandsAvailable)
                 }
                 if let index {
                     Text("Available generation \(index.generation)").font(.headline)
@@ -121,7 +170,7 @@ struct PluginLibraryView: View {
                         }
                     }
                 } else {
-                    Text("Open a converted plugin library to choose its versions and scene targets.")
+                    Text("Open a converted plugin library to browse versions and choose scene targets.")
                     Spacer()
                 }
                 if let message = operation.message { Text(message).font(.caption).textSelection(.enabled) }

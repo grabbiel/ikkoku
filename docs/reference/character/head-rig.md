@@ -163,3 +163,11 @@ For source bind inspection before a native executable is available:
 .local/reverse/unitypy-venv/bin/python Tools/reverse/test_face_rig_parity.py \
   --reference-only --output .local/reverse/rigs/head-bind-report.json
 ```
+
+
+Normal source Maker heads 0/200/201 can be selected with the dedicated
+[head transaction](maker-assets.md#normal-head-selection-182). It replaces the
+selected manifest and head-specific contracts atomically while retaining current
+edits; the hair/clothing transaction does not rebind those contracts. This editor
+operation is separate from the independent source geometry gates and does not
+claim original head-preset semantics or whole-frame appearance parity.

@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "liveAnimation", "on": false},
+    {"op": "customization", "on": true},
+    {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}},
+    {"op": "selectAsset", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "unchanged": true},
+    {"op": "export", "path": ".local/verification/maker-scenario-exports/maker-head-male-reloaded.png"},
+    {"op": "reimport", "path": ".local/verification/maker-scenario-exports/maker-head-male-reloaded.png"},
+    {"op": "assert", "selection": {"kind": "head", "slot": 0, "sourceID": 201}, "face": {"index": 20, "value": 0.625}, "body": {"index": 1, "value": 0.375}, "color": {"id": "clothes.parts.0.colorInfo.0.baseColor", "rgba": [0.8, 0.2, 0.4, 1.0]}}
+  ]
+}
