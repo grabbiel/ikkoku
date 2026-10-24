@@ -201,7 +201,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceMaterialCompositor.swift](../../Packages/Engine/Sources/Character/SourceMaterialCompositor.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourcePreviewAppearance.swift](../../Packages/Engine/Sources/Character/SourcePreviewAppearance.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceRigCustomization.swift](../../Packages/Engine/Sources/Character/SourceRigCustomization.swift) | Runtime / shared shader declaration |
-| [Packages/Engine/Sources/Character/SourceRigPreview.swift](../../Packages/Engine/Sources/Character/SourceRigPreview.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceRigPreview.swift](../../Packages/Engine/Sources/Character/SourceRigPreview.swift) | Runtime / source pose, prepared canine visibility and GPU resource ownership |
 | [Packages/Engine/Sources/Character/SourceShaderBindingDerivation.swift](../../Packages/Engine/Sources/Character/SourceShaderBindingDerivation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShaderLiveAssembly.swift](../../Packages/Engine/Sources/Character/SourceShaderLiveAssembly.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceShaderLiveConfiguration.swift](../../Packages/Engine/Sources/Character/SourceShaderLiveConfiguration.swift) | Runtime / shared shader declaration |
@@ -227,7 +227,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourceFaceShapePoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceFaceShapePoseTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceIrisHighlightTests.swift](../../Packages/Engine/Tests/EngineTests/SourceIrisHighlightTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMakerAssemblyOptionsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerAssemblyOptionsTests.swift) | Test / validation |
-| [Packages/Engine/Tests/EngineTests/SourceMakerLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerLibraryTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceMakerLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerLibraryTests.swift) | Test / Maker library identity, assembly and prepared canine visibility |
 | [Packages/Engine/Tests/EngineTests/SourceMakerPreparationQueueTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerPreparationQueueTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaterialExpansionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaterialExpansionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMessagePackTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMessagePackTests.swift) | Test / validation |
@@ -235,7 +235,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourceModPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceModPackageTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceModProfileTests.swift](../../Packages/Engine/Tests/EngineTests/SourceModProfileTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePreviewAppearanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePreviewAppearanceTests.swift) | Test / validation |
-| [Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigPreviewTests.swift) | Test / preview lifetime, canine hierarchy/material-pass visibility and resource invariants |
 | [Packages/Engine/Tests/EngineTests/SourceShapeChannelsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShapeChannelsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioHandPatternsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPatternsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioHandPoseTests.swift) | Test / validation |
@@ -727,7 +727,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Scene/Skeleton.swift](../../Packages/Engine/Sources/Scene/Skeleton.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/SourceAvatar.swift](../../Packages/Engine/Sources/Scene/SourceAvatar.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/SourceRig.swift](../../Packages/Engine/Sources/Scene/SourceRig.swift) | Runtime / shared shader declaration |
-| [Packages/Engine/Sources/Scene/SourceRigBounds.swift](../../Packages/Engine/Sources/Scene/SourceRigBounds.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Scene/SourceRigBounds.swift](../../Packages/Engine/Sources/Scene/SourceRigBounds.swift) | Runtime / cached conservative bounds including explicitly activatable parts |
 | [Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h](../../Packages/Engine/Sources/ShaderTypes/include/ShaderTypes.h) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/ShaderTypes/shim.c](../../Packages/Engine/Sources/ShaderTypes/shim.c) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceShaderLiveFixtureProbe.swift](../../Packages/Engine/Sources/Studio/SourceShaderLiveFixtureProbe.swift) | Runtime / shared shader declaration |

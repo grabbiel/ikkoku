@@ -89,3 +89,107 @@ func sourceRigPreviewRepeatsMaterialSlotsWithoutDuplicatingGeometry() throws {
     #expect(frame.items[0].material.uniforms.baseColor != frame.items[1].material.uniforms.baseColor)
     #expect(frame.skinSets.count == 1)
 }
+
+private func canineCard(_ value: SourceMessagePackValue?) throws -> SourceCharacterCard {
+    typealias F = OriginalCardFixture
+    var fields: [(String, F.Value)] = [("version", .string("0.0.2"))]
+    if let value { fields.append(("doubleTooth", value)) }
+    let custom = F.lengthData(F.pack(F.map(fields))) + F.lengthData(Data()) + F.lengthData(Data())
+    return try .decode(F.card(blocks: F.blocks(custom: custom)))
+}
+
+@Test func sourceRigPreviewReadsOnlyBooleanDoubleToothWithoutChangingCardBytes() throws {
+    for flag: Bool? in [false, true, nil] {
+        let card = try canineCard(flag.map { .bool($0) }), original = card.preservedData
+        #expect(try SourceRigPreview.savedDoubleTooth(in: card) == flag)
+        #expect(card.preservedData == original)
+    }
+    for value: SourceMessagePackValue in [.integer(1), .string("true"), .null] {
+        #expect(throws: RigError.self) { try SourceRigPreview.savedDoubleTooth(in: canineCard(value)) }
+    }
+}
+
+private func caninePreviewFixture(canineActive: Bool, parentActive: Bool = true, duplicate: Bool = false) throws -> SourceRig {
+    var nodes: [RigDefinition.Node] = [
+        .init(name: "root", sourceID: "root", parent: nil),
+        .init(name: "head", sourceID: "head", parent: 0, active: parentActive),
+        .init(name: "cf_O_canine", sourceID: "canine", parent: 1, active: canineActive),
+        .init(name: "canine child", sourceID: "canine-child", parent: 2),
+        .init(name: "inactive child", sourceID: "inactive-child", parent: 2, active: false),
+        .init(name: "other", sourceID: "other", parent: 0)]
+    if duplicate { nodes.append(.init(name: "cf_O_canine", sourceID: "ambiguous", parent: 0)) }
+    let skins = (2...5).map { RigDefinition.Skin(name: "skin-\($0)", meshNode: $0, joints: [0], inverseBindMatrices: [matrix_identity_float4x4]) }
+    let rig = try RigDefinition(nodes: nodes, skins: skins)
+    let parts = (2...5).map { index -> SourceRig.Part in
+        // A similarly named unrelated mesh must not follow the canine object.
+        let name = index == 5 ? "cf_O_canine_similar/0" : "part-\(index)"
+        let mesh = MeshData(name: name, positions: [Float3(Float(index), 0, 0), Float3(Float(index) + 0.5, 0, 0), Float3(Float(index), 1, 0)],
+            normals: [Float3](repeating: Float3(0, 0, 1), count: 3),
+            joints: [SIMD4<UInt16>](repeating: .zero, count: 3),
+            weights: [Float4](repeating: Float4(1, 0, 0, 0), count: 3), indices: [0, 1, 2])
+        return .init(mesh: mesh, node: index, skin: index - 2, rendererEnabled: true)
+    }
+    let disabled = SourceRig.Part(mesh: parts[0].mesh, node: 2, skin: 0, rendererEnabled: false)
+    return SourceRig(sourcePrefab: "canine-test", rig: rig, parts: parts + [disabled], morphChannelCount: 0)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceRigPreviewCanineToggleUsesGameObjectActivityAndRetainsResources() throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    for authored in [false, true] {
+        let source = try caninePreviewFixture(canineActive: authored)
+        let preview = try SourceRigPreview(source: source, contract: nil, resources: resources,
+            doubleTooth: SourceRigPreview.savedDoubleTooth(in: canineCard(.bool(false))))
+        let off = try preview.frame(camera: OrbitCamera()), generation = resources.generation
+        #expect(off.items.count == 1)
+        preview.doubleTooth = true
+        let on = try preview.frame(camera: OrbitCamera())
+        #expect(on.items.count == 3) // Object + active descendant; no inactive child/disabled renderer.
+        #expect(on.items.last?.mesh == off.items.first?.mesh)
+        #expect(on.sceneBounds.min.x <= 2 && on.sceneBounds.max.x >= 5.5)
+        #expect(on.sceneBounds.min == off.sceneBounds.min && on.sceneBounds.max == off.sceneBounds.max)
+        let retained = try #require(resources.mesh(on.items[0].mesh))
+        for _ in 0..<20 {
+            preview.doubleTooth = false
+            #expect(try preview.frame(camera: OrbitCamera()).items.map(\.mesh) == off.items.map(\.mesh))
+            preview.doubleTooth = true
+            #expect(try preview.frame(camera: OrbitCamera()).items.map(\.mesh) == on.items.map(\.mesh))
+        }
+        #expect(resources.generation == generation)
+        #expect(resources.mesh(on.items[0].mesh) === retained)
+        #expect(try preview.frame(camera: OrbitCamera(), hiddenParts: [0, 1]).items.map(\.mesh) == off.items.map(\.mesh))
+        preview.doubleTooth = nil
+        #expect(try preview.frame(camera: OrbitCamera()).items.count == (authored ? 3 : 1))
+    }
+    let parentOff = try SourceRigPreview(source: caninePreviewFixture(canineActive: true, parentActive: false),
+        contract: nil, resources: resources, doubleTooth: true)
+    #expect(try parentOff.frame(camera: OrbitCamera()).items.count == 1)
+    #expect(throws: RigError.self) {
+        try SourceRigPreview(source: caninePreviewFixture(canineActive: true, duplicate: true), contract: nil, resources: resources)
+    }
+    let noCanines = try SourceRigPreview(source: previewRigFixture(), contract: nil, resources: resources, doubleTooth: false)
+    #expect(try noCanines.frame(camera: OrbitCamera()).items.count == 1)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceRigPreviewCaninesHideEveryMaterialPass() throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let url = directory.appendingPathComponent("appearance.json")
+    try Data(#"{"schemaVersion":1,"parts":[{"part":"part-2","kind":"unlit","color":[1,1,1,1],"alphaMode":"OPAQUE"},{"part":"part-2","pass":1,"kind":"unlit","color":[1,0,0,1],"alphaMode":"BLEND"}]}"#.utf8).write(to: url)
+    let appearance = try SourcePreviewAppearance.load(url: url, resources: resources)
+    let preview = try SourceRigPreview(source: caninePreviewFixture(canineActive: true), contract: nil, resources: resources,
+        appearance: appearance, doubleTooth: true)
+    let on = try preview.frame(camera: OrbitCamera())
+    #expect(on.items.count == 4 && on.items[0].mesh == on.items[1].mesh)
+    #expect(on.items[0].material.uniforms.baseColor != on.items[1].material.uniforms.baseColor)
+    preview.doubleTooth = false
+    let off = try preview.frame(camera: OrbitCamera())
+    #expect(off.items.count == 1 && off.items[0].mesh == on.items[3].mesh)
+    preview.doubleTooth = true
+    let restored = try preview.frame(camera: OrbitCamera())
+    #expect(restored.items.map(\.mesh) == on.items.map(\.mesh))
+    #expect(restored.items.map(\.material.uniforms.baseColor) == on.items.map(\.material.uniforms.baseColor))
+}

@@ -474,7 +474,8 @@ public final class SourceStudioCharacterPreview {
         expressionBase = base
         let controls = try SourceStudioExpressionControls(contract: expression)
         expressionControls = controls
-        preview = try SourceRigPreview(source: source, contract: contract, resources: resources, appearance: appearance, expressionContract: expression, bodyOptions: options, lateCorrectionOptions: .init())
+        preview = try SourceRigPreview(source: source, contract: contract, resources: resources, appearance: appearance, expressionContract: expression, bodyOptions: options, lateCorrectionOptions: .init(),
+            doubleTooth: try SourceRigPreview.savedDoubleTooth(in: card))
         let settings = try card.previewSettings(contract: contract, sex: identity.sex, headID: identity.headID, boneType: identity.boneType)
         let baseline = try preview.pose(bodyValues: settings.bodyValues, faceValues: settings.faceValues, boneModifiers: settings.boneModifiers, coordinate: coordinate)
         self.baseline = baseline
@@ -1031,7 +1032,7 @@ public final class SourceStudioCharacterPreview {
         // preview (unregistered in its deinit) survives a rejected edit.
         preview = try SourceRigPreview(source: appearancePrepared?.source ?? preview.source, contract: preview.contract,
             resources: resources, appearance: appearance, expressionContract: preview.expressionContract,
-            bodyOptions: preview.bodyOptions, lateCorrectionOptions: preview.lateCorrectionOptions)
+            bodyOptions: preview.bodyOptions, lateCorrectionOptions: preview.lateCorrectionOptions, doubleTooth: preview.doubleTooth)
         sourceColorEdits = edits
         appliedColorFields = fields.intersection(supported)
         colorEditDiagnostics = edits == nil ? nil : messages

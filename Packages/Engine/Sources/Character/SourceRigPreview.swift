@@ -23,6 +23,13 @@ public final class SourceRigPreview {
     private let resources: ResourceStore
     private let meshes: [MeshHandle]
     private let keyBase: UInt64
+    private let boundsExtraParts: Set<Int>
+    private let canineParts: [(index: Int, enabled: Bool)]
+    private var activeParts: [Bool]
+    /// ChaControl.VisibleDoubleTooth sets the canine GameObject's activeSelf.
+    /// Nil preserves the authored rig for cardless previews. This changes only
+    /// cached visibility, never meshes, textures, poses or saved card bytes.
+    public var doubleTooth: Bool? { didSet { updateCanineVisibility() } }
     private var liveBounds: SourceRigBounds
     /// The last expression input with its weights (R7 phase 2, item 3, C5).
     /// `expressionWeights` is a pure function of the input for this preview's
@@ -33,9 +40,14 @@ public final class SourceRigPreview {
     public init(source: SourceRig, contract: SourceShapeContract?, resources: ResourceStore, appearance: SourcePreviewAppearance? = nil,
                 expressionContract: SourceExpressionContract? = nil,
                 bodyOptions: SourceBodyShapePose.Options = .init(),
-                lateCorrectionOptions: SourceBodyLateCorrection.Options = .disabled) throws {
+                lateCorrectionOptions: SourceBodyLateCorrection.Options = .disabled,
+                doubleTooth: Bool? = nil) throws {
         self.source = source; self.contract = contract
-        liveBounds = SourceRigBounds(source: source)
+        canineParts = try Self.bindCanines(source)
+        boundsExtraParts = Set(canineParts.filter { $0.enabled && !source.rig.activeNodes[source.parts[$0.index].node] }.map(\.index))
+        activeParts = source.parts.map { source.rig.activeNodes[$0.node] }
+        self.doubleTooth = doubleTooth
+        liveBounds = SourceRigBounds(source: source, includingInactiveParts: boundsExtraParts)
         self.expressionContract = expressionContract
         self.bodyOptions = bodyOptions
         self.lateCorrectionOptions = lateCorrectionOptions
@@ -50,7 +62,7 @@ public final class SourceRigPreview {
         supportsFaceCustomization = contract?.domain("face").map { (try? SourceFaceShapePose.make(rig: source.rig, domain: $0)) != nil } ?? false
         // Validate the entire pose before registering resources.
         let rest = try source.rig.evaluate(source.rig.restPose)
-        _ = try Self.previewBounds(source: source, evaluation: rest)
+        _ = try Self.previewBounds(source: source, evaluation: rest, includingInactiveParts: boundsExtraParts)
         var registered: [MeshHandle] = []
         do {
             for part in source.parts {
@@ -67,6 +79,37 @@ public final class SourceRigPreview {
         }
         meshes = registered
         keyBase = UInt64(meshes.first?.id ?? 0) << 32
+        updateCanineVisibility()
+    }
+
+    /// Read once at card preparation; missing legacy/synthetic fields stay
+    /// unspecified rather than borrowing the source constructor's default.
+    public static func savedDoubleTooth(in card: SourceCharacterCard) throws -> Bool? {
+        guard let value = try card.recordFields(.face)["doubleTooth"] else { return nil }
+        guard case .bool(let enabled) = value else { throw RigError.invalid("Source face.doubleTooth must be a Boolean.") }
+        return enabled
+    }
+
+    private func updateCanineVisibility() {
+        for part in canineParts {
+            activeParts[part.index] = doubleTooth.map { $0 && part.enabled }
+                ?? source.rig.activeNodes[source.parts[part.index].node]
+        }
+    }
+
+    private static func bindCanines(_ source: SourceRig) throws -> [(index: Int, enabled: Bool)] {
+        let targets = source.rig.nodes.indices.filter { source.rig.nodes[$0].name == "cf_O_canine" }
+        guard targets.count <= 1 else { throw RigError.invalid("Ambiguous source canine GameObject.") }
+        guard let target = targets.first else { return [] }
+        var descendants = [Bool](repeating: false, count: source.rig.nodes.count)
+        var enabled = descendants
+        for index in source.rig.order {
+            let node = source.rig.nodes[index]
+            descendants[index] = index == target || node.parent.map { descendants[$0] } == true
+            enabled[index] = (index == target || node.active) && (node.parent.map { enabled[$0] } ?? true)
+        }
+        return source.parts.indices.filter { descendants[source.parts[$0].node] }
+            .map { (index: $0, enabled: enabled[source.parts[$0].node]) }
     }
 
     deinit {
@@ -124,15 +167,21 @@ public final class SourceRigPreview {
     public func bounds(heightScale: Float? = nil, bodyValues: [Float]? = nil, faceValues: [Float]? = nil,
                        expression: SourceExpressionInputs? = nil, boneModifiers: SourceBoneModifiers? = nil, coordinate: Int = 0) throws -> AABB {
         let evaluation = try evaluation(heightScale: heightScale, bodyValues: bodyValues, faceValues: faceValues, boneModifiers: boneModifiers, coordinate: coordinate)
-        return try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: expressionWeights(expression))
+        return try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: expressionWeights(expression), includingInactiveParts: boundsExtraParts)
     }
 
     private func bounds(evaluation: RigEvaluation) throws -> AABB {
-        try Self.previewBounds(source: source, evaluation: evaluation)
+        try Self.previewBounds(source: source, evaluation: evaluation, includingInactiveParts: boundsExtraParts)
     }
 
-    private static func previewBounds(source: SourceRig, evaluation: RigEvaluation, morphWeights: [String: [(index: Int, weight: Float)]] = [:]) throws -> AABB {
-        let meshBounds = try source.bounds(evaluation: evaluation, morphWeights: morphWeights)
+    private static func previewBounds(source: SourceRig, evaluation: RigEvaluation, morphWeights: [String: [(index: Int, weight: Float)]] = [:],
+                                      includingInactiveParts: Set<Int> = []) throws -> AABB {
+        var meshBounds = try source.bounds(evaluation: evaluation, morphWeights: morphWeights)
+        for index in includingInactiveParts {
+            let part = source.parts[index]
+            guard part.rendererEnabled else { continue }
+            meshBounds.expand(AABB.of(points: try source.deformedPositions(part: part, evaluation: evaluation, morphWeights: morphWeights[part.mesh.name] ?? [])))
+        }
         let result = meshBounds.isEmpty
             ? AABB.of(points: source.rig.order.filter { source.rig.activeNodes[$0] }.map { evaluation.worldMatrices[$0].translation }) : meshBounds
         guard !result.isEmpty, result.radius.isFinite, (0..<3).allSatisfy({ result.center[$0].isFinite }) else {
@@ -182,7 +231,7 @@ public final class SourceRigPreview {
         // `hiddenParts` are renderers whose GameObject the source switched
         // off at runtime (ChaControl.UpdateVisible); `sourceBodyAlpha` is the
         // ChangeAlphaMask (_alpha_a, _alpha_b) pair for the body coverage mask.
-        for (index, part) in source.parts.enumerated() where part.rendererEnabled && source.rig.activeNodes[part.node] && !hiddenParts.contains(index) {
+        for (index, part) in source.parts.enumerated() where part.rendererEnabled && activeParts[index] && !hiddenParts.contains(index) {
             var material = MaterialState(uniforms: .make(kind: MaterialKindCloth))
             material.uniforms.baseColor = supportsFaceCustomization ? Float4(0.78, 0.75, 0.70, 1)
                 : (index.isMultiple(of: 2) ? Float4(0.34, 0.50, 0.68, 1) : Float4(0.75, 0.80, 0.88, 1))
@@ -209,7 +258,7 @@ public final class SourceRigPreview {
             }
         }
         var frameBounds = try liveBounds.bounds(evaluation: evaluation, morphWeights: morphWeights)
-        if frameBounds.isEmpty { frameBounds = try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: morphWeights) }
+        if frameBounds.isEmpty { frameBounds = try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: morphWeights, includingInactiveParts: boundsExtraParts) }
         var result = RenderFrame(camera: camera, mainLight: mainLight, items: items,
             gizmos: vertices.isEmpty ? [] : [GizmoBatch(primitive: .lines, vertices: vertices, depthTest: false)],
             effects: effects, sceneBounds: frameBounds)

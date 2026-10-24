@@ -10,8 +10,13 @@ public struct SourceRigBounds: Sendable {
     private struct Weight: Equatable, Sendable { let index: Int, weight: Float }
     private struct PartCache: Sendable { let weights: [Weight], joints: [AABB] }
     private let source: SourceRig
+    private let includingInactiveParts: Set<Int>
     private var cache: [Int: PartCache] = [:]
-    public init(source: SourceRig) { self.source = source }
+    /// Include parts a runtime visibility control can activate, keeping bounds
+    /// conservative without rebuilding geometry when that control changes.
+    public init(source: SourceRig, includingInactiveParts: Set<Int> = []) {
+        self.source = source; self.includingInactiveParts = includingInactiveParts
+    }
 
     public mutating func bounds(evaluation: RigEvaluation, morphWeights: [String: [(index: Int, weight: Float)]] = [:]) throws -> AABB {
         guard evaluation.worldMatrices.count == source.rig.nodes.count, evaluation.palettes.count == source.rig.skins.count,
@@ -19,7 +24,7 @@ public struct SourceRigBounds: Sendable {
             throw RigError.invalid("Live bounds do not match their source rig.")
         }
         var result = AABB.empty
-        for (index, part) in source.parts.enumerated() where part.rendererEnabled && source.rig.activeNodes[part.node] {
+        for (index, part) in source.parts.enumerated() where part.rendererEnabled && (source.rig.activeNodes[part.node] || includingInactiveParts.contains(index)) {
             let active = morphWeights[part.mesh.name] ?? []
             let key = active.map { Weight(index: $0.index, weight: $0.weight) }
             let count = source.rig.skins[part.skin].joints.count
