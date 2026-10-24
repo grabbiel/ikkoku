@@ -99,7 +99,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   distinguishes diagnostic controls from production behavior; reductions are
   evidence, not fixes or added material coverage. The latest controlled split
   associates variation with a discard statement in the instrumented program;
-  source alpha testing remains required.
+  source alpha testing remains required. A subsequent same-source comparison
+  still varies under explicit Metal language versions 4.0 and 4.1.
 - **Mods / Plugins:** immutable library selection, bounded translated profiles
   and three exact native adapters have selected app/save/restore acceptance.
   Mounted-session controls and fresh-profile preview rollback are merged in
@@ -529,8 +530,8 @@ counters, byte meanings, nested intervals and measurement limits.
 Merged after all four CI checks pass at `0bcd33c`. Removing the AlphaMask/combine
 and predicate/discard blocks together makes the
 retained MainTex-only program repeat exactly, while the fresh prefix control
-still varies with both providers. All 16 draws keep the same 2,948 visible pixels,
-primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
+still varies with both providers. For each provider, all eight draws keep the same
+2,948 visible pixels, primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
 hashes, exact MainTex-only repeated outputs and the recorded unchanged mip inputs.
 The actual pipelines retain MSL 4.0 with fast math and preserve-invariance disabled.
 An initial launch rejected a private card symlink before drawing; its failure is
@@ -545,8 +546,9 @@ and removes only discard, requiring a fresh varying baseline before interpretati
 Both private variants retain the same mask/comparison work and record its combined
 mask and original predicate bits. They differ by one discard statement. The fresh
 observed-prefix control varies with both texture providers; no-discard repeats
-all five attachments exactly. All 16 draws retain 2,948 visible pixels, matching
-primitive/pass IDs, alpha and UVs. Root independently decodes and verifies all
+all five attachments exactly. Within each provider, all eight draws retain 2,948
+visible pixels, matching primitive/pass IDs, alpha and UVs. Root independently
+decodes and verifies all
 80 attachment hashes and unchanged inputs. Visible mask values remain 1 and
 predicates 0; this does not observe helper invocations. Actual MSL 4.0 pipelines
 accept the five-attachment, 60-byte logical color payload with fast math and
@@ -556,6 +558,25 @@ the compiled-program association, without identifying a compiler/driver defect
 or changing production shaders, coverage, source tolerances or performance claims.
 The next bounded comparison keeps the source alpha test and changes only the
 explicit language version; #188 remains open.
+
+**Diagnostic handoff — explicit language versions, [#188](https://github.com/grabbiel/ikkoku/issues/188):**
+One private executable compiles the same observed-prefix source with explicit
+MSL 4.0 and 4.1 in separate caches. Both versions reproduce derivative, sample
+and color variation with both texture providers. The fresh 4.0 control varies,
+so the comparison is usable, but selecting 4.1 does not eliminate the gap.
+Root independently decodes all 80 attachment planes and verifies the reported
+repeat counts, 20 paired mip chains, 148 unchanged mip readback hashes and ten
+matching constant buffers. Actual compile records retain fast math and
+preserve-invariance disabled; the observed modern math option values also match.
+
+Within each provider, all eight draws preserve the same 2,948 visible pixels,
+primitive/pass IDs, alpha and UVs; visible mask and predicate remain 1 and 0.
+A separate cross-provider check finds a fixed 17-pixel UV difference, so these
+controls do not establish UV equality between providers. The
+[renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact results and corrected comparison scope. This private diagnostic
+changes no production option or shader and establishes no source parity, stable
+improvement in variation magnitude or performance gain.
 
 **Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
 A supported hidden attachment initializer loads fresh and saves successfully,
@@ -572,7 +593,8 @@ on the local `codex/plugin-profile-native-restore` branch for the bounded fix;
 it is not merged restore support. Candidate previews must use the new scene's
 references and resource policy, including when old and new UUIDs coincide.
 
-**Local acceptance — candidate-owned saved-profile restore, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
+**Merged acceptance — candidate-owned saved-profile restore, [#215](https://github.com/grabbiel/ikkoku/pull/215):**
+All four CI checks passed at `bfdde855`; #215 is merged and closes #210.
 Native open and undo/redo prepare cold attachment previews from the target scene's
 resolved references, outfit, shapes and resource policy, including matching old/new
 UUIDs. Native open uses animation time zero; history uses its held clock. All
