@@ -356,3 +356,39 @@ per-sex exported artifacts are retained privately under
 artifact paths collided with the subsequent male run; that report is retained
 unchanged, and the female pair was rerun successfully to distinct paths. Source
 shape/player tolerances and production rendering algorithms are unchanged.
+
+
+A quiet Release acceptance on 2026-10-24 passed eight checks in 79.201 seconds:
+two interleaved fresh-process selection/reload pairs per sex, on clean runtime
+checkpoint `441ee33`. The launcher verified all 551 Apps/Packages/Shaders/Assets
+inputs against binary SHA-256
+`b2ccfe006b273b3e5c0f56524fc3fa6027e40f75a1a47efda6c7a4ba2b1c9a73`.
+The following ranges contain two samples each for the same 200→201 transition.
+Cold means the first head-201 appearance in that process, not a cold filesystem
+cache; warm repeats it after both head 201 and head 0 have loaded.
+
+| Input / state | Snapshot ms | Async preparation ms | Owner commit ms | Total API ms |
+| --- | ---: | ---: | ---: | ---: |
+| Female, cold 201 | 0.293–0.319 | 557.670–574.642 | 146.977–155.037 | 706.065–731.122 |
+| Female, warm 201 | 0.262–0.274 | 558.551–565.891 | 111.486–112.381 | 671.536–679.718 |
+| Male, cold 201 | 0.288–0.308 | 588.796–589.642 | 151.810–152.685 | 742.098–743.762 |
+| Male, warm 201 | 0.263–0.293 | 587.579–592.581 | 108.777–112.908 | 701.936–702.800 |
+
+Preparation is wall time including queue and scheduling. Owner commit includes
+the appearance I/O, decoding, composition/upload and candidate validation described
+above, final replacement and refresh. Cold main-actor heartbeat gaps were
+148.948–157.000 ms for female and 153.015–154.810 ms for male; warm gaps were
+113.212–115.506 ms and 111.462–115.822 ms respectively. Thus off-owner assembly
+preparation does not yet make selection smooth: approximately 109–155 ms remains
+on the owner, a measured responsiveness limitation. No-op selection bypassed
+preparation/commit, taking 0.318–0.396 ms female and 0.285–0.294 ms male while
+retaining all resource counts and identities.
+
+Cold 201 cached 17 additional textures in each sex (81→98 female, 98→115 male).
+Warm transitions retained 98/115 textures, 43 store-owned meshes, 12 retiring
+resources, one 14,517-byte hidden buffer and zero deform buffers. Head-201 mesh
+buffers totalled 28,189,528 bytes female and 28,138,208 bytes male; returning to
+head 0 restored its prior mesh-byte count. Failure and cancellation retained the
+old counts/frame/context, and all eight distinct exported-card artifacts are
+hash-verified in `quiet-retained/`. These measurements do not establish frame rate,
+process footprint, wider source UI behavior or rendering parity.
