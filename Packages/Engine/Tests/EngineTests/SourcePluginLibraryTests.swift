@@ -502,3 +502,23 @@ func sourceStudioLibraryMixedAdaptersCloneAndDestroyedBindingRoundTrip() throws 
     #expect(try final.savedDocument() == destroyed)
     #expect(destroyed.sourceNativePlugins == document.sourceNativePlugins)
 }
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_HIDE_STUDIO_UI_PACKAGE"]), "Requires exact original HideAllUI package"))
+func sourcePluginLibraryHideStudioUIPreservesPinnedIncompatibilities() throws {
+    let root = try PluginLibraryFixture.directory("hide-ui")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("revisions"), withIntermediateDirectories: true)
+    let path = try SourceFixtureSupport.require("IKKOKU_HIDE_STUDIO_UI_PACKAGE")
+    let revision = try PluginLibraryFixture.existingPackage(root, manifestURL: URL(fileURLWithPath: path))
+    try PluginLibraryFixture.publish(root, revisions: [revision])
+    let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+    let selection = try index.select(guids: ["keelhauled.hideallui"])
+    let resolved = try selection.resolve()
+    #expect(resolved.nativeAdapters.count == 1 && resolved.translated.isEmpty)
+    #expect(resolved.nativeAdapters[0].manifest.incompatibilities == ["HideStudioUI", "HideHInterface"])
+    var altered = revision; altered["incompatibilities"] = []
+    try PluginLibraryFixture.publish(root, revisions: [altered])
+    let newer = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+    #expect(throws: (any Error).self) { try newer.select(guids: ["keelhauled.hideallui"]).resolve() }
+    #expect(try selection.resolve().nativeAdapters[0].manifestSHA256 == resolved.nativeAdapters[0].manifestSHA256)
+}

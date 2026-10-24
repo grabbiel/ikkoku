@@ -140,8 +140,12 @@ rejected together with `--collect`. The accepted keys:
 
 | `topBaseColor1` / `topBaseColor2` / `topBaseColor3` | Each coordinate’s `clothes.parts[0].colorInfo[0..2].baseColor` | Distinct top RGBA inputs for the first normal garment composite |
 | `bottomBaseColor1` / `bottomBaseColor2` / `bottomBaseColor3` | Each coordinate’s `clothes.parts[1].colorInfo[0..2].baseColor` | Distinct bottom RGBA inputs; all other garment slots retain their saved values |
+| `innerShoeBaseColor1` / `innerShoeBaseColor2` / `innerShoeBaseColor3` | Each coordinate’s `clothes.parts[7].colorInfo[0..2].baseColor` | Distinct inner-shoe RGBA inputs; the outer-shoe slot and saved shoes type retain their values |
+| `outerShoeBaseColor1` / `outerShoeBaseColor2` / `outerShoeBaseColor3` | Each coordinate’s `clothes.parts[8].colorInfo[0..2].baseColor` | Distinct outer-shoe RGBA inputs; the inner-shoe slot retains its saved values |
 | `captureTopCompositeInputs` | Diagnostic only; no card field | Boolean enabling GPU readbacks of the selected top catalog main/mask textures, with source bundle hashes, names and texture metadata |
 | `captureBottomCompositeInputs` | Diagnostic only; no card field | The same input readbacks for the selected bottom, independent of the top flag |
+| `captureInnerShoeCompositeInputs` | Diagnostic only; no card field | Selected inner-shoe main/mask readbacks, catalog and shoes-type identity, object activity and direct `rendNormal01` target identity |
+| `captureOuterShoeCompositeInputs` | Diagnostic only; no card field | The selected outer-shoe main/mask readbacks and loaded catalog identity, independent of the top/bottom flags |
 
 **Combined-mode run.** On 2026-09-30 `--settings`, `--hand-patterns` and
 `--look-patterns` were supplied together to one capture

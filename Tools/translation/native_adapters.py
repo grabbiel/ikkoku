@@ -8,10 +8,14 @@ REGISTRY = {
   'identity':{'guid':'BepInEx.MuteInBackground','name':'Mute In Background','version':'1.1'},'processes':[]},
  'c60d740ee1037040e97bcb0ae8037f8f7a1e4350322bc7ed44699fd0dc9662bd': {
   'adapterID':'kk-studio-accessory-names-v1','type':'KK_StudioAccessoryNames.KK_StudioAccessoryNames',
-  'identity':{'guid':'KK_StudioAccessoryNames','name':'KK_StudioAccessoryNames','version':'1.1.0'},'processes':['CharaStudio']}
+  'identity':{'guid':'KK_StudioAccessoryNames','name':'KK_StudioAccessoryNames','version':'1.1.0'},'processes':['CharaStudio']},
+ 'ec11d03060502b60bf15742ef8e56b6bc804c10067e5a78ba368c7b62e3b117e': {
+  'adapterID':'kk-hide-studio-ui-v1','type':'HideAllUI.HideAllUI',
+  'identity':{'guid':'keelhauled.hideallui','name':'HideAllUI','version':'2.3.2'},'processes':[],
+  'incompatibilities':['HideStudioUI','HideHInterface']}
 }
 # Adapters whose package may retain the original BepInEx configuration file.
-CONFIGURABLE = frozenset({'bepinex-mute-in-background-v1'})
+CONFIGURABLE = frozenset({'bepinex-mute-in-background-v1','kk-hide-studio-ui-v1'})
 
 def identify(source: Path):
  if source.suffix.lower()!='.dll':return None

@@ -3292,6 +3292,23 @@ the colour edit retains max 1 byte with 1,235 differing channels. Existing hair
 and eye limits are unchanged, and controlled native coverage stays 16/20.
 This slice adds no UI behavior and makes no new app/VM capture claim.
 
+**Later combined application check.** The Release build at `6ff81db` has the
+merged #165/#166 runtime sources (identical to `b302a27`) and passes all 24 plugin
+scenario checks. Replaying the retained live-material probe keeps its 16 live
+and four fallback slots, attachment report and composite content keys unchanged.
+Ten native output PNGs covering toon, geometry, opaque garments, eyes, nose and
+items are byte-identical to the retained run and a fresh pre-change/new pair.
+
+Strict equality of every live image is not established. Three retained runs of
+the same pre-change executable already vary by four to five hair pixels (maximum
+one to two byte levels) and one full-frame pixel (maximum two). A fresh pair and
+a repeat of the new executable reproduce small differences; one front-hair pixel
+also varies within the new executable. The arithmetic cause remains unassigned.
+This is a live-capture repeatability gap, not evidence for a new tolerance or an
+all-pixels-identical claim. Existing source comparison limits are unchanged.
+The private `wave-three/integration` evidence retains both the initial strict
+comparison failure and the repeat measurements. These runs do not measure speed.
+
 ### Native normal-bottom composite (R1/CMT-04, #168, 2026-10-24)
 
 The normal-clothes recipe also handles clothing slot 1, using its own saved
@@ -3397,8 +3414,299 @@ eye and composite gates remain unchanged; no all-live byte-equality, full
 character parity or window/FPS claim follows from these offscreen controls.
 Private reports, source/binary hashes and preserved binaries are under
 `.local/codex-continue-2026-10-24/rolling/materials-bottom/`.
+**Combined application acceptance.** Release build `04225ae` combines this
+material path with the accepted plugin runtime; its runtime sources match merged
+`76ce58a`. Binary SHA-256
+`bc9af1f86a1a60c27e084ab57b0410ad93c370dd542b2aace100e47514a5e29c` passes all 24 plugin
+scenario checks. Replaying the same 54-entry input store retains 17 live and
+three fallback slots, identical attachment reports and composite content keys.
+Ten stable native diagnostic PNGs are byte-identical to the measured `b178932`
+build, and the full-frame PNG also matches in this pair. Five hair pixels differ
+by at most two channel levels and one front-hair pixel by one, consistent with
+the separately retained repeatability gap. This is bounded integration evidence;
+it neither establishes whole-image equality nor adds a source-parity or timing
+claim. The private `rolling/integration-bottom` directory retains build/input
+hashes, owned process exits and per-image differences.
+
 The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
 [the fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
+
+### Native normal inner-shoe composite (R1/CMT-04 #177, 2026-10-24)
+
+The bounded normal-clothes recipe supports inner shoe slot 7, selected through
+`ChaControl.ChangeClothesShoesAsync(type: 0)` and the normal `rendNormal01`
+creator. The explicit supported slots are 0, 1 and 7; outer slot 8 remains
+unresolved. Patterned, secondary, alpha, emblem, accessory and special-male
+branches retain their existing unsupported reasons. The native path resolves
+and composes at material assembly; conversion stays offline, and draws reuse
+the assembled textures.
+
+The controlled card selects catalog 112/id 3 (`p_o_shoes_run01`) with saved
+`shoesType == 0`. Its active `ct_shoes_inner` renderer is `o_shoes_run01`.
+Changing outer-slot colors first left the displayed target byte-identical:
+that capture is a negative visibility control, not evidence for outer-shoe
+composition. The subsequent inner-color capture changes only the nine RGB
+components in slot 7’s first three base colors in each of seven coordinates.
+Every other card block, including Status, and all other coordinate data remain
+unchanged. The probe records the selected slot/type/catalog/object activity and
+the direct `rendNormal01` `_MainTex` file, avoiding an ambiguous mesh-name match.
+
+The source producer SHA-256 is
+`c8188d3384241d47cc285dbf72e44373650d629c46f19f06490a8e5d65084551`.
+The selected bundle `chara/co_shoes_00.unity3d` has SHA-256
+`dde13cf97a4160d9d13cb8ea8102c7ba6e6c092908855180110c6391cf6066d0`,
+serialized file `CAB-b9a8ff574f24c2b427e59cd30ae00421`.
+Its main texture `cf_shoes_run01_t` (path ID `-7640729741191341103`) is
+sRGB BC7; `cf_shoes_run01_mc` (`-2274634555552161051`) is linear RGB24.
+Both are 512×512, Bilinear/Repeat/aniso 1, with one authored mip. The source
+normal-clothes create program is the already verified `d709d6fc…` program;
+the 512×512 sRGB target has ten generated mips. Only base-level input/target
+pixels have independent original-player readbacks. Input float16 comparisons
+have maximum absolute difference 0.00048828125 for both main and mask; this
+does not substitute for the strict final composite comparison.
+
+The isolated native store adds those two inputs to the accepted 54-entry store.
+All prior entries and all create-program identities/bytes are unchanged; the
+normal program’s use list adds the inner shoe. The path-independent content
+fingerprint is `39b9ac57ffe55f523b0722468f869f4f94eda6e21fb123506c77b5eae85c3656`.
+The regression selects the visible slot explicitly, checks hidden outer 8 stays
+unresolved, and retains the existing base/distinct-color max-one-byte gate,
+unchanged-hit, recolor/revert and released-target checks. All seven strict
+Release GPU checks pass, with no skips: the base/distinct shoe targets have
+maximum one-byte error in 2,295/1,495 of 1,048,576 channels. The exact live set
+increases from 17 to 18 of 20 slots; body and face remain unresolved. Five
+composite keys are retained, with the existing shared iris/eye-white hits.
+Hair, eye, top and bottom gates retain their thresholds and pass. Each shoe
+recolor releases its target; 15 edits retain two uploaded asset textures, one
+default texture and one sampler, and revert returns the original target.
+The Release app was built from clean `d63d601` (binary SHA-256
+`7e092c7366e7819b27190bde145a2e4db46d4e58fb453320fe5a92b8b5cebfc6`).
+The later `03d7c09` merge changes no app, Engine source or shader bytes relative
+to that measured source. Seven launches used that same binary in the order
+old54/new56/new56/old54/old54/new56/capture. Each measures the live native rig
+at a held camera/time, 768×1024, with three warmup and twenty measured offscreen
+frames; original captured meshes are not drawn. Median run-p50 costs (range of
+three run p50s), in milliseconds, were:
+
+| Work | Old 54-entry store, 17 live slots | New 56-entry store, 18 live slots |
+| --- | ---: | ---: |
+| CPU encode | 0.278 (0.277–0.287) | 0.312 (0.310–0.325) |
+| GPU | 0.617 (0.611–0.696) | 0.662 (0.661–0.700) |
+| Completion | 1.240 (1.238–1.338) | 1.321 (1.318–1.388) |
+
+The additional live material increases registered textures from 81 to 85 and
+Metal allocated bytes from 561,725,440 to 570,540,032. This is additional coverage,
+not a speedup or an interactive FPS result. The capture-provider launch resolves
+20/20 slots but is a correctness control, not an equal-work performance baseline.
+Three isolated Release processes measured first-composition totals of
+12.081/11.995/12.152 ms (CPU encode 2.190/2.136/2.211 ms, GPU
+8.480/8.518/8.605 ms), including first pipeline creation; driver caches may
+already be warm. Their fifteen warmed edits each had median total costs
+0.837/0.437/0.445 ms and unchanged hits 0.100/0.106/0.106 ms. Each target uses
+1,425,408 bytes. Repeated edits remain bounded by the resource checks above.
+
+Six default-off launches compare source Studio, native Studio and Maker at
+960×880 against the preserved historical `f52cfa8` app (binary `04e314a8…`).
+All three baseline/current image pairs are byte-identical. That historical app
+is an output control, not a newly built current-main performance baseline.
+
+**Separate translated-draw repeatability limit.** Two same-provider opaque
+captures in each process use the same frame and textures:
+`native-translated-main_opaque.png` and `native-main_opaque.png`; neither is an
+untranslated-renderer control. The current native provider differs by
+29/28/47 shoe-local pixels (maximum channel delta 5/8/27) across the three
+processes; the current captured provider differs by 19 pixels, maximum 8.
+An unchanged pre-PR app, built at `f52cfa8` with binary `04e314a8…`, also draws
+20/20 captured-provider slots, including the shoe, and differs by 17 shoe-local
+pixels, maximum 5, between its duplicate captures. Its input hashes match the
+current captured-provider run. This establishes that a draw repeatability gap
+predates the new compositor; it does not equate the magnitudes or prove their
+complete cause. Whole-frame repeat equality and full source-color parity are
+not claimed.
+
+Private diagnostics read all ten target mip levels before/after repeated draws
+and recompose base/distinct targets under three fresh owners: every level is
+stable. This is native determinism evidence, not independent source-GPU parity
+for uncaptured mip levels. Fixed-LOD-zero sampling removes repeated-draw
+variation, whereas postponing discard with its predicate preserved does not.
+Those altered shaders are diagnostic only; production sampling and every source
+gate remain unchanged. The remaining sampling behavior is tracked separately.
+The diagnostic host is Apple M2 Ultra, macOS 27.0.1, effective Metal language 4.1,
+with fast math disabled; no obsolete pre-Metal-2.3 discard rule is assumed.
+
+Private evidence, exact per-run values and pixel coordinates are under
+`.local/codex-continue-2026-10-24/rolling/materials-shoes/`; the private fixture key
+is `IKKOKU_INNER_SHOE_COMPOSITE_PROBE`. The original-player pixel evidence remains
+pinned to producer `c8188d…`. After merging the accepted `03d7c09` model probe,
+the combined producer `c4df9bf4460f995d84dd240bb2e5bf64ad791ae6c1e82c3fa2cfa3d5d519f85e`
+compiles against the original managed runtime with no diagnostics and no player
+launch; it does not relabel the captured evidence. The affected merged Python
+suites pass 78/78; Debug and Release derivation each pass seven tests with ten
+parameter cases, and the verification Python suite passes 191/191.
+
+### Translated sampling repeatability investigation (#188)
+
+[Issue #188](https://github.com/grabbiel/ikkoku/issues/188) tracks the separate
+held-frame draw variation above. Production sampling, source tolerances and
+composite coverage are unchanged. The following are private numerical
+diagnostics on the same Apple M2 Ultra / macOS 27.0.1 host, effective MSL 4.1,
+with fast math disabled; none is a performance measurement or a proposed
+quality-reducing workaround.
+
+The first controls use the same retained private Release test binary
+`eabc8275…`, immutable shader proxies, native shoe geometry and held frame.
+Replacing the affected fragment samplers with equivalent constexpr samplers
+at effective anisotropy 9 still produces variation. A paired version changes
+only anisotropy to 1 and also varies. Across three repeats, store-provider
+changed-pixel counts are 89/95/111 (maximum byte differences 18/18/27) at 9 and
+81/95/77 (80/80/80) at 1. Captured-provider results are 26/29/29 (8/27/8) and
+19/25/17 (80/80/12), respectively. All ten target mip levels remain stable.
+Anisotropy above one is therefore not required for this observed gap; the
+constexpr representation does not remove it.
+
+A second control encodes primitive/pass IDs into final RGB while preserving
+the original alpha, discard, geometry, draw order, depth and blend state. Its
+7,704 possible IDs remain unique through sRGB8 quantization. Every observed ID
+decodes exactly: 2,604 forward pixels cover 988 primitives, and 344 outline
+pixels cover 272 primitives. All eight images (four per texture provider),
+including alpha and coverage, are byte-identical. This rules out changing
+visible primitive selection in that control; unused shading may be optimized
+away, so it does not establish interpolation or derivative stability.
+
+A third, temporary test-only MRT capture retains the original color output and
+adds three float32 attachments. At the exact first `_MainTex` instruction it
+records UV, `dfdx`, `dfdy`, sampled RGBA and primitive/pass ID in the same draw.
+The source rewrite preserves every original sample statement, discard and the
+original `o0` color expression; extra attachments have blending disabled while
+color0 retains the original state. Its private Release binary is
+`ca8da5ad171964efebb352855ef9f55d4748689542912be2bce6ae1e36ff41de`, built from
+`899e99a` plus the retained temporary test patch. The tracked test file was
+restored byte for byte after compilation; no runtime source was changed.
+
+| MRT result, three repeats against the first draw | Native store | Captured textures |
+| --- | ---: | ---: |
+| Changed color pixels | 90 / 87 / 86 | 11 / 5 / 3 |
+| Maximum color byte difference | 14 / 14 / 14 | 22 / 2 / 22 |
+| Changed UV or primitive/pass pixels | 0 / 0 / 0 | 0 / 0 / 0 |
+| Changed `dfdx` pixels | 87 / 85 / 84 | 9 / 4 / 3 |
+| Changed `dfdy` pixels | 124 / 120 / 115 | 16 / 12 / 5 |
+| Changed first MainTex sample pixels | 100 / 97 / 96 | 14 / 7 / 2 |
+
+The sampled-value changes overlap 79/76/75 and 10/5/2 color-changing pixels,
+respectively. Every observed value is finite, alpha is unchanged, and all
+2,948 primitive/pass IDs match the earlier ID control. The largest recorded
+absolute derivative difference is 0.111033 in normalized UV units. Thus this
+instrumented draw has stable visible UVs and primitive selection but varying
+derivatives and sampled values. The added outputs can perturb compilation and
+execution; this does not identify a driver/compiler fault or explain every
+downstream color change. Later nonlinear ramp/normal-map sampling remains
+outside this first-sample observation.
+
+The retained forward and outline fragments compute this MainTex coordinate
+from the interpolated UV and its affine material transform, after the first
+alpha-mask sample and **before** the discard instruction. No source branch
+precedes it. The current [Metal language specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
+(2026-06-04, §§6.10–6.13, pages 227–239) describes helper execution for
+derivatives, requires uniform control flow, and states that Metal 2.3+ discard
+does not change derivative validity. That rules out applying the obsolete
+pre-2.3 discard restriction to this MSL 4.1 result. Quad reads also require an
+active source lane, so an unchecked quad-shuffle replacement would not be a
+sound fix.
+
+The [Unity 5.6 shader semantics](https://docs.unity3d.com/560/Documentation/Manual/SL-ShaderSemantics.html)
+describe triangle-interpolated fragment inputs. Direct3D's
+[derivative definition](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/deriv-rtx--sm4---asm-)
+is hardware-dependent and describes off-primitive helper pixels in its
+reference rasterizer. Its [implicit sample instruction](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sample--sm4---asm-)
+may share LOD across a 2×2 stamp or compute it per pixel, whereas
+[explicit-gradient sampling](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sample-d--sm4---asm-)
+computes LOD per pixel. Replacing all source samples with explicit gradients
+would therefore require fresh source-output evidence, even if it stabilized
+one native capture. The [source discard instruction](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-)
+also preserves execution for derivative calculation.
+
+An asset-free control is now available as
+[`metal_derivative_repro.swift`](../../Tools/verification/metal_derivative_repro.swift)
+with [build/run instructions](../../Tools/verification/README.md#standalone-metal-derivative-diagnostic).
+It uses eight deterministic CPU-authored sRGB8 mips, the same default language
+version/disabled-fast-math options, and same-draw color/UV/derivative/sample/ID
+readback. Three cases cover the same 64×64-pixel region of a 128×128 target:
+a two-triangle continuous quad, a regular grid of 2,048 small triangles with
+continuous UVs, and identical grid geometry with discontinuous per-triangle
+UVs. Constant clip `w = 1` makes each triangle's affine gradient independently
+calculable. The simple fragment has one implicit sample and no branch/discard;
+the instrumented MRT shader is not the recovered fragment body.
+
+On 2026-10-24, an optimized standalone Swift build and CPU-only layout, literal
+mip-texel and floating-point classification checks pass; six CLI boundary checks
+also pass. The one bounded GPU process collects four draws per case on the same
+M2 Ultra / macOS 27.0.1 host. Effective language version is MSL 4.1, fast math
+is disabled and `preserveInvariance` is false. **All three cases are stable:**
+color, UV, both derivatives, sampled RGBA and primitive IDs have zero changed
+bits between repeats. Each draw covers 4,096 pixels, every visible value is
+finite, and the maximum error against its analytic affine gradient is zero.
+All eight input mip levels remain byte-identical after drawing. The large and
+small continuous cases also render the same checker pattern; the discontinuous
+case renders a visibly distinct minified pattern.
+
+This is a negative reproducer result, not proof that the recovered path is
+stable. It excludes neither irregular/subpixel geometry, perspective
+interpolation, the larger shader body nor compiler perturbation by MRT outputs.
+Any eventual translation change must retain source sampling semantics and pass
+independent source-color and Release cost gates. Fixed LOD zero, reduced
+anisotropy and blanket explicit-gradient rewrites are not production changes.
+Issue #188 remains open, and no timing/FPS claim follows from this diagnostic.
+
+The standalone source SHA-256 is `bf69c7a98d7dea3d70e17244abc5d6efc81e90eb2c61b59579d7bf3147bac573`;
+the tested executable is `8aaf5ab963600ba4c95cb260349ed232077032cb1bfd25a39701daeec8f58255`.
+Build/command provenance, both reviewed coding-helper proposals and the result
+are retained under `.local/codex-continue-2026-10-24/rolling/materials-sampling-reproducer/`.
+Its `run-1/report.json` hashes all 60 shader/vertex/mip/raw-output artifacts;
+those hashes were checked after the process exited. These synthetic results
+are separate from the private original-shader MRT evidence above.
+
+A subsequent bounded control adds two copies of the discontinuous grid while
+retaining the original three cases. One shifts screen coordinates by
+`(5/16, 3/16)` pixels; the other adds the same shift and the shear
+`x += (originalY - 64) * 3/16`. Both preserve UVs, primitive order, depth and
+clip `w = 1`. The shader, mip generator and original mesh-generation blocks
+remain byte-identical. CPU checks independently pin the first three transformed
+positions and the first-triangle gradients; shear changes `dUV/dy` by
+`-3*dUV/dx/16`, so its expected gradient is not copied from the aligned case.
+
+The coverage reference computes the union of triangle interiors at pixel
+centers using clipped per-triangle bounds. It has literal duplicate/shared-edge,
+viewport-clipping, empty and degenerate checks. Each GPU validity and alpha
+pixel must match that plane, rather than assuming the shear leaves coverage
+unchanged. Inclusive shared-edge membership is sufficient for these opaque
+fixtures, whose outer boundaries avoid pixel centers; it is not a general
+Metal rasterizer or a primitive-ownership oracle.
+
+The optimized build and CPU checks pass at clean `b2bc839`. One locked process
+collects five cases × four draws with the same MSL 4.1 options/device. **The two
+added cases also do not reproduce the variation:** every repeat is bit-stable
+for color, UV, derivatives, sampled values and primitive IDs; all visible
+values are finite and affine-gradient error is zero. Computed and GPU coverage
+agree at every pixel and yield 4,096 pixels per case. All 99 saved artifact
+hashes verify; all 60 artifacts from the earlier three-case run, including its
+48 color/float outputs, are byte-identical. The authored input mip chain is
+unchanged after drawing.
+
+This control covers only the stated subpixel offset and shear of a regular
+affine grid. It does not test perspective interpolation, arbitrary irregular
+geometry or the recovered shader body, and it does not establish the cause of
+the private MRT variation. No production change, relaxed source gate or
+performance claim follows. Evidence and both reviewed coding-helper proposals
+are under `.local/codex-continue-2026-10-24/rolling/materials-sampling-subpixel/`.
+Source SHA-256 is `ddc6dd37ec1ffd2f9518314674612aaa27643187507b1ec7e62ee0e35e037ecd`;
+the executable is `66d8dbd646ea548ba1d3aa68cbc07537ee2399eba18b4a1eb5b2477f545545a2`;
+the report is `bfd362c16de2a01cbe5324b1b1678b8d1b3f1d16af1d1f85f773f4e8df56f232`.
+
+Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
+`.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
+correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
+forward pixels already lie on primitive boundaries in this small on-screen
+shoe. The investigation remains open, with no new FPS or source-parity claim.
 
 ### Native pose gate
 

@@ -69,7 +69,8 @@ class PlayerRootTests(unittest.TestCase):
 class DriverWiringTests(unittest.TestCase):
     DRIVERS=[probe,original_animation_probe,original_dynamics_probe,original_light_probe,original_route_probe]
     # These create a fresh root on every start and never reuse the one in run.json.
-    FRESH_ONLY={'original_shader_probe.py','original_lifecycle_probe.py','original_adv_binding_probe.py'}
+    FRESH_ONLY={'original_shader_probe.py','original_lifecycle_probe.py','original_adv_binding_probe.py',
+                'original_hide_studio_ui_probe.py'}
 
     def test_every_reusing_driver_takes_its_root_from_player_root(self):
         class Reached(Exception):pass
