@@ -248,6 +248,19 @@ runtime labeling change or per-frame work was added. The original fixture
 expectation and summary-parser failures remain retained alongside corrected
 passes. See the [adapter acceptance](../reference/mods/native-adapters.md).
 
+**Diagnostic handoff — translated sampling, [#188](https://github.com/grabbiel/ikkoku/issues/188):**
+The Materials owner completed controlled sampler, primitive-ID and simultaneous
+color/float-output experiments. All ten composite mip levels remain stable.
+In the instrumented draw, visible UVs and all 2,948 primitive/pass IDs stay equal,
+while first-texture-sample derivatives and returned values vary across repeats.
+This narrows the observed gap without identifying a compiler/driver cause;
+extra shader outputs can perturb execution, and later texture samples remain
+outside that measurement. The [renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+records the primary-source semantics, immutable private artifacts and numerical
+limits. No production sampling, source tolerance or per-frame work changed,
+and no speedup or source-color parity is claimed. The owner proceeds to an
+asset-free small-triangle reproducer; the repeatability issue remains open.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
