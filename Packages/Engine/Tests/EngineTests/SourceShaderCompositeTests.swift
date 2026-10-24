@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import Metal
 import CryptoKit
+import QuartzCore
 import Character
 import Studio
 @testable import Renderer
@@ -525,4 +526,24 @@ func liveSourceIrisCompositesMatchTheRetainedOriginalComposites() throws {
     }
     print("[iris composite] real program vs CPU reference (synthetic colours): max byte \(largest); \(overlayHigh) texels in the t > 0.5 branch")
     #expect(largest <= 1 && overlayHigh > 0 && overlayHigh < 512 * 512)
+
+    // Edit cost (a Maker iris colour edit: new content key, warm pipeline)
+    // and the cache-hit cost of an unchanged recipe, as medians of 15.
+    func median(_ values: [Double]) -> Double { let sorted = values.sorted(); return sorted[sorted.count / 2] }
+    var edits: [SourceShaderCompositor.Statistics] = [], hits: [Double] = [], kept: [any MTLTexture] = []
+    for index in 0..<15 {
+        var edited = identity
+        edited.composite?.vectors["_Color"] = .init([0.8, 0.3, Float(index) / 32, 0.9], source: "synthetic edit")
+        kept.append(try store.texture(.init(identity: edited, property: "_MainTex", mesh: nil, slot: nil), resources: resources).get().texture)
+        let event = try #require(store.compositeEvents().last)
+        #expect(event.cacheHit == false && event.statistics?.pipelineCompiled == false)
+        edits.append(try #require(event.statistics))
+        let start = CACurrentMediaTime()
+        _ = try store.texture(.init(identity: edited, property: "_MainTex", mesh: nil, slot: nil), resources: resources).get()
+        hits.append((CACurrentMediaTime() - start) * 1000)
+        #expect(store.compositeEvents().last?.cacheHit == true)
+    }
+    print(String(format: "[iris composite] edit (median of 15): cpu encode %.3f ms, gpu %.3f ms, total %.3f ms, %d bytes; cache hit %.3f ms",
+                 median(edits.map(\.cpuEncodeMilliseconds)), median(edits.map(\.gpuMilliseconds)), median(edits.map(\.totalMilliseconds)),
+                 edits[0].bytes, median(hits)))
 }

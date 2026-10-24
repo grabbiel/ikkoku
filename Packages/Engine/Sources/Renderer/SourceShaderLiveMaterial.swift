@@ -360,7 +360,7 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         lock.lock()
         let cache = uploads(resources)
         if let cached = cache.composites[contentKey]?.texture {
-            events.append(CompositeEvent(creator: label, contentKey: contentKey, cacheHit: true, statistics: nil))
+            record(CompositeEvent(creator: label, contentKey: contentKey, cacheHit: true, statistics: nil))
             lock.unlock()
             return .success(SourceShaderLiveTexture(texture: cached, filter: nil, wrap: nil, aniso: nil, provenance: description))
         }
@@ -373,7 +373,7 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
                                                                textures: textures, samplers: samplers, buffers: buffers, label: recipe.material)
             lock.lock()
             cache.composites[contentKey] = WeakComposite(texture: texture, provenance: description)
-            events.append(CompositeEvent(creator: label, contentKey: contentKey, cacheHit: false, statistics: statistics))
+            record(CompositeEvent(creator: label, contentKey: contentKey, cacheHit: false, statistics: statistics))
             lock.unlock()
             return .success(SourceShaderLiveTexture(texture: texture, filter: nil, wrap: nil, aniso: nil, provenance: description))
         } catch { return fail("composition failed: \(error)") }
@@ -437,8 +437,13 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
     private var loadedPrograms: [String: TranslatedSourceProgram] = [:]
     private var events: [CompositeEvent] = []
 
-    /// Compositions and cache hits so far, in order.
+    /// Compositions and cache hits so far, in order (the most recent 256).
     public func compositeEvents() -> [CompositeEvent] { lock.lock(); defer { lock.unlock() }; return events }
+    /// Caller holds `lock`. A long Maker session must not grow the log without bound.
+    private func record(_ event: CompositeEvent) {
+        events.append(event)
+        if events.count > 256 { events.removeFirst(events.count - 256) }
+    }
 }
 
 /// VALIDATION ONLY. Takes pixels from an original-player capture
