@@ -203,9 +203,32 @@ extension StudioModel {
     var sourcePluginCommandsAvailable: Bool { isActiveMode && !sourcePluginLibraryPending }
     var canToggleSourcePluginPlayback: Bool { sourcePluginCommandsAvailable && hasSourcePluginSession }
 
+    var sourcePluginMountSummary: PluginMountSummary? {
+        let document = doc
+        if let library = document.sourcePluginLibrary {
+            return .init(library: library, profile: nil, native: [])
+        }
+        // No manifest reads, digest computation or runtime snapshots in the
+        // panel. GUID keys use UTF-8 so canonically equivalent pins stay distinct.
+        var pins: [Data: String] = [:]
+        for pin in document.sourcePluginState?.packages ?? [] { pins[Data(pin.guid.utf8)] = pin.manifestSHA256 }
+        let profile = sourcePluginSession.map { session in
+            session.library.packages.map { package in
+                PluginMountSummary.Identity(guid: package.manifest.identity.guid, version: package.manifest.identity.version,
+                    manifestSHA256: pins[package.ordinalGUID])
+            }
+        }
+        return .init(library: nil, profile: profile, native: document.sourceNativePlugins ?? [])
+    }
+
     func toggleSourcePluginPlayback() {
         guard canToggleSourcePluginPlayback else { return }
         sourcePluginsRunning.toggle()
+    }
+
+    func unloadSourcePluginsInteractively() {
+        guard sourcePluginCommandsAvailable else { return }
+        unloadSourcePluginLibrary()
     }
 
     /// The modal owns the generation captured before presentation. Leaving and

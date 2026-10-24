@@ -877,6 +877,22 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(all(type(value) is int and value in range(20) for value in labels["loadedSlots"]))
                     if op != "assertRejected":
                         self.assertEqual(len(labels["labels"]), 20)
+                if "pluginMount" in step:
+                    sections = step["pluginMount"]
+                    self.assertEqual(len({section["origin"] for section in sections}), len(sections))
+                    for section in sections:
+                        self.assertIn(section["origin"], ("library", "profile", "native"))
+                        if section["origin"] == "library":
+                            self.assertIs(type(section["generation"]), int)
+                            self.assertGreater(section["generation"], 0)
+                        else:
+                            self.assertNotIn("generation", section)
+                        for plugin in section["plugins"]:
+                            self.assertTrue(plugin["guid"])
+                            self.assertTrue(plugin["version"])
+                            self.assertRegex(plugin["manifestSHA256"], r"^[0-9a-f]{64}$")
+                            if "enabled" in plugin:
+                                self.assertIs(type(plugin["enabled"]), bool)
                 if op in ("setVisible",):
                     self.assertIsInstance(step["visible"], bool)
                 if op == "rename":
@@ -977,7 +993,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "statusContains", "indicatorContains",
                                             "treeLabel", "view", "render",
-                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -1144,6 +1160,21 @@ class StudioScenarioLaneTests(unittest.TestCase):
         self.assertTrue(any("exportIdenticalToSource" in step for step in missing))
         for sequence in (save, load):
             self.assertTrue(any(step.get("accessoryLabels", {}).get("labels", [None])[0] == "01 スクエア" for step in sequence if step["op"] == "assert"))
+
+    def test_direct_plugin_summary_survives_fresh_load_then_unloads(self):
+        root = os.path.join(run.REPO_ROOT, "Tools", "verification", "scenarios")
+        with open(os.path.join(root, "reload-save-accessory-labels.json"), encoding="utf-8") as handle:
+            save = json.load(handle)["steps"]
+        with open(os.path.join(root, "reload-load-accessory-labels.json"), encoding="utf-8") as handle:
+            load = json.load(handle)["steps"]
+        self.assertEqual(save[0]["pluginMount"], load[1]["pluginMount"])
+        self.assertEqual(load[1]["pluginMount"][0]["origin"], "native")
+        self.assertTrue(any(step["op"] == "assertRejected" and "pluginMount" in step for step in save))
+        self.assertEqual(load[-2]["op"], "unloadPlugins")
+        self.assertEqual(load[-1]["pluginMount"], [])
+        self.assertFalse(load[-1]["accessoryLabels"]["mounted"])
+        self.assertEqual(load[-1]["clothes"]["accessoriesOff"], [0])
+        self.assertEqual(load[-1]["outfit"]["coordinate"], load[1]["outfit"]["coordinate"])
 
     def test_synthetic_motion_checks_do_not_discover_a_maker_library(self):
         # These minimal cards exercise blink/hand playback, not assembled
