@@ -151,7 +151,7 @@ struct PluginLibraryScenario: Decodable {
             defer { try? FileManager.default.removeItem(at: scratch) }
             let legacy = try legacyAttachmentSnapshot(document: beforeFailure, directory: scratch)
             studio.doc = legacy; studio.pushUndo(force: true); studio.doc = beforeFailure
-            let previews = studio.sourceInstances.mapValues { ObjectIdentifier($0) }
+            let previews = Set(studio.renderedSourceCharacterPreviews.map { ObjectIdentifier($0) })
             let legacyFrame = studio.host.renderer.currentFrame()
             studio.undo()
             // The rejected legacy entry must remain above the unavailable one;
@@ -161,7 +161,7 @@ struct PluginLibraryScenario: Decodable {
             try check("legacyAttachmentUndoRollback", studio.status.contains("attachment reads during plugin installation are unsupported")
                 && studio.doc == beforeFailure && session === studio.sourcePluginSession && adapter === studio.sourceFocus.adapter
                 && gain == studio.sourceAudioBus.masterVolume && resources == resourceCounts()
-                && previews == studio.sourceInstances.mapValues { ObjectIdentifier($0) }
+                && previews == Set(studio.renderedSourceCharacterPreviews.map { ObjectIdentifier($0) })
                 && sameFrame(legacyFrame, studio.host.renderer.currentFrame()), studio.status)
 
             // A successful retry after cancellation still mounts through the UI path.
