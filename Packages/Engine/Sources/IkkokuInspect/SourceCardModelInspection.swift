@@ -34,8 +34,9 @@ func inspectSourceCardModel(avatarURL: URL, cardURL: URL, libraryURL: URL, bench
     guard prepared.selections.allSatisfy({ $0.entry != nil }) else {
         throw RigError.invalid("Neutral model inspection requires every selected part to be converted; reference fallback is not a comparison.")
     }
+    let correctionData = try manifest.bodyCorrection.map { try Data(contentsOf: directory.appendingPathComponent($0)) }
     let options = try SourceMakerAssemblyOptions.body(sex: identity.sex, exType: identity.exType, boneType: identity.boneType,
-        correctionData: try manifest.bodyCorrection.map { try Data(contentsOf: directory.appendingPathComponent($0)) })
+        correctionData: correctionData)
     guard let device = MTLCreateSystemDefaultDevice() else { throw RigError.invalid("Neutral model inspection requires Metal.") }
     let source = prepared.source
     let preview = try SourceRigPreview(source: source, contract: contract, resources: ResourceStore(device: device), expressionContract: expressions, bodyOptions: options, lateCorrectionOptions: .init())
@@ -82,11 +83,16 @@ func inspectSourceCardModel(avatarURL: URL, cardURL: URL, libraryURL: URL, bench
             "morphWeights": (weights[part.mesh.name] ?? []).map { ["index": $0.index, "weight": $0.weight * 100] },
             "positions": try source.deformedPositions(part: part, evaluation: evaluated, morphWeights: weights[part.mesh.name] ?? []).map(vector)]
     }
+    var inputs = ["cardSHA256": try hash(cardURL), "avatarSHA256": try hash(avatarURL), "librarySHA256": try hash(libraryURL),
+                  "shapeContractSHA256": try hash(contractURL), "expressionContractSHA256": try hash(expressionURL)]
+    if let correctionData {
+        // Hash the same bytes passed to the correction decoder, not a later read.
+        inputs["bodyCorrectionSHA256"] = SHA256.hash(data: correctionData).map { String(format: "%02x", $0) }.joined()
+    }
     var report: [String: Any] = ["kind": "ikkoku-neutral-source-model", "schemaVersion": 1,
         "benchmark": benchmark, "coordinateSpace": "native-right-handed-y-up", "sourcePrefab": source.sourcePrefab,
         "identity": ["sex": identity.sex, "exType": identity.exType, "headID": identity.headID, "boneType": identity.boneType, "coordinate": 0],
-        "inputs": ["cardSHA256": try hash(cardURL), "avatarSHA256": try hash(avatarURL), "librarySHA256": try hash(libraryURL),
-            "shapeContractSHA256": try hash(contractURL), "expressionContractSHA256": try hash(expressionURL)],
+        "inputs": inputs,
         "lateCorrectionOptions": ["hiPoly": preview.lateCorrectionOptions.hiPoly, "enableCorrectArmSize": preview.lateCorrectionOptions.enableCorrectArmSize, "enableCorrectHandSize": preview.lateCorrectionOptions.enableCorrectHandSize],
         "lateCorrectionApplied": preview.lateCorrectionOptions.hiPoly && options.sex == .female,
         "bodyValues": settings.bodyValues, "faceValues": settings.faceValues,
