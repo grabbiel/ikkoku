@@ -432,6 +432,41 @@ func liveSourceCompositeCacheKeysEveryInputAndReleasesWithItsOwner() throws {
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceCompositeReusesDefaultsAndSamplersWithoutRetainingResourceOwners() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice()), fixture = try CompositeStoreFixture.write()
+    defer { try? FileManager.default.removeItem(at: fixture.folder) }
+    let store = try SourceShaderTextureStore(url: fixture.url)
+    var identity = CompositeStoreFixture.identity()
+    identity.composite?.textures["_ColorMask"]?.identity = nil
+    let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: nil, slot: nil)
+    var owner: ResourceStore? = ResourceStore(device: device)
+    weak var weakOwner = owner
+    let target = try store.texture(request, resources: owner!).get().texture
+    let statistics = store.compositeInputStatistics(for: owner!)
+    // The asset clamps; the Unity default repeats, so there are two samplers.
+    #expect(statistics == .init(defaults: 1, samplers: 2))
+    let registered = owner!.statistics().textures
+    for _ in 0..<20 {
+        #expect(try store.texture(request, resources: owner!).get().texture === target)
+        #expect(store.compositeInputStatistics(for: owner!) == statistics)
+        #expect(owner!.statistics().textures == registered)
+    }
+    // Editing and reverting use the same fixed input objects; only the
+    // changed recipe needs a new target, which the materials own.
+    var edited = identity
+    edited.composite?.vectors["_Color"] = .init([0.1, 0.8, 0.3, 1], source: "edit")
+    let other = try store.texture(.init(identity: edited, property: "_MainTex", mesh: nil, slot: nil), resources: owner!).get().texture
+    #expect(other !== target && store.compositeInputStatistics(for: owner!) == statistics)
+    #expect(try store.texture(request, resources: owner!).get().texture === target)
+    owner = nil
+    #expect(weakOwner == nil)
+    let next = ResourceStore(device: device)
+    #expect(store.compositeInputStatistics(for: next) == .init(defaults: 0, samplers: 0))
+    #expect(try store.texture(request, resources: next).get().texture !== target)
+    #expect(store.compositeInputStatistics(for: next) == statistics)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func liveSourceCompositeKeepsAnExplicitReasonForEveryMissingInput() throws {
     let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
     let fixture = try CompositeStoreFixture.write()
@@ -870,4 +905,121 @@ func liveSourceCompositesMatchTheDistinctColourCapture() throws {
               + "mean byte \(total / Double(512 * 512 * 4)); \(distinct.count) distinct original colours")
         #expect(byteLargest <= 1 && distinct.count > 16, "\(mesh): largest byte difference \(byteLargest), \(distinct.count) colours")
     }
+}
+
+
+/// The first normal top target is checked against two independent original
+/// base-level readbacks: the retained base card and a distinct-colour capture.
+/// Authored input mips are decoded by the store; generated target mips are
+/// structural checks only because the source capture exposes only level zero.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_GARMENT_COMPOSITE_PROBE", "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY",
+    "IKKOKU_HEAD_MATERIAL_CONTRACT", "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
+func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws {
+    let base = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true)
+    let colour = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_GARMENT_COMPOSITE_PROBE"), isDirectory: true)
+    let inputs = SourceShaderLiveAssembly.Inputs(programs: base.appendingPathComponent("shaders"),
+        makerLibrary: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")),
+        headContract: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT")),
+        supplement: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_SUPPLEMENT")))
+    let store = try SourceShaderTextureStore(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_TEXTURES")))
+    let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
+    var textures: [any MTLTexture] = [], images: [[UInt8]] = [], identities: [SourceShaderBindingSet.TextureIdentity] = []
+    let expectedColours: [[[Float]]] = [Array(repeating: [0.12, 0.28, 0.5, 1], count: 3),
+        [[0.72, 0.13, 0.04, 1], [0.09, 0.66, 0.31, 1], [0.16, 0.23, 0.84, 1]]]
+    for (index, folder) in [base, colour].enumerated() {
+        let frame = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(index == 0 ? "frame-mips.json" : "frame.json"))) as? [String: Any])
+        let meshes = try #require(frame["meshes"] as? [[String: Any]])
+        let materials = try #require(meshes.first { $0["name"] as? String == "o_top_tsyats_a" }?["materials"] as? [[String: Any]])
+        let properties = try #require(materials.first?["properties"] as? [String: Any])
+        let capture = try #require((properties["_MainTex"] as? [String: Any])?["file"] as? String)
+        let card = try SourceCharacterCard.load(url: folder.appendingPathComponent("fixture-card.png"))
+        let bindings = try inputs.derive(card: card, scene: .originalCharacterProbeHarness, sceneReason: "", eyeLook: nil)
+        let identity = try #require(bindings.renderers.first { $0.mesh == "o_top_tsyats_a" && $0.materialSlot == 0 }?.material.textures["_MainTex"]?.identity)
+        let recipe = try #require(identity.composite)
+        #expect(recipe.material == "cf_m_clothesN_create" && recipe.shader == "Shader Forge/create_topN" && recipe.unresolved == nil)
+        #expect(recipe.programSHA256 == "d709d6fc92ebecd4f8b579041c8a7abce3a13c20c18985812bde6bc42881f579")
+        #expect(recipe.bundleSHA256 == "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e")
+        #expect(recipe.serializedFile == "CAB-0d1f3d8317188244dde38c81a889d1d4" && recipe.pathID == "3922150014319152921")
+        #expect(identity.width == 1024 && identity.height == 1024 && identity.mipLevels == 11)
+        for (property, name, pathID) in [("_MainTex", "cf_top_tsyatu02_t", "-6233972938813170750"),
+                                       ("_ColorMask", "cf_top_tsyatu02_mc", "-1591564840063675426")] {
+            let asset = try #require(recipe.textures[property]?.identity)
+            let entry = try store.entry(for: asset).get()
+            #expect(entry.name == name && entry.pathID == pathID && entry.mipLevels == 11)
+            #expect(entry.bundleSHA256 == "2df694771a8c6437f5e966e94747f48ed905d611a7f2de036a5d64956996657a")
+        }
+        for (lane, name) in ["_Color", "_Color2", "_Color3"].enumerated() {
+            #expect(recipe.vectors[name]?.values == expectedColours[index][lane])
+        }
+        let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: "o_top_tsyats_a", slot: 0)
+        let texture = try store.texture(request, resources: resources).get().texture
+        #expect(texture.mipmapLevelCount == 11 && texture.pixelFormat == .rgba8Unorm_srgb)
+        let resourcesBefore = resources.statistics().textures
+        let auxiliaries = store.compositeInputStatistics(for: resources)
+        #expect(auxiliaries == .init(defaults: 1, samplers: 1))
+        #expect(try store.texture(request, resources: resources).get().texture === texture)
+        #expect(resources.statistics().textures == resourcesBefore && store.compositeEvents().last?.cacheHit == true)
+        #expect(store.compositeInputStatistics(for: resources) == auxiliaries)
+        let ours = try readback(texture, level: 0, device: device)
+        let originalData = try Data(contentsOf: folder.appendingPathComponent(capture))
+        #expect(hex(originalData) == (index == 0 ? "c9020d7ceeaf413ea4199482e52ce66b51e85bd34912493a5d21eea5adf1dd11" : "2ba4e150536fbe5e103430dc1ceb18f988dd169c275d8846ab394e96fb91445a"))
+        let original = originalData.withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
+        try #require(original.count == 1024 * 1024 * 4)
+        var largest: Float = 0, total: Double = 0, differing = 0
+        var errors: [Int: Int] = [:], examples: [String] = []
+        for row in 0..<1024 {
+            for column in 0..<1024 {
+                let target = (row * 1024 + column) * 4, source = ((1023 - row) * 1024 + column) * 4
+                for lane in 0..<4 {
+                    let reference = Float(original[source + lane])
+                    let referenceByte = lane == 3 ? (min(max(reference, 0), 1) * 255).rounded() : srgbByte(reference)
+                    let error = abs(Float(ours[target + lane]) - referenceByte)
+                    largest = max(largest, error); total += Double(error)
+                    if error > 0 { differing += 1; errors[Int(error), default: 0] += 1 }
+                    if error > 1 && examples.count < 8 { examples.append("(\(column),\(row)) lane\(lane) ours\(ours[target + lane]) ref\(referenceByte)") }
+                }
+            }
+        }
+        print("[normal top composite] \(index == 0 ? "base" : "distinct colour"): max byte \(largest), mean byte \(total / Double(ours.count)), \(differing) differing channels")
+        print("[normal top composite] error histogram \(errors); examples \(examples)")
+        #expect(largest <= 1)
+        identities.append(identity); textures.append(texture); images.append(ours)
+    }
+    let changed = zip(images[0], images[1]).filter { $0 != $1 }.count
+    #expect(changed > 1024 * 1024, "The counterfactual must change more than a single channel per pixel on average")
+    #expect(textures[0] !== textures[1])
+    let uploads = resources.statistics().textures
+    // Every edit releases its target, while input uploads and the warm
+    // pipeline are shared. The store must not retain unbounded old targets.
+    var edits: [SourceShaderCompositor.Statistics] = [], hits: [Double] = []
+    for index in 0..<15 {
+        weak var released: (any MTLTexture)?
+        try autoreleasepool {
+            var edited = identities[1]
+            edited.composite?.vectors["_Color"] = .init([0.72, Float(index) / 32, 0.04, 1], source: "colour edit")
+            let request = SourceShaderLiveTextureRequest(identity: edited, property: "_MainTex", mesh: "o_top_tsyats_a", slot: 0)
+            let texture = try store.texture(request, resources: resources).get().texture
+            released = texture
+            let event = try #require(store.compositeEvents().last)
+            #expect(event.cacheHit == false && event.statistics?.pipelineCompiled == false)
+            edits.append(try #require(event.statistics))
+            let start = CACurrentMediaTime()
+            #expect(try store.texture(request, resources: resources).get().texture === texture)
+            hits.append((CACurrentMediaTime() - start) * 1000)
+            #expect(store.compositeEvents().last?.cacheHit == true)
+        }
+        #expect(released == nil && resources.statistics().textures == uploads)
+        #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 1))
+    }
+    let reverted = try store.texture(.init(identity: identities[0], property: "_MainTex", mesh: "o_top_tsyats_a", slot: 0), resources: resources).get().texture
+    #expect(reverted === textures[0] && store.compositeEvents().last?.cacheHit == true)
+    #expect(try readback(reverted, level: 0, device: device) == images[0])
+    func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+    print("[normal top composite] first events " + store.compositeEvents().prefix(4).map { event in
+        "\(event.cacheHit ? "hit" : "composed")" + (event.statistics.map {
+            String(format: " cpu %.3f ms gpu %.3f ms total %.3f ms compiled %@ %d bytes", $0.cpuEncodeMilliseconds, $0.gpuMilliseconds,
+                   $0.totalMilliseconds, $0.pipelineCompiled ? "yes" : "no", $0.bytes) } ?? "")
+    }.joined(separator: "; "))
+    print(String(format: "[normal top composite] 15 warm edits median cpu %.3f ms gpu %.3f ms total %.3f ms; unchanged hit %.3f ms; %d uploaded textures",
+                 median(edits.map(\.cpuEncodeMilliseconds)), median(edits.map(\.gpuMilliseconds)), median(edits.map(\.totalMilliseconds)), median(hits), uploads))
 }

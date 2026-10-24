@@ -838,11 +838,11 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     let storeURL = try #require(configuration.textures)
     let storeData = try Data(contentsOf: storeURL)
     let storeManifest = try #require(JSONSerialization.jsonObject(with: storeData) as? [String: Any])
-    #expect((storeManifest["entries"] as? [[String: Any]])?.count == 50)
+    #expect((storeManifest["entries"] as? [[String: Any]])?.count == 52)
     #expect((storeManifest["unavailable"] as? [[String: Any]])?.isEmpty == true)
     let compositeRows = storeManifest["composites"] as? [[String: Any]] ?? []
     let compositeMaterials: [String] = compositeRows.compactMap { $0["material"] as? String }
-    #expect(compositeRows.count == 2 && compositeMaterials == ["cf_m_eyewhite_create", "cf_m_eye_create"])
+    #expect(compositeRows.count == 3 && compositeMaterials == ["cf_m_eyewhite_create", "cf_m_clothesN_create", "cf_m_eye_create"])
     #expect((storeManifest["unavailableComposites"] as? [[String: Any]])?.isEmpty == true)
     // Exclude machine-specific roots/source.file while pinning every asset,
     // mip hash, sampler and the source binding report's hash.
@@ -851,23 +851,24 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     let contentData = try JSONSerialization.data(withJSONObject: content, options: [.sortedKeys, .withoutEscapingSlashes])
     let contentHash = SHA256.hash(data: contentData).map { String(format: "%02x", $0) }.joined()
     print("[native texture fixture] store content \(contentHash)")
-    #expect(contentHash == "4bf874a3be9a32970f9c7ec198a8a4841c9e64b2aa40739b893c7b826dbbb5ca")
+    #expect(contentHash == "0539171774027e0902c25610b68c543d4889bc73d0bfb34647d8d18bf11fbe43")
     request.textureProvider = "store"
     let store = try SourceShaderLiveFixtureProbe(request, renderer: renderer)
     #expect(Set(store.attach.live) == Set([
         "cf_O_noseline slot 0 (toon_nose_lod0)", "cf_O_mayuge slot 0 (toon_eyew_lod0)", "cf_O_tooth slot 0 (main_item)",
         "cf_O_eyeline slot 0 (toon_eyew_lod0)", "cf_O_eyeline slot 1 (toon_eyew_lod0)", "cf_O_eyeline_low slot 0 (toon_eyew_lod0)",
-        "cf_Ohitomi_L slot 0 (toon_eyew_lod0)", "cf_Ohitomi_R slot 0 (toon_eyew_lod0)",
+        "cf_Ohitomi_L slot 0 (toon_eyew_lod0)", "cf_Ohitomi_R slot 0 (toon_eyew_lod0)", "o_top_tsyats_a slot 0 (main_opaque)",
         "cf_Ohitomi_L02 slot 0 (toon_eye_lod0)", "cf_Ohitomi_R02 slot 0 (toon_eye_lod0)", "o_tang slot 0 (main_item)", "cf_hair_b_03_00 slot 0 (main_hair); TEXCOORD1 from the source stream",
         "cf_hair_idol_hair_f_00 slot 0 (main_hair_front); TEXCOORD1 from the source stream",
         "cf_hair_idol_hair_f_01 slot 0 (main_hair_front); TEXCOORD1 from the source stream",
         "cf_hair_idol_hair_f_02 slot 0 (main_hair_front); TEXCOORD1 from the source stream"]))
-    #expect(store.attach.fallbacks.count == 5 && store.attach.unmatched.isEmpty)
+    #expect(store.attach.fallbacks.count == 4 && store.attach.unmatched.isEmpty)
     // Both irises share one composite and both eye whites another (one recipe
-    // each on this card): each is composed once, then hit once.
+    // each on this card): each is composed once, then hit once. The normal
+    // top has one visible renderer and is composed once.
     let eventsByKey = Dictionary(grouping: store.composites, by: \.contentKey).mapValues { $0.map(\.cacheHit) }
-    let composedOnceThenHit = eventsByKey.values.allSatisfy { (hits: [Bool]) -> Bool in hits == [false, true] }
-    #expect(eventsByKey.count == 2 && composedOnceThenHit, "\(store.composites)")
+    #expect(eventsByKey.count == 3 && eventsByKey.values.filter { $0 == [false, true] }.count == 2
+            && eventsByKey.values.filter { $0 == [false] }.count == 1, "\(store.composites)")
     #expect(store.attach.fallbacks.allSatisfy { $0.contains("is not composed natively for the live path") },
             "\(store.attach.fallbacks)")
     let resolvedTextureCount = renderer.resources.statistics().textures
@@ -875,10 +876,10 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     #expect(renderer.resources.statistics().textures == resolvedTextureCount, "Live draws must reuse assembly textures")
     #expect(renderer.lastSourceShaderLive.fallbacks.isEmpty)
     let nativeFull = try #require(nativeImages["native-translated.png"])
-    for (family, bound) in [("toon_eyew_lod0", 4.0), ("toon_eye_lod0", 4.0), ("main_hair", 24.0), ("main_hair_front", 22.0)] {
+    for (family, bound) in [("main_opaque", 4.0), ("toon_eyew_lod0", 4.0), ("toon_eye_lod0", 4.0), ("main_hair", 24.0), ("main_hair_front", 22.0)] {
         let name = "native-translated-\(family).png"
         let only = try #require(nativeImages[name]), capturedOnly = try #require(images[name])
-        // The five missing composites change occlusion. Compare only pixels
+        // The four missing composites change occlusion. Compare only pixels
         // frontmost in both the complete capture-provider frame and this
         // native subset; do not claim a whole-character colour comparison.
         let mask = (0..<count).map { pixel in

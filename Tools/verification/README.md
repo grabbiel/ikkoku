@@ -1151,6 +1151,14 @@ native store at `textures/manifest.json`. With it, together with
 targets from the card alone and compares them with the readbacks. How the folder
 is captured and rebuilt: [native eye-white composites](../../docs/reference/renderer.md#native-eye-white-composites-r1-2026-10-23).
 
+`IKKOKU_GARMENT_COMPOSITE_PROBE` similarly names a distinct-colour original
+normal-top capture containing `fixture-card.png`, `frame.json`, its readbacks
+and `character-settings.tsv`. With the base probe, library, head contract,
+supplement and native texture store,
+`liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours` checks both
+base and edited top targets, identity hashes, unchanged cache hits, recolour/revert
+and released-target resource bounds. See [normal-top evidence](../../docs/reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24).
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,

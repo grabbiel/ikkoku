@@ -354,6 +354,104 @@ private enum DerivationFixture {
         .material.textures["_MainTex"]?.identity?.width == 512)
 }
 
+// The normal top is deliberately synthetic: a non-square source texture,
+// non-default TexEnv and three distinct colours expose size/identity/setter
+// mixups without depending on the private converted library.
+private enum TopCompositeFixture {
+    typealias F = OriginalCardFixture
+    static func derive(directory: URL, pattern: Int = 0, patternRow: Bool = true,
+                       mask: Bool = true, provenProgram: Bool = true, normalOnly: Bool = true,
+                       hiPoly: Bool = true, omitColor: Bool = false, slot: Int = 0) throws -> SourceShaderBindingSet.Texture? {
+        let colours = (0..<3).map { i -> F.Value in
+            var fields: [(String, F.Value)] = [
+                ("pattern", .integer(Int64(pattern))),
+                ("patternColor", .array([.float(0.7), .float(0.6), .float(0.5), .float(1)])),
+                ("tiling", .array([.float(Double(i + 2)), .float(Double(i + 3))]))]
+            if !omitColor { fields.append(("baseColor", .array([.float(Double(i + 1) / 4), .float(0.5), .float(0.75), .float(0.8)]))) }
+            return F.map(fields)
+        }
+        var parts = Array(repeating: F.map([]), count: slot + 1)
+        parts[slot] = F.map([("id", .integer(38)), ("colorInfo", .array(colours))])
+        let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array(parts))]))
+        let accessory = F.pack(F.map([("version", .string("0.0.2")), ("parts", .array([]))]))
+        let makeup = F.pack(F.map([("version", .string("0.0.0"))]))
+        let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([0]) + F.lengthData(makeup)
+        var blocks = try AppearanceTestFixture.card().blocks.map { F.Block(name: $0.name, version: $0.version, data: $0.data) }
+        blocks.append(.init(name: "Coordinate", version: "0.0.0", data: F.pack(.array([.binary(outfit)]))))
+        let card = try SourceCharacterCard.decode(F.card(blocks: blocks))
+        let material: [String: Any] = ["name": "m_top", "shader": ShaderBindingFixture.testShader,
+            "serializedFile": "CAB-top", "pathID": "10", "renderQueue": -1,
+            "passes": [], "floats": [:], "colors": [:], "textures": [:]]
+        var textures: [String: Any] = ["main": ["name": "top_main", "width": 4, "height": 2]]
+        if mask { textures["mask"] = ["name": "top_mask", "width": 4, "height": 2] }
+        let evidence: [String: Any] = ["category": 105 + slot, "id": 38,
+            "source": ["bundle": "chara/top.unity3d", "bundleSHA256": "top-sha"],
+            "catalog": ["MainAB": "chara/top.unity3d", "MainTexAB": "0", "MainTex": "top_main", "ColorMaskAB": "0", "ColorMaskTex": "top_mask"],
+            "catalogTextures": textures,
+            "componentTrees": [["rendNormal01": [["m_PathID": 3]], "rendAlpha01": normalOnly ? [] : [["m_PathID": 4]]]],
+            "renderers": [["meshName": "o_top", "nodeName": "o_top", "materialSlot": 0, "material": material]]]
+        let materialData = try JSONSerialization.data(withJSONObject: evidence), rig = Data("{}".utf8)
+        try materialData.write(to: directory.appendingPathComponent("materials.json"))
+        try rig.write(to: directory.appendingPathComponent("rig.json"))
+        let entry: [String: Any] = ["category": 105 + slot, "id": 38, "name": "top", "meshNames": ["o_top"],
+            "rig": ["file": "rig.json", "sha256": F.hash(rig)],
+            "materialEvidence": ["file": "materials.json", "sha256": F.hash(materialData)]]
+        let libraryURL = directory.appendingPathComponent("library.json")
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "entries": [entry]]).write(to: libraryURL)
+        var creator = material
+        creator["name"] = "cf_m_clothesN_create"; creator["shader"] = "Shader Forge/create_topN"
+        creator["pathID"] = "99"; creator["serializedFile"] = "CAB-base"
+        creator["textures"] = ["_MainTex": ["texture": NSNull(), "scale": [2, 3], "offset": [0.1, 0.2]]]
+        let head: [String: Any] = ["sources": [["path": "/abdata/chara/mm_base.unity3d", "sha256": "base-sha"]],
+            "catalogRows": patternRow ? [["table": "mt_pattern", "category": 430, "selectedID": 0, "row": ["MainTexAB": "0", "MainTex": "0"]]] : [],
+            "textures": ["top_main", "top_mask"].enumerated().map { i, name in
+                ["name": name, "bundle": "chara/top.unity3d", "serializedFile": "CAB-top", "pathID": String(20 + i), "width": 4, "height": 2] as [String: Any]
+            }, "drawMaterials": [], "renderers": [], "createMaterials": [creator],
+            "verifiedCreateShaders": provenProgram ? [["shader": "Shader Forge/create_topN", "programSHA256": String(repeating: "a", count: 64)]] : []]
+        let contract = try ShaderBindingFixture.testContract()
+        let result = try SourceShaderBindingDerivation.derive(card: card, library: .load(url: libraryURL),
+            headContract: JSONSerialization.data(withJSONObject: head),
+            catalog: .init(programs: [ShaderBindingFixture.testShader: [contract]]), hiPoly: hiPoly)
+        return result.renderers.first { $0.mesh == "o_top" }?.material.textures["_MainTex"]
+    }
+}
+
+@Test func sourceShaderNormalTopCompositeKeepsSourceIdentitySizeAndAllThreeSetters() throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let texture = try #require(try TopCompositeFixture.derive(directory: directory))
+    let identity = try #require(texture.identity), recipe = try #require(identity.composite)
+    #expect(identity.width == 4 && identity.height == 2 && identity.mipLevels == 3)
+    #expect(identity.filter == "Bilinear" && identity.wrap == "Clamp" && identity.aniso == 1)
+    #expect(recipe.unresolved == nil && recipe.programSHA256 == String(repeating: "a", count: 64))
+    #expect(recipe.bundleSHA256 == "base-sha" && recipe.pathID == "99")
+    for (name, asset, path) in [("_MainTex", "top_main", "20"), ("_ColorMask", "top_mask", "21")] {
+        let input = try #require(recipe.textures[name]?.identity)
+        #expect(input.name == asset && input.pathID == path && input.serializedFile == "CAB-top")
+        #expect(input.bundle == "chara/top.unity3d" && input.bundleSHA256 == "top-sha")
+    }
+    #expect(recipe.textures["_MainTex"]?.scale == [2, 3] && recipe.textures["_MainTex"]?.offset == [0.1, 0.2])
+    for i in 1...3 {
+        #expect(recipe.vectors[i == 1 ? "_Color" : "_Color\(i)"]?.values == [Float(i) / 4, 0.5, 0.75, 0.8])
+        #expect(recipe.vectors["_Color\(i)_2"]?.values == [0.7, 0.6, 0.5, 1])
+        #expect(recipe.vectors["_PatternScale\(i)u"]?.values == [Float(i + 1)])
+        #expect(recipe.vectors["_PatternScale\(i)v"]?.values == [Float(i + 2)])
+        let pattern = try #require(recipe.textures["_PatternMask\(i)"])
+        #expect(pattern.identity == nil && pattern.identityUnresolved == nil)
+    }
+}
+
+@Test func sourceShaderNormalTopCompositeLeavesUnsupportedOrMissingInputsExplicit() throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    #expect(try TopCompositeFixture.derive(directory: directory, pattern: 1)?.identity?.composite?.unresolved?.contains("mt_pattern") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, patternRow: false)?.identity?.composite?.unresolved?.contains("mt_pattern") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, mask: false)?.identity?.composite?.textures["_ColorMask"]?.identityUnresolved?.contains("not converted") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, provenProgram: false)?.identity?.composite?.unresolved?.contains("not verified") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, normalOnly: false)?.identityUnresolved?.contains("membership") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, hiPoly: false)?.identity?.composite?.unresolved?.contains("low-detail") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, omitColor: true)?.identity?.composite?.vectors["_Color"]?.unresolved?.contains("baseColor") == true)
+    #expect(try TopCompositeFixture.derive(directory: directory, slot: 1)?.identity?.composite == nil)
+}
+
 // MARK: - Private R1 fixture
 
 /// The controlled R1 fixture: native bindings derived from the card, Maker

@@ -243,6 +243,40 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
             return .success(result)
         } catch { return .failure(.init("\(entry.name) store load failed: \(error)")) }
     }
+    private func compositeDefault(_ kind: String, resources: ResourceStore) throws -> any MTLTexture {
+        lock.lock(); defer { lock.unlock() }
+        let cache = uploads(resources)
+        if let texture = cache.defaults[kind] { return texture }
+        // Only the four supported Unity defaults can enter this cache.
+        let texture = try TranslatedSourceProgram.makeDefaultTexture(kind, device: resources.device)
+        cache.defaults[kind] = texture
+        return texture
+    }
+
+    private func compositeSampler(_ descriptor: MTLSamplerDescriptor, resources: ResourceStore) -> (any MTLSamplerState)? {
+        lock.lock(); defer { lock.unlock() }
+        let cache = uploads(resources), key = CompositeSamplerKey(descriptor)
+        if let sampler = cache.samplers[key] { return sampler }
+        guard let sampler = resources.device.makeSamplerState(descriptor: descriptor) else { return nil }
+        cache.samplers[key] = sampler
+        return sampler
+    }
+
+    // Test visibility for allocations not registered in ResourceStore. The
+    // fixed defaults and normalized sampler combinations are bounded; no
+    // composite colour or recipe content enters either key.
+    struct CompositeInputStatistics: Equatable {
+        let defaults: Int
+        let samplers: Int
+    }
+    func compositeInputStatistics(for resources: ResourceStore) -> CompositeInputStatistics {
+        lock.lock(); defer { lock.unlock() }
+        guard let cache = uploaded[ObjectIdentifier(resources)], cache.owner === resources else {
+            return .init(defaults: 0, samplers: 0)
+        }
+        return .init(defaults: cache.defaults.count, samplers: cache.samplers.count)
+    }
+
     /// Composes a `CustomTextureCreate` target from its recipe (R1/CMT-04):
     /// the store's translated create program, the recipe's textures from the
     /// store (or the program's Unity defaults where the recipe binds none) and
@@ -303,13 +337,13 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
                 inputKey = Self.contentKey(found)
             } else {
                 guard let kind = program.properties[name]?.defaultTexture else { return fail("input \(name) has no Unity default") }
-                do { texture = try TranslatedSourceProgram.makeDefaultTexture(kind, device: resources.device) }
+                do { texture = try compositeDefault(kind, resources: resources) }
                 catch { return fail("default texture \(kind): \(error)") }
                 filter = nil; wrap = nil; aniso = nil; inputKey = "unity-default-" + kind
                 provenance.append("\(name)=Unity default \(kind)")
             }
             let descriptor = TranslatedSourceProgram.samplerDescriptor(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: request.anisotropicFiltering)
-            guard let sampler = resources.device.makeSamplerState(descriptor: descriptor) else { return fail("sampler state for \(name)") }
+            guard let sampler = compositeSampler(descriptor, resources: resources) else { return fail("sampler state for \(name)") }
             textures[parameter.slot] = texture; samplers[parameter.samplerSlot] = sampler
             keyParts.append("t:\(name)@\(parameter.slot)/\(parameter.samplerSlot)=\(inputKey)|\(filter ?? "-")|\(wrap ?? "-")|\(aniso.map(String.init) ?? "-")|\(descriptor.maxAnisotropy)|\(descriptor.mipFilter.rawValue)")
         }
@@ -415,9 +449,21 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
     private static func validDigest(_ digest: String) -> Bool {
         digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
+    /// Covers every field changed by TranslatedSourceProgram.samplerDescriptor;
+    /// the remaining descriptor fields keep their Metal defaults.
+    private struct CompositeSamplerKey: Hashable {
+        let min: UInt, mag: UInt, mip: UInt, s: UInt, t: UInt
+        let anisotropy: Int
+        init(_ value: MTLSamplerDescriptor) {
+            min = value.minFilter.rawValue; mag = value.magFilter.rawValue; mip = value.mipFilter.rawValue
+            s = value.sAddressMode.rawValue; t = value.tAddressMode.rawValue; anisotropy = value.maxAnisotropy
+        }
+    }
     private final class Uploads {
         weak var owner: ResourceStore?
         var textures: [String: SourceShaderLiveTexture] = [:]
+        var defaults: [String: any MTLTexture] = [:]
+        var samplers: [CompositeSamplerKey: any MTLSamplerState] = [:]
         /// Composites are owned by the materials that bind them (never
         /// registered in the resource store): the cache only shares a live
         /// one between owners with the same content key.
