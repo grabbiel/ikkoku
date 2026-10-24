@@ -446,6 +446,26 @@ The [execution reference](../reference/mods/plugin-execution.md) records the
 scope; CI/integration are separate from this accepted runtime. The next bounded
 task reproduces the existing legacy-profile reopen limitation before choosing a fix.
 
+**Local acceptance — compositor fallback reuse, [#207](https://github.com/grabbiel/ikkoku/pull/207):**
+Each compositor now lazily reuses immutable white/zero input textures. The
+measured selection uses eight fallback allocations for 316 absent bindings,
+plus 20 real input allocations across 16 recipes: 308 fewer fallback allocations
+than the old loop. These transient inputs are separate from registered
+ResourceStore counts. Eight focused checks pass; both sexes pass 55 selection
+and seven fresh-reload checks. Eight quiet interleaved processes pass with all
+four exports per sex byte-identical across binaries. Root verifies both binaries,
+all 24 retained artifacts and the 48 stage records. Runtime `4e7b46c` is measured
+against control `8b799157`; the later integration head retains separate provenance.
+Timing directions are mixed, so no consistent latency improvement is established.
+Candidate child intervals attribute 7.426–8.563 ms to allocation/upload,
+0.182–0.282 ms to encode/submit and 51.152–55.855 ms to wait/view in the selected
+head-201 cases. The last interval includes scheduling/completion/view creation,
+not pure kernel time. Registered resources and 32,506,112 retained raw-input
+bytes match the control. The [Maker reference](../reference/character/maker-assets.md)
+retains exact cases and limits. The next task evaluates bounded batching within
+one applying call while preserving synchronous completion and private failure
+cleanup; no batching improvement is claimed here.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
