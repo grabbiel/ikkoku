@@ -1212,9 +1212,9 @@ extension PluginLibraryScenario {
             case "Destroy": operation = ["kind": "api", "type": "Void", "name": "world.Destroy", "children": [object]]
             default: preconditionFailure("Unknown fixture mutation")
             }
-            // The first field has already performed a successful attachment
-            // read. This second initializer mutates the candidate, then returns
-            // a serializable value so restore reaches its explicit policy gate.
+            // With attachmentRead enabled, the first field has already read
+            // an attachment. This second initializer mutates the candidate and
+            // returns a serializable value so restoration can reach its policy.
             fields[1]["initializer"] = ["kind": "call", "type": "Vector3", "name": "Mutate", "children": []]
             symbols.append("M:\(type).Mutate")
             methods.append(["name": "Mutate", "symbol": "M:\(type).Mutate", "static": false,
