@@ -169,14 +169,45 @@ preferences. Sixteen focused Engine tests and 21 native app checks plus four
 fresh-process restore checks pass without skips. The independent original-player
 trace covers ten phases and sixteen retained targets; its corrected validator
 pins the observed exception while preserving the initial failed validations.
-Root GUI checks verify library mounting, text-field Space ownership and hidden
-panels leaving the accessibility tree. Menu recovery, preference preservation and
-unload still need their remaining visible checks after a stale UI-tool binding;
-the process sample showed no application deadlock. Representative synchronous
-event cost and final CI acceptance remain pending. No per-frame callback was
+Root GUI checks verify library mounting, text-field Space ownership, modified
+and held Space, hidden panels leaving the accessibility tree, noninteractive
+hidden controls, preference preservation, and Studio/Maker mode recovery.
+The custom View menu still produces stale UI-tool element errors, so actual
+menu recovery and visible unload remain unverified; automated native recovery
+and unload checks pass. All four CI jobs pass at `a6dcd8c`. Representative
+synchronous event cost remains pending. No per-frame callback was
 added; the native panel mapping does not establish general Unity Canvas, input
 or Harmony compatibility. Private evidence is retained under
 `wave-three/plugins/hide-studio-ui/`; this task is not yet marked fully accepted.
+
+**Implementation handed to final acceptance — normal head selection, [#187](https://github.com/grabbiel/ikkoku/pull/187):**
+Character Maker can prepare normal heads 0, 200 and 201 on the shared selection
+queue and atomically replace the card identity, geometry and shape/expression
+contracts while preserving current edits. Exact candidate texture ownership
+keeps failed loads from publishing partial cache entries. The checkpoint passes
+26 focused Engine/Metal checks, female and male 55-check selection plus seven-check
+fresh reload scenarios, and six existing Maker scenarios without skips. An initial
+female/male export-path collision is retained in the evidence history; the female
+pair passes again with distinct retained outputs. Root picker GUI and quiet stage
+cost checks remain pending. Appearance reads/uploads still run on the owner;
+this is neither full original Maker preset behavior nor source appearance parity.
+The [transaction contract](../reference/character/maker-assets.md#normal-head-selection-182)
+records the exact scope, resource counts and remaining limits.
+
+**Implementation handed to final acceptance — inner-shoe composition, [#183](https://github.com/grabbiel/ikkoku/pull/183):**
+The normal inner-shoe slot 7 now has an independently captured GPU composite
+recipe. Seven strict GPU checks pass, live material coverage rises from 17 to 18
+of 20 slots, and three default-off app image pairs remain byte-identical. The
+additional work raises median run-p50 GPU time from 0.617 to 0.662 ms and allocated
+Metal bytes by 8,814,592 in the measured fixture; no speedup is claimed. All ten
+native target mip levels remain deterministic under repeated draws and fresh
+owners. Separate shoe-local translated-draw variation also occurs in the
+pre-change executable, but current and historical magnitudes differ; whole-frame
+repeat equality and source-color parity remain open. Final combined source-probe
+compilation passes without launching a player or relabeling captured evidence.
+Final-head CI is pending. The [renderer evidence](../reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24)
+retains the costs, source gates and diagnostic limits; sampling repeatability is
+the owner's next bounded task.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
