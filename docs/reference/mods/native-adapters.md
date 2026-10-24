@@ -253,9 +253,10 @@ the commands and the comparison in `.local/local-wave-verify/l3/`.
 ## Accessory label UI integration
 
 The source Clothes inspector now calls `StudioModel.sourceAccessoryLabels(for:)`
-and exposes each of its twenty rows as `studio.source.accessory.<slot>`. Loaded
-slots use the existing visibility toggles; unavailable slots show a disabled
-label. Mounting the adapter selects the recovered label pass, using resolved
+and exposes each of its twenty rows as `studio.source.accessory.<slot>`. Saved
+nonempty slots use the existing visibility toggles; empty slots show a
+noninteractive label. A saved slot with a missing conversion retains its toggle
+and numbered fallback label, even though it has no rendered accessory mesh. Mounting the adapter selects the recovered label pass, using resolved
 source names without changing source identities. The earlier placeholder no
 longer blocks this inspector.
 
@@ -267,7 +268,7 @@ still a separate P-T03 acceptance gate. Label-model tests alone do not close it.
 The `studio-scenarios` lane has a bounded accessory-label checklist:
 `reload-save-accessory-labels`, `reload-load-accessory-labels` and
 `accessory-labels-missing`. The save phase uses the real mount/unload methods,
-checks all twenty labels as UTF-8 bytes, retains the label when a loaded accessory
+checks all twenty labels as UTF-8 bytes, retains the label when a converted accessory
 is hidden, changes outfit, and saves a native scene. The fresh process has no
 source import or startup adapter mount; it restores the saved package reference,
 labels, outfit and visibility state. The missing-selection phase restores its
