@@ -1,5 +1,7 @@
 """Public oracle-contract tests use synthetic observations, never Unity assets."""
 import copy
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -97,6 +99,23 @@ class HideStudioUIOracleTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 probe.stop_owned('fixture', {'root': r'C:\Illusion\Koikatsu'})
             call.assert_not_called()
+
+    def test_existing_output_is_never_reused_or_touched_before_guest_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / '.local' / 'already-used'
+            output.mkdir(parents=True)
+            record = output / 'run.json'
+            original = b'{"root":"C:\\\\Temp\\\\previous-owned-root","processID":123}'
+            record.write_bytes(original)
+            with mock.patch('sys.argv', ['probe', '--vm', 'fixture', '--output', str(output)]), \
+                 mock.patch.object(probe, 'powershell') as guest, \
+                 mock.patch.object(probe, 'launch_owned') as launch, \
+                 mock.patch.object(probe, 'stop_owned') as stop:
+                with self.assertRaises(FileExistsError):
+                    probe.main()
+                guest.assert_not_called(); launch.assert_not_called(); stop.assert_not_called()
+            self.assertEqual(record.read_bytes(), original)
+            self.assertEqual(sorted(p.name for p in output.iterdir()), ['run.json'])
 
 
 if __name__ == '__main__':
