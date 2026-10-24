@@ -74,8 +74,8 @@ have not been established. Current catalog counts state their actual denominator
 
 ## Current work and evidence
 
-Overview reconciled **2026-10-24** against merged work through
-[#200](https://github.com/grabbiel/ikkoku/pull/200). The
+Overview reconciled **2026-10-24**; the task entries below name their acceptance
+scope and distinguish local checkpoints from merged work. The
 [README's eight-component table](../../README.md#current-scope) is the concise
 support summary. The dated handoffs below retain each producer, fixture and
 acceptance boundary; their old “next” steps are historical, not a live queue.
@@ -85,9 +85,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   sexes. Asynchronous normal-head selection is merged. Prepared inputs reduce
   owner-thread stalls at a total-latency cost. Fallback reuse is merged with a
   verified allocation reduction, without consistent latency improvement.
-  Remaining stalls and bounded composition batching are tracked in
-  [#192](https://github.com/grabbiel/ikkoku/issues/192) and
-  [#208](https://github.com/grabbiel/ikkoku/issues/208).
+  Bounded composition batching reduces the selected case from 16 waits to six;
+  its small timing comparison retains mixed owner-thread results. See
+  [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
+  tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192).
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
@@ -469,8 +470,34 @@ retains exact cases and limits. The next task evaluates bounded batching within
 one applying call while preserving synchronous completion and private failure
 cleanup; no batching improvement is claimed here.
 
+**Local acceptance — bounded composition batches, [#208](https://github.com/grabbiel/ikkoku/issues/208):**
+The Metal path prepares private inputs/outputs, encodes all recipes and completes
+once per non-empty applying call, then registers the validated texture views and
+replays material entries in source order. A separate 128 MiB logical input-pixel
+limit counts repeated real uploads and each allocated fallback before allocation;
+it leaves the existing output/raw-input caps intact. Larger repeated-input cases
+now fail explicitly. CPU behavior and nil-diagnostic callers remain supported.
+Eleven focused tests pass without skips, including independent material pixels,
+late-failure atomicity, exact budget boundaries, ordering and shared leases.
+Four app processes pass both sexes' 55 selection and seven reload checks in
+42.257 seconds, with four byte-identical prior exports.
+
+The quiet comparison uses fresh parent `45f355f` and candidate `825e631` binaries
+whose 557-file source manifests differ only in the four scoped files. All eight
+processes pass in 60.109 seconds; root verifies both binaries, 24 artifacts,
+48 stage records and four identical exports per sex. The selected head-201 cases
+retain 16 dispatches, 20 real uploads, eight fallback allocations and 316 absent
+bindings, while completions fall from 16 to six. Registered resources and
+32,506,112 retained raw-input bytes match. With two samples per sex/state/binary,
+API means improve by 7.769–10.595 ms, but male-warm owner time increases by
+1.638 ms; this does not establish a general latency, FPS or peak-memory benefit.
+The [Maker reference](../reference/character/maker-assets.md#bounded-synchronous-composition-batches-208)
+records full timing ranges, transient retention limits and the preserved offline
+analysis corrections. The remaining responsiveness work stays in #192.
+
 **Diagnostic handoff — MainTex-only sampling, [#209](https://github.com/grabbiel/ikkoku/pull/209):**
-Removing the AlphaMask/combine and predicate/discard blocks together makes the
+Merged after all four CI checks pass at `0bcd33c`. Removing the AlphaMask/combine
+and predicate/discard blocks together makes the
 retained MainTex-only program repeat exactly, while the fresh prefix control
 still varies with both providers. All 16 draws keep the same 2,948 visible pixels,
 primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
