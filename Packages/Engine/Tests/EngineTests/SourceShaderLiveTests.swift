@@ -840,7 +840,9 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     let storeManifest = try #require(JSONSerialization.jsonObject(with: storeData) as? [String: Any])
     #expect((storeManifest["entries"] as? [[String: Any]])?.count == 50)
     #expect((storeManifest["unavailable"] as? [[String: Any]])?.isEmpty == true)
-    #expect((storeManifest["composites"] as? [[String: Any]])?.map { $0["material"] as? String } == ["cf_m_eyewhite_create", "cf_m_eye_create"])
+    let compositeRows = storeManifest["composites"] as? [[String: Any]] ?? []
+    let compositeMaterials: [String] = compositeRows.compactMap { $0["material"] as? String }
+    #expect(compositeRows.count == 2 && compositeMaterials == ["cf_m_eyewhite_create", "cf_m_eye_create"])
     #expect((storeManifest["unavailableComposites"] as? [[String: Any]])?.isEmpty == true)
     // Exclude machine-specific roots/source.file while pinning every asset,
     // mip hash, sampler and the source binding report's hash.
@@ -864,7 +866,8 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     // Both irises share one composite and both eye whites another (one recipe
     // each on this card): each is composed once, then hit once.
     let eventsByKey = Dictionary(grouping: store.composites, by: \.contentKey).mapValues { $0.map(\.cacheHit) }
-    #expect(eventsByKey.count == 2 && eventsByKey.values.allSatisfy { $0 == [false, true] }, "\(store.composites)")
+    let composedOnceThenHit = eventsByKey.values.allSatisfy { (hits: [Bool]) -> Bool in hits == [false, true] }
+    #expect(eventsByKey.count == 2 && composedOnceThenHit, "\(store.composites)")
     #expect(store.attach.fallbacks.allSatisfy { $0.contains("is not composed natively for the live path") },
             "\(store.attach.fallbacks)")
     let resolvedTextureCount = renderer.resources.statistics().textures

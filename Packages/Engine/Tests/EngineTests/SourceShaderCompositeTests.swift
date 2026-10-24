@@ -115,9 +115,10 @@ private enum CompositeStoreFixture {
             try FileManager.default.createDirectory(at: folder.appendingPathComponent(name), withIntermediateDirectories: true)
             let data = pixels.flatMap { [Float16($0.x), Float16($0.y), Float16($0.z), Float16($0.w)] }.withUnsafeBytes { Data($0) }
             try data.write(to: folder.appendingPathComponent(name + "/level-0.rgba16f"))
+            let wrap: String = name == "main" ? mainWrap : "Clamp"
             entries.append(["bundle": "chara/inputs.unity3d", "bundleSHA256": "inputs-hash", "name": name, "pathID": pathID,
                             "serializedFile": "CAB-inputs", "width": 4, "height": 4, "mipLevels": 1, "colorSpace": "linear",
-                            "textureFormat": 4, "filter": "Bilinear", "wrap": name == "main" ? mainWrap : "Clamp", "aniso": 1, "directory": name,
+                            "textureFormat": 4, "filter": "Bilinear", "wrap": wrap, "aniso": 1, "directory": name,
                             "files": ["level-0.rgba16f"], "sha256": [hex(data)]])
         }
         let program = folder.appendingPathComponent("create")
@@ -214,15 +215,23 @@ private func bilinearRed(_ texels: [SIMD4<Float>], width: Int, height: Int, u: F
         let j = repeats ? ((row % height) + height) % height : min(max(row, 0), height - 1)
         return texels[j * width + i].x
     }
-    let lower = at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx, upper = at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx
-    return lower * (1 - fy) + upper * fy
+    let a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1)
+    let lower: Float = a + (b - a) * fx
+    let upper: Float = c + (d - c) * fx
+    return lower + (upper - lower) * fy
 }
 
 /// D3D `create_eyewhite` on one texel: `lerp(_Color2, _Color, t)` in linear
 /// colour (the colours are linearized at bind) with alpha 1; pass 0 blends One Zero.
 private func createEyeWhiteReference(t: Float, color: [Float], color2: [Float]) -> [Float] {
     let linear = TranslatedSourceProgram.linear
-    return (0..<3).map { t * (linear(color[$0]) - linear(color2[$0])) + linear(color2[$0]) } + [1]
+    var result: [Float] = []
+    for lane in 0..<3 {
+        let high = linear(color[lane]), low = linear(color2[lane])
+        result.append(t * (high - low) + low)
+    }
+    result.append(1)
+    return result
 }
 
 /// Largest byte difference between an `rgba8Unorm_srgb` level and the
@@ -742,7 +751,15 @@ func liveSourceEyeWhiteCompositesMatchTheRetainedOriginalComposite() throws {
     func texels(_ entry: SourceShaderTextureStore.Entry) throws -> [SIMD4<Float>] {
         let file = store.url.deletingLastPathComponent().appendingPathComponent(entry.directory + "/" + entry.files[0])
         let halves = try Data(contentsOf: file).withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
-        return (0..<entry.width * entry.height).map { SIMD4(Float(halves[$0 * 4]), Float(halves[$0 * 4 + 1]), Float(halves[$0 * 4 + 2]), Float(halves[$0 * 4 + 3])) }
+        var result: [SIMD4<Float>] = []
+        result.reserveCapacity(entry.width * entry.height)
+        for texel in 0..<entry.width * entry.height {
+            let base = texel * 4
+            let r = Float(halves[base]), g = Float(halves[base + 1])
+            let b = Float(halves[base + 2]), a = Float(halves[base + 3])
+            result.append(SIMD4(r, g, b, a))
+        }
+        return result
     }
     var identity = try #require(bindings.renderers.first { $0.mesh == "cf_Ohitomi_L" }?.material.textures["_MainTex"]?.identity)
     let input = try store.entry(for: try #require(identity.composite?.textures["_MainTex"]?.identity)).get()
