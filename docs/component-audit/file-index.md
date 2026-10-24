@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**909 files indexed; 909 assigned; 0 unassigned.**
+**912 files indexed; 912 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 101 |
 | [Character / Maker / mods](character-and-mods.md) | 124 |
 | [Studio / IK / animation](studio.md) | 189 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 326 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 169 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 197 |
+| Conversion / recovery / verification tool | 198 |
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 28 |
+| Reference host / controlled fixture | 29 |
 | Runtime / shared shader declaration | 210 |
-| Test / validation | 188 |
+| Test / validation | 189 |
 
 ## App / gameplay / plugins
 
