@@ -1,17 +1,18 @@
 # Installed native plugin adapters
 
-Reviewed 2026-09-25. Two exact installed revisions have verified **bounded Swift
-behavior adapters** and immutable package tests. Actual app integration is
-incomplete overall. The Mute startup trap before `NSApp` exists is fixed and
-passed local Release acceptance at PR #2 (`93e6b06`, merge `aa4bcb9`). The source character inspector gate
-prevents reaching accessory labels. The successful IR-only release capture does
-not validate either workflow. See
-[A-T04 / P-T03](../../component-audit/app-gameplay-and-plugins.md) and
-[ST-T01/02](../../component-audit/studio.md) for defects and acceptance.
+Reviewed 2026-10-24. The registry contains three exact installed revisions with
+bounded Swift behavior adapters. The two earlier adapters have accepted startup,
+native scene restoration and mixed-library app coverage. The HideAllUI section
+below distinguishes its original-player evidence from its native acceptance
+status. Source accessory labels are wired into the reachable Clothes inspector;
+that wiring is distinct from a visible comparison of the displayed labels.
+See [library app acceptance](plugin-execution.md#saved-scenes-and-migration) and
+[A-T04 / P-T03](../../component-audit/app-gameplay-and-plugins.md) for the bounded
+checks and remaining work. No general installed-plugin compatibility is implied.
 
 ## Conversion and identity
 
-The conversion CLI recognizes two installed DLLs by their complete SHA-256 hashes
+The conversion CLI recognizes three exact installed DLLs by their complete SHA-256 hashes
 and publishes native adapter packages automatically. Run from the repository root:
 
 ```sh
@@ -24,8 +25,10 @@ python3 Tools/translation/plugin.py path/to/KK_StudioAccessoryNames.dll \
 ```
 
 The app exposes **Mods → Load Converted Original Plugin…** for each `manifest.json`.
-Environment mounts and saved-scene restores passed Release verification below;
-interactive menu selection itself remains a separate UI workflow. The package retains original assembly and
+Environment mounts and saved-scene restores passed Release verification below.
+The Studio Plugins library panel also has visible selection, mount, pause and
+unload acceptance; this does not establish the separate legacy manifest dialog
+workflow. The package retains original assembly and
 configuration bytes, GUID, version, type and process restrictions. The DLL is identity evidence; the Swift adapter
 implements the recovered behavior. A different DLL revision requires its own
 verified adapter, or passes through the strict C# translator. Rejected conversion
@@ -36,7 +39,8 @@ cards. Its restore code validates the entire package, including original config
 bytes, before applying it; package tests cover the saved references. The actual
 release mount/save/reload/continue test passed for both exact adapter packages. New-scene and
 original-scene-import code retain current global mount references. The accessory
-label consumer is enabled only by its mount, but its inspector remains unreachable.
+label consumer is enabled only by its mount and is used by the source Clothes
+inspector.
 Adapter mounts do not alter card/mod GUIDs, source object keys, source KKEx payloads or original config files. These global
 plugin/config references belong to native scene metadata; original scene export
 does not inject them into an unrelated KKEx field.
@@ -57,27 +61,34 @@ The registry requires these exact assembly identities:
 | --- | --- |
 | `bepinex-mute-in-background-v1` | `e494f24b73fed491d056c3c6a00ee73baf257409877ce8e5b44da1b0494ca96d` |
 | `kk-studio-accessory-names-v1` | `c60d740ee1037040e97bcb0ae8037f8f7a1e4350322bc7ed44699fd0dc9662bd` |
+| `kk-hide-studio-ui-v1` | `ec11d03060502b60bf15742ef8e56b6bc804c10067e5a78ba368c7b62e3b117e` |
 
 The retained 2026-09-25 evidence reports three native package tests and one
 original-fixture Python packaging test passing. This documentation revision did
 not rerun them. Missing fixture variables skip the original-assembly comparison.
 
 The [plugin library](plugin-execution.md#plugin-library) indexes adapter packages
-as `ikkoku-native-plugin-adapter` revisions. It is the P-T02 first slice and has
-synthetic tests only. Its scanner accepts an adapter manifest only when the
+as `ikkoku-native-plugin-adapter` revisions. Its initial synthetic coverage has
+since been extended with mixed-library app mount/save/fresh-process restoration
+and visible panel acceptance. Its scanner accepts an adapter manifest only when the
 source digest is in this registry and the adapter ID, type, identity and process
 list are identical. The scanner never runs the assembly.
 
-Adapter manifests declare no BepInEx dependencies or incompatibilities. In the
-shared graph, a translated package may depend on an adapter GUID with a minimum
-version, but an adapter itself requires nothing. If a registered plugin declares
+The original two adapter manifests declare no BepInEx dependencies or
+incompatibilities. HideAllUI retains its exact `HideStudioUI` and `HideHInterface`
+incompatibilities in both the manifest and mixed plugin graph. All three declare
+no BepInEx dependencies. A translated package may depend on an adapter GUID with
+a minimum version, but these adapters themselves require nothing. If a registered plugin declares
 dependencies, the registry must record them first.
 
 Library selections verify adapter packages through `SourceNativePluginPackage.load`.
 Stand-in assembly bytes fail with a `revisionInvalid` error that names the
-revision. The app still mounts adapters from individual manifests and saves
-`sourceNativePlugins` references. Restoring adapters from a library selection is
-pending.
+revision. The app supports individual manifest mounts with `sourceNativePlugins`
+references and pinned mixed-library selections with their exact revision hashes.
+The accepted two-adapter/IR fixture restores an older library generation with a
+newer generation available, without upgrading the saved selection. See
+[plugin library](plugin-execution.md#plugin-library) for staged replacement,
+rollback and cancellation guarantees.
 
 ## Startup and acceptance
 
@@ -173,8 +184,10 @@ Merge `aa4bcb9` has the identical source tree. Private evidence is retained at
   survives five OS activation changes and exits normally. This measures launch/
   focus stability; audio gains were measured by the separate headless tone probes.
 
-The inspector gate, live config watching and general observer/timer lifetime work
-are separate tasks. No complete plugin or original Studio parity is implied.
+That historical run did not establish accessory-label UI integration or live
+config watching. The current Clothes inspector wiring is described below; live
+config watching and broader observer/timer lifetime work remain separate. No
+complete plugin or original Studio parity is implied.
 
 ## Local rerun on macOS 27 (2026-10-23)
 
@@ -237,11 +250,19 @@ capture-04 it passed all 89 checks across the two configurations. Evidence:
 `.local/reverse/plugin-execution/native-adapter-capture-03` and `-04`, with
 the commands and the comparison in `.local/local-wave-verify/l3/`.
 
-## Accessory label UI gate
+## Accessory label UI integration
 
-`StudioView` intercepts source-character pose/face/clothes inspectors with a
-stale placeholder. Remove that gate and verify the mounted accessory-name labels
-through the actual UI. Label-model tests alone do not establish UI integration.
+The source Clothes inspector now calls `StudioModel.sourceAccessoryLabels(for:)`
+and exposes each of its twenty rows as `studio.source.accessory.<slot>`. Loaded
+slots use the existing visibility toggles; unavailable slots show a disabled
+label. Mounting the adapter selects the recovered label pass, using resolved
+source names without changing source identities. The earlier placeholder no
+longer blocks this inspector.
+
+The accepted library-panel GUI run verifies selecting and mounting the accessory
+adapter, not the values displayed in the Clothes inspector. A visible mounted /
+unmounted label comparison, including outfit changes and unavailable slots, is
+still a separate P-T03 acceptance gate. Label-model tests alone do not close it.
 
 ## BepInEx.MuteInBackground 1.1
 
@@ -262,7 +283,7 @@ IKKOKU_MUTE_PLUGIN_ORACLE="$PWD/.local/reverse/plugin-execution/mute-oracle/refe
   swift test --package-path Packages/Engine --filter sourceMute
 ```
 
-The oracle compiles the **unchanged recovered plug-in C#** against small component/audio endpoint stubs and executes configuration parsing from the **actual installed BepInEx.dll**. It records hashes and checks 23 configurations plus seven callback traces. Separate Swift tests compare every resulting state, exercise the native mixer and render a generated tone offline. These checks verify the bounded behavior and native audio mixer endpoint. They do not verify the currently broken startup mount, arbitrary Harmony patch execution or original Unity audio output.
+The oracle compiles the **unchanged recovered plug-in C#** against small component/audio endpoint stubs and executes configuration parsing from the **actual installed BepInEx.dll**. It records hashes and checks 23 configurations plus seven callback traces. Separate Swift tests compare every resulting state, exercise the native mixer and render a generated tone offline. These checks verify the bounded behavior and native audio mixer endpoint. They do not by themselves verify app startup, arbitrary Harmony patch execution or original Unity audio output. App startup and focus handling have the separate accepted checks above.
 
 Original binaries, recovered source, configuration and trace results remain ignored in `.local/reverse/plugin-execution`. Only the host, generator, native adapter and tests belong in the repository.
 
@@ -270,4 +291,115 @@ Original binaries, recovered source, configuration and trace results remain igno
 
 `SourceStudioAccessoryNamesPlugin` adapts the installed Studio plug-in's label pass. Slot counting advances only for text containing a UTF-16 decimal digit, missing/inactive accessories keep the original Japanese slot fallback, and resolved names retain their Unicode spelling. Source button positions 100/130 become 160/190 and text width becomes 150 in the label model; native UI uses SwiftUI layout. Labels use the exact resolved accessory entry name and never alter source/mod IDs or card bytes.
 
-`Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing/inactive accessories, non-slot widgets, shifted numbering and Unicode digit behavior. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. App UI reachability is still blocked as described above; no arbitrary Harmony or Unity coroutine host is provided.
+`Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing/inactive accessories, non-slot widgets, shifted numbering and Unicode digit behavior. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. The current source Clothes inspector consumes this model as described above; the visible label-value comparison remains separate. No arbitrary Harmony or Unity coroutine host is provided.
+
+
+## HideAllUI 2.3.2 Studio adapter
+
+This bounded adapter pins `HideAllUI.HideAllUI`, GUID `keelhauled.hideallui`,
+version `2.3.2`, to the exact DLL digest above. It accepts the absent/default
+configuration or UTF-8 `[Keyboard shortcuts]` → `Hide UI = Space`. Other shortcuts
+fail explicitly before replacing a mounted session. The immutable package retains
+all configuration bytes. The original manifest has no process restriction; this
+adapter's supported host is Studio only.
+
+```sh
+python3 Tools/translation/plugin.py path/to/HideAllUI.Koikatu.dll \
+  --type HideAllUI.HideAllUI --config path/to/keelhauled.hideallui.cfg \
+  --output .local/plugins/hide-studio-ui
+```
+
+The recovered source captures an array of active GameObject Canvas components
+at handler construction, then filters their names lazily on each toggle. It changes
+those GameObjects' active state. Optional plugin canvases are found by path on
+each toggle and change `Canvas.enabled`; inactive GameObjects are not found.
+The optional main-camera manipulator changes GameObject active state. Initialization
+sets the handler's internal visibility to true without changing existing surface
+states. New game canvases are absent from the captured array, while renamed
+captured objects can enter the deferred name filter. The name predicate runs before
+the later Unity truthiness predicate. In the retained Unity 5.6.2f1 player, a
+destroyed captured Canvas produces `System.NullReferenceException` after the
+internal flag flips but before dynamic canvases update. A fresh handler drops
+those stale references; it does not reveal surfaces during initialization.
+
+The native mapping is an explicit Ikkoku host contract, not a general Canvas API:
+
+| Native role | Visibility layer |
+| --- | --- |
+| Workspace, inspector, viewport toolbar and authored timeline | Transparent, disabled and inaccessible while hidden; layout and viewport identity retained |
+| Object, bone, IK and light guides | Omitted from the frame and hover picking; active guide gestures cancelled when hiding |
+| Viewport orbit/pan | Remains available |
+| View menu | Remains available; **Show Studio Interface** removes the adapter's hiding |
+
+Only unmodified Space delivered to the active Studio viewport toggles the layer.
+Repeat events are consumed without toggling playback or visibility. Text editing
+owns its own input, and modified Space does not fall through to playback while the
+adapter is mounted. Without the adapter, existing viewport shortcuts are unchanged.
+The layer never changes `showGizmos` or `showTimeline`: recovery, unload, mode exit
+and a fresh scene restore preserve those host preferences. Visibility itself is
+session-local; native scenes save the exact package/config reference and reload a
+fresh visible handler. Original-game visibility persistence is not claimed.
+
+Updates are event-driven. No filesystem checks, Canvas lookup, frame-tick callback
+or per-frame UI invalidation was added. A visibility event rebuilds the existing
+frame so hidden guides cannot remain pickable. Native scenario coverage uses the
+same package loader, key/mouse handlers, mode path, save/reload and unload methods.
+The real-Unity oracle is separate from the native host and public synthetic tests.
+
+The original-player trace records ten phases and sixteen retained targets from
+an isolated player with the exact plugin DLL. Its first producer used Unity 5.6
+`JsonUtility`, which omitted nested observations; that run was rejected. The
+corrected producer emitted all fields. Its initial validator expected a
+`MissingReferenceException`; the retained trace instead establishes the exact
+`NullReferenceException` described above. A corrected independent validation pins
+that observed type and passes the same unchanged trace, with both initial failures
+retained. This is not described as a passing first validation or a fresh rerun.
+
+Four public synthetic trace-contract tests, sixteen Python package-library tests,
+two original-fixture packaging tests and sixteen focused Engine tests pass locally,
+with no skips in these runs. The probe compiles against retained original metadata;
+its exact JSON serializer also passes a standalone nested/escaping check.
+
+The clean Release build at `e652954` (executable SHA-256
+`53162923fed56e4ea5c080aa3a7796f508afd1c6eb6034c14efae50e6f1c87c8`)
+passes 21 native interaction checks and four fresh-process restoration checks.
+These cover unchanged authored preferences, configuration-failure rollback, exact
+saved package references, mode/input ownership, repeated resource/content stability,
+and a real rendered-guide grab followed by hiding and an attempted invisible drag.
+The guide gesture ends without changing the document; hidden orbit remains usable.
+The initial guide-pick harness failure is retained: it projected untransformed
+unit vertices. The corrected check projects transformed triangle centers and keeps
+the same interaction assertions. Earlier app/test compile failures are also retained,
+separately from the successful build and test records.
+
+Visible checks on the same `53162923…` executable cover normal Space playback
+without the adapter, actual package mount and native scene reopen, text input
+receiving a literal Space, Shift+Space leaving the panels unchanged, a held Space
+hiding once and the next Space restoring them. Hidden panels leave the AX tree;
+the old Add-button location is noninteractive. Gizmo/timeline preferences set off
+stay off through hide/show and mode exit/return. Maker retains its controls and
+disables the converted-plugin load command. **Show Studio Interface** is enabled
+while hidden, but activating that custom View menu remained tool-limited: the
+automation connection returned invalid accessibility elements while the process
+remained alive. Visible menu recovery and visible unload are not claimed as passed;
+their native model paths pass the automated checks above. Owned GUI processes were
+stopped. A rejected unsupported scene-load environment input is retained separately
+from the successful real File → Open Scene workflow.
+
+A scenario-only Release build at `a6dcd8c` (executable SHA-256
+`b11d8ad689bc9befd470b05e3ca17885fe14e47d514f4f1eaeb38216d8cba616`)
+retains identical production model, panel and Engine runtime sources. Three quiet
+processes each pass both loaded-scene checks with seven rendered characters,
+141 draw items and identical resource counts. Animation time is held at zero,
+live animation/blink are off, and each process records its first visibility pair,
+three warmup pairs and twenty measured pairs through the actual key handler.
+Per-process hide medians are 0.409–0.428 ms; show medians are 0.425–0.440 ms;
+the largest measured event is 0.610 ms. These are synchronous key-handler/model
+refresh costs, excluding asset loading, deferred SwiftUI layout/display and GPU
+completion. They do not establish an FPS improvement or complete UI latency.
+The first cost attempt used the wrong single-character synthetic scene and exited
+before its scenario; its inputs/log are retained separately from the corrected
+seven-character runs. Camera-only timings remain functional diagnostics.
+
+Private evidence is retained in
+`.local/codex-continue-2026-10-24/wave-three/plugins/hide-studio-ui/`.

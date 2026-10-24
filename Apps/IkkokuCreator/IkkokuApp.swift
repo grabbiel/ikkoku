@@ -58,7 +58,7 @@ struct IkkokuApp: App {
                 Button("Reload Mod Library") { app.reloadModLibrary() }.disabled(app.modProfile == nil)
                 Divider()
                 Button("Load Translated Studio Plugins…") { app.studio?.openSourcePluginProfile() }
-                Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }
+                Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }.disabled(app.mode != .studio)
                 Button(app.studio?.sourcePluginsRunning == true ? "Pause Studio Plugins" : "Run Studio Plugins") {
                     app.studio?.sourcePluginsRunning.toggle()
                 }.disabled(app.studio?.hasSourcePluginSession != true)
@@ -70,6 +70,8 @@ struct IkkokuApp: App {
                 Button("Character Maker") { app.mode = .maker }.keyboardShortcut("1", modifiers: [.command])
                 Button("Studio") { app.mode = .studio }.keyboardShortcut("2", modifiers: [.command])
                 Divider()
+                Button("Show Studio Interface") { app.studio?.revealSourceInterface() }
+                    .disabled(app.mode != .studio || app.studio?.sourceInterfaceVisible != false)
                 Button("Reset Camera") { app.resetCamera() }.keyboardShortcut("r", modifiers: [.command, .shift])
                 Divider()
                 // R1/CMT-04 opt-in: converted source characters draw with the translated

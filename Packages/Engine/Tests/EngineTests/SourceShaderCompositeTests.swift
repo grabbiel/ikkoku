@@ -1052,9 +1052,40 @@ func liveSourceNormalBottomCompositeMatchesBaseAndDistinctOriginalColours() thro
     try verifyNormalGarmentComposite(slot: 1, colourProbe: "IKKOKU_BOTTOM_COMPOSITE_PROBE")
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_INNER_SHOE_COMPOSITE_PROBE", "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY",
+    "IKKOKU_HEAD_MATERIAL_CONTRACT", "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
+func liveSourceNormalInnerShoeCompositeMatchesBaseAndDistinctOriginalColours() throws {
+    try verifyNormalGarmentComposite(slot: 7, colourProbe: "IKKOKU_INNER_SHOE_COMPOSITE_PROBE")
+}
+
 private func verifyNormalGarmentComposite(slot: Int, colourProbe: String) throws {
-    let role = slot == 0 ? "top" : "bottom", width = slot == 0 ? 1024 : 512, height = 1024
-    let mesh = slot == 0 ? "o_top_tsyats_a" : "o_bot_pants03"
+    let role: String, mesh: String, width: Int, height: Int, targetMips: Int, inputMips: Int
+    let expectedColours: [[[Float]]], assetInputs: [(String, String, String)]
+    let inputBundleHash: String, inputFile: String, captureHashes: [String]
+    switch slot {
+    case 0:
+        role = "top"; mesh = "o_top_tsyats_a"; width = 1024; height = 1024; targetMips = 11; inputMips = 11
+        expectedColours = [Array(repeating: [0.12, 0.28, 0.5, 1], count: 3), [[0.72, 0.13, 0.04, 1], [0.09, 0.66, 0.31, 1], [0.16, 0.23, 0.84, 1]]]
+        assetInputs = [("_MainTex", "cf_top_tsyatu02_t", "-6233972938813170750"), ("_ColorMask", "cf_top_tsyatu02_mc", "-1591564840063675426")]
+        inputBundleHash = "2df694771a8c6437f5e966e94747f48ed905d611a7f2de036a5d64956996657a"
+        inputFile = "CAB-ea71f5c3f889c85d158dd90d78f65595"
+        captureHashes = ["c9020d7ceeaf413ea4199482e52ce66b51e85bd34912493a5d21eea5adf1dd11", "2ba4e150536fbe5e103430dc1ceb18f988dd169c275d8846ab394e96fb91445a"]
+    case 1:
+        role = "bottom"; mesh = "o_bot_pants03"; width = 512; height = 1024; targetMips = 11; inputMips = 1
+        expectedColours = [Array(repeating: [0.12, 0.13, 0.16, 1], count: 3), [[0.68, 0.12, 0.83, 1], [0.07, 0.74, 0.29, 1], [0.91, 0.38, 0.05, 1]]]
+        assetInputs = [("_MainTex", "cf_bot_pants03_t", "1799539927781456382"), ("_ColorMask", "cf_bot_pants03_mc", "2152893568627913941")]
+        inputBundleHash = "99ca895979e691caf55c1a68a4ffd9a6892b3d8fdfe9b260cb0812cd5fbf9d29"
+        inputFile = "CAB-633e5b9224bb4b60a1d0f9eeb80cf32d"
+        captureHashes = ["e896dd7f15c967a5ca310eb46448cafcce5dd601a3b8995bee32f7a0e9e5393d", "8b5641111b0c210c872ff26ce522de1c7846e3d511b32295e6c2a28c07d58ae6"]
+    default:
+        try #require(slot == 7)
+        role = "inner shoe"; mesh = "o_shoes_run01"; width = 512; height = 512; targetMips = 10; inputMips = 1
+        expectedColours = [Array(repeating: [0.12, 0.13, 0.16, 1], count: 3), [[0.83, 0.18, 0.07, 1], [0.09, 0.62, 0.87, 1], [0.74, 0.11, 0.58, 1]]]
+        assetInputs = [("_MainTex", "cf_shoes_run01_t", "-7640729741191341103"), ("_ColorMask", "cf_shoes_run01_mc", "-2274634555552161051")]
+        inputBundleHash = "dde13cf97a4160d9d13cb8ea8102c7ba6e6c092908855180110c6391cf6066d0"
+        inputFile = "CAB-b9a8ff574f24c2b427e59cd30ae00421"
+        captureHashes = ["0cac5ab425329461f568cd0b5a681e9965e0c0938b22e8778e4ded8a38d3f0f5", "753a6e98a391b2fc3f511152dadd532dca52f2c89227c12abc2bdca359ebbc4f"]
+    }
     let base = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true)
     let colour = URL(fileURLWithPath: try SourceFixtureSupport.require(colourProbe), isDirectory: true)
     let inputs = SourceShaderLiveAssembly.Inputs(programs: base.appendingPathComponent("shaders"),
@@ -1064,18 +1095,6 @@ private func verifyNormalGarmentComposite(slot: Int, colourProbe: String) throws
     let store = try SourceShaderTextureStore(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_TEXTURES")))
     let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
     var textures: [any MTLTexture] = [], images: [[UInt8]] = [], identities: [SourceShaderBindingSet.TextureIdentity] = []
-    let expectedColours: [[[Float]]] = slot == 0
-        ? [Array(repeating: [0.12, 0.28, 0.5, 1], count: 3), [[0.72, 0.13, 0.04, 1], [0.09, 0.66, 0.31, 1], [0.16, 0.23, 0.84, 1]]]
-        : [Array(repeating: [0.12, 0.13, 0.16, 1], count: 3), [[0.68, 0.12, 0.83, 1], [0.07, 0.74, 0.29, 1], [0.91, 0.38, 0.05, 1]]]
-    let assetInputs = slot == 0
-        ? [("_MainTex", "cf_top_tsyatu02_t", "-6233972938813170750"), ("_ColorMask", "cf_top_tsyatu02_mc", "-1591564840063675426")]
-        : [("_MainTex", "cf_bot_pants03_t", "1799539927781456382"), ("_ColorMask", "cf_bot_pants03_mc", "2152893568627913941")]
-    let inputBundleHash = slot == 0 ? "2df694771a8c6437f5e966e94747f48ed905d611a7f2de036a5d64956996657a"
-        : "99ca895979e691caf55c1a68a4ffd9a6892b3d8fdfe9b260cb0812cd5fbf9d29"
-    let inputFile = slot == 0 ? "CAB-ea71f5c3f889c85d158dd90d78f65595" : "CAB-633e5b9224bb4b60a1d0f9eeb80cf32d"
-    let captureHashes = slot == 0
-        ? ["c9020d7ceeaf413ea4199482e52ce66b51e85bd34912493a5d21eea5adf1dd11", "2ba4e150536fbe5e103430dc1ceb18f988dd169c275d8846ab394e96fb91445a"]
-        : ["e896dd7f15c967a5ca310eb46448cafcce5dd601a3b8995bee32f7a0e9e5393d", "8b5641111b0c210c872ff26ce522de1c7846e3d511b32295e6c2a28c07d58ae6"]
     for (index, folder) in [base, colour].enumerated() {
         let frame = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(index == 0 ? "frame-mips.json" : "frame.json"))) as? [String: Any])
         let meshes = try #require(frame["meshes"] as? [[String: Any]])
@@ -1084,27 +1103,62 @@ private func verifyNormalGarmentComposite(slot: Int, colourProbe: String) throws
         let capture = try #require((properties["_MainTex"] as? [String: Any])?["file"] as? String)
         let card = try SourceCharacterCard.load(url: folder.appendingPathComponent("fixture-card.png"))
         let bindings = try inputs.derive(card: card, scene: .originalCharacterProbeHarness, sceneReason: "", eyeLook: nil)
-        let identity = try #require(bindings.renderers.first { $0.mesh == mesh && $0.materialSlot == 0 }?.material.textures["_MainTex"]?.identity)
+        let selected = try #require(bindings.renderers.first { $0.mesh == mesh && $0.materialSlot == 0 && $0.visible == true })
+        let identity = try #require(selected.material.textures["_MainTex"]?.identity)
+        if slot == 7 {
+            #expect(selected.component == "clothes.7 112:3")
+            let outer = try #require(bindings.renderers.first { $0.component == "clothes.8 112:3" && $0.materialSlot == 0 })
+            #expect(outer.visible == false && outer.material.textures["_MainTex"]?.identity?.composite == nil)
+            if index == 1 {
+                let readbacks = try #require(frame["innerShoeCompositeInputs"] as? [String: Any])
+                let selection = try #require(readbacks["selection"] as? [String: Any])
+                #expect(selection["slot"] as? Int == 7 && selection["shoesType"] as? Int == 0 && selection["id"] as? Int == 3)
+                #expect(selection["object"] as? String == "ct_shoes_inner" && selection["active"] as? Bool == true)
+                #expect(selection["MainData"] as? String == "p_o_shoes_run01" && selection["MainAB"] as? String == "chara/co_shoes_00.unity3d")
+                #expect(selection["MainManifest"] as? String == "abdata")
+                let normal = try #require(selection["normalRenderers"] as? [[String: Any]])
+                try #require(normal.count == 1)
+                #expect(normal[0]["enabled"] as? Bool == true && normal[0]["active"] as? Bool == true)
+                #expect(normal[0]["mainTex"] as? String == capture)
+                #expect((normal[0]["path"] as? String)?.contains("/ct_shoes_inner/") == true)
+                for (key, name, format, hash) in [
+                    ("MainTex", "cf_shoes_run01_t", "BC7", "22a30559f504740547c2f8d7749bb0e01cc7aaa340cf85cdb04baf846974d186"),
+                    ("ColorMaskTex", "cf_shoes_run01_mc", "RGB24", "db3d1c8217367e9fdf190df1c4e1a542065f8e66444adfe54f37381afd178611")
+                ] {
+                    let input = try #require(readbacks[key] as? [String: Any])
+                    #expect(input["bundleSHA256"] as? String == inputBundleHash && input["name"] as? String == name)
+                    #expect(input["format"] as? String == format && input["mipLevels"] as? Int == 1)
+                    #expect(input["width"] as? Int == width && input["height"] as? Int == height)
+                    let file = try #require(input["file"] as? String)
+                    #expect(hex(try Data(contentsOf: folder.appendingPathComponent(file))) == hash)
+                }
+            }
+        }
         let recipe = try #require(identity.composite)
         #expect(recipe.material == "cf_m_clothesN_create" && recipe.shader == "Shader Forge/create_topN" && recipe.unresolved == nil)
         #expect(recipe.programSHA256 == "d709d6fc92ebecd4f8b579041c8a7abce3a13c20c18985812bde6bc42881f579")
         #expect(recipe.bundleSHA256 == "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e")
         #expect(recipe.serializedFile == "CAB-0d1f3d8317188244dde38c81a889d1d4" && recipe.pathID == "3922150014319152921")
-        #expect(identity.width == width && identity.height == height && identity.mipLevels == 11)
+        #expect(identity.width == width && identity.height == height && identity.mipLevels == targetMips)
         for (property, name, pathID) in assetInputs {
             let asset = try #require(recipe.textures[property]?.identity)
             let entry = try store.entry(for: asset).get()
-            #expect(entry.name == name && entry.pathID == pathID && entry.mipLevels == (slot == 0 ? 11 : 1))
+            #expect(entry.name == name && entry.pathID == pathID && entry.mipLevels == inputMips)
             #expect(entry.bundleSHA256 == inputBundleHash && entry.serializedFile == inputFile)
             #expect(entry.width == width && entry.height == height)
             #expect(entry.filter == "Bilinear" && entry.wrap == "Repeat" && entry.aniso == 1)
+            if slot == 7 {
+                #expect(entry.textureFormat == (property == "_MainTex" ? 25 : 3))
+                #expect(entry.colorSpace == (property == "_MainTex" ? "srgb" : "linear"))
+            }
         }
         for (lane, name) in ["_Color", "_Color2", "_Color3"].enumerated() {
             #expect(recipe.vectors[name]?.values == expectedColours[index][lane])
+            #expect(recipe.vectors[name]?.source.contains("clothes.parts.\(slot).colorInfo.\(lane).baseColor") == true)
         }
         let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: mesh, slot: 0)
         let texture = try store.texture(request, resources: resources).get().texture
-        #expect(texture.mipmapLevelCount == 11 && texture.pixelFormat == .rgba8Unorm_srgb)
+        #expect(texture.mipmapLevelCount == targetMips && texture.pixelFormat == .rgba8Unorm_srgb)
         let resourcesBefore = resources.statistics().textures
         let auxiliaries = store.compositeInputStatistics(for: resources)
         #expect(auxiliaries == .init(defaults: 1, samplers: 1))

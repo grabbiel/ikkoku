@@ -437,9 +437,36 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored var sourcePluginLibraryPreparationQueue = SourceMakerPreparationQueue<SourcePluginLibraryResolution>()
     @ObservationIgnored var sourcePluginPreparationHook: (@Sendable () -> Void)?
     var sourceAccessoryNamesEnabled = false
+    /// A session-local layer over host preferences. Mount/recovery never changes
+    /// showGizmos/showTimeline, and no UI work or target lookup runs in ticks.
+    var sourceHideStudioUI: SourceHideStudioUIPlugin?
+    var sourceInterfaceVisible: Bool { sourceHideStudioUI?.visible != false }
+    var effectiveShowGizmos: Bool { showGizmos && sourceInterfaceVisible }
+
+    func toggleSourceInterface() {
+        guard isActiveMode, sourceHideStudioUI != nil else { return }
+        sourceHideStudioUI?.toggle()
+        if !sourceInterfaceVisible {
+            // Hiding a grabbed guide ends that gesture. Camera orbit/pan remain
+            // available because the viewport itself is never hidden.
+            switch drag {
+            case .orbit?, .pan?, nil: break
+            default: drag = nil
+            }
+        }
+        hoverPicks.cancel(); hoverAxis = nil
+        refresh()
+    }
+
+    func revealSourceInterface() {
+        guard !sourceInterfaceVisible else { return }
+        sourceHideStudioUI?.reveal()
+        // Mode exit restores only this layer without overwriting Maker's frame.
+        if isActiveMode { refresh() }
+    }
     var liveAnimation = true
     var sourceAutomaticBlink = true { didSet { for preview in sourceInstances.values { preview.automaticBlink = sourceAutomaticBlink }; refresh() } }
-    var isActiveMode = false { didSet { if oldValue && !isActiveMode { cancelSourcePluginLibraryMount() } } }
+    var isActiveMode = false { didSet { if oldValue && !isActiveMode { cancelSourcePluginLibraryMount(); revealSourceInterface() } } }
     // Timeline
     var timelinePlaying = false
     var timelineTime: Float = 0 { didSet { refresh() } }
@@ -1648,6 +1675,7 @@ final class StudioModel: ViewportInputHandler {
 
     func newScene() {
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
+        sourceHideStudioUI?.reveal()
         // The SHA-gated camera/item/light caches survive a New Scene as they
         // survive undo/redo: the empty document matches none of them (its
         // scene identity is nil), so nothing renders, and undoing the New
@@ -2260,7 +2288,7 @@ final class StudioModel: ViewportInputHandler {
                                 world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         }
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
-                        if showGizmos, selection == o.id {
+                        if effectiveShowGizmos, selection == o.id {
                             gizmos += try sourceCharacterGizmos(o, preview: preview, world: world)
                             characterGuides = (o, preview, world)
                         }
@@ -2298,7 +2326,7 @@ final class StudioModel: ViewportInputHandler {
                 items += r.items
                 skinSets[inst.instanceID] = r.skinSet
                 bounds.expand(r.bounds)
-                if showGizmos, selection == o.id {
+                if effectiveShowGizmos, selection == o.id {
                     gizmos += characterGizmos(o, inst: inst, result: r)
                 }
             case .item:
@@ -2408,13 +2436,13 @@ final class StudioModel: ViewportInputHandler {
             }
         }
         if let text = ikStatusReport.update(failures: ikFailures, enabled: ikEnabled, status: status), text != status { status = text }
-        if !lightGlyphs.isEmpty && showGizmos {
+        if !lightGlyphs.isEmpty && effectiveShowGizmos {
             let batch = GizmoBuilder.lines(lightGlyphs, color: Float4(1, 0.85, 0.3, 1), depthTest: false)
             gizmos.append(batch)
             lightGlyphBatch = batch
         }
         // Selection gizmo
-        if showGizmos, let sel = selectedObject, sel.kind != .folder, poseMode == .object || sel.kind != .character {
+        if effectiveShowGizmos, let sel = selectedObject, sel.kind != .folder, poseMode == .object || sel.kind != .character {
             do {
                 let m = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
                 let origin = m.translation
@@ -3037,7 +3065,7 @@ final class StudioModel: ViewportInputHandler {
     private func finishHoverPicks() {
         while let finished = hoverMailbox.take() {
             PerfTrace.measure(.studioHoverPick, "StudioHoverPick") {
-                if !(showGizmos && selection != nil) { hoverPicks.cancel() }
+                if !(effectiveShowGizmos && selection != nil) { hoverPicks.cancel() }
                 let (outcome, next) = hoverPicks.finish(finished.request, current: hoverPickContext)
                 PerfTrace.hoverPick(applied: outcome == .apply, latency: CACurrentMediaTime() - hoverPickStarted,
                                     gpuTime: finished.result.gpuTime)
@@ -3274,7 +3302,7 @@ final class StudioModel: ViewportInputHandler {
     /// and replaces any earlier waiting position; the result is applied on the
     /// main actor by `finishHoverPicks`.
     func mouseMoved(to p: SIMD2<Float>) {
-        guard showGizmos, selection != nil else { return }
+        guard effectiveShowGizmos, selection != nil else { return }
         if let request = hoverPicks.move(to: p, context: hoverPickContext) { startHoverPick(request) }
         else { PerfTrace.event(.hoverPickCoalesced) }
     }
@@ -3291,6 +3319,15 @@ final class StudioModel: ViewportInputHandler {
     func keyDown(_ event: NSEvent) -> Bool {
         let chars = event.charactersIgnoringModifiers ?? ""
         let mods = event.modifierFlags
+        let modified = !mods.intersection([.command, .option, .control, .shift, .function, .capsLock]).isEmpty
+        switch SourceHideStudioUIPlugin.shortcutAction(isSpace: event.keyCode == 49,
+            hasModifiers: modified, isRepeat: event.isARepeat, ownsInput: isActiveMode,
+            mounted: sourceHideStudioUI != nil) {
+        case .unhandled: return false
+        case .consume: return true
+        case .toggleVisibility: toggleSourceInterface(); return true
+        case .continueViewport: break
+        }
         if let n = Int(chars), chars.count == 1, !mods.contains(.command) {
             let slot = n == 0 ? 9 : n - 1
             if mods.contains(.shift) { saveCameraSlot(slot) } else { loadCameraSlot(slot) }
