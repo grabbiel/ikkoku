@@ -85,7 +85,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   sexes. Asynchronous normal-head selection is merged. Prepared inputs reduce
   owner-thread stalls at a total-latency cost. Fallback reuse is merged with a
   verified allocation reduction, without consistent latency improvement.
-  Bounded composition batching reduces the selected case from 16 waits to six;
+  Bounded composition batching is merged in [#213](https://github.com/grabbiel/ikkoku/pull/213)
+  and reduces the selected case from 16 waits to six;
   its small timing comparison retains mixed owner-thread results. See
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
   tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192).
@@ -94,7 +95,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
-  evidence, not fixes or added material coverage.
+  evidence, not fixes or added material coverage. The latest controlled split
+  associates variation with a discard statement in the instrumented program;
+  source alpha testing remains required.
 - **Mods / Plugins:** immutable library selection, bounded translated profiles
   and three exact native adapters have selected app/save/restore acceptance.
   Mounted-session controls and fresh-profile preview rollback are merged in
@@ -472,7 +475,7 @@ retains exact cases and limits. The next task evaluates bounded batching within
 one applying call while preserving synchronous completion and private failure
 cleanup; no batching improvement is claimed here.
 
-**Local acceptance — bounded composition batches, [#208](https://github.com/grabbiel/ikkoku/issues/208):**
+**Merged acceptance — bounded composition batches, [#213](https://github.com/grabbiel/ikkoku/pull/213):**
 The Metal path prepares private inputs/outputs, encodes all recipes and completes
 once per non-empty applying call, then registers the validated texture views and
 replays material entries in source order. A separate 128 MiB logical input-pixel
@@ -512,6 +515,22 @@ records the two-block scope, full-plane/common-mask checks and compiler-perturba
 limit. This neither identifies the responsible operation nor authorizes removing
 production alpha testing. The next diagnostic keeps mask/predicate work observable
 and removes only discard, requiring a fresh varying baseline before interpretation.
+
+**Diagnostic handoff — observed discard-only sampling, [#188](https://github.com/grabbiel/ikkoku/issues/188):**
+Both private variants retain the same mask/comparison work and record its combined
+mask and original predicate bits. They differ by one discard statement. The fresh
+observed-prefix control varies with both texture providers; no-discard repeats
+all five attachments exactly. All 16 draws retain 2,948 visible pixels, matching
+primitive/pass IDs, alpha and UVs. Root independently decodes and verifies all
+80 attachment hashes and unchanged inputs. Visible mask values remain 1 and
+predicates 0; this does not observe helper invocations. Actual MSL 4.0 pipelines
+accept the five-attachment, 60-byte logical color payload with fast math and
+preserve-invariance disabled. The [renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+records counts, parser checks and the restored private harness. The result narrows
+the compiled-program association, without identifying a compiler/driver defect
+or changing production shaders, coverage, source tolerances or performance claims.
+The next bounded comparison keeps the source alpha test and changes only the
+explicit language version; #188 remains open.
 
 **Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
 A supported hidden attachment initializer loads fresh and saves successfully,
