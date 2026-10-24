@@ -26,10 +26,15 @@ extension StudioModel {
         var candidate = doc
         candidate.sourcePluginLibrary = nil; candidate.sourcePluginLibraryConfiguration = nil
         candidate.sourcePluginState = nil
+        let attachments = PluginAttachmentPreparation(studio: self)
+        defer { attachments.abort() }
         let session = try SourceStudioPluginSession(profileURL: profileURL, document: candidate,
-            attachment: pluginAttachmentResolver())
+            attachment: { child, parent in
+                try MainActor.assumeIsolated { try attachments.frame(child: child, parent: parent) }
+            })
         let next = try session.savedDocument()
         cancelSourcePluginLibraryMount()
+        attachments.commit(document: next)
         sourcePluginSession = session; doc = next; sourcePluginsRunning = true
         status = "Loaded \(session.library.packages.count) converted plugin packages"
     }

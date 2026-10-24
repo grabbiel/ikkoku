@@ -136,6 +136,85 @@ func sourceStudioCharacterPreviewShapeChangesInvalidateCachedPoseAtSameTimeWhenS
     #expect(try preview.editedPose(animationElapsed: 0.5).localMatrices == initial.localMatrices)
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT", "IKKOKU_STUDIO_ANIMATION_CATALOG"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires source Studio pose and animation fixtures"))
+func sourceStudioAttachmentCheckpointRestoresWarmShapeAndAnimationWithoutResourceReplacement() async throws {
+    let input = try sourceStudioPreviewInputs(), data = try Data(contentsOf: input.scene)
+    let reference = SourceStudioCharacterReference(sceneFile: input.scene.path, sceneSHA256: OriginalCardFixture.hash(data),
+        rigFile: input.rig.path, boneCatalogFile: input.catalog.path, objectKey: 10,
+        animationCatalogFile: try SourceFixtureSupport.require("IKKOKU_STUDIO_ANIMATION_CATALOG"))
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let checks = try await liveTickOffPool {
+        let preview = try SourceStudioCharacterPreview(reference: reference, resources: resources)
+        let control = try SourceStudioCharacterPreview(reference: reference, resources: resources)
+        var animation = SourceStudioAnimationState(record: preview.record)
+        animation.group = 0; animation.category = 0; animation.no = 0
+        var body = preview.savedBodyValues, face = preview.savedFaceValues
+        body[0] = 0.63; face[33] = 0.41
+        let initial = try preview.editedPose(faceValues: face, bodyValues: body, animationState: animation, animationElapsed: 0.7)
+        _ = try control.editedPose(faceValues: face, bodyValues: body, animationState: animation, animationElapsed: 0.7)
+        let checkpoint = preview.captureAttachmentReadCheckpoint()
+        let originalRig = preview.preview, originalPose = preview.pose, originalDiagnostics = preview.diagnostics
+        let before = resources.statistics()
+        var otherBody = body, otherFace = face
+        otherBody[0] = 0.21; otherFace[33] = 0.82
+        let changed = try preview.editedPose(faceValues: otherFace, bodyValues: otherBody, animationState: animation, animationElapsed: 1.1)
+        preview.restoreAttachmentReadCheckpoint(checkpoint)
+        let restoredInputs = preview.sourceBodyValues == body && preview.sourceFaceValues == face
+            && preview.pose.localMatrices == originalPose.localMatrices && preview.diagnostics == originalDiagnostics
+        let restored = try preview.editedPose(faceValues: face, bodyValues: body, animationState: animation, animationElapsed: 0.7)
+        let next = try preview.editedPose(faceValues: face, bodyValues: body, animationState: animation, animationElapsed: 0.9)
+        let expected = try control.editedPose(faceValues: face, bodyValues: body, animationState: animation, animationElapsed: 0.9)
+        let after = resources.statistics()
+        return [
+            ("Candidate changed the evaluated shape/clock", changed.localMatrices != initial.localMatrices),
+            ("Rollback restores shape baseline and diagnostics", restoredInputs),
+            ("Rollback retains SourceRigPreview identity", preview.preview === originalRig),
+            ("Rollback restores the held-clock pose", restored.localMatrices == initial.localMatrices),
+            ("Following clock matches an untouched warm control", next.localMatrices == expected.localMatrices),
+            ("Attachment evaluation and rollback allocate no GPU resources", before.meshes == after.meshes && before.textures == after.textures
+                && before.deformBuffers == after.deformBuffers && before.meshBufferBytes == after.meshBufferBytes
+                && before.deformBufferBytes == after.deformBufferBytes && before.hiddenBuffers == after.hiddenBuffers
+                && before.hiddenBufferBytes == after.hiddenBufferBytes && before.retiring == after.retiring),
+        ]
+    }
+    for (name, passed) in checks { #expect(passed, "\(name)") }
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
+               "Requires source Studio pose fixtures"))
+func sourceStudioAttachmentCandidateReleasesPartialConstructorTexturesAndMeshes() async throws {
+    let input = try sourceStudioPreviewInputs(), data = try Data(contentsOf: input.scene)
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let animation = folder.appendingPathComponent("invalid-animation.json")
+    try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "kind": "ikkoku-studio-animation-catalog",
+        "catalogSHA256": String(repeating: "0", count: 64), "entries": []]).write(to: animation)
+    let reference = SourceStudioCharacterReference(sceneFile: input.scene.path, sceneSHA256: OriginalCardFixture.hash(data),
+        rigFile: input.rig.path, boneCatalogFile: input.catalog.path, objectKey: 10, animationCatalogFile: animation.path)
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let checks = try await liveTickOffPool {
+        let before = resources.statistics()
+        var checks: [(String, Bool)] = []
+        for attempt in 1...2 {
+            var rejection = ""
+            do {
+                let transaction = SourceAppearanceLoadTransaction(resources: resources)
+                _ = try SourceStudioCharacterPreview(reference: reference, resources: resources, appearanceTransaction: transaction)
+            } catch { rejection = String(describing: error) }
+            let after = resources.statistics()
+            checks.append(("Partial constructor reaches the post-appearance catalog error \(attempt)", rejection == "Invalid or ambiguous Studio animation catalog."))
+            checks.append(("Partial constructor releases only its own GPU resources \(attempt)", before.meshes == after.meshes && before.textures == after.textures
+                && before.deformBuffers == after.deformBuffers && before.meshBufferBytes == after.meshBufferBytes
+                && before.deformBufferBytes == after.deformBufferBytes && before.hiddenBuffers == after.hiddenBuffers
+                && before.hiddenBufferBytes == after.hiddenBufferBytes && before.retiring == after.retiring))
+        }
+        return checks
+    }
+    for (name, passed) in checks { #expect(passed, "\(name)") }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_STUDIO_SCENE_FIXTURES", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT"]) && MTLCreateSystemDefaultDevice() != nil,
                "Requires IKKOKU_STUDIO_SCENE_FIXTURES, IKKOKU_SOURCE_AVATAR, IKKOKU_STUDIO_POSE_CONTRACT and a Metal device"))
 func sourceStudioCharacterPreviewRejectsChangedSceneBeforeAssetRegistrationWhenSupplied() throws {
