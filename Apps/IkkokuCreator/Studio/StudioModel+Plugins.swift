@@ -6,9 +6,9 @@ import Gameplay
 import Character
 
 extension StudioModel {
-    /// Installation keeps the candidate world isolated until all callbacks and
-    /// configurations validate. Reading a source attachment can lazily construct
-    /// live previews, so it is permitted only after this candidate commits.
+    /// The default/library gate blocks callbacks from lazily constructing live
+    /// previews until commit. Native/history restore opts into a separate cold,
+    /// request-owned resolver; fresh profile loading has its own preparation.
     final class PluginAttachmentAccess { var committed = false }
     struct PluginAttachmentRestoreInputs {
         let blockedObjects: Set<UUID>
