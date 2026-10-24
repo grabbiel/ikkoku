@@ -13,7 +13,7 @@ Supported edits are:
 - Character FK bones, IK targets and look-at target transforms; item FK transforms identified by their original ordinal bone name.
 - Character `enableFK`, `enableIK`, seven `activeFK` flags and five `activeIK` flags. Flags are written literally; source loading gives IK precedence if both modes are enabled.
 - Character animation catalog IDs, speed, pattern, force-loop, options and normalized time; ordered voice playlists and repeat mode, including variable-length replacement.
-- Embedded card body/face values, supported color fields, the worn outfit (`Status.coordinateType`, see [source outfit selection](#source-outfit-selection-st-c03-first-slice)), the per-garment clothes state and accessory visibility (`Status.clothesState` / `showAccessory`, see [source clothes state](#source-clothes-state-and-accessory-visibility-st-c03-second-slice)) and face thumbnail, using the existing bounded card editor. Head/sex/bone type, asset IDs, saved resolver identities and opaque card plug-ins remain unchanged.
+- Embedded card body/face values, supported color fields, the worn outfit (`Status.coordinateType`, see [source outfit selection](#source-outfit-selection-st-c03-first-slice)), the per-garment clothes state and accessory visibility (`Status.clothesState` / `showAccessory`, see [source clothes state](#source-clothes-state-and-accessory-visibility-st-c03-second-slice)), the shoes type (`Status.shoesType`, see [half-state meshes and indoor shoes](#half-state-meshes-and-indoor-shoes-st-c03-third-slice)) and face thumbnail, using the existing bounded card editor. Head/sex/bone type, asset IDs, saved resolver identities and opaque card plug-ins remain unchanged.
 - Current camera and ten saved camera slots, preserving position, all three Euler angles, all three distance components and field of view. Only the 40-byte version-2 payload changes.
 - A replacement scene PNG only when explicitly supplied. It must be one complete CRC-valid PNG; an embedded card cannot acquire a PNG prefix.
 
@@ -57,7 +57,7 @@ remains separate.
 
 ## App boundary and remaining work
 
-The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states and accessory flags that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
+The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
 
 The export validator rejects added/deleted/duplicated objects, reparenting, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
@@ -254,6 +254,10 @@ not committed:
   only for a slot that holds an accessory. A scene save serializes
   `ChaFile.status` into the embedded card's `Status` block.
 
+(The fallbacks and stand-in listed below describe this slice; the
+[third slice](#half-state-meshes-and-indoor-shoes-st-c03-third-slice) renders
+converted half states and indoor shoes natively.)
+
 **Native port.**
 
 - **Rules.** `SourceStudioWear` (`Packages/Engine/Sources/Studio/SourceStudioWear.swift`)
@@ -443,6 +447,147 @@ committed.
   calls `OCIChar.SetShoesType(type)`, which only writes
   `fileStatus.shoesType`, then refreshes the clothing-detail rows.
   `ChaControl.IsShoesStateKind` reads kind 7 or 8 by `shoesType`.
+
+**Conversion.** `Tools/reverse/maker_asset_library.py` tags each drawable
+renderer under an alternate switch node (`n_top_b`, `n_bot_b`, `n_bot_c`,
+`n_panst_b`) of a top, bottom, bra, shorts or pantyhose prefab as an
+`alternates` row: `meshName`, the switch nodes above it, and `activeWhen`,
+the conjunction of the table's conditions over those nodes (one clause per
+clothes kind with its allowed states). A node without a recovered rule, or
+nodes that are never active together, reject the build. The half-state
+renderers' material evidence goes to a separate `alternates.json`, so each
+dressed entry's `materials.json`, rig and recipes keep their bytes.
+`maker_asset_materials.py` composes their `wearAppearance` /
+`wearCardBindings` (the dressed parts and recipes unchanged, then the
+alternate ones; an alternate renderer of the dressed material reuses the
+dressed composed texture). The default selection adds bottom 106-1
+(`n_bot_b`), pantyhose 110-1 (`n_panst_b`) and the indoor shoes 112-2
+(uwabaki); tops 105-3, 105-38 and 105-39 gain their `n_top_b` T-shirt. No bra
+or shorts is converted: the original masks a bra under the top with the
+top's `OverBraMask`, which is not converted, and the Studio fixture's dressed
+character wears bra 1 and shorts 1, so converting them would change its
+dressed render. The retained library's 186 files stay byte-identical except
+`material-inputs.json`, which gains the new entries' inputs; retained entries,
+their order and the head assemblies are unchanged.
+
+**Native port.**
+
+- **Assembly.** `SourceMakerLibrary.prepare(card:coordinate:baseURL:wear:)`
+  with `wear` true (Studio) assembles each converted garment's half-state
+  meshes with its wear appearance, and the indoor shoes as clothing kind 7:
+  the same category 112 entry loaded by `parts[7]`'s ID, whose recipes
+  `SourceAppearanceBindings.contextualizedIndoorShoes` rebinds from slot 8 to
+  slot 7 (`ClothesShoesInner`). The indoor shoes never replace the top's body
+  cut-out. `Prepared.indoorShoes` says whether they were assembled, are the
+  catalog's empty row, or are unconverted. The Maker assembly (`wear` false)
+  is unchanged: dressed meshes and outdoor shoes only, byte-identical output.
+- **Selection.** `SourceStudioWearLayout` maps each alternate renderer to its
+  switch-node ancestors, and `evaluate` draws a renderer only while its
+  garment is visible and every switch node above it is active, so a half
+  state draws the `_b` mesh and hides the `_a` mesh, with the body mask from
+  the `ChangeAlphaMask` row. Converted indoor shoes follow kind 7 and the
+  outdoor shoes kind 8 by `shoesType`. Hidden renderers are not drawn, and
+  the frame bounds still cover every assembled part as before.
+- **Shoes type.** `StudioModel.setSourceShoesType` serves the Clothes tab's
+  Indoor/Outdoor picker (CharaStudio's State panel shoes buttons) and the
+  scenario op `setShoesType`. It records one undo snapshot and persists
+  `StudioObject.sourceShoesType` (nil, or a value equal to the saved one,
+  means the card's saved `shoesType`). Export writes `Status.shoesType`
+  through `SourceCharacterCard.Edits.shoesType`, replacing the token or
+  appending the field when the card does not save it and the value is not
+  the `MemberInit` default 0. Since #149 the Studio live step applies wear
+  on worker threads, so `shoesType` travels in
+  `SourceStudioLiveTick.FrameRequest` with the clothes state and accessory
+  flags, and `setWear(clothesState:showAccessory:shoesType:)` keeps the
+  state inside the preview.
+- **Tools.** `ikkoku-inspect card-model … --studio-wear` selects the saved
+  wear's renderers through `SourceStudioWearLayout.saved` (the
+  [neutral-model gate](../character/neutral-model-parity.md) then compares
+  the half-state meshes). The live fixture probe's
+  `IKKOKU_LIVE_SOURCE_MAKER_WEAR=1` builds the Studio wear assembly with the
+  card's saved hidden parts and body mask. The source-shader binding
+  derivation reads `alternates.json` and marks an alternate renderer
+  visible by its `activeWhen` clauses; an unsaved `shoesType` reads as the
+  `MemberInit` 0.
+
+**Original-player reference (VM, read-only, 2026-10-24).**
+`Tools/reverse/original_wear_probe.py` drives
+`Tools/reverse/fixtures/OriginalCharacterProbe.cs`, whose settings TSV now
+takes `clothes`, `clothesState` and `shoesType`: the player loads the
+fixture card with top 105-38, bottom 106-1, pantyhose 110-1, indoor shoes
+112-2 and outdoor shoes 112-3 in clothes state `1,1,0,0,0,1,0,0,0` with
+`shoesType` 0, keeps the loaded state (no `SetClothesStateAll(0)`), and
+records `objClothes` activity and the body `_alpha_a/_alpha_b`. One
+`prlctl exec` bootstraps `run.ps1` from a host-only endpoint, which also
+serves `plugins\shader-properties.tsv` (built from the translated programs'
+`program.json` properties) so the capture records every material property;
+the first capture lacked it, so `_Texture3` was unbound in the live
+comparison, and was kept only as the geometry repeat. The probe root was
+removed, no game process remained, and the Parallels errno-24 count stayed 5
+before and after both phases. The captures remain under ignored `.local/`.
+
+**Evidence, 2026-10-24.** Limits are the existing ones, unchanged.
+
+- **Geometry.** `compare_original_model.py` on `card-model --studio-wear`
+  passes against both captures: 20 selected parts, 33,882 vertices, maximum
+  vertex error 7.15e-7 and matrix error 7.30e-7, silhouette IoU 1.0. The
+  selection draws `o_top_tsyats_b`, `o_bot_pants01_b`, `o_panst_00_b` and
+  `o_shoes_uwabaki01` and switches off their `_a` meshes and the outdoor
+  shoes. The player's capture holds exactly those four garment meshes, with
+  the outdoor-shoe object inactive and body `_alpha_a/_alpha_b` (0,1).
+- **Colour.** The live probe with `IKKOKU_LIVE_SOURCE_MAKER_WEAR=1`
+  (`compare_original_frame.py`): geometry IoU 1.0; depth-normals pass;
+  translated garments (the half top, half bottom and uwabaki) mean 0.059,
+  p99 1, maximum 19 channel bytes, pass; `main_opaque` mean 0.073, p99 1,
+  pass. `main_skin` as a whole fails, because the untranslated pantyhose
+  (`main_alpha`, no translated program) covers the legs in the original.
+  `Tools/reverse/compare_wear_frame.py` repeats the family comparison
+  outside the pantyhose's BakeMesh silhouette (12,145 pixels, not depth
+  tested): `main_skin` on 53,885 pixels has mean 0.038, p99 1, maximum 10,
+  pass, which validates the half-top body mask (0,1). Hair, eyes and the
+  production colour keep their known residuals (the eye families from the
+  look-settings iris input, not from wear). The pantyhose colour is not
+  established; only its geometry is verified.
+- **Dressed identity.** With every garment on, the scenario scene (outdoor
+  shoes) and the accessory and FK scenes (indoor shoes of the same prefab as
+  their outdoor shoes) render RGBA8 captures byte-identical to the
+  pre-change app with the retained library, with either library.
+- **Lanes.** `half-state.json` (42 steps) on the probe's fixture card built
+  into a Studio scene (`studio_selection_fixture.py --card`, env key
+  `IKKOKU_STUDIO_HALF_STATE_SCENE`): the saved half states draw exactly the
+  three `_b` meshes and the uwabaki with body mask (0,1) and no fallback.
+  Top on changes 3,499 pixels by more than 2/255, bottom on 134 (the half
+  bottom is mostly under the top), pantyhose on 5,844, and `shoesType` 1
+  604. Undo and redo restore every capture exactly. Editing back to the half
+  states and indoor shoes clears the edit and exports the source SHA. The
+  changed export differs from the source body in four bytes (three
+  `clothesState` bytes and `shoesType`) and reimports with them saved.
+  `reload-save-half-state` / `reload-load-half-state` keep a top-on,
+  outdoor-shoes edit across a native save and a fresh process (4,107 and
+  3,499 changed pixels; undo restores the loaded frame). `accessory-toggle`
+  now draws `o_top_tsyats_b` for top half (3,545 pixels from the
+  bottom-off capture) and the converted indoor shoes 112-1.
+- **Tests.** `sourceStudioWearHalfStateMeshesFollowUpdateVisible`,
+  `sourceStudioWearAlternatesWithoutMeshesStillReportTheFallback`,
+  `sourceStudioWearLibraryAlternatesMatchUpdateVisibleAndKeepTheDressedParts`
+  (fixture), `sourceShaderBindingsFollowTheSavedHalfStateOverAlternateRenderers`
+  (fixture), `sourceCardEditingShoesTypePatchesOrAppendsOnlyItsToken`; Python
+  `test_maker_asset_library.py` (switch rules, alternate tagging, the compact
+  rig writer), `test_original_wear_probe.py` and `test_compare_wear_frame.py`.
+
+**Fallbacks that remain.** These still draw dressed with a diagnostic:
+
+- A converted garment whose library entry has no half-state meshes (an
+  older library, or a prefab without alternate renderers).
+- Half states of an unconverted (reference) garment.
+- Unconverted indoor shoes: with `shoesType` 0 the outdoor-shoe geometry
+  stands in for them and follows their state, as before.
+
+**Still open.** Bra and shorts (not converted, pending `OverBraMask`; the
+converter would tag their half-state meshes); the pantyhose `main_alpha` program and
+colour parity; half 2 has no installed top, bottom or bra row to test;
+composite-top sub-parts; `visibleSimple`/`visibleBodyAlways`; CharaStudio
+reload of a changed export; and mouse-driven use of the new picker.
 
 ## Source face-state editing (ST-C04)
 
