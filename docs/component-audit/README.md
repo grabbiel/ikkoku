@@ -291,6 +291,25 @@ fix, source parity or timing improvement. [The renderer reference](../reference/
 retains the numerical scope; #188 remains open. The next bounded experiment
 changes subpixel placement and edge direction while retaining these controls.
 
+**Local acceptance — mounted plugin sessions, [#198](https://github.com/grabbiel/ikkoku/pull/198):**
+The library panel now identifies resident native plugins and translated profiles
+alongside library-mounted generations, with guarded Run/Pause and Unload access.
+All 42 plugin checks, 18 native-save checks, nine fresh-process checks and 84
+runner checks pass. Initial empty-profile and scenario-mode expectation failures
+remain retained; the corrected harness preserves the loader's empty-profile
+rejection and activates ordinary Studio scenarios through the real app mode.
+Root verifies the actual panel for all three origins, Maker-disabled commands,
+Switch to Studio, profile Pause/Run, and Unload. After native unload, outfit 2
+and slot 1's hidden state remain selected while its label returns to the fallback.
+The accepted executable is `1c516693…fc9` from runtime `71e1309`; its GUI process
+exits normally. Presentation reads resident metadata without file I/O or new
+frame work. Mixed-origin and concurrent pending/stale-dialog GUI cases remain
+outside this acceptance, and these overlapping functional runs support no
+timing claim. The [adapter reference](../reference/mods/native-adapters.md)
+retains exact fixtures and limits. The owner next investigates fresh-profile
+initialization failure isolation, beginning with a reproduction before changing
+supported callback behavior.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
