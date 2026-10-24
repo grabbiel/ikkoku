@@ -310,6 +310,21 @@ retains exact fixtures and limits. The owner next investigates fresh-profile
 initialization failure isolation, beginning with a reproduction before changing
 supported callback behavior.
 
+**Diagnostic handoff — subpixel sampling controls, [#199](https://github.com/grabbiel/ikkoku/pull/199):**
+The standalone tool adds a translated discontinuous grid and a sheared copy,
+retaining its original three meshes, shader and eight authored mip levels.
+All five cases remain bit-identical over four draws across color, UV,
+derivatives, returned samples and primitive IDs. CPU triangle-union coverage
+matches all 4,096 visible pixels per case; values are finite and affine-gradient
+error is zero. Root verifies all 99 retained artifact hashes and byte equality
+of the earlier control's 60 artifacts. The measured executable is
+`66d8dbd6…45a2`; the retained report is `bfd362c1…f232`. These placement and edge
+direction controls still do not reproduce #188, establish a production fix or
+support a performance or source-parity claim. The
+[renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact mesh and coverage bounds. The owner next compares constant
+and varying clip-space w while preserving projected geometry and the controls.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
