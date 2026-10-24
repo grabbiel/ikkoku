@@ -3,6 +3,7 @@ import Gameplay
 import Character
 import Studio
 import Renderer
+import Scene
 import CryptoKit
 import simd
 
@@ -10,7 +11,7 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
-    /// Reproduction only: retains the fresh loader's existing callback behavior.
+    /// Source-backed fresh-profile callback and failure-isolation checks.
     let reproduceFreshProfileFailure: Bool?
     /// Stops only the dedicated CPU worker; the main actor remains responsive.
     private final class Barrier: @unchecked Sendable {
@@ -463,7 +464,8 @@ struct PluginLibraryScenario: Decodable {
     }
 }
 
-// Diagnostic fixture only. No change to loadSourcePlugins or its callback policy.
+// Source-backed installation regression; the original failing report is retained
+// separately. Both supported callbacks and rejected candidates use the real loader.
 extension PluginLibraryScenario {
     @MainActor private func reproduceFreshLoad(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
         var rows: [StudioScenario.Report.StepResult] = []
@@ -493,15 +495,29 @@ extension PluginLibraryScenario {
             }
             let sourceFile = studio.doc.sourceSceneFile, sourceSHA = studio.doc.sourceSceneSHA256
             studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            let brokenAnimation = scratch.appendingPathComponent("invalid-animation-catalog.json")
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 2, "kind": "ikkoku-studio-animation-catalog",
+                "catalogSHA256": String(repeating: "0", count: 64), "entries": []]).write(to: brokenAnimation)
             // Start is deferred until step(), not session construction. The
             // failure controls target initializers and active Awake instead.
             for (name, phase, hidden, fail) in [
                 ("hiddenInitializerControl", "initializer", true, false),
                 ("hiddenInitializerFailure", "initializer", true, true),
                 ("activeAwakeFailure", "Awake", false, true),
-                ("activeStartControl", "Start", false, false)] {
+                ("activeStartControl", "Start", false, false),
+                ("warmShapeClockFailure", "Awake", false, true),
+                ("hiddenPartialConstructorFailure", "initializer", true, true)] {
                 studio.newScene()
                 var parent = template; parent.id = UUID(); parent.parent = nil; parent.visible = !hidden
+                let partial = name == "hiddenPartialConstructorFailure"
+                if partial {
+                    parent.sourceCharacter = .init(sceneFile: reference.sceneFile, sceneSHA256: reference.sceneSHA256,
+                        rigFile: reference.rigFile, boneCatalogFile: reference.boneCatalogFile, objectKey: reference.objectKey,
+                        makerLibraryFile: reference.makerLibraryFile, attachmentCatalogFile: reference.attachmentCatalogFile,
+                        animationCatalogFile: brokenAnimation.path, dynamicsFile: reference.dynamicsFile,
+                        handPatternsFile: reference.handPatternsFile, lookSettingsFile: reference.lookSettingsFile)
+                }
                 var child = StudioObject(name: "Attachment probe", kind: .folder)
                 child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
                 var target = StudioObject(name: "Retained session target", kind: .folder); target.sourceObjectKey = 11
@@ -512,6 +528,14 @@ extension PluginLibraryScenario {
                     bindings: [.init(guid: binding.guid, type: binding.type, sourceObjectKey: 11)])
                 try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration)
                 studio.sourcePluginsRunning = false
+                var warmPose: RigPose?, warmBody: [Float]?, warmFace: [Float]?, warmDiagnostics: [String]?
+                let warmPreview = studio.sourceShapePreview(for: parent.id)
+                if name == "warmShapeClockFailure", let preview = warmPreview {
+                    var body = preview.savedBodyValues, face = preview.savedFaceValues
+                    body[0] = body[0] < 0.5 ? 0.8 : 0.2; face[33] = face[33] < 0.5 ? 0.8 : 0.2
+                    warmPose = try preview.editedPose(faceValues: face, bodyValues: body, animationElapsed: 0.7)
+                    warmBody = body; warmFace = face; warmDiagnostics = preview.diagnostics
+                }
                 let beforeDoc = studio.doc, beforeSession = studio.sourcePluginSession
                 let beforeRuntime = try beforeSession?.savedDocument(), beforeAdapter = studio.sourceFocus.adapter
                 let beforeResources = resources(), beforePreviews = previews(), beforeFrame = studio.host.renderer.currentFrame()
@@ -521,13 +545,15 @@ extension PluginLibraryScenario {
                 record(name + "Precondition", beforeSession != nil && beforeAdapter != nil
                     && (studio.sourceShapePreview(for: parent.id) == nil) == hidden,
                     "hidden=\(hidden), cached previews=\(beforePreviews.count), resources=\(beforeResources)")
-                let profile = try freshProfileFixture(directory: scratch.appendingPathComponent(name), phase: phase, fail: fail)
+                let profile = try freshProfileFixture(directory: scratch.appendingPathComponent(name), phase: phase, fail: fail && !partial)
                 var rejection: String?
                 do { try studio.loadSourcePluginProfileInteractively(profileURL: profile, expectedGeneration: beforeGeneration) }
                 catch SourcePluginError.runtime(let message) { rejection = message }
+                catch RigError.invalid(let message) where partial { rejection = message }
                 catch { rejection = "UNEXPECTED: \(error)" }
                 if fail {
-                    record(name + "NamedError", rejection == "Unsupported arithmetic operator or Int32 arithmetic.", rejection ?? "No error")
+                    let expected = partial ? "Invalid or ambiguous Studio animation catalog." : "Unsupported arithmetic operator or Int32 arithmetic."
+                    record(name + "NamedError", rejection == expected, rejection ?? "No error")
                     let afterRuntime = try studio.sourcePluginSession?.savedDocument()
                     record(name + "MountRetained", studio.doc == beforeDoc && studio.sourcePluginSession === beforeSession
                         && afterRuntime == beforeRuntime && studio.sourceFocus.adapter === beforeAdapter
@@ -540,19 +566,69 @@ extension PluginLibraryScenario {
                     let afterPreviews = previews(), afterResources = resources()
                     record(name + "HostRollback", beforePreviews == afterPreviews && beforeResources == afterResources,
                         "previews before=\(beforePreviews), after=\(afterPreviews); parent cached after=\(studio.sourceShapePreview(for: parent.id) != nil); resources before=\(beforeResources), after=\(afterResources)")
+                    if hidden {
+                        for attempt in 1...2 {
+                            var repeatError: String?
+                            do { try studio.loadSourcePluginProfileInteractively(profileURL: profile, expectedGeneration: beforeGeneration) }
+                            catch SourcePluginError.runtime(let message) { repeatError = message }
+                            catch RigError.invalid(let message) where partial { repeatError = message }
+                            catch { repeatError = "UNEXPECTED: \(error)" }
+                            let repeatRuntime = try studio.sourcePluginSession?.savedDocument()
+                            record(name + "Repeat\(attempt)", repeatError == expected && resources() == beforeResources && previews() == beforePreviews
+                                && studio.doc == beforeDoc && studio.sourcePluginSession === beforeSession
+                                && repeatRuntime == beforeRuntime
+                                && studio.status == beforeStatus && studio.sourcePluginMountGeneration == beforeGeneration
+                                && sameFrame(beforeFrame, studio.host.renderer.currentFrame()), repeatError ?? "No error")
+                        }
+                    }
+                    if let warmPose, let preview = warmPreview {
+                        let inputsRestored = preview.sourceBodyValues == warmBody && preview.sourceFaceValues == warmFace
+                            && preview.diagnostics == warmDiagnostics && studio.sourceShapePreview(for: parent.id) === preview
+                        let resumed = try preview.editedPose(faceValues: warmFace, bodyValues: warmBody, animationElapsed: 0.7)
+                        record("warmShapeClockRestored", inputsRestored && resumed.localMatrices == warmPose.localMatrices
+                            && resources() == beforeResources, "Warm shape inputs, held-clock pose, identity and resources restored without rebuilding")
+                    }
                 } else {
                     record(name + "Mounted", rejection == nil && studio.sourcePluginSession !== beforeSession
                         && studio.sourceShapePreview(for: parent.id) != nil
                         && studio.doc.sourcePluginState?.bindings.first?.fields["position"] != nil,
                         rejection ?? "Supported attachment profile committed; reference point17 resolved")
+                    let committedPreview = studio.sourceShapePreview(for: parent.id), committedResources = resources()
                     if phase == "Start" {
                         record("startDeferredUntilStep", studio.doc.sourcePluginState?.bindings.first?.started == false)
                         try studio.stepSourcePlugins(deltaTime: 0.02)
                         record("startAttachmentExecuted", studio.doc.sourcePluginState?.bindings.first?.started == true,
                                "Supported Start attachment read executed on first real step, after installation")
+                    } else {
+                        record("initializerRepeatedReadMatches", studio.doc.sourcePluginState?.bindings.first?.fields["position"]
+                            == studio.doc.sourcePluginState?.bindings.first?.fields["positionAgain"])
+                        try studio.stepSourcePlugins(deltaTime: 0.02)
                     }
+                    record(name + "CommittedPreviewReused", studio.sourceShapePreview(for: parent.id) === committedPreview
+                        && resources() == committedResources, "First real step retains the committed preview and resource vector")
                 }
             }
+            // The current IR marks Destroy pending until its step barrier, so
+            // pruning before commit is a direct preparation-context control,
+            // not a claim that installation runs the destruction barrier.
+            studio.newScene()
+            var parent = template; parent.id = UUID(); parent.parent = nil; parent.visible = false
+            var child = StudioObject(name: "Pruned attachment probe", kind: .folder)
+            child.parent = parent.id; child.sourceAttachmentPoint = 17
+            let beforePrune = resources(), beforePrunePreviews = previews()
+            let staged = StudioModel.PluginAttachmentPreparation(studio: studio)
+            defer { staged.abort() }
+            _ = try staged.frame(child: child, parent: parent)
+            let afterFirstRead = resources()
+            _ = try staged.frame(child: child, parent: parent)
+            record("privateRepeatedRead", previews() == beforePrunePreviews && resources() == afterFirstRead,
+                   "Two reads share a private preview without publishing it to the live cache")
+            staged.commit(document: studio.doc) // Empty document excludes the candidate parent.
+            let afterPrune = resources()
+            record("prunedPreviewNotPublished", previews() == beforePrunePreviews
+                && afterPrune[0] == beforePrune[0] && afterPrune[2] == beforePrune[2]
+                && afterPrune[4] == beforePrune[4] && afterPrune[5] == beforePrune[5],
+                "Mesh/deform ownership returned; successful base texture cache publication follows the appearance transaction contract")
         } catch { record("reproductionFailure", false, String(describing: error)) }
         studio.cancelSourcePluginLibraryMount(); await studio.sourcePluginLibraryPreparationQueue.drain()
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
@@ -571,6 +647,7 @@ extension PluginLibraryScenario {
                                        "initializer": phase == "initializer" ? read : zero]]
         var body: [[String: Any]] = []
         if phase == "initializer" {
+            fields.append(["name": "positionAgain", "type": "Vector3", "serialized": true, "initializer": read])
             if fail { fields.append(["name": "trip", "type": "Int32", "serialized": false, "initializer": poison]) }
         } else {
             body.append(["kind": "assign", "name": "=", "children": [["kind": "field", "type": "Vector3", "name": "position"], read]])
