@@ -105,7 +105,10 @@ class ArgumentTests(unittest.TestCase):
                        dict(model_variant='female201',settings=Path('s')),dict(model_variant='female201',hand_patterns=Path('h')),
                        dict(model_variant='female201',look_patterns=Path('l')),
                        dict(model_variant='male201',settings=Path('s')),dict(model_variant='male201',hand_patterns=Path('h')),
-                       dict(model_variant='male201',look_patterns=Path('l'))]:
+                       dict(model_variant='male201',look_patterns=Path('l')),
+                       dict(model_variant='female00-bone1',settings=Path('s')),
+                       dict(model_variant='female00-bone1',hand_patterns=Path('h')),
+                       dict(model_variant='female00-bone1',look_patterns=Path('l'))]:
             with self.subTest(inputs=inputs),patch('original_character_probe.player_root') as root:
                 with self.assertRaises(ValueError):probe.start('vm',Path('unused'),**inputs)
                 root.assert_not_called()
@@ -147,7 +150,7 @@ class ArgumentTests(unittest.TestCase):
         self.assertIn('character-settings.tsv',text);self.assertIn('docs/reference/character/material-expansion.md',text)
 
     def test_head201_cli_uploads_variant_and_canonical_shapes_before_launch(self):
-        for variant in ('female201','male201'):
+        for variant in ('female201','male201','female00-bone1'):
             events=[]
             def guest(vm, script, *args):
                 events.append(('guest',script))
