@@ -47,7 +47,58 @@ enum FKGroup: String, CaseIterable, Identifiable {
 @MainActor @Observable
 final class StudioModel: ViewportInputHandler {
     let host: EngineHost
-    var doc = StudioDocument() { didSet { pruneSourceVoices(); refresh() } }
+    @ObservationIgnored private var documentStorage = StudioDocument()
+    /// The scene document. Every write prunes voices and rebuilds the frame,
+    /// as a stored property's `didSet` did, and notifies the readers of the
+    /// whole document. The camera is observed separately (`documentCamera`):
+    /// orbit, pan and dolly write it through that accessor, so they do not
+    /// re-evaluate the panels that read the document (R7 phase 2, item 1).
+    /// A document write still notifies camera readers when it changes the
+    /// camera, and `documentSourceSceneFile` readers when it changes that
+    /// field. The accessors mirror the `@Observable` macro's own: a whole-value
+    /// set notifies only when the value differs, an in-place mutation always.
+    var doc: StudioDocument {
+        get { access(keyPath: \.doc); return documentStorage }
+        set {
+            let camera = documentStorage.camera, sceneFile = documentStorage.sourceSceneFile
+            if documentStorage != newValue { withMutation(keyPath: \.doc) { documentStorage = newValue } }
+            else { documentStorage = newValue }
+            documentDidChange(camera: camera, sourceSceneFile: sceneFile)
+        }
+        _modify {
+            access(keyPath: \.doc)
+            let camera = documentStorage.camera, sceneFile = documentStorage.sourceSceneFile
+            _$observationRegistrar.willSet(self, keyPath: \.doc)
+            defer {
+                _$observationRegistrar.didSet(self, keyPath: \.doc)
+                documentDidChange(camera: camera, sourceSceneFile: sceneFile)
+            }
+            yield &documentStorage
+        }
+    }
+    /// The document's camera with its own observation. Writes notify only
+    /// camera readers and rebuild the frame like any document write; during an
+    /// orbit or pan drag the rebuild reuses the camera-independent frame
+    /// (`refreshCamera`).
+    var documentCamera: OrbitCamera {
+        get { access(keyPath: \.documentCamera); return documentStorage.camera }
+        set {
+            withMutation(keyPath: \.documentCamera) { documentStorage.camera = newValue }
+            PerfTrace.event(.studioCameraChange)
+            pruneSourceVoices()
+            if !refreshCamera() { refresh() }
+        }
+    }
+    /// `doc.sourceSceneFile`, observed on its own for the menu commands.
+    var documentSourceSceneFile: String? { access(keyPath: \.documentSourceSceneFile); return documentStorage.sourceSceneFile }
+
+    private func documentDidChange(camera: OrbitCamera, sourceSceneFile: String?) {
+        if documentStorage.camera != camera { withMutation(keyPath: \.documentCamera) {} }
+        if documentStorage.sourceSceneFile != sourceSceneFile { withMutation(keyPath: \.documentSourceSceneFile) {} }
+        PerfTrace.event(.studioDocChange)
+        pruneSourceVoices()
+        refresh()
+    }
     var selection: UUID? { didSet { if selection != oldValue { selectedBone = nil; selectedSourceIK = nil; refresh() } } }
     var gizmoMode: GizmoMode = .translate { didSet { refresh() } }
     var localSpace = true { didSet { refresh() } }
@@ -74,7 +125,9 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored var liveSourceWearChanged: [UUID: String] = [:]
     var inspectorTab: InspectorTab = .object
     var viewportSize = SIMD2<Float>(1600, 1200)
-    var status = "Ready"
+    var status = "Ready" { didSet { statusWrites &+= 1 } }
+    /// Counts `status` writes, so a frame rebuild can tell whether it reported anything.
+    @ObservationIgnored private var statusWrites = 0
     var frame = RenderFrame()
     var captureSize: (Int, Int) { (doc.captureWidth, doc.captureHeight) }
     var sceneURL: URL?
@@ -267,7 +320,11 @@ final class StudioModel: ViewportInputHandler {
     let sourceAudioBus = SourceStudioAudioBus()
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
-    @ObservationIgnored private var drag: DragState?
+    /// A new drag, or none, drops the camera drag's reusable frame.
+    @ObservationIgnored private var drag: DragState? { didSet { cameraReuse = nil } }
+    /// The camera-independent part of the last full frame, kept only while an
+    /// orbit or pan drag runs (see `refreshCamera`).
+    @ObservationIgnored private var cameraReuse: CameraReuse?
     @ObservationIgnored private var hoverAxis: GizmoAxis?
     @ObservationIgnored private var lastUndoPush = Date.distantPast
     @ObservationIgnored private var timer: Timer?
@@ -280,7 +337,11 @@ final class StudioModel: ViewportInputHandler {
     /// Set by `SourceAnimationInspector`'s `onAppear`/`onDisappear` so the headless
     /// UI report reflects the inspector that actually rendered.
     var sourceAnimationInspectorShown = false
-    @ObservationIgnored var sourcePluginSession: SourceStudioPluginSession?
+    @ObservationIgnored var sourcePluginSession: SourceStudioPluginSession? {
+        didSet { if (oldValue == nil) != (sourcePluginSession == nil) { withMutation(keyPath: \.hasSourcePluginSession) {} } }
+    }
+    /// Whether a plugin session is loaded, observed on its own for the menu commands.
+    var hasSourcePluginSession: Bool { access(keyPath: \.hasSourcePluginSession); return sourcePluginSession != nil }
     let sourceFocus = SourceApplicationFocusHost()
     @ObservationIgnored var sourceFocusObservers: [NSObjectProtocol] = []
     @ObservationIgnored var sourceLaunchObserver: NSObjectProtocol?
@@ -320,6 +381,12 @@ final class StudioModel: ViewportInputHandler {
             status = text
         }
         guard drag == nil else { return }
+        PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
+    }
+
+    /// The timer's step outside a drag: the timeline, the plugin session or
+    /// the live source animation.
+    private func stepLive() {
         if timelinePlaying {
             var t = timelineTime + 1.0 / 30.0
             if t > doc.timeline.duration { t = doc.timeline.loop ? 0 : doc.timeline.duration; if !doc.timeline.loop { timelinePlaying = false } }
@@ -1590,9 +1657,11 @@ final class StudioModel: ViewportInputHandler {
 
     // MARK: Camera
 
-    func resetCamera() { doc.camera = StudioDocument().camera }
+    func resetCamera() { documentCamera = StudioDocument().camera }
     func saveCameraSlot(_ i: Int) { guard i >= 0, i < 10 else { return }; doc.cameraSlots[i] = doc.camera; status = "Camera slot \(i + 1) saved" }
-    func loadCameraSlot(_ i: Int) { guard i >= 0, i < 10, let c = doc.cameraSlots[i] else { status = "Camera slot \(i + 1) is empty"; return }; doc.camera = c }
+    func loadCameraSlot(_ i: Int) { guard i >= 0, i < 10, let c = doc.cameraSlots[i] else { status = "Camera slot \(i + 1) is empty"; return }; documentCamera = c }
+    /// The viewport's orbit drag and the scenario runner's `orbit` step.
+    func orbitCamera(dx: Float, dy: Float) { documentCamera.orbit(dx: dx, dy: dy) }
     func focusSelection() {
         guard let id = selection else { return }
         guard let m = try? sourceWorldMatrix(of: id, document: doc, previews: sourceInstances) else {
@@ -1601,9 +1670,9 @@ final class StudioModel: ViewportInputHandler {
         var c = doc.camera
         if let o = doc.object(id), o.kind == .character { c.target = m.transformPoint(Float3(0, 0.9, 0)); c.distance = 3 }
         else { c.target = m.translation; c.distance = max(1, c.distance * 0.6) }
-        doc.camera = c
+        documentCamera = c
     }
-    func lookThrough(_ id: UUID) { if let cam = doc.object(id)?.savedCamera { doc.camera = cam } }
+    func lookThrough(_ id: UUID) { if let cam = doc.object(id)?.savedCamera { documentCamera = cam } }
     func updateCameraObject(_ id: UUID) { update(id) { $0.savedCamera = self.doc.camera; $0.transform.position = self.doc.camera.position } }
 
     // MARK: Frame building
@@ -1626,7 +1695,76 @@ final class StudioModel: ViewportInputHandler {
         return inst
     }
 
-    func refresh() {
+    func refresh() { PerfTrace.measure(.studioRefresh, "StudioRefresh") { refreshFrame() } }
+
+    /// What `refreshFrame` built that the view camera does not change, kept
+    /// for the rest of an orbit or pan drag (C6). Items, skin palettes, lights,
+    /// bounds and effects never read the camera: source previews take it only
+    /// for their own frame's camera field, and the light and camera glyphs are
+    /// world-space lines. The camera-sized guides are rebuilt from the inputs
+    /// recorded here. `frame` keeps its creation stamp, so a reused frame is
+    /// ordered against resource retirement as the frame it came from (R6).
+    private struct CameraReuse {
+        var frame: RenderFrame
+        /// The selected source character's FK/IK guides: the object as drawn
+        /// (timeline state applied), its preview and world matrix.
+        typealias CharacterGuides = (object: StudioObject, preview: SourceStudioCharacterPreview, world: float4x4)
+        var characterGuides: CharacterGuides?
+        var lightGlyphs: GizmoBatch?
+        /// The selection gizmo's origin and orientation.
+        var selectionGuide: (origin: Float3, orientation: simd_quatf)?
+    }
+
+    private var isCameraDrag: Bool {
+        switch drag {
+        case .orbit?, .pan?: return true
+        default: return false
+        }
+    }
+
+    /// A camera write's frame during an orbit or pan drag: the last full
+    /// frame with the new camera, main light and camera-sized guides, exactly
+    /// what `refreshFrame` would build again, since nothing else it reads can
+    /// change while the drag runs. The timer does not step the scene during a
+    /// drag, every other change goes through `refresh()`, which takes a new
+    /// reuse, and a new drag drops it. Returns false (the caller refreshes)
+    /// outside such a drag, without a reuse, or if a guide or the view camera
+    /// reports a problem, so the full rebuild reports it as before.
+    private func refreshCamera() -> Bool {
+        guard isCameraDrag, let reuse = cameraReuse else { return false }
+        return PerfTrace.measure(.studioCameraRefresh, "StudioCameraRefresh") {
+            let writes = statusWrites
+            var gizmos: [GizmoBatch] = []
+            if let guides = reuse.characterGuides {
+                guard let built = try? sourceCharacterGizmos(guides.object, preview: guides.preview, world: guides.world) else { return false }
+                gizmos += built
+            }
+            if let lines = reuse.lightGlyphs { gizmos.append(lines) }
+            if let guide = reuse.selectionGuide {
+                let size = viewCamera.worldUnitsPerPixel(at: guide.origin, viewport: viewportSize) * 110
+                gizmos += GizmoBuilder.build(mode: gizmoMode, origin: guide.origin, orientation: guide.orientation, size: size, highlight: hoverAxis)
+            }
+            var f = reuse.frame
+            f.camera = viewCamera
+            f.mainLight = effectiveMainLight
+            f.gizmos = gizmos
+            guard statusWrites == writes else { return false }
+            frame = f
+            host.renderer.submit(f)
+            return true
+        }
+    }
+
+    private func refreshFrame() {
+        let statusWritesBefore = statusWrites
+        // The camera drag's reuse (see `CameraReuse`): kept only for a frame
+        // without native characters (their gaze reads the camera and their
+        // hair steps per rebuild) or live source shaders, that reported nothing.
+        var reusable = isCameraDrag && !liveSourceShaders
+        var characterGuides: CameraReuse.CharacterGuides?
+        var lightGlyphBatch: GizmoBatch?
+        var selectionGuide: (origin: Float3, orientation: simd_quatf)?
+        cameraReuse = nil
         let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
         sourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
         // Native characters that left the document (delete, a deleted parent,
@@ -1708,12 +1846,16 @@ final class StudioModel: ViewportInputHandler {
                         var rendered = try preview.frame(camera: viewCamera, mainLight: effectiveMainLight, effects: doc.effects,
                             world: world, objectID: objectID, fkRotations: o.sourceFKRotations ?? [:], faceValues: o.sourceFaceValues, bodyValues: o.sourceBodyValues, ikTargets: o.sourceIKOverrides ?? [:], kinematics: o.sourceKinematics, animationState: o.sourceAnimation, animationElapsed: sourceAnimationTime)
                         if liveSourceShaders { applyLiveSourceShaders(&rendered, id: o.id, preview: preview, lines: &liveLines) }
-                        if showGizmos, selection == o.id { gizmos += try sourceCharacterGizmos(o, preview: preview, world: world) }
+                        if showGizmos, selection == o.id {
+                            gizmos += try sourceCharacterGizmos(o, preview: preview, world: world)
+                            characterGuides = (o, preview, world)
+                        }
                         items += rendered.items; skinSets.merge(rendered.skinSets) { _, new in new }
                         bounds.expand(rendered.sceneBounds)
                     } catch { status = "Source character \(o.sourceObjectKey ?? 0): \(error)" }
                     continue
                 }
+                reusable = false
                 let inst = instance(for: o)
                 if let card = o.card, inst.card != card { inst.card = card }
                 inst.poseDelta = combinedPoseDelta(o)
@@ -1849,7 +1991,9 @@ final class StudioModel: ViewportInputHandler {
             }
         }
         if !lightGlyphs.isEmpty && showGizmos {
-            gizmos.append(GizmoBuilder.lines(lightGlyphs, color: Float4(1, 0.85, 0.3, 1), depthTest: false))
+            let batch = GizmoBuilder.lines(lightGlyphs, color: Float4(1, 0.85, 0.3, 1), depthTest: false)
+            gizmos.append(batch)
+            lightGlyphBatch = batch
         }
         // Selection gizmo
         if showGizmos, let sel = selectedObject, sel.kind != .folder, poseMode == .object || sel.kind != .character {
@@ -1859,6 +2003,7 @@ final class StudioModel: ViewportInputHandler {
                 let orient = try localSpace ? sourceWorldRotation(of: sel.id) : .identity
                 let size = viewCamera.worldUnitsPerPixel(at: origin, viewport: viewportSize) * 110
                 gizmos += GizmoBuilder.build(mode: gizmoMode, origin: origin, orientation: orient, size: size, highlight: hoverAxis)
+                selectionGuide = (origin, orient)
             } catch { status = "Source object guide: \(error)" }
         }
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
@@ -1867,6 +2012,9 @@ final class StudioModel: ViewportInputHandler {
         frame = f
         host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
+        if reusable, statusWrites == statusWritesBefore {
+            cameraReuse = CameraReuse(frame: f, characterGuides: characterGuides, lightGlyphs: lightGlyphBatch, selectionGuide: selectionGuide)
+        }
     }
 
     private func sourceWorldMatrix(of id: UUID, document: StudioDocument,
@@ -2335,17 +2483,20 @@ final class StudioModel: ViewportInputHandler {
     func setSourceFKRotation(_ id: UUID, boneID: Int, degrees: Float3, pushHistory: Bool = true) {
         guard let i = doc.index(of: id) else { return }
         if pushHistory { pushUndo(force: true) }
-        var edits = doc.objects[i].sourceFKRotations ?? [:]
+        var object = doc.objects[i]
+        var edits = object.sourceFKRotations ?? [:]
         edits[boneID] = degrees
-        doc.objects[i].sourceFKRotations = edits
+        object.sourceFKRotations = edits
         if let preview = sourceInstances[id] {
-            var state = doc.objects[i].sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
+            var state = object.sourceKinematics ?? SourceStudioKinematicState(record: preview.record)
             state.enableFK = true; state.enableIK = false
             if let target = preview.controller.targets.first(where: { $0.bone.id == boneID }) {
                 for (j, group) in SourceStudioPose.Group.fkParts.enumerated() where !group.intersection(target.bone.fkGroup).isEmpty { state.activeFK[j] = true }
             }
-            doc.objects[i].sourceKinematics = state
+            object.sourceKinematics = state
         }
+        // One document write, so each drag event rebuilds the frame once.
+        doc.objects[i] = object
     }
 
     func setSourceIKValue(_ target: Int32, edit: SourceStudioIKEdit, pushHistory: Bool = true) {
@@ -2355,8 +2506,11 @@ final class StudioModel: ViewportInputHandler {
             let group = try SourceStudioIKEditing.groupIndex(target: target)
             if pushHistory { pushUndo(force: true) }
             state.enableIK = true; state.enableFK = false; state.activeIK[group] = true
-            var changes = doc.objects[i].sourceIKOverrides ?? [:]; changes[target] = edit
-            doc.objects[i].sourceIKOverrides = changes; doc.objects[i].sourceKinematics = state
+            var object = doc.objects[i]
+            var changes = object.sourceIKOverrides ?? [:]; changes[target] = edit
+            object.sourceIKOverrides = changes; object.sourceKinematics = state
+            // One document write, so each drag event rebuilds the frame once.
+            doc.objects[i] = object
         } catch { status = "Source IK guide: \(error)" }
     }
     func resetSourcePoseEdits() {
@@ -2550,10 +2704,10 @@ final class StudioModel: ViewportInputHandler {
             setSourceFKRotation(id, boneID: boneID, degrees: UnityCoordinates.sourceEulerDegrees(local), pushHistory: false)
         case .orbit:
             guard !reportSourceCameraInputBlocked() else { return }
-            doc.camera.orbit(dx: delta.x * 0.005, dy: delta.y * 0.005)
+            orbitCamera(dx: delta.x * 0.005, dy: delta.y * 0.005)
         case .pan:
             guard !reportSourceCameraInputBlocked() else { return }
-            doc.camera.pan(dx: delta.x, dy: delta.y)
+            documentCamera.pan(dx: delta.x, dy: delta.y)
         case .gizmo(let gd, let start):
             guard let id = selection, let i = doc.index(of: id) else { return }
             var t = start
@@ -2630,11 +2784,11 @@ final class StudioModel: ViewportInputHandler {
 
     func scrolled(delta: SIMD2<Float>, modifiers: NSEvent.ModifierFlags) {
         guard !reportSourceCameraInputBlocked() else { return }
-        if modifiers.contains(.shift) { doc.camera.pan(dx: -delta.x * 4, dy: delta.y * 4) } else { doc.camera.dolly(delta.y * 0.5) }
+        if modifiers.contains(.shift) { documentCamera.pan(dx: -delta.x * 4, dy: delta.y * 4) } else { documentCamera.dolly(delta.y * 0.5) }
     }
     func magnified(by amount: Float) {
         guard !reportSourceCameraInputBlocked() else { return }
-        doc.camera.dolly(amount * 10)
+        documentCamera.dolly(amount * 10)
     }
 
     func keyDown(_ event: NSEvent) -> Bool {

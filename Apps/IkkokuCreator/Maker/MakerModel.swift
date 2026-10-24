@@ -66,8 +66,87 @@ final class MakerModel: ViewportInputHandler {
     @ObservationIgnored private var sourceModLibrary: SourceModLibrary?
     @ObservationIgnored private var sourceModCatalog: SourceModCatalog?
     @ObservationIgnored private var sourceModCatalogContract: SourceModCatalogContract?
-    var sourceBodyValues: [Float] = [] { didSet { invalidateSourceSimulation(); refresh() } }
-    var sourceFaceValues: [Float] = [] { didSet { invalidateSourceSimulation(); refresh() } }
+    /// The source shape values. Every write invalidates the simulation and
+    /// rebuilds the frame, as a stored property's `didSet` did, and notifies
+    /// readers of the whole array; it also notifies each slot whose value
+    /// changed (`subscript(shapeSlot:)`) and the count's readers when the
+    /// length changed, so a slider row observes only its own slot (R7 phase 2,
+    /// item 1). The accessors mirror the `@Observable` macro's own: a
+    /// whole-value set notifies only when the value differs, an in-place
+    /// mutation always.
+    var sourceBodyValues: [Float] {
+        get { access(keyPath: \.sourceBodyValues); return bodyValueStorage }
+        set {
+            let old = bodyValueStorage
+            if old != newValue { withMutation(keyPath: \.sourceBodyValues) { bodyValueStorage = newValue } } else { bodyValueStorage = newValue }
+            shapeValuesDidChange(face: false, from: old)
+        }
+        _modify {
+            access(keyPath: \.sourceBodyValues)
+            let old = bodyValueStorage
+            _$observationRegistrar.willSet(self, keyPath: \.sourceBodyValues)
+            defer {
+                _$observationRegistrar.didSet(self, keyPath: \.sourceBodyValues)
+                shapeValuesDidChange(face: false, from: old)
+            }
+            yield &bodyValueStorage
+        }
+    }
+    var sourceFaceValues: [Float] {
+        get { access(keyPath: \.sourceFaceValues); return faceValueStorage }
+        set {
+            let old = faceValueStorage
+            if old != newValue { withMutation(keyPath: \.sourceFaceValues) { faceValueStorage = newValue } } else { faceValueStorage = newValue }
+            shapeValuesDidChange(face: true, from: old)
+        }
+        _modify {
+            access(keyPath: \.sourceFaceValues)
+            let old = faceValueStorage
+            _$observationRegistrar.willSet(self, keyPath: \.sourceFaceValues)
+            defer {
+                _$observationRegistrar.didSet(self, keyPath: \.sourceFaceValues)
+                shapeValuesDidChange(face: true, from: old)
+            }
+            yield &faceValueStorage
+        }
+    }
+    @ObservationIgnored private var bodyValueStorage: [Float] = []
+    @ObservationIgnored private var faceValueStorage: [Float] = []
+
+    /// One shape slider: a body or face slot index.
+    struct ShapeSlot: Hashable, Sendable {
+        let face: Bool
+        let index: Int
+    }
+
+    /// One slot's value, observed per slot. Writes go through the arrays, so a
+    /// slider's write is the same model write the array binding made.
+    subscript(shapeSlot slot: ShapeSlot) -> Float {
+        get {
+            access(keyPath: \.[shapeSlot: slot])
+            return slot.face ? faceValueStorage[slot.index] : bodyValueStorage[slot.index]
+        }
+        set {
+            if slot.face { sourceFaceValues[slot.index] = newValue } else { sourceBodyValues[slot.index] = newValue }
+        }
+    }
+
+    /// How many body or face values there are, observed apart from the values.
+    func shapeValueCount(face: Bool) -> Int {
+        access(keyPath: \.[shapeCount: face])
+        return face ? faceValueStorage.count : bodyValueStorage.count
+    }
+    private subscript(shapeCount face: Bool) -> Int { face ? faceValueStorage.count : bodyValueStorage.count }
+
+    private func shapeValuesDidChange(face: Bool, from old: [Float]) {
+        let new = face ? faceValueStorage : bodyValueStorage
+        if old.count != new.count { withMutation(keyPath: \.[shapeCount: face]) {} }
+        for index in 0..<max(old.count, new.count) where index >= old.count || index >= new.count || old[index] != new[index] {
+            withMutation(keyPath: \.[shapeSlot: ShapeSlot(face: face, index: index)]) {}
+        }
+        invalidateSourceSimulation()
+        refresh()
+    }
     var sourceExpressionInputs: SourceExpressionInputs? { didSet { refresh() } }
     var sourceAutomaticBlink = true { didSet { refresh() } }
     @ObservationIgnored private var sourceBlink = SourceBlinkPlayback()

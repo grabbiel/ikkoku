@@ -14,7 +14,11 @@ struct IkkokuApp: App {
                 .sheet(isPresented: $app.showModLibrary) { ModLibraryView().environment(app) }
         }
         .windowStyle(.titleBar)
+        // The commands read narrow Studio values (the scene file, the plugin
+        // session), not the whole document, so a document edit does not
+        // rebuild the menus.
         .commands {
+            let _ = PerfTrace.body(.appCommands)
             CommandGroup(replacing: .newItem) {
                 Button("New Female Character") { app.maker?.newCharacter(sex: .female) }.keyboardShortcut("n", modifiers: [.command])
                 Button("New Male Character") { app.maker?.newCharacter(sex: .male) }.keyboardShortcut("n", modifiers: [.command, .shift])
@@ -32,7 +36,7 @@ struct IkkokuApp: App {
                 Button("Import Model…") { app.importModel() }
                 Button("Import CharaStudio Object Layout…") { app.importKoikatsuLayout() }
                 Button("Preview CharaStudio Scene…") { app.openSourceScenePreview() }
-                Button("Export Edited Original Scene…") { app.exportSourceScene() }.disabled(app.studio?.doc.sourceSceneFile == nil)
+                Button("Export Edited Original Scene…") { app.exportSourceScene() }.disabled(app.studio?.documentSourceSceneFile == nil)
                 Button("Save Scene…") { app.saveScene() }.keyboardShortcut("s", modifiers: [.command, .option])
                 Divider()
                 Button("Choose Converted Library…") { app.chooseConvertedLibrary() }
@@ -57,7 +61,7 @@ struct IkkokuApp: App {
                 Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }
                 Button(app.studio?.sourcePluginsRunning == true ? "Pause Studio Plugins" : "Run Studio Plugins") {
                     app.studio?.sourcePluginsRunning.toggle()
-                }.disabled(app.studio?.sourcePluginSession == nil)
+                }.disabled(app.studio?.hasSourcePluginSession != true)
                 Divider()
                 Button("Load Bone Modifiers…") { app.openBoneModifiers() }.disabled(app.maker?.sourceRigPreview == nil)
                 Button("Clear Bone Modifiers") { app.maker?.clearBoneModifiers() }.disabled(app.maker?.sourceBoneModifiers == nil)

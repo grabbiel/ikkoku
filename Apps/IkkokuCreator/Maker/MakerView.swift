@@ -7,6 +7,7 @@ struct MakerView: View {
     @Bindable var model: MakerModel
 
     var body: some View {
+        let _ = PerfTrace.body(.makerWindow)
         HStack(spacing: 0) {
             if model.sourceRigPreview != nil {
                 SourceRigPanel(model: model)
