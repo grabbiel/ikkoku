@@ -209,3 +209,97 @@ their initial authored activity and explicit on/off states are tested separately
 from complete synthetic Boolean-card decoding. The targeted preview/live-bounds/
 installed-library lane passes 11 tests. This fixes a production visibility gap;
 it does not establish new source-color, animated-face or true-state player parity.
+
+## Coupled body and face shape input (#160)
+
+`--model-shapes Tools/reverse/fixtures/model-shapes-coupled.tsv` adds a bounded
+non-neutral shape case to the same quiescent pose protocol. The public synthetic
+TSV changes only these saved rates before `CreateFemale`/`CreateMale` and
+`LoadAsync`; it leaves all other source defaults intact:
+
+| Domain | Slots and requested rates | Coverage |
+| --- | --- | --- |
+| Body | `0=.25, 1=.75, 2=.25, 3=.75, 37=.25, 43=.75` | Height, head size, neck width/depth, shoulder width and forearm size |
+| Face | `0=.25, 3=.75, 21=.25, 38=.75, 48=.25` | Overall width, upper face size, eyebrow rotation, nose-tip height and ear rotation |
+
+The case exercises the existing 44-body/52-face kernels together. In particular,
+the face-base scale reads the body-derived parent world scale; the source applies
+body shape before face shape and then its late arm/hand correction. This is a
+shape case with neutral expression/gaze and disabled hand animation, not a new
+animated-pose or expression variant. Normal male still coerces requested height
+`.25` to actual saved `.6`; that coercion is reported separately rather than
+counted as a native mismatch or imposed as a new Maker clamp.
+
+The host validates and canonicalizes finite Float32 rates in `0...1`, unique
+domain/index pairs and exact domain bounds before touching the player. The guest
+validates again, retains the exact input file and hash, and records every requested
+and actual body/face value. The comparator normalizes JSON number representations
+to Float32 so a source `Single` written as `0.1` compares with its exact promoted
+host value. Malformed types, duplicate rows and unrequested changes fail.
+
+```
+python Tools/reverse/original_character_probe.py --model-variant female00 \
+  --model-shapes Tools/reverse/fixtures/model-shapes-coupled.tsv --output <private-folder>
+# Collect this owned player, then evaluate its saved card with card-model as above.
+python Tools/reverse/compare_original_model.py <private-folder> <native.json> \
+  --shape-baseline <independent-neutral-female00-capture> \
+  --repeat <independent-same-shapes-female00-capture> \
+  --visual-output <silhouette.png>
+```
+
+A shaped capture requires an independent, unmodified same-model neutral baseline.
+Both its frame and producer record must omit shape-input metadata, and it must
+have no retained `model-shapes.tsv`; removing only frame metadata cannot turn a
+shaped producer run into a neutral reference.
+The gate binds the exact source assembly, player/fixture versions, sex/head/bone
+identity, shape context, Animator state, detail/correction flags and selected
+original rest identities. Requested arrays must equal the baseline arrays plus
+only the listed overrides; actual arrays allow only the documented male-height
+coercion, and native arrays must equal the saved actual values. Distinct owned
+producer records and all input/card/frame hashes remain in the report.
+
+The independent card parser compares original raw tokens, not a card reconstructed
+by undoing edits. Every non-`Custom` block, the complete hair record, all face/body
+bytes outside the shape-array spans, header and trailing payload must remain
+unchanged. Array framing and every unrequested shape scalar token must also
+remain byte-identical; only the listed scalar tokens may differ. Saved array
+values must match the original-player readback. Rendered
+card thumbnails are excluded because the shapes intentionally change the image.
+Unknown fields and plugin payloads are covered by corruption tests. The existing
+joint-world, all-selected-vertex, topology, BakeMesh and source-only repeat gates
+retain their tolerances and omissions above.
+
+The 2026-10-24 original-player run passes for all three normal assemblies:
+
+| Model | Selected vertices | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error | Max native/BakeMesh vertex error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Female / head00 | 37,052 | 773 / 226 | 6.20e-7 | 7.16e-7 | 5.07e-7 |
+| Female / head200 | 38,594 | 976 / 224 | 7.11e-7 | 7.16e-7 | 5.07e-7 |
+| Normal male / head200 | 37,115 | 976 / 224 | 6.46e-7 | 9.54e-7 | 8.65e-7 |
+
+Each still selects 19 of 20 prepared parts, with the same canine/shadow exclusions.
+The independent female00 repeat has exactly equal 814 transform records, all 20
+original geometry/BakeMesh streams, and saved card bytes. All three controlled
+CPU silhouettes have IoU 1.0 and zero differing pixels; this does not test
+production Metal shading or color. The full input/card gate also passes on the
+repeat. Only the expected male-height coercion occurs.
+
+The four fresh player runs compiled the same probe source SHA-256
+`7a8d740a4d707e8067f25e48d9b2602984dab56aaf33114410ddcde2b926ce17` and used
+input SHA-256 `5dcb282cc04654c9b3f5d5da238328756d192d5d754c10e0838dffce84e34c92`.
+Each owned player was stopped after collection. The Release inspector built from
+the unchanged native source at `b2dde03` has SHA-256
+`15fd5e8e4b707cab625e18ac444f1abe336d490188c3a1ed19c6353f1a621ff4`.
+Private captures, exact baseline identities, input/build hashes, full comparisons,
+controlled images and logs are retained under
+`.local/codex-continue-2026-10-24/mixed-shapes/`, with `summary.json` as the entry point.
+
+All 37 focused Python tests pass, including malformed input, Float32 JSON
+representation, changed identities/context, copied producer records, geometry
+corruption and preservation of unknown/plugin/unedited shape tokens. The three
+retained neutral comparisons remain compatible. No runtime discrepancy was
+found for this bounded case, so no native pose formula or per-frame work changed.
+Prepared part counts remain 20; no new assembly allocation, pose-cost or FPS
+measurement is claimed. Other shape combinations, animation, non-neutral
+expression/gaze, alternate bone types and material appearance remain separate
+acceptance work.

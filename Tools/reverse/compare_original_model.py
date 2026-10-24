@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Neutral native model versus source-player transforms and every selected vertex.
+"""Quiescent native model versus source-player transforms and every selected vertex.
 
 No alignment, fitted animation phase or native-seeded reference. Raw BakeMesh
 and independently evaluated source-runtime skin geometry remain separate gates.
@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import struct
 import numpy as np
+from model_shape_input import parse as parse_shapes, canonical as canonical_shapes
+from analysis.card_contract import parse_card, mapping as card_mapping, unpack as card_unpack, Limits as CardLimits
 from compare_original_pose import compose_original_worlds, build_native_tree, match_bones, file_record
 
 
@@ -59,7 +61,161 @@ def errors(a, b, tolerance):
                 maximum=float(distances.max()), overTolerance=int(np.count_nonzero(distances > tolerance)), tolerance=tolerance)
 
 
-def compare(folder, native, tolerance=2e-5):
+def shape_values(values, count):
+    if (not isinstance(values, list) or len(values) != count
+            or any(type(x) not in (int, float) or not np.isfinite(x) or not 0 <= x <= 1 for x in values)):
+        raise ValueError('Shape arrays require exactly 44 body / 52 face finite rates in 0...1')
+    return np.asarray(values, dtype='<f4')
+
+
+def recorded_shape_rows(value):
+    if not isinstance(value, list): raise ValueError('Recorded shape rows must be an array')
+    result = []
+    for row in value:
+        if (not isinstance(row, dict) or set(row) != {'domain', 'index', 'value'}
+                or row['domain'] not in ('body', 'face') or type(row['index']) is not int
+                or not 0 <= row['index'] < (44 if row['domain'] == 'body' else 52)
+                or type(row['value']) not in (int, float) or not np.isfinite(row['value']) or not 0 <= row['value'] <= 1):
+            raise ValueError('Invalid recorded shape row')
+        result.append(dict(domain=row['domain'], index=row['index'], value=float(np.float32(row['value']))))
+    return result
+
+
+def shape_readback(mode, native=None):
+    coercions = []
+    for domain, count in [('Body', 44), ('Face', 52)]:
+        requested = shape_values(mode['requested' + domain + 'Values'], count)
+        actual = shape_values(mode['actual' + domain + 'Values'], count)
+        expected = requested.copy()
+        if domain == 'Body' and mode['sex'] == 0:
+            expected[0] = np.float32(.6)
+            if requested[0] != expected[0]:
+                coercions.append(dict(domain='body', index=0, requested=float(requested[0]), actual=float(expected[0]),
+                                      reason='ChaControl normal-male saved height coercion'))
+        if not np.array_equal(expected, actual):
+            raise ValueError('Source unexpectedly changed requested ' + domain.lower() + ' shape values')
+        if native is not None and not np.array_equal(actual, shape_values(native[domain.lower() + 'Values'], count)):
+            raise ValueError('Source/native shape values differ')
+    return coercions
+
+
+def model_card(folder, frame):
+    name = frame['card']
+    if Path(name).name != name or not name or name.startswith('.'):
+        raise ValueError('Invalid source card path')
+    path = folder / name
+    return path, parse_card(path.read_bytes())
+
+
+def custom_records(raw):
+    result = {}; offset = 0
+    for domain in ('face', 'body', 'hair'):
+        if offset + 4 > len(raw): raise ValueError('Truncated Custom record')
+        size, = struct.unpack_from('<i', raw, offset); offset += 4
+        if size <= 0 or offset + size > len(raw): raise ValueError('Invalid Custom record length')
+        result[domain] = raw[offset:offset + size]; offset += size
+    result['tail'] = raw[offset:]
+    return result
+
+
+def shape_card_payload(baseline, current, mode, rows=()):
+    """Independent raw-token gate: only explicitly requested shape tokens may differ."""
+    if [(b['name'], b['version']) for b in baseline.blocks] != [(b['name'], b['version']) for b in current.blocks]:
+        raise ValueError('Shape capture changed card block identities')
+    if (baseline.report['headerSHA256'] != current.report['headerSHA256']
+            or baseline.raw[baseline.report['offsets']['payloadEnd']:] != current.raw[current.report['offsets']['payloadEnd']:]):
+        raise ValueError('Shape capture changed card framing or trailing payload')
+    if sum(b['name'] == 'Custom' for b in current.blocks) != 1:
+        raise ValueError('Shape capture needs exactly one Custom block')
+    preserved = []
+    for before, after in zip(baseline.blocks, current.blocks):
+        name = before['name']
+        if name != 'Custom':
+            if before['raw'] != after['raw']: raise ValueError('Shape capture changed unedited card block: ' + name)
+            preserved.append(name); continue
+        old, new = custom_records(before['raw']), custom_records(after['raw'])
+        if old['hair'] != new['hair'] or old['tail'] != new['tail']:
+            raise ValueError('Shape capture changed hair or trailing Custom bytes')
+        for domain, count in [('body', 44), ('face', 52)]:
+            key = 'shapeValue' + domain.title()
+            a = card_mapping(card_unpack(old[domain], CardLimits()))[key]
+            b = card_mapping(card_unpack(new[domain], CardLimits()))[key]
+            if a.kind != 'array' or b.kind != 'array': raise ValueError('Missing card shape arrays')
+            if old[domain][:a.start] != new[domain][:b.start] or old[domain][a.end:] != new[domain][b.end:]:
+                raise ValueError('Shape capture changed an unedited ' + domain + ' token')
+            shape_values([x.value for x in a.value], count)
+            values = shape_values([x.value for x in b.value], count)
+            if old[domain][a.start:a.value[0].start] != new[domain][b.start:b.value[0].start]:
+                raise ValueError('Shape capture changed shape array framing')
+            allowed = {row['index'] for row in rows if row['domain'] == domain}
+            for index, (before_token, after_token) in enumerate(zip(a.value, b.value)):
+                if index not in allowed and old[domain][before_token.start:before_token.end] != new[domain][after_token.start:after_token.end]:
+                    raise ValueError('Shape capture changed an unrequested ' + domain + ' shape token')
+            if not np.array_equal(values, shape_values(mode['actual' + domain.title() + 'Values'], count)):
+                raise ValueError('Saved card shapes differ from original-player readback')
+    return dict(uneditedBlocks=preserved, hairUnchanged=True, otherBodyFaceTokensUnchanged=True,
+                unrequestedShapeTokensUnchanged=True, framingAndTrailingPayloadUnchanged=True, thumbnailsExcluded=True)
+
+
+def shape_request_gate(folder, frame, baseline_folder):
+    mode = frame['neutralModel']; request = mode.get('shapeRequest')
+    if request is None:
+        if baseline_folder is not None: raise ValueError('A shape baseline requires a recorded shape request')
+        return None
+    if baseline_folder is None: raise ValueError('Non-neutral shapes require an independent --shape-baseline')
+    if folder.resolve() == baseline_folder.resolve(): raise ValueError('Shape baseline must be a separate neutral capture')
+    if request.get('file') != 'model-shapes.tsv' or request.get('stage') != 'saved arrays before LoadAsync':
+        raise ValueError('Unsupported model shape request context')
+    data = (folder / 'model-shapes.tsv').read_bytes()
+    if canonical_shapes(data) != data or hashlib.sha256(data).hexdigest() != request['sha256']:
+        raise ValueError('Changed or noncanonical shape request')
+    rows = parse_shapes(data)
+    if rows != recorded_shape_rows(request.get('rows')): raise ValueError('Shape request rows differ from canonical input')
+    run = json.loads((folder / 'run.json').read_text())
+    if run.get('modelShapes') != dict(file=request['file'], sha256=request['sha256']):
+        raise ValueError('Shape input differs from owned producer request')
+    baseline_path = baseline_folder / 'frame.json'; baseline = json.loads(baseline_path.read_text()); base = baseline['neutralModel']
+    if base.get('shapeRequest') is not None: raise ValueError('Shape baseline must be an unmodified model capture')
+    base_run = json.loads((baseline_folder / 'run.json').read_text())
+    if 'modelShapes' in base_run or (baseline_folder / 'model-shapes.tsv').exists():
+        raise ValueError('Shape baseline retains producer shape input')
+    for key in ('variant', 'sex', 'headID', 'boneType', 'requestedSex', 'requestedHeadID', 'requestedBoneType',
+                'loadedHeadCatalogID', 'assemblySHA256', 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize',
+                'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate', 'animators'):
+        if base[key] != mode[key]: raise ValueError('Shape baseline source identity/context differs: ' + key)
+    if baseline['schemaVersion'] != frame['schemaVersion']: raise ValueError('Shape fixture version differs')
+    status = [json.loads((p / 'status.json').read_text()) for p in (baseline_folder, folder)]
+    if any(s.get('error') is not None for s in status): raise ValueError('Source capture reported an error')
+    for key in ('unity', 'graphicsAPI', 'colorSpace'):
+        if not status[0].get(key) or status[0][key] != status[1].get(key): raise ValueError('Shape baseline player context differs: ' + key)
+    shape_readback(base)
+    for domain, count in [('body', 44), ('face', 52)]:
+        expected = shape_values(base['requested' + domain.title() + 'Values'], count).copy()
+        for row in rows:
+            if row['domain'] == domain: expected[row['index']] = row['value']
+        if not np.array_equal(expected, shape_values(mode['requested' + domain.title() + 'Values'], count)):
+            raise ValueError('Recorded requested shapes differ from baseline plus explicit input')
+        if np.array_equal(expected, shape_values(base['requested' + domain.title() + 'Values'], count)):
+            raise ValueError('Mixed-shape gate requires an actual requested change in both domains')
+    def geometry_identity(capture):
+        return sorted((m['path'], m['name'], m['vertices'], m['submeshes'], m['restPositions']['sha256']) for m in capture['meshes'])
+    if geometry_identity(baseline) != geometry_identity(frame): raise ValueError('Shape capture changed selected original geometry')
+    base_card_path, base_card = model_card(baseline_folder, baseline)
+    card_path, card = model_card(folder, frame)
+    payload = shape_card_payload(base_card, card, mode, rows)
+    # The baseline's own saved arrays must match its independently recorded readback.
+    shape_card_payload(base_card, base_card, base)
+    runs = [producer_run(baseline_folder), producer_run(folder)]
+    producer_ids = [(r['vm'], r['root'], r['processID']) for r in runs]
+    if producer_ids[0] == producer_ids[1]:
+        raise ValueError('Shape baseline and capture have the same producer run')
+    return dict(input=file_record(folder / 'model-shapes.tsv'), overrides=rows,
+                baselineFrame=file_record(baseline_path), baselineCard=file_record(base_card_path), card=file_record(card_path),
+                producerRuns=runs, payload=payload,
+                scope='Same source assembly/context; only requested body/face arrays may change; thumbnails excluded')
+
+
+def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     frame_path = folder / 'frame.json'; frame = json.loads(frame_path.read_text())
     mode = frame.get('neutralModel')
     if not mode or native.get('kind') != 'ikkoku-neutral-source-model': raise ValueError('Requires neutral source and native model captures')
@@ -80,11 +236,12 @@ def compare(folder, native, tolerance=2e-5):
         if mode[key] != value: raise ValueError('Source/native late correction options differ')
     for key in ('sex', 'headID', 'boneType'):
         if mode[key] != identity[key]: raise ValueError('Source/native model identity mismatch: ' + key)
+    if Path(frame['card']).name != frame['card'] or not frame['card'] or frame['card'].startswith('.'):
+        raise ValueError('Invalid source card path')
     card_hash = file_record(folder / frame['card'])['sha256']
     if native['inputs']['cardSHA256'] != card_hash: raise ValueError('Source/native card identity differs')
-    for key in ('Body', 'Face'):
-        if not np.array_equal(np.asarray(mode['actual' + key + 'Values'], dtype='<f4'), np.asarray(native[key.lower() + 'Values'], dtype='<f4')):
-            raise ValueError('Source/native shape values differ')
+    coercions = shape_readback(mode, native)
+    shape_request = shape_request_gate(folder, frame, shape_baseline)
     original_tree = compose_original_worlds(frame['bones']); tree = build_native_tree(native)
     matching = match_bones(tree, original_tree)
     hierarchy = {key: value for key, value in matching.items() if key != 'pairs'}
@@ -153,7 +310,7 @@ def compare(folder, native, tolerance=2e-5):
                   and r['bakeMeshVersusSourceMatrix']['overTolerance'] == 0 and r['morphWeightMaxError'] <= 1e-4 for r in rows)
     return dict(schemaVersion=1, gatePassed=bool(passed), reference='original Unity player transforms, raw BakeMesh and separately calculated source matrix skinning',
                 scope='Exact selected rest-position SHA and triangle order; selected skin-joint world matrices and all selected vertices; local/full hierarchy parity is not gated. No fitted time or alignment. Only hash-bound source shadow meshes excluded; color not compared.',
-                sourceFrame=file_record(frame_path), nativeInputs=native['inputs'], identity=identity, neutralModel=mode,
+                sourceFrame=file_record(frame_path), shapeRequest=shape_request, shapeCoercions=coercions, nativeInputs=native['inputs'], identity=identity, neutralModel=mode,
                 hierarchyDiagnostics=hierarchy, selectedSkinBindings=sum(len(r['skinBones']) for r in rows),
                 selectedUniqueNativeBones=len({b['nativeNode'] for r in rows for b in r['skinBones']}),
                 skinBoneMatrixTolerance=tolerance, skinBoneMaximumMatrixError=max((b['maximumMatrixError'] for r in rows for b in r['skinBones']), default=0), parts=rows, selectedParts=len(rows), selectedVertexEntries=sum(r['vertices']['count'] for r in rows),
@@ -182,6 +339,17 @@ def compare_repeat(first, second):
                 'requestedBodyValues', 'requestedFaceValues', 'actualBodyValues', 'actualFaceValues', 'assemblySHA256', 'animators',
                 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize', 'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate'):
         if a['neutralModel'][key] != b['neutralModel'][key]: raise ValueError('Repeated source input identity differs')
+    if a['neutralModel'].get('shapeRequest') != b['neutralModel'].get('shapeRequest'):
+        raise ValueError('Repeated shape request differs')
+    for folder, frame in [(first, a), (second, b)]:
+        request = frame['neutralModel'].get('shapeRequest')
+        if request is not None:
+            data = (folder / 'model-shapes.tsv').read_bytes()
+            if canonical_shapes(data) != data or hashlib.sha256(data).hexdigest() != request['sha256']:
+                raise ValueError('Changed repeated shape input')
+            run = json.loads((folder / 'run.json').read_text())
+            if run.get('modelShapes') != dict(file=request['file'], sha256=request['sha256']):
+                raise ValueError('Repeated producer shape input differs')
     ma = {m['path']: m for m in a['meshes']}; mb = {m['path']: m for m in b['meshes']}
     if len(ma) != len(a['meshes']) or len(mb) != len(b['meshes']): raise ValueError('Duplicate renderer paths in repeat')
     if ma.keys() != mb.keys(): raise ValueError('Repeated source renderer identity differs')
@@ -240,10 +408,11 @@ def visual(folder, native, report, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('probe_folder', type=Path); parser.add_argument('native_snapshot', type=Path)
+    parser.add_argument('--shape-baseline', type=Path, help='independent same-model neutral capture; required for mixed shape input and unedited-card gate')
     parser.add_argument('--repeat', type=Path, help='independent same-input source capture; exact transform and vertex repeat gate')
     parser.add_argument('--visual-output', type=Path, help='matched-camera diagnostic silhouette PNG (no material/rendering parity claim)')
     args = parser.parse_args()
-    result = compare(args.probe_folder, json.loads(args.native_snapshot.read_text()))
+    result = compare(args.probe_folder, json.loads(args.native_snapshot.read_text()), shape_baseline=args.shape_baseline)
     if args.repeat:
         if args.repeat.resolve() == args.probe_folder.resolve(): raise ValueError('Repeat needs a separate independent capture')
         result['repeat'] = compare_repeat(args.probe_folder, args.repeat)

@@ -811,6 +811,9 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_source_shader_translation.py](../../Tools/reverse/test_source_shader_translation.py) | Test / validation |
 | [Tools/reverse/compare_original_model.py](../../Tools/reverse/compare_original_model.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_compare_original_model.py](../../Tools/reverse/test_compare_original_model.py) | Test / validation |
+| [Tools/reverse/model_shape_input.py](../../Tools/reverse/model_shape_input.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/test_model_shape_input.py](../../Tools/reverse/test_model_shape_input.py) | Test / validation |
+| [Tools/reverse/fixtures/model-shapes-coupled.tsv](../../Tools/reverse/fixtures/model-shapes-coupled.tsv) | Public synthetic body/face input fixture |
 
 ## Toolchain / verification / historical docs
 
