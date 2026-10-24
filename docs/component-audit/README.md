@@ -108,6 +108,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   open and history restoration support candidate-owned attachment reads when
   initialization leaves the candidate scene unchanged; library installation
   retains its separate attachment-read gate.
+  Saved profile and library restoration also reject initialization that changes
+  object topology, identities or clone state before committing the candidate.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
@@ -612,6 +614,25 @@ document, session, history, previews, resources and frame. The original policy
 reproduction stays retained separately. The [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records exact scope, hashes and integration requirements. This does not establish
 GUI acceptance, general plugin compatibility, source parity or a timing benefit.
+
+**Restore boundary — constructor-created objects:**
+A fresh-installable cloning initializer previously reopened into an inconsistent
+session: the saved scene held two objects while its reconstructed runtime held
+three, and the first step failed. Shared session preparation now rejects that
+candidate after activation callbacks, before native open or history commits.
+The normalized object identities and clone serial stay pinned during restore;
+fresh installation can still create objects. Same-topology visibility changes,
+pending destruction and missing identities for unbound input objects retain their
+existing behavior. This makes rejection atomic; reopening non-idempotent cloning
+initializers remains unsupported. The
+[plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+retains the original failing reproduction and the precise supported boundary.
+At `4ebdd727`, all 30 focused Engine tests and 161 application checks pass,
+including native open and real undo/redo retention, plus the prior 117
+attachment/profile/library checks. Root independently verifies all six app
+reports and their executable/source provenance. The first Engine attempt's
+missing fixture is retained separately from the corrected run. These checks
+establish functional behavior, without a timing, GUI or general compatibility claim.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
