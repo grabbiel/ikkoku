@@ -154,6 +154,10 @@ struct PluginLibraryScenario: Decodable {
             let previews = studio.sourceInstances.mapValues { ObjectIdentifier($0) }
             let legacyFrame = studio.host.renderer.currentFrame()
             studio.undo()
+            // The rejected legacy entry must remain above the unavailable one;
+            // rejection must not create a redo entry for the unchanged scene.
+            studio.undo()
+            studio.redo()
             try check("legacyAttachmentUndoRollback", studio.status.contains("attachment reads during plugin installation are unsupported")
                 && studio.doc == beforeFailure && session === studio.sourcePluginSession && adapter === studio.sourceFocus.adapter
                 && gain == studio.sourceAudioBus.masterVolume && resources == resourceCounts()
