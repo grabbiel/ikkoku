@@ -32,7 +32,10 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    and the views, so it is phase 2. Phase 2, item 1 has since done this, so
    those edits present at 119–120 FPS ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)).
 3. **The display link shares the main run loop**, so any cost above turns
-   into a presentation hitch.
+   into a presentation hitch. Phase 2, item 2 moved it to its own render
+   thread. With the main thread loaded on purpose, the Studio now presents
+   120 FPS with a p95 interval of 8.33 ms, against 30–60 FPS and 25–33 ms
+   before ([phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes)).
 
 These headline numbers are the original phase-1 measurements. The
 [resumed review](#resumed-phase-1-review-2026-10-23) retained near-120 FPS idle
@@ -381,8 +384,8 @@ which the "per second" column shows.
 | 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1 slider row evaluated per write instead of 44; `GraphHost.flushTransactions` 11.8 → 2.5 ms and `NSHostingView.layout` 8.3 → 3.9 ms per write; 43.4 → 119.8 presented FPS. The rest is layout of the long panel | low |
 | 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: no view body and no sampled SwiftUI pass per orbit event (8.9 ms before); 41.0 → 119.4 presented FPS | medium |
 | 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3 | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured) | low |
-| 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move | M5 | ~2 ms per move | low; renderer file |
-| 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis) | low |
+| 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) it no longer delays presentation; at 120 moves/s it takes 2.6 ms each (316 ms/s), the largest main-thread cost in hover after the tick | M5 | ~2 ms per move | low; renderer file |
+| 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) the draw runs on the render thread, so this costs no main-thread time, and G4 cut its CPU encode from 0.74 to 0.44 ms per frame (offscreen) | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis); now render-thread CPU and GPU only | low |
 | 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3; **done** for orbit and pan drags in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1.00 ms full refresh → 0.04 ms camera rebuild per drag event | medium |
 | 9 | Source scene load at startup | 4,710 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
 | 10 | Engine compiled `-Onone` in Debug | 1,753 per tick | — | 0 presented frames | `Packages/Engine` build settings | an unoptimized generic-heavy Engine | B1 | Debug idle tick 1,753 → ~43 ms (measured with Engine -O) | see B1 |
@@ -663,7 +666,7 @@ loaded machine, so only the shares are used).
 | G1 | GPU time is not the bottleneck on the reference machine | whole frame graph | measured | 1.3–1.9 ms GPU per frame at 1996×1824, 6 characters; draw encoding 0.6–0.9 ms CPU | — | — |
 | G2 | MSAA color/depth, overlay depth and pick depth are already memoryless | `RenderTargets` | measured (code) | `storageMode = .memoryless` | — | — |
 | G3 | Unchanged frames are fully re-rendered at the display rate, including the deform compute pass and the 2048² shadow map | `Renderer.draw`, `ViewportNSView` | measured | 120 draws/s while Studio content changes 30 times/s and the camera is still | skip prepare/encode/present when the frame and drawable size did not change (frame version counter); or lower `preferredFrameRateRange` when idle. ~3/4 of GPU and draw CPU at idle | Low |
-| G4 | Skin matrices are copied into a new `MTLBuffer` per skin set per frame and validated element by element | `Renderer.buildContext` | hypothesis | allocation per draw; not separated in the profile | write skin matrices into the frame ring | Low; renderer file |
+| G4 | Skin matrices are copied into a new `MTLBuffer` per skin set per frame and validated element by element | `Renderer.buildContext` | measured; **done** | 0.70 ms per draw in orbit, 122 buffers per draw in the source scene ([phase 2, item 1](#what-remains-on-the-main-thread)) | write skin matrices into the frame ring. **Done** in [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes): no palette buffer is created once the ring is warm, and the offscreen CPU encode fell from 0.74 to 0.44 ms per frame | Low; renderer file |
 | G5 | Shadow map re-rendered every frame | `Renderer` shadow pass | hypothesis | — | re-render only when casters or the light moved | Low |
 | G6 | No pipeline binary archive | `Pipelines` | hypothesis | pipeline creation happens during startup | `MTLBinaryArchive` for the production pipelines; measure first-launch versus warm | Low |
 | G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`MTKTextureLoader`, `.generateMipmaps`) | hypothesis | Metal allocation 470 MB peak for 6 characters | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1) | Medium: image quality must be checked |
@@ -673,7 +676,7 @@ loaded machine, so only the shares are used).
 
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| P1 | The display link runs on the main run loop, so every model or SwiftUI hitch is a presentation hitch | `ViewportNSView.viewDidMoveToWindow` | measured | idle baseline: 44.7 presented FPS, 150 hitches in 10 s while GPU and draw take < 3 ms | run the display link on a dedicated render thread; `Renderer` already snapshots the frame under `frameLock` | Medium: renderer state touched from two threads (errors, statistics, pick) |
+| P1 | The display link runs on the main run loop, so every model or SwiftUI hitch is a presentation hitch | `ViewportNSView.viewDidMoveToWindow` | measured; **done** | idle baseline: 44.7 presented FPS, 150 hitches in 10 s while GPU and draw take < 3 ms | run the display link on a dedicated render thread; `Renderer` already snapshots the frame under `frameLock`. **Done** in [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) (`ViewportRenderThread`) | Medium: renderer state touched from two threads (errors, statistics, pick); the [threading contract](renderer.md#renderer-threads-r7-phase-2-item-2) covers it |
 | P2 | No `preferredFrameRateRange`; the link runs at 120 Hz while content changes at 30 Hz | `ViewportNSView` | measured | 120 callbacks/s when the main thread is free (`studio-native`, `maker-idle`) | with G3; 120 Hz only while the user drags | Low |
 | P3 | Drawable size is the full backing size (1996×1824 here; ~3.8 K × 2.1 K full-screen on a 4K display) | `ViewportNSView.updateDrawableSize` | hypothesis | — | an opt-in render scale for low-end machines | Quality trade-off, opt-in only |
 | P4 | Three frame slots with `preferredFrameLatency = 2` | `GPUContext`, `ViewportNSView` | measured (code) | no frame-slot waits in the draw timings | — | — |
@@ -717,7 +720,7 @@ How to read the expected gain column:
 | # | Work | Inventory items | Expected on the reference machine | M1 | Verification beyond the standard set |
 | ---: | --- | --- | --- | --- | --- |
 | 1 | **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)). Narrow SwiftUI invalidation. Move the camera out of the observed `doc`, or into its own observed value. Split `StudioView` into child views that read only their own state. Make the Maker slider rows value-driven views with per-slot observation | M2, M3, M4, C6 | orbit, FK drag and slider edits go from 7–25 ms per event to a few ms; the main thread is no longer saturated during interaction; presented FPS for those workloads rises from 24–53 toward 120 | the same edits drop from ~10–30 ms to a few ms; the difference between usable and laggy | `IKKOKU_CAPTURE_UI` window captures identical; undo/redo scenarios (`undo-camera`) pass |
-| 2 | Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment | P1 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
+| 2 | **Done** ([phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes)), with G4. Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment. Measured: with the main thread busy 600 ms/s, 120 FPS and an 8.33 ms p95 interval, against 30–60 FPS and 25–33 ms | P1, G4 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
 | 3 | Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s) | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
 | 4 | Skip unchanged frames and run the display link at 30–60 Hz when nothing moves; leave the shadow map alone until casters or the light move | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
 | 5 | Asynchronous hover pick for the latest mouse position only | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
@@ -1014,6 +1017,14 @@ arm64:
 | harness | `8a2b7ed`: base plus the schema 3 harness (draw log off the main actor, main-thread load knob, lifecycle workload), renderer unchanged | `a3bd4e04…522fd0` |
 | after | `7a265f6`: this change with `main` `c3e83fa` merged | `23b1d10e…a4a26c` |
 
+The PR head `008085c` also merges `main` `ad50c43` (#146), which arrived after
+the measured window. #146 changes `StudioModel.swift` (the IK status report,
+and publishing the source camera view in `refreshFrame`), `StudioView.swift`
+and `StudioScenario.swift`, and it adds an Engine status-text file. It touches no renderer, GPU, viewport or harness
+file. The threading and presentation numbers below therefore still describe
+the PR. Model-phase costs such as the Studio refresh were measured without
+#146.
+
 All runs used the 4K display (M32UC) at 120 Hz and 2×, with a 1996×1824
 drawable, in a quiet window that the orchestrator granted on 2026-10-24.
 Every launch took the app lock, and the load average was 3.0–4.6. Base and
@@ -1205,6 +1216,20 @@ reacts: the model rate and the input latency.
   computed the eye rates. Three alternating launches per build gave both
   variants for each build (base: without, with, without; this change: with,
   with, without), so it is not a difference between them.
+
+  Once the 4K display was back, base and the merged head were captured
+  again at 2× (`captures/base-2x`, `captures/final-2x-b`). Eight of the nine
+  window captures match each other and the first base set byte for byte,
+  and the pose tab matches one of base's two variants. A first 2× set of the
+  merged head, taken right after the display came back, differed in all nine
+  windows only in control accent colors. The window was drawn as active
+  there and inactive in every other set, and all nine reports matched.
+
+  After `main` moved to `ad50c43` (#146), all 13 captures were taken with a
+  Release build of `ad50c43` and of the PR head `008085c`, which merges it
+  (`captures/main-ad50c43`, `captures/head-008085c`). All 13 reports and 12
+  PNGs are identical. The pose tab again shows the two known variants, one
+  per build. The `ad50c43` captures also match base `0c51ca1`.
 - **Native-scene byte control.** `synthetic-current.png` with
   `IKKOKU_MAKER_LIBRARY=none` (see the control note under
   [quick wins](#quick-wins-in-this-change)): base and the merged head both
@@ -1221,7 +1246,8 @@ reacts: the model rate and the input latency.
 - **ThreadSanitizer.**
   - Engine: `swift test --sanitize=thread` with the renderer, frame-ring,
     capture-request, resource-store and character-lifetime tests (33 tests),
-    on the merged head: all pass, 0 warnings. The whole suite under
+    on `7a265f6`: all pass, 0 warnings. #146, merged afterwards, changes no
+    renderer or GPU file. The whole suite under
     ThreadSanitizer took more than 8 minutes on one thread and was stopped.
   - As a control, the new render-thread test caught a deliberately unlocked
     `publish(gpuTime:)`. It did not catch an unlocked `currentFrame()`,
@@ -1238,7 +1264,8 @@ reacts: the model rate and the input latency.
     [renderer threads](renderer.md#renderer-threads-r7-phase-2-item-2)). The
     harness counts them, and they are safe.
 - **Engine suite** with every fixture of the shared map exported, on the
-  merged head: 749 tests passed, including 2 named skips
+  PR head `008085c`: 756 tests passed (749 on `7a265f6`, before #146 added
+  its tests), including 2 named skips
   (`sourceStudioExpressionPerformanceProbe`, opt-in, and
   `sourceCardAppearanceFemaleAndMalePixelsMatchIndependentRawRGBAOracle`,
   no `IKKOKU_APPEARANCE_REFERENCE_ROOT`), plus 21 in the second target.
