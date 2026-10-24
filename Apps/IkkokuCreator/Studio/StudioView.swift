@@ -52,7 +52,16 @@ struct WorkspaceEntry: Equatable, Identifiable {
     let depth: Int
     let selected: Bool
     let cameraPlaceholder: Bool
+    /// A named source camera's key, "camera 2", drawn under its name.
+    var keyDetail: String? = nil
     var cameraMarker: CameraMarker? = nil
+
+    /// The row's second line: the key detail, then "active" on the active
+    /// source camera ("camera 2 · active"); nil for a one-line row.
+    var detailLine: String? {
+        let parts = [keyDetail, cameraMarker == nil ? nil : "active"].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
 }
 
 extension WorkspaceEntry.CameraMarker {
@@ -86,16 +95,16 @@ struct StudioWorkspacePanel: View {
         let doc = model.doc
         let activeCamera = model.activeSourceCameraView
         let entries = doc.flattened().map { entry in
-            // A source camera placeholder reads "IKKOKU-MIRROR (camera 2)",
-            // as the status line and the view indicator name it.
+            // A source camera placeholder reads "IKKOKU-MIRROR" over
+            // "camera 2", the title the status line and the view indicator use.
             let label = model.workspaceLabel(of: entry.object, sceneSHA256: doc.sourceSceneSHA256)
             var marker: WorkspaceEntry.CameraMarker?
             if let activeCamera, activeCamera.id == entry.object.id {
                 marker = activeCamera.fallbackReason.map { .savedCameraShown(reason: $0) } ?? .viewing
             }
-            return WorkspaceEntry(id: entry.object.id, name: label.title, kind: entry.object.kind,
+            return WorkspaceEntry(id: entry.object.id, name: entry.object.name, kind: entry.object.kind,
                                   visible: entry.object.visible, depth: entry.depth, selected: selection == entry.object.id,
-                                  cameraPlaceholder: label.sourceCamera, cameraMarker: marker)
+                                  cameraPlaceholder: label.sourceCamera, keyDetail: label.keyDetail, cameraMarker: marker)
         }
         StudioWorkspaceContent(model: model, entries: entries, objectCount: doc.objects.count).equatable()
     }
@@ -478,13 +487,25 @@ struct WorkspaceRow: View, Equatable {
         let _ = PerfTrace.body(.studioWorkspaceRow)
         HStack(spacing: 6) {
             Spacer().frame(width: CGFloat(entry.depth) * 14)
-            Image(systemName: icon).foregroundStyle(entry.kind == .light ? .yellow : .secondary).frame(width: 16)
-            Text(entry.name).lineLimit(1).font(.callout)
-            Spacer()
             if let marker = entry.cameraMarker {
-                Image(systemName: marker.symbol).foregroundStyle(marker.color)
+                // The active source camera's icon: looking through it, or
+                // active with the saved camera shown.
+                Image(systemName: marker.symbol).foregroundStyle(marker.color).frame(width: 16)
                     .help(marker.help).accessibilityLabel(marker.help)
+            } else {
+                Image(systemName: icon).foregroundStyle(entry.kind == .light ? .yellow : .secondary).frame(width: 16)
             }
+            if let detail = entry.detailLine {
+                // Two lines, so the narrow panel truncates a long name but
+                // never the key.
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(entry.name).lineLimit(1).font(.callout)
+                    Text(detail).lineLimit(1).font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                Text(entry.name).lineLimit(1).font(.callout)
+            }
+            Spacer()
             Button(action: toggleVisible) { Image(systemName: entry.visible ? "eye" : "eye.slash").foregroundStyle(.secondary) }.buttonStyle(.plain)
         }
         .padding(.vertical, 3).padding(.horizontal, 6)

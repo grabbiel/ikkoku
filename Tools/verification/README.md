@@ -765,7 +765,7 @@ and use the object's current name with the source key:
 
 | Where | Before | After |
 | --- | --- | --- |
-| Tree row | `IKKOKU-MIRROR` | `IKKOKU-MIRROR (camera 2)`, with a marker on the active camera: `video.fill` while the view looks through it, an orange `video.slash.fill` while it falls back (the tooltip says why) |
+| Tree row | `IKKOKU-MIRROR` | `IKKOKU-MIRROR` over a smaller `camera 2` line, so the 250 pt panel truncates a long name but never the key (one line read `IKKOKU-MIRROR (c…`). The active camera's line reads `camera 2 · active`, and its icon becomes `video.fill` while the view looks through it, or an orange `video.slash.fill` while it falls back (the tooltip says why). The row's title, which `treeLabel` asserts, is `IKKOKU-MIRROR (camera 2)` |
 | Status line, fallback | `Source camera 2 view unresolved: …; using the saved camera.` | `Source camera "IKKOKU-MIRROR" (camera 2) view unresolved: …; using the saved camera.` |
 | Status line, toggle | `Looking through source camera "IKKOKU-CONTROL".`, `Source camera "…" deactivated; …` | the same with ` (camera 3)` after the name |
 | Indicator, looking through | `Viewing through source camera "IKKOKU-CONTROL" (runtime only)` | `Viewing through source camera "IKKOKU-CONTROL" (camera 3) (runtime only)` |

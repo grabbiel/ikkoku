@@ -92,10 +92,17 @@ public enum SourceStudioCameraLabel {
     /// The importer's name for a camera record that has none.
     public static func fallbackName(_ key: Int32) -> String { "Source camera \(key)" }
 
-    /// The tree and inspector title: "IKKOKU-MIRROR (camera 2)". An unnamed
-    /// record's fallback name, "Source camera 2", already carries the key.
+    /// The key that follows the name: "camera 2". Nil for an unnamed record,
+    /// whose fallback name, "Source camera 2", already carries the key.
+    public static func keyDetail(name: String, key: Int32) -> String? {
+        name == fallbackName(key) ? nil : "camera \(key)"
+    }
+
+    /// The tree and inspector title: "IKKOKU-MIRROR (camera 2)". The tree
+    /// row shows the key detail on a second line, so a long name in the
+    /// narrow panel never hides the key.
     public static func title(name: String, key: Int32) -> String {
-        name == fallbackName(key) ? name : "\(name) (camera \(key))"
+        keyDetail(name: name, key: key).map { "\(name) (\($0))" } ?? name
     }
 
     /// The camera after the words "source camera" in a sentence:

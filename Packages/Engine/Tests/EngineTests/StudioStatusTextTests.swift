@@ -97,6 +97,8 @@ private func failure(_ object: UUID, _ c: IKChain, _ reason: String = reach) -> 
     #expect(SourceStudioCameraLabel.title(name: "Source camera 7", key: 7) == "Source camera 7")
     #expect(SourceStudioCameraLabel.reference(name: "Source camera 7", key: 7) == "7")
     #expect(SourceStudioCameraLabel.title(name: "Source camera 7", key: 8) == "Source camera 7 (camera 8)")
+    #expect(SourceStudioCameraLabel.keyDetail(name: "IKKOKU-MIRROR", key: 2) == "camera 2")
+    #expect(SourceStudioCameraLabel.keyDetail(name: "Source camera 7", key: 7) == nil)
 
     #expect(SourceStudioCameraLabel.fallbackReason(SourceStudioCameraObjectError.reflectedFrame("parent frame")) == "has a mirrored parent")
     #expect(SourceStudioCameraLabel.fallbackReason(SourceStudioCameraObjectError.reflectedFrame("world frame")) == "has a mirrored world frame")

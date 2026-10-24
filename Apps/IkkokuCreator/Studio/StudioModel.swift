@@ -300,10 +300,12 @@ final class StudioModel: ViewportInputHandler {
     /// The workspace tree's label for `object` of the current document
     /// (`sceneSHA256` is its scene identity): a source camera placeholder reads
     /// "IKKOKU-MIRROR (camera 2)", from the object's current name so a renamed
-    /// camera reads the same everywhere; any other object its name.
-    func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, sourceCamera: Bool) {
-        guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, false) }
-        return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey), true)
+    /// camera reads the same everywhere; any other object its name. The row
+    /// draws `keyDetail` ("camera 2") under the name.
+    func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
+        guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, nil, false) }
+        return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
+                SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
     }
     /// The camera after "source camera" in a status message:
     /// `"IKKOKU-MIRROR" (camera 2)`, from the object's current name.
