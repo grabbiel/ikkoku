@@ -290,7 +290,10 @@ struct CharacterLifetimeTests {
     /// the published diagnostics, as the app's main thread does. Every capture
     /// renders, and the retirement completes through the frame submitted
     /// after it. Run it under `swift test --sanitize=thread` for the
-    /// data-race check.
+    /// data-race check. With `publish(gpuTime:)` unlocked, ThreadSanitizer
+    /// reports the race in the reads phase. An unlocked `currentFrame()` is not
+    /// reported: both threads retain and release the frame's shared array
+    /// storage atomically, which ThreadSanitizer counts as synchronization.
     @Test func renderThreadDrawsWhileAnotherThreadSubmitsPicksCapturesAndRetires() throws {
         let assets = try UntexturedCharacterAssets()
         defer { assets.remove() }
@@ -328,6 +331,26 @@ struct CharacterLifetimeTests {
         var character: CharacterInstance? = CharacterInstance(instanceID: 9, library: library,
                                                               card: UntexturedCharacterAssets.card(garmentCount: 2))
         var frame = characterFrame(try #require(character))
+        // Submits alone, then diagnostics reads alone: only the renderer's own
+        // locks order them against the render thread's frame reads and
+        // publications. (Mixed in one loop, or with the picks and captures
+        // below, the other locks they take would order them incidentally.)
+        var drawsBefore = draws.withLock { $0 }
+        for step in 0..<200 {
+            frame.camera.yaw = Float(step) * 0.01
+            renderer.submit(frame)
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        let drewWhileSubmitting = eventually { draws.withLock { $0 } > drawsBefore }
+        #expect(drewWhileSubmitting)
+        drawsBefore = draws.withLock { $0 }
+        for _ in 0..<200 {
+            _ = (renderer.lastFrameStatistics, renderer.lastFrameError, renderer.lastDeformationErrors,
+                 renderer.lastSourceShaderLive, renderer.lastFrameGPUTime)
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+        let drewWhileReading = eventually { draws.withLock { $0 } > drawsBefore }
+        #expect(drewWhileReading)
         for step in 0..<16 {
             frame.camera.yaw = Float(step) * 0.05
             renderer.submit(frame)
@@ -336,8 +359,6 @@ struct CharacterLifetimeTests {
             _ = (renderer.lastFrameStatistics, renderer.lastFrameError, renderer.lastDeformationErrors,
                  renderer.lastSourceShaderLive, renderer.lastFrameGPUTime)
         }
-        let drewWhileBusy = eventually { draws.withLock { $0 } > 0 }
-        #expect(drewWhileBusy)
 
         // Retired while the render thread keeps drawing the pending frame.
         character?.releaseGPUResources()
