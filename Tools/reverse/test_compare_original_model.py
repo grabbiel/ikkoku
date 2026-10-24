@@ -93,6 +93,28 @@ class ModelComparisonTests(unittest.TestCase):
             (other/'frame.json').write_text(json.dumps(self.frame))
             with self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare_repeat(self.folder,other)
 
+    def test_male201_requires_requested_sex_identity_and_normal_height(self):
+        self.head201();mode=self.frame['neutralModel']
+        mode.update(variant='male201',sex=0,requestedSex=0,exType=0,requestedExType=0)
+        mode['actualBodyValues'][0]=.6
+        self.native['identity']['sex']=0;self.native['bodyValues'][0]=.6;self.write()
+        # Manager flags remain enabled; the source late setter itself is sex-gated.
+        result=model.compare(self.folder,self.native);self.assertTrue(result['gatePassed'])
+        self.assertEqual([(r['domain'],r['index']) for r in result['shapeCoercions']],[('body',0)])
+        valid=copy.deepcopy(self.frame)
+        for key,value in [('sex',1),('sex',False),('requestedSex',1),('requestedSex',False),
+                          ('variant','female201'),('headID',200),('requestedHeadID',200),
+                          ('boneType',False),('loadedHeadCatalogID',200),('loadedHeadCatalog',None),
+                          ('exType',1),('exType',False),('requestedExType',1),('requestedExType',None)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD201_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(field=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+        missing=copy.deepcopy(valid['neutralModel']);del missing['exType']
+        with self.assertRaisesRegex(ValueError,'normal model identity'):model.source_head_identity(missing)
+
     def test_extra_original_visible_mesh_and_missing_native_mesh_fail(self):
         extra=copy.deepcopy(self.frame['meshes'][0]);extra['path']='root/extra';extra['name']='extra'
         # Distinct rest identity avoids the separate ambiguity rejection.
