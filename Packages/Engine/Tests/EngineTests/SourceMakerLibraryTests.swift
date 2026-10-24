@@ -169,6 +169,50 @@ private struct MakerSelectionCases: Decodable {
     }
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil, "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
+func sourceMakerLibraryPreparedCaninesFollowVisibilityThroughProductionFrames() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    // Normal male/female head 0, 200 and 201. Geometry fixtures are independent
+    // converted inputs, not a claim of new original-player captures for each.
+    for sample in fixtures.fixtures.prefix(6) {
+        let bytes = try Data(contentsOf: directory.appendingPathComponent(sample.file))
+        #expect(OriginalCardFixture.hash(bytes) == sample.sha256)
+        let card = try SourceCharacterCard.decode(bytes), identity = try card.customization()
+        let base = try library.assemblyURL(for: identity) ?? URL(fileURLWithPath: sample.sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
+        let prepared = try library.prepare(card: card, coordinate: 0, baseURL: base)
+        let canine = try #require(prepared.source.parts.firstIndex { prepared.source.rig.nodes[$0.node].name == "cf_O_canine" })
+        let saved = try SourceRigPreview.savedDoubleTooth(in: card)
+        let preview = try SourceRigPreview(source: prepared.source, contract: nil, resources: resources, doubleTooth: saved)
+        let initial = try preview.frame(camera: OrbitCamera())
+        preview.doubleTooth = true
+        let on = try preview.frame(camera: OrbitCamera())
+        preview.doubleTooth = false
+        let off = try preview.frame(camera: OrbitCamera())
+        if let saved {
+            #expect(initial.items.map(\.mesh) == (saved ? on : off).items.map(\.mesh))
+        } else {
+            // The selection-only synthetic cards omit this field. Their
+            // initial frame must preserve authored activity, then accept the
+            // same explicit Boolean visibility control as a complete card.
+            preview.doubleTooth = nil
+            #expect(try preview.frame(camera: OrbitCamera()).items.map(\.mesh) == initial.items.map(\.mesh))
+            let authored = prepared.source.rig.activeNodes[prepared.source.parts[canine].node]
+            #expect(initial.items.map(\.mesh) == (authored ? on : off).items.map(\.mesh))
+        }
+        #expect(on.items.count == off.items.count + 1)
+        let removed = Set(on.items.map(\.mesh)).subtracting(off.items.map(\.mesh))
+        #expect(removed.count == 1)
+        let handle = try #require(removed.first), mesh = try #require(resources.mesh(handle))
+        #expect(mesh.name == prepared.source.parts[canine].mesh.name)
+        #expect(on.items.filter { !removed.contains($0.mesh) }.map(\.mesh) == off.items.map(\.mesh))
+        preview.doubleTooth = true
+        #expect(try preview.frame(camera: OrbitCamera(), hiddenParts: [canine]).items.map(\.mesh) == off.items.map(\.mesh))
+        #expect(card.preservedData == bytes)
+    }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
 func sourceMakerLibraryRejectsInvalidOrDuplicateBaseComponentSlots() throws {
     let (fixtures, fixtureDirectory) = try MakerSelectionCases.load()
