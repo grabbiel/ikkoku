@@ -3280,11 +3280,14 @@ Both use the retained normal-top inputs documented above; private provenance,
 input paths/hashes, observer source/calibration and ordered logs are under
 `.local/codex-continue-2026-10-24/wave-three/materials/`.
 
-**Validation.** Debug and Release each pass 10 focused checks, including 22
+**Validation.** Debug and Release each execute 9 focused checks successfully, with
+one named skip (`liveSourceCompositesMatchTheDistinctColourCapture`, missing
+private inputs in those invocations). The checks include 22
 literal normalization cases, raw-distinct/effective-equal sampler metadata,
 concurrent cold requests and owner release/replacement. Five strict private
 Release gates pass: controlled live frame, base iris, base eye-white,
-distinct eye colours and base/distinct normal top. The top base is byte-exact;
+distinct eye colours (including the previously skipped gate) and base/distinct
+normal top. The top base is byte-exact;
 the colour edit retains max 1 byte with 1,235 differing channels. Existing hair
 and eye limits are unchanged, and controlled native coverage stays 16/20.
 This slice adds no UI behavior and makes no new app/VM capture claim.
