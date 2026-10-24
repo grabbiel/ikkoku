@@ -37,7 +37,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     Dictionary<string,object> irisCard;
     Transform lookTarget; // dedicated target transform the look controllers follow; Studio owns Camera.main
     string modelVariant;
-    int modelSex=1, modelHead=0;
+    int modelSex=1, modelHead=0, modelBone=0;
     float[] modelRequestedBody,modelRequestedFace;
     sealed class ModelShape { public string domain; public int index; public float value; }
     readonly List<ModelShape> modelShapes=new List<ModelShape>();
@@ -48,7 +48,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // (clothes, clothesState, shoesType). Null when none is given; then the
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
-    bool captureTopCompositeInputs;
+    bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -60,8 +60,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(!File.Exists(path))return;
         modelVariant=File.ReadAllText(path).Trim();
         if(modelVariant=="female00") { modelSex=1;modelHead=0; }
+        else if(modelVariant=="female00-bone1") { modelSex=1;modelHead=0;modelBone=1; }
         else if(modelVariant=="female200") { modelSex=1;modelHead=200; }
         else if(modelVariant=="female201") { modelSex=1;modelHead=201; }
+        else if(modelVariant=="male00") { modelSex=0;modelHead=0;modelBone=0; }
         else if(modelVariant=="male200") { modelSex=0;modelHead=200; }
         else if(modelVariant=="male201") { modelSex=0;modelHead=201; }
         else throw new Exception("Unsupported neutral model variant");
@@ -203,6 +205,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         file.parameter.sex=(byte)modelSex;
         if(modelVariant!=null)file.custom.face.headId=modelHead;
         var body=file.custom.body;
+        if(modelVariant!=null)body.typeBone=modelBone;
         body.skinMainColor=new Color(.95f,.75f,.65f,1);
         body.skinSubColor=new Color(.80f,.45f,.40f,1);
         var face=file.custom.face;
@@ -259,9 +262,25 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 // Independent ChangeCustomClothes counterfactual: only the
                 // top's three base colours change, before the original load.
                 case "captureTopCompositeInputs": captureTopCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureBottomCompositeInputs": captureBottomCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureOuterShoeCompositeInputs": captureOuterShoeCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureInnerShoeCompositeInputs": captureInnerShoeCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "topBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[0].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[1].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[2].baseColor=ParseColor(fields[1]);break;
+                // Separate normal-bottom counterfactual; preserve the top and
+                // every other garment's saved values before original load.
+                case "bottomBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[0].baseColor=ParseColor(fields[1]);break;
+                case "bottomBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[1].baseColor=ParseColor(fields[1]);break;
+                case "bottomBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[2].baseColor=ParseColor(fields[1]);break;
+                // Outer shoes have their own saved slot; do not recolor the
+                // inner shoe selection, even when both use the same catalog.
+                case "outerShoeBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[8].colorInfo[0].baseColor=ParseColor(fields[1]);break;
+                case "outerShoeBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[8].colorInfo[1].baseColor=ParseColor(fields[1]);break;
+                case "outerShoeBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[8].colorInfo[2].baseColor=ParseColor(fields[1]);break;
+                case "innerShoeBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[7].colorInfo[0].baseColor=ParseColor(fields[1]);break;
+                case "innerShoeBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[7].colorInfo[1].baseColor=ParseColor(fields[1]);break;
+                case "innerShoeBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[7].colorInfo[2].baseColor=ParseColor(fields[1]);break;
                 // Wear: catalog IDs for every outfit's nine clothes slots, the
                 // saved ChaFileStatus.clothesState and shoesType. LoadAsync's
                 // UpdateClothesStateAll and the first UpdateVisible apply them.
@@ -377,9 +396,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var ramp=Shader.GetGlobalTexture("_RampG");if(ramp!=null) globals["_RampG"]=ExportTexture(ramp);
         var report=new Dictionary<string,object>{{"schemaVersion",1},{"anisotropicFiltering",QualitySettings.anisotropicFiltering.ToString()},{"masterTextureLimit",QualitySettings.masterTextureLimit},{"lodBias",QualitySettings.lodBias},{"fixedDeltaTime",Time.fixedDeltaTime},{"maximumDeltaTime",Time.maximumDeltaTime},{"width",Width},{"height",Height},{"scope","Frozen original clothed character; source-evaluated geometry, source materials, dedicated camera/light; no Studio post-processing"},{"card","fixture-card.png"},{"color","original-color.png"},{"camera",new Dictionary<string,object>{{"position",V(camera.transform.position)},{"target",V(bounds.center)},{"rotation",V(camera.transform.rotation)},{"fov",camera.fieldOfView},{"near",camera.nearClipPlane},{"far",camera.farClipPlane},{"view",M(camera.worldToCameraMatrix)},{"projection",M(camera.projectionMatrix)}}},{"light",new Dictionary<string,object>{{"direction",V(key.transform.forward)},{"color",V(key.color)},{"intensity",key.intensity},{"ambient",V(RenderSettings.ambientLight)}}},{"bounds",new Dictionary<string,object>{{"min",V(bounds.min)},{"max",V(bounds.max)}}},{"background",V(camera.backgroundColor)},{"globals",globals},{"textures",textures},{"meshes",meshes},{"bones",bones},{"renderCPUMilliseconds",timer.Elapsed.TotalMilliseconds}};
         if(modelVariant!=null) {
-            if(character.sex!=modelSex || character.exType!=0 || character.chaFile.custom.face.headId!=modelHead || character.chaFile.custom.body.typeBone!=0 || character.infoHead==null || character.infoHead.Id!=modelHead)
+            if(character.sex!=modelSex || character.exType!=0 || character.chaFile.custom.face.headId!=modelHead || character.chaFile.custom.body.typeBone!=modelBone || character.infoHead==null || character.infoHead.Id!=modelHead)
                 throw new Exception("Loaded source model identity differs from request");
-            report["neutralModel"]=new Dictionary<string,object>{{"variant",modelVariant},{"exType",character.exType},{"requestedExType",0},{"sex",character.sex},{"headID",character.chaFile.custom.face.headId},{"boneType",character.chaFile.custom.body.typeBone},{"requestedSex",modelSex},{"requestedHeadID",modelHead},{"requestedBoneType",0},{"hiPoly",character.hiPoly},{"enableCorrectArmSize",Manager.Character.Instance.enableCorrectArmSize},{"enableCorrectHandSize",Manager.Character.Instance.enableCorrectHandSize},{"loadedHeadName",character.objHead.name},{"loadedHeadCatalogID",character.infoHead.Id},{"eyeAngleHRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleHRate(EYE_LR.EYE_L)},{"eyeAngleVRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleVRate()},{"requestedBodyValues",modelRequestedBody},{"requestedFaceValues",modelRequestedFace},{"actualBodyValues",character.chaFile.custom.body.shapeValueBody},{"actualFaceValues",character.chaFile.custom.face.shapeValueFace},{"handControllerCounts",modelHandCounts},{"handPatterns",new[]{handPatterns["L"],handPatterns["R"]}},{"animators",modelAnimators},{"elapsedFramesAfterLoad",0},{"clock","no post-load Animator tick; source shape and neutral FBS setters evaluated once; loading-clock determinism must be checked separately"},{"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
+            report["neutralModel"]=new Dictionary<string,object>{{"variant",modelVariant},{"exType",character.exType},{"requestedExType",0},{"sex",character.sex},{"headID",character.chaFile.custom.face.headId},{"boneType",character.chaFile.custom.body.typeBone},{"requestedSex",modelSex},{"requestedHeadID",modelHead},{"requestedBoneType",modelBone},{"hiPoly",character.hiPoly},{"enableCorrectArmSize",Manager.Character.Instance.enableCorrectArmSize},{"enableCorrectHandSize",Manager.Character.Instance.enableCorrectHandSize},{"loadedHeadName",character.objHead.name},{"loadedHeadCatalogID",character.infoHead.Id},{"eyeAngleHRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleHRate(EYE_LR.EYE_L)},{"eyeAngleVRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleVRate()},{"requestedBodyValues",modelRequestedBody},{"requestedFaceValues",modelRequestedFace},{"actualBodyValues",character.chaFile.custom.body.shapeValueBody},{"actualFaceValues",character.chaFile.custom.face.shapeValueFace},{"handControllerCounts",modelHandCounts},{"handPatterns",new[]{handPatterns["L"],handPatterns["R"]}},{"animators",modelAnimators},{"elapsedFramesAfterLoad",0},{"clock","no post-load Animator tick; source shape and neutral FBS setters evaluated once; loading-clock determinism must be checked separately"},{"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
         }
         if(modelVariant!=null) {
             // Read the selected source catalog row, not the requested ID or
@@ -388,6 +407,25 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             foreach(var catalogKey in new[]{ChaListDefine.KeyType.Name,ChaListDefine.KeyType.MainManifest,ChaListDefine.KeyType.MainAB,ChaListDefine.KeyType.MainData,ChaListDefine.KeyType.ShapeAnime})
                 catalog[catalogKey.ToString()]=character.infoHead.GetInfo(catalogKey);
             ((Dictionary<string,object>)report["neutralModel"])["loadedHeadCatalog"]=catalog;
+        }
+        if(modelBone==1) {
+            var body=character.sibBody as ShapeBodyInfoFemale;
+            var face=Required(character,"sibFace") as ShapeHeadInfoFemale;
+            if(body==null || face==null || body.correctValue==null || body.correctValue.Length!=32)
+                throw new Exception("Corrected model requires the original 32-entry body correction table");
+            // The exact SaveCorrectInfo encoding: LE count then position,
+            // rotation and scale XYZ Float32 per entry. Read the active table;
+            // no native table or captured transform is an input to this player.
+            string name="body-correction.bytes",path=Path.Combine(folder,name);
+            using(var stream=File.Create(path))using(var writer=new BinaryWriter(stream)) {
+                writer.Write(body.correctValue.Length);
+                foreach(var row in body.correctValue)foreach(var vector in new[]{row.vctPos,row.vctRot,row.vctScl}) {
+                    writer.Write(vector.x);writer.Write(vector.y);writer.Write(vector.z);
+                }
+            }
+            ((Dictionary<string,object>)report["neutralModel"])["bodyCorrection"]=new Dictionary<string,object>{
+                {"file",name},{"sha256",Sha256File(path)},{"entries",body.correctValue.Length},
+                {"sourceBodyType",body.typeBone},{"sourceFaceType",face.typeBone},{"headCorrectValue",face.headCorrectValue}};
         }
         if(modelShapeRequest!=null)((Dictionary<string,object>)report["neutralModel"])["shapeRequest"]=modelShapeRequest;
         if(wearRequest!=null) {
@@ -399,17 +437,31 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 {"clothesIDs",Array.ConvertAll(character.nowCoordinate.clothes.parts,p=>p.id)},{"objClothesActive",active},{"customMatBodyAlpha",bodyAlpha},
                 {"rule","ChaControl.UpdateVisible after LoadAsync (UpdateClothesStateAll); no SetClothesStateAll(0) at capture"}};
         }
-        if(captureTopCompositeInputs) {
+        foreach(int slot in new[]{0,1,7,8}) {
+            if(!(slot==0?captureTopCompositeInputs:slot==1?captureBottomCompositeInputs:slot==7?captureInnerShoeCompositeInputs:captureOuterShoeCompositeInputs))continue;
             var inputs=new Dictionary<string,object>();
-            var info=character.infoClothes[0];
+            var info=character.infoClothes[slot];
+            if(slot==7 || slot==8) {
+                var clothes=character.objClothes[slot];
+                var component=clothes.GetComponent<ChaClothesComponent>();
+                if(component==null || component.rendNormal01==null)throw new Exception("Shoe normal renderer role missing for slot "+slot);
+                var shoeRenderers=new List<object>();
+                foreach(var renderer in component.rendNormal01) {
+                    if(renderer==null)throw new Exception("Shoe normal renderer missing for slot "+slot);
+                    var shoeTarget=renderer.material.GetTexture("_MainTex");
+                    if(shoeTarget==null)throw new Exception("Shoe normal target missing for slot "+slot);
+                    shoeRenderers.Add(new Dictionary<string,object>{{"name",renderer.name},{"path",RelativePath(renderer.transform)},{"enabled",renderer.enabled},{"active",renderer.gameObject.activeInHierarchy},{"mainTex",ExportTexture(shoeTarget)}});
+                }
+                inputs["selection"]=new Dictionary<string,object>{{"slot",slot},{"shoesType",character.fileStatus.shoesType},{"id",info.Id},{"object",clothes.name},{"active",clothes.activeInHierarchy},{"normalRenderers",shoeRenderers},{"MainData",info.GetInfo(ChaListDefine.KeyType.MainData)},{"MainAB",info.GetInfo(ChaListDefine.KeyType.MainAB)},{"MainManifest",info.GetInfo(ChaListDefine.KeyType.MainManifest)}};
+            }
             foreach(var keys in new[]{new[]{ChaListDefine.KeyType.MainTexAB,ChaListDefine.KeyType.MainTex},new[]{ChaListDefine.KeyType.ColorMaskAB,ChaListDefine.KeyType.ColorMaskTex}}) {
                 string bundle=info.GetInfo(keys[0]),name=info.GetInfo(keys[1]);
                 if(bundle=="0")bundle=info.GetInfo(ChaListDefine.KeyType.MainAB);
                 var texture=CommonLib.LoadAsset<Texture2D>(bundle,name,false,info.GetInfo(ChaListDefine.KeyType.MainManifest));
-                if(texture==null)throw new Exception("Top composite input missing: "+bundle+"/"+name);
+                if(texture==null)throw new Exception("Clothes slot "+slot+" composite input missing: "+bundle+"/"+name);
                 inputs[keys[1].ToString()]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",Sha256File(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath),"abdata"),bundle))},{"name",name},{"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},{"mipLevels",texture.mipmapCount},{"file",ExportTexture(texture)}};
             }
-            report["topCompositeInputs"]=inputs;
+            report[slot==0?"topCompositeInputs":slot==1?"bottomCompositeInputs":slot==7?"innerShoeCompositeInputs":"outerShoeCompositeInputs"]=inputs;
         }
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
