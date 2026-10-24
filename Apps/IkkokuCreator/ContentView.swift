@@ -5,6 +5,7 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var app = app
+        let _ = PerfTrace.body(.contentView)
         Group {
             if app.host == nil {
                 ContentUnavailableView("Metal is unavailable", systemImage: "exclamationmark.triangle", description: Text(app.errorMessage ?? ""))

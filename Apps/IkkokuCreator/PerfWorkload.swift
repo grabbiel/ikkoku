@@ -159,7 +159,6 @@ final class PerfWorkloadDriver {
         app.mode = .studio
         studio.liveAnimation = true
         studio.selection = selectKey.flatMap { key in studio.doc.objects.first { $0.sourceObjectKey == key }?.id }
-        trace.observeStudio(studio)
         trace.details["sourceCharacters"] = characters.count
         trace.details["documentObjects"] = studio.doc.objects.count
         trace.details["selectedSourceKey"] = selectKey.map { Int($0) } ?? -1
@@ -282,7 +281,6 @@ final class PerfWorkloadDriver {
         studio.selection = nil
         studio.liveAnimation = true
         studio.resetCamera()
-        trace.observeStudio(studio)
         trace.details["nativeCharacters"] = configuration.nativeCharacters
         trace.details["documentObjects"] = studio.doc.objects.count
     }

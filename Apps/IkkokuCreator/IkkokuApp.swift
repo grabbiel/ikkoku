@@ -15,6 +15,7 @@ struct IkkokuApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
+            let _ = PerfTrace.body(.appCommands)
             CommandGroup(replacing: .newItem) {
                 Button("New Female Character") { app.maker?.newCharacter(sex: .female) }.keyboardShortcut("n", modifiers: [.command])
                 Button("New Male Character") { app.maker?.newCharacter(sex: .male) }.keyboardShortcut("n", modifiers: [.command, .shift])

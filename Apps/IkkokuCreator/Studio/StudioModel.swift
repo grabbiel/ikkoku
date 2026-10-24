@@ -47,7 +47,7 @@ enum FKGroup: String, CaseIterable, Identifiable {
 @MainActor @Observable
 final class StudioModel: ViewportInputHandler {
     let host: EngineHost
-    var doc = StudioDocument() { didSet { pruneSourceVoices(); refresh() } }
+    var doc = StudioDocument() { didSet { PerfTrace.event(.studioDocChange); pruneSourceVoices(); refresh() } }
     var selection: UUID? { didSet { if selection != oldValue { selectedBone = nil; selectedSourceIK = nil; refresh() } } }
     var gizmoMode: GizmoMode = .translate { didSet { refresh() } }
     var localSpace = true { didSet { refresh() } }
@@ -320,6 +320,12 @@ final class StudioModel: ViewportInputHandler {
             status = text
         }
         guard drag == nil else { return }
+        PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
+    }
+
+    /// The timer's step outside a drag: the timeline, the plugin session or
+    /// the live source animation.
+    private func stepLive() {
         if timelinePlaying {
             var t = timelineTime + 1.0 / 30.0
             if t > doc.timeline.duration { t = doc.timeline.loop ? 0 : doc.timeline.duration; if !doc.timeline.loop { timelinePlaying = false } }
@@ -1626,7 +1632,9 @@ final class StudioModel: ViewportInputHandler {
         return inst
     }
 
-    func refresh() {
+    func refresh() { PerfTrace.measure(.studioRefresh, "StudioRefresh") { refreshFrame() } }
+
+    private func refreshFrame() {
         let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
         sourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
         // Native characters that left the document (delete, a deleted parent,

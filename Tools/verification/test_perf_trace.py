@@ -106,7 +106,35 @@ class PerfTraceTests(unittest.TestCase):
         line = perf_trace.row("release/studio-idle", report(app="Debug", engine="Release"))
         self.assertTrue(line.startswith("| release/studio-idle | Debug/Release | 118.4 | 3 | 1.50/2.50 | 4.00/5.00 | 400 | 200 | 150 | 50 |"))
         self.assertIn("studioTick 1.50/2.50 ×30/s", line)
+        camera = report()
+        camera["summary"]["phases"]["studioCameraRefresh"] = dict(camera["summary"]["phases"]["studioTick"], perSecond=118)
+        self.assertIn("studioCameraRefresh 1.50/2.50 ×118/s", perf_trace.row("after/studio-orbit", camera))
         self.assertTrue(line.endswith("| 512 |"))
+
+    def test_attribution_row_reports_events_and_view_bodies_per_input(self):
+        orbit = report()
+        orbit["summary"].update(recordedSeconds=10, inputCalls={"mouseDown": 1, "mouseDragged": 1199},
+                                events={"studioCameraChange": {"count": 1199, "perSecond": 119.9}},
+                                viewBodies={"studioToolbar": {"count": 12, "perSecond": 1.2},
+                                            "studioWindow": {"count": 600, "perSecond": 60}})
+        line = perf_trace.attribution_row("after/studio-orbit", orbit)
+        self.assertEqual(line, "| after/studio-orbit | 120 | studioCameraChange 120/s (1.00/input) | "
+                               "studioWindow 60/s (0.50/input), studioToolbar 1/s (0.01/input) |")
+        idle = report()
+        idle["summary"].update(recordedSeconds=10, viewBodies={"v%d" % i: {"count": i, "perSecond": i / 10} for i in range(1, 9)})
+        line = perf_trace.attribution_row("after/studio-idle", idle, top=2)
+        self.assertTrue(line.startswith("| after/studio-idle | 0 | - | v8 1/s, v7 1/s, +6 more |"), line)
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder:
+            with open(os.path.join(folder, "studio-orbit.json"), "w") as handle:
+                json.dump(orbit, handle)
+            with open(os.path.join(folder, "old.json"), "w") as handle:
+                json.dump(report(), handle)  # a schema 1 report has neither block
+            with contextlib.redirect_stdout(output):
+                perf_trace.summarize([folder])
+        text = output.getvalue()
+        self.assertIn("| report | input events/s | model events | view bodies (most evaluated first) |", text)
+        self.assertEqual(text.count("studioCameraChange"), 1)
 
     def test_summary_flags_runs_whose_window_was_not_composited(self):
         hidden = report()

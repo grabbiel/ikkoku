@@ -2,7 +2,6 @@ import Foundation
 import AppKit
 import QuartzCore
 import Metal
-import Observation
 import os
 import GPU
 import Renderer
@@ -41,9 +40,12 @@ enum PerfSignpost {
 /// - each main run-loop busy period (after-waiting to before-waiting), so
 ///   main-thread time not spent drawing or in the model is visible as "other"
 ///   (SwiftUI updates, layout, AppKit event handling);
-/// - model work: Maker ticks/refreshes (explicit hooks), Studio live ticks and
-///   `refresh()` calls (observed through `StudioModel`'s observable
-///   properties, see `observeStudio`) and every input handler call;
+/// - model work: Maker and Studio ticks and refreshes, the Studio's camera-only
+///   frame rebuilds (explicit hooks in `MakerModel` and `StudioModel`) and
+///   every input handler call;
+/// - model events: Studio document changes and camera-only changes;
+/// - SwiftUI body evaluations of the Studio and Maker panels (`ViewBody`), so a
+///   report shows which views an edit re-evaluated;
 /// - process footprint, Metal allocation and CPU time.
 @MainActor
 final class PerfTrace {
@@ -51,7 +53,30 @@ final class PerfTrace {
 
     /// Phases with their own sample lists.
     enum Phase: String, CaseIterable {
-        case draw, studioTick, studioRefresh, makerTick, makerRefresh, input
+        case draw, studioTick, studioRefresh, studioCameraRefresh, makerTick, makerRefresh, input
+    }
+
+    /// Model events counted per recording (no duration).
+    enum Event: String, CaseIterable {
+        /// A write to the Studio document other than through the camera
+        /// accessor; each one re-evaluates every view that reads the document.
+        case studioDocChange
+        /// A write through the Studio's camera accessor (orbit, pan, dolly,
+        /// camera slots), which only the camera's readers observe.
+        case studioCameraChange
+    }
+
+    /// SwiftUI bodies counted per recording. A count is one evaluation of that
+    /// view's body (or, for the panels a parent builds inline, of the parent's
+    /// builder for it), so a per-event rate says what one edit re-evaluated.
+    /// The names stay stable across view restructuring so reports compare.
+    enum ViewBody: Int, CaseIterable {
+        case appCommands, contentView
+        case studioWindow, studioWorkspace, studioWorkspaceRow, studioToolbar, studioTimeline, studioInspector, studioStatus
+        case objectInspector, poseInspector, sourcePoseInspector, sourceAnimationInspector, faceInspector, clothesInspector, sceneInspector
+        case makerWindow, makerRigPanel, makerShapeRow
+
+        var name: String { String(describing: self) }
     }
 
     struct Configuration {
@@ -100,6 +125,8 @@ final class PerfTrace {
     private(set) var frames: [FrameSample] = []
     private var intervals: [Phase: [(start: CFTimeInterval, end: CFTimeInterval)]] = [:]
     private var inputNames: [String: Int] = [:]
+    private var eventCounts: [Event: Int] = [:]
+    private var bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
     private var busy: [(start: CFTimeInterval, end: CFTimeInterval)] = []
     private var busyStart: CFTimeInterval?
     private var observers: [CFRunLoopObserver] = []
@@ -116,10 +143,6 @@ final class PerfTrace {
     var drawableSize: CGSize = .zero
     /// Free-form facts the workload driver adds (inputs, selections, hashes).
     var details: [String: Any] = [:]
-
-    // Studio observation probes (see `observeStudio`).
-    private var studioTickStart: CFTimeInterval?
-    private var studioRefreshStart: CFTimeInterval?
 
     private init(configuration: Configuration) {
         self.configuration = configuration
@@ -190,6 +213,21 @@ final class PerfTrace {
         active?.record(.input, start: start, end: CACurrentMediaTime(), name: "\(name)")
     }
 
+    /// Counts one model event while recording.
+    static func event(_ event: Event) {
+        guard let trace = active, trace.recording else { return }
+        trace.eventCounts[event, default: 0] += 1
+    }
+
+    /// Counts one SwiftUI body evaluation while recording; called as
+    /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs one
+    /// optional check when no trace runs.
+    @inline(__always)
+    static func body(_ view: ViewBody) {
+        guard let trace = active, trace.recording else { return }
+        trace.bodyCounts[view.rawValue] += 1
+    }
+
     /// Called by `ViewportNSView` around `Renderer.draw`.
     func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
                  gpuSeconds: Double, presentIndex: Int, drawable: CGSize) {
@@ -201,42 +239,11 @@ final class PerfTrace {
                                   presentLogIndex: presentIndex))
     }
 
-    /// Studio's live tick and `refresh()` live in StudioModel.swift, which other
-    /// work owns at the moment; until it carries explicit hooks the trace infers
-    /// both from properties each of them assigns: a live tick begins with
-    /// `sourceAnimationTime += deltaTime`, `refresh()` assigns
-    /// `sourceRoutePlayState` near its start and `frame` just before it submits.
-    /// The resulting intervals omit only the route prune before the first
-    /// assignment and the submit after the last. Every Observation callback runs
-    /// synchronously in the setter on the main thread.
-    func observeStudio(_ studio: StudioModel) {
-        func watch<Value>(_ read: @escaping () -> Value, _ changed: @escaping () -> Void) {
-            withObservationTracking({ _ = read() }, onChange: {
-                changed()
-                MainActor.assumeIsolated { watch(read, changed) }
-            })
-        }
-        watch({ studio.sourceAnimationTime }) { [weak self] in
-            MainActor.assumeIsolated { self?.studioTickStart = CACurrentMediaTime() }
-        }
-        watch({ studio.sourceRoutePlayState.count }) { [weak self] in
-            MainActor.assumeIsolated { self?.studioRefreshStart = CACurrentMediaTime() }
-        }
-        watch({ studio.frame.items.count }) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let now = CACurrentMediaTime()
-                if let start = self.studioRefreshStart { self.record(.studioRefresh, start: start, end: now) }
-                if let start = self.studioTickStart { self.record(.studioTick, start: start, end: now) }
-                self.studioRefreshStart = nil; self.studioTickStart = nil
-            }
-        }
-    }
-
     // MARK: Recording window
 
     func beginRecording() {
         frames = []; intervals = [:]; inputNames = [:]; busy = []
+        eventCounts = [:]; bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
         peakFootprint = PerfTrace.footprint(); peakMetal = device?.currentAllocatedSize ?? 0
         cpuAtStart = PerfTrace.cpuSeconds()
         recordStart = CACurrentMediaTime()
@@ -325,13 +332,9 @@ final class PerfTrace {
         let gpu = frames.map(\.gpuMilliseconds).filter { $0 > 0 }
         let busyTotal = busy.reduce(0) { $0 + ($1.end - $1.start) } * 1000
         let drawTotal = draw.reduce(0, +)
-        // Model time: ticks and input calls (each includes the refreshes it
-        // triggered) plus the refreshes outside any of them, so nothing counts twice.
-        let containers = (intervals[.studioTick] ?? []) + (intervals[.makerTick] ?? []) + (intervals[.input] ?? [])
-        let looseRefreshes = ((intervals[.studioRefresh] ?? []) + (intervals[.makerRefresh] ?? [])).filter { refresh in
-            !containers.contains { $0.start <= refresh.start && refresh.end <= $0.end }
-        }
-        let modelTotal = (containers + looseRefreshes).reduce(0) { $0 + ($1.end - $1.start) } * 1000
+        // Model time: the union of every model phase (ticks, refreshes and
+        // input calls nest), so nothing counts twice.
+        let modelTotal = PerfTrace.unionSeconds(Phase.allCases.filter { $0 != .draw }.flatMap { intervals[$0] ?? [] }) * 1000
         let other = max(0, busyTotal - drawTotal - modelTotal)
 
         var phases: [String: Any] = [:]
@@ -369,6 +372,15 @@ final class PerfTrace {
             ] as [String: Any],
             "processCPUCores": (cpuAtEnd.process - cpuAtStart.process) / window,
             "inputCalls": inputNames,
+            "events": Dictionary(uniqueKeysWithValues: Event.allCases.compactMap { event -> (String, Any)? in
+                guard let count = eventCounts[event] else { return nil }
+                return (event.rawValue, ["count": count, "perSecond": PerfTrace.round(Double(count) / window)] as [String: Any])
+            }),
+            "viewBodies": Dictionary(uniqueKeysWithValues: ViewBody.allCases.compactMap { view -> (String, Any)? in
+                let count = bodyCounts[view.rawValue]
+                guard count > 0 else { return nil }
+                return (view.name, ["count": count, "perSecond": PerfTrace.round(Double(count) / window)] as [String: Any])
+            }),
             "memory": [
                 "peakFootprintBytes": peakFootprint,
                 "peakMetalAllocatedBytes": peakMetal,
@@ -392,7 +404,7 @@ final class PerfTrace {
 
         let window0 = NSApp.windows.first(where: { $0.isVisible })
         return [
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "workload": configuration.workload,
             "configuration": [
                 "seconds": configuration.seconds, "warmupSeconds": configuration.warmupSeconds,
@@ -425,6 +437,22 @@ final class PerfTrace {
     }
 
     static func round(_ value: Double) -> Double { (value * 10_000).rounded() / 10_000 }
+
+    /// Total length of the union of `intervals`, in their unit.
+    static func unionSeconds(_ intervals: [(start: CFTimeInterval, end: CFTimeInterval)]) -> Double {
+        var total = 0.0
+        var current: (start: CFTimeInterval, end: CFTimeInterval)?
+        for interval in intervals.sorted(by: { $0.start < $1.start }) {
+            if let open = current, interval.start <= open.end {
+                current = (open.start, max(open.end, interval.end))
+            } else {
+                if let open = current { total += open.end - open.start }
+                current = interval
+            }
+        }
+        if let open = current { total += open.end - open.start }
+        return total
+    }
 
     private static func buildDescription() -> [String: Any] {
         #if DEBUG

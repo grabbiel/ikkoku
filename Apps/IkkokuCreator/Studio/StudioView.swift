@@ -11,6 +11,7 @@ struct StudioView: View {
     @Environment(AppState.self) private var app
 
     var body: some View {
+        let _ = PerfTrace.body(.studioWindow)
         HStack(spacing: 0) {
             workspace.frame(width: 250)
             Divider()
@@ -27,7 +28,8 @@ struct StudioView: View {
     // MARK: Workspace
 
     private var workspace: some View {
-        VStack(spacing: 0) {
+        PerfTrace.body(.studioWorkspace)
+        return VStack(spacing: 0) {
             HStack {
                 Text("Workspace").font(.headline)
                 Spacer()
@@ -105,7 +107,8 @@ struct StudioView: View {
     }
 
     private var toolbarControls: some View {
-        HStack(spacing: 8) {
+        PerfTrace.body(.studioToolbar)
+        return HStack(spacing: 8) {
             Picker("", selection: $model.gizmoMode) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").tag(GizmoMode.translate)
                 Image(systemName: "arrow.triangle.2.circlepath").tag(GizmoMode.rotate)
@@ -159,7 +162,8 @@ struct StudioView: View {
     // MARK: Timeline
 
     private var timelineBar: some View {
-        HStack(spacing: 10) {
+        PerfTrace.body(.studioTimeline)
+        return HStack(spacing: 10) {
             Button { model.timelinePlaying.toggle() } label: { Image(systemName: model.timelinePlaying ? "pause.fill" : "play.fill") }
                 .help("Play / pause (Space in the viewport)")
             Button { model.timelinePlaying = false; model.timelineTime = 0 } label: { Image(systemName: "backward.end.fill") }
@@ -196,7 +200,9 @@ struct StudioView: View {
     // MARK: Inspector
 
     private var inspector: some View {
-        VStack(spacing: 0) {
+        PerfTrace.body(.studioInspector)
+        PerfTrace.body(.studioStatus)
+        return VStack(spacing: 0) {
             Picker("", selection: $model.inspectorTab) {
                 ForEach(StudioModel.InspectorTab.allCases) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).labelsHidden().padding(8)
@@ -252,6 +258,7 @@ struct WorkspaceRow: View {
         }
     }
     var body: some View {
+        let _ = PerfTrace.body(.studioWorkspaceRow)
         HStack(spacing: 6) {
             Spacer().frame(width: CGFloat(depth) * 14)
             Image(systemName: icon).foregroundStyle(object.kind == .light ? .yellow : .secondary).frame(width: 16)
@@ -272,6 +279,7 @@ struct ObjectInspector: View {
     @Bindable var model: StudioModel
     @Environment(AppState.self) private var app
     var body: some View {
+        let _ = PerfTrace.body(.objectInspector)
         if let o = model.selectedObject, let i = model.doc.index(of: o.id) {
             VStack(alignment: .leading, spacing: 10) {
                 TextField("Name", text: Binding(get: { o.name }, set: { v in model.update(o.id) { $0.name = v } }))
@@ -380,6 +388,7 @@ struct ObjectInspector: View {
 struct PoseInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
+        let _ = PerfTrace.body(.poseInspector)
         if let o = model.selectedObject, o.kind == .character {
             VStack(alignment: .leading, spacing: 10) {
                 Picker("Mode", selection: $model.poseMode) { ForEach(PoseMode.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.segmented)
@@ -452,6 +461,7 @@ struct PoseInspector: View {
 struct SourcePoseInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
+        let _ = PerfTrace.body(.sourcePoseInspector)
         if let state = model.selectedSourceIKState {
             SectionBox(title: "Original kinematics") {
                 Toggle("FK enabled", isOn: Binding(get: { state.enableFK && !state.enableIK }, set: { model.setSourceFKEnabled($0) }))
@@ -500,6 +510,7 @@ struct SourcePoseInspector: View {
 struct SourceAnimationInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
+        let _ = PerfTrace.body(.sourceAnimationInspector)
         if let o = model.selectedObject, let state = model.selectedSourceAnimationState {
             SectionBox(title: "Original animation") {
                 let rows = model.sourceAnimationCatalog?.entries ?? []
@@ -574,6 +585,7 @@ struct SourceAnimationInspector: View {
 struct FaceInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
+        let _ = PerfTrace.body(.faceInspector)
         if let o = model.selectedObject, o.kind == .character, let preview = model.sourceShapePreview(for: o.id) {
             VStack(alignment: .leading, spacing: 10) {
                 SourceExpressionInspector(model: model, object: o, preview: preview)
@@ -717,6 +729,7 @@ struct FaceInspector: View {
 struct ClothesInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
+        let _ = PerfTrace.body(.clothesInspector)
         if let o = model.selectedObject, o.kind == .character, o.sourceCharacter != nil {
             VStack(alignment: .leading, spacing: 10) {
                 if let preview = model.sourceShapePreview(for: o.id) {
@@ -882,6 +895,7 @@ extension ClothesInspector {
 struct SceneInspector: View {
     @Bindable var model: StudioModel
     var body: some View {
+        let _ = PerfTrace.body(.sceneInspector)
         VStack(alignment: .leading, spacing: 10) {
             SectionBox(title: "Character light") {
                 FloatRow(label: "Horizontal", value: $model.doc.mainLight.rotation.y, range: -180...180)

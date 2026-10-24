@@ -9,6 +9,7 @@ struct SourceRigPanel: View {
     @Bindable var model: MakerModel
 
     var body: some View {
+        let _ = PerfTrace.body(.makerRigPanel)
         if let preview = model.sourceRigPreview {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Original model preview").font(.title2.bold())
@@ -271,7 +272,8 @@ struct SourceRigPanel: View {
     }
 
     private func shapeSlider(label: String, value: Binding<Float>) -> some View {
-        VStack(spacing: 4) {
+        PerfTrace.body(.makerShapeRow)
+        return VStack(spacing: 4) {
             HStack { Text(label); Spacer(); Text(value.wrappedValue, format: .number.precision(.fractionLength(2))).monospacedDigit().foregroundStyle(.secondary) }
             Slider(value: value, in: 0...1)
         }
