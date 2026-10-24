@@ -22,7 +22,8 @@ private let bundledAssets = URL(fileURLWithPath: #filePath).deletingLastPathComp
 /// image, with the bundled catalog and without `Textures/`. Building these
 /// characters therefore never calls `MTKTextureLoader`: on CI, two tests making
 /// synchronous texture loads at once stalled the whole parallel Engine suite.
-private struct UntexturedCharacterAssets {
+/// Shared with `PickTests`.
+struct UntexturedCharacterAssets {
     static var garments: [(slot: ClothSlot, id: String)] {
         [(.bottom, "bottom_skirt_pleated"), (.socks, "socks_knee"), (.shoesIn, "shoes_in_loafers"),
          (.bra, "bra_plain"), (.underwear, "underwear_plain")]
@@ -60,7 +61,8 @@ private struct UntexturedCharacterAssets {
 }
 
 /// One character's frame, built the way `MakerModel.refresh` builds it.
-private func characterFrame(_ character: CharacterInstance) -> RenderFrame {
+/// Shared with `PickTests`.
+func characterFrame(_ character: CharacterInstance) -> RenderFrame {
     let built = character.build(objectID: 1)
     var frame = RenderFrame(items: built.items, sceneBounds: built.bounds)
     frame.skinSets = [character.instanceID: built.skinSet]
@@ -287,7 +289,8 @@ struct CharacterLifetimeTests {
 
     /// R7 phase 2, item 2: a viewport draws on its own render thread while
     /// another thread submits, picks, captures, retires a character and reads
-    /// the published diagnostics, as the app's main thread does. Every capture
+    /// the published diagnostics, as the app's main thread does, and the
+    /// renderer's pick queue runs asynchronous picks (item 5). Every capture
     /// renders, and the retirement completes through the frame submitted
     /// after it. Run it under `swift test --sanitize=thread` for the
     /// data-race check. With `publish(gpuTime:)` unlocked, ThreadSanitizer
@@ -351,14 +354,23 @@ struct CharacterLifetimeTests {
         }
         let drewWhileReading = eventually { draws.withLock { $0 } > drawsBefore }
         #expect(drewWhileReading)
+        // R7 phase 2, item 5: asynchronous picks prepare on the renderer's pick
+        // queue, a third thread, while the render thread draws and this one
+        // submits, picks synchronously and captures.
+        let asyncPicks = OSAllocatedUnfairLock(initialState: [UInt32]())
         for step in 0..<16 {
             frame.camera.yaw = Float(step) * 0.05
             renderer.submit(frame)
+            renderer.pick(frame: renderer.currentFrame(), pixel: Float2(32, 32), size: (64, 64)) { result in
+                asyncPicks.withLock { $0.append(result.id) }
+            }
             _ = renderer.pick(frame: renderer.currentFrame(), pixel: Float2(32, 32), size: (64, 64))
             render(renderer, renderer.currentFrame(), "step \(step)")
             _ = (renderer.lastFrameStatistics, renderer.lastFrameError, renderer.lastDeformationErrors,
                  renderer.lastSourceShaderLive, renderer.lastFrameGPUTime)
         }
+        let picked = eventually { asyncPicks.withLock { $0.count } == 16 }
+        #expect(picked)
 
         // Retired while the render thread keeps drawing the pending frame.
         character?.releaseGPUResources()

@@ -51,6 +51,15 @@ public enum RenderFrameError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+/// A finished asynchronous pick (`Renderer.pick(frame:pixel:size:completion:)`).
+public struct RenderPickResult: Sendable, Equatable {
+    /// The object id under the pixel; 0 for nothing, or when the pick could not run.
+    public var id: UInt32
+    /// The pick command buffer's GPU time in seconds (`gpuEndTime - gpuStartTime`); 0 when it did not run.
+    public var gpuTime: Double
+    public init(id: UInt32, gpuTime: Double = 0) { self.id = id; self.gpuTime = gpuTime }
+}
+
 /// Debounced status-line text for renderer problems an editor should show: a
 /// skipped frame (`Renderer.lastFrameError`) or unshaded lights
 /// (`RenderFrameStatistics.droppedLights`). The app polls it from its editor
@@ -101,7 +110,8 @@ public struct RenderStatusReporter: Sendable {
 ///
 /// Threads (R7 phase 2, item 2; docs/reference/renderer.md, "Renderer threads").
 /// Each viewport draws on its own render thread; the app's models call
-/// `submit`, `pick`, `capture` and `benchmark` from the main thread.
+/// `submit`, `pick`, `capture` and `benchmark` from the main thread. The
+/// asynchronous `pick` prepares and encodes on `pickQueue` (R7 phase 2, item 5).
 /// - `submit` and `currentFrame` exchange the pending frame under `frameLock`.
 /// - Every frame is prepared and encoded under `renderLock`, which also guards
 ///   the render targets, `frameIndex`, the frame ring's open frame and the
@@ -119,7 +129,7 @@ public struct RenderStatusReporter: Sendable {
 /// locks above (`pendingFrame` by `frameLock`; `targets`, `frameIndex`,
 /// `liveEncoder` and `liveEncoderError` by `renderLock`; the published values
 /// by `statusLock`); everything else is immutable after `init` or a
-/// thread-safe Metal or store object.
+/// thread-safe Metal or store object (`pickQueue` is a serial dispatch queue).
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
 
@@ -131,6 +141,9 @@ public final class Renderer: @unchecked Sendable {
 
     private let renderLock = NSLock()
     private let frameLock = NSLock()
+    /// Prepares, encodes and commits asynchronous picks, in the order they were
+    /// requested, off the caller's thread.
+    private let pickQueue = DispatchQueue(label: "com.grabbiel.Ikkoku.pick", qos: .userInteractive)
     private var pendingFrame = RenderFrame()
     private var targets: RenderTargets?
     private var frameIndex = 0
@@ -256,35 +269,109 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: - Picking
 
-    /// Returns the object id under a pixel (0 = nothing). Synchronous; a few milliseconds.
+    /// Returns the object id under a pixel (0 = nothing). Synchronous: waits for
+    /// the GPU, a few milliseconds. Clicks, drag starts and the scenario
+    /// runner use it; the hover uses the asynchronous `pick` below. Both encode
+    /// the same pick, so they return the same id for the same frame and pixel.
     public func pick(frame: RenderFrame, pixel: Float2, size: (Int, Int)) -> UInt32 {
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
-        guard let cb = gpu.commandQueue.makeCommandBuffer() else { publish(error: .commandBufferUnavailable); return 0 }
-        guard let readback = gpu.device.makeBuffer(length: 16, options: .storageModeShared) else {
-            publish(error: .readbackUnavailable); return 0
+        guard let encoded = encodePick(frame: frame, pixel: pixel, size: size) else { return 0 }
+        encoded.commandBuffer.commit()
+        encoded.commandBuffer.waitUntilCompleted()
+        return encoded.readback.contents().load(as: UInt32.self)
+    }
+
+    /// Asynchronous `pick` (R7 phase 2, item 5). Returns at once. The pick
+    /// queue prepares, encodes and commits the pick under the same frame slot
+    /// and locks as every other frame, waits for the GPU there and then calls
+    /// `completion` exactly once, on the pick queue, with the id and the
+    /// command buffer's GPU time (id 0 when the pick could not run; the reason
+    /// is published as for the synchronous pick). Picks run one at a time in
+    /// the order they were requested. The caller decides whether a result is
+    /// still wanted (`LatestPickQueue`).
+    public func pick(frame: RenderFrame, pixel: Float2, size: (Int, Int),
+                     completion: @escaping @Sendable (RenderPickResult) -> Void) {
+        pickQueue.async { [self] in
+            gpu.waitForFrameSlot()
+            defer { gpu.releaseFrameSlot() }
+            guard let encoded = encodePick(frame: frame, pixel: pixel, size: size) else {
+                completion(RenderPickResult(id: 0)); return
+            }
+            let cb = encoded.commandBuffer
+            cb.commit()
+            cb.waitUntilCompleted()
+            let gpuTime = cb.gpuEndTime > cb.gpuStartTime ? cb.gpuEndTime - cb.gpuStartTime : 0
+            completion(RenderPickResult(id: encoded.readback.contents().load(as: UInt32.self), gpuTime: gpuTime))
+        }
+    }
+
+    /// A pick encoded under the render lock and not yet committed.
+    private struct EncodedPick {
+        let commandBuffer: any MTLCommandBuffer
+        /// The id at the pixel (4 bytes), or the whole pick target (`pickTarget`).
+        let readback: any MTLBuffer
+    }
+
+    /// Prepares `frame` for picking and encodes its deform pass, the pick pass
+    /// and the readback copy. With a pixel, the pick pass is scissored to that
+    /// one pixel and only it is copied back: rasterization, the depth test and
+    /// the fragment shader run per pixel, so the pixel's id is the one the
+    /// whole pass would write there (`pickTarget` is the unscissored
+    /// reference). The caller holds a frame slot and commits. Nil when the
+    /// pick cannot run; the reason is published.
+    private func encodePick(frame: RenderFrame, pixel: Float2?, size: (Int, Int)) -> EncodedPick? {
+        // An empty viewport has no pixel to read (nothing is picked there).
+        guard size.0 > 0, size.1 > 0 else { return nil }
+        guard let cb = gpu.commandQueue.makeCommandBuffer() else { publish(error: .commandBufferUnavailable); return nil }
+        cb.label = "Pick"
+        let readbackLength = pixel == nil ? max(size.0, 1) * max(size.1, 1) * 4 : 16
+        guard let readback = gpu.device.makeBuffer(length: readbackLength, options: .storageModeShared) else {
+            publish(error: .readbackUnavailable); return nil
         }
         renderLock.lock()
         guard let targets = ensureTargets(width: size.0, height: size.1) else {
-            renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: size.0, height: size.1)); return 0
+            renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: size.0, height: size.1)); return nil
         }
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
         guard let ctx = try? prepare(frame: frame, targets: targets, forPick: true), lastDeformationErrors.isEmpty else {
-            frameRing.abandonFrame(); renderLock.unlock(); return 0
+            frameRing.abandonFrame(); renderLock.unlock(); return nil
         }
         encodeDeform(ctx, cb)
-        encodePick(ctx, targets: targets, cb)
-        let x = min(max(Int(pixel.x), 0), size.0 - 1), y = min(max(Int(pixel.y), 0), size.1 - 1)
-        if let blit = cb.makeBlitCommandEncoder() {
-            blit.copy(from: targets.pick, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: x, y: y, z: 0),
-                      sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: readback, destinationOffset: 0, destinationBytesPerRow: 4, destinationBytesPerImage: 4)
-            blit.endEncoding()
+        if let pixel {
+            let x = min(max(Int(pixel.x), 0), targets.width - 1), y = min(max(Int(pixel.y), 0), targets.height - 1)
+            encodePick(ctx, targets: targets, scissor: MTLScissorRect(x: x, y: y, width: 1, height: 1), cb)
+            if let blit = cb.makeBlitCommandEncoder() {
+                blit.copy(from: targets.pick, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: x, y: y, z: 0),
+                          sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: readback, destinationOffset: 0, destinationBytesPerRow: 4, destinationBytesPerImage: 4)
+                blit.endEncoding()
+            }
+        } else {
+            encodePick(ctx, targets: targets, scissor: nil, cb)
+            if let blit = cb.makeBlitCommandEncoder() {
+                blit.copy(from: targets.pick, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                          sourceSize: MTLSize(width: targets.width, height: targets.height, depth: 1), to: readback, destinationOffset: 0,
+                          destinationBytesPerRow: targets.width * 4, destinationBytesPerImage: targets.width * targets.height * 4)
+                blit.endEncoding()
+            }
         }
         frameRing.endFrame(retainedUntilCompletionOf: cb)
         renderLock.unlock()
-        cb.commit()
-        cb.waitUntilCompleted()
-        return readback.contents().load(as: UInt32.self)
+        return EncodedPick(commandBuffer: cb, readback: readback)
+    }
+
+    /// The whole pick target of `frame`, unscissored, row-major with the top
+    /// row first: the reference that the scissored pick must match at every
+    /// pixel (tests). Nil when the pick cannot run.
+    func pickTarget(frame: RenderFrame, size: (Int, Int)) -> [UInt32]? {
+        gpu.waitForFrameSlot()
+        defer { gpu.releaseFrameSlot() }
+        guard let encoded = encodePick(frame: frame, pixel: nil, size: size) else { return nil }
+        encoded.commandBuffer.commit()
+        encoded.commandBuffer.waitUntilCompleted()
+        guard encoded.commandBuffer.status == .completed else { return nil }
+        let count = size.0 * size.1
+        return Array(UnsafeBufferPointer(start: encoded.readback.contents().assumingMemoryBound(to: UInt32.self), count: count))
     }
 
     // MARK: - Offscreen capture
@@ -1026,7 +1113,9 @@ public final class Renderer: @unchecked Sendable {
         enc.endEncoding()
     }
 
-    private func encodePick(_ ctx: FrameContext, targets: RenderTargets, _ cb: any MTLCommandBuffer) {
+    /// The pick pass. `scissor` limits it to the pixels the caller reads; the
+    /// fragment shader reads only the body mask, so only that texture is bound.
+    private func encodePick(_ ctx: FrameContext, targets: RenderTargets, scissor: MTLScissorRect?, _ cb: any MTLCommandBuffer) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = targets.pick
         pass.colorAttachments[0].loadAction = .clear
@@ -1038,6 +1127,7 @@ public final class Renderer: @unchecked Sendable {
         pass.depthAttachment.clearDepth = 0
         guard let enc = cb.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.label = "Pick"
+        if let scissor { enc.setScissorRect(scissor) }
         enc.setFrontFacing(.counterClockwise)
         enc.setVertexBuffer(ctx.frameUniforms.buffer, offset: ctx.frameUniforms.offset, index: Int(BufferIndexFrameUniforms.rawValue))
         enc.setRenderPipelineState(pipelines.pick)
@@ -1045,8 +1135,8 @@ public final class Renderer: @unchecked Sendable {
         enc.setCullMode(.none)
         for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 {
             bindDraw(enc, rec)
-            bindTextures(enc, rec.item.material, frame: ctx.frame)
-            enc.setFragmentBuffer(rec.draw.buffer, offset: rec.draw.offset, index: Int(BufferIndexDrawUniforms.rawValue))
+            enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture,
+                                   index: Int(TextureIndexBodyMask.rawValue))
             drawIndexed(enc, rec.mesh)
         }
         // Pickable gizmos draw on top (depth cleared so handles always win).

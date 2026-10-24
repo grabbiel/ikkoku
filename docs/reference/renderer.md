@@ -651,7 +651,9 @@ thread, which is safe because every renderer entry point is. Everything else
 stays on the main actor:
 
 - The models build frames and call `Renderer.submit`, `pick`, `capture` and
-  `benchmark`; their APIs are unchanged.
+  `benchmark`; their APIs are unchanged. Since item 5, the Studio's gizmo
+  hover uses the asynchronous `pick`, which runs on the renderer's pick queue
+  (see [picks](#picks-r7-phase-2-item-5) below).
 - The 30 Hz editor timers poll the status line from `lastFrameError` and
   `lastFrameStatistics`.
 - SwiftUI, AppKit and timer callbacks are unchanged.
@@ -792,7 +794,137 @@ offset.
   an offscreen `CAMetalLayer` from a dedicated thread. Meanwhile the test
   thread runs 16 rounds of submit, pick and capture and reads the published
   diagnostics, then retires the character. Every capture renders, and the
-  retirement completes through the next submitted frame.
+  retirement completes through the next submitted frame. Since item 5 the
+  test thread also requests 16 asynchronous picks, and every one completes.
+
+### Picks (R7 phase 2, item 5)
+
+A pick returns the object id that the pick pass writes at one pixel of a
+frame (0 means nothing). The renderer has two picks, and both run the same
+`encodePick`. They therefore return the same id for the same frame, pixel and
+viewport size:
+
+- **`pick(frame:pixel:size:)`** is synchronous. The calling thread waits for a
+  frame slot, then prepares and encodes the pick under `renderLock`. It
+  commits after releasing the lock, waits for the GPU and reads the id. The
+  Studio uses it for clicks, drag starts (`mouseDown`) and the scenario
+  runner (`pickID(at:)`).
+- **`pick(frame:pixel:size:completion:)`** is asynchronous and returns at
+  once. A serial dispatch queue, `com.grabbiel.Ikkoku.pick` (QoS
+  user-interactive), runs the same steps in the order the picks were
+  requested: the frame slot, preparation and encoding under `renderLock`,
+  the commit after releasing it, and the wait for the GPU. It then calls
+  `completion` exactly once, on that queue, with a `RenderPickResult`: the id
+  and the command buffer's GPU time. A pick that cannot run returns id 0 and
+  publishes its reason, as the synchronous pick does.
+  - The completion runs on the pick queue. It must not wait for the main
+    thread, because the main thread may be waiting for it (a click settles
+    the hover first, below).
+  - The pick queue holds its frame slot while it waits for the GPU, as a
+    synchronous caller does. With a pick in flight, draws keep two of the
+    three slots.
+
+**Locks and retirement.** Picks take the [lock order](#renderer-threads-r7-phase-2-item-2)
+of every other frame: a frame slot, then `renderLock`, then `frameLock` or
+`statusLock`. Neither pick holds `renderLock` while it waits for a slot or
+for the GPU.
+
+A pick prepares the frame its caller passes by value, and that frame is never
+the submitted snapshot. A pick therefore never completes a retirement
+([R6](#character-and-import-lifetime-r6-second-slice)). An asynchronous pick
+can run after a retirement completed, for example after a character was
+deleted. Its frame is then a late copy: it gets transient deformation buffers
+for missing keys and skips retired meshes, as R6 provides. The Studio drops
+such a result anyway, because the deletion rebuilt its frame.
+
+**Command buffers.** Picks commit outside the render lock, like draws and
+captures. Each pick command buffer runs its own deform pass, writes the
+shared interactive pick target at its pixel and then copies that pixel back.
+Metal orders command buffers on the one queue and tracks the pick target, so
+a synchronous pick and an asynchronous pick in flight at the same time each
+read back their own pixel.
+
+**Scissor.** The pick pass is scissored to the one pixel it reads, and a
+1×1 copy brings back only that pixel (a 16-byte readback buffer). Before
+item 5, the pass rasterized and shaded the whole viewport for every pick.
+Rasterization, the depth test and the pick fragment shader all work per
+pixel, so the scissored pass writes the same id at that pixel as the whole
+pass. The pass now binds one texture per item, the body mask, with the same
+black fallback as before. That is the only texture `pick_fragment` reads; its
+draw and material uniforms come from `bindDraw`. The ten other material
+textures and a second binding of the draw uniforms were unused.
+
+- `pickTarget(frame:size:)` (internal, for tests) runs the unscissored pass
+  and returns the whole pick target as the reference.
+- A pixel outside the viewport is clamped to its edge, as the copy's origin
+  was before. An empty viewport (a zero width or height) picks nothing and
+  returns 0.
+
+**The Studio's hover (`StudioModel`).** `mouseMoved` no longer waits for a
+pick. `LatestPickQueue` (in `LatestPickQueue.swift`, a value type with no
+threads of its own) decides what to pick:
+
+- A move with no pick in flight starts one for its position, against the
+  current context: the frame (a serial counted on every `frame` assignment)
+  and the viewport size.
+- A move while a pick is in flight only records its position. A later move
+  replaces that position, so at most one pick is in flight and at most one
+  position waits.
+- When a pick finishes, its result applies only if it answers the latest
+  move and was taken against the current context. The highlight then changes
+  exactly as the synchronous hover changed it: `hoverAxis` is set and the
+  frame refreshed, only when the axis changed.
+- Any other result is stale and dropped. If the latest move has no answer
+  yet, it is picked again against the current context. A move that was
+  answered stays answered. A later frame change does not pick it again; the
+  synchronous hover did not either, because it only picked on a move.
+- When the gizmos are hidden or nothing is selected, the waiting position
+  is forgotten and the result in flight is dropped.
+
+Finished picks go from the pick queue to the main actor through a
+`PickMailbox`: an `OSAllocatedUnfairLock`-guarded list and a semaphore.
+`StudioModel.finishHoverPicks` applies them in order. `mouseDown` first calls
+`settleHoverPicks`, which waits for the pick in flight and applies what it
+finds. A click therefore sees the highlight of its last move, as with the
+synchronous hover. It blocks the main thread for at most one pick round
+trip, or two if a stale result is picked again. The scenario runner's
+`hoverGizmo` op uses the same call. One case differs from the synchronous
+hover: when the selection is cleared while a pick is in flight, `hoverAxis`
+keeps its value. It only highlights a gizmo that is no longer drawn.
+
+**Concurrency checking.** No new `@unchecked Sendable`. `LatestPickQueue`,
+`RenderPickResult` and `PickMailbox` are plain `Sendable`, and the mailbox's
+state is behind its lock. The asynchronous pick waits for its command buffer
+on the pick queue instead of in a completion handler, so no Metal buffer
+crosses threads in a `@Sendable` closure. `StudioModel.HoverPickContext` is
+`nonisolated`, so the app's main-actor default isolation does not apply to it.
+
+**Tests** (`PickTests.swift`):
+
+- `scissoredPickMatchesTheWholePickPassAtEveryTestedPixel` renders a frame
+  with every kind of pick target at 192×144. The frame has a skinned,
+  deformed character, an opaque quad that discards through a body mask, a
+  transparent quad, a translate gizmo with a highlighted axis, a rotate
+  gizmo, a bone handle, an unpickable line batch and the background. The
+  masked quad is tilted, and each mip level of its mask is a different
+  checkerboard. A pass that sampled another mip level would discard other
+  pixels. The test compares 4,386 of the 27,648 pixels with the unscissored
+  pass: every edge pixel, a 9-pixel grid and the corners, synchronously and
+  asynchronously. Together they show 11 distinct ids. The test also checks:
+  - the mask is in effect: the masked quad covers 1,471 of the 2,931
+    pixels the unmasked quad covers;
+  - pixels outside the viewport are clamped;
+  - an empty viewport returns 0.
+- `staleAsynchronousPicksAreDroppedAndTheLatestMoveApplies` drives
+  `LatestPickQueue` with real asynchronous picks:
+  - a result for an axis pixel arrives after the pointer moved to the
+    background, and it is dropped;
+  - a result taken against frame 1 arrives after the frame changed, and the
+    latest move is picked again against frame 2.
+- Four pure tests cover the queue and the mailbox: coalescing, re-picking
+  after a context change, cancelling, and delivery order with a waiter.
+- A mutation control moved the scissor one row down. The scissored,
+  asynchronous and stale-drop tests then failed.
 
 ## Checked math, legacy skeletons and cameras (R4)
 

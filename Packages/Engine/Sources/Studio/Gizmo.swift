@@ -28,6 +28,8 @@ public enum GizmoBuilder {
     static let colY = Float4(0.45, 0.85, 0.30, 1)
     static let colZ = Float4(0.30, 0.55, 0.95, 1)
     static let colHi = Float4(1.0, 0.9, 0.2, 1)
+    /// The color of the highlighted (hovered) axis.
+    public static var highlightColor: Float4 { colHi }
     static let colAll = Float4(0.9, 0.9, 0.9, 0.7)
 
     /// - Parameters: origin world, orientation (identity for world space), size in world units, highlighted axis.
