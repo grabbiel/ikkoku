@@ -66,6 +66,7 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         started = true
         control.unlock()
         let thread = Thread { [self] in run() }
+        renderer.invalidateInteractiveFrame()
         thread.name = ViewportFrame.renderThreadName
         thread.qualityOfService = .userInteractive
         thread.start()

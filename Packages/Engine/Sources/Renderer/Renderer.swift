@@ -60,6 +60,21 @@ public struct RenderPickResult: Sendable, Equatable {
     public init(id: UInt32, gpuTime: Double = 0) { self.id = id; self.gpuTime = gpuTime }
 }
 
+/// Outcome of one display-link callback. An unchanged callback submits no GPU work
+/// and leaves the previously presented image on screen.
+public struct RenderDrawResult: Sendable {
+    public enum Outcome: String, Sendable { case rendered, unchanged, failed }
+    public let outcome: Outcome
+    /// Counters captured under the render lock, before a pick/capture can replace them.
+    public let statistics: RenderFrameStatistics
+}
+
+/// Completion of exactly one interactive command buffer (never a cached GPU sample).
+public struct RenderDrawCompletion: Sendable {
+    public let succeeded: Bool
+    public let gpuTime: Double
+}
+
 /// Debounced status-line text for renderer problems an editor should show: a
 /// skipped frame (`Renderer.lastFrameError`) or unshaded lights
 /// (`RenderFrameStatistics.droppedLights`). The app polls it from its editor
@@ -126,8 +141,9 @@ public struct RenderStatusReporter: Sendable {
 ///   after its own call can see a draw that ran in between.
 ///
 /// Sendable invariant: every mutable stored property is guarded by one of the
-/// locks above (`pendingFrame` by `frameLock`; `targets`, `frameIndex`,
-/// `liveEncoder` and `liveEncoderError` by `renderLock`; the published values
+/// locks above (`pendingFrame`, its revision and continuous flag by `frameLock`;
+/// `targets`, `frameIndex`, interactive invalidation and live encoder state by
+/// `renderLock`; the published values
 /// by `statusLock`); everything else is immutable after `init` or a
 /// thread-safe Metal or store object (`pickQueue` is a serial dispatch queue).
 public final class Renderer: @unchecked Sendable {
@@ -145,6 +161,18 @@ public final class Renderer: @unchecked Sendable {
     /// requested, off the caller's thread.
     private let pickQueue = DispatchQueue(label: "com.grabbiel.Ikkoku.pick", qos: .userInteractive)
     private var pendingFrame = RenderFrame()
+    private var pendingRevision: UInt64 = 0
+    private var pendingContinuous = false
+    private struct DrawnFrame: Equatable {
+        var revision: UInt64
+        var resources: UInt64
+        var width: Int, height: Int
+    }
+    // Protected by renderLock. Weak identity avoids keeping a departed viewport alive.
+    private weak var drawnLayer: CAMetalLayer?
+    private var drawnFrame: DrawnFrame?
+    private var drawSerial: UInt64 = 0
+    private var lastCallback: CFTimeInterval?
     private var targets: RenderTargets?
     private var frameIndex = 0
     var liveEncoder: SourceShaderLiveEncoder?
@@ -208,51 +236,122 @@ public final class Renderer: @unchecked Sendable {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
         snapshot.submitted = true
-        frameLock.lock(); pendingFrame = snapshot; frameLock.unlock()
+        // Native shaders do not read frame.time. Live programs may read _Time;
+        // conservatively keep every visible live material at the display rate.
+        let continuous = snapshot.items.contains { $0.visible && $0.sourceShader != nil }
+        frameLock.lock()
+        pendingFrame = snapshot; pendingRevision &+= 1; pendingContinuous = continuous
+        frameLock.unlock()
     }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
 
     // MARK: - Drawing to the swapchain
 
-    /// Renders the pending frame into `drawable` and presents it. Called by a
-    /// viewport's display link on its render thread (any thread is safe).
-    public func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval) {
+    /// Invalidates the presented image when a viewport starts/rejoins its window.
+    /// Safe from any thread. Does not change the resource-retirement frame stamp.
+    public func invalidateInteractiveFrame() {
+        renderLock.lock(); drawnFrame = nil; renderLock.unlock()
+    }
+
+    /// Renders only when the submitted snapshot, resources, viewport or a live
+    /// material requires it. Callbacks still run at the display rate. Offscreen
+    /// entry points always encode their own complete pass graph.
+    @discardableResult
+    public func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval,
+                     completion: (@Sendable (RenderDrawCompletion) -> Void)? = nil) -> RenderDrawResult {
+        draw(to: drawable, timestamp: timestamp, completion: completion, configureFrameRing: nil)
+    }
+
+    /// Internal allocation-failure injection, like capture(configureTargets:).
+    /// Called under renderLock after opening the ring and before prepare allocates.
+    func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval,
+              completion: (@Sendable (RenderDrawCompletion) -> Void)?,
+              configureFrameRing: ((FrameRing) -> Void)?) -> RenderDrawResult {
         let tex = drawable.texture
-        guard tex.width > 0, tex.height > 0 else { return }
+        let failed = RenderDrawResult(outcome: .failed, statistics: .init())
+        guard tex.width > 0, tex.height > 0 else { return failed }
+        // Cheap first check avoids even a frame-slot wait on an unchanged callback.
+        // Recheck after acquiring the slot: another callback may have drawn while
+        // we waited. No path waits for a slot while holding renderLock.
+        renderLock.lock()
+        let resumed = lastCallback.map { timestamp - $0 > 0.25 || timestamp < $0 } ?? true
+        lastCallback = timestamp
+        if resumed { drawnFrame = nil }
+        if interactiveUnchanged(layer: drawable.layer, width: tex.width, height: tex.height) {
+            renderLock.unlock()
+            return RenderDrawResult(outcome: .unchanged, statistics: .init())
+        }
+        renderLock.unlock()
         gpu.waitForFrameSlot()
+        renderLock.lock()
+        if interactiveUnchanged(layer: drawable.layer, width: tex.width, height: tex.height) {
+            renderLock.unlock(); gpu.releaseFrameSlot()
+            return RenderDrawResult(outcome: .unchanged, statistics: .init())
+        }
         guard let cb = gpu.commandQueue.makeCommandBuffer() else {
-            publish(error: .commandBufferUnavailable); gpu.releaseFrameSlot(); return
+            publish(error: .commandBufferUnavailable); drawnFrame = nil
+            renderLock.unlock(); gpu.releaseFrameSlot(); return failed
         }
         cb.label = "Frame"
-        renderLock.lock()
-        // Taken under the render lock: no pick or capture can complete a
-        // resource retirement between taking the frame and preparing it.
-        var frame = currentFrame()
+        // Frame and revision are one snapshot. Camera-only copies retain createdAt,
+        // which orders retirements and must not be used as the submission revision.
+        frameLock.lock()
+        var frame = pendingFrame
+        let revision = pendingRevision
+        frameLock.unlock()
+        let generation = resources.generation
         frame.time = timestamp
         var encoded = false
         if let targets = ensureTargets(width: tex.width, height: tex.height) {
             frameRing.beginFrame(frameIndex); frameIndex &+= 1
             do {
+                configureFrameRing?(frameRing)
                 try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb)
                 frameRing.endFrame(retainedUntilCompletionOf: cb)
                 encoded = true
-            } catch {
-                // `prepare` failed before any encoder existed and published the error.
-                frameRing.abandonFrame()
-            }
+            } catch { frameRing.abandonFrame() }
         } else {
             publish(error: .renderTargetsUnavailable(width: tex.width, height: tex.height))
         }
-        renderLock.unlock()
-        // A skipped frame keeps the previously presented image rather than
-        // presenting a drawable nothing was rendered into.
-        guard encoded else { gpu.releaseFrameSlot(); return }
+        guard encoded else {
+            drawnFrame = nil; renderLock.unlock(); gpu.releaseFrameSlot(); return failed
+        }
+        let statistics = lastFrameStatistics
+        drawSerial &+= 1
+        let serial = drawSerial
+        // A mutation during preparation may change a lookup already performed.
+        // Cache only a generation that stayed stable across the complete encoding.
+        drawnFrame = resources.generation == generation
+            ? DrawnFrame(revision: revision, resources: generation, width: tex.width, height: tex.height) : nil
+        drawnLayer = drawable.layer
         cb.addCompletedHandler { [weak self] c in
-            self?.publish(gpuTime: c.gpuEndTime - c.gpuStartTime)
+            let succeeded = c.status == .completed
+            let seconds = max(0, c.gpuEndTime - c.gpuStartTime)
+            self?.publish(gpuTime: seconds)
+            if !succeeded, let self {
+                self.renderLock.lock()
+                if self.drawSerial == serial { self.drawnFrame = nil }
+                self.renderLock.unlock()
+            }
+            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: seconds))
         }
         gpu.releaseFrameSlot(onCompletionOf: cb)
+        // Commit/present in draw order, before exposing this reusable image to a
+        // second callback. Neither operation waits for GPU completion.
         cb.present(drawable)
         cb.commit()
+        renderLock.unlock()
+        return RenderDrawResult(outcome: .rendered, statistics: statistics)
+    }
+
+    /// Caller holds renderLock. No per-item scan or buffer work on a skipped draw.
+    private func interactiveUnchanged(layer: CAMetalLayer, width: Int, height: Int) -> Bool {
+        guard drawnLayer === layer, let drawnFrame else { return false }
+        frameLock.lock()
+        let revision = pendingRevision, continuous = pendingContinuous
+        frameLock.unlock()
+        return !continuous && drawnFrame == DrawnFrame(revision: revision, resources: resources.generation,
+                                                       width: width, height: height)
     }
 
     /// Runs `body` under the render lock (live validation captures).

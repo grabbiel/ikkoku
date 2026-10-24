@@ -1,6 +1,6 @@
 # App performance: harness, baseline and ranked costs (R7)
 
-Reviewed 2026-10-23. Owning task: the representative performance gap (R7) in
+Reviewed 2026-10-24. Owning task: the representative performance gap (R7) in
 the [renderer audit](../component-audit/renderer-and-foundation.md). This page
 records how the app is measured, where its time goes on the reference machine,
 the fixes that landed with the measurement, and every further optimization
@@ -106,17 +106,26 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
 
 - every `CAMetalDisplayLink` callback: callback time, target presentation time,
   `Renderer.draw` duration (frame preparation, deformation and pass encoding,
-  plus any wait for one of the three frame slots), the last completed
-  command buffer's GPU time (`gpuEndTime - gpuStartTime`), and whether it ran
-  on the main thread. `drawThread` is `main`, `render` or `mixed`. Only
+  plus any wait for one of the three frame slots), whether it rendered,
+  intentionally kept the previous image, or failed, and whether it ran on the
+  main thread. Since schema 5, GPU time (`gpuEndTime - gpuStartTime`) belongs
+  to that exact draw's asynchronous completion; skipped callbacks do not repeat
+  an older GPU sample. `drawThread` is `main`, `render` or `mixed`. Only
   main-thread callbacks count as main-thread draw time; render-thread draws
   are summed in `renderThread` (callbacks, draw ms/s);
-- the frame ring's counters after each draw (`frameRing`): skin palettes and
+- the frame ring's counters captured under the render lock for each encoded
+  draw (`frameRing`), excluding unchanged callbacks: skin palettes and
   palette KiB per draw, palette buffers created while recording (0 once the
   ring is warm), and draws that used overflow buffers;
 - when each drawable was really presented (`addPresentedHandler`), giving
-  presented FPS, presented-interval percentiles and hitches (an interval longer
-  than 1.5 refresh periods; `skippedRefreshes` counts the periods it lost);
+  actual presented FPS and raw presented-interval percentiles. Schema 5 also
+  reports `activePresentedIntervalMs`: adjacent presentation intervals minus
+  only callbacks explicitly skipped as unchanged. Hitches use this adjusted
+  cadence (longer than 1.5 refresh periods), with `skippedRefreshes` counting
+  its lost periods. Adjustment is not actual FPS or latency: an earlier late
+  presentation can shorten the next interval. `presentationLatenessMs` separately
+  reports nonnegative target-to-present delay p50/p95/max. Out-of-target-order
+  presentation pairs get no intentional-skip allowance;
 - main run-loop busy time (after-waiting to before-waiting observers), split
   into draw, model (ticks, refreshes and input handlers, nested intervals
   counted once) and other (SwiftUI updates, layout, AppKit event handling);
@@ -164,8 +173,16 @@ Studio hooks, events and view bodies were added, 3 since the draw log moved
 off the main actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad`
 phase and `configuration.mainLoadMs`/`mainLoadHz`), and 4 since the hover
 pick became asynchronous (`hoverPick`, the `studioHoverPick` phase and the two
-hover events). `perf_trace.py summarize` prints a hover line for a report with
-hover picks.
+hover events). Schema 5 adds rendered/unchanged/failed callback counts, exact
+GPU completion counts and GPU ms/s, adjusted presentation cadence, absolute
+presentation lateness and a successful-presentation count before recording.
+`perf_trace.py summarize` prints actual draw rate and completed GPU work separately
+from callback rate. Failed or pending GPU work is a warning. A completely static
+recording is valid only if the last rendered warmup drawable presented by the
+recording end, display callbacks continued and no sampled window occlusion was
+recorded; a presentation from an earlier viewport is insufficient. Older schema
+GPU values are sampled last-completion values; they cannot establish an exact
+sum of command-buffer work.
 
 ### Running it
 
@@ -682,7 +699,7 @@ loaded machine, so only the shares are used).
 | --- | --- | --- | --- | --- | --- | --- |
 | G1 | GPU time is not the bottleneck on the reference machine | whole frame graph | measured | 1.3–1.9 ms GPU per frame at 1996×1824, 6 characters; draw encoding 0.6–0.9 ms CPU | — | — |
 | G2 | MSAA color/depth, overlay depth and pick depth are already memoryless | `RenderTargets` | measured (code) | `storageMode = .memoryless` | — | — |
-| G3 | Unchanged frames are fully re-rendered at the display rate, including the deform compute pass and the 2048² shadow map | `Renderer.draw`, `ViewportNSView` | measured | 120 draws/s while Studio content changes 30 times/s and the camera is still | skip prepare/encode/present when the frame and drawable size did not change (frame version counter); or lower `preferredFrameRateRange` when idle. ~3/4 of GPU and draw CPU at idle | Low |
+| G3 | Unchanged frames were fully re-rendered at the display rate, including deform and the 2048² shadow map | `Renderer.draw`, `ViewportRenderThread` | measured; **done** for interactive frames without visible live source materials | fresh Release source idle: about 120 → 30 actual draws/s; draw CPU 117.7–143.1 → 42.4–46.4 ms/s | skip complete interactive submissions using frame/resource/layer/size identity; retain 120 Hz callbacks. [G3 evidence and limits](#phase-2-item-4-unchanged-interactive-frames-g3). Live source programs remain continuous; P2 and G5 are deferred | Low |
 | G4 | Skin matrices are copied into a new `MTLBuffer` per skin set per frame and validated element by element | `Renderer.buildContext` | measured; **done** | 0.70 ms per draw in orbit, 122 buffers per draw in the source scene ([phase 2, item 1](#what-remains-on-the-main-thread)) | write skin matrices into the frame ring. **Done** in [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes): no palette buffer is created once the ring is warm, and the offscreen CPU encode fell from 0.74 to 0.44 ms per frame | Low; renderer file |
 | G5 | Shadow map re-rendered every frame | `Renderer` shadow pass | hypothesis | — | re-render only when casters or the light moved | Low |
 | G6 | No pipeline binary archive | `Pipelines` | hypothesis | pipeline creation happens during startup | `MTLBinaryArchive` for the production pipelines; measure first-launch versus warm | Low |
@@ -739,7 +756,7 @@ How to read the expected gain column:
 | 1 | **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)). Narrow SwiftUI invalidation. Move the camera out of the observed `doc`, or into its own observed value. Split `StudioView` into child views that read only their own state. Make the Maker slider rows value-driven views with per-slot observation | M2, M3, M4, C6 | orbit, FK drag and slider edits go from 7–25 ms per event to a few ms; the main thread is no longer saturated during interaction; presented FPS for those workloads rises from 24–53 toward 120 | the same edits drop from ~10–30 ms to a few ms; the difference between usable and laggy | `IKKOKU_CAPTURE_UI` window captures identical; undo/redo scenarios (`undo-camera`) pass |
 | 2 | **Done** ([phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes)), with G4. Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment. Measured: with the main thread busy 600 ms/s, 120 FPS and an 8.33 ms p95 interval, against 30–60 FPS and 25–33 ms | P1, G4 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
 | 3 | **Done** ([phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread)), with C2, C3 and C5. Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s). Measured: idle main busy 237–251 → 22 ms/s, the step 8.0 ms on the main thread → 0.6 ms (snapshot and refresh) plus 0.93–0.97 ms of worker wall time; digest and captures identical | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
-| 4 | Skip unchanged frames and run the display link at 30–60 Hz when nothing moves; leave the shadow map alone until casters or the light move | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
+| 4 | **G3 done** ([evidence](#phase-2-item-4-unchanged-interactive-frames-g3)): skip unchanged interactive submissions. Lowering the display-link rate (P2) and reusing shadows across changed frames (G5) remain | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
 | 5 | **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)). Asynchronous hover pick for the latest mouse position only, and a scissored pick pass. Measured: 2.29–2.41 → 0.01 ms per move on the main thread, hover's main busy time 518–531 → 239–242 ms/s, pick ids identical | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
 | 6 | Startup: cache decoded rigs and load source characters concurrently off the main thread, with a progress state | C8, S1, S2, S4 | source scene ready in ~1.5 s instead of 4.7 s; first frame earlier | larger, since there is less memory bandwidth for repeated decoding | `startup` workload; scene import results identical |
 | 7 | An opt-in optimized-Engine Debug build for app work | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
@@ -1712,8 +1729,9 @@ profile text only; the traces were deleted).
 
 ### Recommended next
 
-Item 4: skip unchanged frames and lower the link rate (G3, G5, P2). The
-render thread now draws 151–168 ms/s in idle, and the GPU renders 2.08 ms
+At this stage, item 4 was next: skip unchanged frames and lower the link rate
+(G3, G5, P2). G3 is now implemented [below](#phase-2-item-4-unchanged-interactive-frames-g3);
+P2 and G5 remain. The historical render thread drew 151–168 ms/s in idle, and the GPU renders 2.08 ms
 frames 120 times a second, while the content changes 30 times a second.
 That is now the largest per-frame cost in idle and hover. Smaller Engine
 follow-ups:
@@ -1724,6 +1742,119 @@ follow-ups:
 - C4, the eye-look pose solve (115 ms/s on the workers);
 - in the Pose tab, the "Eye look" readout, which live steps do not refresh
   (in `main` too; see [correctness](#correctness-2)).
+
+## Phase 2, item 4: unchanged interactive frames (G3)
+
+The G3 slice is implemented (2026-10-24, #150). The display link still runs at
+120 Hz; adaptive link frequency (P2), cross-frame shadow reuse (G5), and reuse
+of the deform pass by picks remain separate work. A submitted frame still runs
+the complete pass graph. The renderer skips an interactive callback only when
+its last encoded image has the same submission revision, resource generation,
+drawable size and layer. Submission revisions are separate from `createdAt`,
+which keeps its resource-retirement meaning. A new viewport thread, a layer
+replacement, a size change or a callback gap over 250 ms forces rendering.
+
+Resource registration/replacement/removal, hidden-mask changes and completed
+retirements invalidate the image. Resources exposed by the store remain immutable
+between those APIs. Failed preparation is never cached; a failed GPU completion
+invalidates only its own cached submission. Captures, benchmarks and picks still
+encode full graphs and do not establish an interactive cached image. Any visible
+live source-shader material opts the whole frame out, preserving time-driven
+programs without guessing which inputs a program uses. See the
+[renderer contract](renderer.md#renderer-threads-r7-phase-2-item-2).
+
+### Release comparison
+
+Fresh clean `main` `72e7af6` and renderer code `0e201b1` were built in Release.
+Their executable SHA-256 values are respectively
+`5e4d1d9cd4143dd71eaba4df14cfdd8b4f26fed2a871b087c3d27ee5f7502fd2` and
+`677aeb363f2700a8f851b23113a10866641a2c43b074e4abe0cc2cef7dd8b704`.
+Private evidence is under `.local/codex-continue-2026-10-24/{baseline,renderer}`.
+The shared Apple M2 Ultra was reserved for each measurement window: other owned
+builds, tests and apps were stopped, and every app invocation held the app lock.
+Each workload recorded 10 s after 3 s warmup, twice per build, at 120 Hz and
+1996×1824 drawable pixels. The source scene has **7 characters**, 32 document
+objects, and SHA-256
+`029f0b1d248ba71158b08b8d237be14810819d411d62f529f77f3a612a8bea04`;
+the native workload has 6 characters. Live source shaders were OFF for this table.
+
+A fresh clean-baseline idle/orbit control was interleaved between candidate
+repetitions. The baseline ranges below include those controls where available.
+CPU totals include every callback, including the early-return checks. GPU baseline
+values are **estimates from schema 4's sampled last completion**, while candidate
+values sum each command buffer's actual asynchronous completion exactly once.
+They are not an exact before/after GPU-total comparison.
+
+| Workload | Draw CPU ms/s, baseline | Draw CPU ms/s, G3 | Actual G3 draws/s | Baseline GPU ms/s estimate | G3 completed GPU ms/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Studio idle | 117.7–143.1 | 42.4–46.4 | 30.0–30.1 | 248.2–256.1 | 62.0–62.3 |
+| Native idle | 93.2–115.2 | 24.9–33.9 | 29.9 | 157.2–158.9 | 38.1–38.7 |
+| Maker idle | 69.5–84.9 | 18.0–18.1 | 30.0 | 75.6–76.5 | 18.8–20.5 |
+| Studio hover | 118.5–118.8 | 30.1–39.5 | 30.0 | 240.6–245.3 | 54.7–58.2 |
+| Studio orbit | 134.0–184.9 | 118.1–130.4 | 118.9–119.2 | 188.2–195.5 | 192.2–192.4 |
+| Studio FK drag | 92.6–95.1 | 91.3–93.3 | 119.5–119.9 | 245.9–249.1 | 244.0–253.7 |
+| Maker slider | 26.2–26.4 | 26.2–26.4 | 119.7–119.8 | 73.9–74.2 | 74.0–74.3 |
+
+All accepted reports continued at about 120 callbacks/s. Idle and hover now
+render about 30 fresh images/s; the raw presented rate is therefore about 30,
+not 120 FPS. Studio idle draw CPU fell by about 61–70% across the observed ranges.
+FK drag and Maker slider stay effectively unchanged. Orbit's earlier baseline
+was substantially slower than its interleaved control, so its full apparent CPU
+difference cannot be attributed to G3. These measurements do not establish a
+pacing or latency improvement.
+
+The accepted Studio idle runs produced 300 and 301 model updates. Their model
+interval p95 was 33.9–34.2 ms (max 34.3–56.4 ms), raw presentation interval p95
+33.33–41.67 ms, skip-adjusted cadence p95 8.33–16.67 ms, and target-to-present
+lateness p95 about 8.38 ms (max 8.40 ms). Dragging's raw and adjusted interval
+p95 stayed at 8.33 ms. Across all accepted candidate workloads, lateness p95
+ranged from 0.062 to 8.392 ms; its largest individual sample was 16.692 ms in
+the native retry. Raw intervals and absolute lateness remain available alongside
+adjusted cadence, which must not be interpreted as actual FPS.
+
+All 14 accepted candidate reports and both interleaved controls pass the
+presentation and stray-input checks. Candidate reports have no failed callbacks,
+failed/pending GPU completions, sampled occlusion, palette-buffer creation or
+frame-ring overflow. Two initial reports are retained but excluded: a native run
+received 93 stray input events; a Studio idle run had a 1.23 s producer pause,
+265 model updates and 265 rendered frames despite 1,201 callbacks. The latter
+passed composition checks but changed the produced workload, so it was replaced
+once and excluded from the table. Its cause is not established. A separate
+live-source ON control rendered all 1,201 callbacks, with zero skips and 1,201
+successful GPU completions; no G3 saving is claimed for that opt-in.
+
+### Correctness and limits
+
+Six controlled 960×880 Release PNG pairs are byte-identical against the exact
+clean-baseline executable: source Studio, native Studio and imported-card Maker,
+with the live-source opt-in OFF and ON. The ON Studio report records 7 live
+draws; the native and Maker paths have no live draws, so those pairs do not
+extend live-program coverage. The captures exercise complete offscreen graphs;
+the interactive skip path is covered separately below. The private
+`capture-summary.json` records input, executable and PNG hashes for all 12
+launches.
+
+- The real `CAMetalLayer` tests prove an unchanged callback leaves a fresh
+  drawable untouched and a forced interactive redraw is byte-identical. They
+  exercise same-timestamp resubmission, camera/light/morph edits, resource and
+  mask mutations, resize, layer replacement, resume gaps, completed retirement,
+  capture/pick/benchmark interleaving, live-material opt-out, and failed-prepare
+  retry. The latter intentionally fails preparation, then proves the same
+  submission renders successfully instead of being mistaken for unchanged.
+- The final focused ThreadSanitizer run passed **8 tests**, including concurrent
+  submit/draw/pick/capture/retirement and late/out-of-target-order presentation
+  samples, with no race warnings. The fixture-backed Engine suite reported **773 tests, 2 skips**, plus **21 CoreMath tests**, with
+  no failures. That broad run preceded the small internal failure-injection
+  wrapper; the final focused TSan run covers the wrapper. The named skips were
+  the optional independent appearance-reference root and opt-in expression
+  performance probe. `IKKOKU_REQUIRE_SOURCE_FIXTURES` was not enabled.
+- All **189 verification Python tests** pass, including actual-submission versus
+  callback accounting, pending/failed GPU work, and static-report validity.
+  The final Release build passes.
+- Integrated app scenarios, visible UI and lifecycle acceptance are recorded
+  separately on the combined PR. These branch measurements do not cover P2,
+  cross-frame shadows/deform reuse, full-screen 4K, low-end M1 hardware,
+  many-prop scaling or long-running memory growth.
 
 ## Phase 2, item 5: asynchronous hover pick
 
@@ -1946,7 +2077,9 @@ frames) is the largest per-frame cost left: the render thread
 draws 85–91 ms/s and the GPU renders 2.0 ms frames 120 times a second,
 while the content changes 30 times a second. A smaller follow-up is to let
 the pick reuse the draw's deformed buffers (0.85 ms of GPU per pick), which
-item 4's frame identity would also make easier.
+item 4's frame identity would also make easier. The bounded G3 slice is now
+implemented [above](#phase-2-item-4-unchanged-interactive-frames-g3); it does not
+reuse the deform pass for picks.
 
 ## Validation of this change
 
