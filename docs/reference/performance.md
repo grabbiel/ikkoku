@@ -1162,8 +1162,9 @@ Two consequences:
 
 ### What remains
 
-Time Profiler, 5 s per workload, after build
-(`.local/r7c-render-thread/perf/after-tp`; base in `perf/base-tp`).
+Time Profiler, 5 s per workload, after build. The traces are archived in
+`/Volumes/My Book/ikkoku-archive/local/r7c-render-thread/perf/{after-tp,base-tp}`,
+and symlinked from `.local/r7c-render-thread/perf`.
 
 - **The render thread: the draw.** Orbit takes 180 ms/s at 120 draws/s,
   1.5 ms per draw. `Renderer.buildContext` takes 0.58 ms of that, and no
@@ -1194,7 +1195,8 @@ reacts: the model rate and the input latency.
 ### Correctness
 
 - **Captures.** 13 captures per build, each its own launch under the app
-  lock, with the shared fixture map (`.local/r7c-render-thread/captures`):
+  lock, with the shared fixture map (`.local/r7c-render-thread/captures`,
+  a symlink into the archive volume):
   - three `IKKOKU_AUTOCAPTURE` renders, live opt-in OFF: the source scene,
     the native scene (`IKKOKU_CAPTURE_STUDIO`) and the Maker source card;
   - one render of the source scene with the live opt-in ON (7 live draws, 0
@@ -1271,8 +1273,9 @@ reacts: the model rate and the input latency.
   no `IKKOKU_APPEARANCE_REFERENCE_ROOT`), plus 21 in the second target.
 - **Python.** Runner self-tests 185/185 (15 in `test_perf_trace.py`) and the
   studio-inspector validator tests pass.
-- **Lanes** on the merged head, Debug, `--strict` under the app lock:
-  `studio-scenarios` 52/52 (1,631 s) and `maker-scenarios` 5/5, 0 skipped.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped: on the PR head
+  `008085c`, `studio-scenarios` 52/52 (1,699 s) and `maker-scenarios` 5/5;
+  on `7a265f6`, the same (52/52 in 1,631 s, and 5/5).
 
 ### Limits
 
