@@ -1051,7 +1051,7 @@ TBD-REMAINS
 - **Python.** Runner self-tests 185/185 (15 in `test_perf_trace.py`) and the
   studio-inspector validator tests pass.
 - **Lanes** on the merged head, Debug, `--strict` under the app lock:
-  `maker-scenarios` 5/5. TBD-STUDIO-LANE
+  `studio-scenarios` 52/52 (1,631 s) and `maker-scenarios` 5/5, 0 skipped.
 
 ### Limits
 
