@@ -357,6 +357,21 @@ a production fix or a performance improvement. The
 retains the exact numerical scope. The owner moves next to a reduction of the
 recovered shader while preserving the existing varying-output baseline.
 
+**Reproduced gap — profile initialization rollback, [#203](https://github.com/grabbiel/ikkoku/issues/203):**
+A source-backed fresh-profile initializer reads a hidden character's attachment
+before a later named Int32 error rejects installation. The failed candidate
+leaves one new preview cached: meshes rise 37→66, textures 64→82 and mesh-buffer
+bytes rise by 12,505,092. The document, prior session, fields/clocks, adapters,
+status, generation, observers and sampled frame remain unchanged. Thirteen of
+14 reproduction checks pass; the sole failure is the intended cold-preview
+rollback assertion. Successful hidden-initializer and first-step Start controls
+pass, as does a cached active-parent Awake failure's resource/identity check.
+Start is first-step work, not an installation callback. Runtime `cdfc29e` changes
+only the scenario harness; the owned process exits 1 and its failure artifacts
+are retained. This establishes a native ownership gap, not a source-parity or
+performance result. The next task evaluates candidate staging or precise cleanup
+while preserving successful attachment callbacks; no production fix is claimed.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
