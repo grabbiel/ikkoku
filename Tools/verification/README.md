@@ -218,7 +218,11 @@ the largest quaternion-component difference of its three bones and largest
 joint displacement — moved beyond the tolerance by default, or within `within`;
 the pose read is `CharacterInstance.currentPose()` of the rendered instance),
 `statusContains` (a substring of the app's status line, read after the step's
-`view` check so a rejected look-through has reported itself), `animation`
+`view` check so a rejected look-through has reported itself),
+`indicatorContains` (a substring of the view indicator under the status line,
+`StudioModel.activeSourceCameraView`; with no source camera active it is empty
+and contains nothing), `treeLabel` with `key` (the object's workspace tree
+label, `StudioModel.workspaceLabel`, which the tree rows display), `animation`
 `{key,group?,category?,no?,speed?,forceLoop?}` (the live animation state the
 preview plays for that character — the document's saved-clip override or the
 scene record's own — an absent sub-key is not asserted), `fk`
@@ -582,7 +586,7 @@ binding now calls too. It reads the rendered instance, `selectedInstance`'s
 `currentPose()` and `ikFailures()`, which `refresh()` hands the document's
 targets on every edit.
 
-`reload-save-ik.json` (lane check `studio-scenario-reload-save-ik`, 20 steps)
+`reload-save-ik.json` (lane check `studio-scenario-reload-save-ik`, 36 steps)
 imports `koikatu_cs0002591.png`, runs `newScene` and adds a native female
 ("Hana"). It captures her Left hand chain before IK (`fk`), turns Left hand
 IK on, which places the target at the hand, and captures the solved chain
@@ -600,8 +604,54 @@ IK on, which places the target at the hand, and captures the solved chain
   an `assertRejected` control shows the status did not already say so; after
   it, one shows `solved: true` is rejected.
 - Typing X = 0.3 must solve again within 1 mm, and the result must differ from
-  `solved` (control).
+  `solved` (control). The status line must no longer contain "IK left
+  unsolved" (`assertRejected`) and must read "Left hand IK solved again."
 - `saveDocument` writes `.local/verification/scenario-exports/reload-save-ik.png`.
+
+The steps after the save leave the saved card alone. They check that two
+chains are reported and cleared independently, and that the report clears
+only its own message:
+
+- Right hand IK is turned on, then both hands' X are typed as 1e20. The status
+  line must read "Left hand IK left unsolved: IK reach is not finite. · Right
+  hand IK left unsolved: IK reach is not finite.", and the right hand must be
+  unsolved.
+- Typing the left hand's X as 0.3 solves it within 1 mm. The status line must
+  contain "Right hand IK left unsolved: IK reach is not finite." but not "Left
+  hand IK left unsolved" (`assertRejected`), and the right hand must still be
+  unsolved (`assertRejected` on `solved: true`).
+- `addCharacter` adds the default male ("Kai"), which writes "Added Kai". One
+  Stepper click on the left hand's X rebuilds the frame with the right hand
+  still unsolved; the status must still contain "Added Kai". Before this
+  change the frame builder re-wrote the IK message on every rebuild.
+- Typing the right hand's X as −0.3 solves it within 1 mm. The status must
+  still contain "Added Kai", since the report no longer owns the line, and
+  must not contain "IK left unsolved" (`assertRejected`).
+
+Status ownership (`StudioIKStatusReport` in
+[StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift)).
+`refresh()` collects every native character's unsolved chains, in document
+order and then `IKChain` order, and hands them to the report with the current
+status. The report writes the status line only when a chain fails that was not
+failing before, or fails for a new reason. An unchanged set of failures writes
+nothing, so a status written since is not overwritten on the next rebuild.
+When chains solve again, the report narrows its message to the chains still
+unsolved, or writes "<chains> IK solved again.", but only while the status line
+still shows the report's own message. If none of the recovered chains is still
+enabled (IK turned off, character deleted), it writes "Ready". The character
+is named ("… left unsolved on Hana: …") only when the unsolved chains belong to
+more than one character. `swift test --package-path Packages/Engine --filter
+StudioStatusTextTests` covers these rules, including two characters.
+
+Why a failed chain shows its pre-IK pose. `CharacterInstance` solves IK from
+the FK pose on every rebuild, and `solveIK` keeps a refused chain's FK
+rotations. That pose is a function of the document alone: the FK pose, the
+targets and the card. The alternative, keeping the last solved pose, would
+depend on edit history. It would differ between a chain typed straight to an
+unreachable target and one dragged there through reachable targets. It would
+also not survive save/load, because the document stores targets, not solved
+rotations: a loaded card has no last solved pose to keep. So the failed chain
+keeps the pre-IK pose, and the status line says why.
 
 `reload-load-ik.json` (`studio-scenario-reload-load-ik`, 7 steps) loads that
 card in a fresh process with no import. Left hand IK must be on with target X
@@ -626,8 +676,9 @@ manifest cut from the lane ran `--strict` and passed 2/2 (20/20 and 7/7 steps,
   arm before IK, not the last solved arm, which had the elbow 2.3 cm away.
 - At X = 0.3 the end sat 9.4e-8 m from the target. The status line still read
   "Left hand IK left unsolved: IK reach is not finite.", because the frame
-  builder sets the message on a failure and nothing clears it after a later
-  success (finding, not asserted).
+  builder set the message on a failure and nothing cleared it after a later
+  success. That finding is fixed and asserted; see the st-ux-ik-camera record
+  below.
 - The loaded card gave the same end position, 9.4e-8 m from the target. With
   IK off the hand sat 0.126 m away.
 
@@ -641,6 +692,22 @@ formula. Evidence: `.local/local-wave-verify/ik-scenario/` (`run1/`,
 status bar stay manual, and only the Left hand chain of the default native
 female is exercised.
 
+Recorded 2026-10-23 (st-ux-ik-camera, Debug build of `34e3e4e`, app SHA-256
+`149d8b0b…`): the full studio lane ran `--strict` and passed 52/52 (1,650.9 s),
+with `reload-save-ik` at 36/36 and `reload-load-ik` at 7/7. Every number above
+reproduced: the end within 1.37e-7 m of the target, the bit-identical round
+trip, and at 1e20 the arm bit-identical to `fk`. At X = 0.3 the status line
+read "Left hand IK solved again." With both hands at 1e20 it named both chains;
+after the left hand's 0.3 it read "Right hand IK left unsolved: IK reach is not
+finite." The right hand at −0.3 sat 1.44e-7 m from its target, and the status
+line kept "Added Kai". Negative control: the same scenario on the Debug build
+of the base, main `c3e83fa` (app SHA-256 `26c58b05…`), failed 6 of 36 steps.
+These were the cleared-status pair after X = 0.3 (steps 18–19), the two-chain
+message (26; the base names only the first unsolved chain), both "Added Kai"
+asserts (33 and 36; the base re-wrote "Right hand IK left unsolved" over it),
+and the last cleared-status control (35). Evidence: `.local/st-ux-ik-camera/lanes/` (`head-cut/`,
+`base-control/`).
+
 ### Mirrored camera parent (R4, ST-A06)
 
 The R4 app path "a source camera under a mirrored parent falls back to the
@@ -651,18 +718,20 @@ original CharaStudio authored one without a card
 Its private path goes in the environment file as
 `IKKOKU_MIRRORED_CAMERA_SCENE`.
 
-`mirrored-camera.json` (lane check `studio-scenario-mirrored-camera`, 17
-steps; scene plus `IKKOKU_SOURCE_AVATAR`) runs on camera key 2
-`IKKOKU-MIRROR` under item key 0 (scale (−1, 1, 1)), saved active, and
-control camera key 3 `IKKOKU-CONTROL` under item key 1 (scale (1, 1, 1)). It
-asserts that camera 2 is the load winner, that `view` is exactly the saved
-camera and that the status line contains "Source camera 2 view unresolved:
-Source camera object parent frame is mirrored". An `assertRejected` control
-shows the view is not looking through camera 2. `toggleCamera` 3 must look
-through camera 3, with `assertRejected` controls that the view is no longer
-the saved camera and that the status no longer names a mirrored frame.
-`toggleCamera` 2 falls back again. After export → reimport camera 2 is still
-the winner and falls back, and camera 3 still looks through.
+`mirrored-camera.json` (lane check `studio-scenario-mirrored-camera`, 25
+steps since st-ux-ik-camera, 17 before; scene plus `IKKOKU_SOURCE_AVATAR`)
+runs on camera key 2 `IKKOKU-MIRROR` under item key 0 (scale (−1, 1, 1)),
+saved active, and control camera key 3 `IKKOKU-CONTROL` under item key 1
+(scale (1, 1, 1)). It asserts that camera 2 is the load winner, that `view`
+is exactly the saved camera and that the status line contains "Source camera
+"IKKOKU-MIRROR" (camera 2) view unresolved: Source camera object parent frame
+is mirrored". An `assertRejected` control shows the view is not looking
+through camera 2. `toggleCamera` 3 must look through camera 3, with
+`assertRejected` controls that the view is no longer the saved camera and that
+the status no longer names a mirrored frame. `toggleCamera` 2 falls back
+again. After export → reimport camera 2 is still the winner and falls back,
+and camera 3 still looks through. The label asserts are listed under "Source
+camera labels" below.
 
 Recorded 2026-10-23: a one-check manifest cut from the lane ran `--strict` on
 the Debug build of this change (`31d4508`) and passed 17/17 steps. The saved
@@ -682,6 +751,83 @@ ran on the Debug build of `6270e82` and passed 40/40 in 1,368 s, with
 Evidence: `.local/vm-mirrored-camera/runs/`. This is a headless model check:
 the visible status line and rendered pixels are not asserted, and the
 original's own mirrored look-through pose is recorded, not reproduced.
+
+#### Source camera labels (st-ux-ik-camera)
+
+User finding, 2026-10-23: on this scene the tree named the cameras
+`IKKOKU-MIRROR` and `IKKOKU-CONTROL`, the status line named camera 2 by its
+key ("Source camera 2 view unresolved: …"), and the indicator under the status
+line said "Viewing through source camera "IKKOKU-MIRROR"" while the view showed
+the saved camera. The labels now come from one place,
+`SourceStudioCameraLabel` in
+[StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift),
+and use the object's current name with the source key:
+
+| Where | Before | After |
+| --- | --- | --- |
+| Tree row | `IKKOKU-MIRROR` | `IKKOKU-MIRROR` over a smaller `camera 2` line, so the 250 pt panel truncates a long name but never the key (one line read `IKKOKU-MIRROR (c…`). The active camera's line reads `camera 2 · active`, and its icon becomes `video.fill` while the view looks through it, or an orange `video.slash.fill` while it falls back (the tooltip says why). The row's title, which `treeLabel` asserts, is `IKKOKU-MIRROR (camera 2)` |
+| Status line, fallback | `Source camera 2 view unresolved: …; using the saved camera.` | `Source camera "IKKOKU-MIRROR" (camera 2) view unresolved: …; using the saved camera.` |
+| Status line, toggle | `Looking through source camera "IKKOKU-CONTROL".`, `Source camera "…" deactivated; …` | the same with ` (camera 3)` after the name |
+| Indicator, looking through | `Viewing through source camera "IKKOKU-CONTROL" (runtime only)` | `Viewing through source camera "IKKOKU-CONTROL" (camera 3) (runtime only)` |
+| Indicator, fallback | `Viewing through source camera "IKKOKU-MIRROR" (runtime only)` | `Saved camera shown: source camera "IKKOKU-MIRROR" (camera 2) has a mirrored parent` |
+| Object tab, Camera section | `Source camera: IKKOKU-MIRROR`, `Active` | `Source camera: IKKOKU-MIRROR (camera 2)`; `Active: the view looks through this camera`, or `Active, but the saved camera is shown: this camera has a mirrored parent` with a `Deactivate` button |
+| Orbit refused, fallback | `Viewing through source camera "IKKOKU-MIRROR"; deactivate it …` | `Source camera "IKKOKU-MIRROR" (camera 2) is active and the saved camera is shown; deactivate it …` |
+
+A record without a name keeps the importer's "Source camera N", which already
+carries the key, so its status line reads "Source camera N view unresolved" as
+before. The three status asserts changed with the wording in the same commit.
+New asserts: the indicator contains the "Saved camera shown" line at load,
+after toggling back and after reimport, and an `assertRejected` control shows
+it does not contain "Viewing through". With camera 3 the indicator contains
+"Viewing through source camera "IKKOKU-CONTROL" (camera 3)", and a control
+shows it does not contain "Saved camera shown". `treeLabel` asserts the tree
+rows `IKKOKU-MIRROR (camera 2)` and `IKKOKU-CONTROL (camera 3)`. A last toggle
+deactivates camera 3: a control shows the indicator is then empty, and the
+last step asserts no active camera, the saved view and the status "Source
+camera "IKKOKU-CONTROL" (camera 3) deactivated; orbit controls restored.".
+
+Unrendered items: the importer still names an item record it cannot render
+"Unrendered source item N". Where the converted catalog
+(`IKKOKU_STUDIO_ITEM_CATALOG`) maps the item's key but its asset does not load,
+the row now reads "<catalog name> (unrendered source item N)". Item records
+carry no name of their own. The two items in this scene are catalog key
+0/0/0, which the converted catalog does not map, so they keep "Unrendered
+source item 0/1". Naming them would need the Studio item list extracted from
+the game's info bundles (`Tools/reverse/catalog.py`), which this slice did not
+do.
+
+Recorded 2026-10-23 (Debug build of `c5b563c`): a private 8-step scenario
+(`.local/st-ux-ik-camera/item-label/`, not a lane check because it needs a
+synthetic catalog) ran this scene with a one-entry catalog that maps 0/0/0 to
+"Test cube" in a missing package, and passed 8/8. Both item rows read "Test
+cube (unrendered source item 0)" and "… 1)" before and after export →
+reimport, and renaming camera 2 to "Renamed camera" changes both its tree
+label, `Renamed camera (camera 2)`, and the indicator. Without the catalog,
+the same scenario fails exactly the 3 item-label steps.
+
+Recorded 2026-10-23 (Debug build of `34e3e4e`, app SHA-256 `149d8b0b…`):
+the full studio lane passed 52/52 `--strict`, with `mirrored-camera` at 25/25
+and the five camera checks (`camera-load-winner`, `camera-deactivate`,
+`camera-rename`, `charastudio-camera-switch`, `undo-camera`) passing
+unchanged; `maker-scenarios.json --strict` passed 5/5. The view positions
+above reproduced exactly. The same scenario on the base build (`c3e83fa`)
+failed 7 of 25 steps: the three fallback status asserts and the deactivate
+status (old wording), and the three indicator `assertRejected` controls. The
+base runner ignores the new keys, so the positive indicator and tree-label
+asserts pass there trivially; the controls are what fail. Evidence:
+`.local/st-ux-ik-camera/lanes/` (`head-full/`, `base-control/`).
+
+Window captures (`IKKOKU_CAPTURE_UI` and `IKKOKU_AUTOCAPTURE`, 15 per build:
+the source, native and mirrored Studio windows, two Maker windows and four
+renders) of the base and the same HEAD build, taken back to back: all four
+renders, all 15 UI reports and 9 of the 11 UI windows without a source
+camera are byte-identical. The two mirrored-scene windows differ on purpose,
+in the tree rows and the status area only. The native Object tab differed in
+the Transform fields' text baselines: the base build draws those both ways,
+and two more base runs matched HEAD's capture byte for byte. Crops:
+`.local/st-ux-ik-camera/crops/` (`tree-before.png`, `tree-after.png`,
+`status-before.png`, `status-after.png`); hashes in
+`.local/st-ux-ik-camera/captures/{before2,after3,base-rerun1,base-rerun2}/summary.json`.
 
 ## Maker scenario hook (T-T04)
 

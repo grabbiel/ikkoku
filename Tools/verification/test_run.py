@@ -944,7 +944,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "activeCamera", "routePlaying",
                                             "sourceRuntime", "animation", "fk", "position",
                                             "eyeLook", "blink", "handPattern",
-                                            "diagnosticContains", "statusContains", "view", "render",
+                                            "diagnosticContains", "statusContains", "indicatorContains",
+                                            "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
@@ -965,7 +966,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                             self.assertLessEqual(render.get("changedPixelsAtMost", 512 * 512), 512 * 512)
                             self.assertLessEqual(0, render.get("maxChannelDeltaAtMost", 255))
                             self.assertLessEqual(render.get("maxChannelDeltaAtMost", 255), 255)
-                    if any(k in step for k in ("name", "visible", "face", "body", "color")):
+                    if any(k in step for k in ("name", "visible", "face", "body", "color", "treeLabel")):
                         self.assertIsInstance(step.get("key"), int,
                                               "object asserts need a source key")
                     if "color" in step:
@@ -989,8 +990,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                             self.assertIs(view["saved"], True)
                         else:
                             self.assertIsInstance(view["key"], int)
-                    if "statusContains" in step:
-                        self.assertTrue(step["statusContains"])
+                    for text in ("statusContains", "indicatorContains", "treeLabel"):
+                        if text in step:
+                            self.assertTrue(step[text])
                     if "clothes" in step:
                         clothes = step["clothes"]
                         self.assertIsInstance(clothes["key"], int)

@@ -879,11 +879,16 @@ Our side still rejects the mirrored camera (R4 `reflectedFrame`). The lane
 check `studio-scenario-mirrored-camera` (`Tools/verification/scenarios/mirrored-camera.json`,
 environment key `IKKOKU_MIRRORED_CAMERA_SCENE`) loads this scene. It asserts
 through `StudioModel.viewCamera` that with camera 2 active the preview renders
-from exactly the saved camera and that the status line reads "Source camera 2
-view unresolved: Source camera object parent frame is mirrored, so its
-look-through rotation is undefined.; using the saved camera.". Toggling camera
-3 looks through it, and toggling camera 2 again falls back again; the same
-holds after export → reimport. Measured against the capture after the Unity
+from exactly the saved camera and that the status line reads "Source camera
+"IKKOKU-MIRROR" (camera 2) view unresolved: Source camera object parent frame
+is mirrored, so its look-through rotation is undefined.; using the saved
+camera.". The view indicator under the status line reads "Saved camera shown:
+source camera "IKKOKU-MIRROR" (camera 2) has a mirrored parent", never
+"Viewing through". Toggling camera 3 looks through it, and toggling camera 2
+again falls back again; the same holds after export → reimport. (Before
+st-ux-ik-camera the status line named the camera "Source camera 2" and the
+indicator said "Viewing through" during the fallback; see "Source camera
+labels" in [the verification README](../../../Tools/verification/README.md#source-camera-labels-st-ux-ik-camera).) Measured against the capture after the Unity
 → engine z flip, our control view is within 1.7e-7 m and 7.3e-7° of the
 original's control render camera, and our fallback view is within 5.0e-7 m and
 2.8e-6° of the original's saved view. The original's mirrored pose is not

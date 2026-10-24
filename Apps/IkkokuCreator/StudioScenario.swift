@@ -62,6 +62,13 @@ struct StudioScenario: Decodable {
         /// must contain, read after any `view` check in the same step, so a
         /// look-through rejection the render camera reported is visible.
         let statusContains: String?
+        /// assert only: a substring the view indicator under the status line
+        /// (`StudioModel.activeSourceCameraView`) must contain; with no source
+        /// camera active the indicator is empty and contains nothing.
+        let indicatorContains: String?
+        /// assert only, with `key`: the object's workspace tree label
+        /// (`StudioModel.workspaceLabel`, which the tree rows display).
+        let treeLabel: String?
         /// assert only: the camera the preview renders from
         /// (`StudioModel.viewCamera`, the camera `refresh()` hands the
         /// renderer): the saved scene camera, or the look-through camera of
@@ -344,7 +351,7 @@ struct StudioScenario: Decodable {
 
         private enum CodingKeys: String, CodingKey {
             case op, key, visible, name, index, value, id, rgba, path, face, body, color,
-                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, view,
+                 activeCamera, routePlaying, sourceRuntime, diagnosticContains, statusContains, indicatorContains, treeLabel, view,
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, state, clothes, expression,
@@ -380,6 +387,8 @@ struct StudioScenario: Decodable {
             sourceRuntime = try c.decodeIfPresent(SourceRuntimeValue.self, forKey: .sourceRuntime)
             diagnosticContains = try c.decodeIfPresent(String.self, forKey: .diagnosticContains)
             statusContains = try c.decodeIfPresent(String.self, forKey: .statusContains)
+            indicatorContains = try c.decodeIfPresent(String.self, forKey: .indicatorContains)
+            treeLabel = try c.decodeIfPresent(String.self, forKey: .treeLabel)
             view = try c.decodeIfPresent(ViewValue.self, forKey: .view)
             // Same rule as `activeCamera`/`sourceRuntime`: absent keys stay
             // `nil` ("not asserted"); a present `animation`/`fk` object only
@@ -1660,9 +1669,10 @@ struct StudioScenario: Decodable {
                 var problems: [String] = []
                 var details: [String] = []
                 let needsObject = step.name != nil || step.visible != nil || step.face != nil || step.body != nil || step.color != nil
+                    || step.treeLabel != nil
                 var id: UUID?
                 if needsObject, step.key == nil {
-                    problems.append("assert: name/visible/face/color need a key")
+                    problems.append("assert: name/visible/face/color/treeLabel need a key")
                 } else if needsObject {
                     if let found = object(step) {
                         id = found
@@ -1676,6 +1686,14 @@ struct StudioScenario: Decodable {
                     }
                     if let expected = step.name, studio.doc.object(id)?.name != expected {
                         problems.append("assert name: source key \(step.key!) is \"\(studio.doc.object(id)!.name)\", expected \"\(expected)\"")
+                    }
+                    if let expected = step.treeLabel, let object = studio.doc.object(id) {
+                        let label = studio.workspaceLabel(of: object, sceneSHA256: studio.doc.sourceSceneSHA256).title
+                        if label != expected {
+                            problems.append("assert treeLabel: source key \(step.key!) reads \"\(label)\" in the tree, expected \"\(expected)\"")
+                        } else {
+                            details.append("tree label \"\(label)\"")
+                        }
                     }
                     if problems.isEmpty, let problem = assertShape(step, id: id, face: true) { problems.append(problem) }
                     if problems.isEmpty, let problem = assertShape(step, id: id, face: false) { problems.append(problem) }
@@ -1761,6 +1779,14 @@ struct StudioScenario: Decodable {
                 if let problem = assertView(step, details: &details) { problems.append(problem) }
                 if let needle = step.statusContains, !studio.status.contains(needle) {
                     problems.append("assert statusContains: status \"\(studio.status)\" does not contain \"\(needle)\"")
+                }
+                if let needle = step.indicatorContains {
+                    let indicator = studio.activeSourceCameraView?.indicator ?? ""
+                    if !indicator.contains(needle) {
+                        problems.append("assert indicatorContains: view indicator \"\(indicator)\" does not contain \"\(needle)\"")
+                    } else {
+                        details.append("view indicator \"\(indicator)\"")
+                    }
                 }
                 if step.op == "assertRejected" {
                     guard let expected = step.errorContains, !expected.isEmpty else {
