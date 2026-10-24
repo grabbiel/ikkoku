@@ -472,6 +472,11 @@ Concrete Studio integration is covered in [Studio](studio.md).
   No library/hash I/O occurs in ticks or snapshots. Remaining: batch DLL triage,
   multi-type packages, assembly dependencies, converter migrations, and the
   installed Chainloader's duplicate and version rules from private evidence.
+  Cancellation follow-up: the unchanged bounded Maker preparation queue now
+  serializes plugin resolution and promptly resumes cancelled callers while
+  discarded CPU work drains. Model and panel request ownership protect retry
+  state from older completions. Expanded held-worker cancellation, enqueue-witness
+  and panel-state regressions await validation; no decoder throughput claim.
 - **P-T03 — Actual app regression (P1, depends on A-T04 and Studio inspector fix).**
   Run the existing three-stage capture probe with both installed adapters and the
   IR motion fixture. Then exercise focus gain/loss with generated audio and verify
