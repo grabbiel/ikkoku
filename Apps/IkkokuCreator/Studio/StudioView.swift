@@ -19,17 +19,30 @@ struct StudioView: View {
 
     var body: some View {
         let _ = PerfTrace.body(.studioWindow)
+        let interfaceVisible = model.sourceInterfaceVisible
         HStack(spacing: 0) {
             StudioWorkspacePanel(model: model).frame(width: 250)
-            Divider()
+                .studioInterfaceVisibility(interfaceVisible)
+            Divider().opacity(interfaceVisible ? 1 : 0)
             VStack(spacing: 0) {
                 ViewportView(renderer: model.host.renderer, handler: model)
-                    .overlay(alignment: .top) { StudioToolbar(model: model) }
-                if model.showTimeline { Divider(); StudioTimelineBar(model: model) }
+                    .overlay(alignment: .top) { StudioToolbar(model: model).studioInterfaceVisibility(interfaceVisible) }
+                if model.showTimeline {
+                    Divider().opacity(interfaceVisible ? 1 : 0)
+                    StudioTimelineBar(model: model).studioInterfaceVisibility(interfaceVisible)
+                }
             }
-            Divider()
-            StudioInspectorPanel(model: model).frame(width: 350)
+            Divider().opacity(interfaceVisible ? 1 : 0)
+            StudioInspectorPanel(model: model).frame(width: 350).studioInterfaceVisibility(interfaceVisible)
         }
+    }
+}
+
+private extension View {
+    /// Retain layout and the Metal viewport's identity while hiding native roles.
+    /// Preferences remain independent, and invisible controls cannot keep focus.
+    func studioInterfaceVisibility(_ visible: Bool) -> some View {
+        opacity(visible ? 1 : 0).allowsHitTesting(visible).disabled(!visible).accessibilityHidden(!visible)
     }
 }
 
@@ -306,6 +319,7 @@ struct StudioTimelineState: Equatable {
     var keys: [Key]
     var keyCount: Int
     var hasSelection: Bool
+    var spaceHidesInterface: Bool
 }
 
 struct StudioTimelineBar: View {
@@ -317,7 +331,7 @@ struct StudioTimelineBar: View {
         let state = StudioTimelineState(
             playing: model.timelinePlaying, time: model.timelineTime, duration: timeline.duration, loop: timeline.loop,
             keys: model.selectedKeyframes.map { .init(id: $0.id, time: $0.time) }, keyCount: timeline.keyframes.count,
-            hasSelection: model.selectedObject != nil)
+            hasSelection: model.selectedObject != nil, spaceHidesInterface: model.sourceHideStudioUI != nil)
         StudioTimelineControls(model: model, state: state).equatable()
     }
 }
@@ -332,7 +346,7 @@ struct StudioTimelineControls: View, Equatable {
         let state = state
         HStack(spacing: 10) {
             Button { model.timelinePlaying.toggle() } label: { Image(systemName: state.playing ? "pause.fill" : "play.fill") }
-                .help("Play / pause (Space in the viewport)")
+                .help(state.spaceHidesInterface ? "Play / pause (Space toggles the Studio interface)" : "Play / pause (Space in the viewport)")
             Button { model.timelinePlaying = false; model.timelineTime = 0 } label: { Image(systemName: "backward.end.fill") }
             Text(String(format: "%.2f s", state.time)).font(.caption.monospacedDigit()).frame(width: 52)
             Slider(value: Binding(get: { state.time }, set: { model.timelineTime = $0 }), in: 0...max(state.duration, 0.1))

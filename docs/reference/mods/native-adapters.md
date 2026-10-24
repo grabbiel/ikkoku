@@ -11,7 +11,7 @@ not validate either workflow. See
 
 ## Conversion and identity
 
-The conversion CLI recognizes two installed DLLs by their complete SHA-256 hashes
+The conversion CLI recognizes three exact installed DLLs by their complete SHA-256 hashes
 and publishes native adapter packages automatically. Run from the repository root:
 
 ```sh
@@ -57,6 +57,7 @@ The registry requires these exact assembly identities:
 | --- | --- |
 | `bepinex-mute-in-background-v1` | `e494f24b73fed491d056c3c6a00ee73baf257409877ce8e5b44da1b0494ca96d` |
 | `kk-studio-accessory-names-v1` | `c60d740ee1037040e97bcb0ae8037f8f7a1e4350322bc7ed44699fd0dc9662bd` |
+| `kk-hide-studio-ui-v1` | `ec11d03060502b60bf15742ef8e56b6bc804c10067e5a78ba368c7b62e3b117e` |
 
 The retained 2026-09-25 evidence reports three native package tests and one
 original-fixture Python packaging test passing. This documentation revision did
@@ -68,9 +69,11 @@ synthetic tests only. Its scanner accepts an adapter manifest only when the
 source digest is in this registry and the adapter ID, type, identity and process
 list are identical. The scanner never runs the assembly.
 
-Adapter manifests declare no BepInEx dependencies or incompatibilities. In the
-shared graph, a translated package may depend on an adapter GUID with a minimum
-version, but an adapter itself requires nothing. If a registered plugin declares
+The original two adapter manifests declare no BepInEx dependencies or
+incompatibilities. HideAllUI retains its exact `HideStudioUI` and `HideHInterface`
+incompatibilities in both the manifest and mixed plugin graph. All three declare
+no BepInEx dependencies. A translated package may depend on an adapter GUID with
+a minimum version, but these adapters themselves require nothing. If a registered plugin declares
 dependencies, the registry must record them first.
 
 Library selections verify adapter packages through `SourceNativePluginPackage.load`.
@@ -271,3 +274,72 @@ Original binaries, recovered source, configuration and trace results remain igno
 `SourceStudioAccessoryNamesPlugin` adapts the installed Studio plug-in's label pass. Slot counting advances only for text containing a UTF-16 decimal digit, missing/inactive accessories keep the original Japanese slot fallback, and resolved names retain their Unicode spelling. Source button positions 100/130 become 160/190 and text width becomes 150 in the label model; native UI uses SwiftUI layout. Labels use the exact resolved accessory entry name and never alter source/mod IDs or card bytes.
 
 `Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing/inactive accessories, non-slot widgets, shifted numbering and Unicode digit behavior. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. App UI reachability is still blocked as described above; no arbitrary Harmony or Unity coroutine host is provided.
+
+
+## HideAllUI 2.3.2 Studio adapter
+
+This bounded adapter pins `HideAllUI.HideAllUI`, GUID `keelhauled.hideallui`,
+version `2.3.2`, to the exact DLL digest above. It accepts the absent/default
+configuration or UTF-8 `[Keyboard shortcuts]` → `Hide UI = Space`. Other shortcuts
+fail explicitly before replacing a mounted session. The immutable package retains
+all configuration bytes. The original manifest has no process restriction; this
+adapter's supported host is Studio only.
+
+```sh
+python3 Tools/translation/plugin.py path/to/HideAllUI.Koikatu.dll \
+  --type HideAllUI.HideAllUI --config path/to/keelhauled.hideallui.cfg \
+  --output .local/plugins/hide-studio-ui
+```
+
+The recovered source captures an array of active GameObject Canvas components
+at handler construction, then filters their names lazily on each toggle. It changes
+those GameObjects' active state. Optional plugin canvases are found by path on
+each toggle and change `Canvas.enabled`; inactive GameObjects are not found.
+The optional main-camera manipulator changes GameObject active state. Initialization
+sets the handler's internal visibility to true without changing existing surface
+states. New game canvases are absent from the captured array, while renamed
+captured objects can enter the deferred name filter. The name predicate runs before
+the later Unity truthiness predicate. In the retained Unity 5.6.2f1 player, a
+destroyed captured Canvas produces `System.NullReferenceException` after the
+internal flag flips but before dynamic canvases update. A fresh handler drops
+those stale references; it does not reveal surfaces during initialization.
+
+The native mapping is an explicit Ikkoku host contract, not a general Canvas API:
+
+| Native role | Visibility layer |
+| --- | --- |
+| Workspace, inspector, viewport toolbar and authored timeline | Transparent, disabled and inaccessible while hidden; layout and viewport identity retained |
+| Object, bone, IK and light guides | Omitted from the frame and hover picking; active guide gestures cancelled when hiding |
+| Viewport orbit/pan | Remains available |
+| View menu | Remains available; **Show Studio Interface** removes the adapter's hiding |
+
+Only unmodified Space delivered to the active Studio viewport toggles the layer.
+Repeat events are consumed without toggling playback or visibility. Text editing
+owns its own input, and modified Space does not fall through to playback while the
+adapter is mounted. Without the adapter, existing viewport shortcuts are unchanged.
+The layer never changes `showGizmos` or `showTimeline`: recovery, unload, mode exit
+and a fresh scene restore preserve those host preferences. Visibility itself is
+session-local; native scenes save the exact package/config reference and reload a
+fresh visible handler. Original-game visibility persistence is not claimed.
+
+Updates are event-driven. No filesystem checks, Canvas lookup, frame-tick callback
+or per-frame UI invalidation was added. A visibility event rebuilds the existing
+frame so hidden guides cannot remain pickable. Native scenario coverage uses the
+same package loader, key/mouse handlers, mode path, save/reload and unload methods.
+The real-Unity oracle is separate from the native host and public synthetic tests.
+
+The original-player trace records ten phases and sixteen retained targets from
+an isolated player with the exact plugin DLL. Its first producer used Unity 5.6
+`JsonUtility`, which omitted nested observations; that run was rejected. The
+corrected producer emitted all fields. Its initial validator expected a
+`MissingReferenceException`; the retained trace instead establishes the exact
+`NullReferenceException` described above. A corrected independent validation pins
+that observed type and passes the same unchanged trace, with both initial failures
+retained. This is not described as a passing first validation or a fresh rerun.
+
+Four public synthetic trace-contract tests, sixteen package-library tests and two
+original-fixture packaging tests pass locally, with no skips in these runs. The
+probe compiles against retained original metadata; its exact JSON serializer also
+passes a standalone nested/escaping check. Native app and visible UI gates remain
+in progress on this branch. Private evidence is retained in
+`.local/codex-continue-2026-10-24/wave-three/plugins/hide-studio-ui/`.

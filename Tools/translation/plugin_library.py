@@ -44,7 +44,7 @@ PACKAGE_FILES = 256
 PACKAGE_DEPTH = 8
 IDENTITY_BYTES = 1024
 TRANSLATED_KEYS = {"schemaVersion", "kind", "identity", "processes", "dependencies", "incompatibilities", "components"}
-NATIVE_KEYS = {"schemaVersion", "kind", "adapterID", "type", "identity", "processes", "source", "configuration"}
+NATIVE_KEYS = {"schemaVersion", "kind", "adapterID", "type", "identity", "processes", "source", "configuration", "incompatibilities"}
 
 
 class LibraryFailure(ValueError):
@@ -363,6 +363,9 @@ def inspect_package(package: Path, files: list[dict], registry: dict) -> dict:
         row = registry.get(source_sha) if isinstance(source_sha, str) else None
         if row is None or any(manifest.get(key) != row[key] for key in ("adapterID", "type", "identity", "processes")):
             raise PackageFailure("adapter_unverified", "Native adapter manifest differs from every verified original assembly")
+        incompatibilities = string_list(manifest.get("incompatibilities", []), 128, "manifest_invalid", "incompatibilities")
+        if incompatibilities != row.get("incompatibilities", []):
+            raise PackageFailure("adapter_unverified", "Native adapter incompatibilities differ from the verified original")
         file_reference(source, hashes, "source_changed", "original assembly")
         configuration = manifest.get("configuration")
         if configuration is not None:
@@ -371,7 +374,7 @@ def inspect_package(package: Path, files: list[dict], registry: dict) -> dict:
             file = file_reference(configuration, hashes, "configuration_changed", "configuration")
             if sizes[file] > CONFIGURATION_BYTES:
                 raise PackageFailure("package_limit", "Configuration exceeds 1 MiB")
-        dependencies, incompatibilities, types = [], [], [manifest["type"]]
+        dependencies, types = [], [manifest["type"]]
         converter = {"id": "ikkoku.native-adapter", "adapterID": manifest["adapterID"], "sourceSHA256": source_sha}
     return {"kind": kind, "guid": guid, "version": version, "name": name,
             "manifest": f"revisions/{manifest_sha}/manifest.json", "manifestSHA256": manifest_sha,
