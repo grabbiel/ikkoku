@@ -369,10 +369,7 @@ public final class SourceStudioCharacterPreview {
         let clothingSlots = prepared?.clothingSlots
             ?? selectedManifest.clothes.enumerated().map { $0.element.slot ?? ([0, 1, 8].indices.contains($0.offset) ? [0, 1, 8][$0.offset] : -1) }
         let wearLayout = SourceStudioWearLayout(source: source, clothingSlots: clothingSlots, indoorShoes: prepared?.indoorShoes ?? .unconverted)
-        let wearRules = SourceStudioWear(catalog: wearCatalog.clothes, switchNodes: (0..<9).map { kind in
-            if case .row = wearCatalog.clothes[kind] { return wearLayout.switchNodes[kind] ?? [] }
-            return []
-        }, ids: wearCatalog.clothesIDs, modded: wearCatalog.clothesModded)
+        let wearRules = SourceStudioWear(catalog: wearCatalog, layout: wearLayout)
         let loadedClothesState = wearRules.loaded(savedWear.clothesState)
         var hideHairSlots = Set<Int>(), unknownHair: [Int] = []
         for (slot, row) in wearCatalog.accessories {

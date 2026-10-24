@@ -1,4 +1,5 @@
 import Foundation
+import Assets
 import Scene
 import Character
 
@@ -382,5 +383,50 @@ public struct SourceStudioWearLayout: Equatable, Sendable {
     private func stateSummary(_ s: [UInt8], around kind: Int) -> String {
         let related: [Int] = kind <= 1 ? [0, 1] : kind <= 3 ? [2, 3] : [kind]
         return related.map { "\(SourceStudioWear.kindNames[$0]) \(SourceStudioWear.stateNames[Int(s[$0])])" }.joined(separator: ", ")
+    }
+}
+
+extension SourceStudioWear {
+    /// The rules of a Studio wear assembly: the outfit's catalog rows, and the
+    /// switch nodes its assembled garments carry for kinds with a row.
+    public init(catalog: SourceMakerLibrary.WearCatalog, layout: SourceStudioWearLayout) {
+        self.init(catalog: catalog.clothes, switchNodes: (0..<9).map { kind in
+            if case .row = catalog.clothes[kind] { return layout.switchNodes[kind] ?? [] }
+            return []
+        }, ids: catalog.clothesIDs, modded: catalog.clothesModded)
+    }
+}
+
+extension SourceStudioWearLayout {
+    /// A card's saved wear as a CharaStudio load shows it (ST-C03): the Status
+    /// clothes state through `SourceStudioWear.loaded`, then UpdateVisible
+    /// with the saved shoesType, showAccessory and catalog HideHair, over a
+    /// Studio wear assembly (`prepare(wear: true)`). For tools that render or
+    /// snapshot a card outside a Studio scene (`ikkoku-inspect card-model
+    /// --studio-wear`, the live fixture probe); unlike the Studio preview it
+    /// throws instead of falling back when the Status or catalog is unreadable.
+    public struct Saved: Sendable {
+        public let layout: SourceStudioWearLayout, rules: SourceStudioWear
+        public let wear: SourceCharacterCard.StatusWear
+        public let states: [UInt8]
+        public let evaluation: Evaluation
+    }
+
+    public static func saved(card: SourceCharacterCard, coordinate: Int, library: SourceMakerLibrary,
+                             prepared: SourceMakerLibrary.Prepared) throws -> Saved {
+        let status = try card.block(named: "Status").map { try SourceMessagePack.decode($0.data).stringKeyedMap() } ?? [:]
+        let wear = try SourceCharacterCard.StatusWear(status: status)
+        let catalog = try library.wearCatalog(card: card, coordinate: coordinate)
+        let layout = SourceStudioWearLayout(source: prepared.source, clothingSlots: prepared.clothingSlots, indoorShoes: prepared.indoorShoes)
+        let rules = SourceStudioWear(catalog: catalog, layout: layout)
+        let states = rules.loaded(wear.clothesState)
+        var hideHair = Set<Int>()
+        for (slot, row) in catalog.accessories {
+            guard case .row(let fields) = row else { continue }
+            if (Int(fields["HideHair"] ?? "0") ?? -1) != 0 { hideHair.insert(slot) }
+        }
+        return Saved(layout: layout, rules: rules, wear: wear, states: states,
+                     evaluation: layout.evaluate(rules: rules, states: states, shoesType: wear.shoesType,
+                                                 showAccessory: wear.showAccessory, hideHairSlots: hideHair))
     }
 }
