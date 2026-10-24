@@ -27,10 +27,10 @@ class ModelComparisonTests(unittest.TestCase):
         self.frame = dict(card='card.png', meshes=[mesh], bones=[dict(path=p, position=[0,0,0], rotation=[0,0,0,1], scale=[1,1,1]) for p in ['root','root/p_cf_body_bone']],
             neutralModel=dict(variant='female00', sex=1, headID=0, boneType=0, requestedSex=1, requestedHeadID=0, requestedBoneType=0,
                 loadedHeadCatalogID=0, handControllerCounts={'L':1,'R':1}, eyeAngleHRate=0, eyeAngleVRate=0, assemblySHA256='test-assembly', handPatterns=[0,0], elapsedFramesAfterLoad=0, hiPoly=True, enableCorrectArmSize=False,
-                enableCorrectHandSize=True, requestedBodyValues=[.5], requestedFaceValues=[.5], actualBodyValues=[.5], actualFaceValues=[.5], animators=[]))
+                enableCorrectHandSize=True, requestedBodyValues=[.5]*44, requestedFaceValues=[.5]*52, actualBodyValues=[.5]*44, actualFaceValues=[.5]*52, animators=[]))
         native_rest = rest.copy(); native_rest[:, 2] *= -1
         self.native = dict(kind='ikkoku-neutral-source-model', identity=dict(sex=1, headID=0, boneType=0, exType=0),
-            inputs=dict(cardSHA256=hashlib.sha256(b'authored test card identity').hexdigest()), bodyValues=[.5], faceValues=[.5],
+            inputs=dict(cardSHA256=hashlib.sha256(b'authored test card identity').hexdigest()), bodyValues=[.5]*44, faceValues=[.5]*52,
             lateCorrectionOptions=dict(hiPoly=True, enableCorrectArmSize=False, enableCorrectHandSize=True),
             nodeNames=['p_cf_body_bone'], nodeParents=[-1], nodeWorldMatrices=[self.identity],
             parts=[dict(name='mesh/0', selected=True, active=True, hasCloth=False, restPositions=native_rest.tolist(),

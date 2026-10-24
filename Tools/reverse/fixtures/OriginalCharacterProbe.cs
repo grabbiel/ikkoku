@@ -39,6 +39,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     string modelVariant;
     int modelSex=1, modelHead=0;
     float[] modelRequestedBody,modelRequestedFace;
+    sealed class ModelShape { public string domain; public int index; public float value; }
+    readonly List<ModelShape> modelShapes=new List<ModelShape>();
+    Dictionary<string,object> modelShapeRequest;
     readonly List<object> modelAnimators=new List<object>();
     readonly Dictionary<string,int> modelHandCounts=new Dictionary<string,int>{{"L",0},{"R",0}};
     // ST-C03 third slice: optional wear keys in character-settings.tsv
@@ -62,6 +65,28 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(handPatterns!=null || lookPhases.Count>0)throw new Exception("Neutral model mode cannot use hand/look phases");
         handPatterns=new Dictionary<string,int>{{"L",0},{"R",0}};
     }
+    void TryLoadModelShapes() {
+        var path=Path.Combine(Path.GetDirectoryName(folder),"model-shapes.tsv");
+        if(!File.Exists(path))return;
+        if(modelVariant==null)throw new Exception("Model shapes require model mode");
+        var bytes=File.ReadAllBytes(path);
+        if(bytes.Length==0 || bytes.Length>16384)throw new Exception("Invalid model shape input size");
+        var seen=new HashSet<string>();var rows=new List<object>();
+        foreach(var line in File.ReadAllLines(path)) {
+            var fields=line.Split('\t');int index;float value;
+            if(fields.Length!=3 || (fields[0]!="body" && fields[0]!="face") ||
+                !Int32.TryParse(fields[1],NumberStyles.None,CultureInfo.InvariantCulture,out index) ||
+                index<0 || index>=(fields[0]=="body"?44:52) || !seen.Add(fields[0]+":"+index) ||
+                !Single.TryParse(fields[2],NumberStyles.Float,CultureInfo.InvariantCulture,out value) ||
+                Single.IsNaN(value) || Single.IsInfinity(value) || value<0 || value>1)
+                throw new Exception("Invalid or duplicate model shape row: "+line);
+            modelShapes.Add(new ModelShape{domain=fields[0],index=index,value=value});
+            rows.Add(new Dictionary<string,object>{{"domain",fields[0]},{"index",index},{"value",value}});
+        }
+        if(modelShapes.Count==0)throw new Exception("Model shapes have no rows");
+        File.WriteAllBytes(Path.Combine(folder,"model-shapes.tsv"),bytes);
+        modelShapeRequest=new Dictionary<string,object>{{"file","model-shapes.tsv"},{"sha256",Sha256File(path)},{"rows",rows},{"stage","saved arrays before LoadAsync"}};
+    }
     IEnumerator Start()
     {
         folder = Path.Combine(Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location), "character");
@@ -70,7 +95,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         // killing this coroutine silently. Without either file both loaders
         // return at once, so the no-tsv frame sequence and outputs are unchanged.
         string error = null;
-        try { TryLoadHandPatterns(); TryLoadLookPatterns(); TryLoadModelVariant(); }
+        try { TryLoadHandPatterns(); TryLoadLookPatterns(); TryLoadModelVariant(); TryLoadModelShapes(); }
         catch(Exception e) {
             // Drop any rows read before the bad one so Finish writes no partial look trace.
             handPatterns=null; lookPhases.Clear(); lookTargetPositions.Clear();
@@ -249,7 +274,14 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 default: throw new Exception("Unknown character-settings key: "+fields[0]);
             }
         }
-        if(modelVariant!=null){modelRequestedBody=(float[])body.shapeValueBody.Clone();modelRequestedFace=(float[])face.shapeValueFace.Clone();}
+        if(modelVariant!=null){
+            if(body.shapeValueBody.Length!=44 || face.shapeValueFace.Length!=52)throw new Exception("Unexpected model shape array counts");
+            foreach(var shape in modelShapes) {
+                var values=shape.domain=="body"?body.shapeValueBody:face.shapeValueFace;
+                values[shape.index]=shape.value;
+            }
+            modelRequestedBody=(float[])body.shapeValueBody.Clone();modelRequestedFace=(float[])face.shapeValueFace.Clone();
+        }
         character=modelSex==0 ? Manager.Character.Instance.CreateMale(0,null,1,file,true)
             : Manager.Character.Instance.CreateFemale(null,1,file,true);
         // Moment (a): right after CreateFemale returns, before LoadAsync starts.
@@ -340,6 +372,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 throw new Exception("Loaded source model identity differs from request");
             report["neutralModel"]=new Dictionary<string,object>{{"variant",modelVariant},{"sex",character.sex},{"headID",character.chaFile.custom.face.headId},{"boneType",character.chaFile.custom.body.typeBone},{"requestedSex",modelSex},{"requestedHeadID",modelHead},{"requestedBoneType",0},{"hiPoly",character.hiPoly},{"enableCorrectArmSize",Manager.Character.Instance.enableCorrectArmSize},{"enableCorrectHandSize",Manager.Character.Instance.enableCorrectHandSize},{"loadedHeadName",character.objHead.name},{"loadedHeadCatalogID",character.infoHead.Id},{"eyeAngleHRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleHRate(EYE_LR.EYE_L)},{"eyeAngleVRate",character.GetComponentInChildren<FaceBlendShape>().EyeLookController.eyeLookScript.GetAngleVRate()},{"requestedBodyValues",modelRequestedBody},{"requestedFaceValues",modelRequestedFace},{"actualBodyValues",character.chaFile.custom.body.shapeValueBody},{"actualFaceValues",character.chaFile.custom.face.shapeValueFace},{"handControllerCounts",modelHandCounts},{"handPatterns",new[]{handPatterns["L"],handPatterns["R"]}},{"animators",modelAnimators},{"elapsedFramesAfterLoad",0},{"clock","no post-load Animator tick; source shape and neutral FBS setters evaluated once; loading-clock determinism must be checked separately"},{"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
         }
+        if(modelShapeRequest!=null)((Dictionary<string,object>)report["neutralModel"])["shapeRequest"]=modelShapeRequest;
         if(wearRequest!=null) {
             var active=new List<object>();
             for(int slot=0;slot<character.objClothes.Length;slot++)active.Add(character.objClothes[slot]!=null && character.objClothes[slot].activeInHierarchy);
