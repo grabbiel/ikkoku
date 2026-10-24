@@ -501,10 +501,14 @@ struct ObjectInspectorState: Equatable {
         isSourceCharacter = o.sourceCharacter != nil
         clothingVisible = o.clothingVisible; accessoriesVisible = o.accessoriesVisible
         tint = o.tint; emissive = o.emissive; light = o.light
+        // The camera and route state is read only where its section shows,
+        // as the panel did: every frame rebuild rewrites the route play
+        // state, so reading it for other objects would re-evaluate this view
+        // on every live tick.
         sourceCameraName = model.selectedSourceCameraName
-        lookingThroughSourceCamera = model.activeSourceCamera == o.id
+        lookingThroughSourceCamera = sourceCameraName != nil && model.activeSourceCamera == o.id
         routeIsSource = model.selectedRouteIsSource
-        routePlaying = model.selectedRoutePlaying
+        routePlaying = routeIsSource && model.selectedRoutePlaying
     }
 }
 
