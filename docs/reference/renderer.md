@@ -2056,7 +2056,13 @@ Each case was launched with only its own `IKKOKU_*` variables:
 - `koikatu_cs0002591.png`: `a0dc50f4…`. From `8d83f01` on it is `caed346e…`
   on both sides, because #125 applies the scene's clothes state.
 - the rig and fixture card: `9d973e21…`;
-- `synthetic-current.png`: `6837cd63…`.
+- `synthetic-current.png`: `6837cd63…`. Since #133, with a Maker library
+  present, this capture exits 1. The scene's only character has no hair
+  `parts` array that `SourceMakerLibrary` supports ("Unsupported hair part
+  array."), so it is always retained without rendering, and an automated
+  scene capture whose characters all fail exits 1. Run this control with
+  `IKKOKU_MAKER_LIBRARY=none`; the character then renders through the bundled
+  native body, and `0c51ca1` still gives `6837cd63…`.
 
 The frozen probe's deterministic images (`--families`,
 `SWIFT_DETERMINISTIC_HASHING=1`, 3 runs per build) were identical between the
@@ -2425,7 +2431,9 @@ the change predates this branch. `synthetic-current.png` is no longer a usable
 control: both builds exit 1 with "Character 10 retained without rendering:
 Unsupported hair part array". Its only character has no supported hair `parts`
 array, so it was always retained without rendering, and since #133 an automated
-scene capture whose characters all fail exits 1.
+scene capture whose characters all fail exits 1. With `IKKOKU_MAKER_LIBRARY=none`
+it is a native-scene byte control again (see the
+[regression list](#live-source-shader-path-r1cmt-04-opt-in-2026-10-22)).
 
 **Remaining composites.** Seven slots of the fixture still fall back, each with
 "is not composed natively for the live path":
@@ -2687,7 +2695,8 @@ opt-in OFF, so the scene's 0.025 ms CPU difference (base 0.709–0.738, head
 0.744–0.755 ms) is not attributable to it; #143 measured 0.7284 / 0.7329 ms on
 the same case. As there, `synthetic-current.png` is not a control: its only
 character has no supported hair `parts` array, and since #133 an automated scene
-capture whose characters all fail exits 1.
+capture whose characters all fail exits 1. With `IKKOKU_MAKER_LIBRARY=none` it
+is a native-scene byte control again.
 
 **Remaining composites.** Five slots of the fixture still fall back:
 

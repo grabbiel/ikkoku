@@ -558,6 +558,20 @@ fixture card (`9d973e21…`) and the synthetic scene (`4b0fe94e…`).
 Every capture compared is also identical between the Debug and Release
 builds.
 
+Control note (2026-10-24): with a Maker library present, the synthetic
+scene's capture (`IKKOKU_SOURCE_SCENE` set to
+`.local/reverse/studio-scenes/synthetic-current.png`, with
+`IKKOKU_AUTOCAPTURE`) now exits 1. A Maker library is present when
+`IKKOKU_MAKER_LIBRARY` names one, a converted library is selected, or the
+source-tree fallback finds `.local/reverse/maker-library`. The scene's only
+character (`Character 10`) has no hair `parts` array that
+`SourceMakerLibrary` supports ("Unsupported hair part array."), so the
+character is always retained without rendering. Since #133, an automated
+scene capture whose characters all fail exits 1. For a native-scene byte
+control, run it with `IKKOKU_MAKER_LIBRARY=none`, so that the character
+renders through the bundled native body. On 2026-10-24, `main` `0c51ca1` and
+the phase 2, item 2 head both gave `6837cd63…` that way.
+
 In-app harness results, Release, before → after:
 
 | Workload | Presented FPS | Hitches/s | Tick ms × rate/s | Refresh ms | Main busy ms/s |
@@ -597,7 +611,7 @@ composited; the rejected reports are kept in `after-2/qw3-release/invalid`.
 - **The merged head.** The PR head merges `main` at `5e86b57` and later
   (`.local/app-perf/after-3`, Release on `0d4548a`). Its valid runs match quick
   wins 1–3 within run-to-run variation: hover tick 6.39 ms × 30, orbit 41.2 FPS,
-  Maker slider 48.1 FPS, native 119.7 FPS, firstDraw 6.19 s. TBD-MERGED-RERUNS
+  Maker slider 48.1 FPS, native 119.7 FPS, firstDraw 6.19 s.
 
 ## Optimization inventory
 
