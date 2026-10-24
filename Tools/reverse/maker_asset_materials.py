@@ -27,6 +27,74 @@ def verify_hair(root,meta):
  if PROGRAMS.get(name)!=sha(code[start:start+size]):raise ValueError('Unknown hair shader program')
 
 
+# Clothes categories with a recovered create/main_opaque recipe: ClothesKind slot
+# and ChaFileClothes resolver scope. Shoes bind slot 8; the native Studio assembly
+# rebinds an indoor (slot 7) copy itself.
+CLOTHES={105:(0,'ClothesTop'),106:(1,'ClothesBot'),107:(2,'ClothesBra'),108:(3,'ClothesShorts'),110:(5,'ClothesPants'),112:(8,'ClothesShoesOuter')}
+CLOTHES_SHADERS={'Shader Forge/main_opaque':'OPAQUE','Shader Forge/main_alpha':'BLEND'}
+
+def convert(root,source,renderers,category,identifier,textures,written,reuse=False):
+ """Native parts, card bindings and limits for one renderer list (dressed or alternate)."""
+ parts=[];bindings=[];limits=[]
+ for renderer in renderers:
+  part=renderer['meshName']+'/0';material=renderer['material'];shader=material['shader'];colors=material['colors'];slot=renderer['materialSlot']
+  native=dict(part=part,kind='unlit',color=linear(colors.get('_Color',[1,1,1,1])),alphaMode='OPAQUE',outline=False,pass_=slot)
+  native['pass']=native.pop('pass_')
+  recipe=dict(parts=[part],pass_=slot,requirements={},resolverProperties=[]);recipe['pass']=recipe.pop('pass_')
+  def texture(meta):
+   path=root/meta['file'];result=raw_texture(path,meta['sha256'],root);return result
+  def pixels(meta):return np.asarray(Image.open(root/meta['file']).convert('RGBA'),dtype=np.float32)/255
+  bake=None
+  if category in [101,102] and shader in ['Shader Forge/main_hair','Shader Forge/main_hair_front']:
+   verify_hair(root,renderer['shaderTree']);hair_slot=category-101
+   mask=renderer['textures'].get('_ColorMask')
+   if not mask:raise ValueError('Hair color mask unavailable')
+   if mask['scale']!=[1.0,1.0] or mask['offset']!=[0.0,0.0]:raise ValueError('Unrecovered hair UV transform')
+   if any(renderer['textures'].get(k) for k in ['_MainTex','_AlphaMask']):raise ValueError('Non-white hair texture requires conversion')
+   tint=np.asarray([colors.get(k,[1,1,1,1]) for k in ['_Color','_Color2','_Color3']],dtype=np.float32);bake=hair_base(pixels(mask),tint)
+   recipe.update(kind='hair',colors=[f'hair.parts.{hair_slot}.{k}' for k in ['baseColor','startColor','endColor']],mask=texture(mask),requirements={f'hair.parts.{hair_slot}.id':identifier},resolverProperties=['ChaFileHair.'+['HairBack','HairFront'][hair_slot]])
+   native.update(kind='hair',color=[1,1,1,1],outline=True)
+  elif category in CLOTHES and shader in CLOTHES_SHADERS and (shader=='Shader Forge/main_opaque' or category==110):
+   clothes_slot,scope=CLOTHES[category]
+   main=source['catalogTextures'].get('main');mask=source['catalogTextures'].get('mask')
+   if not main or not mask:raise ValueError('Clothing create inputs missing')
+   tint=np.asarray([colors.get(k,[1,1,1,1]) for k in ['_Color','_Color2','_Color3']],dtype=np.float32)
+   main_pixels=pixels(main);mask_pixels=pixels(mask)
+   if main_pixels.shape!=mask_pixels.shape:
+    h,w,_=main_pixels.shape;xx,yy=np.meshgrid((np.arange(w)+.5)/w,1-(np.arange(h)+.5)/h);mask_pixels=sample(mask_pixels,np.stack([xx,yy],axis=-1))
+   bake=encode_rgb(clothes_base(main_pixels,mask_pixels,linear_colors(tint)))
+   prefix=f'clothes.parts.{clothes_slot}.colorInfo.'
+   recipe.update(kind='clothes',colorSpace='sourceLinear',colors=[prefix+f'{i}.baseColor' for i in range(3)],main=texture(main),mask=texture(mask),requirements={f'clothes.parts.{clothes_slot}.id':identifier,f'clothes.parts.{clothes_slot}.emblemeId':0},resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope],patterns=[dict(selection=prefix+f'{i}.pattern',color=prefix+f'{i}.patternColor',tiling=prefix+f'{i}.tiling',resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope+'Pattern'+str(i)],textures=textures) for i in range(3)])
+   native.update(kind='cloth',color=[1,1,1,1],specularStrength=0,rimStrength=0)
+   if CLOTHES_SHADERS[shader]=='BLEND':
+    native['alphaMode']='BLEND'
+    limits.append(f'{part}: {shader} drawn as an alpha blend of the composed texture alpha; the main_alpha program is not recovered.')
+  else:
+   limits.append(f'{part}: {shader} retained as authored flat-color preview; original shader and accessory coloring not converted.')
+   if 'lens' in renderer['meshName']:
+    native['color'][3]=.25;native['alphaMode']='BLEND'
+  if bake is not None:
+   image=Image.fromarray(np.rint(np.clip(bake,0,1)*255).astype(np.uint8));key=image.tobytes()
+   # Dressed renderers keep their own files; an alternate renderer of the
+   # dressed material reuses the dressed bake (`reuse`).
+   filename=written.get(key) if reuse else None
+   if filename is None:
+    filename=f'material-inputs/{category}-{identifier}-{renderer["meshName"]}-{slot}.png';image.save(root/filename);written.setdefault(key,filename)
+   native['texture']=filename;bindings.append(recipe)
+  parts.append(native)
+ # Component evidence can have repeated records for material slots; reject actual collisions.
+ if len({(p['part'],p['pass']) for p in parts})!=len(parts):raise ValueError('Duplicate component material slot')
+ return parts,bindings,limits
+
+def fold(bindings,extra):
+ """Alternate recipes equal to a dressed one but for their parts share its composed texture."""
+ result=[dict(b,parts=list(b['parts'])) for b in bindings]
+ for recipe in extra:
+  same=[b for b in result if {k:v for k,v in b.items() if k!='parts'}=={k:v for k,v in recipe.items() if k!='parts'}]
+  if same:same[0]['parts']+=recipe['parts']
+  else:result.append(recipe)
+ return result
+
 def build(root):
  index_path=root/'library.json';index=json.loads(index_path.read_text());updates={}
  # Original pattern catalog was independently extracted by maker_material_contract.
@@ -37,56 +105,30 @@ def build(root):
   meta=dict(row['texture']);data=(ROOT/'.local/reverse/rigs/expanded-materials'/meta['file']).read_bytes()
   if sha(data)!=meta['sha256']:raise ValueError('Pattern evidence changed')
   name=Path(meta['file']).name;(inputs/name).write_bytes(data);meta['file']='material-inputs/'+name;textures[str(row['id'])]=meta
+ tail=['Recovered albedo and catalog IDs only; source lighting and arbitrary plugin shaders remain incomplete.']
  for entry in index['entries']:
   if 'materialEvidence' not in entry:continue
   evidence=(root/entry['materialEvidence']['file']).read_bytes()
   if sha(evidence)!=entry['materialEvidence']['sha256']:raise ValueError('Material evidence changed')
-  source=json.loads(evidence);category=entry['category'];identifier=entry['id'];parts=[];bindings=[];limits=[]
-  for renderer in source['renderers']:
-   part=renderer['meshName']+'/0';material=renderer['material'];shader=material['shader'];colors=material['colors'];slot=renderer['materialSlot']
-   native=dict(part=part,kind='unlit',color=linear(colors.get('_Color',[1,1,1,1])),alphaMode='OPAQUE',outline=False,pass_=slot)
-   native['pass']=native.pop('pass_')
-   recipe=dict(parts=[part],pass_=slot,requirements={},resolverProperties=[]);recipe['pass']=recipe.pop('pass_')
-   def texture(meta):
-    path=root/meta['file'];result=raw_texture(path,meta['sha256'],root);return result
-   def pixels(meta):return np.asarray(Image.open(root/meta['file']).convert('RGBA'),dtype=np.float32)/255
-   bake=None
-   if category in [101,102] and shader in ['Shader Forge/main_hair','Shader Forge/main_hair_front']:
-    verify_hair(root,renderer['shaderTree']);hair_slot=category-101
-    mask=renderer['textures'].get('_ColorMask')
-    if not mask:raise ValueError('Hair color mask unavailable')
-    if mask['scale']!=[1.0,1.0] or mask['offset']!=[0.0,0.0]:raise ValueError('Unrecovered hair UV transform')
-    if any(renderer['textures'].get(k) for k in ['_MainTex','_AlphaMask']):raise ValueError('Non-white hair texture requires conversion')
-    tint=np.asarray([colors.get(k,[1,1,1,1]) for k in ['_Color','_Color2','_Color3']],dtype=np.float32);bake=hair_base(pixels(mask),tint)
-    recipe.update(kind='hair',colors=[f'hair.parts.{hair_slot}.{k}' for k in ['baseColor','startColor','endColor']],mask=texture(mask),requirements={f'hair.parts.{hair_slot}.id':identifier},resolverProperties=['ChaFileHair.'+['HairBack','HairFront'][hair_slot]])
-    native.update(kind='hair',color=[1,1,1,1],outline=True)
-   elif category in [105,106,112] and shader=='Shader Forge/main_opaque':
-    clothes_slot={105:0,106:1,112:8}[category];scope={105:'ClothesTop',106:'ClothesBot',112:'ClothesShoesOuter'}[category]
-    main=source['catalogTextures'].get('main');mask=source['catalogTextures'].get('mask')
-    if not main or not mask:raise ValueError('Clothing create inputs missing')
-    tint=np.asarray([colors.get(k,[1,1,1,1]) for k in ['_Color','_Color2','_Color3']],dtype=np.float32)
-    main_pixels=pixels(main);mask_pixels=pixels(mask)
-    if main_pixels.shape!=mask_pixels.shape:
-     h,w,_=main_pixels.shape;xx,yy=np.meshgrid((np.arange(w)+.5)/w,1-(np.arange(h)+.5)/h);mask_pixels=sample(mask_pixels,np.stack([xx,yy],axis=-1))
-    bake=encode_rgb(clothes_base(main_pixels,mask_pixels,linear_colors(tint)))
-    prefix=f'clothes.parts.{clothes_slot}.colorInfo.'
-    recipe.update(kind='clothes',colorSpace='sourceLinear',colors=[prefix+f'{i}.baseColor' for i in range(3)],main=texture(main),mask=texture(mask),requirements={f'clothes.parts.{clothes_slot}.id':identifier,f'clothes.parts.{clothes_slot}.emblemeId':0},resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope],patterns=[dict(selection=prefix+f'{i}.pattern',color=prefix+f'{i}.patternColor',tiling=prefix+f'{i}.tiling',resolverProperties=['outfit{coordinate}.ChaFileClothes.'+scope+'Pattern'+str(i)],textures=textures) for i in range(3)])
-    native.update(kind='cloth',color=[1,1,1,1],specularStrength=0,rimStrength=0)
-   else:
-    limits.append(f'{part}: {shader} retained as authored flat-color preview; original shader and accessory coloring not converted.')
-    if 'lens' in renderer['meshName']:
-     native['color'][3]=.25;native['alphaMode']='BLEND'
-   if bake is not None:
-    filename=f'material-inputs/{category}-{identifier}-{renderer["meshName"]}-{slot}.png';Image.fromarray(np.rint(np.clip(bake,0,1)*255).astype(np.uint8)).save(root/filename);native['texture']=filename;bindings.append(recipe)
-   parts.append(native)
-  # Component evidence can have repeated records for material slots; reject actual collisions.
-  if len({(p['part'],p['pass']) for p in parts})!=len(parts):raise ValueError('Duplicate component material slot')
+  source=json.loads(evidence);category=entry['category'];identifier=entry['id'];written={}
+  parts,bindings,limits=convert(root,source,source['renderers'],category,identifier,textures,written)
   appearance=root/f'appearance-{category}-{identifier}.json';card=root/f'bindings-{category}-{identifier}.json'
   dump(appearance,dict(schemaVersion=1,parts=parts))
-  dump(card,dict(schemaVersion=1,entries=bindings,limitations=limits+['Recovered albedo and catalog IDs only; source lighting and arbitrary plugin shaders remain incomplete.']))
+  dump(card,dict(schemaVersion=1,entries=bindings,limitations=limits+tail))
   fields=dict(appearance=dict(file=appearance.name,sha256=sha(appearance.read_bytes())),cardBindings=dict(file=card.name,sha256=sha(card.read_bytes())))
   if 'bodyMask' in source['catalogTextures']:
    body=source['catalogTextures']['bodyMask'];fields['bodyMask']={k:body[k] for k in ['file','sha256']}
+  if 'alternateMaterialEvidence' in entry:
+   # Studio wear: the dressed parts and recipes unchanged, then the half-state ones.
+   sidecar=(root/entry['alternateMaterialEvidence']['file']).read_bytes()
+   if sha(sidecar)!=entry['alternateMaterialEvidence']['sha256']:raise ValueError('Alternate material evidence changed')
+   alternate=json.loads(sidecar)
+   if [a['meshName'] for a in alternate['alternates']]!=[a['meshName'] for a in entry['alternates']]:raise ValueError('Alternate evidence differs from its entry')
+   extra_parts,extra_bindings,extra_limits=convert(root,source,alternate['renderers'],category,identifier,textures,written,reuse=True)
+   wear=root/f'appearance-{category}-{identifier}-wear.json';wear_card=root/f'bindings-{category}-{identifier}-wear.json'
+   dump(wear,dict(schemaVersion=1,parts=parts+extra_parts))
+   dump(wear_card,dict(schemaVersion=1,entries=fold(bindings,extra_bindings),limitations=limits+extra_limits+tail))
+   fields.update(wearAppearance=dict(file=wear.name,sha256=sha(wear.read_bytes())),wearCardBindings=dict(file=wear_card.name,sha256=sha(wear_card.read_bytes())))
   updates[(category,identifier)]=fields
  # Re-read to retain concurrently completed rig hashes and assembly records.
  current=json.loads(index_path.read_text())

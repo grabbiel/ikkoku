@@ -388,13 +388,18 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
     let samplerEvidence = samplerBundles.allSatisfy(bundles.contains)
     #expect(samplerEvidence || !samplerBundles.contains(where: bundles.contains))
     let samplers = comparison.findings.filter { $0.category == .sampler }
+    // A library with the top's half-state renderer (ST-C03) binds a hidden
+    // o_top_tsyats_b, which matches the capture (it draws no such renderer):
+    // one more compared row, exact.
+    let half = library.entries.contains { $0.category == 105 && $0.id == 38 && $0.alternates?.isEmpty == false } ? 1 : 0
+    #expect(comparison.findings.filter { $0.mesh == "o_top_tsyats_b" }.map(\.status) == (half == 1 ? [.exact] : []))
     // The `cf_O_eyeline` slot beyond its single submesh is drawn and compared
     // (it was the one `extra` while the probe drew materials.prefix(submeshes)).
     if samplerEvidence {
-        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (576, 29, 8, 0, 613))
+        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (576 + half, 29, 8, 0, 613 + half))
         #expect(samplers.count == 66 && samplers.allSatisfy { $0.status == .exact })
     } else {
-        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (568, 29, 16, 0, 613))
+        #expect((overall.exact, overall.withinTolerance, overall.missingNatively, overall.extra, overall.total) == (568 + half, 29, 16, 0, 613 + half))
         #expect(samplers.filter { $0.status == .missingNatively }.count == 8)
     }
     // Every remaining gap is one of the named, unresolvable causes.
@@ -414,7 +419,7 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
         let looked = try SourceShaderBindingComparison.compare(bindings: SourceShaderBindingDerivation.derive(card: card, library: library,
             headContract: head, catalog: catalog, supplement: supplement, eyeLook: look), frame: frameData, catalog: catalog).overall
         #expect((looked.exact, looked.withinTolerance, looked.differs, looked.missingNatively, looked.extra, looked.total)
-                == (samplerEvidence ? (576, 35, 0, 2, 0, 613) : (568, 35, 0, 10, 0, 613)))
+                == (samplerEvidence ? (576 + half, 35, 0, 2, 0, 613 + half) : (568 + half, 35, 0, 10, 0, 613 + half)))
     }
 
     // Mutation control on the capture side: one hair colour lane changed.
@@ -432,5 +437,42 @@ func sourceShaderBindingsMatchTheControlledOriginalFrame() throws {
     // Without the supplement the same derivation reports, not guesses, the gaps.
     let bare = try SourceShaderBindingComparison.compare(bindings: SourceShaderBindingDerivation.derive(card: card, library: library,
         headContract: head, catalog: catalog), frame: frameData, catalog: catalog)
-    #expect((bare.overall.exact, bare.overall.withinTolerance, bare.overall.differs, bare.overall.missingNatively, bare.overall.extra) == (457, 27, 2, 114, 0))
+    #expect((bare.overall.exact, bare.overall.withinTolerance, bare.overall.differs, bare.overall.missingNatively, bare.overall.extra) == (457 + half, 27, 2, 114, 0))
+}
+
+/// ST-C03: a library converted with half-state alternates binds the renderers
+/// under n_top_b, n_bot_b and n_panst_b with the library's UpdateVisible
+/// clauses, so a saved half state draws the alternate meshes live and the
+/// dressed ones are switched off; dressed bytes bind as before.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_LIBRARY", "IKKOKU_MAKER_SELECTION_FIXTURES", "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_HEAD_MATERIAL_CONTRACT"]),
+               "Requires IKKOKU_MAKER_LIBRARY, IKKOKU_MAKER_SELECTION_FIXTURES, IKKOKU_SHADER_BINDING_PROBE and IKKOKU_HEAD_MATERIAL_CONTRACT"))
+func sourceShaderBindingsFollowTheSavedHalfStateOverAlternateRenderers() throws {
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")))
+    let head = try Data(contentsOf: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT")))
+    let probe = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"))
+    let catalog = try SourceShaderProgramCatalog.load(directory: probe.appendingPathComponent("shaders"))
+    let fixtures = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_SELECTION_FIXTURES"))
+    var card = try SourceCharacterCard.load(url: fixtures.deletingLastPathComponent().appendingPathComponent("female-head0-bone0.png"))
+    for (slot, id) in [(0, 38), (1, 1), (5, 1), (8, 3)] {
+        card = try SourceCharacterCard.decode(card.selectingVanillaAsset(id, at: .clothes(coordinate: 0, slot: slot)))
+    }
+    try #require(library.entries.contains { $0.category == 105 && $0.id == 38 && $0.alternates?.isEmpty == false },
+                 "IKKOKU_MAKER_LIBRARY must be a library converted with half-state alternates")
+    func visible(_ state: [UInt8], shoesType: Int) throws -> [String: Bool] {
+        let edited = try SourceCharacterCard.decode(card.editedData(.init(clothesState: state, shoesType: shoesType)))
+        let bindings = try SourceShaderBindingDerivation.derive(card: edited, library: library, headContract: head, catalog: catalog)
+        return Dictionary(bindings.renderers.filter { $0.component.hasPrefix("clothes.") }.map { ($0.mesh, $0.visible) }, uniquingKeysWith: { $0 || $1 })
+    }
+    let dressed = try visible([0, 0, 0, 0, 0, 0, 0, 0, 0], shoesType: 1)
+    #expect(dressed["o_top_tsyats_a"] == true && dressed["o_top_tsyats_b"] == false)
+    #expect(dressed["o_bot_pants01_a"] == true && dressed["o_bot_pants01_b"] == false)
+    #expect(dressed["o_panst_00_a"] == true && dressed["o_panst_00_b"] == false)
+    #expect(dressed["o_shoes_run01"] == true)
+    let half = try visible([1, 1, 0, 0, 0, 1, 0, 0, 0], shoesType: 0)
+    #expect(half["o_top_tsyats_a"] == false && half["o_top_tsyats_b"] == true)
+    #expect(half["o_bot_pants01_a"] == false && half["o_bot_pants01_b"] == true)
+    #expect(half["o_panst_00_a"] == false && half["o_panst_00_b"] == true)
+    #expect(half["o_shoes_run01"] == false)
+    let off = try visible([3, 3, 0, 0, 0, 3, 0, 0, 0], shoesType: 1)
+    #expect(["o_top_tsyats_a", "o_top_tsyats_b", "o_bot_pants01_a", "o_bot_pants01_b", "o_panst_00_a", "o_panst_00_b"].allSatisfy { off[$0] == false })
 }

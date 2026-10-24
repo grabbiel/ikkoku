@@ -343,6 +343,38 @@ private func differingOffsets(_ a: Data, _ b: Data) -> [Int] {
     #expect(try combined.savedCoordinateType() == 0 && combined.savedStatusWear().clothesState == clothes)
 }
 
+@Test func sourceCardEditingShoesTypePatchesOrAppendsOnlyItsToken() throws {
+    // OCIChar.SetShoesType writes ChaFileStatus.shoesType (a byte; MemberInit 0).
+    let bytes = try outfitCard(), original = try SourceCharacterCard.decode(bytes)
+    let status = try #require(original.block(named: "Status")).data
+    #expect(try original.savedStatusWear().shoesType == 0)
+    // The card does not save the field: its default needs no bytes.
+    #expect(try original.editedData(.init(shoesType: 0)) == bytes)
+    let outdoor = try SourceCharacterCard.decode(original.editedData(.init(shoesType: 1)))
+    let grown = try #require(outdoor.block(named: "Status")).data
+    #expect(grown.dropFirst(grown.count - 11) == Data([0xa9]) + Data("shoesType".utf8) + Data([0x01]))
+    #expect(try outdoor.savedStatusWear() == .init(clothesState: original.savedStatusWear().clothesState, shoesType: 1,
+                                                    showAccessory: original.savedStatusWear().showAccessory))
+    let decodedBefore = try SourceMessagePack.decode(status).stringKeyedMap(), decodedAfter = try SourceMessagePack.decode(grown).stringKeyedMap()
+    #expect(decodedAfter.filter { $0.key != "shoesType" } == decodedBefore)
+    for block in original.blocks where block.name != "Status" {
+        #expect(outdoor.block(named: block.name)?.data == block.data, Comment(rawValue: block.name))
+    }
+    // A saved token is replaced in place by its compact form, and only it.
+    let saved = compactStatus([("version", compactVersion), ("coordinateType", Data([0x01])), ("shoesType", Data([0x01])), ("k", Data([0x00]))])
+    let savedBytes = try outfitCard(status: saved), savedCard = try SourceCharacterCard.decode(savedBytes)
+    #expect(try savedCard.editedData(.init(shoesType: 1)) == savedBytes)
+    let indoor = try SourceCharacterCard.decode(savedCard.editedData(.init(shoesType: 0)))
+    let patched = try #require(indoor.block(named: "Status")).data
+    let indoorType = try indoor.savedStatusWear().shoesType
+    #expect(patched.count == saved.count && differingOffsets(saved, patched).count == 1 && indoorType == 0)
+    // Combined with the clothes state, both land; only 0 and 1 are shoe types.
+    let both = try SourceCharacterCard.decode(original.editedData(.init(clothesState: [1, 1, 0, 0, 0, 1, 0, 0, 0], shoesType: 1)))
+    #expect(try both.savedStatusWear().clothesState == [1, 1, 0, 0, 0, 1, 0, 0, 0] && both.savedStatusWear().shoesType == 1)
+    #expect(throws: (any Error).self) { try original.editedData(.init(shoesType: 2)) }
+    #expect(throws: (any Error).self) { try original.editedData(.init(shoesType: -1)) }
+}
+
 @Test func sourceCardEditingWearRejectsInvalidValuesAndUnreadableFields() throws {
     let original = try SourceCharacterCard.decode(outfitCard())
     for clothes: [UInt8] in [[0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [4, 0, 0, 0, 0, 0, 0, 0, 0]] {

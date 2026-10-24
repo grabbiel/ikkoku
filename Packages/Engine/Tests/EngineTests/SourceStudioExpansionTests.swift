@@ -149,7 +149,11 @@ func sourceStudioExpandedCardsUseMakerSelectionsAndAttachmentCatalogWhenSupplied
             sceneSHA256: fixture.sha256, rigFile: fixture.sex == 0 ? male : female, boneCatalogFile: catalog, objectKey: 10,
             makerLibraryFile: library, attachmentCatalogFile: URL(fileURLWithPath: catalog).deletingLastPathComponent().appendingPathComponent("attachments.json").path)
         let preview = try SourceStudioCharacterPreview(reference: reference, resources: resources)
-        #expect(preview.selections.count == 13)
+        // Studio now resolves both saved shoe slots: four hair, nine clothes
+        // (including indoor shoes), and the fixture's one accessory.
+        #expect(preview.selections.count == 14)
+        #expect(preview.selections.filter { $0.category == 112 }.map(\.property) ==
+                ["outfit0.ChaFileClothes.ClothesShoesInner", "outfit0.ChaFileClothes.ClothesShoesOuter"])
         #expect(preview.selections.allSatisfy { $0.status == "converted" || $0.status == "empty" })
         #expect(preview.preview.bodyCoverage?.completeSlots.count == 44)
         let rig = preview.preview.source.rig, point = try preview.attachmentMatrix(pointID: 7)

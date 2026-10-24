@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**898 files indexed; 898 assigned; 0 unassigned.**
+**907 files indexed; 907 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 99 |
-| [Character / Maker / mods](character-and-mods.md) | 122 |
+| [Character / Maker / mods](character-and-mods.md) | 124 |
 | [Studio / IK / animation](studio.md) | 189 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 320 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 165 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 326 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 169 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 191 |
+| Conversion / recovery / verification tool | 197 |
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 206 |
-| Test / validation | 184 |
+| Runtime / shared shader declaration | 208 |
+| Test / validation | 188 |
 
 ## App / gameplay / plugins
 
@@ -709,6 +709,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/Renderer/RenderFrame.swift](../../Packages/Engine/Sources/Renderer/RenderFrame.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/RenderTargets.swift](../../Packages/Engine/Sources/Renderer/RenderTargets.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift](../../Packages/Engine/Sources/Renderer/Renderer+SourceShaderLive.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/RenderPresentationSample.swift](../../Packages/Engine/Sources/Renderer/RenderPresentationSample.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/Renderer.swift](../../Packages/Engine/Sources/Renderer/Renderer.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/ResourceStore.swift](../../Packages/Engine/Sources/Renderer/ResourceStore.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift](../../Packages/Engine/Sources/Renderer/SourceShaderBindingComparison.swift) | Runtime / shared shader declaration |
@@ -740,6 +741,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/MaterialImportTests.swift](../../Packages/Engine/Tests/EngineTests/MaterialImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift](../../Packages/Engine/Tests/EngineTests/OriginalFrameNormalTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/PickTests.swift](../../Packages/Engine/Tests/EngineTests/PickTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/InteractiveFrameTests.swift](../../Packages/Engine/Tests/EngineTests/InteractiveFrameTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift](../../Packages/Engine/Tests/EngineTests/RendererLimitsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/RigTests.swift](../../Packages/Engine/Tests/EngineTests/RigTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift](../../Packages/Engine/Tests/EngineTests/SourceAvatarTests.swift) | Test / validation |
@@ -773,6 +775,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/compare_draw_overlays.py](../../Tools/reverse/compare_draw_overlays.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_original_frame.py](../../Tools/reverse/compare_original_frame.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/compare_original_pose.py](../../Tools/reverse/compare_original_pose.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/compare_wear_frame.py](../../Tools/reverse/compare_wear_frame.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/export_prefab.py](../../Tools/reverse/export_prefab.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/eye_shader_contract.py](../../Tools/reverse/eye_shader_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/fixtures/OriginalCharacterProbe.cs](../../Tools/reverse/fixtures/OriginalCharacterProbe.cs) | Reference host / controlled fixture |
@@ -782,6 +785,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/original_frame_normals.py](../../Tools/reverse/original_frame_normals.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_shader_probe.py](../../Tools/reverse/original_shader_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_texture_mips.py](../../Tools/reverse/original_texture_mips.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_wear_probe.py](../../Tools/reverse/original_wear_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/rig_inventory.py](../../Tools/reverse/rig_inventory.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/source_binding_supplement.py](../../Tools/reverse/source_binding_supplement.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/source_shader_translation.py](../../Tools/reverse/source_shader_translation.py) | Conversion / recovery / verification tool |
@@ -791,11 +795,13 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Tools/reverse/test_compare_draw_overlays.py](../../Tools/reverse/test_compare_draw_overlays.py) | Test / validation |
 | [Tools/reverse/test_compare_original_frame.py](../../Tools/reverse/test_compare_original_frame.py) | Test / validation |
 | [Tools/reverse/test_compare_original_pose.py](../../Tools/reverse/test_compare_original_pose.py) | Test / validation |
+| [Tools/reverse/test_compare_wear_frame.py](../../Tools/reverse/test_compare_wear_frame.py) | Test / validation |
 | [Tools/reverse/test_export_prefab.py](../../Tools/reverse/test_export_prefab.py) | Test / validation |
 | [Tools/reverse/test_eye_shader_contract.py](../../Tools/reverse/test_eye_shader_contract.py) | Test / validation |
 | [Tools/reverse/test_original_character_probe.py](../../Tools/reverse/test_original_character_probe.py) | Test / validation |
 | [Tools/reverse/test_original_frame_normals.py](../../Tools/reverse/test_original_frame_normals.py) | Test / validation |
 | [Tools/reverse/test_original_shader_probe.py](../../Tools/reverse/test_original_shader_probe.py) | Test / validation |
+| [Tools/reverse/test_original_wear_probe.py](../../Tools/reverse/test_original_wear_probe.py) | Test / validation |
 | [Tools/reverse/test_rig_inventory.py](../../Tools/reverse/test_rig_inventory.py) | Test / validation |
 | [Tools/reverse/test_rig_parity.py](../../Tools/reverse/test_rig_parity.py) | Test / validation |
 | [Tools/reverse/test_source_binding_supplement.py](../../Tools/reverse/test_source_binding_supplement.py) | Test / validation |
@@ -880,6 +886,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/face-shape.json](../../Tools/verification/scenarios/face-shape.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/fk-edit.json](../../Tools/verification/scenarios/fk-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/fk-mouse-drag.json](../../Tools/verification/scenarios/fk-mouse-drag.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/half-state.json](../../Tools/verification/scenarios/half-state.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/gameplay-controlled-event.json](../../Tools/verification/scenarios/gameplay-controlled-event.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns.json](../../Tools/verification/scenarios/hand-patterns.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/hand-patterns-kept.json](../../Tools/verification/scenarios/hand-patterns-kept.json) | Conversion / recovery / verification tool |
@@ -898,12 +905,14 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-save-expression.json](../../Tools/verification/scenarios/reload-save-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-expression.json](../../Tools/verification/scenarios/reload-load-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-clothes.json](../../Tools/verification/scenarios/reload-load-clothes.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-half-state.json](../../Tools/verification/scenarios/reload-load-half-state.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-ik.json](../../Tools/verification/scenarios/reload-load-ik.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-outfit.json](../../Tools/verification/scenarios/reload-load-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-props.json](../../Tools/verification/scenarios/reload-load-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-route.json](../../Tools/verification/scenarios/reload-load-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-camera.json](../../Tools/verification/scenarios/reload-save-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-clothes.json](../../Tools/verification/scenarios/reload-save-clothes.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-half-state.json](../../Tools/verification/scenarios/reload-save-half-state.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-ik.json](../../Tools/verification/scenarios/reload-save-ik.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-outfit.json](../../Tools/verification/scenarios/reload-save-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-props.json](../../Tools/verification/scenarios/reload-save-props.json) | Conversion / recovery / verification tool |

@@ -67,6 +67,11 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Edited accessory visibility (ChaFileStatus.showAccessory, 20 slots);
     /// nil keeps the card's saved flags. Older documents decode nil.
     public var sourceShowAccessory: [Bool]?
+    /// Edited shoes type (ChaFileStatus.shoesType, 0 indoor, 1 outdoor;
+    /// CharaStudio's State panel shoes buttons); nil keeps the card's saved
+    /// value. Export writes it into the embedded card's Status block when it
+    /// differs. Older documents decode nil.
+    public var sourceShoesType: Int?
     /// Edited face state (ST-C04, the CharaStudio State panel's expression,
     /// look, tears and cheek controls); nil keeps the values the scene load
     /// leaves. Export writes the changed Status fields into the embedded card

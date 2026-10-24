@@ -380,6 +380,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_SOURCE_EXPRESSION", [.rigCapture, .liveSourceShaderProbe]),
         ScopedOption("IKKOKU_LIVE_SOURCE_OUTPUT", [.liveSourceShaderProbe]),
         ScopedOption("IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER", [.liveSourceShaderProbe]),
+        // ST-C03: the card's own outfit as CharaStudio wears it.
+        ScopedOption("IKKOKU_LIVE_SOURCE_MAKER_WEAR", [.liveSourceShaderProbe]),
         ScopedOption("IKKOKU_STUDIO_HAND_POSE", [.liveSourceShaderProbe]),
         // The Studio app capture's live source-shader status (R1/CMT-04).
         ScopedOption("IKKOKU_LIVE_SOURCE_REPORT", [.appCapture]),
@@ -518,6 +520,7 @@ extension CaptureRequest {
         ValueRule("IKKOKU_ORIGINAL_FRAME_DEPTH24", .oneOf(["0", "1"])),
         ValueRule("IKKOKU_LIVE_SOURCE_SHADERS", .oneOf(["0", "1"])),
         ValueRule("IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER", .oneOf(["store", "capture"])),
+        ValueRule("IKKOKU_LIVE_SOURCE_MAKER_WEAR", .oneOf(["0", "1"])),
         ValueRule("IKKOKU_CAPTURE_SEX", .oneOf(["m", "f"])),
         ValueRule("IKKOKU_CAPTURE_UI_MODE", .oneOf(["maker", "studio"])),
         ValueRule("IKKOKU_CAPTURE_TICKS", .integer(0...Int.max)),

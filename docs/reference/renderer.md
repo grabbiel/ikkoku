@@ -676,8 +676,10 @@ handlers, the hover pick, SwiftUI layout.
   completion handler writes on a Metal thread.
 - The order is a frame slot (`GPUContext.waitForFrameSlot`, at most 3 in
   flight), then `renderLock`, then `frameLock` or `statusLock`. Nothing waits
-  for a slot or for the GPU while it holds `renderLock`. The draw commits and
-  presents after releasing it, as before.
+  for a slot or for the GPU while it holds `renderLock`. An unchanged-frame
+  preflight takes only `renderLock` and releases it before acquiring a slot.
+  Interactive draws commit and present under `renderLock` so two callbacks
+  expose reusable images in draw order; neither operation waits for the GPU.
 - `ResourceStore` and the frame ring's completion state keep their own locks,
   unchanged.
 
@@ -689,9 +691,9 @@ complete a retirement ([R6](#character-and-import-lifetime-r6-second-slice))
 that the older frame still needs. A frame submitted while a draw is preparing
 is drawn by the next callback.
 
-**Command buffers from two threads.** Draws commit after releasing the render
-lock, and so do picks and captures. Commit order across threads is therefore
-arbitrary. That is safe because every command buffer is self-contained:
+**Command buffers from two threads.** Interactive draws commit under the render
+lock; picks and captures commit after releasing it. Commit order across those
+entry points is therefore still arbitrary. That is safe because every command buffer is self-contained:
 
 - It runs the deform pass for every deformation key it draws before any pass
   reads that buffer.
@@ -713,6 +715,35 @@ The app reads these values after an offscreen call in two kinds of place:
 - `AppState`'s launch paths (autocapture, the rig capture and the live probe).
   These run before any viewport exists.
 - The status line, which only needs the latest frame.
+
+**Unchanged interactive frames (R7 G3, #150).** `submit` advances a revision
+separate from the frame's resource-retirement stamp. The last encoded interactive
+image is reusable only when the revision, resource-store generation, drawable
+pixel dimensions and viewport layer identity still match. The skipped callback
+allocates no command buffer, opens no frame ring and presents nothing: Core
+Animation retains the previously presented image. Display-link frequency remains
+unchanged. Every new submission redraws, even if its values equal the old one.
+
+Native shaders do not read `FrameUniforms.time`. A frame with any visible live
+source-shader material draws continuously, conservatively preserving `_Time`
+even when a particular program does not use it. New viewport threads explicitly
+invalidate the image, as does a callback gap above 250 ms (minimize/occlusion) or
+a backward timestamp. A failed encode is not cached; a failed GPU completion
+invalidates only its own image, without invalidating a newer completed draw.
+
+Resource mutations during encoding prevent reuse. Registered mesh/texture data
+is immutable after upload; replacements and hidden-mask changes go through
+`ResourceStore`, whose generation advances on handle/key changes and completed
+retirements. Deformation scratch buffers are excluded: every encoded command
+buffer rewrites them before reading them. Captures, benchmarks and picks keep
+their complete pass graphs; none caches or reuses shadow/deformation output.
+Their writes cannot change the previously presented drawable, and the next real
+interactive draw overwrites every intermediate again.
+
+`Renderer.draw` returns rendered/unchanged/failed plus statistics captured under
+the render lock. Its optional completion reports exactly that command buffer's
+GPU duration and success. The harness uses these instead of polling the previous
+GPU duration or counters that a concurrent pick might have replaced.
 
 **Thread lifetime.**
 
@@ -2257,6 +2288,13 @@ IKKOKU_LIVE_SOURCE_PROBE=<run>/frame-mips.json IKKOKU_LIVE_SOURCE_OUTPUT=<run> I
 capture frame `13bd11c2…66f039`, avatar `e90f6a24…e9ab5`, card
 `4b892fc4…ce53c65`, hand pose `0320580d…eec33`, look settings `13e7260f…be9ab`,
 texture store manifest `6b950538…c8ce2`, stream manifest `df8cfb0d…366f7`.
+
+`IKKOKU_LIVE_SOURCE_MAKER_WEAR=1` (ST-C03 third slice) draws the card through
+the Studio wear assembly instead: `prepare(wear: true)` with its half-state
+meshes and indoor shoes, the saved clothes state and `shoesType` evaluated by
+`SourceStudioWearLayout.saved` (hidden parts and body mask), and the Studio
+appearance. A capture of a half-state card then compares its half-state
+meshes; see [half-state meshes](studio/scene-editing.md#half-state-meshes-and-indoor-shoes-st-c03-third-slice).
 
 With capture texture pixels, all 20 source slots draw live. The double tooth is
 hidden (`ChaControl.VisibleDoubleTooth`). There are no fallbacks, unmatched

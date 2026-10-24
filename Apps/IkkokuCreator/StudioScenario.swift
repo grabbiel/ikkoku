@@ -20,7 +20,7 @@ struct StudioScenario: Decodable {
         /// `"select"`, `"setVisible"`, `"rename"`, `"toggleCamera"`, `"toggleRoute"`,
         /// `"undo"`, `"redo"`, `"newScene"`, `"saveDocument"`, `"loadDocument"`,
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
-        /// `"setClothesState"`, `"setAccessoryVisible"`, `"setExpression"`, `"resetExpression"`,
+        /// `"setClothesState"`, `"setAccessoryVisible"`, `"setShoesType"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
@@ -151,7 +151,8 @@ struct StudioScenario: Decodable {
         /// assembled, read from the rendered preview (not the document).
         let outfit: OutfitValue?
         /// setClothesState: the clothes state 0...3 (on, half, half 2, off)
-        /// for the CharaStudio row in `index` (0 top ... 7 shoes).
+        /// for the CharaStudio row in `index` (0 top ... 7 shoes);
+        /// setShoesType: the shoes type (0 indoor, 1 outdoor).
         let state: Int?
         /// assert only: the named character's live wear readback (rendered
         /// preview and document); only the fields present are compared.
@@ -235,9 +236,17 @@ struct StudioScenario: Decodable {
             let accessories: [Int]?
             /// exactly the slots whose rendered showAccessory flag is off.
             let accessoriesOff: [Int]?
-            /// whether the document holds a wear edit (sourceClothesState or
-            /// sourceShowAccessory non-nil); false proves a return to saved.
+            /// whether the document holds a wear edit (sourceClothesState,
+            /// sourceShowAccessory or sourceShoesType non-nil); false proves a
+            /// return to saved.
             let edited: Bool?
+            /// the rendered shoesType, and the card's saved one as imported.
+            let shoesType: Int?, savedShoesType: Int?
+            /// exactly the drawn clothing renderers, by source mesh name
+            /// without the assembly's "clothes-<kind>/" prefix (sorted).
+            let drawn: [String]?
+            /// the ChangeAlphaMask (_alpha_a, _alpha_b) the body renders with.
+            let bodyAlpha: [Float]?
             /// exact number of fallback lines (states drawn dressed instead).
             let fallbacks: Int?
             /// a substring one of the preview's wear diagnostics (current
@@ -1076,9 +1085,10 @@ struct StudioScenario: Decodable {
             }
             let evaluation = preview.wearEvaluation
             let off = preview.showAccessory.indices.filter { !preview.showAccessory[$0] }
-            let edited = object.sourceClothesState != nil || object.sourceShowAccessory != nil
+            let edited = object.sourceClothesState != nil || object.sourceShowAccessory != nil || object.sourceShoesType != nil
+            let drawn = preview.drawnClothingMeshes
             func list<T>(_ values: [T]) -> String { "[" + values.map { "\($0)" }.joined(separator: ",") + "]" }
-            details.append("clothes \(check.key): state \(list(preview.clothesState)), saved \(list(preview.savedWear.clothesState)), loaded \(list(preview.loadedClothesState)), shoesType \(preview.savedWear.shoesType); garments drawn \(list(evaluation.renderedClothing)) of \(list(preview.wearLayout.clothingKinds)); accessories drawn \(list(evaluation.renderedAccessories)), off \(list(off)); body alpha (\(evaluation.bodyAlpha.x), \(evaluation.bodyAlpha.y)); document edited \(edited); fallbacks \(evaluation.fallbacks)")
+            details.append("clothes \(check.key): state \(list(preview.clothesState)), saved \(list(preview.savedWear.clothesState)), loaded \(list(preview.loadedClothesState)), shoesType \(preview.shoesType) (saved \(preview.savedWear.shoesType)); garments drawn \(list(evaluation.renderedClothing)) of \(list(preview.wearLayout.clothingKinds)); clothing renderers drawn \(list(drawn)); accessories drawn \(list(evaluation.renderedAccessories)), off \(list(off)); body alpha (\(evaluation.bodyAlpha.x), \(evaluation.bodyAlpha.y)); document edited \(edited); fallbacks \(evaluation.fallbacks)")
             var problems: [String] = []
             if let expected = check.state, preview.clothesState.map(Int.init) != expected { problems.append("state is \(list(preview.clothesState)), expected \(list(expected))") }
             if let expected = check.saved, preview.savedWear.clothesState.map(Int.init) != expected { problems.append("saved state is \(list(preview.savedWear.clothesState)), expected \(list(expected))") }
@@ -1087,6 +1097,10 @@ struct StudioScenario: Decodable {
             if let expected = check.accessoriesOff, off != expected.sorted() { problems.append("hidden accessory slots are \(list(off)), expected \(list(expected.sorted()))") }
             if let expected = check.edited, edited != expected { problems.append("document wear edit is \(edited), expected \(expected)") }
             if let expected = check.fallbacks, evaluation.fallbacks.count != expected { problems.append("\(evaluation.fallbacks.count) fallbacks, expected \(expected)") }
+            if let expected = check.shoesType, preview.shoesType != expected { problems.append("shoesType is \(preview.shoesType), expected \(expected)") }
+            if let expected = check.savedShoesType, preview.savedWear.shoesType != expected { problems.append("saved shoesType is \(preview.savedWear.shoesType), expected \(expected)") }
+            if let expected = check.drawn, drawn != expected.sorted() { problems.append("drawn clothing renderers are \(list(drawn)), expected \(list(expected.sorted()))") }
+            if let expected = check.bodyAlpha, [evaluation.bodyAlpha.x, evaluation.bodyAlpha.y] != expected { problems.append("body alpha is (\(evaluation.bodyAlpha.x), \(evaluation.bodyAlpha.y)), expected \(list(expected))") }
             if let needle = check.diagnosticContains, !(preview.wearDiagnostics + preview.diagnostics).contains(where: { $0.contains(needle) }) {
                 problems.append("no wear or import diagnostic contains \"\(needle)\"")
             }
@@ -1321,31 +1335,37 @@ struct StudioScenario: Decodable {
                     record(step, matched && unchanged, matched && unchanged ? "refused as expected, document and preview unchanged: \(error)"
                         : "expected a refusal containing \"\(expected)\" that leaves the outfit unchanged; received \(error), unchanged=\(unchanged)")
                 }
-            case "setClothesState", "setAccessoryVisible":
+            case "setClothesState", "setAccessoryVisible", "setShoesType":
                 let op = step.op
                 guard let id = object(step) else { record(step, false, "\(op): no object with source key \(step.key ?? -1)"); continue }
-                guard let index = step.index else { record(step, false, "\(op): index (the clothes row 0...7 or accessory slot 0...19) is required"); continue }
+                let index = step.index ?? 0
+                guard op == "setShoesType" || step.index != nil else { record(step, false, "\(op): index (the clothes row 0...7 or accessory slot 0...19) is required"); continue }
                 guard op == "setAccessoryVisible" ? step.on != nil : step.state != nil else {
-                    record(step, false, op == "setAccessoryVisible" ? "setAccessoryVisible: on is required" : "setClothesState: state (0...3) is required"); continue
+                    record(step, false, op == "setAccessoryVisible" ? "setAccessoryVisible: on is required" : "\(op): state is required"); continue
                 }
-                // The Clothes tab's rows and accessory toggles call the same
-                // StudioModel methods, so the lane drives the app's path.
+                // The Clothes tab's rows, shoes-type buttons and accessory
+                // toggles call the same StudioModel methods, so the lane
+                // drives the app's path.
                 let before = (studio.doc.object(id)?.sourceClothesState, studio.doc.object(id)?.sourceShowAccessory,
-                              studio.sourceShapePreview(for: id).map { ($0.clothesState, $0.showAccessory, ObjectIdentifier($0)) })
+                              studio.sourceShapePreview(for: id).map { ($0.clothesState, $0.showAccessory, ObjectIdentifier($0), $0.shoesType) },
+                              studio.doc.object(id)?.sourceShoesType)
                 do {
                     if op == "setAccessoryVisible" { try studio.setSourceAccessoryVisible(id, slot: index, visible: step.on!) }
+                    else if op == "setShoesType" { try studio.setSourceShoesType(id, type: step.state!) }
                     else { try studio.setSourceClothesState(id, kind: index, state: step.state!) }
                     if let expected = step.errorContains {
                         record(step, false, "\(op): the edit was accepted, expected a refusal containing \"\(expected)\"")
                     } else {
                         let preview = studio.sourceShapePreview(for: id), object = studio.doc.object(id)
-                        record(step, true, "source key \(step.key!) \(op) \(index) -> \(step.state.map(String.init) ?? String(step.on!)); rendered state \(preview.map { $0.clothesState.map(String.init).joined(separator: ",") } ?? "none"), drawn garments \(preview.map { $0.wearEvaluation.renderedClothing.map(String.init).joined(separator: ",") } ?? "none"), drawn accessories \(preview.map { $0.wearEvaluation.renderedAccessories.map(String.init).joined(separator: ",") } ?? "none"), document edited \(object?.sourceClothesState != nil || object?.sourceShowAccessory != nil)")
+                        record(step, true, "source key \(step.key!) \(op) \(index) -> \(step.state.map(String.init) ?? String(step.on!)); rendered state \(preview.map { $0.clothesState.map(String.init).joined(separator: ",") } ?? "none"), shoesType \(preview.map { String($0.shoesType) } ?? "none"), drawn garments \(preview.map { $0.wearEvaluation.renderedClothing.map(String.init).joined(separator: ",") } ?? "none"), drawn accessories \(preview.map { $0.wearEvaluation.renderedAccessories.map(String.init).joined(separator: ",") } ?? "none"), document edited \(object?.sourceClothesState != nil || object?.sourceShowAccessory != nil || object?.sourceShoesType != nil)")
                     }
                 } catch {
                     guard let expected = step.errorContains else { record(step, false, "\(op): \(error)"); continue }
                     let after = studio.sourceShapePreview(for: id)
                     let unchanged = studio.doc.object(id)?.sourceClothesState == before.0 && studio.doc.object(id)?.sourceShowAccessory == before.1
+                        && studio.doc.object(id)?.sourceShoesType == before.3
                         && after.map(ObjectIdentifier.init) == before.2?.2 && after?.clothesState == before.2?.0 && after?.showAccessory == before.2?.1
+                        && after?.shoesType == before.2?.3
                     let matched = String(describing: error).contains(expected)
                     record(step, matched && unchanged, matched && unchanged ? "refused as expected, document and preview unchanged: \(error)"
                         : "expected a refusal containing \"\(expected)\" that leaves the wear unchanged; received \(error), unchanged=\(unchanged)")

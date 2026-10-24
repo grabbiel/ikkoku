@@ -46,6 +46,9 @@ public enum SourceSceneExportValidation {
             if let flags = object.sourceShowAccessory, flags.count != 20 {
                 throw RigError.invalid("Source accessory visibility must contain exactly 20 slot flags.")
             }
+            if let shoes = object.sourceShoesType, !(0...1).contains(shoes) {
+                throw RigError.invalid("Source shoes type must be 0 (indoor) or 1 (outdoor).")
+            }
             if importedKind == .character {
                 guard original.character != nil, !routeChild, let reference = object.sourceCharacter,
                       reference.objectKey == key, reference.sceneFile.utf8.elementsEqual(sceneFile.utf8),
@@ -54,7 +57,7 @@ public enum SourceSceneExportValidation {
                 }
                 fallbackName = "Source character \(key)"
             } else {
-                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceClothesState == nil, object.sourceShowAccessory == nil, object.sourceExpression == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
+                guard object.sourceCharacter == nil, object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil, object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceClothesState == nil, object.sourceShowAccessory == nil, object.sourceShoesType == nil, object.sourceExpression == nil, object.sourceKinematics == nil, object.sourceAnimation == nil, object.sourceVoice == nil else {
                     throw RigError.invalid("Retained source placeholders cannot contain character references or FK edits.")
                 }
                 // Routes like folders: their saved name is the baseline the

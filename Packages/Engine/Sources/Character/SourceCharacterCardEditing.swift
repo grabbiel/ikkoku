@@ -40,6 +40,11 @@ extension SourceCharacterCard {
         /// The twenty Status.showAccessory flags; nil keeps the saved flags.
         /// Only the changed bool tokens of the existing array change.
         public var showAccessory: [Bool]?
+        /// Status.shoesType (0 indoor, 1 outdoor); nil keeps the saved value.
+        /// The existing token is replaced by its compact form, or the field
+        /// is appended when the card does not save it and the value is not
+        /// the MemberInit default 0.
+        public var shoesType: Int?
         /// The CharaStudio State panel's face-state Status fields (ST-C04);
         /// each nil member keeps the saved token. See `StatusFaceEdit`.
         public var faceState: StatusFaceEdit
@@ -48,12 +53,12 @@ extension SourceCharacterCard {
         public var thumbnailData: Data?, faceThumbnailData: Data?
         public init(faceValues: [Float]? = nil, bodyValues: [Float]? = nil,
                     colors: [ColorEdit] = [], coordinateType: Int? = nil,
-                    clothesState: [UInt8]? = nil, showAccessory: [Bool]? = nil,
+                    clothesState: [UInt8]? = nil, showAccessory: [Bool]? = nil, shoesType: Int? = nil,
                     faceState: StatusFaceEdit = StatusFaceEdit(), thumbnailData: Data? = nil,
                     faceThumbnailData: Data? = nil) {
             self.faceValues = faceValues; self.bodyValues = bodyValues; self.colors = colors
             self.coordinateType = coordinateType
-            self.clothesState = clothesState; self.showAccessory = showAccessory
+            self.clothesState = clothesState; self.showAccessory = showAccessory; self.shoesType = shoesType
             self.faceState = faceState
             self.thumbnailData = thumbnailData; self.faceThumbnailData = faceThumbnailData
         }
@@ -325,9 +330,9 @@ extension SourceCharacterCard {
             let updated = try tokens.applying(patches)
             if updated != block.data { replacements["Coordinate"] = updated }
         }
-        if edits.coordinateType != nil || edits.clothesState != nil || edits.showAccessory != nil || !edits.faceState.isEmpty,
+        if edits.coordinateType != nil || edits.clothesState != nil || edits.showAccessory != nil || edits.shoesType != nil || !edits.faceState.isEmpty,
            let status = try editedStatus(coordinate: edits.coordinateType, clothesState: edits.clothesState, showAccessory: edits.showAccessory,
-                                         face: edits.faceState) {
+                                         shoesType: edits.shoesType, face: edits.faceState) {
             replacements["Status"] = status
         }
         let thumbnail = try Self.editedPNG(edits.thumbnailData, original: thumbnailData)
@@ -338,11 +343,11 @@ extension SourceCharacterCard {
         if let face = edits.faceValues, try verified.customization().faceValues != face { throw cardEditError("Face edit verification failed.") }
         if let body = edits.bodyValues, try verified.customization().bodyValues != body { throw cardEditError("Body edit verification failed.") }
         if let coordinate = edits.coordinateType, try verified.savedCoordinateType() != coordinate { throw cardEditError("Outfit edit verification failed.") }
-        if edits.clothesState != nil || edits.showAccessory != nil {
+        if edits.clothesState != nil || edits.showAccessory != nil || edits.shoesType != nil {
             let before = try savedStatusWear(), after = try verified.savedStatusWear()
-            guard after.clothesState == (edits.clothesState ?? before.clothesState), after.shoesType == before.shoesType,
+            guard after.clothesState == (edits.clothesState ?? before.clothesState), after.shoesType == (edits.shoesType ?? before.shoesType),
                   after.showAccessory == (edits.showAccessory ?? before.showAccessory) else {
-                throw cardEditError("Clothes state or accessory visibility edit verification failed.")
+                throw cardEditError("Clothes state, accessory visibility or shoes type edit verification failed.")
             }
         }
         if !edits.faceState.isEmpty {
@@ -363,7 +368,7 @@ extension SourceCharacterCard {
             // Every Status field other than the edited ones must decode
             // exactly as saved (the byte patches cannot reach them).
             var old = try SourceMessagePack.decode(original.data).stringKeyedMap(), new = try SourceMessagePack.decode(edited.data).stringKeyedMap()
-            for key in ["coordinateType", "backCoordinateType", "clothesState", "showAccessory"] + edits.faceState.editedKeys { old[key] = nil; new[key] = nil }
+            for key in ["coordinateType", "backCoordinateType", "clothesState", "showAccessory"] + (edits.shoesType != nil ? ["shoesType"] : []) + edits.faceState.editedKeys { old[key] = nil; new[key] = nil }
             guard old == new else { throw cardEditError("Unedited Status field preservation verification failed.") }
         }
         guard verified.trailingData == trailingData else { throw cardEditError("Trailer preservation verification failed.") }
@@ -468,7 +473,7 @@ extension SourceCharacterCard {
     /// byte, float32 0xca for the rates, c2/c3 for the bool); every other
     /// byte stays. A face field the card does not save is appended only when
     /// the edit moves it off its ChaFileStatus.MemberInit default.
-    private func editedStatus(coordinate: Int?, clothesState: [UInt8]?, showAccessory: [Bool]?,
+    private func editedStatus(coordinate: Int?, clothesState: [UInt8]?, showAccessory: [Bool]?, shoesType: Int? = nil,
                               face: StatusFaceEdit = StatusFaceEdit()) throws -> Data? {
         if let coordinate {
             guard (0..<7).contains(coordinate) else { throw cardEditError("Outfit index must be in 0...6.") }
@@ -479,13 +484,15 @@ extension SourceCharacterCard {
             }
         }
         if let showAccessory, showAccessory.count != 20 { throw cardEditError("Accessory visibility must contain exactly 20 slot flags.") }
+        if let shoesType, !(0...1).contains(shoesType) { throw cardEditError("Status.shoesType must be 0 (indoor) or 1 (outdoor).") }
         try Self.validate(face)
+        let scalars = Self.faceTokens(face) + (shoesType.map { [(key: "shoesType", value: StatusScalar.integer($0), memberInit: StatusScalar.integer(StatusWear.memberInit.shoesType))] } ?? [])
         let changeCoordinate = try coordinate.map { try savedCoordinateType() != $0 } ?? false
         if changeCoordinate, let coordinate, try coordinateCount() <= coordinate { throw cardEditError("The card has no saved outfit \(coordinate).") }
         guard let status = block(named: "Status"), status.version == "0.0.0" else {
             if !changeCoordinate, clothesState.map({ $0 == StatusWear.memberInit.clothesState }) ?? true,
                showAccessory.map({ $0 == StatusWear.memberInit.showAccessory }) ?? true,
-               Self.faceTokens(face).allSatisfy({ $0.value == $0.memberInit }) { return nil }
+               scalars.allSatisfy({ $0.value == $0.memberInit }) { return nil }
             throw cardEditError("Unsupported or missing Status block.")
         }
         let tokens = try CardTokenDocument(status.data)
@@ -546,7 +553,8 @@ extension SourceCharacterCard {
                 if old != flag { patches.append(.init(range: child.range, replacement: Data([flag ? 0xc3 : 0xc2]))) }
             }
         }
-        for token in Self.faceTokens(face) {
+        // The face-state scalars and shoesType share the scalar token path.
+        for token in scalars {
             guard fields[token.key] != nil else {
                 // Absent: the MemberInit default applies, so only a value off
                 // that default needs the field.
