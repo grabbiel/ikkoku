@@ -464,7 +464,7 @@ Concrete Studio integration is covered in [Studio](studio.md).
   passes with source object 10 supplied by its declared scene fixture; earlier
   missing-scene failures above remain historical. Visible library UI acceptance
   passed on the same Release build: open the actual library, choose three
-  current-generation revisions, bind source character 10, mount, pause/run,
+  current-generation revisions, bind source character 10, mount, pause,
   browse the latest generation without changing the mount, and unload. The new
   panel's Run/Unload controls are disabled in Maker and recover in Studio; this
   does not cover the legacy menubar Run command. Native save/reopen acceptance

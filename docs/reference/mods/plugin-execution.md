@@ -284,7 +284,7 @@ as evidence. The legacy startup capture also passes after declaring its required
 source scene instead of attempting to bind object 10 in an empty document.
 
 Visible UI acceptance on the same build opened the actual library, selected its
-three generation-2 revisions, bound Source character 10, mounted, paused/resumed,
+three generation-2 revisions, bound Source character 10, mounted, paused,
 and unloaded. Reading the latest generation reset the browsing choices while
 retaining the mounted selection. The new panel's Run/Unload controls were
 disabled in Maker and enabled again in Studio; the legacy menubar Run command
