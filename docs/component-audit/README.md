@@ -372,6 +372,24 @@ are retained. This establishes a native ownership gap, not a source-parity or
 performance result. The next task evaluates candidate staging or precise cleanup
 while preserving successful attachment callbacks; no production fix is claimed.
 
+**Diagnostic handoff — recovered shader prefix, [#204](https://github.com/grabbiel/ikkoku/pull/204):**
+A fresh full-shader control and a reduction retaining the original vertex path
+and exact fragment prefix through alpha discard both reproduce derivative/sample
+variation with store and captured texture providers. Later shading is therefore
+not required for this particular reduced draw; shader compilation perturbation
+remains a limit. Sixteen draws retain equal UVs, primitive/pass IDs, coverage and
+alpha, with finite outputs. Reduced color is deliberately the first texture
+sample and is not a full-color equivalence gate. Root verifies all 64 attachment
+hashes, reconstructing the zero-cleared full float buffers from retained ROIs;
+the report retains equal before/after hashes for 148 mip instances, 20 matching
+provider/property chains and ten matching constant-buffer pairs. The harness
+records MSL 4.0 (`262144`), separately from the standalone controls' MSL 4.1;
+the earlier separate options query did not prove runtime compiler equivalence.
+No production shader, tolerance or performance claim changes. The
+[renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact scope. Next, the owner isolates the independent MainTex sample
+on the same geometry, reporting any coverage changes from removing alpha discard.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
