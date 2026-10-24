@@ -767,3 +767,11 @@ termination self-test exposed a Darwin liveness-query error after both synthetic
 processes had exited; that attempt was preserved, and a corrected group-inventory
 test passed. No application rerun was needed. The one quiet collection exited
 normally with no timeout, signals or surviving group members.
+
+Final integration at `bc32a083` merges accepted main `8153f14`. Its fresh Release
+binary (`55b5bf0d…`) passes four further processes: 55 selection and seven fresh
+reload checks for each sex, with all four exports matching their accepted
+counterparts. Only three accepted plugin app files differ from the measured
+candidate across the 557-file source inventory; the attribution code and tests
+remain byte-identical. These are functional checks, with no repeated quiet run
+or relabeling of the original measurement producers.
