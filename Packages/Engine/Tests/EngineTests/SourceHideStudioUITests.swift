@@ -5,8 +5,10 @@ import Gameplay
 @Test func hideStudioUIHasSessionLocalStateAndRecovery() {
     var plugin = SourceHideStudioUIPlugin()
     #expect(plugin.visible)
-    #expect(!plugin.toggle())
-    #expect(plugin.toggle())
+    let hidden = plugin.toggle()
+    #expect(!hidden)
+    let shown = plugin.toggle()
+    #expect(shown)
     plugin.toggle(); plugin.reveal(); plugin.reveal()
     #expect(plugin.visible)
     plugin.toggle()
