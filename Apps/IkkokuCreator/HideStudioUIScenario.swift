@@ -52,7 +52,7 @@ struct HideStudioUIScenario: Decodable {
                     throw SourcePluginError.invalid("Loaded visibility cost cannot ignore reload or rejected-package checks.")
                 }
                 studio.stopBenchmarkTimer()
-                studio.sourceAutomaticBlink = false; studio.sourceAnimationTime = 0
+                studio.sourceAutomaticBlink = false; try studio.setSourceAnimationTime(0)
                 let outcome = studio.sourcePreviewCharacterOutcome()
                 guard outcome.built >= 2,
                       let target = studio.doc.objects.first(where: { $0.sourceObjectKey == 65 }) else {
