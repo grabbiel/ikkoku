@@ -425,6 +425,27 @@ No production shader, tolerance or performance claim changes. The
 retains the exact scope. Next, the owner isolates the independent MainTex sample
 on the same geometry, reporting any coverage changes from removing alpha discard.
 
+**Local acceptance — fresh-profile preview isolation, [#206](https://github.com/grabbiel/ikkoku/pull/206):**
+The #203 fix stages cold attachment previews and newly loaded appearance inputs
+until initialization and saved-state validation succeed. A lazy checkpoint
+restores a touched warm preview's exact state on rejection; supported initializer
+and first-step Start reads remain available. At runtime `b6740b0`, six focused
+Engine checks, 32 isolation checks and the existing 42 plugin checks pass without
+skips. Cold rejection now preserves the complete active-resource vector and
+leaves no cached preview. Repeated failure after mesh/appearance construction
+reaches the named invalid-animation-catalog error and also releases its resources.
+Warm shape/clock restoration, later continuation and successful preview reuse
+pass. Root verifies all seven retained report/log hashes and the accepted
+`b9e0a6f2…c0f4` executable; the earlier 13/14 failure and binary remain retained.
+These are functional checks, not timing or GUI measurements. Resource generation
+and handle counters do not rewind; the malformed-neck alias branch is reviewed
+but not independently exercised. The pruning control directly uses the production
+preparation context, without claiming an installation-time Destroy barrier.
+Library installation and legacy restore retain their prior attachment policy.
+The [execution reference](../reference/mods/plugin-execution.md) records the
+scope; CI/integration are separate from this accepted runtime. The next bounded
+task reproduces the existing legacy-profile reopen limitation before choosing a fix.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
