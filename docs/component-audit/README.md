@@ -174,8 +174,11 @@ and held Space, hidden panels leaving the accessibility tree, noninteractive
 hidden controls, preference preservation, and Studio/Maker mode recovery.
 The custom View menu still produces stale UI-tool element errors, so actual
 menu recovery and visible unload remain unverified; automated native recovery
-and unload checks pass. All four CI jobs pass at `a6dcd8c`. Representative
-synchronous event cost remains pending. No per-frame callback was
+and unload checks pass. All four CI jobs pass at `a6dcd8c`. Three isolated seven-character runs
+with 141 draw items pass six loaded-event checks with unchanged resources.
+Hide/show median synchronous event costs span 0.409–0.440 ms, with a 0.610 ms
+maximum; this excludes deferred layout, display and GPU completion. The initial
+wrong-fixture launch failed before the scenario and remains separately retained. No per-frame callback was
 added; the native panel mapping does not establish general Unity Canvas, input
 or Harmony compatibility. Private evidence is retained under
 `wave-three/plugins/hide-studio-ui/`; this task is not yet marked fully accepted.
@@ -188,9 +191,13 @@ keeps failed loads from publishing partial cache entries. The checkpoint passes
 26 focused Engine/Metal checks, female and male 55-check selection plus seven-check
 fresh reload scenarios, and six existing Maker scenarios without skips. An initial
 female/male export-path collision is retained in the evidence history; the female
-pair passes again with distinct retained outputs. Root picker GUI and quiet stage
-cost checks remain pending. Appearance reads/uploads still run on the owner;
-this is neither full original Maker preset behavior nor source appearance parity.
+pair passes again with distinct retained outputs. Root verifies the actual female
+0→200→201→0 picker sequence, success status and dressed viewport. Two isolated
+interleaved rounds pass eight further selection/reload checks. Measured owner
+commit cost remains 109–155 ms; no-op calls take 0.285–0.396 ms and warmed resource
+counts stay fixed. Appearance reads/uploads still run on the owner, so UI-owner
+latency remains a performance task. This is neither full original Maker preset
+behavior nor source appearance parity. Final-head CI remains pending.
 The [transaction contract](../reference/character/maker-assets.md#normal-head-selection-182)
 records the exact scope, resource counts and remaining limits.
 
