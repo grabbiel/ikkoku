@@ -481,6 +481,21 @@ limit. This neither identifies the responsible operation nor authorizes removing
 production alpha testing. The next diagnostic keeps mask/predicate work observable
 and removes only discard, requiring a fresh varying baseline before interpretation.
 
+**Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
+A supported hidden attachment initializer loads fresh and saves successfully,
+but native reopen rejects it under the existing installation-read policy.
+The local regression-only checkpoint `6f999ea` passes ten save checks and ten
+reopen checks in distinct processes. Rejection preserves the prior scene,
+session, fields/clocks, adapters, undo/redo history, frame, preview identities
+and complete active-resource vector. A valid-JSON changed-profile control still
+rejects by identity; an attachment-free control restores and advances its next
+step. Root runs both processes against the frozen `7654f79b…1d6e` Release binary
+and retains seven hashed report/log/build records. This is a documented-policy
+gap, not a #206 regression, source parity or GUI acceptance. The scenario remains
+on the local `codex/plugin-profile-native-restore` branch for the bounded fix;
+it is not merged restore support. Candidate previews must use the new scene's
+references and resource policy, including when old and new UUIDs coincide.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
