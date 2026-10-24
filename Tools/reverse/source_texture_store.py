@@ -145,6 +145,39 @@ def texture_settings(texture):
     return FILTERS.get(getattr(settings, 'm_FilterMode', -1)), WRAPS.get(wrap), getattr(settings, 'm_Aniso', None)
 
 
+def decode_bc1(data, width, height):
+    """Decode BC1 to float RGBA without an intermediate 8-bit image.
+
+    RGB565 endpoints expand by bit replication; selectors 2/3 interpolate
+    those endpoints before normalization. Pillow's integer palette truncates
+    these interpolants, which a later half-float export cannot recover.
+    https://learn.microsoft.com/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-block-compression
+    Only little-endian BC1 is handled here; other formats keep UnityPy's path.
+    """
+    columns, rows = max(1, (width + 3) // 4), max(1, (height + 3) // 4)
+    if width <= 0 or height <= 0 or len(data) != columns * rows * 8:
+        raise ValueError('invalid BC1 dimensions or level byte count')
+    blocks = np.frombuffer(data, dtype='<u2').reshape(rows, columns, 4)
+    endpoints = blocks[:, :, :2]
+    rgb565 = np.stack([(endpoints >> 11) & 31, (endpoints >> 5) & 63, endpoints & 31], axis=-1)
+    rgb888 = ((rgb565 << np.array([3, 2, 3])) | (rgb565 >> np.array([2, 4, 2]))).astype(np.float32)
+    colours = rgb888 / np.float32(255)
+    palette = np.ones((rows, columns, 4, 4), dtype=np.float32)
+    palette[:, :, :2, :3] = colours
+    palette[:, :, 2, :3] = (2 * colours[:, :, 0] + colours[:, :, 1]) / 3
+    palette[:, :, 3, :3] = (colours[:, :, 0] + 2 * colours[:, :, 1]) / 3
+    transparent = endpoints[:, :, 0] <= endpoints[:, :, 1]
+    palette[transparent, 2, :3] = (colours[transparent, 0] + colours[transparent, 1]) / 2
+    palette[transparent, 3] = 0
+    selectors = blocks[:, :, 2].astype(np.uint32) | (blocks[:, :, 3].astype(np.uint32) << 16)
+    pixels = np.empty((rows * 4, columns * 4, 4), dtype=np.float32)
+    for y in range(4):
+        for x in range(4):
+            selected = (selectors >> (2 * (y * 4 + x))) & 3
+            pixels[y::4, x::4] = np.take_along_axis(palette, selected[:, :, None, None], axis=2)[:, :, 0]
+    return pixels[:height, :width]
+
+
 def decode_levels(texture):
     """Yield (width, height, float32 RGBA bottom-up) per authored mip level."""
     from UnityPy.export.Texture2DConverter import parse_image_data
@@ -157,9 +190,17 @@ def decode_levels(texture):
         count = level_bytes(width, height, fmt)
         if offset + count > len(data):
             raise ValueError('truncated mip chain at level %d' % level)
-        image = parse_image_data(data[offset:offset + count], width, height, texture.m_TextureFormat,
-                                 texture.object_reader.version, texture.object_reader.platform, flip=False)
-        yield width, height, np.asarray(image.convert('RGBA'), dtype=np.float32) / 255
+        level_data = data[offset:offset + count]
+        # Xbox 360 stores swapped words; UnityPy retains responsibility for
+        # that platform. The source Windows bundles are little-endian.
+        from UnityPy.enums import BuildTarget
+        if fmt == 10 and texture.object_reader.platform != BuildTarget.XBOX360:
+            pixels = decode_bc1(level_data, width, height)
+        else:
+            image = parse_image_data(level_data, width, height, texture.m_TextureFormat,
+                                     texture.object_reader.version, texture.object_reader.platform, flip=False)
+            pixels = np.asarray(image.convert('RGBA'), dtype=np.float32) / 255
+        yield width, height, pixels
         offset += count
         width, height = max(1, width // 2), max(1, height // 2)
 

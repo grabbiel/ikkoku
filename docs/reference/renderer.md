@@ -3062,9 +3062,10 @@ is a native-scene byte control again.
 | `cf_O_face` (`main_skin`) | `CustomTextureControl` face, `cf_m_face_create` | head `MainTex`, skin and makeup inputs |
 | `o_top_tsyats_a`, `o_bot_pants03`, `o_shoes_run01` (`main_opaque`) | `ChangeCustomClothes`, `cf_m_clothesN_create` | each garment's `_t` texture and the card's `colorInfo` |
 
-None of them is a `CustomTextureCreate` target, so each needs its own recipe
-recovery (more inputs, layered passes) before the same store and compositor
-can take it.
+The body and face use `CustomTextureControl`. The garments do use
+`CustomTextureCreate`: `InitBaseCustomTextureClothes` creates the targets,
+then `ChangeCustomClothes` sets their inputs. Their recipes were not derived
+in this eye-white slice; the normal-top continuation below handles one target.
 
 **Tests.** `SourceShaderCompositeTests.swift` gains a hand-written
 `create_eyewhite` fragment (Blend One Zero) and checks it against the CPU
@@ -3078,6 +3079,111 @@ pins the store and the 15/5 split. `OriginalCharacterProbe.cs` accepts the new
 settings keys (`whiteId`, `whiteBaseColor`, `whiteSubColor`, `pupilBaseColor`,
 `pupilSubColor`, `gradBlend`, `gradOffsetY`, `gradScale`; see
 [material expansion](character/material-expansion.md)).
+
+### Native normal-top composite (R1/CMT-04, #159, 2026-10-24)
+
+The opt-in live path now derives the first normal top target from
+`InitBaseCustomTextureClothes(true, 0)` and `ChangeCustomClothes`. The verified
+selection is category 105, ID 38 (`p_o_top_tsyatu02`, `o_top_tsyats_a`), with
+all renderers in `rendNormal01`, high-detail inputs, and all three pattern IDs
+zero. Other garment slots, mixed normal/alpha roles, low-detail inputs and
+nonzero/missing pattern rows retain explicit fallbacks. This does not verify
+arbitrary clothes, patterns, skin composites or Studio scene globals.
+
+**Source contract.** The retained CharaStudio assembly is
+`902b9a237337b17a64514bdb0d857b460ece4fb6a57c658375dd32c5fa504c45`.
+Recovered `ChaControl.cs` is `d5a09fb197f697b67bdad886d0c762fc96c08012c9ec40952e6e2a091ad62101`
+and `CustomTextureCreate.cs` is `8f8cf47cfc2829515a43d1e134d89474f4e374547156103cc2c559b32577a897`.
+The source sizes the target from the main texture, sets the main and colour-mask
+textures using `MainTexAB`/`ColorMaskAB` with `0 → MainAB` fallback, applies each
+`colorInfo` base/pattern colour and tiling, then blits with the cloned create
+material. The converted `mt_pattern` category 430 row 0 proves that the three
+pattern textures are null; the shader's white defaults apply. Missing card
+fields or missing program proof are not replaced with guessed values.
+
+| Identity | Exact source evidence |
+| --- | --- |
+| Create material | `cf_m_clothesN_create`, path ID `3922150014319152921`, serialized file `CAB-0d1f3d8317188244dde38c81a889d1d4` |
+| Create shader | `Shader Forge/create_topN`, fragment DXBC SHA-256 `d709d6fc92ebecd4f8b579041c8a7abce3a13c20c18985812bde6bc42881f579` |
+| Create bundle | `chara/mm_base.unity3d`, SHA-256 `3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e` |
+| Main input | `cf_top_tsyatu02_t`, path ID `-6233972938813170750`, sRGB BC1 |
+| Mask input | `cf_top_tsyatu02_mc`, path ID `-1591564840063675426`, linear BC1 |
+| Input bundle | `chara/co_top_00.unity3d`, SHA-256 `2df694771a8c6437f5e966e94747f48ed905d611a7f2de036a5d64956996657a`, serialized file `CAB-ea71f5c3f889c85d158dd90d78f65595` |
+
+Both inputs are 1024² with 11 authored mips, Bilinear/Repeat/aniso 1. The
+composite is 1024², 11 generated mips, sRGB ARGB32-equivalent with source
+SrcAlpha/OneMinusSrcAlpha blending over transparent clear. Only level zero has
+an independent original composite readback; lower target mips are structural
+checks, not a GPU parity claim.
+
+**Independent colour check.** The retained base readback (`texture-37`, SHA-256
+`c9020d7ceeaf413ea4199482e52ce66b51e85bd34912493a5d21eea5adf1dd11`) is byte-exact.
+A new isolated original-player capture changes the three top base colours to
+`(0.72,0.13,0.04,1)`, `(0.09,0.66,0.31,1)` and `(0.16,0.23,0.84,1)`.
+Its independently generated composite has SHA-256
+`2ba4e150536fbe5e103430dc1ceb18f988dd169c275d8846ab394e96fb91445a`.
+Native level zero differs by at most 1 byte: 1,235 of 4,194,304 channels,
+mean absolute error 0.00029445 byte. Reverting the recipe returns the original
+cached target and identical pixels.
+
+The distinct-colour check exposed an offline decoder issue hidden by the equal
+base colours: UnityPy's Pillow path quantizes BC1 interpolants to integer bytes
+before half-float export. The original decoder produced 60 channels above one
+byte (57 at two, three at three). The converter now expands RGB565 endpoints
+and preserves fractional interpolation in float before half-float export, using
+[the BC1 interpolation contract](https://learn.microsoft.com/en-us/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-block-compression).
+[Pillow's integer palette](https://github.com/python-pillow/Pillow/blob/main/src/libImaging/BcnDecode.c)
+explains the precision loss. Other compressed formats and Xbox byte-swapped
+inputs keep their previous decoder paths; no card colour or shader coefficient
+was fitted to the capture.
+
+An additional original-player readback loads the same catalog main/mask after
+capture and records their source bundle hash, names, format, dimensions and mip
+count. The repeated edited composite is byte-identical. The main input matches
+exactly; the mask's filtered `Graphics.Blit` readback retains a maximum linear
+difference of 0.00683594 (previous decoder 0.0078125), only in green transition
+pixels, with mean 0.0000014333. This is not a raw-texel or all-mip equality
+claim; the final composite keeps the stricter one-byte output gate.
+
+**Live fixture and resources.** The rebuilt private store contains 52 assets,
+three create programs and zero unavailable entries. Its path-independent
+content fingerprint is `0539171774027e0902c25610b68c543d4889bc73d0bfb34647d8d18bf11fbe43`.
+The controlled native rig now resolves 16/20 live slots, with body, face, bottom
+and shoes still falling back. This uses native pose and vertex streams under
+the controlled capture camera, not the original's frozen vertices. On pixels
+frontmost in both the capture-provider and native subsets:
+
+| Family | Shared pixels | Mean byte error | p99 |
+| --- | ---: | ---: | ---: |
+| Normal top (`main_opaque`) | 26,349 | 0.02908 | 1 |
+| Eye whites/eyebrows/eyelines | 327 | 0.60347 | 0 |
+| Irises | 366 | 0.00455 | 0 |
+| Back hair | 3,524 | 0.98874 | 23 |
+| Front hair | 6,153 | 0.66737 | 22 |
+
+The prior hair and eye limits are unchanged. Hair retains its documented edge
+residual; whole-character production colour and arbitrary animated scenes are
+not claimed to match. Each output is composed only at assembly or recipe edit.
+The store now also caches Unity-default textures and normalized sampler states
+per weakly checked resource owner: unchanged top lookups allocate no new inputs,
+and 15 recolours retain two asset uploads, one white default and one sampler.
+Released edited targets are not retained by the weak composite cache. Synthetic
+checks cover distinct Clamp/Repeat samplers and owner destruction/recreation.
+
+The private fixture is generated by `head_material_contract.py`, native
+`shader-bindings`, then `source_texture_store.py` with both the head and garment
+create-shader caches. Original captures remain validation inputs, never runtime
+textures. `IKKOKU_GARMENT_COMPOSITE_PROBE` points to the distinct-colour capture;
+see [the verification fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
+
+**Validation state before final Release acceptance.** The fixture-backed Engine
+suite passed 788 tests with two named skips (the opt-in expression timing probe
+and the unavailable independent raw appearance-reference root), plus 21 CoreMath
+tests. Reverse tooling passed 443 tests with six optional skips; verification
+tooling passed 190 tests. The focused converter suite passed 19 tests. Debug and
+Release Engine builds and the Release app build succeeded. These are correctness/build results; quiet Release
+cold/warm/edit/frame measurements and opt-in-off production captures remain
+pending and are not inferred from Debug timings.
 
 ### Native pose gate
 

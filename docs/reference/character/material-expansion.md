@@ -138,6 +138,9 @@ rejected together with `--collect`. The accepted keys:
 | `pupilBaseColor` / `pupilSubColor` | `custom.face.pupil[0..1].baseColor` / `.subColor` | Iris RGBA pair (`ChangeSettingEye` `_Color` / `_Color2`), set on both eyes |
 | `gradBlend` / `gradOffsetY` / `gradScale` | `custom.face.pupil[0..1].gradBlend` / `.gradOffsetY` / `.gradScale` | Iris gradient blend, offset and scale (floats) behind the composite's `_Blend` and `_grad`, set on both eyes |
 
+| `topBaseColor1` / `topBaseColor2` / `topBaseColor3` | Each coordinate’s `clothes.parts[0].colorInfo[0..2].baseColor` | Distinct top RGBA inputs for the first normal garment composite |
+| `captureTopCompositeInputs` | Diagnostic only; no card field | Boolean enabling GPU readbacks of the selected top catalog main/mask textures, with source bundle hashes, names and texture metadata |
+
 **Combined-mode run.** On 2026-09-30 `--settings`, `--hand-patterns` and
 `--look-patterns` were supplied together to one capture
 (`.local/vm-merged-probe`, driver root `C:\Temp\IkkokuShaderProbe-d1e6773e…`), so the merged fixture compiled once on the VM and ran all three optional modes at once. They did not interfere: `status.json` reported `error: null`; the `irisCard` header in `look-trace.json` repeats the settings tsv verbatim (the same nine values as the settings+look-only capture `.local/stt07y/run1`); `compare_iris.py` replayed the same six phases over 450 frames with a worst iris texture-transform difference of 0.000000444 against the 1e-6 tolerance (the settings+look capture `.local/stt07y/run1` measured 0.000000492); and `compare_hand_patterns.py` passed with its frame.json bone maxima identical to the hands-only capture `.local/stt07f/r5-9` down to the last digit (7.64e-6° left `cf_j_thumb01_L`, 6.83e-6° right `cf_j_index01_R`), while the sampled-snapshot maximum moved to 1.07e-5° only because the look phases shift the recorded playhead phase (tolerance 0.01°).

@@ -34,6 +34,47 @@ class TextureStoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             store.level_bytes(4, 4, 63)
 
+    def test_bc1_keeps_fractional_interpolation_and_selector_order(self):
+        # Red endpoints differ by one expanded step: selector2 must retain
+        # (2*255+247)/3, rather than truncate it to252 before float export.
+        selectors = sum((i % 4) << (2 * i) for i in range(16))
+        pixels = store.decode_bc1(struct.pack('<HHI', 0xf800, 0xf000, selectors), 4, 4)
+        expected = np.array([255, 247, (2*255+247)/3, (255+2*247)/3]) / 255
+        np.testing.assert_allclose(pixels[:, :, 0], np.tile(expected, (4, 1)), rtol=1e-7)
+        self.assertTrue(np.all(pixels[:, :, 1:3] == 0))
+        self.assertTrue(np.all(pixels[:, :, 3] == 1))
+        self.assertNotEqual(float(pixels[0, 2, 0]), 252 / 255)
+
+    def test_bc1_transparency_equal_endpoints_and_cropped_mips(self):
+        selectors = sum((i % 4) << (2 * i) for i in range(16))
+        block = struct.pack('<HHI', 0, 0xffff, selectors)
+        pixels = store.decode_bc1(block, 3, 2)
+        self.assertEqual(pixels.shape, (2, 3, 4))
+        np.testing.assert_allclose(pixels[0], [[0,0,0,1], [1,1,1,1], [.5,.5,.5,1]])
+        transparent = store.decode_bc1(struct.pack('<HHI', 0xffff, 0xffff, 0xffffffff), 1, 1)
+        np.testing.assert_array_equal(transparent, np.zeros((1, 1, 4)))
+        # Two blocks with a cropped right edge retain their own selectors.
+        wide = store.decode_bc1(block + struct.pack('<HHI', 0x07e0, 0, 0), 5, 2)
+        np.testing.assert_array_equal(wide[:, 4], [[0,1,0,1], [0,1,0,1]])
+        for data, width, height in [(block[:-1],4,4), (block,0,4), (block,5,4)]:
+            with self.assertRaises(ValueError): store.decode_bc1(data,width,height)
+
+    def test_bc1_authored_mip_offsets_and_truncation(self):
+        data = b''.join(struct.pack('<HHI', colour, 0, 0) for colour in (0xf800, 0x07e0, 0x001f))
+        texture = NS(m_Width=4, m_Height=4, m_MipCount=3, m_TextureFormat=10,
+                     object_reader=NS(version=(5,6,2), platform=19), get_image_data=lambda: data)
+        def unexpected(*args, **kwargs): raise AssertionError('BC1 must not pass through an 8-bit image')
+        modules = {'UnityPy.enums': NS(BuildTarget=NS(XBOX360=11)),
+                   'UnityPy.export.Texture2DConverter': NS(parse_image_data=unexpected)}
+        with patch.dict('sys.modules', modules):
+            levels = list(store.decode_levels(texture))
+            self.assertEqual([(w,h) for w,h,_ in levels], [(4,4),(2,2),(1,1)])
+            for (_,_,pixels), rgb in zip(levels, ([1,0,0],[0,1,0],[0,0,1])):
+                np.testing.assert_array_equal(pixels[0,0], rgb+[1])
+            texture.get_image_data = lambda: data[:-1]
+            with self.assertRaisesRegex(ValueError, 'truncated mip chain at level 2'):
+                list(store.decode_levels(texture))
+
     def test_srgb_to_linear_matches_the_gpu_transfer_function(self):
         values = store.srgb_to_linear([0.0, 0.04045, 0.5, 1.0])
         self.assertEqual(values.dtype, np.float32)

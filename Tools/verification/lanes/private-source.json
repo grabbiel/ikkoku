@@ -319,6 +319,11 @@
           "env": "IKKOKU_COMPOSITE_COLOUR_PROBE",
           "kind": "directory",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_GARMENT_COMPOSITE_PROBE",
+          "kind": "directory",
+          "optional": true
         }
       ],
       "env": {},

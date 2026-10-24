@@ -546,6 +546,62 @@ public enum SourceShaderBindingDerivation {
             identity.composite = recipe
             return identity
         }
+        /// First normal top target: InitBaseCustomTextureClothes(main: true,
+        /// parts: 0), then ChangeCustomClothes's three colour setters. Other
+        /// garment roles and nonzero patterns retain an explicit unresolved
+        /// recipe until they have their own independent comparison.
+        func topComposite(evidence: LibraryMaterials, index: TextureIndex, main: LibraryMaterials.CatalogTexture) -> Set_.TextureIdentity {
+            var identity = composite(main.width, main.height,
+                creator: "ChaControl.ChangeCustomClothes: cf_m_clothesN_create (chara/mm_base.unity3d) over \(main.name) with card colorInfo")
+            var recipe = createRecipe(material: "cf_m_clothesN_create",
+                method: "ChaControl.InitBaseCustomTextureClothes(true, 0) → ChangeCustomClothes(true, 0, true, true, true, true, false)")
+            // The target size is from the loaded texture. Only the high-detail
+            // catalog inputs are currently recorded by the Maker contract.
+            guard hiPoly else {
+                recipe.unresolved = "normal top composite low-detail inputs are not verified"
+                identity.composite = recipe; return identity
+            }
+            func input(_ bundleKey: String, _ assetKey: String, role: String) -> Result<Set_.TextureIdentity?, Reason> {
+                guard var bundle = evidence.catalog[bundleKey], let name = evidence.catalog[assetKey], name != "0" else {
+                    return .failure(Reason("normal top catalog lacks \(bundleKey)/\(assetKey)"))
+                }
+                if bundle == "0" { bundle = evidence.catalog["MainAB"] ?? "0" }
+                guard bundle != "0", let known = evidence.catalogTextures[role], known.name == name else {
+                    return .failure(Reason("normal top \(role) texture is not converted"))
+                }
+                var value = index.catalogIdentity(bundle: bundle, name: name, head: head.textures, bundleSHA: bundleSHA)
+                if bundle == evidence.source.bundle { value.bundleSHA256 = evidence.source.bundleSHA256 }
+                value.width = known.width; value.height = known.height
+                return .success(value)
+            }
+            setCreateTexture(&recipe, "_MainTex", main: true, input("MainTexAB", "MainTex", role: "main"),
+                source: "top catalog MainTexAB (0 → MainAB)/MainTex via InitBaseCustomTextureClothes → SetMainTexture")
+            setCreateTexture(&recipe, "_ColorMask", main: false, input("ColorMaskAB", "ColorMaskTex", role: "mask"),
+                source: "top catalog ColorMaskAB (0 → MainAB)/ColorMaskTex via InitBaseCustomTextureClothes → SetTexture")
+            for color in 0..<3 {
+                let path = "clothes.parts.0.colorInfo.\(color)", number = color + 1
+                guard card.number(path + ".pattern") == 0,
+                      let row = catalogRow(430, 0), row["MainTexAB"] == "0", row["MainTex"] == "0" else {
+                    recipe.unresolved = "normal top composite requires the verified mt_pattern ID0 no-texture row for all three colours"
+                    identity.composite = recipe; return identity
+                }
+                setCreateTexture(&recipe, "_PatternMask\(number)", main: false, .success(nil),
+                    source: "mt_pattern[0] MainTexAB/MainTex = 0/0 via ChangeCustomClothes → SetTexture(null)")
+                for (name, field) in [(color == 0 ? "_Color" : "_Color\(number)", "baseColor"), ("_Color\(number)_2", "patternColor")] {
+                    recipe.vectors[name] = card.color(path + "." + field).map {
+                        .init($0, source: "card \(path).\(field) via ChangeCustomClothes → SetColor(\(name))")
+                    } ?? .init(unresolved: card.missing(path + "." + field))
+                }
+                for (axis, lane) in [("u", 0), ("v", 1)] {
+                    let name = "_PatternScale\(number)\(axis)", field = path + ".tiling.\(lane)"
+                    recipe.vectors[name] = card.number(field).map {
+                        .init([$0], source: "card \(field) via ChangeCustomClothes → SetFloat(\(name))")
+                    } ?? .init(unresolved: card.missing(field))
+                }
+            }
+            identity.composite = recipe
+            return identity
+        }
         // MARK: Hair (ChaControl.ChangeHairAsync → ChangeSettingHair*)
         if let parts = card.appearance.value("hair.parts")?.arrayValue {
             // ChaControl.LoadHairGlossMask: mt_hairgloss[hair.glossId] MainTexAB/MainTex (no _low suffix).
@@ -640,7 +696,9 @@ public enum SourceShaderBindingDerivation {
                 builder.keywords(fromTree: renderer.materialTree)
                 if allNormal, let main = evidence.catalogTextures["main"], evidence.catalog["MainTex"] == main.name {
                     // InitBaseCustomTextureClothes sizes the composite from the main texture.
-                    builder.setTexture("_MainTex", composite(main.width, main.height, creator: "ChaControl.ChangeCustomClothes: cf_m_clothesN_create (chara/mm_base.unity3d) over \(main.name) with card colorInfo"),
+                    let texture = slot == 0 ? topComposite(evidence: evidence, index: index, main: main)
+                        : composite(main.width, main.height, creator: "ChaControl.ChangeCustomClothes: cf_m_clothesN_create (chara/mm_base.unity3d) over \(main.name) with card colorInfo")
+                    builder.setTexture("_MainTex", texture,
                                        source: "ChaControl.ChangeCustomClothes → rendNormal01 _MainTex")
                 } else {
                     builder.unresolveTexture("_MainTex", allNormal ? "clothes main texture is not converted" : "rendNormal01 membership is not resolvable from evidence")

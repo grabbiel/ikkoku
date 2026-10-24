@@ -2,7 +2,9 @@
 """Resolve head-00 default material inputs into ignored local evidence and PNGs.
 
 Only named nonsexual face texture inputs are decoded. Derived base-color previews
-use verified create_* equations with a documented color-space assumption.
+use verified create_* equations with a documented color-space assumption. The
+contract also records the normal-clothes create material and no-pattern row;
+garment pixels are exported separately by source_texture_store.py.
 """
 from __future__ import annotations
 
@@ -37,12 +39,15 @@ TABLES = {
     "mt_lip_00": [("lipMakeup", "MainAB", "LipTex")],
     "mt_eyeshadow_00": [("eyeShadow", "MainAB", "EyeshadowTex")],
     "mt_face_paint_00": [("facePaint", "MainAB", "PaintTex")],
+    # ChangeCustomClothes selects no pattern texture for this recorded row.
+    "mt_pattern_00": [],
 }
-CREATORS = {"cf_m_face_create", "cf_m_eye_create", "cf_m_eyewhite_create"}
+CREATORS = {"cf_m_face_create", "cf_m_eye_create", "cf_m_eyewhite_create", "cf_m_clothesN_create"}
 VERIFIED_PROGRAMS = {
     "Shader Forge/create_head": "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c",
     "Shader Forge/create_eye": "c4bd7e1ec704b84075a666316519230ce163e1f4540be2af7ed25b9f3934fece",
     "Shader Forge/create_eyewhite": "4f4f69fd421ab35d9e380e418ae04b22ac88852cad0ecf6c63f75285c895b1f9",
+    "Shader Forge/create_topN": "d709d6fc92ebecd4f8b579041c8a7abce3a13c20c18985812bde6bc42881f579",
 }
 # Extra masks and neutral mouth/tear inputs used by the head's authored materials.
 EXTRA_TEXTURES = {"chara/bo_head_00.unity3d": ["cf_face_00_md", "cf_face_00_md2", "cf_t_tooth_00",
