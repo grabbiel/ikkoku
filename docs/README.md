@@ -1,12 +1,15 @@
 # Documentation
 
-Baseline code review: **2026-09-25**, working tree based on `2cfb859`, including
-then-uncommitted implementation. Dated follow-ups in the component reports record
-later merged slices; the baseline date is not a fresh all-project verification.
-Ikkoku is a partial Swift + Metal reconstruction with a separate
-bundled prototype. The [component audit](component-audit/README.md) is the current
-feature-status and implementation-backlog entry point. No whole-game completion
-percentage or general mod compatibility is claimed.
+Navigation and project overview refreshed **2026-10-24**. Ikkoku is a partial
+Swift + Metal Maker/Studio reconstruction with a separate bundled prototype.
+The [repository overview](../README.md#current-scope) summarizes the eight
+priority components; the [component audit](component-audit/README.md) owns feature
+status, acceptance evidence and the implementation backlog. No whole-game
+completion percentage or general mod compatibility is claimed.
+
+The original audit was reviewed on 2026-09-25 at `2cfb859` plus its working tree.
+Later dated entries supersede only their named scope. Neither this navigation
+refresh nor a green public CI run re-verifies every private source-data path.
 
 ## Start here
 
@@ -20,7 +23,7 @@ percentage or general mod compatibility is claimed.
 | Scan/mount a local mod library | [Mod library guide](guides/mod-library.md) |
 | Locate code and understand data boundaries | [Architecture](architecture.md) |
 | Resume implementation | [Audit and prioritized backlog](component-audit/README.md) |
-| Continue the latest local work in Claude | [2026-10-23 Renderer / Maker / model handoff](../HANDOFF-2026-10-23-renderer-maker-models.md) |
+| Continue current development | [Current work and evidence](component-audit/README.md#current-work-and-evidence), then the owning reference and current issue/PR |
 | Recover/convert original data | [Source pipeline runbook](../Tools/reverse/README.md) |
 | Regenerate bundled prototype assets | [Bundled asset runbook](../Tools/assets/README.md) |
 | Run or extend reproducible verification lanes | [Verification lane runner](../Tools/verification/README.md) |
@@ -112,6 +115,10 @@ The [archive index](archive/README.md) explains how to use the superseded
 [rebuild checkpoint](archive/2026-09-25-rebuild.md), and
 [expansion checkpoint](archive/2026-09-25-expansion.md). Their earlier status claims
 are preserved as historical evidence, not maintained support promises.
+The top-level [2026-10-23 Renderer / Maker / model handoff](../HANDOFF-2026-10-23-renderer-maker-models.md)
+and [local-environment handoff](../HANDOFF-2026-10-23-local-environment.md) are also
+dated checkpoints. Their branch lists, task limits and next steps describe that
+session; use current user directions and repository state when resuming.
 
 ## Keeping documentation organized
 
@@ -122,6 +129,11 @@ are preserved as historical evidence, not maintained support promises.
 - Update a feature's reference and audit row together. Name the supported data,
   execution path, UI availability, test fixture and remaining exclusions. Distinguish
   parsed/preserved data, executable kernels and measured original-player parity.
+- At each completed task, the integrating owner records its scoped result and
+  remaining boundary. Make a small accompanying change to the overview or usage
+  guide when public-facing support, setup, commands or priorities changed. Keep
+  routine evidence details in the owning reference; reserve broad rewrites for
+  an explicit project-wide review. See [contribution rules](../CONTRIBUTING.md#keep-the-documentation-current).
 - Keep local evidence private; document paths, hashes and scope without copying
   recovered original code or assets into Markdown. Retain dates on old measurements.
 - Link repository files relatively within Markdown, update links after moves and

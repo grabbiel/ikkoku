@@ -61,16 +61,49 @@ have not been established. Current catalog counts state their actual denominator
 | Materials and source appearance | Mid-stage | Selected recipes applied; missing layers/states and complete draw-shader parity |
 | Asset mods/resolver/ABMX | Mid-stage | Immutable identities and static subset; migrations, dynamic callbacks and general mod geometry missing |
 | CoreMath/Scene rig foundation | Mid-stage | Verified basis/rig kernels; broader geometry/deformation and degenerate input contracts |
-| GPU/Metal renderer | Mid-stage | Live source shader integration, resource limits, original effects and representative performance |
-| Source shader translation/matched frames | Mid-stage | Garment diagnostic passes; full-character color fails; independent live app comparison pending |
-| Native Studio editor/timeline | Mid-stage | Source controls and tracks differ from native prototype controls; source UI gate is a defect |
+| GPU/Metal renderer | Mid-stage | Default toon and opt-in live source paths exist; remaining material dispatch, resource limits, original effects and representative performance |
+| Source shader translation/matched frames | Mid-stage | Bounded diagnostic and independent live gates exist; complete character silhouette/color parity and same-input sampling repeatability remain open |
+| Native Studio editor/timeline | Mid-stage | Source Pose/Face/Clothes controls are reachable; broader interactive regression coverage and source timeline tracks remain incomplete |
 | Original Studio scenes | Mid-stage | Broad parsing/preservation; mixed object/map/light/route/effect consumers and edit topology incomplete |
-| Full-body IK/guides | Mid-stage | Recovered solver tests exist; editor reachability and actual original-player full-body comparison remain |
+| Full-body IK/guides | Mid-stage | Recovered solver tests and source guide editing exist; broad GUI acceptance and actual original-player full-body comparison remain |
 | Animator/dynamics | Mid-stage | Selected normal states and hair chains; remaining controllers, loop correction, cloth and full sequence parity |
 | Voice/audio | Mid-stage | Scheduler/mixer subset; original waveform coverage, spatial/lip-sync and scene sound consumers |
 | Gameplay as a playable game | Infancy | A headless native host runs one synthetic fixed event across save/reload; NPC, scene, presentation, original save state and an interactive mode are missing |
 | General managed plugin compatibility | Infancy | Strict bounded AST subset and exact-revision native adapters; no general Harmony/coroutine/Unity host |
 | Recovery/build/test infrastructure | Mid-stage | Reproducibility, explicit fixture skips, automatic orchestration and release gating |
+
+## Current work and evidence
+
+Overview reconciled **2026-10-24** against merged work through
+[#200](https://github.com/grabbiel/ikkoku/pull/200). The
+[README's eight-component table](../../README.md#current-scope) is the concise
+support summary. The dated handoffs below retain each producer, fixture and
+acceptance boundary; their old “next” steps are historical, not a live queue.
+
+- **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
+  have bounded original-player gates, plus head-0 bone-type-1 checks for both
+  sexes. Asynchronous normal-head selection is merged. Prepared inputs reduce
+  owner-thread stalls at a total-latency cost; remaining stalls and transient
+  fallback allocations are tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192)
+  and [#202](https://github.com/grabbiel/ikkoku/issues/202).
+- **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
+  reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
+  variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
+  The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+  distinguishes diagnostic controls from production behavior; reductions are
+  evidence, not fixes or added material coverage.
+- **Mods / Plugins:** immutable library selection, bounded translated profiles
+  and three exact native adapters have selected app/save/restore acceptance.
+  Mounted-session controls are merged. Fresh-profile initialization can retain
+  preview resources after rejection; [#203](https://github.com/grabbiel/ikkoku/issues/203)
+  tracks the reproduced failure and its pending fix. General plugin compatibility
+  remains outside the supported subset.
+
+Use the linked issue/PR state for work in review, and the owning reference for
+exact commands, commits, costs, failed attempts and exclusions. Public CI checks
+compilation and public fixtures; private original-player, app and GPU acceptance
+remain separate. A later integration build does not replace a recorded runtime
+measurement. Update this section only when the project-level boundary changes.
 
 ## Highest-priority handoff
 
@@ -340,6 +373,8 @@ until completion. This is a responsiveness tradeoff, with 90–144 ms owner stal
 still present, rather than a total speedup, peak-memory or FPS result. The
 [Maker reference](../reference/character/maker-assets.md#normal-head-selection-182)
 records the two-sample-per-sex/binary limits and remaining synchronous GPU wait.
+All four CI checks pass at `4aab6c78`; #200 is merged. #192 remains open for
+the remaining stalls; the final integration build is separate from the measured pair.
 The owner proceeds to measuring and reusing immutable fallback textures within
 each compositor, preserving its completion and failure semantics.
 

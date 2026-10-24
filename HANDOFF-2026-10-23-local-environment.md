@@ -1,8 +1,11 @@
 # Handoff: local-environment verification (2026-10-23)
 
-**Latest continuation:** read the
+**Historical checkpoint, 2026-10-23.** Current support and work are maintained in
+the [project overview](README.md#current-scope) and
+[component audit](docs/component-audit/README.md#current-work-and-evidence).
+The
 [Renderer, Character Maker and base-model handoff](HANDOFF-2026-10-23-renderer-maker-models.md)
-for merged PRs #139–#141, current `main`, final local evidence and next work.
+records merged PRs #139–#141 and that session's local evidence and next work.
 The initial state and task sequence below are historical; later sections record
 the subsequent local verification and PR #135 integration.
 
