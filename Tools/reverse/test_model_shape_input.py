@@ -6,6 +6,7 @@ from pathlib import Path
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from model_shape_input import canonical, parse
 from analysis.card_contract import fixture_bytes, parse_card, mapping, unpack, Limits
 import compare_original_model as model
@@ -126,6 +127,33 @@ class ShapeCaptureTests(unittest.TestCase):
     def test_shape_request_card_and_independent_baseline_pass(self):
         result = model.compare(self.folder, self.native, shape_baseline=self.baseline)
         self.assertTrue(result['gatePassed']); self.assertEqual(result['shapeRequest']['overrides'], self.rows)
+    def test_shape_baseline_binds_loaded_head_metadata_and_validates_new_head(self):
+        path=self.baseline/'frame.json';base=json.loads(path.read_text())
+        base['neutralModel']['loadedHeadCatalog']={'MainData':'changed'}
+        path.write_text(json.dumps(base))
+        with self.assertRaisesRegex(ValueError,'loaded head context'):
+            model.compare(self.folder,self.native,shape_baseline=self.baseline)
+        # Even matching forged metadata on two head201 captures is rejected by
+        # the baseline gate itself, independently of compare's first-frame check.
+        for mode in (base['neutralModel'],self.frame['neutralModel']):
+            mode.update(variant='female201',headID=201,requestedHeadID=201,loadedHeadCatalogID=201,
+                        loadedHeadName='ct_head',loadedHeadCatalog=dict(model.HEAD201_CATALOG,MainData='wrong'))
+        path.write_text(json.dumps(base));self.write()
+        with self.assertRaisesRegex(ValueError,'exact source prefab'):
+            model.shape_request_gate(self.folder,self.frame,self.baseline)
+    def test_head201_shape_baseline_rejects_other_sex_before_card_payload(self):
+        path=self.baseline/'frame.json';base=json.loads(path.read_text())
+        for baseline_sex,current_sex in ((1,0),(0,1)):
+            for mode,sex in ((base['neutralModel'],baseline_sex),(self.frame['neutralModel'],current_sex)):
+                mode.update(variant='female201' if sex else 'male201',sex=sex,requestedSex=sex,
+                            headID=201,requestedHeadID=201,loadedHeadCatalogID=201,loadedHeadName='ct_head',
+                            loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG),exType=0,requestedExType=0)
+            path.write_text(json.dumps(base));self.write()
+            with patch.object(model,'shape_card_payload') as payload:
+                with self.subTest(baselineSex=baseline_sex),self.assertRaisesRegex(ValueError,'source identity/context differs: variant'):
+                    model.shape_request_gate(self.folder,self.frame,self.baseline)
+                payload.assert_not_called()
+
     def test_same_producer_and_changed_player_context_fail(self):
         repeated = copy.deepcopy(self.run); repeated.pop('modelShapes')
         (self.baseline / 'run.json').write_text(json.dumps(repeated))

@@ -46,6 +46,75 @@ class ModelComparisonTests(unittest.TestCase):
         result = model.compare(self.folder, self.native)
         self.assertTrue(result['gatePassed']); self.assertEqual(result['selectedVertexEntries'], 3)
         self.assertEqual(result['selectedSkinBindings'], 1); self.assertEqual(result['omittedOriginalComponents'], [])
+    def test_shared_rest_geometry_requires_unique_renderer_name_and_full_coverage(self):
+        extra=copy.deepcopy(self.frame['meshes'][0]);extra.update(name='mesh_low',path='root/mesh_low')
+        self.frame['meshes'].append(extra);self.write()
+        other=copy.deepcopy(self.native['parts'][0]);other['name']='mesh_low/0';self.native['parts'].append(other)
+        result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['selectedVertexEntries'],6)
+        self.assertEqual({r['sourcePath'] for r in result['parts']},{'root/mesh','root/mesh_low'})
+        for row in result['parts']:
+            self.assertEqual(row['restSHA256'],extra['restPositions']['sha256'])
+            self.assertRegex(row['restSHA256'],r'^[0-9a-f]{64}$')
+        self.native['parts'].pop()
+        self.assertFalse(model.compare(self.folder,self.native)['gatePassed'])
+        self.frame['meshes'][0]['name']='renamed';self.write()
+        with self.assertRaisesRegex(ValueError,'Missing or ambiguous exact source vertex identity'):
+            model.compare(self.folder,self.native)
+        self.frame['meshes'][0]['name']='mesh'
+        extra['name']='mesh';self.write()
+        with self.assertRaisesRegex(ValueError,'ambiguous exact source vertex identity'):
+            model.compare(self.folder,self.native)
+    def head201(self):
+        self.frame['neutralModel'].update(variant='female201', headID=201, requestedHeadID=201, loadedHeadCatalogID=201,
+                                         loadedHeadName='ct_head', loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG))
+        self.native['identity']['headID']=201;self.write()
+
+    def test_head201_requires_exact_measured_catalog_and_loaded_identity(self):
+        self.head201();self.assertTrue(model.compare(self.folder,self.native)['gatePassed'])
+        valid=copy.deepcopy(self.frame)
+        for key,value in [('loadedHeadCatalog',None),('loadedHeadCatalog',{}),('loadedHeadCatalog',[]),
+                          ('loadedHeadName','p_cf_head_03'),('sex',True),('requestedHeadID',200)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD201_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(field=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+
+    def test_head201_repeat_rejects_matching_forged_catalogs(self):
+        self.head201()
+        with tempfile.TemporaryDirectory() as tmp:
+            other=Path(tmp)
+            for path in self.folder.iterdir():(other/path.name).write_bytes(path.read_bytes())
+            run=copy.deepcopy(self.run);run['processID']=101;(other/'run.json').write_text(json.dumps(run))
+            self.assertTrue(model.compare_repeat(self.folder,other)['gatePassed'])
+            self.frame['neutralModel']['loadedHeadCatalog']['MainData']='p_cf_head_wrong';self.write()
+            (other/'frame.json').write_text(json.dumps(self.frame))
+            with self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare_repeat(self.folder,other)
+
+    def test_male201_requires_requested_sex_identity_and_normal_height(self):
+        self.head201();mode=self.frame['neutralModel']
+        mode.update(variant='male201',sex=0,requestedSex=0,exType=0,requestedExType=0)
+        mode['actualBodyValues'][0]=.6
+        self.native['identity']['sex']=0;self.native['bodyValues'][0]=.6;self.write()
+        # Manager flags remain enabled; the source late setter itself is sex-gated.
+        result=model.compare(self.folder,self.native);self.assertTrue(result['gatePassed'])
+        self.assertEqual([(r['domain'],r['index']) for r in result['shapeCoercions']],[('body',0)])
+        valid=copy.deepcopy(self.frame)
+        for key,value in [('sex',1),('sex',False),('requestedSex',1),('requestedSex',False),
+                          ('variant','female201'),('headID',200),('requestedHeadID',200),
+                          ('boneType',False),('loadedHeadCatalogID',200),('loadedHeadCatalog',None),
+                          ('exType',1),('exType',False),('requestedExType',1),('requestedExType',None)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD201_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(field=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+        missing=copy.deepcopy(valid['neutralModel']);del missing['exType']
+        with self.assertRaisesRegex(ValueError,'normal model identity'):model.source_head_identity(missing)
+
     def test_extra_original_visible_mesh_and_missing_native_mesh_fail(self):
         extra=copy.deepcopy(self.frame['meshes'][0]);extra['path']='root/extra';extra['name']='extra'
         # Distinct rest identity avoids the separate ambiguity rejection.
@@ -74,6 +143,68 @@ class ModelComparisonTests(unittest.TestCase):
     def test_changed_bone_fails_independently_of_vertex_output(self):
         self.native['nodeWorldMatrices'] = [list(self.identity)]; self.native['nodeWorldMatrices'][0][12] = .01
         self.assertFalse(model.compare(self.folder, self.native)['gatePassed'])
+    def test_valid_signed_sparse_and_empty_morph_channels(self):
+        part, mesh = self.native['parts'][0], self.frame['meshes'][0]
+        part['morphNames'] = mesh['morphNames'] = ['mouth', 'eye']
+        mesh['morphWeights'] = [-0.5, 0]
+        part['morphWeights'] = [dict(index=0, weight=-0.5)]
+        self.write(); self.assertTrue(model.compare(self.folder, self.native)['gatePassed'])
+        mesh['morphWeights'] = [0, 0]; part['morphWeights'] = []
+        self.write(); self.assertTrue(model.compare(self.folder, self.native)['gatePassed'])
+        part['morphNames'] = mesh['morphNames'] = []
+        mesh['morphWeights'] = []
+        self.write(); self.assertTrue(model.compare(self.folder, self.native)['gatePassed'])
+
+    def test_malformed_sparse_morph_entries_rejected(self):
+        cases = [([dict(index=-1, weight=0)], 'integer within'),
+                 ([dict(index=True, weight=0)], 'integer within'),
+                 ([dict(index=0.0, weight=0)], 'integer within'),
+                 ([dict(index=1, weight=0)], 'integer within'),
+                 ([dict(index=0, weight=1), dict(index=0, weight=0)], 'Duplicate'),
+                 ([0], 'index/weight record'),
+                 ([dict(index=0, weight=0), None], 'index/weight record'),
+                 (None, 'must be a list')]
+        for entries, message in cases:
+            self.native['parts'][0]['morphWeights'] = entries
+            with self.subTest(entries=entries), self.assertRaisesRegex(ValueError, message):
+                model.compare(self.folder, self.native)
+
+    def test_source_dense_morph_length_rejected_before_broadcasting(self):
+        self.native['parts'][0]['morphNames'] = self.frame['meshes'][0]['morphNames'] = ['mouth', 'eye']
+        for weights in ([0], [], [0, 0, 0], None):
+            self.frame['meshes'][0]['morphWeights'] = weights; self.write()
+            with self.subTest(weights=weights), self.assertRaisesRegex(ValueError, 'Source dense morph weights'):
+                model.compare(self.folder, self.native)
+
+    def test_nonfinite_and_mistyped_morph_values_rejected(self):
+        for value in (True, '0', None, float('nan'), float('inf'), -float('inf'), 10 ** 1000):
+            for source in (False, True):
+                self.frame['meshes'][0]['morphWeights'] = [value if source else 0]
+                self.native['parts'][0]['morphWeights'] = [] if source else [dict(index=0, weight=value)]
+                self.write()
+                with self.subTest(value=value, source=source), self.assertRaisesRegex(ValueError, 'finite numeric'):
+                    model.compare(self.folder, self.native)
+
+    def test_zero_channel_weights_must_be_empty(self):
+        part, mesh = self.native['parts'][0], self.frame['meshes'][0]
+        part['morphNames'] = mesh['morphNames'] = []
+        mesh['morphWeights'] = [0]; self.write()
+        with self.assertRaisesRegex(ValueError, 'Source dense morph weights'):
+            model.compare(self.folder, self.native)
+        mesh['morphWeights'] = []; self.write()
+        part['morphWeights'] = [dict(index=0, weight=0)]
+        with self.assertRaisesRegex(ValueError, 'integer within'):
+            model.compare(self.folder, self.native)
+
+    def test_morph_error_threshold_is_unchanged(self):
+        part = self.native['parts'][0]
+        part['morphWeights'] = [dict(index=0, weight=1e-4)]
+        within = model.compare(self.folder, self.native)
+        self.assertTrue(within['gatePassed'])
+        self.assertEqual(within['parts'][0]['morphWeightMaxError'], 1e-4)
+        part['morphWeights'] = [dict(index=0, weight=1.0001e-4)]
+        self.assertFalse(model.compare(self.folder, self.native)['gatePassed'])
+
     def test_morph_and_bake_are_separate_gates(self):
         self.native['parts'][0]['morphWeights'] = [dict(index=0,weight=1)]
         self.assertFalse(model.compare(self.folder, self.native)['gatePassed'])

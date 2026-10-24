@@ -3,6 +3,7 @@ import AppKit
 import AVFAudio
 import Studio
 import Gameplay
+import Character
 
 extension StudioModel {
     /// Installation keeps the candidate world isolated until all callbacks and
@@ -127,25 +128,37 @@ extension StudioModel {
            try encoder.encode(bindings) == encoder.encode(configuration) {
             status = "This plugin selection is already mounted"; return
         }
-        sourcePluginLibraryPending = true
+        let request = UUID()
         sourcePluginMountGeneration &+= 1
         let generation = sourcePluginMountGeneration, hook = sourcePluginPreparationHook
-        defer { sourcePluginLibraryPending = false }
-        let resolution = try await Task.detached(priority: .userInitiated) {
-            if let hook { await hook() }
-            try Task.checkCancellation()
+        sourcePluginMountRequest = request; sourcePluginLibraryPending = true
+        defer {
+            if sourcePluginMountRequest == request {
+                sourcePluginMountRequest = nil; sourcePluginLibraryPending = false
+            }
+        }
+        let resolution = try await sourcePluginLibraryPreparationQueue.prepare {
+            hook?()
             return try selection.resolve()
-        }.value
+        }
         try Task.checkCancellation()
-        guard isActiveMode, generation == sourcePluginMountGeneration else { throw CancellationError() }
+        guard isActiveMode, generation == sourcePluginMountGeneration,
+              sourcePluginMountRequest == request else { throw CancellationError() }
         let prepared = try prepareSourcePluginLibrary(selection: selection, resolution: resolution,
             configuration: configuration, document: doc)
+        // No suspension follows validation. Our own document setter must not
+        // interpret this successful commit as an external preparation edit.
+        sourcePluginMountRequest = nil; sourcePluginLibraryPending = false
         pushUndo(force: true)
         commitSourcePlugins(prepared, running: true)
         status = "Mounted \(selection.revisions.count) plugins · library generation \(selection.generation)"
     }
 
-    func cancelSourcePluginLibraryMount() { sourcePluginMountGeneration &+= 1 }
+    func cancelSourcePluginLibraryMount() {
+        sourcePluginMountGeneration &+= 1
+        sourcePluginMountRequest = nil; sourcePluginLibraryPending = false
+        sourcePluginLibraryPreparationQueue.cancel()
+    }
 
     func commitSourcePlugins(_ prepared: PreparedSourcePlugins, running: Bool,
                              mountNative: Bool = true, replaceDocument: Bool = true) {

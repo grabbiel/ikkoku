@@ -397,8 +397,8 @@ original-runtime probe: `Tools/reverse/original_adv_binding_probe.py`; CLI: `Gam
 ## P. C# translation, plugin runtime and native adapters
 
 Sources: `Packages/Engine/Sources/Gameplay/Source{TranslatedBehaviour,IRProgram,PluginPackage,PluginLibraryIndex,PluginRuntime,NativePluginPackage,MuteInBackgroundPlugin}.swift`;
-`Tools/translation/{translate,plugin,plugin_library,native_adapters,studio_execution_probe}.py`;
-`Tools/translation/frontend/{Program.cs,UnitySurface.txt,Translation.csproj}`.
+`Tools/translation/{translate,plugin,plugin_library,plugin_inventory,native_adapters,studio_execution_probe}.py`;
+`Tools/translation/frontend/{Program.cs,AssemblyInventory.cs,UnitySurface.txt,Translation.csproj}`.
 Concrete Studio integration is covered in [Studio](studio.md).
 
 | ID / feature | Status | Specific review comments | Remaining work / acceptance |
@@ -412,7 +412,7 @@ Concrete Studio integration is covered in [Studio](studio.md).
 | P07 · Clone serialization/activation/destruction | Fully ported — supported fields and objects | Public/SerializeField copied; private/NonSerialized reset to initializers. Clone Awake/Enable runs before Instantiate returns. Destroy deactivates immediately and finalizes at a frame barrier. Tombstones retain saved identity. | Extend only when object references/component graphs have a defined source-preserving representation. |
 | P08 · Failure rollback and clocks | Mid-stage | Callback/whole-frame failures restore world snapshots, fields, lifecycle flags, clock, trace and new entries. Studio also checkpoints Animator/dynamics for an afterUpdate failure. Default fixed-step catch-up is capped at 64; failure is deliberate, not source time truncation. P-T04 fixed a defect: a field initializer that cloned or deactivated an object ran the clone/activation callbacks of other components outside any runtime transaction, so a later initializer failure left their fields, flags and trace. `attach` is now one transaction. Synthetic tests inject failures into all eight callbacks, Instantiate/Destroy/SetEnabled, every attachment-resolver call of a frame and `afterUpdate`, compare full snapshots, and check that retried runs match a clean run in the documented order. | Test additional host consumers before including them in transactions; the app-side Animator/dynamics checkpoint (`StudioModel`) has no Engine test; profiler must account for snapshot cost. |
 | P09 · BepInEx metadata/dependencies/process filters | Mid-stage | GUID/name/version, hard/soft dependencies, incompatibilities and process names are retained. Ordinal UTF-8 identity avoids Swift canonical equivalence. P-T02 first slice (synthetic; Swift checked only by CI): `SourcePluginGraph` is one graph for profiles and for library selections of IR and native-adapter packages. Duplicate GUIDs (also across kinds), missing hard dependencies, unmet hard minimums, incompatibilities (also with itself) and cycles (also through soft edges) fail with named errors. Every package version and declared minimum must be a strict 2–4 part numeric .NET version, even when nothing compares it. Edge tests cover `.exe`/case process filters, ordinal case/Unicode dependency GUIDs, unenforced soft minimums and 1.0 < 1.0.0. Duplicate GUIDs need an explicit manifest choice. Process matching uses a Foundation case-insensitive approximation. | Recover the installed Chainloader's duplicate-GUID preference and full `System.Version` parsing (whitespace/sign) from private evidence; the native policy rejects those cases. Record adapter dependency metadata when a registered plugin declares any. |
-| P10 · Immutable packaging and static DLL recovery | Mid-stage | `.cs` or bounded `.dll` input; DLLs are statically decompiled, not loaded. New generations preserve source/program hashes. Rejected conversion has diagnostics but no loadable manifest. Exact two-DLL registry selects verified Swift adapters. P-T02 first slice: `plugin_library.py` copies published IR and adapter packages into `revisions/<manifestSHA256>/` and publishes numbered generations (stage + rename, hard-linked index, one atomic `library.json` commit). Revisions record GUID, version, kind, manifest/package SHA-256, converter hashes and sources. Changed source yields a new generation; unchanged rescans publish none; revisions and generations are never rewritten; identical interrupted output is adopted. `plugin.py` rejections are triaged with their diagnostics. 15 synthetic Python tests pass locally. | Batch DLL discovery that recovers each entry type, assembly dependencies, multiple types per package and an installed-directory compatibility report; converter migrations bound to saved selections. No installed plugin directory has been scanned. |
+| P10 · Immutable packaging and static DLL recovery | Mid-stage | `.cs` or bounded `.dll` input; DLLs are statically decompiled, not loaded. New generations preserve source/program hashes. Rejected conversion has diagnostics but no loadable manifest. Exact two-DLL registry selects verified Swift adapters. P-T02 first slice: `plugin_library.py` copies published IR and adapter packages into `revisions/<manifestSHA256>/` and publishes numbered generations (stage + rename, hard-linked index, one atomic `library.json` commit). Revisions record GUID, version, kind, manifest/package SHA-256, converter hashes and sources. Changed source yields a new generation; unchanged rescans publish none; revisions and generations are never rewritten; identical interrupted output is adopted. `plugin.py` rejections are triaged with their diagnostics. 15 synthetic Python tests pass locally. | P-T01 now has bounded metadata-only DLL discovery (direct entry declarations, exact hashes, dependencies and reference evidence), synthetic tests and a six-retained-DLL gate; see [inventory](../reference/mods/plugin-inventory.md). Complete installed-directory collection, per-entry recovery/translation and converter migrations bound to saved selections remain. Discovery is not compatibility. |
 | P11 · IR plugin execution in Studio | Mid-stage | Explicit profile binds original source keys or native UUIDs. Local/world transforms, attachment frames, subtree clones and identity preservation work. Native save/reload persists clocks/fields without replaying Start. | App controls for bindings/unload and source-object topology changes; no implicit source BepInEx manager exists. |
 | P12 · Original MuteInBackground 1.1 behavior | Fully ported — bounded initial config/focus callback | Exact installed GUID/hash registry; original config parsing oracle covers 23 cases and seven focus traces, including the repeat-focus-loss quirk. Audio bus mixer endpoint tested with a generated tone. A-T04 Release startup, persistence and focus/gain acceptance passed in PR #2. | Live config-file watching and multiple static copies are unsupported. |
 | P13 · Original StudioAccessoryNames 1.1.0 behavior | Fully ported — bounded label pass | Recovered coroutine result matches three source-host cases, including UTF-16 digit detection and missing slots. Mount enables the native label model; source identities are unchanged. | The source Clothes inspector consumes the native label model through sourceAccessoryLabels. General Unity UI/coroutine execution is not provided. |
@@ -429,6 +429,12 @@ Concrete Studio integration is covered in [Studio](studio.md).
   at a time with original behavior evidence. Acceptance: reports distinguish
   package discovered, source recovered, translation accepted, host integrated and
   original behavior verified; none is reported simply as “compatible”.
+  The 2026-10-24 [offline inventory slice](../reference/mods/plugin-inventory.md)
+  adds bounded metadata-only discovery with duplicate/multiple declarations and
+  explicit unsupported diagnostics. Six retained originals produce six entries,
+  including the two existing exact adapter hashes; three match prior independent
+  metadata records. Full 243-path directory collection and demand-ranked API
+  expansion remain pending. No assembly is loaded or automatically packaged.
 - **P-T02 — Unified immutable plugin library (P1).** Add scanner/generations for
   IR and native adapters, exact revision selection, dependency resolution across
   both kinds, standalone version validation and original loader edge tests.
@@ -472,6 +478,16 @@ Concrete Studio integration is covered in [Studio](studio.md).
   No library/hash I/O occurs in ticks or snapshots. Remaining: batch DLL triage,
   multi-type packages, assembly dependencies, converter migrations, and the
   installed Chainloader's duplicate and version rules from private evidence.
+  Cancellation follow-up: the unchanged bounded Maker preparation queue now
+  serializes plugin resolution and promptly resumes cancelled callers while
+  discarded CPU work drains. Model and panel request ownership protect retry
+  state from older completions. Release build, four existing queue tests and
+  24 app checks passed at `fdf9fad` (2026-10-24), including held-worker cancellation,
+  causal retry enqueue, unchanged frame/resources and panel cleanup. Visible
+  Cancel/retry also passed in a separately hashed diagnostic Release build with
+  a temporary worker gate: controls recovered before worker release, the retry
+  waited for the discarded resolver, and only the retry mounted. Pause/Unload
+  passed. The exact patch was removed; no decoder throughput or GUI latency claim.
 - **P-T03 — Actual app regression (P1, depends on A-T04 and Studio inspector fix).**
   Run the existing three-stage capture probe with both installed adapters and the
   IR motion fixture. Then exercise focus gain/loss with generated audio and verify

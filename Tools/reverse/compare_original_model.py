@@ -157,6 +157,27 @@ def shape_card_payload(baseline, current, mode, rows=()):
                 unrequestedShapeTokensUnchanged=True, framingAndTrailingPayloadUnchanged=True, thumbnailsExcluded=True)
 
 
+HEAD201_CATALOG = dict(Name='タイプ０３', MainManifest='add50', MainAB='chara/bo_head_50.unity3d',
+                       MainData='p_cf_head_03', ShapeAnime='cf_anmShapeHead_03')
+
+
+def source_head_identity(mode):
+    """Pin the new head's measured catalog; retain old capture compatibility."""
+    if mode.get('variant') in ('female201', 'male201') or mode.get('headID') == 201:
+        variant = mode.get('variant')
+        if variant not in ('female201', 'male201'):
+            raise ValueError('Head201 normal model variant differs')
+        sex = 1 if variant == 'female201' else 0
+        expected = dict(sex=sex, headID=201, boneType=0, requestedSex=sex,
+                        requestedHeadID=201, requestedBoneType=0, loadedHeadCatalogID=201)
+        if variant == 'male201': expected.update(exType=0, requestedExType=0)
+        if any(type(mode.get(k)) is not int or mode[k] != v for k, v in expected.items()):
+            raise ValueError('Head201 requested/loaded normal model identity differs')
+        if mode.get('loadedHeadName') != 'ct_head' or mode.get('loadedHeadCatalog') != HEAD201_CATALOG:
+            raise ValueError('Head201 loaded head name or catalog differs from the exact source prefab')
+    return dict(loadedHeadName=mode.get('loadedHeadName'), loadedHeadCatalog=mode.get('loadedHeadCatalog'))
+
+
 def shape_request_gate(folder, frame, baseline_folder):
     mode = frame['neutralModel']; request = mode.get('shapeRequest')
     if request is None:
@@ -179,6 +200,8 @@ def shape_request_gate(folder, frame, baseline_folder):
     base_run = json.loads((baseline_folder / 'run.json').read_text())
     if 'modelShapes' in base_run or (baseline_folder / 'model-shapes.tsv').exists():
         raise ValueError('Shape baseline retains producer shape input')
+    if source_head_identity(base) != source_head_identity(mode):
+        raise ValueError('Shape baseline loaded head context differs')
     for key in ('variant', 'sex', 'headID', 'boneType', 'requestedSex', 'requestedHeadID', 'requestedBoneType',
                 'loadedHeadCatalogID', 'assemblySHA256', 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize',
                 'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate', 'animators'):
@@ -215,18 +238,54 @@ def shape_request_gate(folder, frame, baseline_folder):
                 scope='Same source assembly/context; only requested body/face arrays may change; thumbnails excluded')
 
 
+def morph_weight_error(names, sparse, dense):
+    """Validate the two producer formats before indexing or broadcasting."""
+    count = len(names)
+    if not isinstance(dense, list) or len(dense) != count:
+        raise ValueError('Source dense morph weights must match the channel count')
+    if not isinstance(sparse, list):
+        raise ValueError('Native sparse morph weights must be a list')
+
+    def weight(value):
+        if type(value) not in (int, float):
+            raise ValueError('Morph weight must be a finite numeric value')
+        try:
+            result = float(value)
+        except OverflowError:
+            raise ValueError('Morph weight must be a finite numeric value')
+        if not np.isfinite(result):
+            raise ValueError('Morph weight must be a finite numeric value')
+        return result
+
+    expected = np.asarray([weight(value) for value in dense], dtype=np.float64)
+    actual = np.zeros(count, dtype=np.float64)
+    seen = set()
+    for entry in sparse:
+        if not isinstance(entry, dict):
+            raise ValueError('Native sparse morph weight must be an index/weight record')
+        index = entry.get('index')
+        if type(index) is not int or not 0 <= index < count:
+            raise ValueError('Native sparse morph index must be an integer within the channel count')
+        if index in seen:
+            raise ValueError('Duplicate native sparse morph index')
+        seen.add(index)
+        actual[index] = weight(entry.get('weight'))
+    return float(np.max(np.abs(actual - expected))) if count else 0.
+
+
 def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     frame_path = folder / 'frame.json'; frame = json.loads(frame_path.read_text())
     mode = frame.get('neutralModel')
     if not mode or native.get('kind') != 'ikkoku-neutral-source-model': raise ValueError('Requires neutral source and native model captures')
     identity = native['identity']
-    variants = {'female00': (1, 0), 'female200': (1, 200), 'male200': (0, 200)}
+    variants = {'female00': (1, 0), 'female200': (1, 200), 'female201': (1, 201), 'male200': (0, 200), 'male201': (0, 201)}
     if mode.get('variant') not in variants or (mode['sex'], mode['headID']) != variants[mode['variant']]:
         raise ValueError('Unsupported source neutral model identity')
     for key in ('Sex', 'HeadID', 'BoneType'):
         if mode['requested' + key] != mode[key[0].lower() + key[1:]]: raise ValueError('Source silently changed requested identity')
     if mode['loadedHeadCatalogID'] != mode['headID'] or mode['boneType'] != 0 or identity['exType'] != 0:
         raise ValueError('Loaded head or normal body identity differs')
+    source_head_identity(mode)
     if mode.get('handControllerCounts') != {'L': 1, 'R': 1}: raise ValueError('Expected exactly two driven hand controllers')
     if mode['handPatterns'] != [0, 0] or mode['elapsedFramesAfterLoad'] != 0:
         raise ValueError('Requires quiescent pattern-zero capture')
@@ -249,7 +308,9 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     candidates = {}
     for mesh in frame['meshes']:
         if 'restPositions' not in mesh: continue
-        key = mesh['restPositions']['sha256']
+        # Head201's upper/lower eyeline renderers share the same rest vertices.
+        # Bind both exact geometry and renderer name; duplicate pairs still fail.
+        key = (mesh['restPositions']['sha256'], mesh['name'])
         candidates.setdefault(key, []).append(mesh)
     rows, omitted, matched = [], [], set()
     for part in native['parts']:
@@ -257,11 +318,11 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
             omitted.append(dict(name=part['name'], reason=part['selectionReason'])); continue
         if part['hasCloth']: raise ValueError('Neutral model gate does not approximate Unity Cloth')
         rest = np.asarray(part['restPositions'], dtype='<f4'); rest[:, 2] *= -1
-        key = hashlib.sha256(rest.tobytes()).hexdigest()
+        name = part['name'].split('/')[-2]; submesh = int(part['name'].split('/')[-1])
+        key = (hashlib.sha256(rest.tobytes()).hexdigest(), name)
         matches = candidates.get(key, [])
         if len(matches) != 1: raise ValueError('Missing or ambiguous exact source vertex identity: ' + part['name'])
-        mesh = matches[0]; name = part['name'].split('/')[-2]; submesh = int(part['name'].split('/')[-1])
-        if name != mesh['name']: raise ValueError('Source mesh name differs despite matching rest geometry')
+        mesh = matches[0]
         sidecar(folder, mesh['restPositions'], part['vertexCount'])
         world, indices = geometry(folder, mesh)
         native_indices = np.asarray(part['indices'], dtype=np.int64).reshape(-1, 3)[:, [0, 2, 1]].reshape(-1)
@@ -276,9 +337,7 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
         vertex_check = errors(native_world, world, tolerance)
         baked_check = errors(native_world, baked_world[:, :3], tolerance)
         if part['morphNames'] != mesh['morphNames']: raise ValueError('Source morph channel identity differs')
-        morphs = np.zeros(len(mesh['morphNames']), dtype=np.float64)
-        for entry in part['morphWeights']: morphs[entry['index']] = entry['weight']
-        morph_error = float(np.max(np.abs(morphs - mesh['morphWeights']))) if len(morphs) else 0.
+        morph_error = morph_weight_error(mesh['morphNames'], part['morphWeights'], mesh['morphWeights'])
         joints = part['jointNodes']; source_joints = mesh['skinBones']
         if len(joints) > len(source_joints) or len(joints) != len(mesh['inverseBindMatrices']) or len(joints) != len(part['inverseBindMatrices']):
             raise ValueError('Source/native skin bone counts differ')
@@ -295,7 +354,7 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
             if np.max(np.abs(inverse - source_inverse)) > 2e-6: raise ValueError('Source/native inverse-bind identity differs')
             bone_rows.append(dict(nativeNode=joint, sourcePath=source_joint['path'], maximumMatrixError=float(np.max(np.abs(actual - expected)))))
         matched.add(mesh['path'])
-        rows.append(dict(name=part['name'], sourcePath=mesh['path'], sourceNodeID=part['nodeSourceID'], restSHA256=key,
+        rows.append(dict(name=part['name'], sourcePath=mesh['path'], sourceNodeID=part['nodeSourceID'], restSHA256=key[0],
                          submesh=submesh, skinBones=bone_rows, unboundSourceBoneTail=source_joints[len(joints):], vertices=vertex_check, nativeVersusBakeMesh=baked_check,
                          bakeMeshVersusSourceMatrix=source_check, morphWeightMaxError=morph_error))
     original_omitted = [dict(path=m['path'], name=m['name'], vertices=m['vertices']) for m in frame['meshes'] if m['path'] not in matched]
@@ -335,6 +394,8 @@ def compare_repeat(first, second):
     if identities[0] == identities[1]: raise ValueError('Repeat captures have the same producer run')
     if runs[0]['sourceSHA256'] != runs[1]['sourceSHA256']: raise ValueError('Repeated probe source differs')
     a = json.loads((first / 'frame.json').read_text()); b = json.loads((second / 'frame.json').read_text())
+    if source_head_identity(a['neutralModel']) != source_head_identity(b['neutralModel']):
+        raise ValueError('Repeated loaded head context differs')
     for key in ('variant', 'sex', 'headID', 'boneType', 'requestedSex', 'requestedHeadID', 'requestedBoneType', 'loadedHeadCatalogID',
                 'requestedBodyValues', 'requestedFaceValues', 'actualBodyValues', 'actualFaceValues', 'assemblySHA256', 'animators',
                 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize', 'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate'):
