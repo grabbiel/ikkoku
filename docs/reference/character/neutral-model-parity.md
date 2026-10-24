@@ -124,8 +124,8 @@ Each model selects 19 of 20 assembled drawable parts: normal body, face,
 eyebrows, nose line, teeth, upper/lower eyelines, four iris/highlight meshes,
 tongue, top, bottom, outdoor shoes and four hair meshes. The inspector explicitly
 excludes canine geometry because this card has `doubleTooth == false`.
-**Production toon canine visibility is still unresolved; this inspector rule
-does not establish application visibility parity.** The source-only female
+The ordinary Maker/Studio preview now applies that saved flag as described
+below; these historical geometry comparisons still use the inspector. The source-only female
 `o_shadowcaster` and male `o_shadowcaster_cm` meshes (1,360 vertices each) are
 excluded using exact rest hashes. Any other missing visible source mesh fails.
 Unity Cloth, nonzero hand patterns, dynamics, nonzero gaze, other outfits/body
@@ -172,3 +172,40 @@ and disabled controls both measured 0/42 ns; these small timings include clock
 quantization and overhead. Full commands, hardware/compiler identity and the
 executable hash are in `late-correction-benchmark.json`. This measures the
 cached four-bone pass only, not assembly/loading, whole-pose time or app FPS.
+
+
+## Production canine visibility (2026-10-24, #156)
+
+The recovered `ChaReference` binds `ObjDoubleTooth` to the exact GameObject
+`cf_O_canine`. `ChaControl.VisibleDoubleTooth` sets that object's activity to
+`fileFace.doubleTooth`, without a sex-specific branch; the Maker mouth toggle
+writes the Boolean and invokes that method. This is recovered-code evidence
+from the Studio assembly hash above, not a new original-player run.
+
+`SourceRigPreview` now reads the saved Boolean once during Maker/Studio card
+preparation. It binds the exact target and affected descendant part indices
+once, then changes only cached part activity. A true flag can activate an
+authored-inactive target; inactive ancestors, inactive descendant objects and
+disabled renderers still prevent drawing. Duplicate target names fail. A missing
+target is a no-op, and a missing legacy/synthetic card field preserves authored
+activity; a present non-Boolean field is rejected. Cardless preview callers keep
+that unspecified behavior. Appearance/asset replacement preserves the option.
+
+Ordinary production frames combine this activity with the existing hidden-part
+filter and omit every material pass of a hidden canine. Both live conservative
+bounds and exact framing include the potentially visible geometry, so changing
+the flag does not rebuild resources or change camera framing. There is no
+per-frame card decoding, name search or hierarchy traversal. The native API
+supports changing the flag in place; a new Maker UI toggle and export editor are
+outside this slice.
+
+The three retained neutral player cards independently decode to false and their
+visible mesh lists omit the canine. No retained true-state player capture was
+found in this bounded review. Both states are covered by native production-frame
+regressions, including inactive hierarchy controls, multi-pass materials,
+unchanged mesh identity/resource generation and six converted normal male/female
+head variants (0, 200, 201). Those selection-only fixture cards omit the Boolean;
+their initial authored activity and explicit on/off states are tested separately
+from complete synthetic Boolean-card decoding. The targeted preview/live-bounds/
+installed-library lane passes 11 tests. This fixes a production visibility gap;
+it does not establish new source-color, animated-face or true-state player parity.
