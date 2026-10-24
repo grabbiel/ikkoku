@@ -775,3 +775,50 @@ counterparts. Only three accepted plugin app files differ from the measured
 candidate across the 557-file source inventory; the attribution code and tests
 remain byte-identical. These are functional checks, with no repeated quiet run
 or relabeling of the original measurement producers.
+
+### Worker preparation attribution (#192)
+
+Normal-head selection records `headWorkerStages` and `headQueueStages` with the
+successful state commit. The worker creates its own synchronous diagnostic
+collector and returns an immutable sample inside the prepared head. Default
+preparation callers omit the collector and read no additional clocks or counters.
+`SourceMakerPreparationQueue.prepare` retains its ordinary value/error API;
+`prepareWithTiming` returns the same value plus immutable queue observations.
+Neither path changes the one-running/newest-pending limit or interrupts an
+already-running synchronous decoder.
+
+Queue residence covers the pending slot and serial dispatch until the closure
+starts. Operation time covers that closure, including a supplied preparation
+hook. Delivery covers worker completion to entry on the owning actor, before the
+continuation resumes; it is not worker execution. These intervals are inside the
+broader app `preparationMilliseconds` wait and omit its surrounding work. Failed,
+cancelled and superseded requests return no successful sample. A discarded
+running operation still drains before the next one begins. No shared mutable
+observer crosses the worker/owner boundary.
+
+Worker stages separate the bounded manifest, shape and expression reads from
+their decoding APIs; `bodyOptions` includes correction decoding when required.
+Library preparation includes its own manifest read/decode, converted-file
+verification reads and SHA comparisons, rig reads and `SourceRig.decode`, and
+avatar assembly. Rig decoding includes validation and coordinate/data conversion,
+not just JSON decoding. Splitting `SourceRig.load` retains its exact
+`Data(contentsOf:)` then `decode` sequence, resolved URLs and error order. The four
+base rigs load in their original argument order before assembly is timed.
+Appearance-input preparation includes binding reads/JSON decoding, recipe
+resolution, raw RGBA reads, SHA comparisons and Data-to-array copies. The library
+and appearance-input spans are inclusive; their leaf API intervals must not be
+added to those parents again. Untimed validation, namespacing, contextualization
+and instrumentation remain within the relevant parent.
+
+Each timed API counts attempts and throws with `defer`. Semantic validation after
+an API can reject its result even when that API succeeded; retained observations
+after such failures are partial, not a completed preparation. A hash mismatch has
+its own counter because hashing itself succeeded. File-byte counters record
+returned bytes, including bounded overreads and repeated verification/rig reads;
+hashed bytes count each comparison, including repeated cached RGBA checks.
+Copied bytes count only Data-to-RGBA-array copies, while cache reuse counts only
+successful repeated-path lookups. Size checks still short-circuit hashing and
+copying. These are API byte volumes, separate from retained snapshot bytes, disk
+traffic, Metal allocations or RSS. No caches, image options, resource publication,
+leases, shader math or GPU completion behavior change. Attribution alone makes no
+latency or responsiveness claim.

@@ -214,7 +214,16 @@ func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() th
         for id in [0, 200, 201] {
             let card = try SourceCharacterCard.decode(original.selectingVanillaHead(id))
             let bytes = card.preservedData
-            let value = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base)
+            let timings = id == 201 ? SourceMakerPreparationTimings() : nil
+            let value = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base, timings: timings)
+            if let timings {
+                let sample = try #require(value.workerStages)
+                #expect(sample.intervals["libraryPreparation"]?.calls == 1 && sample.intervals["appearanceInputPreparation"]?.calls == 1)
+                #expect(sample.intervals["assembly"]?.calls == 1 && sample.intervals.values.allSatisfy { $0.failures == 0 })
+                #expect(sample.bytesRead["rgbaRead"] == value.appearanceInputs.byteCount)
+                #expect(sample.rgbaBytesCopied == value.appearanceInputs.byteCount && sample.hashMismatches == 0)
+                #expect(timings.sample.bytesRead == sample.bytesRead)
+            } else { #expect(value.workerStages == nil) }
             #expect(value.sex == sample.sex && value.headID == id && value.boneType == sample.boneType && value.coordinate == 1)
             #expect(value.bodyOptions.sex.rawValue == sample.sex)
             let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: value.manifestURL))
@@ -334,7 +343,11 @@ func sourceMakerLibraryLoadsOnlyRequiredReferenceGeometry() throws {
     }
     let changedBase = directory.appendingPathComponent("source-avatar.json")
     try JSONSerialization.data(withJSONObject: manifest).write(to: changedBase)
-    let prepared = try library.prepare(card: card, coordinate: 0, baseURL: changedBase)
+    let timings = SourceMakerPreparationTimings()
+    let prepared = try library.prepare(card: card, coordinate: 0, baseURL: changedBase, timings: timings)
+    #expect(timings.sample.intervals["libraryManifestRead"]?.calls == 1 && timings.sample.intervals["libraryManifestDecode"]?.calls == 1)
+    #expect(timings.sample.intervals["rigRead"]?.calls == timings.sample.intervals["rigDecode"]?.calls)
+    #expect(timings.sample.intervals["assembly"]?.calls == 1 && timings.sample.intervals.values.allSatisfy { $0.failures == 0 })
     #expect(prepared.clothingSlots == original.clothingSlots && prepared.referenceClothingSlots == original.referenceClothingSlots)
     #expect(prepared.selections.map(\.property) == original.selections.map(\.property))
     #expect(prepared.selections.map(\.sourceID) == original.selections.map(\.sourceID))
@@ -491,4 +504,43 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
     } catch { #expect(String(describing: error).contains("different base assembly")) }
     #expect(resources.statistics().textures == before)
     #expect(try original.editedData(.init()) == original.preservedData)
+}
+
+@Test func sourceMakerWorkerDiagnosticsPreserveRigLoadErrorOrderAndPartialReads() throws {
+    let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let library = try MakerLibraryFixture.library([], directory: directory)
+    typealias F = OriginalCardFixture
+    let custom = try #require(try AppearanceTestFixture.card().block(named: "Custom")?.data)
+    let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array([]))]))
+    let accessory = F.pack(F.map([("version", .string("0.0.2")), ("parts", .array([]))]))
+    let makeup = F.pack(F.map([("version", .string("0.0.0"))]))
+    let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([0]) + F.lengthData(makeup)
+    var blocks = F.blocks(custom: custom)
+    blocks.append(.init(name: "Coordinate", version: "0.0.0", data: F.pack(.array(Array(repeating: .binary(outfit), count: 7)))))
+    let card = try SourceCharacterCard.decode(F.card(blocks: blocks))
+    let url = directory.appendingPathComponent("source-avatar.json"), first = directory.appendingPathComponent("first.json")
+    let manifest: [String: Any] = ["schemaVersion": 1, "kind": "koikatsu-female-avatar", "name": "fixture", "sex": 1, "headID": 0,
+        "bodySkeleton": "first.json", "headSkeleton": "../must-not-resolve.json", "body": ["file": "missing-body.json"],
+        "head": ["file": "missing-head.json"], "clothes": [], "hair": []]
+    try JSONSerialization.data(withJSONObject: manifest).write(to: url)
+    let malformed = Data("malformed rig".utf8); try malformed.write(to: first)
+    func failure(_ action: () throws -> Void) -> String {
+        do { try action(); Issue.record("Invalid rig unexpectedly loaded"); return "no failure" }
+        catch { return String(reflecting: error) }
+    }
+    let reference = failure { _ = try SourceRig.load(url: first) }
+    #expect(reference.contains("DecodingError"))
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url) } == reference)
+    let timings = SourceMakerPreparationTimings()
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: timings) } == reference)
+    #expect(timings.sample.bytesRead["rigRead"] == malformed.count)
+    #expect(timings.sample.intervals["rigRead"]?.calls == 1 && timings.sample.intervals["rigRead"]?.failures == 0)
+    #expect(timings.sample.intervals["rigDecode"]?.calls == 1 && timings.sample.intervals["rigDecode"]?.failures == 1)
+    #expect(timings.sample.intervals["assembly"] == nil)
+    try FileManager.default.removeItem(at: first)
+    let missing = SourceMakerPreparationTimings()
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: missing) }
+        == failure { _ = try SourceRig.load(url: first) })
+    #expect(missing.sample.intervals["rigRead"]?.failures == 1 && missing.sample.intervals["rigDecode"] == nil)
+    #expect(missing.sample.bytesRead["rigRead"] == nil)
 }

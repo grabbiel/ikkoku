@@ -105,11 +105,15 @@ public struct SourceAppearanceBindings: Codable, Sendable, Equatable {
         return try JSONDecoder().decode(Self.self, from: JSONSerialization.data(withJSONObject: rewrite(object)))
     }
 
-    public static func load(url: URL) throws -> Self {
-        let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
-        let data = try file.read(upToCount: 1024 * 1024 + 1) ?? Data()
+    public static func load(url: URL, timings: SourceMakerPreparationTimings? = nil) throws -> Self {
+        let data = try SourceMakerPreparationTimings.read(timings, .bindingRead) {
+            let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+            return try file.read(upToCount: 1024 * 1024 + 1) ?? Data()
+        }
         guard data.count <= 1024 * 1024 else { throw RigError.invalid("Appearance binding manifest exceeds 1 MiB.") }
-        let value = try JSONDecoder().decode(Self.self, from: data)
+        let value = try SourceMakerPreparationTimings.measure(timings, .bindingDecode) {
+            try JSONDecoder().decode(Self.self, from: data)
+        }
         guard value.schemaVersion == 1, value.entries.count <= 256 else { throw RigError.invalid("Unsupported appearance binding manifest.") }
         return value
     }
@@ -431,8 +435,14 @@ private final class SourceAppearanceInputReader {
     let maximumBytes: Int
     private var bytesByPath: [String: [UInt8]] = [:]
     private(set) var totalBytes = 0
-    init(directory: URL, maximumBytes: Int = 128 * 1024 * 1024) {
-        self.directory = directory.resolvingSymlinksInPath(); self.maximumBytes = maximumBytes
+    private let timings: SourceMakerPreparationTimings?
+    init(directory: URL, maximumBytes: Int = 128 * 1024 * 1024, timings: SourceMakerPreparationTimings? = nil) {
+        self.directory = directory.resolvingSymlinksInPath(); self.maximumBytes = maximumBytes; self.timings = timings
+    }
+    private func matchesHash(_ data: Data, expected: String) -> Bool {
+        let matches = SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expected
+        timings?.hashed(data.count, phase: .rgbaSHA, matches: matches)
+        return matches
     }
     func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
         guard (1...4096).contains(input.width), (1...4096).contains(input.height),
@@ -443,22 +453,29 @@ private final class SourceAppearanceInputReader {
         guard url.path.hasPrefix(directory.path + "/") else { throw RigError.invalid("Appearance texture escapes its directory.") }
         let expected = input.width * input.height * 4
         if let cached = bytesByPath[url.path] {
-            guard cached.count == expected, SHA256.hash(data: Data(cached)).map({ String(format: "%02x", $0) }).joined() == input.sha256 else {
+            guard cached.count == expected, SourceMakerPreparationTimings.measure(timings, .rgbaSHA, {
+                matchesHash(Data(cached), expected: input.sha256)
+            }) else {
                 throw RigError.invalid("Conflicting appearance texture metadata.")
             }
+            timings?.reusedRGBA()
             return cached
         }
         guard expected <= maximumBytes - totalBytes else {
             throw RigError.invalid("Appearance inputs exceed their retained byte limit.")
         }
-        let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
-        let data = try file.read(upToCount: expected + 1) ?? Data()
+        let data = try SourceMakerPreparationTimings.read(timings, .rgbaRead) {
+            let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+            return try file.read(upToCount: expected + 1) ?? Data()
+        }
         totalBytes += data.count
         guard totalBytes <= maximumBytes, data.count == expected,
-              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == input.sha256 else {
+              SourceMakerPreparationTimings.measure(timings, .rgbaSHA, { matchesHash(data, expected: input.sha256) }) else {
             throw RigError.invalid("Appearance texture has changed or exceeds its size limit.")
         }
-        let result = [UInt8](data); bytesByPath[url.path] = result; return result
+        let result = SourceMakerPreparationTimings.measure(timings, .rgbaCopy) { [UInt8](data) }
+        timings?.copied(data.count)
+        bytesByPath[url.path] = result; return result
     }
 }
 
@@ -473,12 +490,13 @@ public struct SourceAppearanceInputs: Sendable {
     public let byteCount: Int
 
     public static func prepare(card: SourceCardAppearance, bindings: SourceAppearanceBindings,
-                               directory: URL, maximumBytes: Int = 128 * 1024 * 1024) throws -> Self {
+                               directory: URL, maximumBytes: Int = 128 * 1024 * 1024,
+                               timings: SourceMakerPreparationTimings? = nil) throws -> Self {
         guard (0...128 * 1024 * 1024).contains(maximumBytes) else {
             throw RigError.invalid("Invalid prepared appearance input byte limit.")
         }
         try validateOutputBudget(bindings)
-        let reader = SourceAppearanceInputReader(directory: directory, maximumBytes: maximumBytes)
+        let reader = SourceAppearanceInputReader(directory: directory, maximumBytes: maximumBytes, timings: timings)
         var values: [SourceAppearanceBindings.Texture: [UInt8]] = [:], diagnostics: [String] = []
         for entry in bindings.entries {
             _ = try SourceAppearanceRecipe.resolve(entry, card: card, materials: nil, pixels: { input in
