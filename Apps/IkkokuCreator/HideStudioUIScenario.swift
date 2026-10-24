@@ -14,6 +14,8 @@ struct HideStudioUIScenario: Decodable {
     let rejectedManifestFile: String?
     let sceneFile: String
     var reload: Bool = false
+    /// Uses the already imported source scene; no fixture path is inferred.
+    let measureLoadedScene: Bool?
 
     @MainActor func run(app: AppState, studio: StudioModel) -> StudioScenario.Report {
         var rows: [StudioScenario.Report.StepResult] = []
@@ -32,17 +34,72 @@ struct HideStudioUIScenario: Decodable {
                 && a.skinSets == b.skinSets && a.items.count == b.items.count
                 && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
         }
-        func space(repeatKey: Bool = false, modifiers: NSEvent.ModifierFlags = []) throws -> Bool {
+        func spaceEvent(repeatKey: Bool = false, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
             guard let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
                 timestamp: 0, windowNumber: 0, context: nil, characters: " ", charactersIgnoringModifiers: " ",
                 isARepeat: repeatKey, keyCode: 49) else { throw SourcePluginError.runtime("Space event unavailable.") }
-            return studio.keyDown(event)
+            return event
+        }
+        func space(repeatKey: Bool = false, modifiers: NSEvent.ModifierFlags = []) throws -> Bool {
+            studio.keyDown(try spaceEvent(repeatKey: repeatKey, modifiers: modifiers))
         }
         do {
             studio.liveAnimation = false; studio.sourcePluginsRunning = false
             app.maker?.liveAnimation = false; app.mode = .studio
             let manifest = URL(fileURLWithPath: manifestFile), scene = URL(fileURLWithPath: sceneFile)
-            if reload {
+            if measureLoadedScene == true {
+                guard !reload, rejectedManifestFile == nil else {
+                    throw SourcePluginError.invalid("Loaded visibility cost cannot ignore reload or rejected-package checks.")
+                }
+                studio.stopBenchmarkTimer()
+                studio.sourceAutomaticBlink = false; studio.sourceAnimationTime = 0
+                let outcome = studio.sourcePreviewCharacterOutcome()
+                guard outcome.built >= 2,
+                      let target = studio.doc.objects.first(where: { $0.sourceObjectKey == 65 }) else {
+                    throw SourcePluginError.invalid("Loaded visibility cost needs an imported multi-character scene with source key 65.")
+                }
+                studio.selection = target.id; studio.showGizmos = true; studio.showTimeline = true
+                try studio.loadSourceNativePlugin(url: manifest)
+                let original = studio.doc, baseline = studio.host.renderer.currentFrame(), resources = counts()
+                try check("loadedFixture", !baseline.items.isEmpty && !baseline.gizmos.isEmpty && studio.sourceInterfaceVisible,
+                          "\(outcome.built) rendered source characters; \(baseline.items.count) draw items; held animation time 0, live animation and blink disabled")
+                let event = try spaceEvent()
+                func timedSpace() throws -> Double {
+                    let start = ProcessInfo.processInfo.systemUptime
+                    let consumed = studio.keyDown(event)
+                    let milliseconds = (ProcessInfo.processInfo.systemUptime - start) * 1000
+                    guard consumed else { throw SourcePluginError.runtime("Loaded visibility event was not consumed.") }
+                    return milliseconds
+                }
+                func pair() throws -> [Double] {
+                    let hide = try timedSpace()
+                    guard !studio.sourceInterfaceVisible, studio.host.renderer.currentFrame().gizmos.isEmpty,
+                          sameContent(baseline, studio.host.renderer.currentFrame()) else {
+                        throw SourcePluginError.runtime("Loaded hide changed render content or retained guides.")
+                    }
+                    let show = try timedSpace()
+                    guard studio.sourceInterfaceVisible,
+                          studio.host.renderer.currentFrame().gizmos.count == baseline.gizmos.count,
+                          sameContent(baseline, studio.host.renderer.currentFrame()),
+                          studio.doc == original, counts() == resources else {
+                        throw SourcePluginError.runtime("Loaded visibility pair changed document, frame or resources.")
+                    }
+                    return [hide, show]
+                }
+                // Cold here means the first visibility events after the scene and
+                // package are loaded, not cold asset loading. Assertions and event
+                // construction are outside the timed synchronous keyDown calls.
+                let firstPair = try pair()
+                for _ in 0..<3 { _ = try pair() }
+                var measured: [[Double]] = []
+                for _ in 0..<20 { measured.append(try pair()) }
+                let detail: [String: Any] = ["firstPairMS": firstPair, "warmupPairs": 3,
+                    "measuredPairsMS": measured, "renderedSourceCharacters": outcome.built,
+                    "drawItems": baseline.items.count, "resources": resources,
+                    "scope": "Synchronous keyDown/model refresh only; excludes deferred SwiftUI layout/display and GPU completion. Held clocks; no throughput or responsiveness comparison."]
+                let data = try JSONSerialization.data(withJSONObject: detail, options: [.sortedKeys])
+                try check("loadedEventCostAndState", true, String(decoding: data, as: UTF8.self))
+            } else if reload {
                 try studio.loadScene(from: scene)
                 try check("freshProcessVisible", studio.sourceHideStudioUI != nil && studio.sourceInterfaceVisible)
                 let expected = SourceNativePluginReference(package: try SourceNativePluginPackage.load(url: manifest))
