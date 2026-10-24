@@ -163,6 +163,23 @@ class ShapeCaptureTests(unittest.TestCase):
         (self.baseline / 'status.json').write_text(json.dumps(status))
         with self.assertRaisesRegex(ValueError, 'context differs'): model.compare(self.folder, self.native, shape_baseline=self.baseline)
 
+    def test_male00_baseline_rejects_other_sex_and_head_before_card_payload(self):
+        path=self.baseline/'frame.json';base=json.loads(path.read_text())
+        male00=dict(variant='male00',sex=0,requestedSex=0,headID=0,requestedHeadID=0,
+                    loadedHeadCatalogID=0,loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG),
+                    exType=0,requestedExType=0,boneType=0,requestedBoneType=0)
+        for other in (dict(variant='female00',sex=1,requestedSex=1),
+                      dict(variant='male201',headID=201,requestedHeadID=201,loadedHeadCatalogID=201,
+                           loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG))):
+            for changed_baseline in (True,False):
+                base['neutralModel'].update(male00);self.frame['neutralModel'].update(male00)
+                (base['neutralModel'] if changed_baseline else self.frame['neutralModel']).update(other)
+                path.write_text(json.dumps(base));self.write()
+                with patch.object(model,'shape_card_payload') as payload:
+                    with self.subTest(other=other['variant'],baseline=changed_baseline),self.assertRaisesRegex(ValueError,'context differs'):
+                        model.shape_request_gate(self.folder,self.frame,self.baseline)
+                    payload.assert_not_called()
+
     def test_corrected_shape_baseline_binds_type_and_table_before_card_payload(self):
         authored.ModelComparisonTests.bone1(self)
         path=self.baseline/'frame.json';base=json.loads(path.read_text())
