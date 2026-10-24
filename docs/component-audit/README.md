@@ -98,8 +98,8 @@ inspector hashes its correction input once; no runtime pose formula or per-frame
 work changes, and no timing speedup is claimed. Original-player coverage for
 normal male/head 0, other corrected types, broader shapes, full hierarchy and
 appearance remains open. The measured producer and separately compiled merged
-producer retain distinct provenance. The task is reviewed locally; its four CI
-jobs and merge are pending. [Detailed scope and measurements](https://github.com/grabbiel/ikkoku/pull/178).
+producer retain distinct provenance. All four CI jobs pass at the reviewed head
+`78fcf76`; the change is merged. [Detailed scope and measurements](../reference/character/neutral-model-parity.md#corrected-female-head00-skeleton-176).
 
 A later read-only snapshot covers all 243 installed DLLs (26,759,208 bytes),
 with identical before/after source manifests. Eight bounded shards per scan give
