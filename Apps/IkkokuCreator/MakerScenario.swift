@@ -2,6 +2,8 @@ import Foundation
 import Character
 import CoreMath
 import Renderer
+import Scene
+import Studio
 
 /// JSON-driven Maker scenario: a scripted sequence of checklist moves over the
 /// imported source card, run headlessly behind `IKKOKU_MAKER_SCENARIO` so the
