@@ -83,9 +83,11 @@ acceptance boundary; their old “next” steps are historical, not a live queue
 - **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
   have bounded original-player gates, plus head-0 bone-type-1 checks for both
   sexes. Asynchronous normal-head selection is merged. Prepared inputs reduce
-  owner-thread stalls at a total-latency cost; remaining stalls and transient
-  fallback allocations are tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192)
-  and [#202](https://github.com/grabbiel/ikkoku/issues/202).
+  owner-thread stalls at a total-latency cost. Fallback reuse is merged with a
+  verified allocation reduction, without consistent latency improvement.
+  Remaining stalls and bounded composition batching are tracked in
+  [#192](https://github.com/grabbiel/ikkoku/issues/192) and
+  [#208](https://github.com/grabbiel/ikkoku/issues/208).
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
@@ -461,7 +463,8 @@ Candidate child intervals attribute 7.426–8.563 ms to allocation/upload,
 0.182–0.282 ms to encode/submit and 51.152–55.855 ms to wait/view in the selected
 head-201 cases. The last interval includes scheduling/completion/view creation,
 not pure kernel time. Registered resources and 32,506,112 retained raw-input
-bytes match the control. The [Maker reference](../reference/character/maker-assets.md)
+bytes match the control. All four CI checks pass at `45f355f`; #207 is merged.
+The [Maker reference](../reference/character/maker-assets.md)
 retains exact cases and limits. The next task evaluates bounded batching within
 one applying call while preserving synchronous completion and private failure
 cleanup; no batching improvement is claimed here.
