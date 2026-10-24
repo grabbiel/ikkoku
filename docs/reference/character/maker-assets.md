@@ -392,3 +392,12 @@ head 0 restored its prior mesh-byte count. Failure and cancellation retained the
 old counts/frame/context, and all eight distinct exported-card artifacts are
 hash-verified in `quiet-retained/`. These measurements do not establish frame rate,
 process footprint, wider source UI behavior or rendering parity.
+
+
+The same Release binary also passed a visible native GUI check on the normal
+female head-0 fixture: the popup listed exactly 0, 200 and 201, actual 0→200→201→0
+selections committed the expected value and success status, and the dressed
+viewport remained visible with the picker enabled. This verifies that bounded
+female control flow; the two-sex API checks above separately cover persistence,
+latest edits and rollback. It does not establish male GUI or whole-Maker/source
+appearance parity. The parent-owned review is retained as `root-gui-review.json`.
