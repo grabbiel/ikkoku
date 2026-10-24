@@ -295,6 +295,20 @@ alias branch is source-reviewed, not independently fixture-executed. These are
 functional results, with no quiet timing or speedup claim. The original failed
 report and binary remain retained separately.
 
+The saved-profile restriction is independently reproduced in
+[#210](https://github.com/grabbiel/ikkoku/issues/210). A local regression-only
+checkpoint at `6f999ea` mounts a supported hidden attachment initializer, saves a
+native scene and reopens it in a separate process. All ten save checks and ten
+reopen checks pass: the attachment profile hits the exact existing installation
+gate, preserving the prior document/session, fields/clocks, adapters, history,
+frame, preview identities and active resources. A valid-JSON profile whose bytes
+changed still hits the saved-identity gate. An attachment-free control restores
+exact saved state and advances its next step. This records an unsupported-policy
+gap, not implemented restore support or a new regression. The accepted local
+Release binary is `7654f79beeed754ff46c718668dc171522c0015cd5621ad5b039b908a63d1d6e`;
+private evidence is under the existing `profile-native-restore` directory. No GUI,
+performance or source-game parity claim follows.
+
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
 It cannot be combined with a legacy profile or separate adapter manifests. This
