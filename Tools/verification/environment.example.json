@@ -64,5 +64,7 @@
   "IKKOKU_ROUTE_CHILDREN_SCENE": "/absolute/path/to/scene-route-children.png",
   "IKKOKU_NECK_TARGET_SCENE": "/absolute/path/to/scene-neck-target.png",
   "IKKOKU_MIRRORED_CAMERA_SCENE": "/absolute/path/to/scene-mirrored-camera.png",
-  "IKKOKU_GARMENT_COMPOSITE_PROBE": "/absolute/path/to/r1-garment/original-colour"
+  "IKKOKU_GARMENT_COMPOSITE_PROBE": "/absolute/path/to/r1-garment/original-colour",
+  "IKKOKU_BOTTOM_COMPOSITE_PROBE": "/absolute/path/to/r1-bottom/original-colour",
+  "IKKOKU_INNER_SHOE_COMPOSITE_PROBE": "/absolute/path/to/r1-inner-shoe/original-inner-colour"
 }

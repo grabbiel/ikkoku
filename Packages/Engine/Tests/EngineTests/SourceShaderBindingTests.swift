@@ -354,10 +354,10 @@ private enum DerivationFixture {
         .material.textures["_MainTex"]?.identity?.width == 512)
 }
 
-// The normal top is deliberately synthetic: a non-square source texture,
+// Normal clothes are deliberately synthetic: a non-square source texture,
 // non-default TexEnv and three distinct colours expose size/identity/setter
 // mixups without depending on the private converted library.
-private enum TopCompositeFixture {
+private enum NormalClothesCompositeFixture {
     typealias F = OriginalCardFixture
     static func derive(directory: URL, pattern: Int = 0, patternRow: Bool = true,
                        mask: Bool = true, provenProgram: Bool = true, normalOnly: Bool = true,
@@ -370,8 +370,39 @@ private enum TopCompositeFixture {
             if !omitColor { fields.append(("baseColor", .array([.float(Double(i + 1) / 4), .float(0.5), .float(0.75), .float(0.8)]))) }
             return F.map(fields)
         }
-        var parts = Array(repeating: F.map([]), count: slot + 1)
+        var parts = Array(repeating: F.map([]), count: slot == 7 ? 9 : slot + 1)
         parts[slot] = F.map([("id", .integer(38)), ("colorInfo", .array(colours))])
+        if slot == 1 {
+            // A valid but different top exposes any accidental parts[0]
+            // lookup in the bottom recipe, including omitted bottom fields.
+            let topColours: [F.Value] = (0..<3).map { i -> F.Value in
+                let baseColor: [F.Value] = [.float(0.9), .float(0.1), .float(Double(i) / 8), .float(1)]
+                let patternColor: [F.Value] = [.float(0.2), .float(0.3), .float(0.4), .float(0.5)]
+                let tiling: [F.Value] = [.float(Double(i + 9)), .float(Double(i + 10))]
+                let fields: [(String, F.Value)] = [
+                    ("pattern", .integer(0)), ("baseColor", .array(baseColor)),
+                    ("patternColor", .array(patternColor)), ("tiling", .array(tiling))]
+                return F.map(fields)
+            }
+            parts[0] = F.map([("id", .integer(38)), ("colorInfo", .array(topColours))])
+        }
+        if slot == 7 {
+            for peer in [0, 1, 8] {
+                let peerColours: [F.Value] = (0..<3).map { i -> F.Value in
+                    let baseColor: [F.Value] = [.float(0.9 - Double(peer) / 20), .float(0.1), .float(Double(i) / 8), .float(1)]
+                    let patternColor: [F.Value] = [.float(0.2), .float(0.3), .float(0.4), .float(0.5)]
+                    let tiling: [F.Value] = [.float(Double(peer + i + 9)), .float(Double(peer + i + 10))]
+                    let fields: [(String, F.Value)] = [
+                        ("pattern", .integer(0)), ("baseColor", .array(baseColor)),
+                        ("patternColor", .array(patternColor)), ("tiling", .array(tiling))]
+                    return F.map(fields)
+                }
+                // Slots 7 and 8 share category 112. A peer ID absent from the
+                // one-row library prevents two copies of the same test mesh;
+                // its saved fields still expose a wrong-slot color lookup.
+                parts[peer] = F.map([("id", .integer(39)), ("colorInfo", .array(peerColours))])
+            }
+        }
         let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array(parts))]))
         let accessory = F.pack(F.map([("version", .string("0.0.2")), ("parts", .array([]))]))
         let makeup = F.pack(F.map([("version", .string("0.0.0"))]))
@@ -384,7 +415,8 @@ private enum TopCompositeFixture {
             "passes": [], "floats": [:], "colors": [:], "textures": [:]]
         var textures: [String: Any] = ["main": ["name": "top_main", "width": 4, "height": 2]]
         if mask { textures["mask"] = ["name": "top_mask", "width": 4, "height": 2] }
-        let evidence: [String: Any] = ["category": 105 + slot, "id": 38,
+        let category = min(105 + slot, 112)
+        let evidence: [String: Any] = ["category": category, "id": 38,
             "source": ["bundle": "chara/top.unity3d", "bundleSHA256": "top-sha"],
             "catalog": ["MainAB": "chara/top.unity3d", "MainTexAB": "0", "MainTex": "top_main", "ColorMaskAB": "0", "ColorMaskTex": "top_mask"],
             "catalogTextures": textures,
@@ -393,7 +425,7 @@ private enum TopCompositeFixture {
         let materialData = try JSONSerialization.data(withJSONObject: evidence), rig = Data("{}".utf8)
         try materialData.write(to: directory.appendingPathComponent("materials.json"))
         try rig.write(to: directory.appendingPathComponent("rig.json"))
-        let entry: [String: Any] = ["category": 105 + slot, "id": 38, "name": "top", "meshNames": ["o_top"],
+        let entry: [String: Any] = ["category": category, "id": 38, "name": "top", "meshNames": ["o_top"],
             "rig": ["file": "rig.json", "sha256": F.hash(rig)],
             "materialEvidence": ["file": "materials.json", "sha256": F.hash(materialData)]]
         let libraryURL = directory.appendingPathComponent("library.json")
@@ -418,7 +450,7 @@ private enum TopCompositeFixture {
 
 @Test func sourceShaderNormalTopCompositeKeepsSourceIdentitySizeAndAllThreeSetters() throws {
     let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
-    let texture = try #require(try TopCompositeFixture.derive(directory: directory))
+    let texture = try #require(try NormalClothesCompositeFixture.derive(directory: directory))
     let identity = try #require(texture.identity), recipe = try #require(identity.composite)
     #expect(identity.width == 4 && identity.height == 2 && identity.mipLevels == 3)
     #expect(identity.filter == "Bilinear" && identity.wrap == "Clamp" && identity.aniso == 1)
@@ -440,16 +472,76 @@ private enum TopCompositeFixture {
     }
 }
 
-@Test func sourceShaderNormalTopCompositeLeavesUnsupportedOrMissingInputsExplicit() throws {
+@Test func sourceShaderNormalBottomCompositeReadsItsOwnSlotDespiteAValidTop() throws {
     let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
-    #expect(try TopCompositeFixture.derive(directory: directory, pattern: 1)?.identity?.composite?.unresolved?.contains("mt_pattern") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, patternRow: false)?.identity?.composite?.unresolved?.contains("mt_pattern") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, mask: false)?.identity?.composite?.textures["_ColorMask"]?.identityUnresolved?.contains("not converted") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, provenProgram: false)?.identity?.composite?.unresolved?.contains("not verified") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, normalOnly: false)?.identityUnresolved?.contains("membership") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, hiPoly: false)?.identity?.composite?.unresolved?.contains("low-detail") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, omitColor: true)?.identity?.composite?.vectors["_Color"]?.unresolved?.contains("baseColor") == true)
-    #expect(try TopCompositeFixture.derive(directory: directory, slot: 1)?.identity?.composite == nil)
+    let texture = try #require(try NormalClothesCompositeFixture.derive(directory: directory, slot: 1))
+    let identity = try #require(texture.identity), recipe = try #require(identity.composite)
+    #expect(identity.width == 4 && identity.height == 2 && identity.mipLevels == 3)
+    #expect(recipe.unresolved == nil && recipe.programSHA256 == String(repeating: "a", count: 64))
+    #expect(recipe.method == "ChaControl.InitBaseCustomTextureClothes(true, 1) → ChangeCustomClothes(true, 1, true, true, true, true, false)")
+    #expect(recipe.textures["_MainTex"]?.identitySource.hasPrefix("bottom catalog") == true)
+    #expect(recipe.textures["_ColorMask"]?.identitySource.hasPrefix("bottom catalog") == true)
+    for i in 1...3 {
+        let path = "clothes.parts.1.colorInfo.\(i - 1)"
+        let base = try #require(recipe.vectors[i == 1 ? "_Color" : "_Color\(i)"])
+        let pattern = try #require(recipe.vectors["_Color\(i)_2"])
+        let u = try #require(recipe.vectors["_PatternScale\(i)u"])
+        let v = try #require(recipe.vectors["_PatternScale\(i)v"])
+        #expect(base.values == [Float(i) / 4, 0.5, 0.75, 0.8] && base.source.contains(path + ".baseColor"))
+        #expect(pattern.values == [0.7, 0.6, 0.5, 1] && pattern.source.contains(path + ".patternColor"))
+        #expect(u.values == [Float(i + 1)] && u.source.contains(path + ".tiling.0"))
+        #expect(v.values == [Float(i + 2)] && v.source.contains(path + ".tiling.1"))
+        #expect(recipe.textures["_PatternMask\(i)"]?.identity == nil)
+        #expect(recipe.textures["_PatternMask\(i)"]?.identityUnresolved == nil)
+    }
+}
+
+@Test func sourceShaderNormalInnerShoeCompositeReadsItsOwnSlotDespiteConflictingPeers() throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let texture = try #require(try NormalClothesCompositeFixture.derive(directory: directory, slot: 7))
+    let identity = try #require(texture.identity), recipe = try #require(identity.composite)
+    #expect(identity.width == 4 && identity.height == 2 && identity.mipLevels == 3)
+    #expect(recipe.unresolved == nil && recipe.programSHA256 == String(repeating: "a", count: 64))
+    #expect(recipe.method == "ChaControl.InitBaseCustomTextureClothes(true, 7) → ChangeCustomClothes(true, 7, true, true, true, true, false)")
+    #expect(recipe.textures["_MainTex"]?.identitySource.hasPrefix("inner shoe catalog") == true)
+    #expect(recipe.textures["_ColorMask"]?.identitySource.hasPrefix("inner shoe catalog") == true)
+    for i in 1...3 {
+        let path = "clothes.parts.7.colorInfo.\(i - 1)"
+        let base = try #require(recipe.vectors[i == 1 ? "_Color" : "_Color\(i)"])
+        let pattern = try #require(recipe.vectors["_Color\(i)_2"])
+        let u = try #require(recipe.vectors["_PatternScale\(i)u"])
+        let v = try #require(recipe.vectors["_PatternScale\(i)v"])
+        #expect(base.values == [Float(i) / 4, 0.5, 0.75, 0.8] && base.source.contains(path + ".baseColor"))
+        #expect(pattern.values == [0.7, 0.6, 0.5, 1] && pattern.source.contains(path + ".patternColor"))
+        #expect(u.values == [Float(i + 1)] && u.source.contains(path + ".tiling.0"))
+        #expect(v.values == [Float(i + 2)] && v.source.contains(path + ".tiling.1"))
+        #expect(recipe.textures["_PatternMask\(i)"]?.identity == nil)
+        #expect(recipe.textures["_PatternMask\(i)"]?.identityUnresolved == nil)
+    }
+    let missing = try #require(try NormalClothesCompositeFixture.derive(directory: directory, omitColor: true, slot: 7)?.identity?.composite)
+    for i in 1...3 {
+        let base = try #require(missing.vectors[i == 1 ? "_Color" : "_Color\(i)"])
+        #expect(base.values == nil && base.unresolved?.contains("clothes.parts.7.colorInfo.\(i - 1).baseColor") == true)
+    }
+}
+
+@Test(arguments: [2, 8])
+func sourceShaderOtherNormalClothesSlotsRemainUncomposed(slot: Int) throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let identity = try #require(try NormalClothesCompositeFixture.derive(directory: directory, slot: slot)?.identity)
+    #expect(identity.kind == .runtimeComposite && identity.composite == nil)
+}
+
+@Test(arguments: [0, 1, 7])
+func sourceShaderNormalClothesCompositeLeavesUnsupportedOrMissingInputsExplicit(slot: Int) throws {
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, pattern: 1, slot: slot)?.identity?.composite?.unresolved?.contains("mt_pattern") == true)
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, patternRow: false, slot: slot)?.identity?.composite?.unresolved?.contains("mt_pattern") == true)
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, mask: false, slot: slot)?.identity?.composite?.textures["_ColorMask"]?.identityUnresolved?.contains("not converted") == true)
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, provenProgram: false, slot: slot)?.identity?.composite?.unresolved?.contains("not verified") == true)
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, normalOnly: false, slot: slot)?.identityUnresolved?.contains("membership") == true)
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, hiPoly: false, slot: slot)?.identity?.composite?.unresolved?.contains("low-detail") == true)
+    #expect(try NormalClothesCompositeFixture.derive(directory: directory, omitColor: true, slot: slot)?.identity?.composite?.vectors["_Color"]?.unresolved?.contains("baseColor") == true)
 }
 
 // MARK: - Private R1 fixture
