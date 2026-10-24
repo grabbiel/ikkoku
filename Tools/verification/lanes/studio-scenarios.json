@@ -1943,6 +1943,52 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "studio-scenario-live-step-edit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_ANIMATION_CATALOG",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_STUDIO_LOOK_SETTINGS",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/live-step-edit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-live-step-edit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "R7 phase 2, item 3: on the 7-character scenario scene, each editDuringAdvance step starts the live step the way the timer does (off the main thread; a serial step fails the op), lands an edit through the app's own method while the step is in flight (none, move key 65 by 0.25 m in x, FK bone 19 of key 65 to [0,35,0], undo, redo), then completes the step as its completion handler does. Each must advance the clock by exactly one 1/30 s step, present a 512x512 render byte-identical to a full main-thread rebuild of the same document at the same clock, and reuse exactly the step frames the contract allows: all of them without an edit, all but the moved character's after the document-only move, none after an edit that reached a preview (FK, undo, redo). The fk asserts read the edited document; after export and reimport only the character's presence is asserted, since the round trip is not what this check covers. The interleaving inside one step (which worker finishes first) is not controlled; the Engine's sourceStudioEditDuringAParallelTickMatchesTheSerialOrder compares the parallel and serial call orders bit for bit.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-live-step-edit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/live-step-edit.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 900
     }
   ]
 }
