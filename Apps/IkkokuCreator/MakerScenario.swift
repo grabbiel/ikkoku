@@ -2,6 +2,8 @@ import Foundation
 import Character
 import CoreMath
 import Renderer
+import Scene
+import Studio
 
 /// JSON-driven Maker scenario: a scripted sequence of checklist moves over the
 /// imported source card, run headlessly behind `IKKOKU_MAKER_SCENARIO` so the
@@ -120,11 +122,12 @@ struct MakerScenario: Decodable {
     /// Runs the steps against the imported card. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` stops it,
     /// because every later step depends on the file they were to write.
-    static func run(_ scenario: MakerScenario, maker: MakerModel) async -> Report {
+    static func run(_ scenario: MakerScenario, maker: MakerModel, app: AppState) async -> Report {
         var results: [Report.StepResult] = []
         var heldSelection: (task: Task<Void, Error>, gate: MakerSelectionGate)?
         defer { heldSelection?.gate.release(); heldSelection?.task.cancel() }
         var heartbeat: MakerSelectionHeartbeat?
+        var inactiveStudioFrame: RenderFrame?
         struct SelectionState: Equatable {
             let preview: ObjectIdentifier?, card: Data?, face: [Float], body: [Float], coordinate: Int
             let colors: [String: Float4]
@@ -136,6 +139,25 @@ struct MakerScenario: Decodable {
                 colors: Dictionary(uniqueKeysWithValues: (maker.sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) }),
                 customization: maker.applySourceCustomization, applyBoneModifiers: maker.applySourceBoneModifiers,
                 boneModifierHash: maker.sourceBoneModifiers?.source.payloadSHA256)
+        }
+        func showEmptyStudio() throws -> RenderFrame {
+            guard let studio = app.studio else { throw RigError.invalid("Mode check needs Studio.") }
+            studio.liveAnimation = false; studio.timelinePlaying = false
+            studio.newScene()
+            app.mode = .studio // Exercise the same app transition as the mode picker.
+            let frame = maker.host.renderer.currentFrame()
+            guard frame.items.isEmpty, frame.skinSets.isEmpty, frame.gizmos.isEmpty, frame.lights.isEmpty else {
+                throw RigError.invalid("Mode check expected an empty Studio frame.")
+            }
+            return frame
+        }
+        func studioFrameMatches(_ expected: RenderFrame) -> Bool {
+            let actual = maker.host.renderer.currentFrame()
+            return app.mode == .studio && !maker.isActiveMode && app.studio?.doc.objects.isEmpty == true
+                && actual.items.isEmpty && actual.skinSets.isEmpty && actual.camera == expected.camera
+                && actual.mainLight == expected.mainLight && actual.effects == expected.effects
+                && actual.sceneBounds == expected.sceneBounds && actual.time == expected.time
+                && actual.gizmos.count == expected.gizmos.count && actual.lights.count == expected.lights.count
         }
         // The file the model currently holds: the `IKKOKU_SOURCE_CARD` import,
         // replaced by each `reimport`. The export guard below never deletes it.
@@ -278,11 +300,46 @@ struct MakerScenario: Decodable {
                 case .failure(let error):
                     let afterResources = maker.host.renderer.resources.statistics()
                     let expectedError = step.diagnosticContains.map { String(describing: error).contains($0) } ?? (error is CancellationError)
+                    let framePreserved = inactiveStudioFrame.map(studioFrameMatches) ?? true
                     record(step, step.expectFailure == true && expectedError && maker.sourceSelectionPending == nil
                         && beforeRelease == selectionState() && beforeResources.meshes == afterResources.meshes
-                        && beforeResources.textures == afterResources.textures && beforeResources.deformBuffers == afterResources.deformBuffers,
-                        "held selection: \(error); contextSame=\(beforeRelease == selectionState()), pending=\(maker.sourceSelectionPending != nil); meshes \(beforeResources.meshes)→\(afterResources.meshes), textures \(beforeResources.textures)→\(afterResources.textures), deform \(beforeResources.deformBuffers)→\(afterResources.deformBuffers)")
+                        && beforeResources.textures == afterResources.textures && beforeResources.deformBuffers == afterResources.deformBuffers && framePreserved,
+                        "held selection: \(error); contextSame=\(beforeRelease == selectionState()), pending=\(maker.sourceSelectionPending != nil), inactiveFramePreserved=\(framePreserved); meshes \(beforeResources.meshes)→\(afterResources.meshes), textures \(beforeResources.textures)→\(afterResources.textures), deform \(beforeResources.deformBuffers)→\(afterResources.deformBuffers)")
                 }
+            case "mode":
+                do {
+                    switch step.id {
+                    case "studio": inactiveStudioFrame = try showEmptyStudio()
+                    case "maker": app.mode = .maker; inactiveStudioFrame = nil
+                    default: throw RigError.invalid("Mode check needs maker or studio.")
+                    }
+                    record(step, true, "active mode: \(app.mode.rawValue)")
+                } catch { record(step, false, "mode: \(error)") }
+            case "queueSelectionThenStudio":
+                guard heldSelection == nil, app.mode == .maker, let selection = step.selection else {
+                    record(step, false, "queueSelectionThenStudio needs an active Maker and no held request"); continue
+                }
+                do {
+                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
+                    let before = selectionState(), resources = maker.host.renderer.resources.statistics()
+                    let gate = MakerSelectionGate(); gate.release() // Records entry without holding a faulty implementation.
+                    let task = Task {
+                        defer { gate.finished() }
+                        try await maker.selectSourceAsset(slot, id: selection.sourceID, beforePreparation: { gate.arriveAndWait() })
+                    }
+                    inactiveStudioFrame = try showEmptyStudio() // No yield: the queued Task has not entered yet.
+                    let result = await task.result
+                    await maker.waitForSourceSelectionPreparation()
+                    let enteredWorker = await gate.arrival()
+                    let after = maker.host.renderer.resources.statistics()
+                    let cancelled: Bool
+                    if case .failure(let error) = result { cancelled = error is CancellationError } else { cancelled = false }
+                    let framePreserved = inactiveStudioFrame.map(studioFrameMatches) == true
+                    record(step, cancelled && !enteredWorker && before == selectionState() && maker.sourceSelectionPending == nil
+                        && resources.meshes == after.meshes && resources.textures == after.textures
+                        && resources.deformBuffers == after.deformBuffers && framePreserved,
+                        "queued inactive selection cancelled=\(cancelled), enteredWorker=\(enteredWorker), contextSame=\(before == selectionState()), studioFramePreserved=\(framePreserved)")
+                } catch { record(step, false, "queueSelectionThenStudio: \(error)") }
             case "supersedeSelection":
                 guard let held = heldSelection, let selection = step.selection else {
                     record(step, false, "supersedeSelection needs a held request and replacement"); continue

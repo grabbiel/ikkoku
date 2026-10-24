@@ -220,8 +220,11 @@ disabled until completion or Cancel, preventing independent choices from being
 silently replaced by a request based on the same old card. Shapes, expressions,
 colors and customization/ABMX toggles remain editable. At commit the transaction
 reads and validates those current edits; it does not restore a pre-decode copy.
-An import, rig/library replacement, outfit change, source close or explicit Cancel
-invalidates the request. Export cancels pending selection and saves the displayed,
+An import, rig/library replacement, outfit change, source close, mode exit or
+explicit Cancel invalidates the request. Switching back to Maker does not revive
+an old request. A picker task first entering after leaving Maker rejects before
+starting preparation; inactive results cannot submit a Maker frame over Studio.
+Export cancels pending selection and saves the displayed,
 committed card and its supported edits; the pending UI states that behavior.
 Resolved no-ops do no preparation and preserve preview/GPU identity.
 
@@ -249,7 +252,8 @@ to the baseline. An independent audit of the async export found exactly seven
 intended scalar leaves changed (face/body rates, two selection IDs and three color
 components), with unrelated records/tokens, other outfits and trailer preserved.
 
-The quiet Release comparison alternated baseline `72e7af6` and candidate `a987e4f`
+The quiet Release comparison, before the later mode-exit guard, alternated
+baseline `72e7af6` and candidate `a987e4f`
 three times, using the same synthetic card and preserved pre-half-state library.
 All six runs passed 46/46 steps, with 15 successful changed selections per run;
 the initial seed no-op, explicit no-op and rejected selections are excluded from
