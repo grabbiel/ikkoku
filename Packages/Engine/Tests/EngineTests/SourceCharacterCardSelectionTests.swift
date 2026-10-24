@@ -18,8 +18,10 @@ private enum SelectionFixture {
                 ("other", .ext(3, Data([6, 7])))])))
         } + [("unknown.plugin", F.plugin(23, data: F.map([("opaque", .binary(Data([0xc1, 0xff])))])))])
     }
-    static func card(records: [Data]? = nil, legacy: Bool = false, badID: V? = nil) throws -> SourceCharacterCard {
-        let face = F.pack(F.map([("version", .string("0.0.2")), ("headId", .integer(0)), ("shapeValueFace", .array(F.faceValues))]))
+    static func card(records: [Data]? = nil, legacy: Bool = false, badID: V? = nil,
+                     headID: V = .integer(0), faceVersion: String = "0.0.2") throws -> SourceCharacterCard {
+        let face = F.pack(F.map([("version", .string(faceVersion)), ("headId", headID),
+            ("shapeValueFace", .array(F.faceValues)), ("unknownFace", .ext(11, Data([1, 2, 3])))]))
         let body = F.pack(F.map([("version", .string("0.0.2")), ("shapeValueBody", .array(F.bodyValues))]))
         let hair = F.pack(F.map([("version", .string("0.0.4")), ("parts", .array((0..<4).map { _ in
             F.map([("id", badID ?? .integer(2)), ("untouched", .ext(5, Data([8, 9])))])
@@ -49,6 +51,78 @@ private enum SelectionFixture {
     let card = try SelectionFixture.card()
     #expect(try card.selectingVanillaAsset(2, at: .hair(0)) == card.preservedData)
     #expect(try card.selectingVanillaAsset(3, at: .clothes(coordinate: 6, slot: 8)) == card.preservedData)
+}
+
+@Test func sourceCardHeadSelectionPreservesUnrelatedTokensAndNoOpBytes() throws {
+    typealias F = SelectionFixture
+    let card = try F.card()
+    #expect(try card.selectingVanillaHead(0) == card.preservedData)
+    var current = card
+    for id in [200, 201, 0] {
+        let edited = try SourceCharacterCard.decode(current.selectingVanillaHead(id))
+        #expect(try edited.recordFields(.face)["headId"]?.integerValue == id)
+        #expect(try edited.recordData(.body) == card.recordData(.body))
+        #expect(try edited.recordData(.hair) == card.recordData(.hair))
+        // The synthetic formatter uses wide noncanonical tokens. Check the raw
+        // face bytes outside the one headId token, not only decoded values.
+        let before = try current.recordData(.face), after = try edited.recordData(.face)
+        let headKey = F.F.pack(.string("headId"))
+        let start = try #require(before.range(of: headKey)).upperBound
+        let next = try #require(before.range(of: F.F.pack(.string("shapeValueFace"))))
+        let afterStart = try #require(after.range(of: headKey)).upperBound
+        let afterNext = try #require(after.range(of: F.F.pack(.string("shapeValueFace"))))
+        #expect(before.prefix(start) == after.prefix(afterStart))
+        #expect(before.suffix(from: next.lowerBound) == after.suffix(from: afterNext.lowerBound))
+        for block in card.blocks where block.name != "Custom" { #expect(edited.block(named: block.name)?.data == block.data) }
+        #expect(edited.thumbnailData == card.thumbnailData && edited.faceThumbnailData == card.faceThumbnailData)
+        #expect(edited.trailingData == card.trailingData)
+        #expect(try edited.selectingVanillaHead(id) == edited.preservedData)
+        current = edited
+    }
+}
+
+@Test func sourceCardHeadSelectionRemovesEqualIDResolverIdentityInBothFormats() throws {
+    typealias F = SelectionFixture
+    let target = "ChaFileFace.headId"
+    let retained = [F.resolver(target + " "), F.resolver("chafileface.headId"), F.resolver(F.target)]
+    for legacy in [false, true] {
+        let card = try F.card(records: [F.resolver(target)] + retained + [F.resolver(target, id: 7)], legacy: legacy)
+        #expect(throws: (any Error).self) { try SourceMakerLibrary.validateAssemblyIdentity(card: card) }
+        let edited = try SourceCharacterCard.decode(card.selectingVanillaHead(0))
+        #expect(edited.preservedData != card.preservedData)
+        try SourceMakerLibrary.validateAssemblyIdentity(card: edited)
+        for block in card.blocks where block.name != "KKEx" { #expect(edited.block(named: block.name)?.data == block.data) }
+        for marker in SourceCardModReferences.pluginIDs {
+            #expect(try F.records(#require(edited.block(named: "KKEx")).data, marker: marker) == retained)
+            if legacy {
+                // The legacy formatter writes KKEx, version and length before
+                // its payload. Extract through the independently generated frame.
+                let originalPayload = F.F.pack(F.plugins([F.resolver(target)] + retained + [F.resolver(target, id: 7)]))
+                let prefix = F.F.legacy(F.plugins([])).count - F.F.pack(F.plugins([])).count
+                let payload = edited.trailingData.subdata(in: prefix..<(edited.trailingData.count - 2))
+                #expect(payload.count < originalPayload.count)
+                #expect(try F.records(payload, marker: marker) == retained)
+            }
+        }
+        #expect(try edited.modReferences()?.records.map(\.preservedData) == retained)
+        #expect(try edited.selectingVanillaHead(0) == edited.preservedData)
+        #expect(edited.trailingData.suffix(2) == card.trailingData.suffix(2))
+    }
+}
+
+@Test func sourceCardHeadSelectionRejectsMalformedAndUnsupportedIdentity() throws {
+    let card = try SelectionFixture.card()
+    for id in [-1, 1, 199, 202, Int(Int32.max) + 1] {
+        #expect(throws: (any Error).self) { try card.selectingVanillaHead(id) }
+    }
+    for value: SelectionFixture.V in [.string("0"), .bool(false), .integer(Int64(Int32.max) + 1)] {
+        let malformed = try SelectionFixture.card(headID: value)
+        #expect(throws: (any Error).self) { try malformed.selectingVanillaHead(200) }
+    }
+    let future = try SelectionFixture.card(faceVersion: "9.0.0")
+    #expect(throws: (any Error).self) { try future.selectingVanillaHead(0) }
+    let malformed = try SelectionFixture.card(records: [Data([0xc1])])
+    #expect(throws: (any Error).self) { try malformed.selectingVanillaHead(0) }
 }
 
 @Test func sourceCardSelectionEditsOnlyHairOrSelectedOutfit() throws {
@@ -137,6 +211,7 @@ private enum SelectionFixture {
     #expect(try malformed.modReferences()?.records.isEmpty == true)
     #expect(throws: (any Error).self) { try malformed.validateMakerSelectionMetadata() }
     #expect(throws: (any Error).self) { try malformed.selectingVanillaAsset(2, at: .hair(0)) }
+    #expect(throws: (any Error).self) { try malformed.selectingVanillaHead(0) }
 }
 
 @Test func sourceCardSelectionRejectsAmbiguousExtendedSaveOffsetsEvenForSameID() throws {
@@ -150,6 +225,8 @@ private enum SelectionFixture {
     #expect(throws: (any Error).self) { try gapped.validateMakerSelectionMetadata() }
     #expect(throws: (any Error).self) { try gapped.selectingVanillaAsset(2, at: .hair(0)) }
     #expect(throws: (any Error).self) { try gapped.selectingVanillaAsset(9, at: .hair(0)) }
+    #expect(throws: (any Error).self) { try gapped.selectingVanillaHead(0) }
+    #expect(throws: (any Error).self) { try gapped.selectingVanillaHead(200) }
 }
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))

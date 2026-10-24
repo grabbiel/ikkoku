@@ -7,6 +7,45 @@ import ShaderTypes
 import Scene
 import Assets
 
+/// A synchronous candidate's new base textures stay private until commit. Cache
+/// hits are never owned here. Abandoned loads release their own handles through
+/// leases, including partial loads; appearances retain any unpublished handles
+/// they use if another consumer publishes the same key before commit.
+public final class SourceAppearanceLoadTransaction {
+    fileprivate let resources: ResourceStore
+    private var created: [String: SourceAppearanceTextureLease] = [:]
+    private var committed = false
+
+    public init(resources: ResourceStore) { self.resources = resources }
+
+    fileprivate func texture(data: Data, key: String, srgb: Bool) throws -> TextureHandle {
+        precondition(!committed, "Appearance transaction is already committed.")
+        let fullKey = "\(key)#\(srgb)"
+        if let lease = created[fullKey] { return lease.handle }
+        return try resources.texture(data: data, key: key, srgb: srgb, cacheNew: false) { handle in
+            self.created[fullKey] = SourceAppearanceTextureLease(resources: self.resources, handle: handle)
+        }
+    }
+
+    fileprivate func owner(for materials: [String: [MaterialState]]) -> SourceAppearanceTextureOwner {
+        let used = Set(materials.values.flatMap { $0 }.flatMap(\.textureHandles))
+        let leases = created.values.filter { used.contains($0.handle) }
+        return SourceAppearanceTextureOwner(leases: Dictionary(uniqueKeysWithValues: leases.map { ($0.handle, $0) }))
+    }
+
+    /// Call only after candidate validation, alongside the final non-suspending
+    /// state replacement. A collision keeps the candidate's appearance lease;
+    /// it never overwrites or releases the already-published shared texture.
+    public func commit() {
+        precondition(!committed, "Appearance transaction is already committed.")
+        for (key, lease) in created where resources.cacheTextureIfAbsent(lease.handle, key: key) {
+            lease.transferToCache()
+        }
+        created.removeAll()
+        committed = true
+    }
+}
+
 /// Explicit appearance choices for the imported-model preview. This maps recovered
 /// texture inputs to the native toon shader; it does not claim source shader parity.
 public struct SourcePreviewAppearance: Sendable {
@@ -60,7 +99,11 @@ public struct SourcePreviewAppearance: Sendable {
         return Self(materials: result, textureOwner: SourceAppearanceTextureOwner(leases: (textureOwner?.leases ?? [:]).filter { used.contains($0.key) }))
     }
 
-    public static func load(url: URL, resources: ResourceStore, modLibrary: SourceModLibrary? = nil) throws -> Self {
+    public static func load(url: URL, resources: ResourceStore, modLibrary: SourceModLibrary? = nil,
+                            transaction: SourceAppearanceLoadTransaction? = nil) throws -> Self {
+        guard transaction == nil || transaction?.resources === resources else {
+            throw RigError.invalid("Appearance transaction belongs to a different resource store.")
+        }
         let document = try JSONDecoder().decode(Document.self, from: Data(contentsOf: url))
         guard document.schemaVersion == 1 else { throw RigError.invalid("Unsupported preview appearance schema.") }
         let directory = url.deletingLastPathComponent().resolvingSymlinksInPath()
@@ -80,16 +123,20 @@ public struct SourcePreviewAppearance: Sendable {
         }
         // Explicit source identities bind converted textures to known native shader
         // inputs. Material, shader and catalog conversion remain separate adapters.
+        func loadTexture(_ data: Data, key: String, srgb: Bool) throws -> TextureHandle {
+            if let transaction { return try transaction.texture(data: data, key: key, srgb: srgb) }
+            return try resources.texture(data: data, key: key, srgb: srgb)
+        }
         func texture(_ path: String?, srgb: Bool = true) throws -> TextureHandle? {
             guard let path else { return nil }
             if let binding = document.textureBindings?[path] {
                 guard let resolved = try mods.texture(bundlePath: binding.bundlePath, assetName: binding.assetName) else {
                     throw RigError.invalid("No mounted mod provides '\(binding.bundlePath)' / '\(binding.assetName)'.")
                 }
-                return try resources.texture(data: resolved.data, key: resolved.cacheKey + "#\(srgb)", srgb: srgb)
+                return try loadTexture(resolved.data, key: resolved.cacheKey + "#\(srgb)", srgb: srgb)
             }
             let file = try contained(path)
-            return try resources.texture(data: Data(contentsOf: file), key: file.path + "#\(srgb)", srgb: srgb)
+            return try loadTexture(Data(contentsOf: file), key: file.path + "#\(srgb)", srgb: srgb)
         }
         var materials: [String: [MaterialState]] = [:]
         for entry in document.parts {
@@ -152,7 +199,7 @@ public struct SourcePreviewAppearance: Sendable {
             material.transparent = entry.alphaMode == "BLEND"
             materials[entry.part, default: []].append(material)
         }
-        return Self(materials: materials, textureOwner: nil)
+        return Self(materials: materials, textureOwner: transaction?.owner(for: materials))
     }
 
     private struct Document: Decodable {

@@ -52,6 +52,20 @@ struct MakerScenario: Decodable {
                 default: throw SourceCharacterCardError.invalid("Unknown Maker selection kind.")
                 }
             }
+            @MainActor func apply(to maker: MakerModel, beforePreparation: (@Sendable () -> Void)? = nil) async throws {
+                try validate(currentCoordinate: maker.sourceBoneModifierCoordinate)
+                if kind == "head" {
+                    try await maker.selectSourceHead(sourceID, beforePreparation: beforePreparation)
+                } else {
+                    try await maker.selectSourceAsset(destination(currentCoordinate: maker.sourceBoneModifierCoordinate),
+                        id: sourceID, beforePreparation: beforePreparation)
+                }
+            }
+            func validate(currentCoordinate: Int) throws {
+                if kind == "head" {
+                    guard slot == 0, coordinate == nil else { throw SourceCharacterCardError.invalid("Head selection has no part slot or outfit.") }
+                } else { _ = try destination(currentCoordinate: currentCoordinate).destination() }
+            }
         }
 
         struct SlotValue: Decodable { let index: Int; let value: Float }
@@ -130,12 +144,14 @@ struct MakerScenario: Decodable {
         var inactiveStudioFrame: RenderFrame?
         struct SelectionState: Equatable {
             let preview: ObjectIdentifier?, card: Data?, face: [Float], body: [Float], coordinate: Int
+            let rigURL: URL?, headID: Int, expressions: SourceExpressionInputs?
             let colors: [String: Float4]
             let customization: Bool, applyBoneModifiers: Bool, boneModifierHash: String?
         }
         func selectionState() -> SelectionState {
             SelectionState(preview: maker.sourceRigPreview.map(ObjectIdentifier.init), card: maker.importedSourceCard?.preservedData,
                 face: maker.sourceFaceValues, body: maker.sourceBodyValues, coordinate: maker.sourceBoneModifierCoordinate,
+                rigURL: maker.sourceRigURL, headID: maker.sourceHeadID, expressions: maker.sourceExpressionInputs,
                 colors: Dictionary(uniqueKeysWithValues: (maker.sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) }),
                 customization: maker.applySourceCustomization, applyBoneModifiers: maker.applySourceBoneModifiers,
                 boneModifierHash: maker.sourceBoneModifiers?.source.payloadSHA256)
@@ -159,6 +175,19 @@ struct MakerScenario: Decodable {
                 && actual.sceneBounds == expected.sceneBounds && actual.time == expected.time
                 && actual.gizmos.count == expected.gizmos.count && actual.lights.count == expected.lights.count
         }
+        func sameStaticFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy {
+                    $0.mesh == $1.mesh && $0.model == $1.model && $0.material == $1.material && $0.objectID == $1.objectID
+                        && $0.deformKey == $1.deformKey && $0.skinSet == $1.skinSet && $0.hiddenKey == $1.hiddenKey
+                        && $0.visible == $1.visible && $0.hiddenRegions == $1.hiddenRegions && $0.order == $1.order
+                        && $0.castsShadow == $1.castsShadow && $0.outline == $1.outline && $0.outlineScale == $1.outlineScale
+                        && $0.morphWeights.map(\.index) == $1.morphWeights.map(\.index)
+                        && $0.morphWeights.map(\.weight) == $1.morphWeights.map(\.weight)
+                }
+        }
         // The file the model currently holds: the `IKKOKU_SOURCE_CARD` import,
         // replaced by each `reimport`. The export guard below never deletes it.
         var heldCardPath = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD"].map {
@@ -172,7 +201,7 @@ struct MakerScenario: Decodable {
         func record(_ step: Step, _ ok: Bool, _ detail: String) -> Bool {
             results.append(Report.StepResult(op: step.op, ok: ok, detail: detail,
                 selectionMilliseconds: step.op == "selectAsset" ? (ProcessInfo.processInfo.systemUptime - stepStart) * 1000 : nil,
-                selectionStages: step.op == "selectAsset" ? maker.sourceSelectionTiming : nil,
+                selectionStages: ["selectAsset", "finishSelection"].contains(step.op) ? maker.sourceSelectionTiming : nil,
                 mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
                 mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
@@ -236,7 +265,9 @@ struct MakerScenario: Decodable {
                 let pulse = MakerSelectionHeartbeat()
                 heartbeat = pulse
                 let pulseTask = Task { await pulse.run() }
-                do { try await maker.selectSourceAsset(selection.destination(currentCoordinate: coordinate), id: selection.sourceID) }
+                let beforeState = selectionState()
+                let beforeFrame = maker.host.renderer.currentFrame()
+                do { try await selection.apply(to: maker) }
                 catch { failure = error }
                 pulseTask.cancel(); pulse.sample()
                 if (failure != nil) != (step.expectFailure == true) {
@@ -246,7 +277,8 @@ struct MakerScenario: Decodable {
                     let nextColors = Dictionary(uniqueKeysWithValues: (maker.sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) })
                     guard preview == maker.sourceRigPreview.map(ObjectIdentifier.init), bytes == maker.importedSourceCard?.preservedData,
                           face == maker.sourceFaceValues, body == maker.sourceBodyValues, coordinate == maker.sourceBoneModifierCoordinate,
-                          colors == nextColors else {
+                          colors == nextColors, beforeState == selectionState(),
+                          maker.liveAnimation || sameStaticFrame(beforeFrame, maker.host.renderer.currentFrame()) else {
                         record(step, false, "selectAsset: rejected/no-op selection changed the preview or editor state"); continue
                     }
                     if step.unchanged == true {
@@ -263,7 +295,7 @@ struct MakerScenario: Decodable {
                     record(step, false, "beginSelection needs one selection and no held request"); continue
                 }
                 do {
-                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
+                    try selection.validate(currentCoordinate: maker.sourceBoneModifierCoordinate)
                     let gate = MakerSelectionGate()
                     let preview = maker.sourceRigPreview.map(ObjectIdentifier.init)
                     let bytes = maker.importedSourceCard?.preservedData
@@ -271,7 +303,7 @@ struct MakerScenario: Decodable {
                     resourcesBefore = resources
                     let task = Task {
                         defer { gate.finished() }
-                        try await maker.selectSourceAsset(slot, id: selection.sourceID, beforePreparation: { gate.arriveAndWait() })
+                        try await selection.apply(to: maker, beforePreparation: { gate.arriveAndWait() })
                     }
                     heldSelection = (task, gate)
                     let arrived = await gate.arrival()
@@ -283,6 +315,8 @@ struct MakerScenario: Decodable {
             case "finishSelection":
                 guard let held = heldSelection else { record(step, false, "finishSelection has no held request"); continue }
                 let beforeRelease = selectionState()
+                let beforeFrame = maker.host.renderer.currentFrame()
+                let beforeClock = maker.sourceAnimationTime
                 let beforeResources = maker.host.renderer.resources.statistics()
                 resourcesBefore = beforeResources
                 held.gate.release()
@@ -295,12 +329,15 @@ struct MakerScenario: Decodable {
                     record(step, step.expectFailure != true && maker.sourceSelectionPending == nil
                         && beforeRelease.face == after.face && beforeRelease.body == after.body && beforeRelease.colors == after.colors
                         && beforeRelease.coordinate == after.coordinate && beforeRelease.customization == after.customization
-                        && beforeRelease.applyBoneModifiers == after.applyBoneModifiers && beforeRelease.boneModifierHash == after.boneModifierHash,
-                        "held selection committed with the latest edits and customization/ABMX modes")
+                        && beforeRelease.applyBoneModifiers == after.applyBoneModifiers && beforeRelease.boneModifierHash == after.boneModifierHash
+                        && beforeRelease.expressions == after.expressions
+                        && (maker.liveAnimation ? maker.sourceAnimationTime >= beforeClock : maker.sourceAnimationTime == beforeClock),
+                        "held selection committed with latest edits/modes/expressions; clock \(beforeClock)→\(maker.sourceAnimationTime)")
                 case .failure(let error):
                     let afterResources = maker.host.renderer.resources.statistics()
                     let expectedError = step.diagnosticContains.map { String(describing: error).contains($0) } ?? (error is CancellationError)
-                    let framePreserved = inactiveStudioFrame.map(studioFrameMatches) ?? true
+                    let framePreserved = inactiveStudioFrame.map(studioFrameMatches)
+                        ?? (maker.liveAnimation || sameStaticFrame(beforeFrame, maker.host.renderer.currentFrame()))
                     record(step, step.expectFailure == true && expectedError && maker.sourceSelectionPending == nil
                         && beforeRelease == selectionState() && beforeResources.meshes == afterResources.meshes
                         && beforeResources.textures == afterResources.textures && beforeResources.deformBuffers == afterResources.deformBuffers && framePreserved,
@@ -320,12 +357,11 @@ struct MakerScenario: Decodable {
                     record(step, false, "queueSelectionThenStudio needs an active Maker and no held request"); continue
                 }
                 do {
-                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
                     let before = selectionState(), resources = maker.host.renderer.resources.statistics()
                     let gate = MakerSelectionGate(); gate.release() // Records entry without holding a faulty implementation.
                     let task = Task {
                         defer { gate.finished() }
-                        try await maker.selectSourceAsset(slot, id: selection.sourceID, beforePreparation: { gate.arriveAndWait() })
+                        try await selection.apply(to: maker, beforePreparation: { gate.arriveAndWait() })
                     }
                     inactiveStudioFrame = try showEmptyStudio() // No yield: the queued Task has not entered yet.
                     let result = await task.result
@@ -345,8 +381,7 @@ struct MakerScenario: Decodable {
                     record(step, false, "supersedeSelection needs a held request and replacement"); continue
                 }
                 do {
-                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
-                    let replacement = Task { try await maker.selectSourceAsset(slot, id: selection.sourceID) }
+                    let replacement = Task { try await selection.apply(to: maker) }
                     // The old caller must finish while its worker is still held.
                     let old = await held.task.result
                     held.gate.release()
@@ -361,6 +396,24 @@ struct MakerScenario: Decodable {
                 guard let on = step.on else { record(step, false, "boneModifiers needs on"); continue }
                 maker.applySourceBoneModifiers = on
                 record(step, true, "applySourceBoneModifiers=\(on)")
+            case "advanceMotion":
+                guard let value = step.value else { record(step, false, "advanceMotion needs seconds"); continue }
+                do {
+                    try maker.advanceSourceMotion(deltaTime: value)
+                    maker.refresh()
+                    record(step, true, "source clock=\(maker.sourceAnimationTime)")
+                } catch { record(step, false, "advanceMotion: \(error)") }
+            case "liveAnimation":
+                guard let on = step.on else { record(step, false, "liveAnimation needs on"); continue }
+                maker.liveAnimation = on
+                record(step, true, "liveAnimation=\(on)")
+            case "mouthOpen":
+                guard let value = step.value, value.isFinite, (0...1).contains(value), var inputs = maker.sourceExpressionInputs else {
+                    record(step, false, "mouthOpen needs expressions and a normalized rate"); continue
+                }
+                inputs.mouthOpenRate = value
+                maker.sourceExpressionInputs = inputs
+                record(step, true, "mouthOpenRate=\(value)")
             case "cancelSelection":
                 maker.cancelSourceSelection()
                 record(step, maker.sourceSelectionPending == nil, "cancelled pending selection")
@@ -453,10 +506,35 @@ struct MakerScenario: Decodable {
                 if let on = step.on, maker.applySourceCustomization != on { problems.append("assert customization flag changed") }
                 if let expected = step.selection {
                     do {
-                        let destination = try expected.destination(currentCoordinate: maker.sourceBoneModifierCoordinate).destination()
-                        let row = maker.sourceAssetSelections.first { $0.property == destination.property }
-                        if row?.sourceID != expected.sourceID || row?.savedID != expected.sourceID || row?.modGUID != nil || row?.entry == nil {
-                            problems.append("assert selection: \(destination.property) did not resolve vanilla ID \(expected.sourceID)")
+                        if expected.kind == "head" {
+                            guard expected.slot == 0, expected.coordinate == nil, let card = maker.importedSourceCard,
+                                  let url = maker.sourceRigURL, let preview = maker.sourceRigPreview,
+                                  let contract = preview.contract, let expressions = preview.expressionContract else {
+                                throw RigError.invalid("Head selection has no complete preview/contracts.")
+                            }
+                            try SourceMakerLibrary.validateAssemblyIdentity(card: card)
+                            let identity = try card.customization()
+                            let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
+                            guard identity.headID == expected.sourceID, maker.sourceHeadID == expected.sourceID,
+                                  (manifest.headID ?? 0) == expected.sourceID else {
+                                throw RigError.invalid("Head selection card/preview/manifest identities differ.")
+                            }
+                            let folder = url.deletingLastPathComponent()
+                            let expectedContract = try SourceShapeContract.decode(Data(contentsOf: folder.appendingPathComponent("character-shape-contract.json")))
+                            let expectedExpressions = try SourceExpressionContract.decode(Data(contentsOf: folder.appendingPathComponent("source-expression-contract.json")))
+                            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+                            let targets = expressions.controllers.flatMap { $0.targets.map(\.meshSourceID) }
+                            guard try encoder.encode(contract) == encoder.encode(expectedContract),
+                                  targets == expectedExpressions.controllers.flatMap({ $0.targets.map(\.meshSourceID) }),
+                                  preview.supportsExpressions, preview.supportsFaceCustomization else {
+                                throw RigError.invalid("Selected head reused different shape/expression bindings.")
+                            }
+                        } else {
+                            let destination = try expected.destination(currentCoordinate: maker.sourceBoneModifierCoordinate).destination()
+                            let row = maker.sourceAssetSelections.first { $0.property == destination.property }
+                            if row?.sourceID != expected.sourceID || row?.savedID != expected.sourceID || row?.modGUID != nil || row?.entry == nil {
+                                problems.append("assert selection: \(destination.property) did not resolve vanilla ID \(expected.sourceID)")
+                            }
                         }
                     } catch { problems.append("assert selection: \(error)") }
                 }
