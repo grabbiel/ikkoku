@@ -10,6 +10,8 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
+    /// Reproduction only: retains the fresh loader's existing callback behavior.
+    let reproduceFreshProfileFailure: Bool?
     /// Stops only the dedicated CPU worker; the main actor remains responsive.
     private final class Barrier: @unchecked Sendable {
         private let condition = NSCondition()
@@ -33,6 +35,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if reproduceFreshProfileFailure == true { return await reproduceFreshLoad(app: app, studio: studio) }
         var rows: [StudioScenario.Report.StepResult] = []
         func check(_ name: String, _ condition: Bool, _ detail: String = "") throws {
             rows.append(.init(op: name, ok: condition, detail: detail))
@@ -457,5 +460,141 @@ struct PluginLibraryScenario: Decodable {
         let session = try SourceStudioPluginSession(profileURL: profile, document: candidate,
             attachment: { _, _ in (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))) })
         return try session.savedDocument()
+    }
+}
+
+// Diagnostic fixture only. No change to loadSourcePlugins or its callback policy.
+extension PluginLibraryScenario {
+    @MainActor private func reproduceFreshLoad(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        func record(_ name: String, _ okay: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+        }
+        func resources() -> [Int] {
+            let s = studio.host.renderer.resources.statistics()
+            return [s.meshes, s.textures, s.deformBuffers, s.hiddenBuffers,
+                    s.meshBufferBytes, s.deformBufferBytes, s.hiddenBufferBytes, s.retiring]
+        }
+        func previews() -> Set<ObjectIdentifier> { Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)) }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
+        }
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-fresh-profile-repro-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        do {
+            let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
+            guard let template = studio.doc.objects.first(where: { $0.sourceCharacter != nil }),
+                  let reference = template.sourceCharacter, reference.attachmentCatalogFile != nil,
+                  let binding = request.configuration.bindings.first, request.configuration.bindings.count == 1 else {
+                throw SourcePluginError.invalid("Fresh-profile reproduction requires one source character with attachment catalog and one old-session binding.")
+            }
+            let sourceFile = studio.doc.sourceSceneFile, sourceSHA = studio.doc.sourceSceneSHA256
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            // Start is deferred until step(), not session construction. The
+            // failure controls target initializers and active Awake instead.
+            for (name, phase, hidden, fail) in [
+                ("hiddenInitializerControl", "initializer", true, false),
+                ("hiddenInitializerFailure", "initializer", true, true),
+                ("activeAwakeFailure", "Awake", false, true),
+                ("activeStartControl", "Start", false, false)] {
+                studio.newScene()
+                var parent = template; parent.id = UUID(); parent.parent = nil; parent.visible = !hidden
+                var child = StudioObject(name: "Attachment probe", kind: .folder)
+                child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
+                var target = StudioObject(name: "Retained session target", kind: .folder); target.sourceObjectKey = 11
+                var scene = studio.doc
+                scene.sourceSceneFile = sourceFile; scene.sourceSceneSHA256 = sourceSHA
+                scene.objects = [parent, child, target]; studio.doc = scene
+                let configuration = SourceStudioPluginConfiguration(fixedDeltaTime: request.configuration.fixedDeltaTime,
+                    bindings: [.init(guid: binding.guid, type: binding.type, sourceObjectKey: 11)])
+                try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration)
+                studio.sourcePluginsRunning = false
+                let beforeDoc = studio.doc, beforeSession = studio.sourcePluginSession
+                let beforeRuntime = try beforeSession?.savedDocument(), beforeAdapter = studio.sourceFocus.adapter
+                let beforeResources = resources(), beforePreviews = previews(), beforeFrame = studio.host.renderer.currentFrame()
+                let beforeStatus = studio.status, beforeGeneration = studio.sourcePluginMountGeneration
+                let beforeGain = studio.sourceAudioBus.masterVolume, beforeAnimation = studio.sourceAnimationTime
+                let beforeObservers = studio.sourceFocusObservers.count, beforeLaunchObserver = studio.sourceLaunchObserver != nil
+                record(name + "Precondition", beforeSession != nil && beforeAdapter != nil
+                    && (studio.sourceShapePreview(for: parent.id) == nil) == hidden,
+                    "hidden=\(hidden), cached previews=\(beforePreviews.count), resources=\(beforeResources)")
+                let profile = try freshProfileFixture(directory: scratch.appendingPathComponent(name), phase: phase, fail: fail)
+                var rejection: String?
+                do { try studio.loadSourcePluginProfileInteractively(profileURL: profile, expectedGeneration: beforeGeneration) }
+                catch SourcePluginError.runtime(let message) { rejection = message }
+                catch { rejection = "UNEXPECTED: \(error)" }
+                if fail {
+                    record(name + "NamedError", rejection == "Unsupported arithmetic operator or Int32 arithmetic.", rejection ?? "No error")
+                    let afterRuntime = try studio.sourcePluginSession?.savedDocument()
+                    record(name + "MountRetained", studio.doc == beforeDoc && studio.sourcePluginSession === beforeSession
+                        && afterRuntime == beforeRuntime && studio.sourceFocus.adapter === beforeAdapter
+                        && studio.status == beforeStatus && studio.sourcePluginMountGeneration == beforeGeneration
+                        && !studio.sourcePluginsRunning && studio.sourceAudioBus.masterVolume == beforeGain
+                        && studio.sourceAnimationTime == beforeAnimation && studio.sourceFocusObservers.count == beforeObservers
+                        && (studio.sourceLaunchObserver != nil) == beforeLaunchObserver
+                        && sameFrame(beforeFrame, studio.host.renderer.currentFrame()),
+                        "Document/session/runtime fields+clocks/adapter/gain/status/generation/observers/frame retained")
+                    let afterPreviews = previews(), afterResources = resources()
+                    record(name + "HostRollback", beforePreviews == afterPreviews && beforeResources == afterResources,
+                        "previews before=\(beforePreviews), after=\(afterPreviews); parent cached after=\(studio.sourceShapePreview(for: parent.id) != nil); resources before=\(beforeResources), after=\(afterResources)")
+                } else {
+                    record(name + "Mounted", rejection == nil && studio.sourcePluginSession !== beforeSession
+                        && studio.sourceShapePreview(for: parent.id) != nil
+                        && studio.doc.sourcePluginState?.bindings.first?.fields["position"] != nil,
+                        rejection ?? "Supported attachment profile committed; reference point17 resolved")
+                    if phase == "Start" {
+                        record("startDeferredUntilStep", studio.doc.sourcePluginState?.bindings.first?.started == false)
+                        try studio.stepSourcePlugins(deltaTime: 0.02)
+                        record("startAttachmentExecuted", studio.doc.sourcePluginState?.bindings.first?.started == true,
+                               "Supported Start attachment read executed on first real step, after installation")
+                    }
+                }
+            }
+        } catch { record("reproductionFailure", false, String(describing: error)) }
+        studio.cancelSourcePluginLibraryMount(); await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+
+    private func freshProfileFixture(directory: URL, phase: String, fail: Bool) throws -> URL {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let type = "FreshAttachmentProbe", guid = "Ikkoku.Validation.FreshAttachmentProbe"
+        let hash = String(repeating: "a", count: 64)
+        let read: [String: Any] = ["kind": "api", "type": "Vector3", "name": "position", "children": [
+            ["kind": "api", "type": "Transform", "name": "transform", "children": []]]]
+        let poison: [String: Any] = ["kind": "binary", "type": "Int32", "name": "+", "children": [
+            ["kind": "literal", "type": "Int32", "value": 1], ["kind": "literal", "type": "Int32", "value": 1]]]
+        let zero: [String: Any] = ["kind": "api", "type": "Vector3", "name": "vector.zero", "children": []]
+        var fields: [[String: Any]] = [["name": "position", "type": "Vector3", "serialized": true,
+                                       "initializer": phase == "initializer" ? read : zero]]
+        var body: [[String: Any]] = []
+        if phase == "initializer" {
+            if fail { fields.append(["name": "trip", "type": "Int32", "serialized": false, "initializer": poison]) }
+        } else {
+            body.append(["kind": "assign", "name": "=", "children": [["kind": "field", "type": "Vector3", "name": "position"], read]])
+            if fail { body.append(["kind": "expression", "children": [poison]]) }
+        }
+        let lifecycle = phase == "initializer" ? "Awake" : phase
+        let program: [String: Any] = ["schemaVersion": 1, "status": "ready", "mode": "component", "type": type,
+            "source": ["sha256": hash], "identity": ["sourceSHA256": hash, "type": type,
+                "symbols": ["M:\(type).\(lifecycle)"], "pluginGUID": guid],
+            "semanticSurfaceSHA256": hash, "bridgeSHA256": hash, "emitterSHA256": hash,
+            "fields": fields, "methods": [["name": lifecycle, "symbol": "M:\(type).\(lifecycle)", "static": false,
+                "returnType": "Void", "parameters": [], "body": ["kind": "block", "children": body], "lifecycle": lifecycle]]]
+        let bytes = try JSONSerialization.data(withJSONObject: program)
+        _ = try SourceIRProgram.decode(bytes) // Structural rejection is not the intended failure.
+        try bytes.write(to: directory.appendingPathComponent("program.json"))
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let manifest: [String: Any] = ["schemaVersion": 1, "kind": "ikkoku-translated-plugin",
+            "identity": ["guid": guid, "version": "1.0", "name": "Fresh profile failure reproduction"],
+            "processes": ["CharaStudio"], "dependencies": [], "incompatibilities": [],
+            "components": [["type": type, "program": ["file": "program.json", "sha256": digest]]]]
+        let manifestURL = directory.appendingPathComponent("manifest.json"), profile = directory.appendingPathComponent("profile.json")
+        try JSONSerialization.data(withJSONObject: manifest).write(to: manifestURL)
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
+            "packages": [["manifest": manifestURL.path, "bindings": [["type": type, "sourceObjectKey": 12]]]]]).write(to: profile)
+        return profile
     }
 }
