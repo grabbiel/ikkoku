@@ -375,11 +375,15 @@ private enum NormalClothesCompositeFixture {
         if slot == 1 {
             // A valid but different top exposes any accidental parts[0]
             // lookup in the bottom recipe, including omitted bottom fields.
-            let topColours = (0..<3).map { i in F.map([
-                ("pattern", .integer(0)),
-                ("baseColor", .array([.float(0.9), .float(0.1), .float(Double(i) / 8), .float(1)])),
-                ("patternColor", .array([.float(0.2), .float(0.3), .float(0.4), .float(0.5)])),
-                ("tiling", .array([.float(Double(i + 9)), .float(Double(i + 10))]))]) }
+            let topColours: [F.Value] = (0..<3).map { i -> F.Value in
+                let baseColor: [F.Value] = [.float(0.9), .float(0.1), .float(Double(i) / 8), .float(1)]
+                let patternColor: [F.Value] = [.float(0.2), .float(0.3), .float(0.4), .float(0.5)]
+                let tiling: [F.Value] = [.float(Double(i + 9)), .float(Double(i + 10))]
+                let fields: [(String, F.Value)] = [
+                    ("pattern", .integer(0)), ("baseColor", .array(baseColor)),
+                    ("patternColor", .array(patternColor)), ("tiling", .array(tiling))]
+                return F.map(fields)
+            }
             parts[0] = F.map([("id", .integer(38)), ("colorInfo", .array(topColours))])
         }
         let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array(parts))]))

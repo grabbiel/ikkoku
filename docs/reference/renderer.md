@@ -3357,8 +3357,46 @@ do not accumulate, and reverting returns the original cached target and pixels.
 Debug and Release CPU validation each pass five tests (six parameterized cases),
 including original binding and half-state checks. All six strict private Release
 pixel/resource gates pass with no skips. Probe Python tests pass 15/15, texture
-converter tests 20/20 and verification-tool tests 191/191. Release app cost and
-default-off output controls are pending; no frame-time or FPS gain is claimed.
+converter tests 20/20 and verification-tool tests 191/191.
+
+**Release costs and output controls.** The clean runtime commit `b178932` built
+binary SHA-256 `eb739a3944dd896a83081f058d52ce1b0a19ca9d9b42724c5101bc8429564fc5`.
+Seven quiet launches use that same binary in old/new, new/old, old/new order,
+followed by a capture-provider control. The old store has 52 entries; the new
+store adds only the two bottom inputs. Each launch measures 20 synchronous
+offscreen frames after three warmups at 768×1024 with reused targets and no
+readback. These timings include the native rig under the controlled capture
+camera/light/time; they are separate from the frozen-geometry pixel comparison.
+
+| Frame cost, ms | Old store, median of three run p50s (range) | New store, median of three run p50s (range) |
+| --- | --- | --- |
+| CPU encode | 0.318 (0.258–0.331) | 0.281 (0.280–0.291) |
+| GPU | 0.631 (0.578–0.635) | 0.655 (0.613–0.695) |
+| Synchronous completion | 1.324 (1.189–1.355) | 1.309 (1.255–1.333) |
+
+The overlapping ranges establish no frame-time speedup. Registered textures
+increase from 76 to 81 and Metal allocation from 543,358,976 to 561,725,440 bytes
+for the fuller material path; neither number is a process-wide leak test.
+Three fresh Release test processes measure bottom first-use totals of
+11.348–11.803 ms, including pipeline creation with a potentially warm driver
+cache. Across 15 recolors per process, median CPU encode is 0.038–0.041 ms,
+GPU 0.078–0.086 ms and total 0.626–0.881 ms. Unchanged lookup is
+0.098–0.100 ms with no new composition or upload. Each generated mip chain
+occupies 2,834,432 bytes; the lifetime/revert assertions above bound retained
+edited targets.
+
+Source Studio, native Studio and Maker each produce a byte-identical default-off
+960×880 PNG pair against the preserved `f52cfa8` Release binary
+`04e314a8f1fc6406a85e536c01b75b27495c87d3b2096d9098414455359d8538`.
+That historical build is an output control, not the paired performance baseline.
+Repeated opt-in frozen renders still vary at a few pixels: old-store runs differ
+at up to four hair pixels (max 2 bytes) and two whole-frame pixels (max 14 bytes);
+new-store runs differ at one hair/whole-frame pixel (max 2 bytes). Other repeated
+native PNGs are identical within each provider group. The strict isolated hair,
+eye and composite gates remain unchanged; no all-live byte-equality, full
+character parity or window/FPS claim follows from these offscreen controls.
+Private reports, source/binary hashes and preserved binaries are under
+`.local/codex-continue-2026-10-24/rolling/materials-bottom/`.
 The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
 [the fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
 
