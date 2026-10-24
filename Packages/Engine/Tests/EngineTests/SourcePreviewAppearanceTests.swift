@@ -46,6 +46,105 @@ private func appearanceLoadChecks(_ body: @escaping @Sendable () throws -> [(Str
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourcePreviewAppearanceLoadDiagnosticsDistinguishPrivateReuseAndSharedHits() async throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    try await appearanceLoadChecks {
+        let fixture = try AppearanceLoadFixture(); defer { fixture.remove() }
+        let url = try fixture.document("repeated", textures: ["candidate.png", "candidate.png"])
+        let diagnostics = SourceBaseAppearanceTimings()
+        let transaction = SourceAppearanceLoadTransaction(resources: resources)
+        let appearance = try SourcePreviewAppearance.load(url: url, resources: resources,
+            transaction: transaction, timings: diagnostics)
+        let handle = try appearanceValue(appearance.materials["part0/0"]?.first?.base, "Private texture is absent")
+        let sample = diagnostics.sample
+        var checks: [(String, Bool)] = [
+            ("Repeated references reuse one live private handle", appearance.materials["part1/0"]?.first?.base == handle && resources.texture(handle) != nil),
+            ("Private handle is not published during load", resources.lookup(key: fixture.key("candidate.png")) == nil),
+            ("Completed load is distinguished from failures", sample.loadAttempts == 1 && sample.loadFailures == 0),
+            ("Repeated file reads count encoded bytes separately", sample.calls["textureFileRead"] == 2 && sample.encodedTextureBytesRead == fixture.png.count * 2),
+            ("Document bytes measure the actual JSON read", sample.documentBytesRead == (try Data(contentsOf: url)).count),
+            ("Private transaction reuse is not a shared cache hit", sample.textureRequests == 2 && sample.transactionReuses == 1 && sample.textureLoads.dataCacheHits == 0),
+            ("Only one reference reaches ResourceStore", sample.textureLoads.dataRequests == 1 && sample.textureLoads.encodedBytesPresented == fixture.png.count),
+            ("Both actual cache checks miss for the single new texture", sample.textureLoads.dataCacheMisses == 1 && sample.textureLoads.imageCacheMisses == 1),
+            ("One image is created, loaded and registered", sample.textureLoads.calls["imageCreation"] == 1 && sample.textureLoads.calls["metalTextureLoad"] == 1 && sample.textureLoads.registeredTextures == 1),
+            ("Successful APIs record no failures", sample.failures.isEmpty && sample.textureLoads.failures.isEmpty),
+        ]
+        transaction.commit()
+        let warmDiagnostics = SourceBaseAppearanceTimings()
+        let warmTransaction = SourceAppearanceLoadTransaction(resources: resources)
+        let warm = try SourcePreviewAppearance.load(url: url, resources: resources,
+            transaction: warmTransaction, timings: warmDiagnostics)
+        let warmSample = warmDiagnostics.sample
+        checks.append(("Warm load uses the published identity", warm.materials["part0/0"]?.first?.base == handle && warm.materials["part1/0"]?.first?.base == handle))
+        checks.append(("Warm reads remain distinct from shared hits", warmSample.encodedTextureBytesRead == fixture.png.count * 2 && warmSample.textureLoads.dataCacheHits == 2 && warmSample.transactionReuses == 0))
+        checks.append(("Shared hits skip image creation and registration", warmSample.textureLoads.calls["imageCreation"] == nil && warmSample.textureLoads.calls["metalTextureLoad"] == nil && warmSample.textureLoads.registeredTextures == 0))
+        warmTransaction.commit()
+        let ordinary = try SourcePreviewAppearance.load(url: url, resources: resources)
+        checks.append(("Default caller preserves material and cache identity", ordinary.materials["part0/0"]?.first?.base == handle && ordinary.materials["part1/0"]?.first?.uniforms.baseColor == appearance.materials["part1/0"]?.first?.uniforms.baseColor && resources.lookup(key: fixture.key("candidate.png")) == handle))
+        return checks
+    }
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourcePreviewAppearanceTextureDiagnosticsWarmHitBypassesInvalidImageBytes() async throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    try await appearanceLoadChecks {
+        let fixture = try AppearanceLoadFixture(); defer { fixture.remove() }
+        let key = "diagnostic-warm-" + UUID().uuidString
+        let original = try resources.texture(data: fixture.png, key: key)
+        let invalid = Data("not an image".utf8)
+        let diagnostics = ResourceTextureLoadTimings()
+        var creations: [TextureHandle] = []
+        let warm = try resources.texture(data: invalid, key: key, timings: diagnostics, didCreate: { creations.append($0) })
+        let ordinary = try resources.texture(data: invalid, key: key)
+        let sample = diagnostics.sample
+        return [
+            ("Invalid bytes do not invalidate a warm shared texture", warm == original && ordinary == original && resources.texture(original) != nil),
+            ("Warm load reports a data-cache hit only", sample.dataCacheHits == 1 && sample.dataCacheMisses == 0 && sample.calls == ["dataCacheLookup": 1]),
+            ("Presented encoded bytes do not claim a file read or decode", sample.dataRequests == 1 && sample.encodedBytesPresented == invalid.count),
+            ("Shared hit never reports actual creation", creations.isEmpty && sample.registeredTextures == 0 && sample.failures.isEmpty),
+        ]
+    }
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourcePreviewAppearanceLoadDiagnosticsRetainFailuresAndRollBackOnlyPrivateTextures() async throws {
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    try await appearanceLoadChecks {
+        let fixture = try AppearanceLoadFixture(); defer { fixture.remove() }
+        let original = try SourcePreviewAppearance.load(url: fixture.document("shared", textures: ["shared.png"]), resources: resources)
+        let shared = try appearanceValue(original.materials["part0/0"]?.first?.base, "Shared texture is absent")
+        let baseline = resources.statistics().textures
+        let corrupt = Data("not an image".utf8)
+        try corrupt.write(to: fixture.directory.appendingPathComponent("corrupt.png"))
+        let url = try fixture.document("corrupt", textures: ["shared.png", "candidate.png", "corrupt.png"])
+        let diagnostics = SourceBaseAppearanceTimings()
+        var rejected = false
+        do {
+            let transaction = SourceAppearanceLoadTransaction(resources: resources)
+            _ = try SourcePreviewAppearance.load(url: url, resources: resources, transaction: transaction, timings: diagnostics)
+        } catch { rejected = true }
+        let sample = diagnostics.sample
+        var checks: [(String, Bool)] = [
+            ("Corrupt image rejects the entire load", rejected && sample.loadAttempts == 1 && sample.loadFailures == 1),
+            ("Successful reads precede the image-creation failure", sample.calls["textureFileRead"] == 3 && sample.encodedTextureBytesRead == fixture.png.count * 2 + corrupt.count && sample.failures.isEmpty),
+            ("Failed image API is counted even though it throws", sample.textureLoads.calls["imageCreation"] == 2 && sample.textureLoads.failures["imageCreation"] == 1),
+            ("Corrupt image never reaches MetalKit or registration", sample.textureLoads.calls["metalTextureLoad"] == 1 && sample.textureLoads.registeredTextures == 1),
+            ("Partial private allocation is rolled back", resources.statistics().textures == baseline && resources.lookup(key: fixture.key("candidate.png")) == nil),
+            ("Prior shared appearance and cache survive", resources.texture(shared) != nil && resources.lookup(key: fixture.key("shared.png")) == shared),
+        ]
+        let missing = SourceBaseAppearanceTimings()
+        rejected = false
+        do {
+            _ = try SourcePreviewAppearance.load(url: fixture.document("missing", textures: ["absent.png"]), resources: resources, timings: missing)
+        } catch { rejected = true }
+        checks.append(("File-read failure is retained without successful bytes", rejected && missing.sample.loadFailures == 1 && missing.sample.calls["textureFileRead"] == 1 && missing.sample.failures["textureFileRead"] == 1 && missing.sample.encodedTextureBytesRead == 0))
+        checks.append(("File-read failure never reaches the texture loader", missing.sample.textureLoads.dataRequests == 0 && missing.sample.textureLoads.registeredTextures == 0))
+        return checks
+    }
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func sourcePreviewAppearanceCandidateRollsBackPartialLoadWithoutEvictingSharedTextures() async throws {
     let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
     try await appearanceLoadChecks {

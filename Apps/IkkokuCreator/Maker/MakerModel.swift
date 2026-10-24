@@ -67,6 +67,7 @@ final class MakerModel: ViewportInputHandler {
     struct SourceSelectionTiming: Encodable {
         let snapshotMilliseconds: Double, preparationMilliseconds: Double, commitMilliseconds: Double
         var headOwnerStages: HeadOwnerStages? = nil
+        var baseAppearanceStages: SourceBaseAppearanceTimings.Sample? = nil
         var cardAppearanceStages: SourceAppearanceTimings.Sample? = nil
         var preparedAppearanceBytes: Int? = nil
         var preparedAppearanceBytesByCall: [Int]? = nil
@@ -923,8 +924,10 @@ final class MakerModel: ViewportInputHandler {
         let draftFinished = ProcessInfo.processInfo.systemUptime
         let url = head.manifestURL
         let appearanceTransaction = SourceAppearanceLoadTransaction(resources: host.renderer.resources)
+        let baseAppearanceTimings = SourceBaseAppearanceTimings()
         let base = try SourcePreviewAppearance.load(url: url.deletingPathExtension().appendingPathExtension("appearance.json"),
-            resources: host.renderer.resources, modLibrary: sourceModLibrary, transaction: appearanceTransaction)
+            resources: host.renderer.resources, modLibrary: sourceModLibrary, transaction: appearanceTransaction,
+            timings: baseAppearanceTimings)
         let baseAppearanceFinished = ProcessInfo.processInfo.systemUptime
         let appearanceTimings = SourceAppearanceTimings()
         let application = try applyCardAppearance(draft, base: base, url: url, prepared: head.assets, modLibrary: sourceModLibrary,
@@ -964,6 +967,7 @@ final class MakerModel: ViewportInputHandler {
                     previewMilliseconds: (previewFinished - cardAppearanceFinished) * 1000,
                     poseFrameMilliseconds: (poseFrameFinished - previewFinished) * 1000,
                     commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000),
+                baseAppearanceStages: baseAppearanceTimings.sample,
                 cardAppearanceStages: appearanceTimings.sample, preparedAppearanceBytes: head.appearanceInputs.byteCount,
                 preparedAppearanceBytesByCall: head.appearanceInputs.perCallByteCounts)
         }
