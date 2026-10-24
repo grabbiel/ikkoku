@@ -23,25 +23,25 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**916 files indexed; 916 assigned; 0 unassigned.**
+**921 files indexed; 921 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 104 |
-| [Character / Maker / mods](character-and-mods.md) | 124 |
+| [Character / Maker / mods](character-and-mods.md) | 125 |
 | [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 170 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 174 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 200 |
+| Conversion / recovery / verification tool | 204 |
 | Documentation / historical evidence | 58 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 29 |
-| Runtime / shared shader declaration | 210 |
+| Runtime / shared shader declaration | 211 |
 | Test / validation | 190 |
 
 ## App / gameplay / plugins
@@ -201,6 +201,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceExpressions.swift](../../Packages/Engine/Sources/Character/SourceExpressions.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceFaceShapePose.swift](../../Packages/Engine/Sources/Character/SourceFaceShapePose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerAssemblyOptions.swift](../../Packages/Engine/Sources/Character/SourceMakerAssemblyOptions.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceMakerHeadPreparation.swift](../../Packages/Engine/Sources/Character/SourceMakerHeadPreparation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerLibrary.swift](../../Packages/Engine/Sources/Character/SourceMakerLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerPreparationQueue.swift](../../Packages/Engine/Sources/Character/SourceMakerPreparationQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMaterialCompositor.swift](../../Packages/Engine/Sources/Character/SourceMaterialCompositor.swift) | Runtime / shared shader declaration |
@@ -992,6 +993,10 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [docs/reference/studio/voice.md](../../docs/reference/studio/voice.md) | Documentation / historical evidence |
 | [Tools/verification/scenarios/maker-selection-roundtrip.json](../../Tools/verification/scenarios/maker-selection-roundtrip.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-async-selection.json](../../Tools/verification/scenarios/maker-async-selection.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-head-female-selection.json](../../Tools/verification/scenarios/maker-head-female-selection.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-head-female-reload.json](../../Tools/verification/scenarios/maker-head-female-reload.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-head-male-selection.json](../../Tools/verification/scenarios/maker-head-male-selection.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/maker-head-male-reload.json](../../Tools/verification/scenarios/maker-head-male-reload.json) | Conversion / recovery / verification tool |
 | [Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift) | Runtime / shared shader declaration |
 | [docs/reference/character/neutral-model-parity.md](../../docs/reference/character/neutral-model-parity.md) | Documentation / historical evidence |
 

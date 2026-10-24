@@ -18,8 +18,8 @@ struct SourceRigPanel: View {
                 Text("Original geometry, shape curves and facial expressions. Materials are still being rebuilt.")
                     .font(.caption).foregroundStyle(.secondary)
                 Divider()
-                if !model.sourceSelectionRows.isEmpty {
-                    DisclosureGroup("Hair and clothing") {
+                if !model.sourceSelectionRows.isEmpty || !model.sourceHeadChoices.isEmpty {
+                    DisclosureGroup("Head, hair and clothing") {
                         VStack(alignment: .leading, spacing: 8) {
                             if let reason = model.sourceSelectionRows.first?.unavailableReason {
                                 Text(reason).font(.caption).foregroundStyle(.secondary)
@@ -40,6 +40,20 @@ struct SourceRigPanel: View {
                                 }
                                 Text("The displayed character stays editable. Export cancels the pending choice and saves current selections and edits.")
                                     .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if !model.sourceHeadChoices.isEmpty {
+                                Picker("Normal head", selection: Binding(get: { model.sourceHeadID }, set: { id in
+                                    Task {
+                                        do { try await model.selectSourceHead(id) }
+                                        catch is CancellationError { }
+                                        catch { model.status = "Head selection: \(error)" }
+                                    }
+                                })) {
+                                    ForEach(model.sourceHeadChoices) { choice in Text(choice.name).tag(choice.id) }
+                                }
+                                .disabled(model.sourceSelectionPending != nil)
+                                .accessibilityIdentifier("source-selection-head")
+                                .help("Changes the converted normal head while keeping current shape and color edits.")
                             }
                             ForEach(model.sourceSelectionRows) { row in
                                 Picker(row.label, selection: Binding(get: { row.selectedID }, set: { id in

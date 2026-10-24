@@ -135,6 +135,174 @@
         {"path": ".local/verification/maker-scenario-exports/maker-async-edited.png", "kind": "exported-card"}
       ],
       "timeout": 600
+    },
+    {
+      "id": "maker-scenario-head-female",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_CARD",
+          "kind": "file",
+          "from": "IKKOKU_MAKER_HEAD_FEMALE_CARD"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SOURCE_MALE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-head-female-selection.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-head-female.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Normal female heads 0/200/201 use the production async transaction. A cold late pose failure, cancellation, outfit/mode invalidation and head/hair supersession preserve committed identity/resources. Latest shape/color edits and clock survive replacement; exact selected manifest/contracts are checked. Vanilla no-op keeps resources and warmed cycles do not grow them. Export/reimport retains selected head and edits at 1e-5 shape/1/255 color bounds. Scripted API checks, not source appearance parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/maker-scenario-head-female.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-head-female-selected.png",
+          "kind": "exported-card"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "maker-scenario-head-female-reload",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_CARD",
+          "kind": "file",
+          "from": "IKKOKU_MAKER_HEAD_SELECTED_FEMALE_CARD"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SOURCE_MALE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-head-female-reload.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-head-female-reload.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Fresh-process import of the immediately preceding female head-201 export validates exact card/manifest and shape/expression contract identity, then exports/reimports again. Shape rates use 1e-5 and colors 1/255. This is API persistence evidence, not source rendering parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/maker-scenario-head-female-reload.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-head-female-reloaded.png",
+          "kind": "exported-card"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "maker-scenario-head-male",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_CARD",
+          "kind": "file",
+          "from": "IKKOKU_MAKER_HEAD_MALE_CARD"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SOURCE_MALE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-head-male-selection.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-head-male.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Normal male heads 0/200/201 use the production async transaction. A cold late pose failure, cancellation, outfit/mode invalidation and head/hair supersession preserve committed identity/resources. Latest shape/color edits and clock survive replacement; exact selected manifest/contracts are checked. Vanilla no-op keeps resources and warmed cycles do not grow them. Export/reimport retains selected head and edits at 1e-5 shape/1/255 color bounds. Scripted API checks, not source appearance parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/maker-scenario-head-male.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-head-male-selected.png",
+          "kind": "exported-card"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "maker-scenario-head-male-reload",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_CARD",
+          "kind": "file",
+          "from": "IKKOKU_MAKER_HEAD_SELECTED_MALE_CARD"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_SOURCE_MALE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-head-male-reload.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-head-male-reload.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Fresh-process import of the immediately preceding male head-201 export validates exact card/manifest and shape/expression contract identity, then exports/reimports again. Shape rates use 1e-5 and colors 1/255. This is API persistence evidence, not source rendering parity.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/maker-scenario-head-male-reload.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/maker-scenario-exports/maker-head-male-reloaded.png",
+          "kind": "exported-card"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

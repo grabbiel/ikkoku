@@ -55,7 +55,12 @@ final class MakerModel: ViewportInputHandler {
     @ObservationIgnored private(set) var sourceAvatarFailure: String?
     @ObservationIgnored private var sourceMakerLibrary: SourceMakerLibrary?
     @ObservationIgnored private var sourcePreparedAssets: SourceMakerLibrary.Prepared?
-    @ObservationIgnored private let sourcePreparation = SourceMakerPreparationQueue<SourceMakerLibrary.Prepared>()
+    private enum PreparedSelection: Sendable {
+        case assets(SourceMakerLibrary.Prepared)
+        case head(SourceMakerHeadPreparation)
+    }
+    @ObservationIgnored private let sourcePreparation = SourceMakerPreparationQueue<PreparedSelection>()
+    @ObservationIgnored private var sourceNormalBaseURL: URL?
     @ObservationIgnored private var sourceSelectionGeneration: UInt64 = 0
     /// Only asset pickers are disabled while preparing; shape/color controls stay live.
     private(set) var sourceSelectionPending: String?
@@ -71,6 +76,7 @@ final class MakerModel: ViewportInputHandler {
     }
     /// Refreshed only when a card, outfit or selection changes, never on a tick.
     private(set) var sourceSelectionRows: [SourceSelectionRow] = []
+    private(set) var sourceHeadChoices: [SourceSelectionRow.Choice] = []
     @ObservationIgnored private var sourceModLibrary: SourceModLibrary?
     @ObservationIgnored private var sourceModCatalog: SourceModCatalog?
     @ObservationIgnored private var sourceModCatalogContract: SourceModCatalogContract?
@@ -165,7 +171,7 @@ final class MakerModel: ViewportInputHandler {
     @ObservationIgnored private var sourceDynamicsDocument: SourceDynamicsDocument?
     @ObservationIgnored private var sourceDynamicsStates: [SourceDynamicBone] = []
     @ObservationIgnored private var sourceSimulationPose: RigPose?
-    @ObservationIgnored private var sourceAnimationTime: Float = 0
+    @ObservationIgnored private(set) var sourceAnimationTime: Float = 0
     @ObservationIgnored private var sourceLastTick = ProcessInfo.processInfo.systemUptime
     var hasSourceIdle = false
     var hasSourceHairDynamics = false
@@ -446,6 +452,9 @@ final class MakerModel: ViewportInputHandler {
         sourceAssetSelections = prepared?.selections ?? []
         sourceSelectionRows = selectionRows(card: imported, library: makerLibrary, coordinate: 0,
             unavailableReason: selectionUnavailableReason(draft: draft, url: url))
+        sourceNormalBaseURL = head == 0 ? url : EngineHost.sourceAvatarCandidateURL(sex: sex == 0 ? .male : .female)
+        sourceHeadChoices = headChoices(card: imported, library: makerLibrary, baseURL: sourceNormalBaseURL,
+            appearanceAvailable: draft != nil)
         importedSourceCardURL = cardURL
         sourceColorEdits = [:]
         sourceAppearanceDraft = draft
@@ -479,7 +488,7 @@ final class MakerModel: ViewportInputHandler {
         frameSourceRig()
     }
 
-    func closeSourceRig() { cancelSourceSelection(); sourceSelectionRows = []; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
+    func closeSourceRig() { cancelSourceSelection(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
 
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
@@ -586,7 +595,8 @@ final class MakerModel: ViewportInputHandler {
     }
 
     private func applyCardAppearance(_ draft: SourceCardAppearance, base: SourcePreviewAppearance, url: URL,
-                                     prepared: SourceMakerLibrary.Prepared? = nil, modLibrary: SourceModLibrary?) throws -> SourcePreviewAppearance.CardApplication? {
+                                     prepared: SourceMakerLibrary.Prepared? = nil, modLibrary: SourceModLibrary?,
+                                     transaction: SourceAppearanceLoadTransaction? = nil) throws -> SourcePreviewAppearance.CardApplication? {
         let bindingsURL = url.deletingPathExtension().appendingPathExtension("card-appearance.json")
         var current = base, fields = Set<String>(), diagnostics: [String] = []
         if FileManager.default.fileExists(atPath: bindingsURL.path) {
@@ -595,7 +605,8 @@ final class MakerModel: ViewportInputHandler {
             let applied = try current.applying(draft, bindings: bindings, directory: url.deletingLastPathComponent(), resources: host.renderer.resources)
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
-        if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources, modLibrary: modLibrary) {
+        if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources,
+            modLibrary: modLibrary, transaction: transaction) {
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         return .init(appearance: current, appliedFields: fields, diagnostics: diagnostics)
@@ -699,6 +710,20 @@ final class MakerModel: ViewportInputHandler {
         }
     }
 
+    private func headChoices(card: SourceCharacterCard?, library: SourceMakerLibrary?, baseURL: URL?,
+                             appearanceAvailable: Bool) -> [SourceSelectionRow.Choice] {
+        guard let card, let library, appearanceAvailable,
+              (try? card.validateMakerSelectionMetadata()) != nil,
+              (try? SourceMakerLibrary.validateAssemblyIdentity(card: card)) != nil,
+              let identity = try? card.customization(), identity.exType == 0 else { return [] }
+        return SourceMakerHeadPreparation.supportedIDs.compactMap { id in
+            let available = id == 0 ? baseURL != nil : library.assemblies.contains {
+                $0.sex == identity.sex && $0.headID == id && $0.exType == 0
+            }
+            return available ? .init(id: id, name: "Head \(id)") : nil
+        }
+    }
+
     /// Invalidates the generation before resuming any cancelled caller. Export
     /// deliberately saves the visible, committed card, never an in-flight choice.
     func cancelSourceSelection() {
@@ -750,10 +775,12 @@ final class MakerModel: ViewportInputHandler {
         let snapshotFinished = ProcessInfo.processInfo.systemUptime
         let prepared: SourceMakerLibrary.Prepared
         do {
-            prepared = try await sourcePreparation.prepare {
+            let result = try await sourcePreparation.prepare {
                 beforePreparation?()
-                return try library.prepare(card: candidate, coordinate: coordinate, baseURL: url)
+                return .assets(try library.prepare(card: candidate, coordinate: coordinate, baseURL: url))
             }
+            guard case .assets(let assets) = result else { throw RigError.invalid("Unexpected Maker preparation result.") }
+            prepared = assets
         } catch {
             if generation != sourceSelectionGeneration || Task.isCancelled { throw CancellationError() }
             throw error
@@ -813,6 +840,109 @@ final class MakerModel: ViewportInputHandler {
         sourceSimulationPose = pose // The immediate refresh can reuse the validated upstream solve.
         refreshSourceCardModReport()
         status = "Selected source ID \(id). Export saves this selection and supported edits."
+    }
+
+    /// Head replacement shares the bounded preparation queue and generation with
+    /// hair/clothes, but must replace both head contracts and the manifest URL.
+    func selectSourceHead(_ id: Int, beforePreparation: (@Sendable () -> Void)? = nil) async throws {
+        try Task.checkCancellation()
+        guard isActiveMode else { throw CancellationError() }
+        cancelSourceSelection()
+        sourceSelectionTiming = nil
+        let generation = sourceSelectionGeneration
+        let started = ProcessInfo.processInfo.systemUptime
+        guard let card = importedSourceCard, sourceRigPreview != nil, let library = sourceMakerLibrary,
+              sourceAppearanceDraft != nil else {
+            throw RigError.invalid("Import an original card with readable appearance and a converted Maker library before selecting a head.")
+        }
+        let identity = try card.customization()
+        guard identity.sex == sourceSex, identity.exType == 0,
+              SourceMakerHeadPreparation.supportedIDs.contains(id) else {
+            throw RigError.invalid("This normal head selection is unsupported.")
+        }
+        // Validate and clean resolver identity even when the numeric ID equals
+        // the current head. A true vanilla no-op never prepares GPU resources.
+        let bytes = try card.selectingVanillaHead(id)
+        guard bytes != card.preservedData else { return }
+        let candidate = try SourceCharacterCard.decode(bytes)
+        let coordinate = sourceBoneModifierCoordinate, baseURL = sourceNormalBaseURL
+        sourceSelectionPending = "Preparing head · ID \(id)"
+        status = sourceSelectionPending!
+        defer { if generation == sourceSelectionGeneration { sourceSelectionPending = nil } }
+        let snapshotFinished = ProcessInfo.processInfo.systemUptime
+        let head: SourceMakerHeadPreparation
+        do {
+            let result = try await sourcePreparation.prepare {
+                beforePreparation?()
+                return .head(try SourceMakerHeadPreparation.prepare(card: candidate, library: library,
+                    coordinate: coordinate, baseURL: baseURL))
+            }
+            guard case .head(let value) = result else { throw RigError.invalid("Unexpected Maker preparation result.") }
+            head = value
+        } catch {
+            if generation != sourceSelectionGeneration || Task.isCancelled { throw CancellationError() }
+            throw error
+        }
+        let preparationFinished = ProcessInfo.processInfo.systemUptime
+        try Task.checkCancellation()
+        guard isActiveMode, generation == sourceSelectionGeneration,
+              coordinate == sourceBoneModifierCoordinate, head.coordinate == coordinate,
+              importedSourceCard?.preservedData == card.preservedData,
+              head.sex == sourceSex, head.headID == id, head.boneType == sourceBoneType,
+              let current = sourceRigPreview else { throw CancellationError() }
+
+        // No suspension below: use the latest editable values and clock, and
+        // validate the full candidate before changing any displayed state.
+        let colors = try pendingSourceColors(card: card)
+        var draft = try SourceCardAppearance(card: candidate, coordinate: coordinate)
+        for color in draft.colors {
+            if let edit = colors[colorEditKey(color)] { try draft.setColor(color.id, rgba: Float4(edit.rgba)) }
+        }
+        let url = head.manifestURL
+        let appearanceTransaction = SourceAppearanceLoadTransaction(resources: host.renderer.resources)
+        let base = try SourcePreviewAppearance.load(url: url.deletingPathExtension().appendingPathExtension("appearance.json"),
+            resources: host.renderer.resources, modLibrary: sourceModLibrary, transaction: appearanceTransaction)
+        let application = try applyCardAppearance(draft, base: base, url: url, prepared: head.assets, modLibrary: sourceModLibrary,
+            transaction: appearanceTransaction)
+        let preview = try SourceRigPreview(source: head.assets.source, contract: head.contract, resources: host.renderer.resources,
+            appearance: application?.appearance ?? base, expressionContract: head.expressions, bodyOptions: head.bodyOptions,
+            lateCorrectionOptions: current.lateCorrectionOptions, doubleTooth: try SourceRigPreview.savedDoubleTooth(in: candidate))
+        guard preview.supportsFaceCustomization, preview.supportsExpressions,
+              preview.bodyCoverage?.completeSlots.count == 44 else {
+            throw RigError.invalid("Selected head assembly has incomplete shape or expression bindings.")
+        }
+        let pose = try sourceUpstreamPose(preview: preview, at: sourceAnimationTime)
+        let frame = try preview.frame(camera: camera, mainLight: mainLight, effects: effects,
+            expression: effectiveSourceExpressionInputs, showBones: showBones, poseOverride: pose)
+        guard !frame.sceneBounds.isEmpty, frame.sceneBounds.radius.isFinite else {
+            throw RigError.invalid("Selected head assembly has no finite rendered bounds.")
+        }
+        let rows = selectionRows(card: candidate, library: library, coordinate: coordinate, unavailableReason: nil)
+        var diagnostics = try candidate.previewSettings(contract: head.contract, sex: head.sex,
+            headID: head.headID, boneType: head.boneType).diagnostics
+        if head.sex == 0 { diagnostics.append("Normal male Maker height is fixed at 0.6 by the original game.") }
+        updatingSource = true
+        appearanceTransaction.commit()
+        defer {
+            updatingSource = false
+            refresh()
+            sourceSelectionTiming = SourceSelectionTiming(snapshotMilliseconds: (snapshotFinished - started) * 1000,
+                preparationMilliseconds: (preparationFinished - snapshotFinished) * 1000,
+                commitMilliseconds: (ProcessInfo.processInfo.systemUptime - preparationFinished) * 1000)
+        }
+        importedSourceCard = candidate
+        sourceRigURL = url; sourceHeadID = head.headID
+        sourceColorEdits = colors; sourceAppearanceDraft = draft
+        sourceAppliedColors = Dictionary(uniqueKeysWithValues: draft.colors.map { ($0.id, $0.rgba) })
+        sourceAppearanceAppliedFields = application?.appliedFields ?? []
+        sourceAppearanceDiagnostics = application?.diagnostics ?? ["This assembly has no card appearance bindings."]
+        sourceCardDiagnostics = diagnostics
+        sourcePreparedAssets = head.assets; sourceAssetSelections = head.assets.selections
+        sourceSelectionRows = rows; sourceRigPreview = preview
+        sourceDynamicsDocument = nil; hasSourceHairDynamics = false
+        invalidateSourceSimulation(); sourceSimulationPose = pose
+        refreshSourceCardModReport()
+        status = "Selected normal head \(id). Current shapes, colors and pose are kept."
     }
 
     private func replaceSourceAppearance(_ draft: SourceCardAppearance) throws {

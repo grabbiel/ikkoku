@@ -13,8 +13,16 @@ import ShaderTypes
 final class SourceAppearanceTextureLease: @unchecked Sendable {
     let resources: ResourceStore
     let handle: TextureHandle
+    private let ownershipLock = NSLock()
+    private var cached = false
     init(resources: ResourceStore, handle: TextureHandle) { self.resources = resources; self.handle = handle }
-    deinit { resources.unregister(texture: handle) }
+    func transferToCache() {
+        ownershipLock.lock(); cached = true; ownershipLock.unlock()
+    }
+    deinit {
+        ownershipLock.lock(); let shouldRelease = !cached; ownershipLock.unlock()
+        if shouldRelease { resources.unregister(texture: handle) }
+    }
 }
 
 final class SourceAppearanceTextureOwner: Sendable {

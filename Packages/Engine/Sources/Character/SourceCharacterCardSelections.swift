@@ -78,6 +78,40 @@ extension SourceCharacterCard {
         return result
     }
 
+    /// Select a converted normal head without replacing the face's other fields.
+    /// A numerically equal resolver-backed head still changes identity. The
+    /// caller must validate the selected assembly before committing these bytes.
+    public func selectingVanillaHead(_ id: Int) throws -> Data {
+        guard [0, 200, 201].contains(id) else { throw cardEditError("Unsupported normal source head ID.") }
+        // Validate the Custom/face versions even for a no-op. Body and hair
+        // payloads remain opaque, exactly as they were saved.
+        let face = try recordData(.face)
+        let tokens = try CardTokenDocument(face)
+        let field = try tokens.node(at: [.key("headId")])
+        guard let oldID = try tokens.value(field).integerValue, Int32(exactly: oldID) != nil else {
+            throw cardEditError("Saved source head ID is not an Int32.")
+        }
+        var replacements: [String: Data] = [:]
+        if oldID != id {
+            guard let block = block(named: "Custom") else { throw cardEditError("Custom block is absent.") }
+            var reader = try CardReader(block.data)
+            _ = try reader.lengthPrefixedData()
+            let body = try reader.lengthPrefixedData(), hair = try reader.lengthPrefixedData()
+            let updated = try tokens.applying([.init(range: field.range, replacement: cardInteger(id))])
+            replacements["Custom"] = cardLengthData(updated) + cardLengthData(body) + cardLengthData(hair)
+        }
+        let property = "ChaFileFace.headId"
+        let resolver = try selectionResolverChanges(removing: property)
+        replacements.merge(resolver.blocks) { _, updated in updated }
+        if replacements.isEmpty, resolver.trailer == trailingData { return preservedData }
+        let verified = try replacingBlocks(replacements, trailer: resolver.trailer)
+        guard try verified.recordFields(.face)["headId"]?.integerValue == id,
+              try verified.modReferences()?.records.contains(where: { $0.property.map { Data($0.utf8) } == Data(property.utf8) }) != true else {
+            throw cardEditError("Source head selection verification failed.")
+        }
+        return verified.preservedData
+    }
+
     /// Validate both resolver markers and both supported Extended Save locations,
     /// including metadata shadowed by the source loader. The selection UI must
     /// not infer a vanilla identity when any data needed for cleanup is invalid.

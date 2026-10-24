@@ -37,7 +37,7 @@ the original correction table for nonzero Int32 body-bone types on the shared
 skeleton. Special `exType` assemblies and resolver-backed mod heads fail explicitly.
 
 Maker invokes the library when importing an original card, committing a converted
-vanilla hair/clothing selection, and when changing its
+vanilla head/hair/clothing selection, and when changing its
 saved outfit. Four hair slots, supported clothes and up to 20 accessory slots are
 resolved from preserved source IDs and exact resolver properties. A missing entry
 can retain reference hair/clothes with a diagnostic; an unresolved accessory is
@@ -147,7 +147,7 @@ therefore does not, by itself, enable its Maker animation or physics.
 
 ## Source selection editor (CMT-02 first slice)
 
-The source panel's **Hair and clothing** pickers use the loaded library's exact
+The source panel's **Head, hair and clothing** pickers use the loaded library's exact
 vanilla category/ID entries. Four hair slots and eight clothing slots are editable;
 inner shoes are excluded because `prepare` assembles only outer shoes. Explicit
 empty entries work through the same identity checks. Unavailable or modded current
@@ -290,3 +290,69 @@ Integrated visible UI verification changed back hair 2 → 0 → 9, edited heigh
 the UI capture could observe it. Editing/cancelling while pending is therefore
 verified through deterministic production-path scenarios, not yet by a captured
 interactive workflow; no whole-character or original-player parity is claimed.
+
+
+### Normal head selection (#182)
+
+The **Normal head** picker selects converted normal heads 0, 200 and 201 for the
+current sex and `exType=0`. It uses a dedicated transaction because each head owns
+its shape curves, expression targets and source manifest. The four hair and
+clothing slot APIs cannot substitute for a head replacement. Head choices are
+cached when the card is opened; the picker adds no animation-tick catalog scans.
+
+`selectingVanillaHead` patches only the `Custom.face.headId` token and removes
+exact `ChaFileFace.headId` resolver entries in both supported Extended Save
+locations. Equal numeric IDs with a resolver still require cleanup. A vanilla
+no-op validates the face version and resolver metadata, then preserves all bytes
+and GPU identities. Unknown fields, unrelated resolver records and other record
+payloads remain intact. Special `exType` values, unconverted heads and incomplete
+contracts fail explicitly; head selection never substitutes reference geometry.
+
+`SourceMakerHeadPreparation` resolves and hash-checks the selected assembly and
+loads geometry, shape/expression contracts and correction data on the existing
+bounded serial preparation queue. Head, hair and clothing requests share its
+cancellation generation. Before commit, the owner checks the active mode, saved
+card, coordinate and requested assembly identity, then uses the latest draft
+shapes, colors, ABMX settings, expression and animation clock. The replacement
+preview, contracts, manifest URL and saved head ID commit together without a
+suspension. The selected head keeps the current edits; this does not implement the
+original Maker's head-preset/default-reset behavior.
+
+Appearance JSON and texture reads, texture composition/upload, preview creation
+and pose/frame validation remain on the owner. Candidate base textures use
+`SourceAppearanceLoadTransaction`: existing cache hits stay shared, new handles
+remain unpublished until validation succeeds, and abandoned loads release only
+those new handles. If another consumer publishes the same key before commit, its
+cache entry stays unchanged and the candidate keeps an appearance-owned lease.
+Successful uncontended loads retain the existing persistent cache behavior.
+Composed texture leases and preview mesh cleanup continue to own their respective
+resources. This boundary avoids treating resource-count changes as ownership.
+
+The Maker lane includes paired selection/fresh-process reload checks for female
+and male head-0 inputs. It requires `IKKOKU_MAKER_HEAD_FEMALE_CARD`,
+`IKKOKU_MAKER_HEAD_MALE_CARD`, `IKKOKU_MAKER_HEAD_SELECTED_FEMALE_CARD` and
+`IKKOKU_MAKER_HEAD_SELECTED_MALE_CARD`. The selected-card aliases point to
+`.local/verification/maker-scenario-exports/maker-head-female-selected.png` and
+`maker-head-male-selected.png` respectively in the checkout running the lane.
+Each sex's reload follows its export immediately, with distinct output artifacts.
+The scenarios use controlled API calls, with background animation paused for
+failure-frame comparisons; they do not establish original-player UI or rendered
+appearance parity. Existing independent geometry gates remain the source-model
+reference, at their unchanged tolerances.
+
+
+Local Release acceptance for this bounded transaction passed 26 focused Engine
+checks without skips, including 18 fixture assembly preparations, exact card-token
+and resolver checks, queue cancellation, and synthetic partial-load, cache-collision
+and texture-lifetime controls. Both normal sexes pass 55 scripted selection checks
+and seven fresh-process reload checks; the six existing Maker lane checks also
+pass. The cold head-200 pose rejection retains 43 meshes and 64 textures for the
+female input, and 43 meshes and 81 textures for the male input. Warm 200→201→0
+cycles retain the same head-0 resource counts (98/115 cached textures respectively)
+with no growth. Counts include store-owned retired resources; they are not process
+footprint or frame-rate measurements. Runtime/script/input provenance and distinct
+per-sex exported artifacts are retained privately under
+`.local/codex-continue-2026-10-24/rolling/maker-head-selection/`. The initial female
+artifact paths collided with the subsequent male run; that report is retained
+unchanged, and the female pair was rerun successfully to distinct paths. Source
+shape/player tolerances and production rendering algorithms are unchanged.

@@ -643,7 +643,7 @@ MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "setColorDraft", "selectAsset", "captureResources", "resetShapes", "export", "reimport", "assert",
                       "beginSelection", "finishSelection",
                       "supersedeSelection", "cancelSelection", "closeSource", "reloadCard", "clearModLibrary", "boneModifiers",
-                      "mode", "queueSelectionThenStudio"}
+                      "mode", "queueSelectionThenStudio", "advanceMotion", "liveAnimation", "mouthOpen"}
 
 # App settings that name a file the app is asked to write (A-T05).
 APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
@@ -1158,7 +1158,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_maker_scenario(self):
-        self.assertEqual(len(self.checks), 6)
+        self.assertEqual(len(self.checks), 10)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_MAKER_SCENARIO"]
@@ -1200,6 +1200,11 @@ class MakerScenarioLaneTests(unittest.TestCase):
                 if op in ("setFace", "setBody"):
                     self.assertIsInstance(step["index"], int)
                     self.assertIsInstance(step["value"], float)
+                if op in ("advanceMotion", "mouthOpen"):
+                    self.assertIsInstance(step["value"], float)
+                    self.assertGreaterEqual(step["value"], 0)
+                    if op == "mouthOpen":
+                        self.assertLessEqual(step["value"], 1)
                 if op in ("setColor", "setColorDraft"):
                     self.assertIsInstance(step["id"], str)
                     rgba = step["rgba"]
@@ -1211,9 +1216,12 @@ class MakerScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step["id"], ("maker", "studio"))
                 if op in ("selectAsset", "beginSelection", "supersedeSelection", "queueSelectionThenStudio") or "selection" in step:
                     selection = step["selection"]
-                    self.assertIn(selection["kind"], ("hair", "clothes"))
+                    self.assertIn(selection["kind"], ("hair", "clothes", "head"))
                     self.assertIsInstance(selection["slot"], int)
                     self.assertIsInstance(selection["sourceID"], int)
+                    if selection["kind"] == "head":
+                        self.assertEqual(selection["slot"], 0)
+                        self.assertNotIn("coordinate", selection)
                     for flag in ("unchanged", "expectFailure"):
                         if flag in step:
                             self.assertIsInstance(step[flag], bool)
@@ -1256,6 +1264,23 @@ class MakerScenarioLaneTests(unittest.TestCase):
         self.assertEqual(steps[queued + 2], {"op": "mode", "id": "maker"})
         self.assertEqual(steps[queued + 3]["op"], "selectAsset")
         self.assertEqual(steps[queued + 3]["selection"], steps[queued]["selection"])
+
+    def test_head_checks_pair_each_sex_with_its_fresh_process_reload(self):
+        selected = [c for c in self.checks if c["id"].startswith("maker-scenario-head-")]
+        self.assertEqual([c["id"] for c in selected], ["maker-scenario-head-female", "maker-scenario-head-female-reload",
+                                                       "maker-scenario-head-male", "maker-scenario-head-male-reload"])
+        for sex, changed, reloaded in (("FEMALE", selected[0], selected[1]), ("MALE", selected[2], selected[3])):
+            input_fixture = next(f for f in changed["fixtures"] if f["env"] == "IKKOKU_SOURCE_CARD")
+            reload_fixture = next(f for f in reloaded["fixtures"] if f["env"] == "IKKOKU_SOURCE_CARD")
+            self.assertEqual(input_fixture["from"], "IKKOKU_MAKER_HEAD_" + sex + "_CARD")
+            self.assertEqual(reload_fixture["from"], "IKKOKU_MAKER_HEAD_SELECTED_" + sex + "_CARD")
+            self.assertTrue(any(a["path"].endswith("maker-head-" + sex.lower() + "-selected.png") for a in changed["artifacts"]))
+        with open(os.path.join(self.SCENARIO_DIR, "maker-head-female-selection.json"), encoding="utf-8") as handle:
+            steps = json.load(handle)["steps"]
+        self.assertEqual(steps[0], {"op": "liveAnimation", "on": False})
+        first_commit = next(i for i, step in enumerate(steps) if step["op"] == "finishSelection" and not step.get("expectFailure"))
+        self.assertTrue(any(s["op"] == "finishSelection" and s.get("diagnosticContains") == "invalidRate" for s in steps[:first_commit]))
+        self.assertTrue({"setFace", "setBody", "setColorDraft", "mouthOpen", "advanceMotion"} <= {s["op"] for s in steps[:first_commit]})
 
     def test_every_scenario_round_trips_through_export_and_reimport(self):
         for check in self.checks:

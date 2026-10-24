@@ -392,20 +392,36 @@ public final class ResourceStore: @unchecked Sendable {
         return register(texture: t, key: key)
     }
 
-    public func texture(data: Data, key: String, srgb: Bool = true) throws -> TextureHandle {
+    public func texture(data: Data, key: String, srgb: Bool = true, cacheNew: Bool = true,
+                        didCreate: ((TextureHandle) -> Void)? = nil) throws -> TextureHandle {
         let fullKey = "\(key)#\(srgb)"
         if let h = lookup(key: fullKey) { return h }
         guard let src = CGImageSourceCreateWithData(data as CFData, nil), let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
             throw ResourceError.imageDecode(key)
         }
-        return try texture(cgImage: cg, key: fullKey, srgb: srgb)
+        return try texture(cgImage: cg, key: fullKey, srgb: srgb, cacheNew: cacheNew, didCreate: didCreate)
     }
 
-    public func texture(cgImage: CGImage, key: String, srgb: Bool = true) throws -> TextureHandle {
+    /// Candidate loads can defer cache publication. The callback reports only a
+    /// handle registered by this call, never a shared cache hit.
+    public func texture(cgImage: CGImage, key: String, srgb: Bool = true, cacheNew: Bool = true,
+                        didCreate: ((TextureHandle) -> Void)? = nil) throws -> TextureHandle {
         if let h = lookup(key: key) { return h }
         let t = try textureLoader.newTexture(cgImage: cgImage, options: [.SRGB: srgb, .generateMipmaps: true, .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue])
         t.label = key
-        return register(texture: t, key: key)
+        let handle = register(texture: t, key: cacheNew ? key : nil)
+        didCreate?(handle)
+        return handle
+    }
+
+    /// Publish a prepared texture without displacing an existing consumer. A
+    /// false result leaves the candidate privately owned by its caller.
+    public func cacheTextureIfAbsent(_ handle: TextureHandle, key: String) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard textures[handle.id] != nil else { return false }
+        if let existing = textureKeys[key] { return existing == handle }
+        textureKeys[key] = handle
+        return true
     }
 
     /// Creates (or replaces) an 8-bit single-channel texture from raw bytes (row-major, width*height).
