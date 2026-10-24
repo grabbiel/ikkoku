@@ -121,7 +121,14 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
 - model events without a duration (`events`): `studioDocChange` counts writes
   to the Studio document, each of which notifies every view that reads it, and
   `studioCameraChange` counts writes through the camera accessor, which only
-  the camera's readers observe;
+  the camera's readers observe. `hoverPickStarted` counts hover picks started
+  (a move with no pick in flight, or a stale result picked again), and
+  `hoverPickCoalesced` counts moves that waited for the pick in flight;
+- the asynchronous hover picks (`hoverPick`, [phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)):
+  picks finished on the main actor, how many applied and how many were stale,
+  their latency from start to the main actor and their command buffers' GPU
+  time. Applying them is the `studioHoverPick` model phase, including the
+  refresh when the highlight changes;
 - SwiftUI body evaluations (`viewBodies`, count and rate per second) for the
   app's commands, the content view, the Studio window and each of its panels
   and inspectors, and the Maker window, source rig panel and shape slider rows.
@@ -143,12 +150,15 @@ the whole live step and the refresh column the frame rebuild inside it.
 
 The same phases are `os_signpost` intervals in the Points of Interest category
 of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `StudioTick`,
-`StudioRefresh`, `StudioCameraRefresh`, `MakerTick`, `MakerRefresh`,
-`Startup`, and `Mark` events), so every Instruments template shows them next
-to its own tracks. The report's `schemaVersion` is 2 since the Studio hooks,
-events and view bodies were added, and 3 since the draw log moved off the main
-actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad` phase and
-`configuration.mainLoadMs`/`mainLoadHz`).
+`StudioRefresh`, `StudioCameraRefresh`, `StudioHoverPick`, `MakerTick`,
+`MakerRefresh`, `Startup`, and `Mark` events), so every Instruments template
+shows them next to its own tracks. The report's `schemaVersion` is 2 since the
+Studio hooks, events and view bodies were added, 3 since the draw log moved
+off the main actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad`
+phase and `configuration.mainLoadMs`/`mainLoadHz`), and 4 since the hover
+pick became asynchronous (`hoverPick`, the `studioHoverPick` phase and the two
+hover events). `perf_trace.py summarize` prints a hover line for a report with
+hover picks.
 
 ### Running it
 

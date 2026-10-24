@@ -148,7 +148,10 @@ private func pickAsync(_ renderer: Renderer, _ frame: RenderFrame, _ pixel: Floa
     let mailbox = PickMailbox<Int>()
     #expect(mailbox.take() == nil)
     #expect(!mailbox.waitForDelivery(timeout: 0.01))
-    DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+    // A thread of its own: in the full parallel suite, a global dispatch queue
+    // can wait far longer than the timeouts below for a worker thread.
+    Thread.detachNewThread {
+        Thread.sleep(forTimeInterval: 0.05)
         mailbox.deliver(1, RenderPickResult(id: 10))
         mailbox.deliver(2, RenderPickResult(id: 20, gpuTime: 0.001))
     }
