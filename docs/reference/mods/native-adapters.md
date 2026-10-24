@@ -355,9 +355,24 @@ corrected producer emitted all fields. Its initial validator expected a
 that observed type and passes the same unchanged trace, with both initial failures
 retained. This is not described as a passing first validation or a fresh rerun.
 
-Four public synthetic trace-contract tests, sixteen package-library tests and two
-original-fixture packaging tests pass locally, with no skips in these runs. The
-probe compiles against retained original metadata; its exact JSON serializer also
-passes a standalone nested/escaping check. Native app and visible UI gates remain
-in progress on this branch. Private evidence is retained in
+Four public synthetic trace-contract tests, sixteen Python package-library tests,
+two original-fixture packaging tests and sixteen focused Engine tests pass locally,
+with no skips in these runs. The probe compiles against retained original metadata;
+its exact JSON serializer also passes a standalone nested/escaping check.
+
+The clean Release build at `e652954` (executable SHA-256
+`53162923fed56e4ea5c080aa3a7796f508afd1c6eb6034c14efae50e6f1c87c8`)
+passes 21 native interaction checks and four fresh-process restoration checks.
+These cover unchanged authored preferences, configuration-failure rollback, exact
+saved package references, mode/input ownership, repeated resource/content stability,
+and a real rendered-guide grab followed by hiding and an attempted invisible drag.
+The guide gesture ends without changing the document; hidden orbit remains usable.
+The initial guide-pick harness failure is retained: it projected untransformed
+unit vertices. The corrected check projects transformed triangle centers and keeps
+the same interaction assertions. Earlier app/test compile failures are also retained,
+separately from the successful build and test records.
+
+The camera-only scenario's event timings are functional diagnostics, not loaded-scene
+performance evidence. Representative loaded-scene cost and visible UI acceptance
+remain in progress. Private evidence is retained in
 `.local/codex-continue-2026-10-24/wave-three/plugins/hide-studio-ui/`.
