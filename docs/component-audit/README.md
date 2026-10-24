@@ -276,6 +276,21 @@ concurrency is automated-method evidence, not interactive modal evidence.
 The owner moves next to mounted-session summaries and Unload access for direct
 native and translated-profile origins in the existing library panel.
 
+**Diagnostic handoff — standalone sampling control, [#197](https://github.com/grabbiel/ikkoku/pull/197):**
+The Materials owner completed an asset-free Metal tool with authored mip levels,
+a large continuous quad, and identical tiny-triangle grids with continuous or
+discontinuous UVs. Four held draws per case are bit-identical across color,
+UV, derivatives, returned samples and primitive IDs; every case covers 4,096
+pixels with finite values and zero affine-gradient error. The continuous cases
+also produce identical color images, while the discontinuous case differs.
+CPU literal/layout checks pass and root independently verifies all 60 retained
+artifact hashes. The measured executable is `8aaf5ab9…8255` on M2 Ultra,
+macOS 27.0.1, default MSL 4.1 and fast math disabled. These regular-grid controls
+do not reproduce the recovered-shader variation and establish no production
+fix, source parity or timing improvement. [The renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the numerical scope; #188 remains open. The next bounded experiment
+changes subpixel placement and edge direction while retaining these controls.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
