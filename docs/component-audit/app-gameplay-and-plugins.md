@@ -451,10 +451,24 @@ Concrete Studio integration is covered in [Studio](studio.md).
   an external-profile alias. Mode/document changes cancel pending mounts; runtime
   ticks may continue. Missing-library undo/load and rejected replacement preserve
   the prior document/session/adapters. Focused strict fixture checks: 30 Engine
-  tests, zero skips; 191 verification Python tests; 12 deterministic app checks.
+  tests, zero skips; 191 verification Python tests; 8 execution-probe tests;
+  clean Release build and 13 deterministic app checks. Failed legacy attachment
+  restoration also retains undo/redo history, the old session/adapters, rendered
+  preview identities and exact resource/frame state (the synthetic rollback
+  scene has no character previews). Static cancellation assertions pause normal
+  editor timers; the separate running replacement check advances the old runtime.
   Mixed-library state and both adapters pass fresh-process restore against an old
-  generation after a changed source publication. Exact reload pixels and visible
-  UI acceptance are pending the controlled-clock rerun and maintainer review.
+  generation after a changed source publication, with exact reload pixels at an
+  explicitly held source-hand clock of zero. This does not establish general
+  source-animation clock persistence. The corrected legacy startup smoke also
+  passes with source object 10 supplied by its declared scene fixture; earlier
+  missing-scene failures above remain historical. Visible library UI acceptance
+  passed on the same Release build: open the actual library, choose three
+  current-generation revisions, bind source character 10, mount, pause/run,
+  browse the latest generation without changing the mount, and unload. The new
+  panel's Run/Unload controls are disabled in Maker and recover in Studio; this
+  does not cover the legacy menubar Run command. Native save/reopen acceptance
+  is the three-process headless check, not a claimed GUI save/reopen test.
   No library/hash I/O occurs in ticks or snapshots. Remaining: batch DLL triage,
   multi-type packages, assembly dependencies, converter migrations, and the
   installed Chainloader's duplicate and version rules from private evidence.

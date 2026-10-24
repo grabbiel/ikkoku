@@ -266,6 +266,41 @@ native scene stores both values directly. A Studio scenario may run the bounded
 holds the real background preparation for mode/document-change and rollback
 checks; normal Studio scenarios keep their synchronous execution.
 
+The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
+including a rejected legacy restore whose field initializer tries to read an
+attached world transform. Repeating undo and trying redo preserve the old
+document, session, adapters, rendered-preview identities and exact frame/resource
+state. That rollback fixture uses two folders and no character previews. Normal
+editor timers are paused for static cancellation assertions; a separate running
+replacement check advances the old session during preparation.
+
+The three-process mixed-library probe retained generation 1 with generation 2
+available, exact fields/clocks/object bindings, and both registered adapters.
+Run/reload pixels are identical with `--animation-time 0`, explicitly held in
+every phase. This verifies plugin persistence under a controlled source-hand
+clock, not general source-animation clock persistence. The historical probe
+default remains import-only 0.5 seconds; the unequal-clock failure is retained
+as evidence. The legacy startup capture also passes after declaring its required
+source scene instead of attempting to bind object 10 in an empty document.
+
+Visible UI acceptance on the same build opened the actual library, selected its
+three generation-2 revisions, bound Source character 10, mounted, paused/resumed,
+and unloaded. Reading the latest generation reset the browsing choices while
+retaining the mounted selection. The new panel's Run/Unload controls were
+disabled in Maker and enabled again in Studio; the legacy menubar Run command
+was outside that control check. Generation 2 offered its current motion revision,
+not the older generation-1 revision; old-selection restoration is the separate
+automated proof. GUI save/reopen was not tested in this pass.
+
+Functional timing diagnostics on that Release build: one initial mount took
+112.88 ms end to end (preparation, scheduling and commit combined); 120 synthetic
+two-folder steps averaged 0.01855 ms and snapshots 0.000642 ms. Whole-process
+run/reload/continue took 3.268/1.149/1.205 seconds, including startup, assets,
+rendering and PNG I/O. These ran alongside other development work and are not a
+quiet performance comparison, isolated main-thread commit cost, or scene-open
+responsiveness claim. No library/hash I/O occurs in the measured tick/snapshot
+path; native open and history restoration still resolve synchronously.
+
 Remaining work:
 
 - Batch DLL triage that recovers each entry type, assembly-level dependencies,
