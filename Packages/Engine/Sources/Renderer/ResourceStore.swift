@@ -96,6 +96,13 @@ public final class ResourceStore: @unchecked Sendable {
     private var nextMesh: UInt32 = 1
     private var nextTexture: UInt32 = 1
     private var deformBuffers: [UInt64: any MTLBuffer] = [:]
+    /// Bumped by every change to what a prepared frame can look up by handle
+    /// or key: meshes, textures and hidden masks registered, replaced or
+    /// dropped, and retirements completed. Deformation buffers are not
+    /// counted: a frame's own deform pass rewrites them before any pass reads
+    /// them. The interactive draw shows an unchanged frame again only while
+    /// this value is unchanged (R7 phase 2, item 4; `Renderer.DrawnFrame`).
+    private var generationValue: UInt64 = 0
     let textureLoader: MTKTextureLoader
 
     public let whiteTexture: any MTLTexture
@@ -129,6 +136,9 @@ public final class ResourceStore: @unchecked Sendable {
     // MARK: Meshes
 
     public func mesh(_ h: MeshHandle) -> GPUMesh? { lock.lock(); defer { lock.unlock() }; return meshes[h.id] }
+
+    /// See `generationValue`. Any thread.
+    var generation: UInt64 { lock.lock(); defer { lock.unlock() }; return generationValue }
 
     public struct Statistics: Encodable, Sendable {
         public let meshes: Int, textures: Int, deformBuffers: Int, hiddenBuffers: Int
@@ -246,12 +256,15 @@ public final class ResourceStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let h = MeshHandle(id: nextMesh); nextMesh += 1
         meshes[h.id] = mesh
+        generationValue &+= 1
         return h
     }
 
     /// Drops a mesh at once. A queued handle-only frame then skips it; owners whose
     /// frames may still be pending use `retire(meshes:)`.
-    public func unregister(mesh h: MeshHandle) { lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; lock.unlock() }
+    public func unregister(mesh h: MeshHandle) {
+        lock.lock(); meshes[h.id] = nil; retiringMeshes[h.id] = nil; generationValue &+= 1; lock.unlock()
+    }
 
     /// The persistent deformation output for `key`, reallocated when a mesh needs
     /// more vertices. Nil when Metal refuses the allocation; the renderer reports it
@@ -291,6 +304,7 @@ public final class ResourceStore: @unchecked Sendable {
             : device.makeBuffer(bytes: bytes, length: bytes.count, options: .storageModeShared)
         lock.lock(); defer { lock.unlock() }
         retiringHiddenKeys[key] = nil
+        generationValue &+= 1
         guard let buffer else { hiddenBuffers[key] = nil; return false }
         buffer.label = "hidden.\(key)"
         hiddenBuffers[key] = buffer
@@ -300,7 +314,7 @@ public final class ResourceStore: @unchecked Sendable {
     /// Drops hidden masks at once, like `releaseDeformBuffers`. Encoded frames keep
     /// theirs; owners whose frames may still be pending use `retire(hiddenKeys:)`.
     public func releaseHiddenBuffers(keys: [UInt64]) {
-        lock.lock(); for k in keys { hiddenBuffers[k] = nil; retiringHiddenKeys[k] = nil }; lock.unlock()
+        lock.lock(); for k in keys { hiddenBuffers[k] = nil; retiringHiddenKeys[k] = nil }; generationValue &+= 1; lock.unlock()
     }
 
     func hiddenBuffer(key: UInt64) -> (any MTLBuffer)? { lock.lock(); defer { lock.unlock() }; return hiddenBuffers[key] }
@@ -346,15 +360,17 @@ public final class ResourceStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty else { return }
         var newest = newestCompletedRetirement
+        var changed = false
         for (id, retired) in retiringMeshes where retired < stamp {
-            meshes[id] = nil; retiringMeshes[id] = nil; newest = max(newest, retired)
+            meshes[id] = nil; retiringMeshes[id] = nil; newest = max(newest, retired); changed = true
         }
         for (key, retired) in retiringDeformKeys where retired < stamp {
-            deformBuffers[key] = nil; retiringDeformKeys[key] = nil; newest = max(newest, retired)
+            deformBuffers[key] = nil; retiringDeformKeys[key] = nil; newest = max(newest, retired); changed = true
         }
         for (key, retired) in retiringHiddenKeys where retired < stamp {
-            hiddenBuffers[key] = nil; retiringHiddenKeys[key] = nil; newest = max(newest, retired)
+            hiddenBuffers[key] = nil; retiringHiddenKeys[key] = nil; newest = max(newest, retired); changed = true
         }
+        if changed { generationValue &+= 1 }
         newestCompletedRetirement = newest
     }
 
@@ -401,7 +417,7 @@ public final class ResourceStore: @unchecked Sendable {
         t.label = key
         bytes.withUnsafeBytes { t.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: width) }
         lock.lock()
-        if let h = textureKeys[key] { textures[h.id] = t; lock.unlock(); return h }
+        if let h = textureKeys[key] { textures[h.id] = t; generationValue &+= 1; lock.unlock(); return h }
         lock.unlock()
         return register(texture: t, key: key)
     }
@@ -412,6 +428,7 @@ public final class ResourceStore: @unchecked Sendable {
         let h = TextureHandle(id: nextTexture); nextTexture += 1
         textures[h.id] = texture
         if let key { textureKeys[key] = h }
+        generationValue &+= 1
         return h
     }
 
@@ -421,5 +438,6 @@ public final class ResourceStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         textures.removeValue(forKey: handle.id)
         textureKeys = textureKeys.filter { $0.value.id != handle.id }
+        generationValue &+= 1
     }
 }
