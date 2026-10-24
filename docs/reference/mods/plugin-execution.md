@@ -306,6 +306,38 @@ the tracked tree checked clean before continuing development. This GUI run
 proves cancellation/serialization behavior, not latency or decoder throughput.
 The older acceptance below describes the preceding build.
 
+Interactive legacy commands use the same Studio ownership boundary as library
+mounts. “Load Translated Studio Plugins…” is unavailable outside Studio or during
+a pending library mount. Its model entry checks that boundary before opening the
+dialog and before reading the selected profile; the completion also requires the
+generation captured before the dialog. Leaving and returning to Studio, or
+unloading plugins, invalidates an older selection without changing the current
+status. Both menu and library-panel Run/Pause actions use one guarded method that
+also requires an existing session. These are event-only checks of narrow state;
+they add no work to frame ticks and do not read the scene document for menu
+availability. The programmatic startup loader and fresh-profile callback behavior
+remain unchanged.
+
+The bounded `pluginLibrary` scenario now includes held-preparation, inactive,
+leave/return and unload rejection checks through those production methods,
+comparing runtime snapshots, document/session identity, sampled shared-frame
+fields and resource counts. It separately exercises active Run/Pause, successful
+profile load, a normal missing-file failure and the inactive programmatic startup
+path. Release build `14579b8` passed, and all 34 checks executed successfully
+(24 retained plus ten new ownership checks), with zero failures or skips. The
+executable SHA-256 is
+`64bc93179a7f81454733c6645d8c677c086c2645d6c9112050a623e01839653f`.
+This uses a synthetic two-folder Studio fixture; it is not a loaded-scene pixel or
+latency measurement. A separate visible check on this same executable confirmed
+active translated-profile Load and Pause, Pause → Run, disabled plugin commands
+in Maker with its original inspector still visible, and restored enabled commands
+in Studio without resuming the paused session. Run and Pause both remained usable.
+The actual translated-profile dialog loaded the controlled profile and reported
+one converted package; the owned process exited normally. These are accessibility
+menu/action observations, not pixels or UI latency. Pending replacement and stale
+dialog concurrency remain deterministic model checks. The mounted summary/Unload
+for direct native or profile routes is a separate UI follow-up.
+
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
 attached world transform. Repeating undo and trying redo preserve the old

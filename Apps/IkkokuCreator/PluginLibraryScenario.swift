@@ -49,6 +49,32 @@ struct PluginLibraryScenario: Decodable {
                 && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
                 && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
         }
+        let commandScratch = FileManager.default.temporaryDirectory.appendingPathComponent("ikkoku-plugin-commands-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: commandScratch) }
+        let absentProfile = commandScratch.appendingPathComponent("absent.json")
+        // The missing path distinguishes a pre-I/O ownership rejection from a
+        // normal loader error. Compare the real runtime snapshot, not just doc.
+        func rejectProfile(_ name: String, generation: UInt64, toggle: Bool) throws {
+            let document = studio.doc, session = studio.sourcePluginSession
+            let runtime = try session?.savedDocument(), adapter = studio.sourceFocus.adapter
+            let frame = studio.host.renderer.currentFrame(), resources = resourceCounts()
+            let status = studio.status, running = studio.sourcePluginsRunning
+            let pending = studio.sourcePluginLibraryPending, currentGeneration = studio.sourcePluginMountGeneration
+            let time = studio.sourceAnimationTime, gain = studio.sourceAudioBus.masterVolume
+            var cancelled = false
+            do { try studio.loadSourcePluginProfileInteractively(profileURL: absentProfile, expectedGeneration: generation) }
+            catch is CancellationError { cancelled = true }
+            if toggle { studio.toggleSourcePluginPlayback() }
+            let afterRuntime = try studio.sourcePluginSession?.savedDocument()
+            try check(name, cancelled && (!toggle || !studio.canToggleSourcePluginPlayback)
+                && studio.doc == document && studio.sourcePluginSession === session && afterRuntime == runtime
+                && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
+                && studio.status == status && studio.sourcePluginsRunning == running
+                && studio.sourcePluginLibraryPending == pending && studio.sourcePluginMountGeneration == currentGeneration
+                && studio.sourceAnimationTime == time && resources == resourceCounts()
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Cancellation before absent-file I/O; document, runtime fields/clocks, session, focus adapter/gain, status, pending request, sampled frame and resources unchanged")
+        }
         do {
             let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
             let initial = request.configuration
@@ -77,6 +103,7 @@ struct PluginLibraryScenario: Decodable {
             studio.sourcePluginPreparationHook = { runningBarrier.hold() }
             let replacement = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(11)) }
             await runningBarrier.wait()
+            try rejectProfile("pendingLegacyCommands", generation: studio.sourcePluginMountGeneration, toggle: true)
             try studio.stepSourcePlugins(deltaTime: 0.02)
             runningBarrier.finish(); try await replacement.value
             studio.sourcePluginPreparationHook = nil
@@ -199,6 +226,7 @@ struct PluginLibraryScenario: Decodable {
             // A UI Task queued before removal must reject entry before scheduling
             // preparation, changing status, or touching the shared Maker frame.
             let beforeQueue = studio.doc, queuedSession = studio.sourcePluginSession
+            let dialogGeneration = studio.sourcePluginMountGeneration
             let queued = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10)) }
             app.mode = .maker
             let makerFrame = studio.host.renderer.currentFrame()
@@ -206,10 +234,12 @@ struct PluginLibraryScenario: Decodable {
             do { try await queued.value } catch is CancellationError { rejected = true }
             try check("inactiveQueuedEntry", rejected && studio.doc == beforeQueue && queuedSession === studio.sourcePluginSession
                 && sameFrame(makerFrame, studio.host.renderer.currentFrame()) && !studio.sourcePluginLibraryPending)
+            try rejectProfile("inactiveLegacyCommands", generation: studio.sourcePluginMountGeneration, toggle: true)
             studio.unloadSourcePluginLibrary()
             try check("inactiveUnload", studio.doc == beforeQueue && queuedSession === studio.sourcePluginSession
                 && sameFrame(makerFrame, studio.host.renderer.currentFrame()))
             app.mode = .studio
+            try rejectProfile("staleLegacyDialogAfterModeReturn", generation: dialogGeneration, toggle: false)
 
             let beforeFailure = studio.doc, session = studio.sourcePluginSession, adapter = studio.sourceFocus.adapter
             let resources = resourceCounts(), gain = studio.sourceAudioBus.masterVolume
@@ -264,6 +294,69 @@ struct PluginLibraryScenario: Decodable {
                 snapshotTime += ProcessInfo.processInfo.systemUptime - time
             }
             try check("cachedStepSnapshot", true, "120 synthetic two-folder samples; step mean \(stepTime * 1000 / 120) ms; snapshot mean \(snapshotTime * 1000 / 120) ms")
+
+            // Both UI Run/Pause sites use this same guarded method. Neither
+            // action advances the runtime or rebuilds the shared frame itself.
+            studio.sourcePluginsRunning = false
+            let commandDocument = studio.doc, commandSession = studio.sourcePluginSession
+            let commandState = try commandSession?.savedDocument(), commandFrame = studio.host.renderer.currentFrame()
+            let commandResources = resourceCounts(), commandAdapter = studio.sourceFocus.adapter
+            func unchangedPlayback() throws -> Bool {
+                let state = try studio.sourcePluginSession?.savedDocument()
+                return studio.doc == commandDocument && studio.sourcePluginSession === commandSession
+                    && state == commandState && studio.sourceFocus.adapter === commandAdapter
+                    && resourceCounts() == commandResources && sameFrame(commandFrame, studio.host.renderer.currentFrame())
+            }
+            studio.toggleSourcePluginPlayback()
+            try check("activeLegacyRun", studio.canToggleSourcePluginPlayback && studio.sourcePluginsRunning && (try unchangedPlayback()))
+            studio.toggleSourcePluginPlayback()
+            try check("activeLegacyPause", studio.canToggleSourcePluginPlayback && !studio.sourcePluginsRunning && (try unchangedPlayback()))
+            var activeLoadError = ""
+            do { try studio.loadSourcePluginProfileInteractively(profileURL: absentProfile, expectedGeneration: studio.sourcePluginMountGeneration) }
+            catch is CancellationError { throw SourcePluginError.runtime("Active legacy profile load was incorrectly cancelled") }
+            catch { activeLoadError = String(describing: error) }
+            try check("activeLegacyLoadFailure", !activeLoadError.isEmpty && !studio.sourcePluginsRunning && (try unchangedPlayback()), activeLoadError)
+
+            // Reuse the exact immutable converted package already mounted by
+            // this checklist; no second IR program or fake session is introduced.
+            guard let package = commandSession?.library.packages.first,
+                  commandSession?.library.packages.count == 1,
+                  package.manifest.identity.guid.utf8.elementsEqual(binding.guid.utf8) else {
+                throw SourcePluginError.invalid("Legacy command check needs the controlled single-package fixture.")
+            }
+            try FileManager.default.createDirectory(at: commandScratch, withIntermediateDirectories: true)
+            let profileURL = commandScratch.appendingPathComponent("profile.json")
+            try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": initial.fixedDeltaTime,
+                "packages": [["manifest": package.manifestURL.path,
+                    "bindings": [["type": binding.type, "sourceObjectKey": 10]]]]]).write(to: profileURL)
+            try studio.loadSourcePluginProfileInteractively(profileURL: profileURL, expectedGeneration: studio.sourcePluginMountGeneration)
+            try check("activeLegacyProfileLoad", studio.sourcePluginSession !== commandSession && studio.sourcePluginsRunning
+                && studio.doc.sourcePluginLibrary == nil && studio.doc.sourcePluginLibraryConfiguration == nil
+                && studio.doc.sourcePluginState?.profileFile == profileURL.resolvingSymlinksInPath().path
+                && studio.doc.sourcePluginState?.packages == commandDocument.sourcePluginState?.packages
+                && studio.doc.sourceNativePlugins == commandDocument.sourceNativePlugins
+                && studio.sourceFocus.adapter === commandAdapter && commandResources == resourceCounts())
+
+            // Startup/capture still uses the programmatic loader outside visible
+            // Studio. This deliberately does not assert inactive UI submission:
+            // only interactive entry owns that restriction.
+            studio.sourcePluginsRunning = false
+            let interactiveSession = studio.sourcePluginSession
+            app.mode = .maker
+            try studio.loadSourcePlugins(profileURL: profileURL)
+            try check("inactiveProgrammaticProfileLoad", !studio.isActiveMode && studio.sourcePluginsRunning
+                && studio.sourcePluginSession !== interactiveSession
+                && studio.doc.sourcePluginState?.profileFile == profileURL.resolvingSymlinksInPath().path
+                && studio.doc.sourcePluginState?.packages == commandDocument.sourcePluginState?.packages)
+            app.mode = .studio
+            let unloadGeneration = studio.sourcePluginMountGeneration
+            studio.unloadSourcePluginLibrary()
+            try rejectProfile("staleLegacyDialogAfterUnload", generation: unloadGeneration, toggle: false)
+            let emptyDocument = studio.doc, emptyFrame = studio.host.renderer.currentFrame(), emptyResources = resourceCounts()
+            studio.toggleSourcePluginPlayback()
+            try check("noSessionLegacyPlayback", studio.sourcePluginCommandsAvailable && !studio.canToggleSourcePluginPlayback
+                && !studio.sourcePluginsRunning && studio.sourcePluginSession == nil && studio.doc == emptyDocument
+                && emptyResources == resourceCounts() && sameFrame(emptyFrame, studio.host.renderer.currentFrame()))
         } catch {
             rows.append(.init(op: "failure", ok: false, detail: String(describing: error)))
         }
