@@ -2258,6 +2258,13 @@ capture frame `13bd11c2…66f039`, avatar `e90f6a24…e9ab5`, card
 `4b892fc4…ce53c65`, hand pose `0320580d…eec33`, look settings `13e7260f…be9ab`,
 texture store manifest `6b950538…c8ce2`, stream manifest `df8cfb0d…366f7`.
 
+`IKKOKU_LIVE_SOURCE_MAKER_WEAR=1` (ST-C03 third slice) draws the card through
+the Studio wear assembly instead: `prepare(wear: true)` with its half-state
+meshes and indoor shoes, the saved clothes state and `shoesType` evaluated by
+`SourceStudioWearLayout.saved` (hidden parts and body mask), and the Studio
+appearance. A capture of a half-state card then compares its half-state
+meshes; see [half-state meshes](studio/scene-editing.md#half-state-meshes-and-indoor-shoes-st-c03-third-slice).
+
 With capture texture pixels, all 20 source slots draw live. The double tooth is
 hidden (`ChaControl.VisibleDoubleTooth`). There are no fallbacks, unmatched
 slots or render-time fallbacks. `compare_original_frame.py` reports the

@@ -239,11 +239,11 @@ func sourceStudioDynamicsActualSkirtWearOutfitAndRollbackWhenSupplied() throws {
     try preview.setDynamicsStep(elapsed: 9/60, deltaTime: 1/60)
     #expect(try preview.editedPose(kinematics: kinematics, animationElapsed: 9/60).localMatrices == advanced.localMatrices)
     var wear = preview.clothesState; wear[1] = 3
-    try preview.setWear(clothesState: wear, showAccessory: nil)
+    try preview.setWear(clothesState: wear, showAccessory: nil, shoesType: nil)
     let off = try preview.editedPose(kinematics: kinematics, animationElapsed: 9/60)
     #expect(skirtIndices.allSatisfy { off.localMatrices[$0] == upstream.localMatrices[$0] })
     // Half state changes renderer switches, but the garment root remains active.
-    wear[1] = 1; try preview.setWear(clothesState: wear, showAccessory: nil)
+    wear[1] = 1; try preview.setWear(clothesState: wear, showAccessory: nil, shoesType: nil)
     try preview.setDynamicsStep(elapsed: 10/60, deltaTime: 1/60)
     let half = try preview.editedPose(kinematics: kinematics, animationElapsed: 10/60)
     #expect(skirtIndices.contains { half.localMatrices[$0] != upstream.localMatrices[$0] })

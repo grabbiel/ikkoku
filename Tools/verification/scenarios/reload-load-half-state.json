@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-half-state.png"},
+    {"op": "assert", "clothes": {"key": 10, "saved": [1, 1, 0, 0, 0, 1, 0, 0, 0], "state": [0, 1, 0, 0, 0, 1, 0, 0, 0], "savedShoesType": 0, "shoesType": 1, "rendered": [0, 1, 5, 8], "drawn": ["o_bot_pants01_b/0", "o_panst_00_b/0", "o_shoes_run01/0", "o_top_tsyats_a/0"], "bodyAlpha": [1, 1], "fallbacks": 0, "edited": true}},
+    {"op": "captureRender", "name": "loaded", "path": ".local/verification/renders/reload-load-half-state.png"},
+    {"op": "setClothesState", "key": 10, "index": 0, "state": 1},
+    {"op": "assert", "clothes": {"key": 10, "state": [1, 1, 0, 0, 0, 1, 0, 0, 0], "shoesType": 1, "drawn": ["o_bot_pants01_b/0", "o_panst_00_b/0", "o_shoes_run01/0", "o_top_tsyats_b/0"], "bodyAlpha": [0, 1], "edited": true}, "render": {"from": "loaded", "changedPixelsAtLeast": 2000}},
+    {"op": "undo"},
+    {"op": "assert", "clothes": {"key": 10, "state": [0, 1, 0, 0, 0, 1, 0, 0, 0], "shoesType": 1, "edited": true}, "render": {"from": "loaded", "changedPixelsAtMost": 0, "maxChannelDeltaAtMost": 0}}
+  ]
+}

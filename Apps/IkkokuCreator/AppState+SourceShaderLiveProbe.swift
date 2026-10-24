@@ -18,7 +18,9 @@ extension AppState {
     /// live-path variables of `SourceShaderLiveConfiguration`, and
     /// `IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER` = `store` (default, native texture
     /// store) or `capture` (VALIDATION only: capture pixels matched by native
-    /// identity). Exits 0 after writing, 1 on error.
+    /// identity). `IKKOKU_LIVE_SOURCE_MAKER_WEAR=1` draws the card's own outfit
+    /// as CharaStudio wears it (ST-C03) instead of the avatar's fixture
+    /// garments. Exits 0 after writing, 1 on error.
     static func captureLiveSourceShaderProbe(host: EngineHost, path: String) {
         let env = ProcessInfo.processInfo.environment
         do {
@@ -35,7 +37,8 @@ extension AppState {
                 lookSettings: env["IKKOKU_STUDIO_LOOK_SETTINGS"].map { URL(fileURLWithPath: $0) },
                 configuration: SourceShaderLiveConfiguration.environment(env, sourceAvatar: avatar),
                 makerLibrary: try EngineHost.locateMakerLibrary()?.sourceURL,
-                textureProvider: env["IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER"] ?? "store")
+                textureProvider: env["IKKOKU_LIVE_SOURCE_TEXTURE_PROVIDER"] ?? "store",
+                makerWear: env["IKKOKU_LIVE_SOURCE_MAKER_WEAR"] == "1")
             let renderer = host.renderer
             let probe = try SourceShaderLiveFixtureProbe(request, renderer: renderer)
             let width = probe.width, height = probe.height
