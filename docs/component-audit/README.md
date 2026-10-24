@@ -98,10 +98,10 @@ historical hashes. These counts establish neither loadability nor executable
 compatibility. Evidence is indexed privately under
 `wave-three/plugins/installed-inventory/coverage-index.json`.
 
-#170, #172 and #174 passed all four CI jobs at their reviewed heads and merged.
-Their capture/inventory changes add no native frame work. The #173 entry records
-completed local acceptance; a compiler-friendly test-fixture repair passes locally,
-and its merge still requires exact-head CI and integration review.
+#170, #172, #173 and #174 passed all four CI jobs at their reviewed heads and
+merged. The #173 test-fixture type-check repair also passes focused Debug and
+Release locally. Capture/inventory validation adds no native frame work; the
+material path has the measured costs below.
 
 The bottom path increases registered textures from 76 to 81 and measured Metal
 allocation by 18,366,464 bytes. Paired run medians overlap: GPU time changes from
@@ -125,6 +125,14 @@ image differences also occur between runs of the same pre-change executable;
 strict whole-live-image repeatability remains open. The
 [renderer reference](../reference/renderer.md#composite-sampler-allocation-r1cmt-04-2026-10-24)
 records the measured scope and limitations.
+
+A subsequent combined Release build containing #173 and the accepted plugin
+runtime passes all 24 plugin checks and retains 17 live / three fallback slots,
+with unchanged attachment reports and composite keys. Ten stable diagnostic
+PNGs are byte-identical to the measured material build; the full-frame PNG also
+matches in this pair. Five hair pixels (maximum channel difference 2) and one
+front-hair pixel (maximum 1) still vary. This bounded integration check adds no
+source-parity or performance claim.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

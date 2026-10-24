@@ -3414,6 +3414,20 @@ eye and composite gates remain unchanged; no all-live byte-equality, full
 character parity or window/FPS claim follows from these offscreen controls.
 Private reports, source/binary hashes and preserved binaries are under
 `.local/codex-continue-2026-10-24/rolling/materials-bottom/`.
+**Combined application acceptance.** Release build `04225ae` combines this
+material path with the accepted plugin runtime; its runtime sources match merged
+`76ce58a`. Binary SHA-256
+`bc9af1f86a1a60c27e084ab57b0410ad93c370dd542b2aace100e47514a5e29c` passes all 24 plugin
+scenario checks. Replaying the same 54-entry input store retains 17 live and
+three fallback slots, identical attachment reports and composite content keys.
+Ten stable native diagnostic PNGs are byte-identical to the measured `b178932`
+build, and the full-frame PNG also matches in this pair. Five hair pixels differ
+by at most two channel levels and one front-hair pixel by one, consistent with
+the separately retained repeatability gap. This is bounded integration evidence;
+it neither establishes whole-image equality nor adds a source-parity or timing
+claim. The private `rolling/integration-bottom` directory retains build/input
+hashes, owned process exits and per-image differences.
+
 The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
 [the fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
 
