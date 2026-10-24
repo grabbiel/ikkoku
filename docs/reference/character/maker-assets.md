@@ -579,3 +579,85 @@ aggregate caps. The 16 no-op checks retain their resource identities and take
 or total Metal allocation bytes; there is no FPS or percentile claim. Immutable
 binaries, inputs, logs and 24 paired artifacts are retained privately under
 `.local/codex-continue-2026-10-24/rolling/maker-compositor-fallbacks/`.
+
+### Bounded synchronous composition batches (#208)
+
+The Metal path now prepares all recipes in one `SourcePreviewAppearance.applying`
+call, encodes them into one command buffer and waits once before publishing their
+outputs. Input textures, output textures and parameters remain retained through
+completion. All output views must succeed before resource registration and material
+changes replay in their original order. A later invalid recipe, allocation failure,
+failed command or missing view leaves the prior appearance and its shared leases
+usable. CPU composition and callers without optional timing diagnostics retain
+their existing behavior; completion remains synchronous on the owner.
+
+Batching retains inputs longer. A separate **128 MiB logical input-pixel storage
+limit per Metal application** bounds this retention, with checked arithmetic before
+allocation. Repeated image uploads count separately, while each actually allocated
+1×1 fallback contributes four bytes once per compositor. The existing 128 MiB
+output limit and prepared-input limits remain separate. Extreme inputs exceeding
+the new limit fail explicitly; there is no immediate-mode fallback. This budget
+describes logical pixel storage, not measured Metal heap usage or peak RSS.
+
+Eleven focused Engine checks passed with no failures or skips. They include
+multiple-recipe pixels and material ordering, rejection of a later invalid recipe
+without publication or dispatch, exact 12/20-byte repeated-upload boundaries,
+fallback rejection before allocation, prior shared-lease lifetime, nil diagnostics
+and CPU independence from the Metal-only limit. The independent female/male
+raw-RGBA and expanded material oracles retain their one-byte tolerance. Four
+functional processes passed both sexes' 55-step selection and 7-step fresh reload
+scenarios in 42.257 seconds; all four exported cards match their previously
+accepted counterparts byte-for-byte.
+
+The 2026-10-24 quiet comparison used freshly built parent `45f355f`
+(binary `be3e952d43ca953ead0c378af1c38ac90a1123ddaba878207ebf39a9e8023f56`)
+and candidate `825e631`
+(`2db016b849ade8cae4c9042eb2c2b13f9a2df067ba7a6404e473f1cd623142ae`).
+The 557-file source manifests differ only in three implementation files and one
+focused test. Eight interleaved 19-step processes passed in 60.109 seconds, with
+fixed shapes, colors and clock. All four exports per sex are identical across
+binaries and repeats. The selected head-201 intervals have two samples per binary,
+sex and cold/warm state:
+
+| Input / state | Control owner ms | Batch owner ms | Control API ms | Batch API ms |
+| --- | --- | --- | --- | --- |
+| Female cold | 118.122–121.322 | 118.633–118.779 | 753.904–757.062 | 746.329–749.101 |
+| Female warm | 83.261–87.056 | 79.475–80.704 | 703.814–716.869 | 697.219–702.274 |
+| Male cold | 126.634–127.779 | 120.734–123.373 | 799.052–802.630 | 789.459–796.318 |
+| Male warm | 80.792–82.367 | 81.924–84.511 | 739.640–756.742 | 737.546–739.550 |
+
+The candidate has lower API times in these small samples, but owner and composition
+costs remain mixed: male warm owner time increased, and composition changed from
+57.632–57.973 ms to 57.386–59.138 ms. Worker preparation remains substantial
+(control 619.123–674.277 ms; candidate 616.196–671.366 ms), while snapshot costs
+were 0.278–0.320 ms and 0.263–0.400 ms respectively. These observations do not
+establish a consistent latency speedup or remove the remaining owner stalls;
+the broader responsiveness work in #192 remains open.
+
+The bounded change is fewer synchronous completions: each measured selection
+still has 16 recipe dispatches across six appearance applications, but now records
+six completions instead of the control's per-recipe 16 waits. The candidate retains
+20 actual-image allocations, eight fallback allocations and 316 absent bindings.
+Its nested allocation/upload interval was 7.332–8.727 ms, encode/submit
+0.182–0.235 ms and wait/view 47.356–50.149 ms; aggregate composition was
+55.131–59.138 ms. Nested intervals sit inside the aggregate and are not an exact
+partition. Wait/view includes scheduling, synchronous completion and view creation,
+so it is not pure GPU kernel time. Transient input textures are not registered in
+`ResourceStore`; unchanged store counts do not measure their retention cost.
+
+Selected head-201 resource totals match the control: 43 meshes, 98 female or 115
+male registered textures, 12 retiring resources, one 14,517-byte hidden buffer and
+no deformation buffers. Mesh buffers remain 28,189,528 bytes female and
+28,138,208 bytes male. Prepared raw inputs remain 32,506,112 bytes; that is a
+separate quantity from the new per-batch logical storage limit. All 16 no-op checks
+retain resource identities and take 0.236–0.438 ms. There is no FPS, percentile,
+peak-RSS or wider source-appearance parity claim.
+
+The first offline retainer confused `-batch` with the candidate `-b1`/`-b2` suffix,
+and the first analysis script contained accidentally renamed fallback counter
+keys. Preserved v2 scripts correct the classification and keys against the same
+app reports; no app, shader, scenario input or timing record changed, and no app
+rerun was needed. Both binaries, 24 artifacts and 48 stage records were independently
+verified. Frozen sources, inputs, original postprocessing attempts and corrected
+results are retained privately under
+`.local/codex-continue-2026-10-24/rolling/maker-compositor-batch/`.

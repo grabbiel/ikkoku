@@ -64,9 +64,11 @@ mixed scene objects, maps, lights and effects remain open. Gameplay has bounded
 cycle, event and ADV kernels and a headless host, with no complete playable mode.
 
 Performance is part of every component's acceptance. Record responsiveness, total
-latency, memory and GPU work separately: the latest head-selection change reduces
-owner-thread stalls while increasing total latency and retaining additional raw
-input bytes; peak memory was not measured. An allocation reduction or passing functional check alone is not a speedup.
+latency, memory and GPU work separately. Prepared head-selection inputs reduce
+owner-thread stalls at a total-latency and retained-input cost. Fallback reuse and
+[bounded composition batches](docs/reference/character/maker-assets.md#bounded-synchronous-composition-batches-208)
+reduce allocations and waits; measured owner-thread timing remains mixed. Peak
+memory was not measured. Functional success alone does not establish a speedup.
 
 The [current work and evidence](docs/component-audit/README.md#current-work-and-evidence)
 section distinguishes merged support, active investigations and historical

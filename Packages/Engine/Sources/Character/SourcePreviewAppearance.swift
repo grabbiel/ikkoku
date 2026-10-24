@@ -17,6 +17,8 @@ public final class SourceAppearanceTimings {
         public let milliseconds: [String: Double], calls: [String: Int]
         /// These transient input textures are not registered in ResourceStore.
         public let realInputAllocations: Int, fallbackAllocations: Int, fallbackBindings: Int
+        public let metalEncodeDispatches: Int
+        public let metalBatchCompletions: Int
     }
     public struct Sample: Encodable {
         public let milliseconds: [String: Double]
@@ -27,11 +29,14 @@ public final class SourceAppearanceTimings {
     private var calls: [String: Int] = [:]
     private var compositionMilliseconds: [String: Double] = [:], compositionCalls: [String: Int] = [:]
     private var realInputAllocations = 0, fallbackAllocations = 0, fallbackBindings = 0
+    private var metalEncodeDispatches = 0, metalBatchCompletions = 0
     public init() {}
     public var sample: Sample {
-        Sample(milliseconds: milliseconds, calls: calls, composition: compositionCalls.isEmpty ? nil :
+        Sample(milliseconds: milliseconds, calls: calls,
+            composition: compositionCalls.isEmpty && realInputAllocations == 0 && fallbackAllocations == 0 && fallbackBindings == 0 ? nil :
             CompositionSample(milliseconds: compositionMilliseconds, calls: compositionCalls,
-                realInputAllocations: realInputAllocations, fallbackAllocations: fallbackAllocations, fallbackBindings: fallbackBindings))
+                realInputAllocations: realInputAllocations, fallbackAllocations: fallbackAllocations, fallbackBindings: fallbackBindings,
+                metalEncodeDispatches: metalEncodeDispatches, metalBatchCompletions: metalBatchCompletions))
     }
 
     func recordComposition(_ phase: CompositionPhase, milliseconds: Double) {
@@ -42,6 +47,8 @@ public final class SourceAppearanceTimings {
         if fallback { fallbackAllocations += 1 } else { realInputAllocations += 1 }
     }
     func recordFallbackBinding() { fallbackBindings += 1 }
+    func recordMetalEncodeDispatch() { metalEncodeDispatches += 1 }
+    func recordMetalBatchCompletion() { metalBatchCompletions += 1 }
 
     public static func measure<T>(_ timings: SourceAppearanceTimings?, _ phase: Phase,
                                   _ body: () throws -> T) rethrows -> T {
