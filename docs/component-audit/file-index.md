@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**884 files indexed; 884 assigned; 0 unassigned.**
+**885 files indexed; 885 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,14 +31,14 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 122 |
 | [Studio / IK / animation](studio.md) | 185 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 316 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 163 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 164 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
 | Conversion / recovery / verification tool | 190 |
-| Documentation / historical evidence | 56 |
+| Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
 | Runtime / shared shader declaration | 201 |
@@ -803,6 +803,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [.gitignore](../../.gitignore) | Build / repository configuration |
 | [CONTRIBUTING.md](../../CONTRIBUTING.md) | Documentation / historical evidence |
 | [HANDOFF-2026-10-23-local-environment.md](../../HANDOFF-2026-10-23-local-environment.md) | Documentation / historical evidence |
+| [HANDOFF-2026-10-23-renderer-maker-models.md](../../HANDOFF-2026-10-23-renderer-maker-models.md) | Documentation / historical evidence |
 | [Ikkoku.xcodeproj/project.pbxproj](../../Ikkoku.xcodeproj/project.pbxproj) | Build / repository configuration |
 | [Ikkoku.xcodeproj/project.xcworkspace/contents.xcworkspacedata](../../Ikkoku.xcodeproj/project.xcworkspace/contents.xcworkspacedata) | Build / repository configuration |
 | [Ikkoku.xcodeproj/xcshareddata/xcschemes/IkkokuCreator.xcscheme](../../Ikkoku.xcodeproj/xcshareddata/xcschemes/IkkokuCreator.xcscheme) | Build / repository configuration |
