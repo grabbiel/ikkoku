@@ -134,6 +134,16 @@ integrating contributor reviews the resulting diff, resolves interface conflicts
 and verifies the combined behavior; an agent's success report is not sufficient.
 Human and agent-authored contributions follow the same review and evidence rules.
 
+External coding helpers are optional dependencies of the assigned worker. If a
+helper reaches a rate limit, exhausts its quota, or loses authentication, disable
+that helper for the current task and continue with the worker's own model and
+available tools. Preserve its worktree, edits, evidence and next step; report the
+fallback without terminating the worker or repeatedly retrying the helper.
+Resume helper calls only after recovery is established. If the worker's own
+execution service is unavailable, the coordinator preserves the checkpoint and
+reassigns the work to an available worker. Keep the same ownership, concurrency,
+review and shared-resource rules during either fallback.
+
 A handoff should name the branch/commit, owned files, completed work, exact checks
 and results, local fixture/output paths, unresolved blockers and the next concrete
 step. On GitHub, omit private payloads and sensitive machine details from that note.
