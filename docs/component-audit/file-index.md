@@ -23,13 +23,13 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**888 files indexed; 888 assigned; 0 unassigned.**
+**890 files indexed; 890 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 99 |
 | [Character / Maker / mods](character-and-mods.md) | 122 |
-| [Studio / IK / animation](studio.md) | 185 |
+| [Studio / IK / animation](studio.md) | 187 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 318 |
 | [Toolchain / verification / historical docs](toolchain-and-verification.md) | 164 |
 
@@ -41,8 +41,8 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 203 |
-| Test / validation | 181 |
+| Runtime / shared shader declaration | 204 |
+| Test / validation | 182 |
 
 ## App / gameplay / plugins
 
@@ -339,6 +339,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioWear.swift](../../Packages/Engine/Sources/Studio/SourceStudioWear.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift](../../Packages/Engine/Sources/Studio/SourceStudioWorldTransform.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/StudioDocument.swift](../../Packages/Engine/Sources/Studio/StudioDocument.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/StudioStatusText.swift](../../Packages/Engine/Sources/Studio/StudioStatusText.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/Timeline.swift](../../Packages/Engine/Sources/Studio/Timeline.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/camera-object-reference.json) | Reference host / controlled fixture |
 | [Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json](../../Packages/Engine/Tests/EngineTests/Fixtures/eye-look-reference.json) | Reference host / controlled fixture |
@@ -388,6 +389,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioWorldTransformTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift](../../Packages/Engine/Tests/EngineTests/SourceTrigonometricIKTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift](../../Packages/Engine/Tests/EngineTests/StudioHierarchyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift](../../Packages/Engine/Tests/EngineTests/StudioStatusTextTests.swift) | Test / validation |
 | [Tools/reverse/analysis/animation_playback_contract.py](../../Tools/reverse/analysis/animation_playback_contract.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/chara_light_mapping.py](../../Tools/reverse/analysis/chara_light_mapping.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/analysis/dynamics_manual_steps.py](../../Tools/reverse/analysis/dynamics_manual_steps.py) | Conversion / recovery / verification tool |

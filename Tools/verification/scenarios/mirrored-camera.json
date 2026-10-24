@@ -1,21 +1,29 @@
 {
   "steps": [
     {"op": "assert", "activeCamera": 2},
-    {"op": "assert", "view": {"saved": true}, "statusContains": "Source camera 2 view unresolved: Source camera object parent frame is mirrored"},
+    {"op": "assert", "view": {"saved": true}, "statusContains": "Source camera \"IKKOKU-MIRROR\" (camera 2) view unresolved: Source camera object parent frame is mirrored"},
     {"op": "assertRejected", "view": {"key": 2}, "errorContains": "expected it looked through camera 2"},
+    {"op": "assert", "indicatorContains": "Saved camera shown: source camera \"IKKOKU-MIRROR\" (camera 2) has a mirrored parent"},
+    {"op": "assertRejected", "indicatorContains": "Viewing through", "errorContains": "does not contain \"Viewing through\""},
+    {"op": "assert", "key": 2, "treeLabel": "IKKOKU-MIRROR (camera 2)"},
+    {"op": "assert", "key": 3, "treeLabel": "IKKOKU-CONTROL (camera 3)"},
     {"op": "toggleCamera", "key": 3},
     {"op": "assert", "activeCamera": 3},
-    {"op": "assert", "view": {"key": 3}},
+    {"op": "assert", "view": {"key": 3}, "indicatorContains": "Viewing through source camera \"IKKOKU-CONTROL\" (camera 3)"},
     {"op": "assertRejected", "view": {"saved": true}, "errorContains": "expected the saved camera"},
     {"op": "assertRejected", "statusContains": "parent frame is mirrored", "errorContains": "does not contain \"parent frame is mirrored\""},
+    {"op": "assertRejected", "indicatorContains": "Saved camera shown", "errorContains": "does not contain \"Saved camera shown\""},
     {"op": "toggleCamera", "key": 2},
     {"op": "assert", "activeCamera": 2},
-    {"op": "assert", "view": {"saved": true}, "statusContains": "Source camera 2 view unresolved: Source camera object parent frame is mirrored"},
+    {"op": "assert", "view": {"saved": true}, "statusContains": "Source camera \"IKKOKU-MIRROR\" (camera 2) view unresolved: Source camera object parent frame is mirrored", "indicatorContains": "Saved camera shown: source camera \"IKKOKU-MIRROR\" (camera 2) has a mirrored parent"},
     {"op": "export", "path": ".local/verification/scenario-exports/mirrored-camera.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/mirrored-camera.png"},
     {"op": "assert", "activeCamera": 2},
-    {"op": "assert", "view": {"saved": true}, "statusContains": "Source camera 2 view unresolved: Source camera object parent frame is mirrored"},
+    {"op": "assert", "view": {"saved": true}, "statusContains": "Source camera \"IKKOKU-MIRROR\" (camera 2) view unresolved: Source camera object parent frame is mirrored", "indicatorContains": "Saved camera shown: source camera \"IKKOKU-MIRROR\" (camera 2) has a mirrored parent"},
     {"op": "toggleCamera", "key": 3},
-    {"op": "assert", "view": {"key": 3}}
+    {"op": "assert", "view": {"key": 3}, "indicatorContains": "Viewing through source camera \"IKKOKU-CONTROL\" (camera 3)"},
+    {"op": "toggleCamera", "key": 3},
+    {"op": "assertRejected", "indicatorContains": "camera", "errorContains": "view indicator \"\" does not contain"},
+    {"op": "assert", "activeCamera": null, "view": {"saved": true}, "statusContains": "Source camera \"IKKOKU-CONTROL\" (camera 3) deactivated; orbit controls restored."}
   ]
 }

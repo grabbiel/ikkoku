@@ -128,6 +128,10 @@ final class StudioModel: ViewportInputHandler {
     var status = "Ready" { didSet { statusWrites &+= 1 } }
     /// Counts `status` writes, so a frame rebuild can tell whether it reported anything.
     @ObservationIgnored private var statusWrites = 0
+    /// The native IK chains the status line last reported unsolved, and that
+    /// message, so a frame where they solve again clears only its own message
+    /// (`StudioIKStatusReport`).
+    @ObservationIgnored private var ikStatusReport = StudioIKStatusReport()
     var frame = RenderFrame()
     var captureSize: (Int, Int) { (doc.captureWidth, doc.captureHeight) }
     var sceneURL: URL?
@@ -272,6 +276,54 @@ final class StudioModel: ViewportInputHandler {
     var activeSourceCameraName: String? {
         activeSourceCamera.flatMap { sourceCameraEntry(of: $0)?.name }
     }
+    /// The active source camera as the view shows it. The workspace tree, the
+    /// view indicator under the status line and the Object tab read this one
+    /// value, so none of them observes the document for it.
+    struct SourceCameraView: Equatable {
+        let id: UUID
+        /// "IKKOKU-MIRROR (camera 2)" (`SourceStudioCameraLabel.title`).
+        let title: String
+        /// Why the view shows the saved camera instead, completing "source
+        /// camera …" ("has a mirrored parent"); nil while it looks through.
+        let fallbackReason: String?
+        /// The line under the status line (`SourceStudioCameraLabel.indicator`).
+        let indicator: String
+    }
+    /// Rebuilt at the end of every full frame rebuild and written only when it
+    /// changes, so an orbit or an edit that leaves the camera alone notifies
+    /// nothing. `nil` while no source camera is active.
+    private(set) var activeSourceCameraView: SourceCameraView?
+    /// Why the last `viewCamera` read fell back to the saved camera while a
+    /// source camera was active (nil when it looked through), for
+    /// `publishActiveSourceCameraView`.
+    @ObservationIgnored private var sourceCameraFallbackReason: String?
+    /// The workspace tree's label for `object` of the current document
+    /// (`sceneSHA256` is its scene identity): a source camera placeholder reads
+    /// "IKKOKU-MIRROR (camera 2)", from the object's current name so a renamed
+    /// camera reads the same everywhere; any other object its name. The row
+    /// draws `keyDetail` ("camera 2") under the name.
+    func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
+        guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, nil, false) }
+        return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
+                SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
+    }
+    /// The camera after "source camera" in a status message:
+    /// `"IKKOKU-MIRROR" (camera 2)`, from the object's current name.
+    private func sourceCameraReference(_ id: UUID, entry: (sceneSHA256: String, objectKey: Int32, name: String)) -> String {
+        SourceStudioCameraLabel.reference(name: doc.object(id)?.name ?? entry.name, key: entry.objectKey)
+    }
+    /// Publishes `activeSourceCameraView` for the frame just built, whose
+    /// `viewCamera` read set `sourceCameraFallbackReason`.
+    private func publishActiveSourceCameraView() {
+        var view: SourceCameraView?
+        if let id = activeSourceCamera, let entry = sourceCameraEntry(of: id) {
+            let name = doc.object(id)?.name ?? entry.name, reason = sourceCameraFallbackReason
+            view = SourceCameraView(id: id, title: SourceStudioCameraLabel.title(name: name, key: entry.objectKey),
+                fallbackReason: reason,
+                indicator: SourceStudioCameraLabel.indicator(name: name, key: entry.objectKey, fallbackReason: reason))
+        }
+        if activeSourceCameraView != view { activeSourceCameraView = view }
+    }
     /// Read-only census of the source runtime caches for the scenario lane:
     /// for each cache, the entries whose scene identity matches the document
     /// and whose object is still in it — exactly the entries the render path
@@ -296,26 +348,25 @@ final class StudioModel: ViewportInputHandler {
         do {
             let (object, parentFrame) = try sourceParentFrame(of: id, document: doc, previews: sourceInstances, visited: [])
             // Same composition as `sourceWorldMatrix`, whose native branch has no Studio rule.
-            guard object.sourceObjectKey != nil else {
-                return try SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
-            }
-            return try SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
-                                                            localRotation: object.transform.quaternion, base: doc.camera)
+            let camera = try object.sourceObjectKey == nil
+                ? SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
+                : SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
+                                                       localRotation: object.transform.quaternion, base: doc.camera)
+            sourceCameraFallbackReason = nil
+            return camera
         } catch {
-            let message = "Source camera \(entry.objectKey) view unresolved: \(error); using the saved camera."
+            sourceCameraFallbackReason = SourceStudioCameraLabel.fallbackReason(error)
+            let message = "Source camera \(sourceCameraReference(id, entry: entry)) view unresolved: \(error); using the saved camera."
             if status != message { status = message }
             return doc.camera
         }
     }
-    /// Whether the selected object is a source camera placeholder, so the
-    /// Camera controls appear only where they can do something.
-    var selectedSourceCameraName: String? {
-        selection.flatMap { sourceCameraEntry(of: $0)?.name }
-    }
-    /// Whether the workspace row should show the camera icon for the folder
-    /// placeholder of a source camera object.
-    func isSourceCameraPlaceholder(_ id: UUID) -> Bool {
-        sourceCameraEntry(of: id) != nil
+    /// The selected source camera placeholder's title, so the Camera controls
+    /// appear only where they can do something.
+    var selectedSourceCameraTitle: String? {
+        selection.flatMap { id in sourceCameraEntry(of: id).flatMap { entry in
+            doc.object(id).map { SourceStudioCameraLabel.title(name: $0.name, key: entry.objectKey) }
+        } }
     }
     let sourceAudioBus = SourceStudioAudioBus()
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
@@ -1070,11 +1121,17 @@ final class StudioModel: ViewportInputHandler {
         // The converted item catalog is opt-in; a broken catalog is one
         // diagnostic and every item record stays an unrendered placeholder.
         var itemResolver: KoikatsuAssetResolver?
+        // The catalog's item names by key, so a mapped item whose asset does
+        // not load still shows its name in the tree.
+        var itemNames: [String: String] = [:]
         if let itemCatalogPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ITEM_CATALOG"] {
             let itemCatalogURL = URL(fileURLWithPath: itemCatalogPath)
             do {
                 let itemCatalog = try JSONDecoder().decode(KoikatsuAssetCatalog.self, from: Data(contentsOf: itemCatalogURL))
                 itemResolver = try KoikatsuAssetResolver(catalog: itemCatalog, directory: itemCatalogURL.deletingLastPathComponent())
+                for item in itemCatalog.items where !item.name.isEmpty {
+                    itemNames[KoikatsuAssetResolver.key(group: item.group, category: item.category, no: item.no)] = item.name
+                }
             } catch {
                 diagnostics.append("Item catalog \(itemCatalogPath) not loaded: \(error)")
             }
@@ -1151,7 +1208,11 @@ final class StudioModel: ViewportInputHandler {
                     itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
                         colors: item.colors, alpha: item.alpha)
                 } catch {
-                    object.name = "Unrendered source \(record.kind) \(record.sourceKey)"
+                    // The catalog's name where it maps the key, with an
+                    // explicit unrendered marker; otherwise the placeholder.
+                    // The export baseline is `sourcePreviewName`, set below.
+                    object.name = itemNames[itemKey].map { "\($0) (unrendered source item \(record.sourceKey))" }
+                        ?? "Unrendered source \(record.kind) \(record.sourceKey)"
                     if error is KoikatsuLayoutError { unmappedItemKeys[itemKey, default: 0] += 1 }
                     diagnostics.append("Object \(record.sourceKey) (\(record.kind)) retained without rendering: \(error)")
                 }
@@ -1804,6 +1865,8 @@ final class StudioModel: ViewportInputHandler {
         var bounds = AABB.empty
         var lightGlyphs: [(Float3, Float3)] = []
         var liveLines: [String] = []
+        var ikFailures: [StudioIKStatusReport.Failure] = []
+        var ikEnabled: Set<StudioIKStatusReport.Chain> = []
 
         let animated = !doc.timeline.keyframes.isEmpty
         var animatedDoc = doc
@@ -1871,11 +1934,14 @@ final class StudioModel: ViewportInputHandler {
                 inst.gazeTarget = gazeTarget(for: o, root: world)
                 inst.clothingVisible = o.clothingVisible
                 inst.accessoriesVisible = o.accessoriesVisible
-                // R4: a chain with degenerate joints or target keeps its pose; say which and why.
-                let ikFailures = inst.ikFailures()
-                if let chain = IKChain.allCases.first(where: { ikFailures[$0] != nil }), let failure = ikFailures[chain] {
-                    let message = "\(chain.label) IK left unsolved: \(failure)"
-                    if status != message { status = message }
+                // R4: a chain with degenerate joints or target keeps its pre-IK
+                // pose; `ikStatusReport` names it below, and clears its own
+                // message once the chain solves again.
+                let failed = inst.ikFailures()
+                for chain in IKChain.allCases {
+                    let key = StudioIKStatusReport.Chain(object: o.id, chain: chain)
+                    if o.ikTargets[chain]?.enabled == true { ikEnabled.insert(key) }
+                    if let failure = failed[chain] { ikFailures.append(.init(chain: key, character: o.name, reason: "\(failure)")) }
                 }
                 let r = inst.build(objectID: objectID)
                 items += r.items
@@ -1990,6 +2056,7 @@ final class StudioModel: ViewportInputHandler {
                 }
             }
         }
+        if let text = ikStatusReport.update(failures: ikFailures, enabled: ikEnabled, status: status), text != status { status = text }
         if !lightGlyphs.isEmpty && showGizmos {
             let batch = GizmoBuilder.lines(lightGlyphs, color: Float4(1, 0.85, 0.3, 1), depthTest: false)
             gizmos.append(batch)
@@ -2012,6 +2079,7 @@ final class StudioModel: ViewportInputHandler {
         frame = f
         host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
+        publishActiveSourceCameraView()
         if reusable, statusWrites == statusWritesBefore {
             cameraReuse = CameraReuse(frame: f, characterGuides: characterGuides, lightGlyphs: lightGlyphBatch, selectionGuide: selectionGuide)
         }
@@ -2235,22 +2303,29 @@ final class StudioModel: ViewportInputHandler {
     func toggleSourceCamera(_ id: UUID) {
         guard let entry = sourceCameras[id], entry.sceneSHA256 == doc.sourceSceneSHA256,
               doc.object(id) != nil else { return }
+        let camera = sourceCameraReference(id, entry: entry)
         if activeSourceCamera == id {
             activeSourceCamera = nil
-            status = "Source camera \"\(entry.name)\" deactivated; orbit controls restored."
+            status = "Source camera \(camera) deactivated; orbit controls restored."
         } else {
             activeSourceCamera = id
-            status = "Looking through source camera \"\(entry.name)\"."
+            // A camera the view cannot look through replaces this with the
+            // `viewCamera` fallback message during the refresh below.
+            status = "Looking through source camera \(camera)."
         }
         refresh()
     }
 
     /// While a source camera object is active the original disables the orbit
     /// controller, so mouse orbit, pan, zoom and pinch do nothing; the status
-    /// explains why instead of silently dropping the gesture.
+    /// explains why instead of silently dropping the gesture. While the view
+    /// falls back to the saved camera it says so rather than "viewing through".
     private func reportSourceCameraInputBlocked() -> Bool {
-        guard let name = activeSourceCameraName else { return false }
-        status = "Viewing through source camera \"\(name)\"; deactivate it to move the editor camera."
+        guard let id = activeSourceCamera, let entry = sourceCameraEntry(of: id) else { return false }
+        let camera = sourceCameraReference(id, entry: entry)
+        status = activeSourceCameraView?.id == id && activeSourceCameraView?.fallbackReason != nil
+            ? "Source camera \(camera) is active and the saved camera is shown; deactivate it to move the editor camera."
+            : "Viewing through source camera \(camera); deactivate it to move the editor camera."
         return true
     }
 

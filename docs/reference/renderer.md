@@ -1023,6 +1023,20 @@ bit-identical to its pre-IK pose. With this section's former update patched
 back in, the four reach asserts failed by 16–74 mm. Enabling IK at the hand's
 own position moves the elbow about 2.3 cm, to the default pole's side.
 
+Unsolved status, fixed 2026-10-23 (st-ux-ik-camera). After the target
+returned to a reachable X, the status line used to keep the unsolved message:
+the frame builder wrote it on a failure and nothing cleared it.
+`StudioIKStatusReport` now owns that message. It names every unsolved chain,
+narrows the message as chains solve, writes "Left hand IK solved again." when
+the last one does, and leaves any status written since alone.
+`reload-save-ik` asserts this for one chain, for two chains failing and
+recovering independently, and for an "Added Kai" status that must survive
+(36/36 on the Debug build of `34e3e4e`; 6 of the 36 fail on main `c3e83fa`).
+A failed chain still shows its pre-IK pose, not its last solved pose: the
+pre-IK pose follows from the document alone, while the last solved pose would
+depend on edit history and is not saved. See
+[Native IK re-solve and unsolved status](../../Tools/verification/README.md#native-ik-re-solve-and-unsolved-status-r4-115-and-110).
+
 Remaining limits:
 
 - The result is exact only when the upper bone and its ancestors have uniform

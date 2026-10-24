@@ -17,8 +17,24 @@
     {"op": "assertRejected", "ik": {"character": "Hana", "chain": "hand_L", "solved": true}, "errorContains": "Left hand IK left unsolved"},
     {"op": "setIKTarget", "character": "Hana", "chain": "hand_L", "axis": "x", "value": 0.3},
     {"op": "assert", "ik": {"character": "Hana", "chain": "hand_L", "solved": true, "reachesTarget": 0.001, "target": [0.3, null, null]}},
+    {"op": "assertRejected", "statusContains": "IK left unsolved", "errorContains": "does not contain \"IK left unsolved\""},
+    {"op": "assert", "statusContains": "Left hand IK solved again."},
     {"op": "assertRejected", "ik": {"character": "Hana", "chain": "hand_L", "from": "solved", "within": 1e-6}, "errorContains": "differs from \"solved\""},
     {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-ik.png"},
-    {"op": "assert", "ik": {"character": "Hana", "chain": "hand_L", "enabled": true, "solved": true, "reachesTarget": 0.001, "target": [0.3, null, null]}}
+    {"op": "assert", "ik": {"character": "Hana", "chain": "hand_L", "enabled": true, "solved": true, "reachesTarget": 0.001, "target": [0.3, null, null]}},
+    {"op": "setIKEnabled", "character": "Hana", "chain": "hand_R", "on": true},
+    {"op": "setIKTarget", "character": "Hana", "chain": "hand_L", "axis": "x", "value": 1e20},
+    {"op": "setIKTarget", "character": "Hana", "chain": "hand_R", "axis": "x", "value": 1e20},
+    {"op": "assert", "statusContains": "Left hand IK left unsolved: IK reach is not finite. · Right hand IK left unsolved: IK reach is not finite.", "ik": {"character": "Hana", "chain": "hand_R", "solved": false}},
+    {"op": "setIKTarget", "character": "Hana", "chain": "hand_L", "axis": "x", "value": 0.3},
+    {"op": "assert", "statusContains": "Right hand IK left unsolved: IK reach is not finite.", "ik": {"character": "Hana", "chain": "hand_L", "solved": true, "reachesTarget": 0.001}},
+    {"op": "assertRejected", "statusContains": "Left hand IK left unsolved", "errorContains": "does not contain \"Left hand IK left unsolved\""},
+    {"op": "assertRejected", "ik": {"character": "Hana", "chain": "hand_R", "solved": true}, "errorContains": "Right hand IK left unsolved"},
+    {"op": "addCharacter", "sex": "male"},
+    {"op": "setIKTarget", "character": "Hana", "chain": "hand_L", "axis": "x", "delta": 0.02},
+    {"op": "assert", "statusContains": "Added Kai", "ik": {"character": "Hana", "chain": "hand_R", "solved": false}},
+    {"op": "setIKTarget", "character": "Hana", "chain": "hand_R", "axis": "x", "value": -0.3},
+    {"op": "assertRejected", "statusContains": "IK left unsolved", "errorContains": "does not contain \"IK left unsolved\""},
+    {"op": "assert", "statusContains": "Added Kai", "ik": {"character": "Hana", "chain": "hand_R", "solved": true, "reachesTarget": 0.001, "target": [-0.3, null, null]}}
   ]
 }
