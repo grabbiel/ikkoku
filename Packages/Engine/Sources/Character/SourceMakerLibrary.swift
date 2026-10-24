@@ -207,7 +207,7 @@ public struct SourceMakerLibrary: Sendable {
         }
         return WearCatalog(clothes: clothes, clothesIDs: ids, clothesModded: modded, accessories: accessories)
     }
-    fileprivate struct MaterialComponent: Sendable {
+    fileprivate struct MaterialComponent: Sendable, Equatable {
         let appearance: URL, bindings: URL?, meshNames: Set<String>, prefix: String, accessorySlot: Int?
         /// The indoor-shoe copy of a category 112 entry, whose recipes bind
         /// the outdoor slot (8) and are rebound to slot 7.
@@ -236,24 +236,90 @@ public struct SourceMakerLibrary: Sendable {
         fileprivate let bodyMask: URL?
         fileprivate let clearBodyMask: Bool
         public var geometryChanged: Bool { selections.contains { $0.entry != nil } }
+        /// CPU-only input snapshots are scoped to this exact assembly/component
+        /// context. The candidate owns them until its commit/cancellation ends;
+        /// rendered appearances retain only the resulting GPU texture leases.
+        public struct AppearanceInputs: Sendable {
+            fileprivate struct Binding: Sendable {
+                let url: URL, value: SourceAppearanceBindings, pixels: SourceAppearanceInputs
+            }
+            fileprivate let baseURL: URL, components: [MaterialComponent]
+            fileprivate let base: Binding?, componentBindings: [Binding?]
+            public let byteCount: Int
+            public var perCallByteCounts: [Int] { [base?.pixels.byteCount ?? 0] + componentBindings.map { $0?.pixels.byteCount ?? 0 } }
+
+            public func applyingBase(to appearance: SourcePreviewAppearance, card: SourceCardAppearance, baseURL: URL,
+                                     resources: ResourceStore, timings: SourceAppearanceTimings? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+                guard self.baseURL == baseURL.standardizedFileURL else {
+                    throw RigError.invalid("Prepared appearance inputs belong to a different base assembly.")
+                }
+                guard let base else { return nil }
+                return try appearance.applying(card, bindings: base.value, directory: base.url.deletingLastPathComponent(),
+                    resources: resources, timings: timings, preparedInputs: base.pixels)
+            }
+        }
+
+        public func prepareAppearanceInputs(card: SourceCardAppearance, baseURL: URL,
+                                            maximumBytes: Int = 128 * 1024 * 1024) throws -> AppearanceInputs {
+            guard (0...128 * 1024 * 1024).contains(maximumBytes) else {
+                throw RigError.invalid("Invalid prepared appearance candidate byte limit.")
+            }
+            var totalBytes = 0
+            func prepare(_ url: URL, transform: (SourceAppearanceBindings) throws -> SourceAppearanceBindings) throws -> AppearanceInputs.Binding {
+                let bindings = try transform(SourceAppearanceBindings.load(url: url))
+                let pixels = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: url.deletingLastPathComponent(),
+                    maximumBytes: maximumBytes - totalBytes)
+                totalBytes += pixels.byteCount
+                guard totalBytes <= maximumBytes else {
+                    throw RigError.invalid("Prepared appearance inputs exceed their candidate byte limit.")
+                }
+                return .init(url: url, value: bindings, pixels: pixels)
+            }
+            let baseBindingsURL = baseURL.deletingPathExtension().appendingPathExtension("card-appearance.json")
+            let base: AppearanceInputs.Binding?
+            if FileManager.default.fileExists(atPath: baseBindingsURL.path) {
+                base = try prepare(baseBindingsURL) { $0.restricted(to: Set(source.parts.map { $0.mesh.name })) }
+            } else { base = nil }
+            let values = try components.map { component -> AppearanceInputs.Binding? in
+                guard let url = component.bindings else { return nil }
+                return try prepare(url) { input in
+                    var value = input
+                    if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
+                    if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
+                    return value
+                }
+            }
+            return AppearanceInputs(baseURL: baseURL.standardizedFileURL, components: components, base: base,
+                componentBindings: values, byteCount: totalBytes)
+        }
+
         public func appearance(base: SourcePreviewAppearance?, card: SourceCardAppearance, resources: ResourceStore,
                                modLibrary: SourceModLibrary?, transaction: SourceAppearanceLoadTransaction? = nil,
-                               timings: SourceAppearanceTimings? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+                               timings: SourceAppearanceTimings? = nil, inputs: AppearanceInputs? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+            guard inputs == nil || (inputs?.components == components && inputs?.componentBindings.count == components.count) else {
+                throw RigError.invalid("Prepared appearance inputs belong to different selected components.")
+            }
             var combined = base, fields = Set<String>(), messages = diagnostics
-            for component in components {
+            for (index, component) in components.enumerated() {
                 var appearance = try SourceAppearanceTimings.measure(timings, .componentLoad) {
                     try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
                         transaction: transaction)
                 }
                 if let url = component.bindings {
                     let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
+                        if let inputs {
+                            guard let prepared = inputs.componentBindings[index], prepared.url == url else {
+                                throw RigError.invalid("Prepared component appearance binding is missing or mismatched.")
+                            }
+                            return prepared.value
+                        }
                         var value = try SourceAppearanceBindings.load(url: url)
                         if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
                         if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
                         return value
                     }
                     let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources,
-                        timings: timings)
+                        timings: timings, preparedInputs: inputs?.componentBindings[index]?.pixels)
                     appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
                 }
                 appearance = appearance.renaming(component.meshNames, prefix: component.prefix)

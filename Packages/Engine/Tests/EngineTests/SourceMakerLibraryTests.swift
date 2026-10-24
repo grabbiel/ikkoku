@@ -451,3 +451,44 @@ func sourceMakerSelectedCardEditsKeepOpaqueTokensResolverAndAssetIdentity() thro
         #expect(try result.customization().boneType == sample.boneType)
     }
 }
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil, "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
+func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContext() throws {
+    let (fixtures, directory) = try MakerSelectionCases.load()
+    let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+    let base = URL(fileURLWithPath: fixtures.femaleBase)
+    let original = try SourceCharacterCard.load(url: directory.appendingPathComponent("female-head0-bone0.png"))
+    let card = try SourceCardAppearance(card: original)
+    let selected = try library.prepare(card: original, coordinate: 0, baseURL: base)
+    let inputs = try selected.prepareAppearanceInputs(card: card, baseURL: base)
+    let largestCall = try #require(inputs.perCallByteCounts.max())
+    #expect(largestCall > 0 && inputs.byteCount > largestCall)
+    // Every individual input call fits this limit, but their retained sum does
+    // not. The aggregate must reject using the remaining candidate allowance.
+    do {
+        _ = try selected.prepareAppearanceInputs(card: card, baseURL: base, maximumBytes: largestCall)
+        Issue.record("Independent per-call budgets bypassed the candidate cap.")
+    } catch { #expect(String(describing: error).contains("retained byte limit")) }
+    #expect(throws: (any Error).self) { try selected.prepareAppearanceInputs(card: card, baseURL: base, maximumBytes: 128 * 1024 * 1024 + 1) }
+
+    // A real unresolved hair selection uses its retained reference geometry,
+    // giving a different component set while the head/base assembly stays equal.
+    let fallbackCard = try SourceCharacterCard.decode(original.selectingVanillaAsset(Int(Int32.max), at: .hair(0)))
+    let fallback = try library.prepare(card: fallbackCard, coordinate: 0, baseURL: base)
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let before = resources.statistics().textures
+    do {
+        _ = try fallback.appearance(base: nil, card: SourceCardAppearance(card: fallbackCard), resources: resources, modLibrary: nil, inputs: inputs)
+        Issue.record("Prepared pixels crossed selected component contexts.")
+    } catch { #expect(String(describing: error).contains("different selected components")) }
+    #expect(resources.statistics().textures == before)
+    let temporary = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    let preview = try AppearanceTestFixture.preview(directory: temporary, resources: resources)
+    do {
+        _ = try inputs.applyingBase(to: preview, card: card, baseURL: temporary.appendingPathComponent("other-head.json"), resources: resources)
+        Issue.record("Prepared pixels crossed base assembly contexts.")
+    } catch { #expect(String(describing: error).contains("different base assembly")) }
+    #expect(resources.statistics().textures == before)
+    #expect(try original.editedData(.init()) == original.preservedData)
+}

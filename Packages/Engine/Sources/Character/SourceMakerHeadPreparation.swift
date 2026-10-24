@@ -11,10 +11,12 @@ public struct SourceMakerHeadPreparation: Sendable {
     public let contract: SourceShapeContract
     public let expressions: SourceExpressionContract
     public let bodyOptions: SourceBodyShapePose.Options
+    public let appearanceInputs: SourceMakerLibrary.Prepared.AppearanceInputs
 
     /// `baseURL` is a configuration snapshot for the sex's head-0 assembly, not
-    /// the currently displayed head-200/201 URL. Assembly and contract I/O stay
-    /// here; appearance JSON/texture loads remain in the owner-side candidate.
+    /// the currently displayed head-200/201 URL. Assembly/contract I/O and the
+    /// selected appearance binding/RGBA reads and hashes stay here. Base and
+    /// component image loads, GPU composition and resources remain owner-side.
     public static func prepare(card: SourceCharacterCard, library: SourceMakerLibrary,
                                coordinate: Int, baseURL: URL?) throws -> Self {
         try card.validateMakerSelectionMetadata()
@@ -58,8 +60,9 @@ public struct SourceMakerHeadPreparation: Sendable {
             boneType: identity.boneType, correctionData: correction)
         _ = try card.previewSettings(contract: contract, sex: identity.sex, headID: identity.headID, boneType: identity.boneType)
         let assets = try library.prepare(card: card, coordinate: coordinate, baseURL: url)
+        let appearanceInputs = try assets.prepareAppearanceInputs(card: SourceCardAppearance(card: card, coordinate: coordinate), baseURL: url)
         return Self(manifestURL: url, sex: identity.sex, headID: identity.headID,
             boneType: identity.boneType, coordinate: coordinate, assets: assets, contract: contract,
-            expressions: expressions, bodyOptions: options)
+            expressions: expressions, bodyOptions: options, appearanceInputs: appearanceInputs)
     }
 }

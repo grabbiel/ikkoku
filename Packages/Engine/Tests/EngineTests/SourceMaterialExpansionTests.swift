@@ -92,8 +92,11 @@ func sourceMaterialExpandedTextureIndependentOracle() throws {
     let appearance = try SourcePreviewAppearance.load(url: base.appendingPathComponent("source-avatar.appearance.json"), resources: resources)
     let bindings = try SourceAppearanceBindings.load(url: base.appendingPathComponent("source-avatar.card-appearance.json"))
     let card = try SourceCardAppearance(card: SourceCharacterCard.load(url: directory.appendingPathComponent(oracle.cardFile)))
+    let selectedBindings = bindings.restricted(to: Set(oracle.recipes.map(\.part)))
+    let prepared = try SourceAppearanceInputs.prepare(card: card, bindings: selectedBindings, directory: base)
     for backend: SourceAppearanceCompositionBackend in [.cpu, .metal] {
-    let result = try appearance.applying(card, bindings: bindings.restricted(to: Set(oracle.recipes.map(\.part))), directory: base, resources: resources, backend: backend)
+    for inputs: SourceAppearanceInputs? in [nil, prepared] {
+    let result = try appearance.applying(card, bindings: selectedBindings, directory: base, resources: resources, backend: backend, preparedInputs: inputs)
     #expect(result.appliedFields.contains("makeup.paintColor.0"))
     #expect(result.appliedFields.contains("clothes.parts.0.colorInfo.0.patternColor"))
     for recipe in oracle.recipes {
@@ -106,6 +109,7 @@ func sourceMaterialExpandedTextureIndependentOracle() throws {
         #expect(actual.count == expected.count)
         let errors = zip(actual, expected).map { abs(Int($0) - Int($1)) }
         #expect((errors.max() ?? 0) <= 1)
+    }
     }
     }
 }
