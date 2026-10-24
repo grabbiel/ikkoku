@@ -227,7 +227,8 @@ def row(name, report):
     def stat(entry, field):
         return "%.2f" % entry[field] if entry and field in entry else "-"
 
-    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "makerTick", "makerRefresh", "input") if k in phases]
+    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "studioHoverPick", "makerTick", "makerRefresh", "input")
+             if k in phases]
     model_text = ", ".join("%s %s/%s ×%.0f/s" % (k, phase(k), phase(k, "p95"), phases[k]["perSecond"]) for k in model) or "-"
     build = report["build"]
     configuration = report.get("configuration", {})
@@ -357,6 +358,24 @@ def live_line(name, report):
         events.get("studioLiveTickDiscarded", {}).get("perSecond", 0))
 
 
+def hover_line(name, report):
+    """The asynchronous hover picks (schema 4, R7 phase 2, item 5), or None for
+    a report without any: picks finished, applied and stale, their latency from
+    start to the main actor and their GPU time."""
+    hover = report["summary"].get("hoverPick")
+    if not hover or not hover.get("finished"):
+        return None
+
+    def stat(entry):
+        return "%.2f/%.2f" % (entry["p50"], entry["p95"]) if entry.get("count") else "-"
+
+    events = report["summary"].get("events", {})
+    return "[perf] %s: hover picks %d finished (%d applied, %d stale), %d started, %d moves coalesced; latency ms p50/p95 %s, GPU ms p50/p95 %s" % (
+        name, hover["finished"], hover.get("applied", 0), hover.get("stale", 0),
+        events.get("hoverPickStarted", {}).get("count", 0), events.get("hoverPickCoalesced", {}).get("count", 0),
+        stat(hover.get("latencyMs", {})), stat(hover.get("gpuMs", {})))
+
+
 def stray_input(report):
     """Input calls the workload did not send (someone moved the mouse over the window), or None."""
     if report.get("workload") not in INPUTLESS_WORKLOADS:
@@ -388,6 +407,9 @@ def summarize(directories):
             live = live_line(label, report)
             if live:
                 rings.append(live)
+            hover = hover_line(label, report)
+            if hover:
+                rings.append(hover)
             if report.get("workload") == "viewport-lifecycle" and "lifecycle" in report.get("details", {}):
                 lifecycles.append(lifecycle_line(label, report))
                 problem = lifecycle_problem(report)

@@ -126,6 +126,22 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("| 400 | 0 | 150 | 600 | 20 | 210 |", line)
         self.assertEqual(perf_trace.HEADER.count("|"), line.count("|"))
 
+    def test_hover_line_reports_the_asynchronous_hover_picks(self):
+        # Schema 4 (R7 phase 2, item 5): finished hover picks, how many
+        # applied, their latency and GPU time; older reports have none.
+        self.assertIsNone(perf_trace.hover_line("base/studio-hover", report()))
+        hover = report()
+        hover["summary"]["hoverPick"] = {"finished": 1190, "applied": 1180, "stale": 10,
+                                         "latencyMs": {"count": 1190, "p50": 1.2, "p95": 2.5},
+                                         "gpuMs": {"count": 1190, "p50": 0.45, "p95": 0.61}}
+        hover["summary"]["events"] = {"hoverPickStarted": {"count": 1190, "perSecond": 119},
+                                      "hoverPickCoalesced": {"count": 3, "perSecond": 0.3}}
+        hover["summary"]["phases"]["studioHoverPick"] = dict(hover["summary"]["phases"]["studioTick"], perSecond=119)
+        self.assertEqual(perf_trace.hover_line("after/studio-hover", hover),
+                         "[perf] after/studio-hover: hover picks 1190 finished (1180 applied, 10 stale), 1190 started, "
+                         "3 moves coalesced; latency ms p50/p95 1.20/2.50, GPU ms p50/p95 0.45/0.61")
+        self.assertIn("studioHoverPick 1.50/2.50 ×119/s", perf_trace.row("after/studio-hover", hover))
+
     def test_main_load_sets_the_launch_variables_and_names_the_report(self):
         launches = []
 

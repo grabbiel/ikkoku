@@ -36,6 +36,10 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    thread. With the main thread loaded on purpose, the Studio now presents
    120 FPS with a p95 interval of 8.33 ms, against 30–60 FPS and 25–33 ms
    before ([phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes)).
+4. **The hover pick waited for the GPU on the main thread**, 2.3 ms for every
+   mouse move. Phase 2, item 5 made it asynchronous, for the latest position
+   only: hover's main-thread time fell from 518–531 to 239–242 ms/s, with
+   identical pick ids ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)).
 
 These headline numbers are the original phase-1 measurements. The
 [resumed review](#resumed-phase-1-review-2026-10-23) retained near-120 FPS idle
@@ -121,7 +125,14 @@ locked `PerfDrawLog`. Everything else is recorded on the main thread.
 - model events without a duration (`events`): `studioDocChange` counts writes
   to the Studio document, each of which notifies every view that reads it, and
   `studioCameraChange` counts writes through the camera accessor, which only
-  the camera's readers observe;
+  the camera's readers observe. `hoverPickStarted` counts hover picks started
+  (a move with no pick in flight, or a stale result picked again), and
+  `hoverPickCoalesced` counts moves that waited for the pick in flight;
+- the asynchronous hover picks (`hoverPick`, [phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)):
+  picks finished on the main actor, how many applied and how many were stale,
+  their latency from start to the main actor and their command buffers' GPU
+  time. Applying them is the `studioHoverPick` model phase, including the
+  refresh when the highlight changes;
 - SwiftUI body evaluations (`viewBodies`, count and rate per second) for the
   app's commands, the content view, the Studio window and each of its panels
   and inspectors, and the Maker window, source rig panel and shape slider rows.
@@ -143,12 +154,15 @@ the whole live step and the refresh column the frame rebuild inside it.
 
 The same phases are `os_signpost` intervals in the Points of Interest category
 of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `StudioTick`,
-`StudioRefresh`, `StudioCameraRefresh`, `MakerTick`, `MakerRefresh`,
-`Startup`, and `Mark` events), so every Instruments template shows them next
-to its own tracks. The report's `schemaVersion` is 2 since the Studio hooks,
-events and view bodies were added, and 3 since the draw log moved off the main
-actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad` phase and
-`configuration.mainLoadMs`/`mainLoadHz`).
+`StudioRefresh`, `StudioCameraRefresh`, `StudioHoverPick`, `MakerTick`,
+`MakerRefresh`, `Startup`, and `Mark` events), so every Instruments template
+shows them next to its own tracks. The report's `schemaVersion` is 2 since the
+Studio hooks, events and view bodies were added, 3 since the draw log moved
+off the main actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad`
+phase and `configuration.mainLoadMs`/`mainLoadHz`), and 4 since the hover
+pick became asynchronous (`hoverPick`, the `studioHoverPick` phase and the two
+hover events). `perf_trace.py summarize` prints a hover line for a report with
+hover picks.
 
 ### Running it
 
@@ -384,7 +398,7 @@ which the "per second" column shows.
 | 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1 slider row evaluated per write instead of 44; `GraphHost.flushTransactions` 11.8 → 2.5 ms and `NSHostingView.layout` 8.3 → 3.9 ms per write; 43.4 → 119.8 presented FPS. The rest is layout of the long panel | low |
 | 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: no view body and no sampled SwiftUI pass per orbit event (8.9 ms before); 41.0 → 119.4 presented FPS | medium |
 | 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3 | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured) | low |
-| 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) it no longer delays presentation; at 120 moves/s it takes 2.6 ms each (316 ms/s), the largest main-thread cost in hover after the tick | M5 | ~2 ms per move | low; renderer file |
+| 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) it no longer delays presentation; at 120 moves/s it takes 2.6 ms each (316 ms/s), the largest main-thread cost in hover after the tick | M5; **done** in [phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick) | measured: 2.29–2.41 → 0.01 ms per move on the main thread; the pick (0.47 ms CPU, 0.94 ms GPU) runs on the renderer's pick queue | low; renderer file |
 | 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) the draw runs on the render thread, so this costs no main-thread time, and G4 cut its CPU encode from 0.74 to 0.44 ms per frame (offscreen) | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis); now render-thread CPU and GPU only | low |
 | 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3; **done** for orbit and pan drags in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1.00 ms full refresh → 0.04 ms camera rebuild per drag event | medium |
 | 9 | Source scene load at startup | 4,710 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
@@ -633,7 +647,7 @@ gains are for the reference machine unless stated; the M1 column of the
 | M2 | Every document change re-evaluates all of `StudioView` | `StudioView.body` reads `model.doc` (workspace list, toolbar, inspector) | measured | orbit: `GraphHost.flushTransactions` 733 ms/s, inside it `ViewBodyAccessor.updateBody` 194 ms/s and `NSHostingView.layout` 148 ms/s, against 19 ms/s in `StudioView.body` itself ([rank 4](#ranked-costs)) | split `StudioView` into child views that each read only what they show (workspace list, toolbar, timeline, inspector), with per-event state (camera, an FK drag in progress) outside what they read. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): an FK drag event re-evaluates 4 outer views whose content is skipped, and an orbit event none | Low–medium: UI captures (`IKKOKU_CAPTURE_UI` lanes) must stay identical |
 | M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): `documentCamera` has its own observation, and orbit and pan drags reuse the frame's camera-independent content | Medium: the camera is saved with the document and undo must keep working |
 | M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): 11.8 → 2.5 ms of graph update per write; the panel's layout remains | Low |
-| M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work | Low; renderer file |
+| M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured; **done** | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work. **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)): 2.29–2.41 → 0.01 ms per move on the main thread; the pick pass's GPU time 0.13 → 0.06 ms, its 0.85 ms deform pass remains | Low; renderer file |
 | M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking | `StudioModel.init` | hypothesis | the 15 Hz tick rate above is the late-handler case | drive the live step from the display link's target time with a fixed 1/30 s accumulator so animation speed never depends on main-thread load | Medium: the scenario lanes rely on fixed 1/30 s steps, which an accumulator keeps |
 | M7 | Status-line churn | `StudioModel.tick` → `RenderStatusReporter.status` | measured (negative) | assigns only when the text changes | none needed | — |
 | M8 | Native characters step hair dynamics once per `refresh()`, not per tick, so an orbit (one refresh per mouse event) runs their hair simulation faster than real time | `StudioModel.refresh` (`inst.stepHairDynamics(dt: 1/30)`) | measured (code path) | `studio-native` refreshes at 30/s idle; any extra refresh adds a 1/30 s step | step native hair only from the live tick. Since [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation), an FK drag event refreshes once instead of twice, and orbit and pan with native characters still refresh fully | Behavior change; a correctness fix more than a performance one |
@@ -723,7 +737,7 @@ How to read the expected gain column:
 | 2 | **Done** ([phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes)), with G4. Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment. Measured: with the main thread busy 600 ms/s, 120 FPS and an 8.33 ms p95 interval, against 30–60 FPS and 25–33 ms | P1, G4 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
 | 3 | Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s) | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
 | 4 | Skip unchanged frames and run the display link at 30–60 Hz when nothing moves; leave the shadow map alone until casters or the light move | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
-| 5 | Asynchronous hover pick for the latest mouse position only | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
+| 5 | **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)). Asynchronous hover pick for the latest mouse position only, and a scissored pick pass. Measured: 2.29–2.41 → 0.01 ms per move on the main thread, hover's main busy time 518–531 → 239–242 ms/s, pick ids identical | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
 | 6 | Startup: cache decoded rigs and load source characters concurrently off the main thread, with a progress state | C8, S1, S2, S4 | source scene ready in ~1.5 s instead of 4.7 s; first frame earlier | larger, since there is less memory bandwidth for repeated decoding | `startup` workload; scene import results identical |
 | 7 | An opt-in optimized-Engine Debug build for app work | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
 | 8 | Texture compression at conversion time; release staging data after upload | G7, R1 | smaller footprint and bandwidth | main memory-pressure relief on 8 GB | image comparison; this is a quality trade-off, so it stays opt-in until compared |
@@ -1184,7 +1198,8 @@ and symlinked from `.local/r7c-render-thread/perf`.
     each is nested in the tick.
   - The synchronous hover pick takes 2.6 ms per move (316 ms/s at 120 moves
     per second). Most of it is a wait for the GPU: the main thread's sampled
-    CPU time was only 304 ms/s in all.
+    CPU time was only 304 ms/s in all. Item 5 has since taken the pick off
+    the main thread ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)).
 - **FK drag.** The frame rebuild takes 1.80 ms per event (219 ms/s), and
   SwiftUI about 145 ms/s.
 - **Maker slider.** The panel's layout takes about 480 ms/s, as in item 1.
@@ -1303,8 +1318,231 @@ model rate and input latency. The 7.6–8.3 ms source-scene tick is the
 largest main-thread cost left in idle and hover, and it is now slightly
 slower while the draw runs beside it. Item 5, the asynchronous hover pick,
 is the smaller follow-up: hover's pick takes about 2.6 ms per mouse move on
-the main thread. Item 4 (skip unchanged frames) would now mostly save GPU
+the main thread. Item 5 is now done
+([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)). Item 4 (skip unchanged frames) would now mostly save GPU
 time and render-thread CPU, not main-thread time.
+
+## Phase 2, item 5: asynchronous hover pick
+
+Done 2026-10-24 (inventory M5). The Studio's gizmo hover no longer waits for
+the GPU on the main thread. It picks asynchronously, only for the latest
+mouse position, and drops results that no longer apply. Clicks, drag starts
+and the scenario runner still pick synchronously. Both picks are now
+scissored to the one pixel they read. Pick ids, rendered frames and window
+captures are byte-identical.
+
+In the `studio-hover` workload (120 mouse moves a second over the source
+scene, with a character selected), the main thread was busy 239–242 ms/s,
+against 518–531 ms/s before. The hover pick took 2.29–2.41 ms of the main
+thread per move (279–296 ms/s). Now a move takes 0.01 ms to request a pick,
+and applying a result takes under 0.01 ms (about 1.3 ms/s together). The
+pick itself, 0.47 ms of CPU and 0.94 ms of GPU, runs on the renderer's pick
+queue. Nearly all of what remains on the main thread in hover is the 30 Hz
+live tick (7.8 ms, 234 ms/s), which item 3 addresses. Presentation was
+already at 120 FPS since item 2, and it is unchanged. The scissor cut the
+pick pass's GPU time from 0.13 to 0.06 ms per pick. The pick's deform pass
+(0.85 ms) is now nearly all of its GPU time.
+
+### What changed
+
+- **Asynchronous hover pick.** `Renderer.pick(frame:pixel:size:completion:)`
+  runs the pick on a serial pick queue (`com.grabbiel.Ikkoku.pick`) and calls
+  back there with the id and the command buffer's GPU time.
+  `StudioModel.mouseMoved` hands the position to a `LatestPickQueue`, which
+  keeps at most one pick in flight. A move while one is in flight only
+  waits, and a later move replaces it. A result applies only if it answers
+  the latest move against the current frame and viewport size. Otherwise it
+  is dropped, and the latest move is picked again against the current frame.
+  `mouseDown` first settles the pick in flight, so a click sees the highlight
+  of its last move. The contract, lock order and R6 rules are in
+  [renderer threads](renderer.md#picks-r7-phase-2-item-5).
+- **Scissored pick pass.** The pick pass is scissored to the pixel it reads,
+  and only that pixel is copied back. It binds only the body mask texture,
+  the one texture `pick_fragment` reads. The deform pass a pick runs first is
+  unchanged.
+- **Harness (schema 4).** Reports gain a `hoverPick` block (picks finished,
+  applied and stale, their latency from start to the main actor and their
+  GPU time), the `studioHoverPick` phase and two events (see
+  [what the report records](#what-the-report-records)). `summarize` prints a
+  hover line per report.
+- **Scenario op.** `hoverGizmo` (in `fk-mouse-drag.json`) drives the real
+  `mouseMoved` across the z ring of bone 19 and off it, settles the picks and
+  checks the highlighted axis against the synchronous pick
+  ([README](../../Tools/verification/README.md)).
+
+### Measurement
+
+The commands follow [measuring a change](#measuring-a-change). Release builds,
+arm64:
+
+| Label | Commit | Executable SHA-256 |
+| --- | --- | --- |
+| base | `3dec1b2` (`main` before this change) | `2733396e…569aebb` |
+| after | `c905d8d` (this change; later commits change only a test and docs) | `9dad4909…942c4adb` |
+
+All runs used the 120 Hz display at 2×, with a 1996×1824 drawable, in two
+quiet windows the orchestrator granted on 2026-10-24 (base 07:14–07:18,
+after 08:04–08:07). Every launch took the app lock, and the load average
+was 3.7–5.3. Each run had a 3 s warmup and 10 s of recording, and hover ran
+twice. One 5 s Time Profiler run and one 5 s Metal System Trace run of
+hover were taken per build. `summarize` flagged no run. Reports are in
+`.local/r7e-async-pick/perf/{base,after}`; the traces are archived in
+`/Volumes/My Book/ikkoku-archive/local/r7e-async-pick/perf/` and symlinked
+from `.local/r7e-async-pick/perf`.
+
+| Workload | Build | Presented FPS | Hitches/s | Presented interval p95 ms | Main busy ms/s | Input events/s | Hover pick on the main thread, ms per move p50 (ms/s) |
+| --- | --- | ---: | ---: | --- | ---: | ---: | --- |
+| studio-hover | base | 120.0, 119.9 | 0, 0.1 | 8.33 | 518, 531 | 120, 119 | 2.29, 2.41 (279, 296) |
+| studio-hover | after | 119.8, 120.0 | 0.2, 0 | 8.33 | 239, 242 | 120, 100 | 0.01 to request, < 0.01 to apply (1.4, 1.2) |
+| studio-idle | base | 119.9 | 0.1 | 8.33 | 250 | 0 | — |
+| studio-idle | after | 120.0 | 0 | 8.33 | 251 | 0 | — |
+| studio-orbit | base | 119.3 | 0.7 | 8.33 | 18 | 120 | — |
+| studio-orbit | after | 119.3 | 0.7 | 8.33 | 20 | 120 | — |
+
+One pick, before and after (hover):
+
+| | Base | After |
+| --- | --- | --- |
+| Main thread per move | 2.29–2.41 ms p50, the pick's CPU work and the wait for the GPU | 0.01 ms to request; applying a result takes < 0.01 ms p95 |
+| CPU per pick (Time Profiler) | 0.57 ms, on the main thread (54.7 ms/s at 95 moves/s) | 0.47 ms, on the pick queue (56.1 ms/s at 120 picks/s) |
+| GPU per pick (Metal System Trace, p50) | deform 0.848, pick pass 0.130 (vertex 0.053, fragment 0.077), copy 0.005 ms | deform 0.847, pick pass 0.062 (vertex 0.045, fragment 0.017), copy 0.005 ms |
+| GPU per pick command buffer (harness, p50) | — | 0.94 ms |
+| Picks per second | one per move | 100–147, re-picks included |
+| From the start of a pick to its applied highlight | inside the move's handler | 1.86–2.16 ms p50, 2.07–9.66 ms p95 |
+
+Notes on the tables:
+
+- **The main thread no longer picks.** Hover's main busy time fell by
+  279–289 ms/s, the pick's whole cost on the main thread. The live tick is
+  unchanged (7.73–7.84 ms mean in base, 7.77–7.86 ms in after), and so are
+  idle and orbit. Presentation was already decoupled from the main thread by
+  item 2, so FPS, hitches and the presented-interval p95 do not change.
+- **Stale results.** Run 1 dropped 532 of 1,466 results (36%), and run 2
+  dropped 97 of 1,000. A result is stale when a newer move waited for it or
+  when the frame changed while it was in flight. Each coalesced move makes
+  at most one result stale (266 and 97), so at least 266 results in run 1
+  (27 a second, about one per live tick) were dropped because the frame
+  changed, and none in run 2. The workload's input timer and the 30 Hz tick
+  timer both run on the main run loop, so their phase stays fixed within a
+  launch. A likely explanation is that in run 1 the tick fired while a pick
+  was in flight, and in run 2 it did not. Real mouse events have no fixed
+  phase. Each stale result costs one more pick off the main thread: run 1
+  ran 147 picks a second for 120 moves.
+- **GPU.** The pick command buffers took 0.94 ms each, so 94–138 ms/s at
+  100–147 picks a second, against about 118 ms/s in base (120 picks of
+  0.98 ms). The frame's own GPU time stayed at 2.0 ms, and the GPU is not
+  the limit on the reference machine ([G1](#metal)).
+- **Input rate.** After's second hover run received 100 input events a
+  second instead of 120: the workload's input timer missed fires. The base
+  Time Profiler run also received only 95 a second, so this is not specific
+  to this change; its cause was not established.
+- **Latency.** A result waits for the main actor, so the 9.66 ms p95 of run
+  1 is a result that arrived during a 7.8 ms tick. The synchronous pick
+  blocked the handler instead, for 2.3 ms per move.
+
+### What remains
+
+Time Profiler, 5 s of hover, after build:
+
+- **The main thread: the live tick.** 227 of the 232 ms/s of sampled
+  main-thread CPU are in `StudioModel.stepLive`. The hover pick no longer
+  shows on the main thread. Item 3 (in progress separately) moves the tick.
+- **The pick queue: 56 ms/s of CPU** at 120 picks a second. Preparing the
+  frame (`buildContext`) takes 0.30 ms of each 0.47 ms. Sorting the
+  transparent items takes 0.06 ms of that, and the pick does not need the
+  sort order except between equal depths. Encoding the pick pass and the
+  deform pass takes the rest. A pick-only preparation is a **hypothesis**
+  worth about 0.1–0.2 ms of pick-queue CPU per pick.
+- **The pick's deform pass: 0.85 ms of GPU per pick.** Each pick deforms
+  every character again, although the draw deformed the same frame. Reusing
+  the draw's deformed vertex buffers would need the pick to prove that the
+  frame it picks is the frame the draw deformed, and that those buffers
+  have not been reused since. That is a **hypothesis** worth about 0.85 ms of
+  GPU per pick, off the main thread.
+- **Re-picks after a frame change** repeat that work. With real mouse input
+  they should be rarer than in run 1 above (not measured).
+
+### Behavior notes
+
+- The highlight follows the last mouse position, as before. A result applies
+  1.9–2.2 ms (p50) after its pick started, in a later turn of the main actor,
+  instead of inside the move's handler. The next drawn frame shows it, as before.
+- A click first waits for the hover pick in flight (at most one round trip,
+  about 2 ms; two if the result is stale and the latest move is picked
+  again), so a click or drag never starts with a highlight that is about to
+  change.
+- If the selection is cleared while a pick is in flight, the highlight keeps
+  its axis. That gizmo is no longer drawn, so nothing shows it.
+- A move that already has its answer is not picked again when the frame
+  changes. The synchronous hover did not pick it again either, because it
+  only picked on a move.
+
+### Correctness
+
+- **Pick ids.** `scissoredPickMatchesTheWholePickPassAtEveryTestedPixel`
+  compares the scissored pick, synchronous and asynchronous, with the whole
+  unscissored pass at 4,386 of 27,648 pixels. Those include every pixel where
+  the id changes, and they show 11 distinct ids: the background, a skinned
+  character, a quad masked through a mipmapped body mask, a transparent quad,
+  translate-gizmo axes and plane handles, rotate rings and a bone handle
+  ([tests](renderer.md#picks-r7-phase-2-item-5)). Moving the scissor one row
+  down made the test fail. In the real scene, `fk-mouse-drag` scans pixels
+  with the synchronous pick and found the same z-ring pixel `(227.63,
+  393.38)`, id `4278190083`, and the same 58.066128° drag as a report from an
+  earlier `main` build of 2026-10-23
+  (`.local/r7e-async-pick/fk-mouse-drag-*.json`).
+- **Stale results.** `staleAsynchronousPicksAreDroppedAndTheLatestMoveApplies`
+  runs real asynchronous picks. A result for an axis pixel that arrives
+  after the pointer moved to the background is dropped, and a result taken
+  against an older frame leads to a re-pick against the new frame. Four pure
+  tests cover the queue and the mailbox.
+- **Scenario.** `hoverGizmo` in `fk-mouse-drag` drives the real `mouseMoved`
+  with the source scene: 6 moves, 3 coalesced, 5 picks issued, 3 applied and
+  2 stale. After each sequence, the highlighted axis (in the model and in the
+  frame's highlighted gizmo batches) is the one the synchronous pick reads at
+  the last position: z on the ring, none off it.
+- **Captures.** The 13 captures of [item 2](#correctness-1) (four
+  `IKKOKU_AUTOCAPTURE` renders, including the live opt-in, and nine
+  `IKKOKU_CAPTURE_UI` windows), each its own launch under the app lock with
+  the shared fixture map: all 13 PNGs and all 10 reports are byte-identical
+  between base and after (`.local/r7e-async-pick/captures`, PNG hashes in
+  `summary.json`).
+- **Engine suite** with every fixture of the shared map exported: 762 tests
+  passed, including the 2 named skips of item 2, plus 21 in the second
+  target. In the first full run, the mailbox test timed out: it delivered
+  through a global dispatch queue, which the parallel suite starved for
+  about a minute. It now delivers from its own thread.
+- **ThreadSanitizer.** `swift test --sanitize=thread --filter
+  'PickTests|latestPickQueue|pickMailbox|renderThreadDraws'`: 7 tests pass
+  with 0 warnings. The render-thread test now also requests 16 asynchronous
+  picks. As a control, an unlocked write to `frameIndex` in the asynchronous
+  pick produced 4 ThreadSanitizer warnings.
+- **Python.** Runner self-tests 186/186 (16 in `test_perf_trace.py`), the
+  studio-inspector validator tests (11), mod tools (40) and translation
+  (33, 2 skipped) pass.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped:
+  `studio-scenarios` 52/52 (1,730 s) and `maker-scenarios` 5/5.
+
+### Limits
+
+- **One run per build and workload**, plus the hover repeat.
+- **No physical mouse.** The harness and the scenario drive `mouseMoved`
+  from timers; the stale rate with real, unphased mouse events was not
+  measured.
+- **ThreadSanitizer** covered the pick and render-thread tests, not the
+  whole Engine suite or an app session.
+- **No M1 run.**
+
+### Recommended next
+
+This change does not start item 4. Item 3, the live tick off the main
+thread, is in progress separately, and the tick is now nearly all of the
+main thread's time in idle and hover. After it, item 4 (skip unchanged
+frames) is the largest per-frame cost left: the render thread
+draws 85–91 ms/s and the GPU renders 2.0 ms frames 120 times a second,
+while the content changes 30 times a second. A smaller follow-up is to let
+the pick reuse the draw's deformed buffers (0.85 ms of GPU per pick), which
+item 4's frame identity would also make easier.
 
 ## Validation of this change
 

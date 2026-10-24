@@ -632,7 +632,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "setFace", "setBody", "setColor", "resetShape", "resetColors", "setOutfit",
                 "setClothesState", "setAccessoryVisible", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
-                "dragGizmo", "captureBone", "captureObject", "captureRender",
+                "dragGizmo", "hoverGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected"}
@@ -912,6 +912,10 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(step["axis"], ("x", "y", "z"))
                     self.assertEqual(len(step["pixels"]), 2)
                     self.assertTrue(all(isinstance(c, (int, float)) for c in step["pixels"]))
+                if op == "hoverGizmo":
+                    self.assertIsInstance(step["key"], int)
+                    self.assertIsInstance(step["bone"], int)
+                    self.assertIn(step["axis"], ("x", "y", "z"))
                 if op == "captureBone":
                     self.assertTrue(step["name"],
                                     "a captured bone needs a label to compare against: %s" % path)

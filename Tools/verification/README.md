@@ -178,6 +178,14 @@ origin with the view camera, scans ±120 px for a pixel whose GPU pick id is
 that rotate ring, and calls `mouseDown` / eight `mouseDragged` / `mouseUp`
 there — a ring turned edge-on to the camera projects to a sub-pixel sliver
 nothing picks, and then the failure names the rings the camera does see),
+`hoverGizmo` `{key,bone,axis}` (the asynchronous gizmo hover, R7 phase 2,
+item 5: finds that rotate ring's pixel like `dragGizmo` and a pixel off the
+gizmo, calls the REAL `mouseMoved` in three sequences (on, off, on; off; on,
+off), settles the hover picks in flight after each with the call a click
+makes, and checks that the highlighted axis is that of the last position, as
+the synchronous pick reads it, both in the model and in the frame's
+highlighted gizmo batches; the pick counters must show the coalesced moves
+and the dropped stale results),
 `captureBone`
 `{key,bone,name}` (memorizes that guide bone's position in the character's
 rig frame under a label for a later `fk`/`from` compare), `captureObject`

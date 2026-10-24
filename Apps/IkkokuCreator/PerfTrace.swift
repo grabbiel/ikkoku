@@ -60,6 +60,9 @@ final class PerfTrace {
     /// Phases with their own sample lists.
     enum Phase: String, CaseIterable {
         case draw, studioTick, studioRefresh, studioCameraRefresh, makerTick, makerRefresh, input
+        /// Applying finished hover picks on the main actor (R7 phase 2, item 5),
+        /// including the refresh when the highlight changes.
+        case studioHoverPick
         /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
         case mainLoad
         /// The main thread blocked on a Studio live step still running off it
@@ -94,6 +97,11 @@ final class PerfTrace {
         /// A settled live step whose frames a preview access dropped, so its
         /// refresh evaluated the characters on the main thread again.
         case studioLiveTickDiscarded
+        /// A hover pick started (a mouse move with none in flight, or a stale
+        /// result picked again; R7 phase 2, item 5).
+        case hoverPickStarted
+        /// A mouse move that waited because a hover pick was in flight.
+        case hoverPickCoalesced
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that
@@ -156,6 +164,8 @@ final class PerfTrace {
     private var intervals: [Phase: [(start: CFTimeInterval, end: CFTimeInterval)]] = [:]
     private var inputNames: [String: Int] = [:]
     private var eventCounts: [Event: Int] = [:]
+    /// Finished hover picks: applied or stale, start-to-main-actor latency and GPU time (ms).
+    private var hoverPicks: [(applied: Bool, latency: Double, gpu: Double)] = []
     private var bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
     private var busy: [(start: CFTimeInterval, end: CFTimeInterval)] = []
     private var busyStart: CFTimeInterval?
@@ -251,6 +261,13 @@ final class PerfTrace {
         trace.eventCounts[event, default: 0] += 1
     }
 
+    /// One finished hover pick taken on the main actor while recording:
+    /// whether it applied, seconds since it started, its GPU time in seconds.
+    static func hoverPick(applied: Bool, latency: Double, gpuTime: Double) {
+        guard let trace = active, trace.recording else { return }
+        trace.hoverPicks.append((applied, latency * 1000, gpuTime * 1000))
+    }
+
     /// Counts one SwiftUI body evaluation while recording; called as
     /// `let _ = PerfTrace.body(.name)` at the top of the body. Costs one
     /// optional check when no trace runs.
@@ -265,7 +282,7 @@ final class PerfTrace {
     func beginRecording() {
         drawLog.setRecording(true)
         intervals = [:]; inputNames = [:]; busy = []
-        eventCounts = [:]; bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
+        eventCounts = [:]; hoverPicks = []; bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
         peakFootprint = PerfTrace.footprint(); peakMetal = device?.currentAllocatedSize ?? 0
         cpuAtStart = PerfTrace.cpuSeconds()
         recordStart = CACurrentMediaTime()
@@ -422,6 +439,16 @@ final class PerfTrace {
                 guard let count = eventCounts[event] else { return nil }
                 return (event.rawValue, ["count": count, "perSecond": PerfTrace.round(Double(count) / window)] as [String: Any])
             }),
+            // Asynchronous hover picks (R7 phase 2, item 5): finished picks
+            // the main actor took, how many applied, their latency from start
+            // to the main actor and their command buffers' GPU time.
+            "hoverPick": [
+                "finished": hoverPicks.count,
+                "applied": hoverPicks.filter(\.applied).count,
+                "stale": hoverPicks.filter { !$0.applied }.count,
+                "latencyMs": PerfTrace.statistics(hoverPicks.map(\.latency)),
+                "gpuMs": PerfTrace.statistics(hoverPicks.map(\.gpu).filter { $0 > 0 }),
+            ] as [String: Any],
             "viewBodies": Dictionary(uniqueKeysWithValues: ViewBody.allCases.compactMap { view -> (String, Any)? in
                 let count = bodyCounts[view.rawValue]
                 guard count > 0 else { return nil }
@@ -453,7 +480,7 @@ final class PerfTrace {
         var startup = marks
         if let first = drawn.firstDraw { startup.append(("firstDraw", secondsSinceProcessStart(media: first))) }
         return [
-            "schemaVersion": 3,
+            "schemaVersion": 4,
             "workload": configuration.workload,
             "configuration": [
                 "seconds": configuration.seconds, "warmupSeconds": configuration.warmupSeconds,

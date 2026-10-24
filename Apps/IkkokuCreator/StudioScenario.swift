@@ -7,6 +7,7 @@ import Scene
 import Renderer
 import Character
 import Studio
+import ShaderTypes
 
 /// JSON-driven Studio scenario: a scripted sequence of checklist moves over the
 /// imported source scene, run headlessly behind `IKKOKU_STUDIO_SCENARIO` so the
@@ -21,7 +22,7 @@ struct StudioScenario: Decodable {
         /// `"setFace"`, `"setBody"`, `"setColor"`, `"resetShape"`, `"resetColors"`, `"setOutfit"`,
         /// `"setClothesState"`, `"setAccessoryVisible"`, `"setExpression"`, `"resetExpression"`,
         /// `"setAnimation"`, `"setAnimationSpeed"`, `"setForceLoop"`, `"setFKEnabled"`,
-        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`,
+        /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
@@ -1109,6 +1110,77 @@ struct StudioScenario: Decodable {
             return nil
         }
 
+        /// The preconditions and pixel scan `dragGizmo` and `hoverGizmo`
+        /// share: the step names the selected FK guide (`setPoseMode fk`,
+        /// `selectBone`) and an axis ring the view shows. Records the failure
+        /// and returns nil otherwise.
+        func locateGuideAxis(_ step: Step) -> (id: UUID, boneID: Int32, axis: GizmoAxis, axisName: String, anchor: SIMD2<Float>, start: SIMD2<Float>)? {
+            let op = step.op
+            guard let id = object(step) else { record(step, false, "\(op): no object with source key \(step.key ?? -1)"); return nil }
+            guard let boneID = step.bone, let axisName = step.axis else {
+                record(step, false, "\(op): bone and axis (\"x\", \"y\" or \"z\") are required"); return nil
+            }
+            guard let axis = GizmoAxis(rawValue: ["x": 1, "y": 2, "z": 3][axisName] ?? -1) else {
+                record(step, false, "\(op): unknown axis \"\(axisName)\", expected \"x\", \"y\" or \"z\""); return nil
+            }
+            // The real handlers only reach the guide path through this
+            // state, so say so here instead of reporting a bare miss
+            // after the pixel scan.
+            guard studio.poseMode == .fk else {
+                record(step, false, "\(op): pose mode is \(studio.poseMode.rawValue), run setPoseMode fk first"); return nil
+            }
+            guard studio.selection == id, let node = studio.selectedBone,
+                  let preview = studio.sourceShapePreview(for: id),
+                  preview.controller.targets.contains(where: { $0.node == node && $0.bone.id == Int(boneID) && $0.hasGuide }) else {
+                record(step, false, "\(op): source key \(step.key!) bone \(boneID) is not the selected guide (run selectBone first)"); return nil
+            }
+            guard let anchor = studio.sourceGuidePixel(of: Int(boneID)) else {
+                record(step, false, "\(op): bone \(boneID) does not project into the view camera"); return nil
+            }
+            let wanted = PickIDs.gizmo(axis)
+            func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
+            // The rotate ring of a selected guide is about 0.9 * 90
+            // world-units-per-pixel (~81 px) in radius and only a few px
+            // wide, so a ±120 px box around the bone's projected origin
+            // covers it: a coarse pass locates the ring, a fine pass
+            // around that hit lands squarely on it. The pass records the
+            // first pixel of every axis ring — a ring turned nearly
+            // edge-on to the camera projects to a sub-pixel sliver no
+            // pixel picks, and then the failure has to name which rings
+            // the camera does show.
+            func scan(_ radius: Float, by: Float, centeredAt center: SIMD2<Float>) -> [GizmoAxis: SIMD2<Float>] {
+                var hits: [GizmoAxis: SIMD2<Float>] = [:]
+                var y = center.y - radius
+                while y <= center.y + radius {
+                    var x = center.x - radius
+                    while x <= center.x + radius {
+                        let p = SIMD2<Float>(x, y)
+                        if let hit = PickIDs.axis(from: picked(p)), hit.rawValue <= 3, hits[hit] == nil {
+                            hits[hit] = p
+                            if hits.count == 3 { return hits }
+                        }
+                        x += by
+                    }
+                    y += by
+                }
+                return hits
+            }
+            let coarse = scan(120, by: 10, centeredAt: anchor)
+            let fine = coarse[axis].flatMap { scan(20, by: 4, centeredAt: $0) }
+            guard let start = (fine ?? coarse)[axis] else {
+                let axisWord: (GizmoAxis) -> String = { $0 == .x ? "x" : $0 == .y ? "y" : "z" }
+                let seen = [GizmoAxis.x, .y, .z].compactMap { a -> String? in
+                    guard let p = coarse[a] else { return nil }
+                    return "\(axisWord(a)) ring at (\(p.x), \(p.y))"
+                }
+                record(step, false, "\(op): no pixel within ±120 px of bone \(boneID)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
+                    + (seen.isEmpty ? "the scan sees no axis ring at all (anchor pixel picks \(picked(anchor)))"
+                                    : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) ring (edge-on to the camera?)"))
+                return nil
+            }
+            return (id, boneID, axis, axisName, anchor, start)
+        }
+
         scenarioLoop: for step in scenario.steps {
             // Steps run microseconds apart, inside the editor's 0.4 s
             // edit-coalescing window (startup's import opens it too), so an
@@ -1407,69 +1479,12 @@ struct StudioScenario: Decodable {
                     record(step, false, "selectBone: selectedBone reads \(String(describing: studio.selectedBone)), expected node \(target.node)")
                 }
             case "dragGizmo":
-                guard let id = object(step) else { record(step, false, "dragGizmo: no object with source key \(step.key ?? -1)"); continue }
-                guard let boneID = step.bone, let axisName = step.axis,
-                      let pixels = step.pixels, pixels.count == 2, pixels.allSatisfy({ $0.isFinite }) else {
+                guard let pixels = step.pixels, pixels.count == 2, pixels.allSatisfy({ $0.isFinite }) else {
                     record(step, false, "dragGizmo: bone, axis (\"x\", \"y\" or \"z\") and pixels [dx, dy] are required"); continue
                 }
-                guard let axis = GizmoAxis(rawValue: ["x": 1, "y": 2, "z": 3][axisName] ?? -1) else {
-                    record(step, false, "dragGizmo: unknown axis \"\(axisName)\", expected \"x\", \"y\" or \"z\""); continue
-                }
-                // The real handlers only reach the guide path through this
-                // state, so say so here instead of reporting a bare miss
-                // after the pixel scan.
-                guard studio.poseMode == .fk else {
-                    record(step, false, "dragGizmo: pose mode is \(studio.poseMode.rawValue), run setPoseMode fk first"); continue
-                }
-                guard studio.selection == id, let node = studio.selectedBone,
-                      let preview = studio.sourceShapePreview(for: id),
-                      preview.controller.targets.contains(where: { $0.node == node && $0.bone.id == Int(boneID) && $0.hasGuide }) else {
-                    record(step, false, "dragGizmo: source key \(step.key!) bone \(step.bone!) is not the selected guide (run selectBone first)"); continue
-                }
-                guard let anchor = studio.sourceGuidePixel(of: Int(boneID)) else {
-                    record(step, false, "dragGizmo: bone \(boneID) does not project into the view camera"); continue
-                }
-                let wanted = PickIDs.gizmo(axis)
+                guard let located = locateGuideAxis(step) else { continue }
+                let (id, boneID, axisName, start) = (located.id, located.boneID, located.axisName, located.start)
                 func picked(_ p: SIMD2<Float>) -> UInt32 { studio.pickID(at: p) }
-                // The rotate ring of a selected guide is about 0.9 * 90
-                // world-units-per-pixel (~81 px) in radius and only a few px
-                // wide, so a ±120 px box around the bone's projected origin
-                // covers it: a coarse pass locates the ring, a fine pass
-                // around that hit lands squarely on it. The pass records the
-                // first pixel of every axis ring — a ring turned nearly
-                // edge-on to the camera projects to a sub-pixel sliver no
-                // pixel picks, and then the failure has to name which rings
-                // the camera does show.
-                func scan(_ radius: Float, by: Float, centeredAt center: SIMD2<Float>) -> [GizmoAxis: SIMD2<Float>] {
-                    var hits: [GizmoAxis: SIMD2<Float>] = [:]
-                    var y = center.y - radius
-                    while y <= center.y + radius {
-                        var x = center.x - radius
-                        while x <= center.x + radius {
-                            let p = SIMD2<Float>(x, y)
-                            if let hit = PickIDs.axis(from: picked(p)), hit.rawValue <= 3, hits[hit] == nil {
-                                hits[hit] = p
-                                if hits.count == 3 { return hits }
-                            }
-                            x += by
-                        }
-                        y += by
-                    }
-                    return hits
-                }
-                let coarse = scan(120, by: 10, centeredAt: anchor)
-                let fine = coarse[axis].flatMap { scan(20, by: 4, centeredAt: $0) }
-                guard let start = (fine ?? coarse)[axis] else {
-                    let axisWord: (GizmoAxis) -> String = { $0 == .x ? "x" : $0 == .y ? "y" : "z" }
-                    let seen = [GizmoAxis.x, .y, .z].compactMap { a -> String? in
-                        guard let p = coarse[a] else { return nil }
-                        return "\(axisWord(a)) ring at (\(p.x), \(p.y))"
-                    }
-                    record(step, false, "dragGizmo: no pixel within ±120 px of bone \(boneID)'s projection (\(anchor.x), \(anchor.y)) picks axis \(axisName) (id \(wanted)); "
-                        + (seen.isEmpty ? "the scan sees no axis ring at all (anchor pixel picks \(picked(anchor)))"
-                                        : "the scan sees \(seen.joined(separator: " and ")) but not the \(axisName) ring (edge-on to the camera?)"))
-                    continue
-                }
                 let pickedID = picked(start)
                 // One mouseDown, eight interpolated mouseDragged steps to the
                 // requested offset, one mouseUp — the view's own coordinator
@@ -1494,6 +1509,60 @@ struct StudioScenario: Decodable {
                     record(step, false, "dragGizmo: the drag left no FK rotation on bone \(boneID) — mouseDragged never reached setSourceFKRotation"); continue
                 }
                 record(step, true, "drag bone \(boneID) axis \(axisName) from pixel (\(start.x), \(start.y)), picked id \(pickedID), over \(pixels) px: FK (\(held.x), \(held.y), \(held.z)) degrees")
+            case "hoverGizmo":
+                // R7 phase 2, item 5: the REAL `mouseMoved` hover, which picks
+                // asynchronously for the latest position only. Moves go over
+                // the guide's ring and off it, partly faster than a pick
+                // completes; `settleHoverPicks` (what a click does first) then
+                // applies what the app's own completion path decides. The
+                // highlight is read from the frame the app built.
+                guard let located = locateGuideAxis(step) else { continue }
+                let start = located.start, ringID = PickIDs.gizmo(located.axis)
+                // An off-gizmo pixel: the first corner of the scan box that picks no axis.
+                let corners: [SIMD2<Float>] = [SIMD2(-120, -120), SIMD2(120, -120), SIMD2(-120, 120), SIMD2(120, 120)]
+                guard let off = corners.map({ located.anchor + $0 }).first(where: { PickIDs.axis(from: studio.pickID(at: $0)) == nil }) else {
+                    record(step, false, "hoverGizmo: every corner of the ±120 px box around bone \(located.boneID) picks a gizmo axis"); continue
+                }
+                /// The gizmo-axis batches of the current frame drawn in the highlight color.
+                func highlighted() -> [UInt32] {
+                    let hi = simd_make_float3(GizmoBuilder.highlightColor)
+                    return studio.frame.gizmos.filter { batch in
+                        PickIDs.axis(from: batch.objectID) != nil && batch.vertices.contains { simd_make_float3($0.color) == hi }
+                    }.map(\.objectID)
+                }
+                func axisText(_ a: GizmoAxis?) -> String { a.map { "\($0)" } ?? "none" }
+                let before = studio.hoverPickStatistics
+                var failures: [String] = []
+                var phases: [String] = []
+                func expectHover(_ label: String, axis: GizmoAxis?, at p: SIMD2<Float>) {
+                    guard studio.settleHoverPicks() else { failures.append("\(label): no hover pick result within 2 s"); return }
+                    let hovered = studio.hoveredGizmoAxis, lit = highlighted()
+                    // What the synchronous pick (the pre-item-5 hover) finds at the final position.
+                    let synchronous = PickIDs.axis(from: studio.pickID(at: p))
+                    phases.append("\(label): hover \(axisText(hovered)), highlighted ids \(lit.map { String($0, radix: 16) }), synchronous pick \(axisText(synchronous))")
+                    if hovered != axis || hovered != synchronous { failures.append("\(label): hover \(axisText(hovered)), expected \(axisText(axis)) (synchronous pick \(axisText(synchronous)))") }
+                    if lit != (axis == nil ? [] : [ringID]) { failures.append("\(label): highlighted ids \(lit), expected \(axis == nil ? [] : [ringID])") }
+                }
+                // Over the ring, off it and back without waiting: one pick runs,
+                // the later moves wait, the first result is stale (it answers
+                // the first move) and the last move's applies.
+                studio.mouseMoved(to: start); studio.mouseMoved(to: off); studio.mouseMoved(to: start)
+                expectHover("on-off-on", axis: located.axis, at: start)
+                studio.mouseMoved(to: off)
+                expectHover("off", axis: nil, at: off)
+                // Onto the ring and straight off: the ring's result arrives
+                // stale and is dropped, so the highlight never lights.
+                studio.mouseMoved(to: start); studio.mouseMoved(to: off)
+                expectHover("on-off", axis: nil, at: off)
+                let after = studio.hoverPickStatistics
+                let moves = after.moves - before.moves, coalesced = after.coalesced - before.coalesced
+                let issued = after.issued - before.issued, applied = after.applied - before.applied, stale = after.stale - before.stale
+                if moves != 6 || coalesced != 3 || stale < 2 || applied != 3 {
+                    failures.append("hover picks: \(moves) moves, \(coalesced) coalesced, \(issued) issued, \(applied) applied, \(stale) stale; expected 6 moves, 3 coalesced, 3 applied and at least 2 stale")
+                }
+                record(step, failures.isEmpty, (failures.isEmpty ? "" : failures.joined(separator: "; ") + " | ")
+                    + "ring pixel (\(start.x), \(start.y)), off pixel (\(off.x), \(off.y)); " + phases.joined(separator: "; ")
+                    + "; hover picks: \(moves) moves, \(coalesced) coalesced, \(issued) issued, \(applied) applied, \(stale) stale")
             case "addCharacter":
                 // The Studio toolbar's Add ▸ Character ▸ Female/Male button.
                 guard let sex = ["female": Sex.female, "male": Sex.male][step.sex ?? ""] else {
