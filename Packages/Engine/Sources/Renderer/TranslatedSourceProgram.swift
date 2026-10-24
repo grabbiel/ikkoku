@@ -204,18 +204,63 @@ public final class TranslatedSourceProgram: @unchecked Sendable {
         }
     }
 
+    /// Finite, normalized sampler state shared by descriptor construction
+    /// and the per-resource-owner composite sampler cache.
+    struct SamplerConfiguration: Hashable {
+        let minFilter: MTLSamplerMinMagFilter
+        let magFilter: MTLSamplerMinMagFilter
+        let mipFilter: MTLSamplerMipFilter
+        let sAddressMode: MTLSamplerAddressMode
+        let tAddressMode: MTLSamplerAddressMode
+        let maxAnisotropy: Int
+
+        init(filter: String?, wrap: String?, aniso: Int?, anisotropicFiltering: String?) {
+            let minMag: MTLSamplerMinMagFilter = filter == "Point" ? .nearest : .linear
+            var mip: MTLSamplerMipFilter = filter == "Trilinear" ? .linear : .nearest
+            let address: MTLSamplerAddressMode = wrap == "Clamp" ? .clampToEdge : .repeat
+            var effectiveAnisotropy = max(1, min(16, aniso ?? 1))
+            if anisotropicFiltering == "Disable" { effectiveAnisotropy = 1 }
+            else if anisotropicFiltering == "ForceEnable", (aniso ?? 0) > 0, filter != "Point" {
+                effectiveAnisotropy = max(9, effectiveAnisotropy)
+            }
+            if effectiveAnisotropy > 1 { mip = .linear }
+            minFilter = minMag; magFilter = minMag; mipFilter = mip
+            sAddressMode = address; tAddressMode = address
+            maxAnisotropy = effectiveAnisotropy
+        }
+
+        // Hash raw values explicitly; no imported-enum Hashable or Sendable
+        // conformance is required for this internal value type.
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.minFilter.rawValue == rhs.minFilter.rawValue
+                && lhs.magFilter.rawValue == rhs.magFilter.rawValue
+                && lhs.mipFilter.rawValue == rhs.mipFilter.rawValue
+                && lhs.sAddressMode.rawValue == rhs.sAddressMode.rawValue
+                && lhs.tAddressMode.rawValue == rhs.tAddressMode.rawValue
+                && lhs.maxAnisotropy == rhs.maxAnisotropy
+        }
+
+        func hash(into hasher: inout Hasher) {
+            hasher.combine(minFilter.rawValue); hasher.combine(magFilter.rawValue)
+            hasher.combine(mipFilter.rawValue); hasher.combine(sAddressMode.rawValue)
+            hasher.combine(tAddressMode.rawValue); hasher.combine(maxAnisotropy)
+        }
+
+        func makeDescriptor() -> MTLSamplerDescriptor {
+            let sampler = MTLSamplerDescriptor()
+            sampler.minFilter = minFilter; sampler.magFilter = magFilter; sampler.mipFilter = mipFilter
+            sampler.sAddressMode = sAddressMode; sampler.tAddressMode = tAddressMode
+            sampler.maxAnisotropy = maxAnisotropy
+            return sampler
+        }
+    }
+
     /// The probe's sampler rule for an original `Texture2D`/render target:
     /// Unity filter/wrap/aniso, the player's `QualitySettings.anisotropicFiltering`
     /// (`ForceEnable` raises aniso textures to at least 9) and D3D11's trilinear
     /// mip filtering whenever anisotropy is above 1.
     public static func samplerDescriptor(filter: String?, wrap: String?, aniso: Int?, anisotropicFiltering: String?) -> MTLSamplerDescriptor {
-        let sampler = MTLSamplerDescriptor()
-        sampler.minFilter = filter == "Point" ? .nearest : .linear; sampler.magFilter = sampler.minFilter; sampler.mipFilter = filter == "Trilinear" ? .linear : .nearest
-        sampler.sAddressMode = wrap == "Clamp" ? .clampToEdge : .repeat; sampler.tAddressMode = sampler.sAddressMode; sampler.maxAnisotropy = max(1, min(16, aniso ?? 1))
-        if anisotropicFiltering == "Disable" { sampler.maxAnisotropy = 1 }
-        else if anisotropicFiltering == "ForceEnable", (aniso ?? 0) > 0, filter != "Point" { sampler.maxAnisotropy = max(9, sampler.maxAnisotropy) }
-        if sampler.maxAnisotropy > 1 { sampler.mipFilter = .linear }
-        return sampler
+        SamplerConfiguration(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: anisotropicFiltering).makeDescriptor()
     }
 
     /// Unity's built-in default texture for an unbound property (`white`,

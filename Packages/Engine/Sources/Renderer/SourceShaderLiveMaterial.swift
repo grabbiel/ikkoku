@@ -253,12 +253,12 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         return texture
     }
 
-    private func compositeSampler(_ descriptor: MTLSamplerDescriptor, resources: ResourceStore) -> (any MTLSamplerState)? {
+    private func compositeSampler(_ configuration: TranslatedSourceProgram.SamplerConfiguration, resources: ResourceStore) -> (any MTLSamplerState)? {
         lock.lock(); defer { lock.unlock() }
-        let cache = uploads(resources), key = CompositeSamplerKey(descriptor)
-        if let sampler = cache.samplers[key] { return sampler }
-        guard let sampler = resources.device.makeSamplerState(descriptor: descriptor) else { return nil }
-        cache.samplers[key] = sampler
+        let cache = uploads(resources)
+        if let sampler = cache.samplers[configuration] { return sampler }
+        guard let sampler = resources.device.makeSamplerState(descriptor: configuration.makeDescriptor()) else { return nil }
+        cache.samplers[configuration] = sampler
         return sampler
     }
 
@@ -342,10 +342,10 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
                 filter = nil; wrap = nil; aniso = nil; inputKey = "unity-default-" + kind
                 provenance.append("\(name)=Unity default \(kind)")
             }
-            let descriptor = TranslatedSourceProgram.samplerDescriptor(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: request.anisotropicFiltering)
-            guard let sampler = compositeSampler(descriptor, resources: resources) else { return fail("sampler state for \(name)") }
+            let configuration = TranslatedSourceProgram.SamplerConfiguration(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: request.anisotropicFiltering)
+            guard let sampler = compositeSampler(configuration, resources: resources) else { return fail("sampler state for \(name)") }
             textures[parameter.slot] = texture; samplers[parameter.samplerSlot] = sampler
-            keyParts.append("t:\(name)@\(parameter.slot)/\(parameter.samplerSlot)=\(inputKey)|\(filter ?? "-")|\(wrap ?? "-")|\(aniso.map(String.init) ?? "-")|\(descriptor.maxAnisotropy)|\(descriptor.mipFilter.rawValue)")
+            keyParts.append("t:\(name)@\(parameter.slot)/\(parameter.samplerSlot)=\(inputKey)|\(filter ?? "-")|\(wrap ?? "-")|\(aniso.map(String.init) ?? "-")|\(configuration.maxAnisotropy)|\(configuration.mipFilter.rawValue)")
         }
         // Constants: recipe vectors and the textures' saved transforms. The
         // create programs read no per-frame or global values; any other name
@@ -449,21 +449,11 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
     private static func validDigest(_ digest: String) -> Bool {
         digest.utf8.count == 64 && digest.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
     }
-    /// Covers every field changed by TranslatedSourceProgram.samplerDescriptor;
-    /// the remaining descriptor fields keep their Metal defaults.
-    private struct CompositeSamplerKey: Hashable {
-        let min: UInt, mag: UInt, mip: UInt, s: UInt, t: UInt
-        let anisotropy: Int
-        init(_ value: MTLSamplerDescriptor) {
-            min = value.minFilter.rawValue; mag = value.magFilter.rawValue; mip = value.mipFilter.rawValue
-            s = value.sAddressMode.rawValue; t = value.tAddressMode.rawValue; anisotropy = value.maxAnisotropy
-        }
-    }
     private final class Uploads {
         weak var owner: ResourceStore?
         var textures: [String: SourceShaderLiveTexture] = [:]
         var defaults: [String: any MTLTexture] = [:]
-        var samplers: [CompositeSamplerKey: any MTLSamplerState] = [:]
+        var samplers: [TranslatedSourceProgram.SamplerConfiguration: any MTLSamplerState] = [:]
         /// Composites are owned by the materials that bind them (never
         /// registered in the resource store): the cache only shares a live
         /// one between owners with the same content key.
