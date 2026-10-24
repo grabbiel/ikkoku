@@ -275,8 +275,19 @@ labels, outfit and visibility state. The missing-selection phase restores its
 original outfit and requires byte-identical original export before reimport.
 The lane maps `IKKOKU_ACCESSORY_NAMES_MANIFEST` to the exact adapter package's
 `manifest.json`; its missing-file check is distinct from the package identity
-validation performed by the app. These new app checks and their displayed AX
-comparison are pending execution at this revision.
+validation performed by the app. Release verification at `6ddb1ea` passes
+17 save/mount checks and seven fresh-process checks. The corrected missing-slot
+scenario passes ten checks on the same executable (SHA-256
+`3885d66f5452b0111735e2e804fbd68942cae7f24289dcc059997f0ffebada29`).
+All twenty rows match exactly, saved and restored package references are identical,
+and the original export is byte-identical. The initial missing-slot run passed
+8/10: its expectation confused saved slot metadata with converted geometry.
+The corrected check requires saved slot 0, zero rendered accessories and the same
+fallback label; no runtime behavior or comparison was weakened. The first report
+is retained. A private report-summary parser failure after the passing app exit
+was corrected offline; no app rerun was attributed to that parser correction.
+Both focused Engine tests executed, including the recovered-code oracle, with
+zero skips; 83 runner tests passed. Displayed AX label comparison remains pending.
 
 `measureAccessoryLabels` records the first timed call and repeated warm calls to
 `sourceAccessoryLabels(for:)`, with a fixed 100–2,000-call bound. Every returned
@@ -286,6 +297,9 @@ selected frame fields for unintended changes. It measures synchronous label
 construction, excluding package load, frame refresh, SwiftUI layout/display and
 GPU completion. The first sample is not a cold asset-load measurement. No cache
 or runtime behavior change is inferred from the presence of this checklist.
+Functional runs observed warm call medians around 0.052–0.074 ms; these were not a
+quiet performance comparison and do not establish UI latency. No caching change
+was justified by this bounded diagnostic.
 
 ## BepInEx.MuteInBackground 1.1
 
