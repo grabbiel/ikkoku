@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**912 files indexed; 912 assigned; 0 unassigned.**
+**916 files indexed; 916 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 101 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 104 |
 | [Character / Maker / mods](character-and-mods.md) | 124 |
 | [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 169 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 170 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 198 |
-| Documentation / historical evidence | 57 |
+| Conversion / recovery / verification tool | 200 |
+| Documentation / historical evidence | 58 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 29 |
 | Runtime / shared shader declaration | 210 |
-| Test / validation | 189 |
+| Test / validation | 190 |
 
 ## App / gameplay / plugins
 
@@ -140,14 +140,17 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Tools/translation/fixtures/LifecycleFixture.cs](../../Tools/translation/fixtures/LifecycleFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/fixtures/StudioMotionFixture.cs](../../Tools/translation/fixtures/StudioMotionFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/frontend/Program.cs](../../Tools/translation/frontend/Program.cs) | Conversion / recovery / verification tool |
+| [Tools/translation/frontend/AssemblyInventory.cs](../../Tools/translation/frontend/AssemblyInventory.cs) | Conversion / recovery / verification tool |
 | [Tools/translation/frontend/Translation.csproj](../../Tools/translation/frontend/Translation.csproj) | Conversion / recovery / verification tool |
 | [Tools/translation/frontend/UnitySurface.txt](../../Tools/translation/frontend/UnitySurface.txt) | Conversion / recovery / verification tool |
 | [Tools/translation/native_adapters.py](../../Tools/translation/native_adapters.py) | Conversion / recovery / verification tool |
 | [Tools/translation/plugin.py](../../Tools/translation/plugin.py) | Conversion / recovery / verification tool |
 | [Tools/translation/plugin_library.py](../../Tools/translation/plugin_library.py) | Conversion / recovery / verification tool |
+| [Tools/translation/plugin_inventory.py](../../Tools/translation/plugin_inventory.py) | Conversion / recovery / verification tool |
 | [Tools/translation/studio_execution_probe.py](../../Tools/translation/studio_execution_probe.py) | Conversion / recovery / verification tool |
 | [Tools/translation/tests/test_native_adapters.py](../../Tools/translation/tests/test_native_adapters.py) | Test / validation |
 | [Tools/translation/tests/test_plugin_library.py](../../Tools/translation/tests/test_plugin_library.py) | Test / validation |
+| [Tools/translation/tests/test_plugin_inventory.py](../../Tools/translation/tests/test_plugin_inventory.py) | Test / validation |
 | [Tools/translation/tests/test_studio_execution_probe.py](../../Tools/translation/tests/test_studio_execution_probe.py) | Test / validation |
 | [Tools/translation/tests/test_translation.py](../../Tools/translation/tests/test_translation.py) | Test / validation |
 | [Tools/translation/translate.py](../../Tools/translation/translate.py) | Conversion / recovery / verification tool |
@@ -975,6 +978,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [docs/reference/mods/native-adapters.md](../../docs/reference/mods/native-adapters.md) | Documentation / historical evidence |
 | [docs/reference/mods/overview.md](../../docs/reference/mods/overview.md) | Documentation / historical evidence |
 | [docs/reference/mods/plugin-execution.md](../../docs/reference/mods/plugin-execution.md) | Documentation / historical evidence |
+| [docs/reference/mods/plugin-inventory.md](../../docs/reference/mods/plugin-inventory.md) | Documentation / historical evidence |
 | [docs/reference/native-assets.md](../../docs/reference/native-assets.md) | Documentation / historical evidence |
 | [docs/reference/performance.md](../../docs/reference/performance.md) | Documentation / historical evidence |
 | [docs/reference/renderer.md](../../docs/reference/renderer.md) | Documentation / historical evidence |
