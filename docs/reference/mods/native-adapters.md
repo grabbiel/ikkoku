@@ -264,6 +264,28 @@ adapter, not the values displayed in the Clothes inspector. A visible mounted /
 unmounted label comparison, including outfit changes and unavailable slots, is
 still a separate P-T03 acceptance gate. Label-model tests alone do not close it.
 
+The `studio-scenarios` lane has a bounded accessory-label checklist:
+`reload-save-accessory-labels`, `reload-load-accessory-labels` and
+`accessory-labels-missing`. The save phase uses the real mount/unload methods,
+checks all twenty labels as UTF-8 bytes, retains the label when a loaded accessory
+is hidden, changes outfit, and saves a native scene. The fresh process has no
+source import or startup adapter mount; it restores the saved package reference,
+labels, outfit and visibility state. The missing-selection phase restores its
+original outfit and requires byte-identical original export before reimport.
+The lane maps `IKKOKU_ACCESSORY_NAMES_MANIFEST` to the exact adapter package's
+`manifest.json`; its missing-file check is distinct from the package identity
+validation performed by the app. These new app checks and their displayed AX
+comparison are pending execution at this revision.
+
+`measureAccessoryLabels` records the first timed call and repeated warm calls to
+`sourceAccessoryLabels(for:)`, with a fixed 100–2,000-call bound. Every returned
+label is consumed and checked outside the timed interval. The measurement also
+checks document bytes, preview identity, resource counts, animation time and
+selected frame fields for unintended changes. It measures synchronous label
+construction, excluding package load, frame refresh, SwiftUI layout/display and
+GPU completion. The first sample is not a cold asset-load measurement. No cache
+or runtime behavior change is inferred from the presence of this checklist.
+
 ## BepInEx.MuteInBackground 1.1
 
 `SourceMuteInBackgroundPlugin` preserves the installed GUID/version, configuration section/key and recovered focus callback behavior. The native host connects `AudioListener.volume` to `SourceStudioAudioBus.masterVolume`, leaving PCM and personality/per-voice gains intact. Repeated focus loss deliberately preserves the original 1.1 quirk: the second loss replaces the stored volume with zero. Focus gain restores the stored value even if the setting was disabled while unfocused.
@@ -289,9 +311,9 @@ Original binaries, recovered source, configuration and trace results remain igno
 
 ## KK_StudioAccessoryNames 1.1.0
 
-`SourceStudioAccessoryNamesPlugin` adapts the installed Studio plug-in's label pass. Slot counting advances only for text containing a UTF-16 decimal digit, missing/inactive accessories keep the original Japanese slot fallback, and resolved names retain their Unicode spelling. Source button positions 100/130 become 160/190 and text width becomes 150 in the label model; native UI uses SwiftUI layout. Labels use the exact resolved accessory entry name and never alter source/mod IDs or card bytes.
+`SourceStudioAccessoryNamesPlugin` adapts the installed Studio plug-in's label pass. Slot counting advances only for text containing a UTF-16 decimal digit, missing names or inactive UI rows keep the original Japanese slot fallback, and resolved names retain their Unicode spelling. Source button positions 100/130 become 160/190 and text width becomes 150 in the label model; native UI uses SwiftUI layout. Labels use the exact resolved accessory entry name and never alter source/mod IDs or card bytes.
 
-`Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing/inactive accessories, non-slot widgets, shifted numbering and Unicode digit behavior. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. The current source Clothes inspector consumes this model as described above; the visible label-value comparison remains separate. No arbitrary Harmony or Unity coroutine host is provided.
+`Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing accessories and inactive UI rows, non-slot widgets, shifted numbering and Unicode digit behavior. UI-row activity is distinct from the character’s accessory visibility flag: hiding a loaded accessory does not discard its resolved label. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. The current source Clothes inspector consumes this model as described above; the visible label-value comparison remains separate. No arbitrary Harmony or Unity coroutine host is provided.
 
 
 ## HideAllUI 2.3.2 Studio adapter
