@@ -656,8 +656,9 @@ public enum SourceShaderBindingDerivation {
                     } else { rule = "half-state mesh without a recorded switch rule: hidden"; visible = false }
                 } else if let state = clothesState, state.indices.contains(slot) { visible = state[slot] == 0 } else { rule = "clothesState missing; assumed worn" ; visible = true }
                 if slot == 7 || slot == 8 {
-                    if let shoesType { visible = visible && shoesType == (slot == 7 ? 0 : 1); rule += ", shoesType == \(slot == 7 ? 0 : 1)" }
-                    else { rule += ", shoesType missing" }
+                    // An unsaved shoesType loads as ChaFileStatus MemberInit's 0 (indoor).
+                    visible = visible && (shoesType ?? 0) == (slot == 7 ? 0 : 1)
+                    rule += ", shoesType == \(slot == 7 ? 0 : 1)" + (shoesType == nil ? " (not saved: MemberInit 0)" : "")
                 }
                 if slot == 1, notBot { visible = false; rule += ", top Coordinate == 2 hides the bottom" }
                 if !allNormal { result.diagnostics.append("\(category):\(id): clothes renderer roles unresolved") }
