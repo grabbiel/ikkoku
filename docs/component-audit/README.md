@@ -95,7 +95,7 @@ The bottom path increases registered textures from 76 to 81 and measured Metal
 allocation by 18,366,464 bytes. Paired run medians overlap: GPU time changes from
 0.631 to 0.655 ms and synchronous completion from 1.324 to 1.309 ms, establishing
 no speedup. Same-input live repeats still differ at a few pixels, including two
-old-store full-frame pixels with a maximum 14-byte-level difference. This remains
+old-store full-frame pixels with a maximum channel difference of 14 on the 0–255 scale. This remains
 a separate repeatability gap; source-composite tolerances are unchanged. See the
 [bottom scope and measurements](../reference/renderer.md#native-normal-bottom-composite-r1cmt-04-168-2026-10-24).
 
