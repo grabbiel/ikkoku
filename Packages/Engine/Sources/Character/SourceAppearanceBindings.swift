@@ -32,25 +32,25 @@ final class SourceAppearanceTextureOwner: Sendable {
 
 /// Explicit material/texture bindings produced by the source converter. Geometry
 /// selection and identity checks are separate from scalar color composition.
-public struct SourceAppearanceBindings: Codable, Sendable {
-    public struct Texture: Codable, Sendable {
+public struct SourceAppearanceBindings: Codable, Sendable, Equatable {
+    public struct Texture: Codable, Sendable, Hashable {
         public let file: String, sha256: String
         public let width: Int, height: Int
         public let wrap: String?
     }
-    public struct Pattern: Codable, Sendable {
+    public struct Pattern: Codable, Sendable, Equatable {
         public let selection: String, color: String, tiling: String
         public let resolverProperties: [String]
         public let textures: [String: Texture]
     }
-    public struct Layer: Codable, Sendable {
+    public struct Layer: Codable, Sendable, Equatable {
         public let selection: String, color: String, kind: String
         public let layout: String?, transform: [Float]?
         public let resolverProperties: [String]
         public let textures: [String: Texture]
         public let mask: Texture?
     }
-    public struct Entry: Codable, Sendable {
+    public struct Entry: Codable, Sendable, Equatable {
         public let parts: [String]
         public let pass: Int
         public let kind: String
@@ -129,59 +129,19 @@ public extension SourcePreviewAppearance {
     }
 
     func applying(_ card: SourceCardAppearance, bindings: SourceAppearanceBindings, directory: URL,
-                  resources: ResourceStore, backend: SourceAppearanceCompositionBackend = .metal) throws -> CardApplication {
+                  resources: ResourceStore, backend: SourceAppearanceCompositionBackend = .metal,
+                  timings: SourceAppearanceTimings? = nil, preparedInputs: SourceAppearanceInputs? = nil) throws -> CardApplication {
         var materials = self.materials, applied = Set<String>(), diagnostics = card.diagnostics + bindings.limitations
         var leases = textureOwner?.leases ?? [:]
         var compositor: SourceMaterialCompositor?
-        // Count every prospective output, including repeated recipes over one cached
-        // source texture. Preflight before reading pixels or allocating Metal textures.
-        var totalOutputBytes = 0
-        for entry in bindings.entries where SourceColorComposition.Kind(rawValue: entry.kind) != nil {
-            guard let texture = entry.main ?? entry.mask else { continue }
-            let width = texture.width, height = texture.height
-            guard (1...4096).contains(width), (1...4096).contains(height), width * height <= 4_194_304 else {
-                throw RigError.invalid("Invalid bounded appearance output dimensions.")
-            }
-            totalOutputBytes += width * height * 4
-            guard totalOutputBytes <= 128 * 1024 * 1024 else {
-                throw RigError.invalid("Composed appearance outputs exceed 128 MiB.")
-            }
-        }
-        let directory = directory.resolvingSymlinksInPath()
-        var bytesByPath: [String: [UInt8]] = [:], totalBytes = 0
+        try SourceAppearanceInputs.validateOutputBudget(bindings)
+        try preparedInputs?.validate(bindings: bindings, directory: directory)
+        let reader = preparedInputs == nil ? SourceAppearanceInputReader(directory: directory) : nil
         func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
-            guard (1...4096).contains(input.width), (1...4096).contains(input.height),
-                  input.width * input.height <= 4_194_304, !input.file.isEmpty, !input.file.hasPrefix("/") else {
-                throw RigError.invalid("Invalid bounded appearance texture.")
+            try SourceAppearanceTimings.measure(timings, .pixelReadHash) {
+                if let preparedInputs { return try preparedInputs.pixels(input) }
+                return try reader!.pixels(input)
             }
-            let url = directory.appendingPathComponent(input.file).resolvingSymlinksInPath()
-            guard url.path.hasPrefix(directory.path + "/") else { throw RigError.invalid("Appearance texture escapes its directory.") }
-            let expected = input.width * input.height * 4
-            if let cached = bytesByPath[url.path] {
-                guard cached.count == expected, SHA256.hash(data: Data(cached)).map({ String(format: "%02x", $0) }).joined() == input.sha256 else {
-                    throw RigError.invalid("Conflicting appearance texture metadata.")
-                }
-                return cached
-            }
-            let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
-            let data = try file.read(upToCount: expected + 1) ?? Data()
-            totalBytes += data.count
-            guard totalBytes <= 128 * 1024 * 1024, data.count == expected,
-                  SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == input.sha256 else {
-                throw RigError.invalid("Appearance texture has changed or exceeds its size limit.")
-            }
-            let result = [UInt8](data); bytesByPath[url.path] = result; return result
-        }
-        func linear(_ color: Float4) -> Float4 {
-            Float4((0..<4).map { i in i == 3 ? color[i] : color[i] <= 0.04045 ? color[i] / 12.92 : pow((color[i] + 0.055) / 1.055, 2.4) })
-        }
-        func vector(_ path: String, count: Int) -> [Float]? {
-            guard let values = card.value(path)?.arrayValue, values.count == count else { return nil }
-            let numbers = (0..<count).compactMap { card.number(path + "." + String($0)) }
-            return numbers.count == count && numbers.allSatisfy({ (0...1).contains($0) }) ? numbers : nil
-        }
-        func isModded(_ properties: [String]) -> Bool {
-            properties.contains { card.modProperties.contains($0.replacingOccurrences(of: "{coordinate}", with: String(card.coordinate))) }
         }
         func sampled(_ bytes: [UInt8], _ meta: SourceAppearanceBindings.Texture, uv: Float2) -> Float4 {
             // Converted source pixels are upright; Unity texture UVs are bottom-up.
@@ -200,99 +160,33 @@ public extension SourcePreviewAppearance {
             return top + fraction.y * (bottom - top)
         }
         for entry in bindings.entries {
-            guard !entry.parts.isEmpty, entry.parts.count <= 64, (0..<16).contains(entry.pass),
-                  entry.colors.count <= 3, entry.requirements.count <= 64, entry.resolverProperties.count <= 64,
-                  (entry.patterns?.count ?? 0) <= 3, (entry.layers?.count ?? 0) <= 8 else {
-                throw RigError.invalid("Invalid appearance material binding.")
-            }
-            let unsupported = entry.requirements.filter { card.value($0.key)?.integerValue != $0.value }.keys.sorted()
-            let modded = entry.resolverProperties.map { $0.replacingOccurrences(of: "{coordinate}", with: String(card.coordinate)) }
-                .filter { card.modProperties.contains($0) }
-            guard unsupported.isEmpty && modded.isEmpty else {
-                diagnostics.append("\(entry.parts.joined(separator: ", ")) kept reference material; unmatched selections: \((unsupported + modded).joined(separator: ", ")).")
-                continue
-            }
-            let sourceLinear = entry.colorSpace == "sourceLinear"
-            guard entry.colorSpace == nil || (sourceLinear && ["head", "clothes"].contains(entry.kind)) else {
-                throw RigError.invalid("Unverified source material color-space recipe.")
-            }
-            var colors = entry.colors.compactMap { card.color($0) }
-            if sourceLinear { colors = colors.map(linear) }
-            guard colors.count == entry.colors.count else {
-                diagnostics.append("\(entry.parts.joined(separator: ", ")) kept reference material because color fields are missing or unsupported."); continue
-            }
-            for part in entry.parts {
-                guard let surfaces = materials[part], surfaces.indices.contains(entry.pass) else { throw RigError.invalid("Appearance binding targets an absent material: \(part).") }
-            }
+            guard let recipe = try SourceAppearanceRecipe.resolve(entry, card: card, materials: materials,
+                pixels: pixels, diagnostics: &diagnostics) else { continue }
+            let colors = recipe.colors, sourceLinear = recipe.sourceLinear
             var texture: TextureHandle?
-            if let kind = SourceColorComposition.Kind(rawValue: entry.kind) {
-                guard let dimensions = entry.main ?? entry.mask else { throw RigError.invalid("A texture recipe needs source pixels.") }
-                let main = try entry.main.map(pixels), mask = try entry.mask.map(pixels)
-                let blend: Float
-                if let path = entry.blend {
-                    guard let value = card.number(path), (0...1).contains(value) else { diagnostics.append("Skipped \(entry.parts): invalid \(path)."); continue }
-                    blend = value
-                } else { blend = 0 }
-                _ = try SourceColorComposition.sample(kind: kind, main: .one, mask: .zero, colors: colors, blend: blend)
-                var patterns: [(Int, SourceAppearanceBindings.Texture, [UInt8], Float4, Float2)] = []
-                if let definitions = entry.patterns {
-                    guard kind == .clothes, definitions.count == 3 else { throw RigError.invalid("Pattern recipes require three clothes channels.") }
-                    for (index, pattern) in definitions.enumerated() {
-                        guard pattern.textures.count <= 512, pattern.resolverProperties.count <= 8 else { throw RigError.invalid("Invalid pattern catalog bound.") }
-                        guard !isModded(pattern.resolverProperties), let id = card.value(pattern.selection)?.integerValue else {
-                            diagnostics.append("Skipped unresolved or modded pattern: \(pattern.selection)."); continue
-                        }
-                        if id == 0 { continue }
-                        guard let meta = pattern.textures[String(id)], let color = card.color(pattern.color),
-                              let scale = vector(pattern.tiling, count: 2) else {
-                            diagnostics.append("Skipped unavailable pattern or parameters: \(pattern.selection)=\(id)."); continue
-                        }
-                        guard meta.wrap == "repeat" || meta.wrap == "clamp" else { throw RigError.invalid("Unsupported source pattern wrapping.") }
-                        patterns.append((index, meta, try pixels(meta), sourceLinear ? linear(color) : color, Float2(scale)))
-                        applied.insert(pattern.color)
-                    }
-                }
-                var layers: [(SourceAppearanceBindings.Layer, SourceAppearanceBindings.Texture, [UInt8], Float4, Float4?, [UInt8]?)] = []
-                if let definitions = entry.layers {
-                    guard kind == .head else { throw RigError.invalid("Face layers require the recovered head composition.") }
-                    for layer in definitions {
-                        guard ["cheek", "lipline", "paint", "mole"].contains(layer.kind), layer.textures.count <= 512,
-                              layer.resolverProperties.count <= 8 else { throw RigError.invalid("Invalid face layer recipe.") }
-                        guard !isModded(layer.resolverProperties), let id = card.value(layer.selection)?.integerValue else {
-                            diagnostics.append("Skipped unresolved or modded face layer: \(layer.selection)."); continue
-                        }
-                        if id == 0 { continue }
-                        guard let meta = layer.textures[String(id)], let color = card.color(layer.color) else {
-                            diagnostics.append("Skipped unavailable face layer: \(layer.selection)=\(id)."); continue
-                        }
-                        var layout: Float4?
-                        if let path = layer.layout {
-                            guard let values = vector(path, count: 4) else { diagnostics.append("Skipped invalid face layout: \(path)."); continue }
-                            layout = Float4(values)
-                        }
-                        guard meta.wrap == "repeat" || meta.wrap == "clamp",
-                              layer.transform == nil || (layer.transform!.count == 4 && layer.transform!.allSatisfy({ $0.isFinite && abs($0) <= 100 })),
-                              !["paint", "mole"].contains(layer.kind) || layout != nil else {
-                            throw RigError.invalid("Unsupported source face layer sampling.")
-                        }
-                        if layer.kind == "paint" && layer.mask == nil { throw RigError.invalid("Face paint requires its source mask.") }
-                        layers.append((layer, meta, try pixels(meta), sourceLinear ? linear(color) : color, layout, try layer.mask.map(pixels)))
-                        applied.insert(layer.color)
-                    }
-                }
+            if let kind = recipe.kind {
+                let dimensions = (entry.main ?? entry.mask)!
+                let main = recipe.main, mask = recipe.mask, blend = recipe.blend
+                let patterns = recipe.patterns, layers = recipe.layers
                 let gpu: any MTLTexture
                 if backend == .metal {
-                    if compositor == nil { compositor = try SourceMaterialCompositor(device: resources.device) }
+                    if compositor == nil {
+                        compositor = try SourceAppearanceTimings.measure(timings, .pipelineCreation) {
+                            try SourceMaterialCompositor(device: resources.device)
+                        }
+                    }
                     func image(_ meta: SourceAppearanceBindings.Texture, _ bytes: [UInt8]) -> SourceMaterialImage {
                         SourceMaterialImage(width: meta.width, height: meta.height, repeating: meta.wrap == "repeat", bytes: bytes)
                     }
-                    gpu = try compositor!.compose(kind: kind, width: dimensions.width, height: dimensions.height,
-                        main: entry.main.map { image($0, main!) }, mask: entry.mask.map { image($0, mask!) }, colors: colors, blend: blend, encodeSRGB: sourceLinear,
-                        patterns: patterns.map { SourceMaterialPattern(channel: $0.0, image: image($0.1, $0.2), color: $0.3, tiling: $0.4) },
-                        layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
-                            SourceMaterialLayer(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
-                                transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
-                        })
+                    gpu = try SourceAppearanceTimings.measure(timings, .composeEncodeWait) {
+                        try compositor!.compose(kind: kind, width: dimensions.width, height: dimensions.height,
+                            main: entry.main.map { image($0, main!) }, mask: entry.mask.map { image($0, mask!) }, colors: colors, blend: blend, encodeSRGB: sourceLinear,
+                            patterns: patterns.map { SourceMaterialPattern(channel: $0.0, image: image($0.1, $0.2), color: $0.3, tiling: $0.4) },
+                            layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
+                                SourceMaterialLayer(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
+                                    transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
+                            })
+                    }
                 } else {
                     let count = dimensions.width * dimensions.height
                     var output = [UInt8](repeating: 0, count: count * 4)
@@ -343,23 +237,235 @@ public extension SourcePreviewAppearance {
                 let handle = resources.register(texture: gpu)
                 texture = handle
                 leases[handle] = SourceAppearanceTextureLease(resources: resources, handle: handle)
-            } else if !["tint", "highlightUpper", "highlightLower"].contains(entry.kind) || colors.count != 1 {
-                throw RigError.invalid("Unsupported appearance recipe \(entry.kind).")
             }
             for part in entry.parts {
                 var material = materials[part]![entry.pass]
                 if let texture {
                     material.base = texture; material.uniforms.baseColor = .one
                     material.setFlag(MaterialFlagHasBaseTexture, true)
-                } else if entry.kind == "highlightUpper" { material.uniforms.overlayColor0 = linear(colors[0]) }
-                else if entry.kind == "highlightLower" { material.uniforms.overlayColor1 = linear(colors[0]) }
-                else { material.uniforms.baseColor = linear(colors[0]) }
+                } else if entry.kind == "highlightUpper" { material.uniforms.overlayColor0 = sourceAppearanceLinear(colors[0]) }
+                else if entry.kind == "highlightLower" { material.uniforms.overlayColor1 = sourceAppearanceLinear(colors[0]) }
+                else { material.uniforms.baseColor = sourceAppearanceLinear(colors[0]) }
                 materials[part]![entry.pass] = material
             }
-            applied.formUnion(entry.colors)
+            applied.formUnion(recipe.appliedFields)
         }
         let usedHandles = Set(materials.values.flatMap { $0 }.flatMap(\.textureHandles))
         let owner = SourceAppearanceTextureOwner(leases: leases.filter { usedHandles.contains($0.key) })
         return CardApplication(appearance: Self(materials: materials, textureOwner: owner), appliedFields: applied, diagnostics: diagnostics)
+    }
+}
+
+private func sourceAppearanceLinear(_ color: Float4) -> Float4 {
+    Float4((0..<4).map { i in i == 3 ? color[i] : color[i] <= 0.04045 ? color[i] / 12.92 : pow((color[i] + 0.055) / 1.055, 2.4) })
+}
+
+/// One shared resolver chooses only the inputs consumed by the current card.
+/// Preparation omits material-target checks; realization performs them before
+/// any texture lookup/allocation, with the latest owner-side colors.
+private struct SourceAppearanceRecipe {
+    let kind: SourceColorComposition.Kind?
+    let colors: [Float4], sourceLinear: Bool
+    let main: [UInt8]?, mask: [UInt8]?, blend: Float
+    let patterns: [(Int, SourceAppearanceBindings.Texture, [UInt8], Float4, Float2)]
+    let layers: [(SourceAppearanceBindings.Layer, SourceAppearanceBindings.Texture, [UInt8], Float4, Float4?, [UInt8]?)]
+    let appliedFields: Set<String>
+
+    static func resolve(_ entry: SourceAppearanceBindings.Entry, card: SourceCardAppearance,
+                        materials: [String: [MaterialState]]?,
+                        pixels: (SourceAppearanceBindings.Texture) throws -> [UInt8],
+                        diagnostics: inout [String]) throws -> Self? {
+        func vector(_ path: String, count: Int) -> [Float]? {
+            guard let values = card.value(path)?.arrayValue, values.count == count else { return nil }
+            let numbers = (0..<count).compactMap { card.number(path + "." + String($0)) }
+            return numbers.count == count && numbers.allSatisfy({ (0...1).contains($0) }) ? numbers : nil
+        }
+        func isModded(_ properties: [String]) -> Bool {
+            properties.contains { card.modProperties.contains($0.replacingOccurrences(of: "{coordinate}", with: String(card.coordinate))) }
+        }
+        guard !entry.parts.isEmpty, entry.parts.count <= 64, (0..<16).contains(entry.pass),
+              entry.colors.count <= 3, entry.requirements.count <= 64, entry.resolverProperties.count <= 64,
+              (entry.patterns?.count ?? 0) <= 3, (entry.layers?.count ?? 0) <= 8 else {
+            throw RigError.invalid("Invalid appearance material binding.")
+        }
+        let unsupported = entry.requirements.filter { card.value($0.key)?.integerValue != $0.value }.keys.sorted()
+        let modded = entry.resolverProperties.map { $0.replacingOccurrences(of: "{coordinate}", with: String(card.coordinate)) }
+            .filter { card.modProperties.contains($0) }
+        guard unsupported.isEmpty && modded.isEmpty else {
+            diagnostics.append("\(entry.parts.joined(separator: ", ")) kept reference material; unmatched selections: \((unsupported + modded).joined(separator: ", ")).")
+            return nil
+        }
+        let sourceLinear = entry.colorSpace == "sourceLinear"
+        guard entry.colorSpace == nil || (sourceLinear && ["head", "clothes"].contains(entry.kind)) else {
+            throw RigError.invalid("Unverified source material color-space recipe.")
+        }
+        var colors = entry.colors.compactMap { card.color($0) }
+        if sourceLinear { colors = colors.map(sourceAppearanceLinear) }
+        guard colors.count == entry.colors.count else {
+            diagnostics.append("\(entry.parts.joined(separator: ", ")) kept reference material because color fields are missing or unsupported."); return nil
+        }
+        if let materials {
+            for part in entry.parts {
+                guard let surfaces = materials[part], surfaces.indices.contains(entry.pass) else { throw RigError.invalid("Appearance binding targets an absent material: \(part).") }
+            }
+        }
+        var applied = Set(entry.colors)
+        if let kind = SourceColorComposition.Kind(rawValue: entry.kind) {
+            guard entry.main != nil || entry.mask != nil else { throw RigError.invalid("A texture recipe needs source pixels.") }
+            let main = try entry.main.map(pixels), mask = try entry.mask.map(pixels)
+            let blend: Float
+            if let path = entry.blend {
+                guard let value = card.number(path), (0...1).contains(value) else { diagnostics.append("Skipped \(entry.parts): invalid \(path)."); return nil }
+                blend = value
+            } else { blend = 0 }
+            _ = try SourceColorComposition.sample(kind: kind, main: .one, mask: .zero, colors: colors, blend: blend)
+            var patterns: [(Int, SourceAppearanceBindings.Texture, [UInt8], Float4, Float2)] = []
+            if let definitions = entry.patterns {
+                guard kind == .clothes, definitions.count == 3 else { throw RigError.invalid("Pattern recipes require three clothes channels.") }
+                for (index, pattern) in definitions.enumerated() {
+                    guard pattern.textures.count <= 512, pattern.resolverProperties.count <= 8 else { throw RigError.invalid("Invalid pattern catalog bound.") }
+                    guard !isModded(pattern.resolverProperties), let id = card.value(pattern.selection)?.integerValue else {
+                        diagnostics.append("Skipped unresolved or modded pattern: \(pattern.selection)."); continue
+                    }
+                    if id == 0 { continue }
+                    guard let meta = pattern.textures[String(id)], let color = card.color(pattern.color),
+                          let scale = vector(pattern.tiling, count: 2) else {
+                        diagnostics.append("Skipped unavailable pattern or parameters: \(pattern.selection)=\(id)."); continue
+                    }
+                    guard meta.wrap == "repeat" || meta.wrap == "clamp" else { throw RigError.invalid("Unsupported source pattern wrapping.") }
+                    patterns.append((index, meta, try pixels(meta), sourceLinear ? sourceAppearanceLinear(color) : color, Float2(scale)))
+                    applied.insert(pattern.color)
+                }
+            }
+            var layers: [(SourceAppearanceBindings.Layer, SourceAppearanceBindings.Texture, [UInt8], Float4, Float4?, [UInt8]?)] = []
+            if let definitions = entry.layers {
+                guard kind == .head else { throw RigError.invalid("Face layers require the recovered head composition.") }
+                for layer in definitions {
+                    guard ["cheek", "lipline", "paint", "mole"].contains(layer.kind), layer.textures.count <= 512,
+                          layer.resolverProperties.count <= 8 else { throw RigError.invalid("Invalid face layer recipe.") }
+                    guard !isModded(layer.resolverProperties), let id = card.value(layer.selection)?.integerValue else {
+                        diagnostics.append("Skipped unresolved or modded face layer: \(layer.selection)."); continue
+                    }
+                    if id == 0 { continue }
+                    guard let meta = layer.textures[String(id)], let color = card.color(layer.color) else {
+                        diagnostics.append("Skipped unavailable face layer: \(layer.selection)=\(id)."); continue
+                    }
+                    var layout: Float4?
+                    if let path = layer.layout {
+                        guard let values = vector(path, count: 4) else { diagnostics.append("Skipped invalid face layout: \(path)."); continue }
+                        layout = Float4(values)
+                    }
+                    guard meta.wrap == "repeat" || meta.wrap == "clamp",
+                          layer.transform == nil || (layer.transform!.count == 4 && layer.transform!.allSatisfy({ $0.isFinite && abs($0) <= 100 })),
+                          !["paint", "mole"].contains(layer.kind) || layout != nil else {
+                        throw RigError.invalid("Unsupported source face layer sampling.")
+                    }
+                    if layer.kind == "paint" && layer.mask == nil { throw RigError.invalid("Face paint requires its source mask.") }
+                    layers.append((layer, meta, try pixels(meta), sourceLinear ? sourceAppearanceLinear(color) : color, layout, try layer.mask.map(pixels)))
+                    applied.insert(layer.color)
+                }
+            }
+            return Self(kind: kind, colors: colors, sourceLinear: sourceLinear, main: main, mask: mask,
+                blend: blend, patterns: patterns, layers: layers, appliedFields: applied)
+        }
+        guard ["tint", "highlightUpper", "highlightLower"].contains(entry.kind), colors.count == 1 else {
+            throw RigError.invalid("Unsupported appearance recipe \(entry.kind).")
+        }
+        return Self(kind: nil, colors: colors, sourceLinear: sourceLinear, main: nil, mask: nil,
+            blend: 0, patterns: [], layers: [], appliedFields: applied)
+    }
+}
+
+private final class SourceAppearanceInputReader {
+    let directory: URL
+    let maximumBytes: Int
+    private var bytesByPath: [String: [UInt8]] = [:]
+    private(set) var totalBytes = 0
+    init(directory: URL, maximumBytes: Int = 128 * 1024 * 1024) {
+        self.directory = directory.resolvingSymlinksInPath(); self.maximumBytes = maximumBytes
+    }
+    func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
+        guard (1...4096).contains(input.width), (1...4096).contains(input.height),
+              input.width * input.height <= 4_194_304, !input.file.isEmpty, !input.file.hasPrefix("/") else {
+            throw RigError.invalid("Invalid bounded appearance texture.")
+        }
+        let url = directory.appendingPathComponent(input.file).resolvingSymlinksInPath()
+        guard url.path.hasPrefix(directory.path + "/") else { throw RigError.invalid("Appearance texture escapes its directory.") }
+        let expected = input.width * input.height * 4
+        if let cached = bytesByPath[url.path] {
+            guard cached.count == expected, SHA256.hash(data: Data(cached)).map({ String(format: "%02x", $0) }).joined() == input.sha256 else {
+                throw RigError.invalid("Conflicting appearance texture metadata.")
+            }
+            return cached
+        }
+        guard expected <= maximumBytes - totalBytes else {
+            throw RigError.invalid("Appearance inputs exceed their retained byte limit.")
+        }
+        let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+        let data = try file.read(upToCount: expected + 1) ?? Data()
+        totalBytes += data.count
+        guard totalBytes <= maximumBytes, data.count == expected,
+              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == input.sha256 else {
+            throw RigError.invalid("Appearance texture has changed or exceeds its size limit.")
+        }
+        let result = [UInt8](data); bytesByPath[url.path] = result; return result
+    }
+}
+
+/// Validated immutable RGBA snapshots. No public initializer can bypass input
+/// bounds, containment or SHA checks. File edits after preparation do not alter
+/// the candidate; a changed binding/directory or a newly required input rejects
+/// realization instead of falling back to owner-side I/O.
+public struct SourceAppearanceInputs: Sendable {
+    private let bindings: SourceAppearanceBindings
+    private let directory: URL
+    private let values: [SourceAppearanceBindings.Texture: [UInt8]]
+    public let byteCount: Int
+
+    public static func prepare(card: SourceCardAppearance, bindings: SourceAppearanceBindings,
+                               directory: URL, maximumBytes: Int = 128 * 1024 * 1024) throws -> Self {
+        guard (0...128 * 1024 * 1024).contains(maximumBytes) else {
+            throw RigError.invalid("Invalid prepared appearance input byte limit.")
+        }
+        try validateOutputBudget(bindings)
+        let reader = SourceAppearanceInputReader(directory: directory, maximumBytes: maximumBytes)
+        var values: [SourceAppearanceBindings.Texture: [UInt8]] = [:], diagnostics: [String] = []
+        for entry in bindings.entries {
+            _ = try SourceAppearanceRecipe.resolve(entry, card: card, materials: nil, pixels: { input in
+                let bytes = try reader.pixels(input)
+                values[input] = bytes
+                return bytes
+            }, diagnostics: &diagnostics)
+        }
+        return Self(bindings: bindings, directory: directory.standardizedFileURL, values: values, byteCount: reader.totalBytes)
+    }
+
+    fileprivate func validate(bindings: SourceAppearanceBindings, directory: URL) throws {
+        guard self.bindings == bindings, self.directory == directory.standardizedFileURL else {
+            throw RigError.invalid("Prepared appearance inputs do not match their binding context.")
+        }
+    }
+    fileprivate func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
+        guard let value = values[input] else {
+            throw RigError.invalid("The latest appearance requires an input absent from its prepared snapshot.")
+        }
+        return value
+    }
+
+    fileprivate static func validateOutputBudget(_ bindings: SourceAppearanceBindings) throws {
+        // Count every prospective output, including repeated recipes over one cached
+        // source texture. Preflight before reading pixels or allocating Metal textures.
+        var totalOutputBytes = 0
+        for entry in bindings.entries where SourceColorComposition.Kind(rawValue: entry.kind) != nil {
+            guard let texture = entry.main ?? entry.mask else { continue }
+            let width = texture.width, height = texture.height
+            guard (1...4096).contains(width), (1...4096).contains(height), width * height <= 4_194_304 else {
+                throw RigError.invalid("Invalid bounded appearance output dimensions.")
+            }
+            totalOutputBytes += width * height * 4
+            guard totalOutputBytes <= 128 * 1024 * 1024 else {
+                throw RigError.invalid("Composed appearance outputs exceed 128 MiB.")
+            }
+        }
     }
 }

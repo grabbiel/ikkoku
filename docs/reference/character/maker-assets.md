@@ -318,8 +318,10 @@ preview, contracts, manifest URL and saved head ID commit together without a
 suspension. The selected head keeps the current edits; this does not implement the
 original Maker's head-preset/default-reset behavior.
 
-Appearance JSON and texture reads, texture composition/upload, preview creation
-and pose/frame validation remain on the owner. Candidate base textures use
+The head candidate prepares selected card-appearance bindings and validated raw
+RGBA inputs on the worker (see #192 below). Base/component appearance JSON and
+image decoding, texture composition/upload, preview creation and pose/frame
+validation remain on the owner. Candidate base textures use
 `SourceAppearanceLoadTransaction`: existing cache hits stay shared, new handles
 remain unpublished until validation succeeds, and abandoned loads release only
 those new handles. If another consumer publishes the same key before commit, its
@@ -413,5 +415,96 @@ cooperative pool. Hosted runs of the original tests repeatedly timed out while
 their appearance tests were outstanding. The first hosted diagnostic identified
 `swiftpm-testing-helper` as the test process but missed its stack because it
 only matched older executable names; the sampler now includes that helper.
-Worker starvation remains a hypothesis pending hosted evidence. This is test
-isolation, with no production runtime or performance claim.
+The isolation change passed hosted run `40135675480`: all five public checks
+passed, with Engine taking 42.722 s, and Debug, Release packaging and reverse
+checks passed too. No captured stack proves worker starvation, so that cause
+remains a hypothesis. This is test isolation, with no production runtime or
+performance claim.
+
+
+### Prepared head appearance inputs (#192)
+
+`SourceMakerHeadPreparation` also prepares immutable `SourceAppearanceInputs` for
+the selected base assembly and material components. Preparation and realization
+share the same recipe resolver: requirements, resolver identity, color fields,
+selected patterns and face layers choose the same inputs. The worker reads only
+those chosen RGBA files, validates containment, dimensions, exact size and SHA-256,
+and snapshots their bytes. It does not decode an entire pattern catalog or create
+Metal resources. Existing synchronous appearance callers keep their default path.
+
+Snapshots bind the exact manifest values, base URL and component list, including
+accessory slots and indoor-shoe context. Realization uses the latest owner-side
+colors and validates material targets before composition. Changed context or a
+newly required input missing from the snapshot fails explicitly, without falling
+back to owner-side file reads. Files modified after preparation do not change the
+candidate's already validated bytes. The head transaction's card, coordinate,
+mode and cancellation guards still precede its non-suspending final replacement.
+
+Each input call keeps its existing 128 MiB bound; all input calls in one head
+candidate now also share a 128 MiB retained-byte cap, checked before each read.
+Repeated paths share storage within a call. Per-call and aggregate raw byte counts
+are recorded with the selection timings. These counts exclude metadata, transient
+read buffers, GPU images and other candidates; they are not peak process memory.
+The preparation result owns the immutable arrays until commit or discard. Rendered
+appearances retain the existing GPU texture leases, not these raw snapshots.
+
+The focused Engine checks exercise real aggregate-cap failure, exact component
+and base-context rejection, selected-only pattern reads, malformed dimensions and
+hashes, path/symlink containment, and absent prepared inputs. Deleting source RGBA
+files after preparation still permits CPU and Metal realization with later color
+edits; the default caller then fails its file read. The expanded independent
+image oracle checks both prepared and default input paths on CPU and Metal at its
+unchanged one-byte tolerance. Existing queue cancellation, partial-load rollback,
+cache collision and lease-lifetime checks remain in the focused set.
+
+
+The 2026-10-24 local #192 acceptance passed all 33 selected Engine checks across
+the initial 32 passes and one focused retry: the initial run's only failure was
+an unset `IKKOKU_APPEARANCE_REFERENCE_ROOT`, then supplied explicitly for the
+existing female/male pixel oracle. The Release build passed on clean `ec69b5f`.
+Both sexes passed 55 selection checks plus seven fresh-process reload checks
+(four processes, 41.701 seconds). All four corresponding exported cards match
+the earlier baseline bytes, including the late failure, cancellation, latest-edit
+and resource-retention scenarios. Logs retain the initial fixture failure.
+
+A separate quiet comparison passed eight interleaved fresh processes in 59.954
+seconds: female baseline/prepared/prepared/baseline, then male
+prepared/baseline/baseline/prepared. Both binaries used the same 19-step cold,
+warm and no-op scenario and fixtures. Baseline `096bd3e` (binary SHA-256
+`bb1b5ddab59dad6fcf1dbbe7abf2cfcfce0089c8a276cdeda57d8f13088b2973`)
+and prepared `ec69b5f` (`ced2ea660a6d1a63b970a1aa1950a22ba961510b058764125c96a671838de181`)
+share the fine attribution instrumentation. The following ranges have **two
+samples per sex and binary** for the same 200→201 transition. Cold means first
+head-201 appearance in the process, not a cold filesystem cache.
+
+| Input / state | Baseline owner ms | Prepared owner ms | Baseline total API ms | Prepared total API ms |
+| --- | ---: | ---: | ---: | ---: |
+| Female, cold | 155.473–165.162 | 128.566–143.899 | 736.932–773.583 | 766.141–804.481 |
+| Female, warm | 118.813–122.943 | 91.865–110.547 | 702.642–711.137 | 718.084–754.269 |
+| Male, cold | 159.823–166.154 | 129.178–130.848 | 782.312–800.665 | 797.755–809.439 |
+| Male, warm | 115.438–124.333 | 90.119–91.458 | 730.253–748.508 | 741.062–746.863 |
+
+This is a **responsiveness tradeoff, not a total selection speedup**. Mean owner
+commit fell by 19.672–32.976 ms across those four groups, while async preparation
+rose by 33.618–54.032 ms and total API time rose by 4.582–30.054 ms (about
+0.6–4.2%). These small samples do not establish percentile behavior. Moving
+validated input work is useful for interactive selection, but 90–144 ms owner
+stalls remain. The owner pixel-read/hash phase fell from 29.817–31.205 ms to
+0.011–0.019 ms (prepared lookup), and binding preparation from 2.409–2.966 ms to
+0.005–0.012 ms. The remaining composition phase measured 60.551–80.091 ms; it
+includes texture allocation/upload, encoding and synchronous completion, so it
+is not a measurement of GPU execution alone. Cold base appearance loading still
+cost 37.849–44.652 ms; warm loading cost 0.889–1.342 ms.
+
+Every prepared transition retained **32,506,112 raw input bytes** (approximately
+31 MiB) across seven input calls, below the 128 MiB candidate cap. Head-201
+resource counts and byte totals exactly matched baseline: 43 meshes, 98 female
+or 115 male textures, 12 retiring resources, one 14,517-byte hidden buffer, and
+no deformation buffers; mesh buffers were 28,189,528 bytes female and 28,138,208
+bytes male. No-op API times across both binaries were 0.220–0.408 ms and retained
+resource identities. All four exports per sex match byte-for-byte across the
+paired binaries and repeats. The 48 timing records, 24 artifacts, source/input
+hashes and phase analysis are retained under
+`.local/codex-continue-2026-10-24/rolling/maker-head-owner-commit/`. This does not
+claim reduced peak memory, frame-rate improvement or wider source appearance
+parity.
