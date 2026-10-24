@@ -44,10 +44,45 @@ jobs:
       - name: Build Engine tests
         run: swift build --build-tests --package-path Packages/Engine
       - name: Public verification lane (skip-tolerant)
-        run: >-
-          python3 Tools/verification/run.py
-          --manifest Tools/verification/lanes/public.json
-          --report .local/verification/reports/ci-public.json
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+
+          reports = Path('.local/verification/reports')
+          reports.mkdir(parents=True, exist_ok=True)
+          process = subprocess.Popen([
+              sys.executable, 'Tools/verification/run.py',
+              '--manifest', 'Tools/verification/lanes/public.json',
+              '--report', str(reports / 'ci-public.json'),
+          ])
+          try:
+              code = process.wait(timeout=90)
+          except subprocess.TimeoutExpired:
+              # Preserve stacks for a hosted-only stall without changing the
+              # test selection, assertions, parallelism or 600-second timeout.
+              try:
+                  listing = subprocess.check_output(['ps', '-axo', 'pid=,ppid=,comm='], text=True)
+                  rows = [line.split(None, 2) for line in listing.splitlines()]
+                  rows = [(int(pid), int(parent), name) for pid, parent, name in rows]
+                  owned = {process.pid}
+                  while True:
+                      expanded = owned | {pid for pid, parent, _ in rows if parent in owned}
+                      if expanded == owned:
+                          break
+                      owned = expanded
+                  descendants = [(pid, name) for pid, _, name in rows if pid in owned]
+                  (reports / 'slow-check-processes.txt').write_text(repr(descendants) + '\n')
+                  for pid, name in descendants:
+                      if 'EnginePackageTests' in name or name.endswith('/xctest'):
+                          subprocess.run(['sample', str(pid), '3', '-file',
+                                          str(reports / f'slow-engine-{pid}.txt')], timeout=15)
+              except (OSError, ValueError, subprocess.SubprocessError) as error:
+                  print(f'Optional stall diagnostic failed: {error}', flush=True)
+              code = process.wait()
+          raise SystemExit(code)
+          PY
       - name: Upload lane report and logs
         if: always()
         uses: actions/upload-artifact@v4
