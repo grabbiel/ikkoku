@@ -92,7 +92,7 @@ class DriverWiringTests(unittest.TestCase):
 
 class ArgumentTests(unittest.TestCase):
     def test_capture_inputs_are_rejected_with_collect_before_the_output_is_touched(self):
-        for flag in ['--settings','--hand-patterns','--look-patterns','--model-variant']:
+        for flag in ['--settings','--hand-patterns','--look-patterns','--model-variant','--model-shapes']:
             with self.subTest(flag=flag),tempfile.TemporaryDirectory() as tmp:
                 output=Path(tmp)/'never-created'
                 with patch.object(sys,'argv',['original_character_probe.py','--output',str(output),'--collect',flag,'female00' if flag=='--model-variant' else 'input.tsv']),patch('original_character_probe.collect') as collect:
@@ -108,12 +108,33 @@ class ArgumentTests(unittest.TestCase):
 
     def test_reused_capture_clears_absent_optional_inputs_before_launch(self):
         with tempfile.TemporaryDirectory() as tmp,patch('original_character_probe.player_root',return_value=ROOT_A),\
-             patch('original_character_probe.write_small') as write,patch('original_character_probe.retry',side_effect=['','','','123']) as guest:
+             patch('original_character_probe.write_small') as write,patch('original_character_probe.retry',side_effect=['','','','','123']) as guest:
             probe.start('vm',Path(tmp),model_variant='female00')
         scripts=[call.args[1] for call in guest.call_args_list]
-        self.assertIn('hand-patterns.tsv',scripts[1]);self.assertIn('look-patterns.tsv',scripts[2])
-        self.assertTrue(all('Remove-Item -LiteralPath' in s and 'Test-Path -LiteralPath' in s for s in scripts[1:3]))
+        self.assertIn('hand-patterns.tsv',scripts[1]);self.assertIn('look-patterns.tsv',scripts[2]);self.assertIn('model-shapes.tsv',scripts[3])
+        self.assertTrue(all('Remove-Item -LiteralPath' in s and 'Test-Path -LiteralPath' in s for s in scripts[1:4]))
         self.assertTrue(any(call.args[1].endswith('model-variant.txt') and call.args[2]==b'female00\n' for call in write.call_args_list))
+
+    def test_model_shapes_validate_before_any_guest_access(self):
+        for text in ['', 'body\t44\t.5\n', 'face\t-1\t.5\n', 'body\t0\tNaN\n',
+                     'face\t0\tInf\n', 'body\t0\t1.1\n', 'body\t0\t.5\nbody\t0\t.6\n']:
+            with self.subTest(text=text),tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'input.tsv';path.write_text(text)
+                with patch.object(probe,'player_root') as root:
+                    with self.assertRaises(ValueError):probe.start('vm',Path(tmp),model_variant='female00',model_shapes=path)
+                    root.assert_not_called()
+        with patch.object(probe,'player_root') as root:
+            with self.assertRaisesRegex(ValueError,'require'):probe.start('vm',Path('unused'),model_shapes=Path('unused'))
+            root.assert_not_called()
+
+    def test_model_shape_upload_and_run_provenance_bind_canonical_input(self):
+        with tempfile.TemporaryDirectory() as tmp,patch.object(probe,'player_root',return_value=ROOT_A),\
+             patch.object(probe,'write_small') as write,patch.object(probe,'retry',side_effect=['','','','123']):
+            path=Path(tmp)/'input.tsv';path.write_text('face\t3\t.7500\nbody\t0\t.2500\n')
+            run=probe.start('vm',Path(tmp),model_variant='female00',model_shapes=path)
+        expected=b'body\t0\t0.25\nface\t3\t0.75\n'
+        self.assertEqual(run['modelShapes'],dict(file='model-shapes.tsv',sha256=probe.digest(expected)))
+        self.assertTrue(any(call.args[1].endswith('model-shapes.tsv') and call.args[2]==expected for call in write.call_args_list))
 
     def test_settings_help_points_at_the_documented_keys(self):
         with patch.object(sys,'argv',['original_character_probe.py','--help']),patch('sys.stdout',new_callable=io.StringIO) as out:
