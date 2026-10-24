@@ -96,6 +96,15 @@ public final class SourceShaderCompositor: @unchecked Sendable {
     public func compose(program: TranslatedSourceProgram, width: Int, height: Int, mipLevels: Int,
                         textures: [Int: any MTLTexture], samplers: [Int: any MTLSamplerState],
                         buffers: [(slot: Int, data: [Float])], label: String) throws -> (texture: any MTLTexture, statistics: Statistics) {
+        // Drain the command buffer and encoders here: an autoreleased command
+        // buffer would keep the target alive past its owning materials.
+        try autoreleasepool { try encode(program: program, width: width, height: height, mipLevels: mipLevels,
+                                         textures: textures, samplers: samplers, buffers: buffers, label: label) }
+    }
+
+    private func encode(program: TranslatedSourceProgram, width: Int, height: Int, mipLevels: Int,
+                        textures: [Int: any MTLTexture], samplers: [Int: any MTLSamplerState],
+                        buffers: [(slot: Int, data: [Float])], label: String) throws -> (texture: any MTLTexture, statistics: Statistics) {
         let start = CACurrentMediaTime()
         guard (1...4096).contains(width), (1...4096).contains(height),
               mipLevels == 1 + Int(log2(Double(max(width, height)))) else {
