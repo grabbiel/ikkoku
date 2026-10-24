@@ -101,8 +101,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
 - **Mods / Plugins:** immutable library selection, bounded translated profiles
   and three exact native adapters have selected app/save/restore acceptance.
   Mounted-session controls and fresh-profile preview rollback are merged in
-  [#206](https://github.com/grabbiel/ikkoku/pull/206). Legacy saved-profile restore
-  still rejects initializer attachment reads; its loader has a separate policy.
+  [#206](https://github.com/grabbiel/ikkoku/pull/206). Legacy saved-profile native
+  open and history restoration support candidate-owned attachment reads when
+  initialization leaves the candidate scene unchanged; library installation
+  retains its separate attachment-read gate.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
@@ -544,6 +546,25 @@ gap, not a #206 regression, source parity or GUI acceptance. The scenario remain
 on the local `codex/plugin-profile-native-restore` branch for the bounded fix;
 it is not merged restore support. Candidate previews must use the new scene's
 references and resource policy, including when old and new UUIDs coincide.
+
+**Local acceptance — candidate-owned saved-profile restore, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
+Native open and undo/redo prepare cold attachment previews from the target scene's
+resolved references, outfit, shapes and resource policy, including matching old/new
+UUIDs. Native open uses animation time zero; history uses its held clock. All
+fallible preparation finishes before history, adapters or cache state changes.
+Successful candidates transfer matching previews before document refresh; failure
+releases only candidate-owned resources. Newly permitted attachment-reading
+initialization rejects scene mutations, cloning and pending destruction, preserving
+the existing input-scene commit semantics.
+
+The frozen `af6007a` Release binary passes all 117 checks in four processes:
+ten saves, 33 fresh reopen/ownership/history checks, 32 existing fresh-profile
+isolation checks and 42 library/command checks. Root verifies all four reports.
+Six repeated mutation cases reach the exact policy error and retain the old
+document, session, history, previews, resources and frame. The original policy
+reproduction stays retained separately. The [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+records exact scope, hashes and integration requirements. This does not establish
+GUI acceptance, general plugin compatibility, source parity or a timing benefit.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

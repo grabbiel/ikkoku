@@ -257,9 +257,10 @@ Native save/reload resolves the recorded generation; a new publication never
 upgrades it. Load and undo/redo stage restoration before replacing the live
 session or history. Missing/changed files produce named errors. Plugin-library
 restoration during native open or undo/redo still resolves files synchronously;
-this slice does not move scene loading off the UI thread. Staged legacy-profile
-restoration uses the same attachment-read gate. A fresh legacy profile load
-supports attachment reads through the installation transaction described below. Plugin-library
+this slice does not move scene loading off the UI thread. Plugin-library
+restoration retains its installation attachment-read gate. Legacy-profile native
+open and history restoration use the candidate-owned read-only preparation
+described below; fresh profile loading uses its separate installation transaction. Plugin-library
 root relocation is not supported by the asset-library relocation system; keep
 the recorded root or explicitly mount a selection from its new location.
 
@@ -294,6 +295,54 @@ installation flushes the runtime's Destroy barrier. The malformed-neck-write
 alias branch is source-reviewed, not independently fixture-executed. These are
 functional results, with no quiet timing or speedup claim. The original failed
 report and binary remain retained separately.
+
+The saved-profile restriction is independently reproduced in
+[#210](https://github.com/grabbiel/ikkoku/issues/210). A local regression-only
+checkpoint at `6f999ea` mounts a supported hidden attachment initializer, saves a
+native scene and reopens it in a separate process. All ten save checks and ten
+reopen checks pass: the attachment profile hits the exact existing installation
+gate, preserving the prior document/session, fields/clocks, adapters, history,
+frame, preview identities and active resources. A valid-JSON profile whose bytes
+changed still hits the saved-identity gate. An attachment-free control restores
+exact saved state and advances its next step. This records an unsupported-policy
+gap, not implemented restore support or a new regression. The accepted local
+Release binary is `7654f79beeed754ff46c718668dc171522c0015cd5621ad5b039b908a63d1d6e`;
+private evidence is under the existing `profile-native-restore` directory. No GUI,
+performance or source-game parity claim follows.
+
+The #210 implementation prepares ordinary attachment previews exclusively from
+that native/history candidate's resolved references, coordinate and resource
+policy. A matching UUID never borrows the previous scene's preview. Native open
+uses animation time zero; history restoration uses the held history clock.
+Successful preparation transfers surviving previews before the document refresh;
+failure drops only candidate-owned preview and appearance leases. This uses the
+ordinary preview cache, independently of route-child runtime bundles.
+
+The newly supported restore path permits attachment reads only when initialization
+leaves the candidate scene, clone serial and pending destruction unchanged. After
+an actual successful attachment read, Instantiate, a visibility-changing SetActive,
+or pending Destroy produces the explicit unsupported-restoration error before
+history, cache or adapter commit. Saved fields/clocks keep their existing restore
+order, and the input candidate remains the committed scene. Attachment-free
+restoration and fresh-profile callback semantics are unchanged.
+
+Release acceptance at `af6007a` (binary SHA-256
+`bb383b496dba79e0755116fd9e6c054336434e30acb378d91809fd5abf249cf6`)
+passes all 117 functional checks: ten native-save checks, 33 in a separate reopen
+process, 32 existing fresh-profile isolation checks and 42 existing library/command
+checks. Restore covers distinct same-UUID references/outfits/shapes/clocks,
+candidate resource policy, repeated reads, transfer and subsequent step, undo/redo,
+late initializer and partial-constructor failures. Each of the three mutation
+rejections runs twice and reaches the exact policy error while retaining the old
+session, document, history, previews, frame and active resources. Changed-identity
+rejection and attachment-free restore remain separate passing controls. The
+original unsupported-policy reports and binary remain preserved independently.
+These are bounded functional results; no GUI, source-game parity or performance
+claim follows. After integrating the prepared/fallback/batched appearance changes,
+Release `baa32ea` (binary SHA-256
+`ae11e3eb4cdba4d197859d18ab8aa4dbe95f46c6874d8aed6938973a2bbbca18`)
+also passes the same 117 checks in four fresh processes, with zero failures or
+skips. Its reports and input/build hashes are separate from the first acceptance.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
