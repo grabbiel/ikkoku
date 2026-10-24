@@ -289,7 +289,8 @@ struct CharacterLifetimeTests {
 
     /// R7 phase 2, item 2: a viewport draws on its own render thread while
     /// another thread submits, picks, captures, retires a character and reads
-    /// the published diagnostics, as the app's main thread does. Every capture
+    /// the published diagnostics, as the app's main thread does, and the
+    /// renderer's pick queue runs asynchronous picks (item 5). Every capture
     /// renders, and the retirement completes through the frame submitted
     /// after it. Run it under `swift test --sanitize=thread` for the
     /// data-race check. With `publish(gpuTime:)` unlocked, ThreadSanitizer
@@ -353,14 +354,23 @@ struct CharacterLifetimeTests {
         }
         let drewWhileReading = eventually { draws.withLock { $0 } > drawsBefore }
         #expect(drewWhileReading)
+        // R7 phase 2, item 5: asynchronous picks prepare on the renderer's pick
+        // queue, a third thread, while the render thread draws and this one
+        // submits, picks synchronously and captures.
+        let asyncPicks = OSAllocatedUnfairLock(initialState: [UInt32]())
         for step in 0..<16 {
             frame.camera.yaw = Float(step) * 0.05
             renderer.submit(frame)
+            renderer.pick(frame: renderer.currentFrame(), pixel: Float2(32, 32), size: (64, 64)) { result in
+                asyncPicks.withLock { $0.append(result.id) }
+            }
             _ = renderer.pick(frame: renderer.currentFrame(), pixel: Float2(32, 32), size: (64, 64))
             render(renderer, renderer.currentFrame(), "step \(step)")
             _ = (renderer.lastFrameStatistics, renderer.lastFrameError, renderer.lastDeformationErrors,
                  renderer.lastSourceShaderLive, renderer.lastFrameGPUTime)
         }
+        let picked = eventually { asyncPicks.withLock { $0.count } == 16 }
+        #expect(picked)
 
         // Retired while the render thread keeps drawing the pending frame.
         character?.releaseGPUResources()

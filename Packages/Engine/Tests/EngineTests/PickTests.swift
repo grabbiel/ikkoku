@@ -183,13 +183,16 @@ struct PickTests {
 
         // Every kind of target is on screen.
         let ids = Set(reference)
-        let expected: Set<UInt32> = [0, 1, 2, 3, PickIDs.bone(7)]
+        let expected = Set<UInt32>([0, 1, 2, 3, PickIDs.bone(7)])
             .union([GizmoAxis.x, .y, .z, .xy, .yz, .xz].map(PickIDs.gizmo))
         #expect(expected.isSubset(of: ids), "missing \(expected.subtracting(ids).map { String($0, radix: 16) })")
-        // The mask discards part of its quad: id 2 appears in pieces, so its
-        // coverage is not the quad's full silhouette (checked by count below).
-        let maskedPixels = reference.filter { $0 == 2 }.count
-        #expect(maskedPixels > 20)
+        // The body mask discards part of its quad: without the mask the quad
+        // covers more pixels, so the discard path is exercised.
+        var unmasked = scene.frame
+        unmasked.items[unmasked.items.count - 2].material.setFlag(MaterialFlagHasBodyMask, false)
+        let unmaskedReference = try #require(renderer.pickTarget(frame: unmasked, size: Self.size))
+        let maskedPixels = reference.filter { $0 == 2 }.count, quadPixels = unmaskedReference.filter { $0 == 2 }.count
+        #expect(maskedPixels > 20 && quadPixels > maskedPixels + 20, "masked \(maskedPixels), unmasked \(quadPixels)")
 
         var pixels: [(Int, Int)] = []
         for y in 0..<h {
@@ -211,6 +214,7 @@ struct PickTests {
             if picked != id(x, y) { mismatches.append("(\(x), \(y)): \(String(picked, radix: 16)) != \(String(id(x, y), radix: 16))") }
         }
         #expect(pixels.count > 500)
+        print("[pick] \(pixels.count) of \(w * h) pixels compared, \(ids.count) distinct ids, masked quad \(maskedPixels) of \(quadPixels) pixels")
         #expect(mismatches.isEmpty, "\(mismatches.count) of \(pixels.count) pixels: \(mismatches.prefix(10))")
         #expect(expected.isSubset(of: seen))
         // Out-of-range pixels clamp to the edge, as before.
@@ -274,8 +278,10 @@ struct PickTests {
 
         // Over the axis, then straight to the background: the axis result is
         // stale even though its pick ran, and only the background applies.
-        start(try #require(queue.move(to: point(axisPixel), context: currentFrame)))
-        #expect(queue.move(to: point(backgroundPixel), context: currentFrame) == nil)
+        let overAxis = queue.move(to: point(axisPixel), context: currentFrame)
+        start(try #require(overAxis))
+        let toBackground = queue.move(to: point(backgroundPixel), context: currentFrame)
+        #expect(toBackground == nil)
         try settle()
         #expect(applied.count == 1)
         #expect(applied.last?.request.pixel == point(backgroundPixel))
@@ -284,7 +290,8 @@ struct PickTests {
 
         // Over the axis, then the frame changes while the pick runs: the frame-1
         // result is dropped and the move is picked again against frame 2.
-        let request = try #require(queue.move(to: point(axisPixel), context: currentFrame))
+        let moved2 = queue.move(to: point(axisPixel), context: currentFrame)
+        let request = try #require(moved2)
         currentFrame = 2
         start(request)
         try settle()
@@ -295,7 +302,8 @@ struct PickTests {
 
         // Back on frame 1, the axis applies and equals the synchronous pick.
         currentFrame = 1
-        start(try #require(queue.move(to: point(axisPixel), context: currentFrame)))
+        let backOnAxis = queue.move(to: point(axisPixel), context: currentFrame)
+        start(try #require(backOnAxis))
         try settle()
         #expect(applied.last?.id == PickIDs.gizmo(.x))
         #expect(applied.last?.id == renderer.pick(frame: scene.frame, pixel: point(axisPixel), size: Self.size))

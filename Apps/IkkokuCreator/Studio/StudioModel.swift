@@ -2665,7 +2665,7 @@ final class StudioModel: ViewportInputHandler {
 
     /// What a hover pick was taken against: the frame (by `frameSerial`) and
     /// the viewport size. A result taken against anything else is stale.
-    struct HoverPickContext: Equatable, Sendable {
+    nonisolated struct HoverPickContext: Equatable, Sendable {
         let frame: UInt64
         let viewport: SIMD2<Float>
     }
