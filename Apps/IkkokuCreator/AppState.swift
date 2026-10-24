@@ -132,7 +132,7 @@ final class AppState {
                             throw RigError.invalid("IKKOKU_MAKER_SCENARIO needs the Maker and IKKOKU_MAKER_SCENARIO_REPORT.")
                         }
                         let scenario = try JSONDecoder().decode(MakerScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
-                        let report = await MakerScenario.run(scenario, maker: maker)
+                        let report = await MakerScenario.run(scenario, maker: maker, app: self)
                         let reportURL = URL(fileURLWithPath: reportPath)
                         try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try CaptureOutput.writeJSON(report.json(), to: reportURL)

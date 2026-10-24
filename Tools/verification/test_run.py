@@ -642,7 +642,8 @@ IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
                       "setColor", "setColorDraft", "selectAsset", "captureResources", "resetShapes", "export", "reimport", "assert",
                       "beginSelection", "finishSelection",
-                      "supersedeSelection", "cancelSelection", "closeSource", "reloadCard", "clearModLibrary", "boneModifiers"}
+                      "supersedeSelection", "cancelSelection", "closeSource", "reloadCard", "clearModLibrary", "boneModifiers",
+                      "mode", "queueSelectionThenStudio"}
 
 # App settings that name a file the app is asked to write (A-T05).
 APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
@@ -1198,7 +1199,9 @@ class MakerScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(all(0 <= c <= 1 for c in rgba))
                 if op == "captureResources":
                     self.assertIsInstance(step["id"], str)
-                if op in ("selectAsset", "beginSelection", "supersedeSelection") or "selection" in step:
+                if op == "mode":
+                    self.assertIn(step["id"], ("maker", "studio"))
+                if op in ("selectAsset", "beginSelection", "supersedeSelection", "queueSelectionThenStudio") or "selection" in step:
                     selection = step["selection"]
                     self.assertIn(selection["kind"], ("hair", "clothes"))
                     self.assertIsInstance(selection["slot"], int)
@@ -1240,7 +1243,11 @@ class MakerScenarioLaneTests(unittest.TestCase):
         self.assertFalse(held, "scenario exits with a worker held")
         self.assertTrue({"setBody", "setFace", "setColorDraft", "customization", "boneModifiers",
                          "cancelSelection", "export", "selectCoordinate", "clearModLibrary",
-                         "reloadCard", "closeSource"} <= covered)
+                         "reloadCard", "closeSource", "mode"} <= covered)
+        queued = next(i for i, step in enumerate(steps) if step["op"] == "queueSelectionThenStudio")
+        self.assertEqual(steps[queued + 2], {"op": "mode", "id": "maker"})
+        self.assertEqual(steps[queued + 3]["op"], "selectAsset")
+        self.assertEqual(steps[queued + 3]["selection"], steps[queued]["selection"])
 
     def test_every_scenario_round_trips_through_export_and_reimport(self):
         for check in self.checks:

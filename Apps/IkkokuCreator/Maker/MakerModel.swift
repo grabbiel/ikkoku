@@ -242,8 +242,11 @@ final class MakerModel: ViewportInputHandler {
         character.stepHairDynamics(dt: 1.0 / 30.0)
         refresh()
     }
-    /// Set by the app when the maker is the visible mode, so the timer is idle otherwise.
-    var isActiveMode = true
+    /// A mode exit invalidates preparation even if Maker is shown again before
+    /// its worker finishes; an inactive completion must never replace Studio's frame.
+    var isActiveMode = true {
+        didSet { if oldValue && !isActiveMode { cancelSourceSelection() } }
+    }
 
     var library: AssetLibrary { host.library }
 
@@ -714,6 +717,9 @@ final class MakerModel: ViewportInputHandler {
     func selectSourceAsset(_ slot: SourceMakerSelectionSlot, id: Int,
                            beforePreparation: (@Sendable () -> Void)? = nil) async throws {
         try Task.checkCancellation()
+        // A picker Task may first enter after its view was removed. Reject it
+        // before changing status, cancelling another request or starting CPU work.
+        guard isActiveMode else { throw CancellationError() }
         cancelSourceSelection()
         sourceSelectionTiming = nil
         let generation = sourceSelectionGeneration
@@ -753,7 +759,7 @@ final class MakerModel: ViewportInputHandler {
         }
         let preparationFinished = ProcessInfo.processInfo.systemUptime
         try Task.checkCancellation()
-        guard generation == sourceSelectionGeneration,
+        guard isActiveMode, generation == sourceSelectionGeneration,
               sourceBoneModifierCoordinate == coordinate,
               importedSourceCard?.preservedData == card.preservedData,
               let current = sourceRigPreview else { throw CancellationError() }
