@@ -18,6 +18,31 @@ import Character
 // prints the digest it computed. Run it in Release:
 // `swift test -c release --package-path Packages/Engine --filter SourceStudioLiveTick`.
 
+/// The three fixture tests each load the 7 characters of the scenario scene
+/// and step them for seconds. They run one at a time, each on a thread of its
+/// own (`liveTickOffPool`).
+@Suite(.serialized) struct SourceStudioLiveTickFixtureTests {}
+
+/// A fixture test's failure on its own thread, reported by the test.
+struct LiveTickFailure: Error, CustomStringConvertible {
+    let description: String
+}
+
+/// Runs `body` on a thread of its own and suspends the calling test until it
+/// returns. Building a preview blocks its thread in MetalKit's synchronous
+/// texture load (`ResourceStore.texture`). A parallel `swift test` hung twice
+/// with every thread of its test pool blocked there, with these tests running
+/// on that pool. Without these tests, the suite passed. Here they hold no
+/// pool thread while they load or step. Their checks stay in the test's own
+/// task: `body` returns what they compare.
+func liveTickOffPool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        let thread = Thread { continuation.resume(with: Result { try body() }) }
+        thread.stackSize = 8 << 20
+        thread.start()
+    }
+}
+
 private let liveTickVariables = ["IKKOKU_STUDIO_SCENARIO_SCENE", "IKKOKU_SOURCE_AVATAR", "IKKOKU_STUDIO_POSE_CONTRACT",
                                  "IKKOKU_MAKER_LIBRARY", "IKKOKU_STUDIO_ANIMATION_CATALOG", "IKKOKU_STUDIO_LOOK_SETTINGS",
                                  "IKKOKU_STUDIO_HAND_PATTERNS"]
@@ -164,33 +189,40 @@ func liveTickExpressions(_ previews: [SourceStudioCharacterPreview]) throws -> [
 let liveTickSeek = 120
 let liveTickCount = 180
 
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(liveTickVariables) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires the Studio scenario scene and its import fixtures (\(liveTickVariables.joined(separator: ", "))) and a Metal device"))
-func sourceStudioLiveTickDigestIsReproducibleWhenSupplied() throws {
-    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
-    let previews = try liveTickFixturePreviews(resources: resources)
-    #expect(previews.count >= 2)
-    let expressions = try liveTickExpressions(previews)
-    #expect(previews.filter(\.hasLiveNeckLook).count >= 1)
-    var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
-    var digest = LiveTickDigest()
-    let clock = ContinuousClock(), start = clock.now
-    for tick in 1...liveTickCount {
-        if tick == liveTickSeek { for preview in previews { preview.clearDynamicsStep(); preview.resetAnimationPlayback() } }
-        for (character, preview) in previews.enumerated() {
-            try liveTickStep(preview, character: character, tick: tick, expression: expressions[character],
-                             random: &randoms[character], digest: &digest)
+extension SourceStudioLiveTickFixtureTests {
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(liveTickVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(liveTickVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioLiveTickDigestIsReproducibleWhenSupplied() async throws {
+        let run = try await liveTickOffPool { () throws -> (digest: String, characters: Int, neck: Int, line: String) in
+            guard let device = MTLCreateSystemDefaultDevice() else { throw LiveTickFailure(description: "no Metal device") }
+            let previews = try liveTickFixturePreviews(resources: ResourceStore(device: device))
+            let expressions = try liveTickExpressions(previews)
+            let neck = previews.filter(\.hasLiveNeckLook).count
+            var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
+            var digest = LiveTickDigest()
+            let clock = ContinuousClock(), start = clock.now
+            for tick in 1...liveTickCount {
+                if tick == liveTickSeek { for preview in previews { preview.clearDynamicsStep(); preview.resetAnimationPlayback() } }
+                for (character, preview) in previews.enumerated() {
+                    try liveTickStep(preview, character: character, tick: tick, expression: expressions[character],
+                                     random: &randoms[character], digest: &digest)
+                }
+            }
+            let elapsed = clock.now - start
+            let value = digest.finish()
+            let milliseconds = Double(elapsed.components.seconds) * 1e3 + Double(elapsed.components.attoseconds) * 1e-15
+            let line = "[live-tick-digest] \(value) characters=\(previews.count) ticks=\(liveTickCount)"
+                + " ms/tick=\(String(format: "%.3f", milliseconds / Double(liveTickCount)))"
+                + " neck=\(neck) eye=\(previews.filter(\.hasLiveEyeLook).count)"
+                + " dynamics=\(previews.map(\.dynamicsComponentCount))"
+            return (value, previews.count, neck, line)
         }
-    }
-    let elapsed = clock.now - start
-    let value = digest.finish()
-    let milliseconds = Double(elapsed.components.seconds) * 1e3 + Double(elapsed.components.attoseconds) * 1e-15
-    print("[live-tick-digest] \(value) characters=\(previews.count) ticks=\(liveTickCount)"
-        + " ms/tick=\(String(format: "%.3f", milliseconds / Double(liveTickCount)))"
-        + " neck=\(previews.filter(\.hasLiveNeckLook).count) eye=\(previews.filter(\.hasLiveEyeLook).count)"
-        + " dynamics=\(previews.map(\.dynamicsComponentCount))")
-    if let expected = ProcessInfo.processInfo.environment["IKKOKU_LIVE_TICK_DIGEST"], !expected.isEmpty {
-        #expect(value == expected)
+        print(run.line)
+        #expect(run.characters >= 2)
+        #expect(run.neck >= 1)
+        if let expected = ProcessInfo.processInfo.environment["IKKOKU_LIVE_TICK_DIGEST"], !expected.isEmpty {
+            #expect(run.digest == expected)
+        }
     }
 }
 
@@ -216,112 +248,139 @@ func liveTickLease(_ preview: SourceStudioCharacterPreview, character: Int, tick
     return SourceStudioLiveTickLease(preview: preview, input: input, random: random)
 }
 
-/// The same run as `sourceStudioLiveTickDigestIsReproducibleWhenSupplied`, with
-/// each tick's characters stepped in parallel by `SourceStudioLiveTickJob`
-/// and joined in character order: the digest must be the serial one. Under
-/// `swift test --sanitize=thread` this is the ThreadSanitizer run over
-/// previews driven in parallel.
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(liveTickVariables) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires the Studio scenario scene and its import fixtures (\(liveTickVariables.joined(separator: ", "))) and a Metal device"))
-func sourceStudioParallelLiveTickMatchesTheSerialDigest() throws {
-    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
-    let previews = try liveTickFixturePreviews(resources: resources)
-    let expressions = try liveTickExpressions(previews)
-    var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
-    var digest = LiveTickDigest()
-    var wall = 0.0, cpu = 0.0
-    let clock = ContinuousClock(), start = clock.now
-    for tick in 1...liveTickCount {
-        if tick == liveTickSeek { for preview in previews { preview.clearDynamicsStep(); preview.resetAnimationPlayback() } }
-        let leases = previews.enumerated().map { character, preview in
-            liveTickLease(preview, character: character, tick: tick, expression: expressions[character], random: randoms[character])
-        }
-        // One owner per preview per tick: a second lease of a preview is refused.
-        if tick == 1 { #expect(SourceStudioLiveTickJob(leases: leases + [leases[0]]) == nil) }
-        let job = try #require(SourceStudioLiveTickJob(leases: leases))
-        job.start(completion: nil)
-        let result = job.wait()
-        wall += result.wallSeconds; cpu += result.cpuSeconds
-        for (character, preview) in previews.enumerated() {
-            let output = result.outputs[character]
-            #expect(output.neckError == nil && output.eyeError == nil && output.wearError == nil && output.faceError == nil)
-            randoms[character] = try #require(output.random as? LiveTickRandom)
-            digest.add(frame: try #require(output.frame).get())
-            let edit = LiveTickEdit.at(tick: tick, character: character, preview: preview)
-            digest.add(pose: try preview.editedPose(fkRotations: edit.fk, kinematics: edit.kinematics, animationElapsed: Float(tick) / 30))
-            if let rates = preview.eyeLookRates { for rate in rates.horizontal { digest.add(rate.bitPattern) }; digest.add(rates.vertical.bitPattern) }
-            digest.add(preview.didBlink)
-        }
-    }
-    let elapsed = clock.now - start
-    let value = digest.finish()
-    let milliseconds = Double(elapsed.components.seconds) * 1e3 + Double(elapsed.components.attoseconds) * 1e-15
-    print("[live-tick-parallel] \(value) characters=\(previews.count) ticks=\(liveTickCount)"
-        + " ms/tick=\(String(format: "%.3f", milliseconds / Double(liveTickCount)))"
-        + " job wall ms/tick=\(String(format: "%.3f", wall * 1e3 / Double(liveTickCount)))"
-        + " worker cpu ms/tick=\(String(format: "%.3f", cpu * 1e3 / Double(liveTickCount)))")
-    if let expected = ProcessInfo.processInfo.environment["IKKOKU_LIVE_TICK_DIGEST"], !expected.isEmpty {
-        #expect(value == expected)
-    }
-}
-
-/// An edit that lands while a tick runs (R7 phase 2, item 3): the Studio
-/// settles the tick first, so the preview sees the tick's calls and then the
-/// edit's refresh, exactly as when the edit arrived after a serial tick. Here
-/// the parallel tick followed by an edited frame must match the serial tick
-/// followed by the same edited frame, and a frame request that did not change
-/// must give back the tick's own frame (the reuse the refresh makes).
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(liveTickVariables) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires the Studio scenario scene and its import fixtures (\(liveTickVariables.joined(separator: ", "))) and a Metal device"))
-func sourceStudioEditDuringAParallelTickMatchesTheSerialOrder() throws {
-    let device = try #require(MTLCreateSystemDefaultDevice())
-    func run(parallel: Bool) throws -> (digest: String, reuse: Bool) {
-        let previews = try liveTickFixturePreviews(resources: ResourceStore(device: device))
-        let expressions = try liveTickExpressions(previews)
-        var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
-        var digest = LiveTickDigest(), reuse = true
-        for tick in 1...45 {
-            var frames: [RenderFrame] = []
-            if parallel {
+extension SourceStudioLiveTickFixtureTests {
+    /// The same run as `sourceStudioLiveTickDigestIsReproducibleWhenSupplied`, with
+    /// each tick's characters stepped in parallel by `SourceStudioLiveTickJob`
+    /// and joined in character order: the digest must be the serial one. Under
+    /// `swift test --sanitize=thread` this is the ThreadSanitizer run over
+    /// previews driven in parallel.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(liveTickVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(liveTickVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioParallelLiveTickMatchesTheSerialDigest() async throws {
+        let run = try await liveTickOffPool { () throws -> (digest: String, duplicateRefused: Bool, errors: [String], line: String) in
+            guard let device = MTLCreateSystemDefaultDevice() else { throw LiveTickFailure(description: "no Metal device") }
+            let previews = try liveTickFixturePreviews(resources: ResourceStore(device: device))
+            let expressions = try liveTickExpressions(previews)
+            var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
+            var digest = LiveTickDigest()
+            var wall = 0.0, cpu = 0.0, duplicateRefused = false, errors: [String] = []
+            let clock = ContinuousClock(), start = clock.now
+            for tick in 1...liveTickCount {
+                if tick == liveTickSeek { for preview in previews { preview.clearDynamicsStep(); preview.resetAnimationPlayback() } }
                 let leases = previews.enumerated().map { character, preview in
                     liveTickLease(preview, character: character, tick: tick, expression: expressions[character], random: randoms[character])
                 }
-                let job = try #require(SourceStudioLiveTickJob(leases: leases))
-                job.start()
-                let result = job.wait()
-                for character in previews.indices {
-                    randoms[character] = try #require(result.outputs[character].random as? LiveTickRandom)
-                    frames.append(try #require(result.outputs[character].frame).get())
+                // One owner per preview per tick: a second lease of a preview is refused.
+                if tick == 1 { duplicateRefused = SourceStudioLiveTickJob(leases: leases + [leases[0]]) == nil }
+                guard let job = SourceStudioLiveTickJob(leases: leases) else {
+                    throw LiveTickFailure(description: "tick \(tick): the job refused leases of distinct previews")
                 }
-            } else {
+                job.start(completion: nil)
+                let result = job.wait()
+                wall += result.wallSeconds; cpu += result.cpuSeconds
                 for (character, preview) in previews.enumerated() {
-                    var scratch = LiveTickDigest()
-                    frames.append(try liveTickStep(preview, character: character, tick: tick, expression: expressions[character],
-                                                   random: &randoms[character], digest: &scratch))
+                    let output = result.outputs[character]
+                    for case let error? in [output.neckError, output.eyeError, output.wearError, output.faceError] {
+                        errors.append("tick \(tick), character \(character): \(error)")
+                    }
+                    guard let random = output.random as? LiveTickRandom, let frame = output.frame else {
+                        throw LiveTickFailure(description: "tick \(tick), character \(character): no blink draws or no frame")
+                    }
+                    randoms[character] = random
+                    digest.add(frame: try frame.get())
+                    let edit = LiveTickEdit.at(tick: tick, character: character, preview: preview)
+                    digest.add(pose: try preview.editedPose(fkRotations: edit.fk, kinematics: edit.kinematics, animationElapsed: Float(tick) / 30))
+                    if let rates = preview.eyeLookRates { for rate in rates.horizontal { digest.add(rate.bitPattern) }; digest.add(rates.vertical.bitPattern) }
+                    digest.add(preview.didBlink)
                 }
             }
-            for frame in frames { digest.add(frame: frame) }
-            // Every third tick an FK edit lands on character 1 "mid-tick": its
-            // refresh asks for an edited frame after the tick's own.
-            guard tick % 3 == 0 else { continue }
-            let preview = previews[1], elapsed = Float(tick) / 30
-            guard let bone = preview.controller.targets.first(where: { $0.hasGuide && $0.bone.fkGroup == .body })?.bone.id else { continue }
-            let edited = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
-                world: liveTickWorld(character: 1), objectID: 2, fkRotations: [bone: Float3(Float(tick), 4, -2)], animationElapsed: elapsed)
-            digest.add(frame: edited)
-            // The unchanged request of character 2 returns its tick frame.
-            let again = try previews[2].frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
-                world: liveTickWorld(character: 2), objectID: 3, animationElapsed: elapsed)
-            var first = LiveTickDigest(), second = LiveTickDigest()
-            first.add(frame: frames[2]); second.add(frame: again)
-            reuse = reuse && first.finish() == second.finish()
+            let elapsed = clock.now - start
+            let value = digest.finish()
+            let milliseconds = Double(elapsed.components.seconds) * 1e3 + Double(elapsed.components.attoseconds) * 1e-15
+            let line = "[live-tick-parallel] \(value) characters=\(previews.count) ticks=\(liveTickCount)"
+                + " ms/tick=\(String(format: "%.3f", milliseconds / Double(liveTickCount)))"
+                + " job wall ms/tick=\(String(format: "%.3f", wall * 1e3 / Double(liveTickCount)))"
+                + " worker cpu ms/tick=\(String(format: "%.3f", cpu * 1e3 / Double(liveTickCount)))"
+            return (value, duplicateRefused, errors, line)
         }
-        return (digest.finish(), reuse)
+        print(run.line)
+        #expect(run.duplicateRefused)
+        #expect(run.errors.isEmpty, "\(run.errors)")
+        if let expected = ProcessInfo.processInfo.environment["IKKOKU_LIVE_TICK_DIGEST"], !expected.isEmpty {
+            #expect(run.digest == expected)
+        }
     }
-    let serial = try run(parallel: false), parallel = try run(parallel: true)
-    print("[live-tick-edit] serial=\(serial.digest) parallel=\(parallel.digest) reuse=\(serial.reuse)/\(parallel.reuse)")
-    #expect(serial.digest == parallel.digest)
-    #expect(serial.reuse && parallel.reuse)
+}
+
+extension SourceStudioLiveTickFixtureTests {
+    /// An edit that lands while a tick runs (R7 phase 2, item 3): the Studio
+    /// settles the tick first, so the preview sees the tick's calls and then the
+    /// edit's refresh, exactly as when the edit arrived after a serial tick. Here
+    /// the parallel tick followed by an edited frame must match the serial tick
+    /// followed by the same edited frame, and a frame request that did not change
+    /// must give back the tick's own frame (the reuse the refresh makes).
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(liveTickVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(liveTickVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioEditDuringAParallelTickMatchesTheSerialOrder() async throws {
+        let run = try await liveTickOffPool { () throws -> (serial: (digest: String, reuse: Bool), parallel: (digest: String, reuse: Bool)) in
+            guard let device = MTLCreateSystemDefaultDevice() else { throw LiveTickFailure(description: "no Metal device") }
+            return (serial: try liveTickEditRun(device: device, parallel: false), parallel: try liveTickEditRun(device: device, parallel: true))
+        }
+        print("[live-tick-edit] serial=\(run.serial.digest) parallel=\(run.parallel.digest) reuse=\(run.serial.reuse)/\(run.parallel.reuse)")
+        #expect(run.serial.digest == run.parallel.digest)
+        #expect(run.serial.reuse && run.parallel.reuse)
+    }
+}
+
+/// One run of `sourceStudioEditDuringAParallelTickMatchesTheSerialOrder`:
+/// 45 ticks, serial or through the job, with an FK edit after every third.
+func liveTickEditRun(device: any MTLDevice, parallel: Bool) throws -> (digest: String, reuse: Bool) {
+    let previews = try liveTickFixturePreviews(resources: ResourceStore(device: device))
+    let expressions = try liveTickExpressions(previews)
+    var randoms = previews.indices.map { LiveTickRandom(state: UInt64($0) &* 7919 &+ 17) }
+    var digest = LiveTickDigest(), reuse = true
+    for tick in 1...45 {
+        var frames: [RenderFrame] = []
+        if parallel {
+            let leases = previews.enumerated().map { character, preview in
+                liveTickLease(preview, character: character, tick: tick, expression: expressions[character], random: randoms[character])
+            }
+            guard let job = SourceStudioLiveTickJob(leases: leases) else {
+                throw LiveTickFailure(description: "tick \(tick): the job refused leases of distinct previews")
+            }
+            job.start()
+            let result = job.wait()
+            for character in previews.indices {
+                guard let random = result.outputs[character].random as? LiveTickRandom, let frame = result.outputs[character].frame else {
+                    throw LiveTickFailure(description: "tick \(tick), character \(character): no blink draws or no frame")
+                }
+                randoms[character] = random
+                frames.append(try frame.get())
+            }
+        } else {
+            for (character, preview) in previews.enumerated() {
+                var scratch = LiveTickDigest()
+                frames.append(try liveTickStep(preview, character: character, tick: tick, expression: expressions[character],
+                                               random: &randoms[character], digest: &scratch))
+            }
+        }
+        for frame in frames { digest.add(frame: frame) }
+        // Every third tick an FK edit lands on character 1 "mid-tick": its
+        // refresh asks for an edited frame after the tick's own.
+        guard tick % 3 == 0 else { continue }
+        let preview = previews[1], elapsed = Float(tick) / 30
+        guard let bone = preview.controller.targets.first(where: { $0.hasGuide && $0.bone.fkGroup == .body })?.bone.id else { continue }
+        let edited = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
+            world: liveTickWorld(character: 1), objectID: 2, fkRotations: [bone: Float3(Float(tick), 4, -2)], animationElapsed: elapsed)
+        digest.add(frame: edited)
+        // The unchanged request of character 2 returns its tick frame.
+        let again = try previews[2].frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
+            world: liveTickWorld(character: 2), objectID: 3, animationElapsed: elapsed)
+        var first = LiveTickDigest(), second = LiveTickDigest()
+        first.add(frame: frames[2]); second.add(frame: again)
+        reuse = reuse && first.finish() == second.finish()
+    }
+    return (digest.finish(), reuse)
 }
 
 @Test func sourceStudioEmptyLiveTickJobJoinsAtOnce() throws {

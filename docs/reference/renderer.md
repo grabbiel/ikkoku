@@ -943,6 +943,32 @@ protocol (`SourceStudioBlinkRandom`) carried in the lease. The app target
 (Swift 5 mode, `MainActor` default isolation) runs the completion through
 `MainActor.assumeIsolated` on the main queue.
 
+**Tests.** `SourceStudioLiveTickTests.swift` checks the contract against the
+7-character scenario scene:
+
+- `sourceStudioLiveTickDigestIsReproducibleWhenSupplied` hashes 180 serial
+  steps. `IKKOKU_LIVE_TICK_DIGEST` pins the hash.
+- `sourceStudioParallelLiveTickMatchesTheSerialDigest` runs the same steps
+  through `SourceStudioLiveTickJob` and must give the serial hash. It also
+  checks that a job refuses two leases of one preview.
+- `sourceStudioEditDuringAParallelTickMatchesTheSerialOrder` lands an FK
+  edit after every third step ("step, then edit") and compares the parallel
+  and serial orders bit for bit. It also checks that an unchanged frame
+  request reuses the step's own frame.
+- `sourceStudioEmptyLiveTickJobJoinsAtOnce` covers the job with no leases.
+
+The three fixture tests form one serialized suite. Each one loads the 7
+characters and steps them on a thread of its own (`liveTickOffPool`), and its
+checks run in the test's task. Building a preview blocks its thread in
+MetalKit's synchronous texture load. When these tests ran on the test pool,
+a parallel `swift test` hung with every pool thread blocked there (see
+[performance](performance.md#correctness-2)).
+The Studio scenario check `studio-scenario-live-step-edit` lands document,
+FK, undo and redo edits while a step is in flight in the app. ThreadSanitizer
+runs the Engine tests with `swift test --sanitize=thread --filter
+SourceStudioLiveTick`, and the app check on a Debug build with
+`-enableThreadSanitizer YES`.
+
 ### Picks (R7 phase 2, item 5)
 
 A pick returns the object id that the pick pass writes at one pixel of a
