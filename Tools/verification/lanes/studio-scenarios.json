@@ -1557,7 +1557,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-accessory-toggle.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "Headless StudioModel.setSourceAccessoryVisible (the Clothes tab's accessory toggle path) on source character key 10 of the head-200 expansion scene (converted glasses in accessory slot 0, converted top 105-39, bottom 106-25 and shoes 112-1, saved shoesType 0): an empty slot is refused unchanged; hiding slot 0 must change at least 100 pixels by >2/255 (the glasses are small in this framing) and undo/redo restore the captures exactly. The recovered SetClothesState rules run on the converted garments: bottom half advances to off (StateType 1), top half (StateType 0) draws the dressed T-shirt with the n_top_b fallback diagnostic, the shoes row mirrors off to both shoe kinds, the gloves row is refused. The restored export must equal the initial source SHA256 before and after reimport; the slot-0-hidden export must differ and reimport with showAccessory[0] false rendering the hidden capture exactly.",
+      "tolerance": "Headless StudioModel.setSourceAccessoryVisible (the Clothes tab's accessory toggle path) on source character key 10 of the head-200 expansion scene (converted glasses in accessory slot 0, converted top 105-39, bottom 106-25 and shoes 112-1, saved shoesType 0): an empty slot is refused unchanged; hiding slot 0 must change at least 100 pixels by >2/255 (the glasses are small in this framing) and undo/redo restore the captures exactly. The recovered SetClothesState rules run on the converted garments: bottom half advances to off (StateType 1), top half (StateType 0) draws the converted n_top_b alternate o_top_tsyats_b with body alpha (0,1) and no fallback (ST-C03 third slice), changing at least 2,000 pixels from the bottom-off capture, the shoes row mirrors off to both shoe kinds, the gloves row is refused. The restored export must equal the initial source SHA256 before and after reimport; the slot-0-hidden export must differ and reimport with showAccessory[0] false rendering the hidden capture exactly.",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-accessory-toggle.json",
@@ -1645,6 +1645,135 @@
         {
           "path": ".local/verification/reports/studio-scenario-reload-load-clothes.json",
           "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-half-state",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_HALF_STATE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/half-state.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-half-state.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-C03 third slice on source character key 10 of the half-state scene (the original-player probe's fixture card: top 105-38, bottom 106-1, pantyhose 110-1, indoor shoes 112-2, outdoor shoes 112-3, saved clothes state 1,1,0,0,0,1,0,0,0 and shoesType 0) through StudioModel.setSourceClothesState / setSourceShoesType (the Clothes tab's paths). The saved half states load and draw exactly the converted alternate meshes o_top_tsyats_b, o_bot_pants01_b and o_panst_00_b with the indoor uwabaki, body alpha (0,1) and no fallback. Turning the top, bottom and pantyhose on draws the dressed meshes (top: body alpha (1,1)); the steps change at least 2,000, 100 and 3,000 pixels by >2/255 (the half bottom is mostly under the top), and shoesType 1 swaps the uwabaki for the outdoor run01 shoes (at least 300 pixels). Undo restores each capture exactly and redo the outdoor capture. Editing back to the half states and indoor shoes clears the edit, renders the saved capture exactly and exports byte-identical to the source scene. The changed export differs from the source and reimports with the edits saved (clothes state all on, shoesType 1, document unedited, outdoor render exact).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-half-state.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/half-state-changed.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/half-state-restored.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/renders/half-state-saved.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/half-state-dressed.png",
+          "kind": "render-capture"
+        },
+        {
+          "path": ".local/verification/renders/half-state-outdoor.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-save-half-state",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_HALF_STATE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-half-state.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-half-state.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Turns key 10's top from half to on and its shoesType to outdoor in the half-state scene (render changes at least 2,000 pixels by >2/255) and saves the native document card. The next check loads it in a fresh process.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-half-state.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-half-state.png",
+          "kind": "saved-document"
+        },
+        {
+          "path": ".local/verification/renders/reload-save-half-state.png",
+          "kind": "render-capture"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-half-state",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-half-state.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-half-state.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Loads the document the previous check saved, in a fresh process with NO IKKOKU_SOURCE_SCENE: key 10 must render clothes state 0,1,0,0,0,1,0,0,0 over its saved 1,1,0,0,0,1,0,0,0 and shoesType 1 over its saved 0 (dressed top, half bottom and pantyhose, outdoor sneakers, body alpha (1,1)); turning the top back to half must change at least 2,000 pixels and draw o_top_tsyats_b with body alpha (0,1), and undo must restore the loaded render exactly.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-half-state.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/renders/reload-load-half-state.png",
+          "kind": "render-capture"
         }
       ],
       "timeout": 600

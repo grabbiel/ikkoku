@@ -1,0 +1,11 @@
+{
+  "steps": [
+    {"op": "assert", "clothes": {"key": 10, "state": [1, 1, 0, 0, 0, 1, 0, 0, 0], "shoesType": 0, "edited": false}},
+    {"op": "captureRender", "name": "saved"},
+    {"op": "setClothesState", "key": 10, "index": 0, "state": 0},
+    {"op": "setShoesType", "key": 10, "state": 1},
+    {"op": "assert", "clothes": {"key": 10, "state": [0, 1, 0, 0, 0, 1, 0, 0, 0], "shoesType": 1, "rendered": [0, 1, 5, 8], "drawn": ["o_bot_pants01_b/0", "o_panst_00_b/0", "o_shoes_run01/0", "o_top_tsyats_a/0"], "bodyAlpha": [1, 1], "fallbacks": 0, "edited": true}, "render": {"from": "saved", "changedPixelsAtLeast": 2000}},
+    {"op": "captureRender", "name": "edited", "path": ".local/verification/renders/reload-save-half-state.png"},
+    {"op": "saveDocument", "path": ".local/verification/scenario-exports/reload-save-half-state.png"}
+  ]
+}
