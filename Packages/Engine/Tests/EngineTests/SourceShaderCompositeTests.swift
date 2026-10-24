@@ -257,8 +257,11 @@ func liveSourceCompositeMapsTheUndefinedOverlayToZeroLikeD3D() throws {
     let texture = try SourceShaderTextureStore(url: fixture.url).texture(.init(identity: identity, property: "_MainTex", mesh: nil, slot: nil),
                                                                         resources: resources).get().texture
     let bytes = try readback(texture, level: 0, device: device)
-    #expect(stride(from: 0, to: bytes.count, by: 4).allSatisfy { bytes[$0] == 0 && bytes[$0 + 1] == 0 && bytes[$0 + 2] == 0 && bytes[$0 + 3] == 255 },
-            "\(Array(bytes.prefix(8)))")
+    let opaqueBlack: [UInt8] = [0, 0, 0, 255]
+    let texelsAreOpaqueBlack = stride(from: 0, to: bytes.count, by: 4).allSatisfy { (offset: Int) -> Bool in
+        Array(bytes[offset ..< offset + 4]) == opaqueBlack
+    }
+    #expect(texelsAreOpaqueBlack, "\(Array(bytes.prefix(8)))")
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
