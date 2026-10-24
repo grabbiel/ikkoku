@@ -363,8 +363,21 @@ with no frame-path work. This does not implement persistence for non-idempotent
 cloning initializers. Same-topology SetActive and pending Destroy keep the existing
 input-wins/first-step semantics demonstrated against the original session's
 continuation. Attachment-reading restoration retains its stricter read-only
-boundary; cloning now reaches the shared topology error first. Focused Engine and
-native/history acceptance for this correction are pending.
+boundary; cloning now reaches the shared topology error first.
+
+Release `4ebdd727` (binary SHA-256
+`b39d288ce18bb511081ea6de86ba68b8a44a9949568753132871fa2886d4bbae`)
+passes all 161 checks in six fresh processes: 18 synthetic save checks, 26
+synthetic reopen/history checks and the existing 117 attachment/fresh-profile/
+library checks. The cloning case now verifies exact rejection and retention of
+the prior scene, session, history, frame and active resources through native open,
+undo and redo. SetActive/pending-Destroy results still match the original session's
+continuation. All 30 focused Engine tests pass with zero skips, including four new
+parameterized tests through both profile and immutable-library constructors,
+clone-then-Destroy, activation-time cloning and normalized unbound identities.
+The first strict Engine attempt's missing HideUI fixture failure remains recorded;
+the corrected run supplies the pinned original package. This is functional
+acceptance without a GUI, original-player parity or measured performance claim.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
