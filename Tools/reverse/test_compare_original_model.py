@@ -206,6 +206,35 @@ class ModelComparisonTests(unittest.TestCase):
         missing=copy.deepcopy(valid['neutralModel']);del missing['exType']
         with self.assertRaisesRegex(ValueError,'normal model identity'):model.source_head_identity(missing)
 
+    def test_male00_requires_exact_identity_catalog_and_only_height_coercion(self):
+        mode=self.frame['neutralModel']
+        mode.update(variant='male00',sex=0,requestedSex=0,exType=0,requestedExType=0,
+                    loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG))
+        mode['actualBodyValues'][0]=.6
+        self.native['identity']['sex']=0;self.native['bodyValues'][0]=.6;self.write()
+        result=model.compare(self.folder,self.native);self.assertTrue(result['gatePassed'])
+        self.assertEqual([(r['domain'],r['index']) for r in result['shapeCoercions']],[('body',0)])
+        self.assertIsNone(result['headColliderScale']);self.assertIsNone(result['bodyCorrection'])
+        valid=copy.deepcopy(self.frame)
+        for key in ('sex','requestedSex','headID','requestedHeadID','boneType','requestedBoneType',
+                    'exType','requestedExType','loadedHeadCatalogID'):
+            for value in (False,True,None,1,201):
+                self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+                with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key,value in [('variant','female00'),('variant','male201'),('loadedHeadName','p_cf_head_00'),('loadedHeadCatalog',{})]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(key=key),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key in model.HEAD00_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][key]='wrong';self.write()
+            with self.subTest(catalog=key),self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare(self.folder,self.native)
+        self.frame=valid;self.write()
+        for key in ('sex','headID','boneType','exType'):
+            self.native['identity'][key]=False
+            with self.subTest(native=key),self.assertRaisesRegex(ValueError,'Native normal male00'):model.compare(self.folder,self.native)
+            self.native['identity'][key]=0
+        self.frame['neutralModel']['actualBodyValues'][1]=.6;self.write()
+        with self.assertRaisesRegex(ValueError,'unexpectedly changed requested body'):model.compare(self.folder,self.native)
+
     def test_extra_original_visible_mesh_and_missing_native_mesh_fail(self):
         extra=copy.deepcopy(self.frame['meshes'][0]);extra['path']='root/extra';extra['name']='extra'
         # Distinct rest identity avoids the separate ambiguity rejection.
