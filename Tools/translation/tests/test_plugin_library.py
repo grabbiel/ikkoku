@@ -329,8 +329,27 @@ class PluginLibraryTests(unittest.TestCase):
         result = plugin_library.scan(library, [self.packages / "mute"])
         self.assertEqual(result["generation"]["packages"][0]["diagnostics"][0]["code"], "adapter_unverified")
 
+    def test_native_incompatibilities_are_preserved_and_pinned_to_registered_metadata(self):
+        row = {"adapterID": "kk-hide-studio-ui-v1", "type": "HideAllUI.HideAllUI",
+               "identity": {"guid": "keelhauled.hideallui", "name": "HideAllUI", "version": "2.3.2"},
+               "processes": [], "incompatibilities": ["HideStudioUI", "HideHInterface"]}
+        registry = write_native(self.packages / "hide", row=row, config=b"[Keyboard shortcuts]\nHide UI = Space\n")
+        write_ir(self.packages / "conflict", "HideStudioUI")
+        result = self.scan(registry=registry)
+        revision = self.revision(result["generation"], "keelhauled.hideallui")
+        self.assertEqual(revision["incompatibilities"], row["incompatibilities"])
+        self.assertTrue(any(d["code"] == "incompatibility_present" for d in result["generation"]["diagnostics"]))
+        manifest_file = self.packages / "hide/manifest.json"
+        manifest = json.loads(manifest_file.read_text())
+        manifest["incompatibilities"] = []
+        manifest_file.write_text(json.dumps(manifest))
+        changed = self.scan(registry=registry)
+        bad = next(p for p in changed["generation"]["packages"] if p["relativePath"] == "hide")
+        self.assertNotEqual(bad["status"], "ready")
+        self.assertEqual(bad["diagnostics"][0]["code"], "adapter_unverified")
+
     def test_plugin_py_native_route_output_is_indexed_without_running_a_decompiler(self):
-        evidence = ROOT / ".local/reverse/plugin-execution"
+        evidence = ROOT / ".local/plugin-tests"
         evidence.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="plugin-library-", dir=evidence) as temporary:
             work = Path(temporary)

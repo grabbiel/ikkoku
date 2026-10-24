@@ -164,6 +164,15 @@ final class AppState {
                         throw RigError.invalid("IKKOKU_STUDIO_SCENARIO needs the Studio and IKKOKU_STUDIO_SCENARIO_REPORT.")
                     }
                     let scenario = try JSONDecoder().decode(StudioScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
+                    if let visibility = scenario.hideStudioUI {
+                        guard scenario.steps.isEmpty, scenario.pluginLibrary == nil else { throw RigError.invalid("Visibility checks cannot ignore other Studio steps.") }
+                        let report = visibility.run(app: self, studio: studio)
+                        let url = URL(fileURLWithPath: reportPath)
+                        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try CaptureOutput.writeJSON(report.json(), to: url)
+                        print("[ikkoku] Studio visibility scenario: \(report.passed) passed, \(report.failed) failed")
+                        exit(report.failed == 0 ? 0 : 1)
+                    }
                     if let plugins = scenario.pluginLibrary {
                         guard scenario.steps.isEmpty else { throw RigError.invalid("Plugin library checks cannot ignore ordinary Studio steps.") }
                         Task { @MainActor in
