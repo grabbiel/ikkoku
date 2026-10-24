@@ -171,10 +171,10 @@ class PerfTraceTests(unittest.TestCase):
         self.assertEqual(perf_trace.live_line("after/studio-idle", report),
                          "[perf] after/studio-idle: live step job wall 0.61/0.90 ms (p50/p95) x 30.0/s, "
                          "worker CPU 2.40 ms per job (72 ms/s), main waits 0.5/s (0.12 ms/s), "
-                         "skipped 0.1/s, serial 0/s, re-evaluated 0/s")
+                         "skipped 0.1/s, serial 0.0/s, re-evaluated 0.0/s")
         native = {"summary": {"phases": {}, "events": {"studioLiveTickSerial": {"perSecond": 30.0}}}}
         self.assertEqual(perf_trace.live_line("after/studio-native", native),
-                         "[perf] after/studio-native: live step, skipped 0/s, serial 30/s, re-evaluated 0/s")
+                         "[perf] after/studio-native: live step, skipped 0.0/s, serial 30.0/s, re-evaluated 0.0/s")
         self.assertIsNone(perf_trace.live_line("base/studio-idle", {"summary": {"phases": {}}}))
 
     def test_lifecycle_run_checks_render_threads_and_presentation_after_restore(self):

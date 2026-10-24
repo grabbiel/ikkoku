@@ -829,6 +829,47 @@ and two more base runs matched HEAD's capture byte for byte. Crops:
 `status-before.png`, `status-after.png`); hashes in
 `.local/st-ux-ik-camera/captures/{before2,after3,base-rerun1,base-rerun2}/summary.json`.
 
+### Edits during an off-main live step (R7 phase 2, item 3)
+
+`live-step-edit` (`IKKOKU_STUDIO_SCENARIO_SCENE`, the 7-character scenario
+scene) covers what happens when an edit lands while the live step runs off
+the main thread ([threading contract](../../docs/reference/renderer.md#studio-live-step-threads-r7-phase-2-item-3)).
+Its `editDuringAdvance` op takes `edit`, one of:
+
+- `none`;
+- `move` with `key`: moves that character by 0.25 m in x through
+  `StudioModel.update`;
+- `setFK` with `key`, `bone` and `rotation`: the Pose tab's FK setter
+  (`setSourceFKRotation`);
+- `undo` or `redo`: the editor's own undo and redo.
+
+The op runs these steps:
+
+1. It starts one live step the way the timer does
+   (`StudioModel.startLiveFrameAsTimer`). If that step ran serially on the
+   main thread, the op fails.
+2. It applies the edit while the step is in flight.
+3. It completes the step the way its completion handler does
+   (`completeLiveFrame`).
+4. It captures the presented 512×512 render, rebuilds the same document at
+   the same clock with `refresh()` on the main thread, and captures again.
+
+The op passes when all of these hold:
+
+- the clock advanced by exactly one 1/30 s step, compared bit for bit;
+- the two renders are byte-identical;
+- the presenting refresh reused exactly the step frames the contract
+  allows: all of them without an edit, all but the moved character's after
+  `move`, and none after `setFK`, `undo` or `redo`, which reach a preview.
+
+The interleaving inside one step, meaning which worker finishes first, is
+not controlled here. The Engine test
+`sourceStudioEditDuringAParallelTickMatchesTheSerialOrder` compares the
+parallel and serial call orders bit for bit. As a mutation control,
+`FrameRequest.matches` was changed to ignore the world matrix. The `move` step
+then failed: 39,828 pixels differed (max channel delta 182), and the refresh
+reused 7 of 7 frames instead of 6.
+
 ## Maker scenario hook (T-T04)
 
 When the app starts with `IKKOKU_MAKER_SCENARIO` set, `AppState` runs it

@@ -352,7 +352,7 @@ def live_line(name, report):
         text += " job wall %.2f/%.2f ms (p50/p95) x %.1f/s, worker CPU %.2f ms per job (%.0f ms/s)" % (
             job["p50"], job["p95"], job["perSecond"], cpu.get("mean", 0), cpu.get("msPerSecond", 0))
         text += ", main waits %.1f/s (%.2f ms/s)" % (wait.get("perSecond", 0), wait.get("msPerSecond", 0))
-    return text + ", skipped %g/s, serial %g/s, re-evaluated %g/s" % (
+    return text + ", skipped %.1f/s, serial %.1f/s, re-evaluated %.1f/s" % (
         events.get("studioLiveTickSkipped", {}).get("perSecond", 0), serial,
         events.get("studioLiveTickDiscarded", {}).get("perSecond", 0))
 
