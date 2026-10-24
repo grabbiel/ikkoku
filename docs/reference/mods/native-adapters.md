@@ -395,7 +395,34 @@ unit vertices. The corrected check projects transformed triangle centers and kee
 the same interaction assertions. Earlier app/test compile failures are also retained,
 separately from the successful build and test records.
 
-The camera-only scenario's event timings are functional diagnostics, not loaded-scene
-performance evidence. Representative loaded-scene cost and visible UI acceptance
-remain in progress. Private evidence is retained in
+Visible checks on the same `53162923…` executable cover normal Space playback
+without the adapter, actual package mount and native scene reopen, text input
+receiving a literal Space, Shift+Space leaving the panels unchanged, a held Space
+hiding once and the next Space restoring them. Hidden panels leave the AX tree;
+the old Add-button location is noninteractive. Gizmo/timeline preferences set off
+stay off through hide/show and mode exit/return. Maker retains its controls and
+disables the converted-plugin load command. **Show Studio Interface** is enabled
+while hidden, but activating that custom View menu remained tool-limited: the
+automation connection returned invalid accessibility elements while the process
+remained alive. Visible menu recovery and visible unload are not claimed as passed;
+their native model paths pass the automated checks above. Owned GUI processes were
+stopped. A rejected unsupported scene-load environment input is retained separately
+from the successful real File → Open Scene workflow.
+
+A scenario-only Release build at `a6dcd8c` (executable SHA-256
+`b11d8ad689bc9befd470b05e3ca17885fe14e47d514f4f1eaeb38216d8cba616`)
+retains identical production model, panel and Engine runtime sources. Three quiet
+processes each pass both loaded-scene checks with seven rendered characters,
+141 draw items and identical resource counts. Animation time is held at zero,
+live animation/blink are off, and each process records its first visibility pair,
+three warmup pairs and twenty measured pairs through the actual key handler.
+Per-process hide medians are 0.409–0.428 ms; show medians are 0.425–0.440 ms;
+the largest measured event is 0.610 ms. These are synchronous key-handler/model
+refresh costs, excluding asset loading, deferred SwiftUI layout/display and GPU
+completion. They do not establish an FPS improvement or complete UI latency.
+The first cost attempt used the wrong single-character synthetic scene and exited
+before its scenario; its inputs/log are retained separately from the corrected
+seven-character runs. Camera-only timings remain functional diagnostics.
+
+Private evidence is retained in
 `.local/codex-continue-2026-10-24/wave-three/plugins/hide-studio-ui/`.
