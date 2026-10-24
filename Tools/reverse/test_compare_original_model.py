@@ -74,6 +74,68 @@ class ModelComparisonTests(unittest.TestCase):
     def test_changed_bone_fails_independently_of_vertex_output(self):
         self.native['nodeWorldMatrices'] = [list(self.identity)]; self.native['nodeWorldMatrices'][0][12] = .01
         self.assertFalse(model.compare(self.folder, self.native)['gatePassed'])
+    def test_valid_signed_sparse_and_empty_morph_channels(self):
+        part, mesh = self.native['parts'][0], self.frame['meshes'][0]
+        part['morphNames'] = mesh['morphNames'] = ['mouth', 'eye']
+        mesh['morphWeights'] = [-0.5, 0]
+        part['morphWeights'] = [dict(index=0, weight=-0.5)]
+        self.write(); self.assertTrue(model.compare(self.folder, self.native)['gatePassed'])
+        mesh['morphWeights'] = [0, 0]; part['morphWeights'] = []
+        self.write(); self.assertTrue(model.compare(self.folder, self.native)['gatePassed'])
+        part['morphNames'] = mesh['morphNames'] = []
+        mesh['morphWeights'] = []
+        self.write(); self.assertTrue(model.compare(self.folder, self.native)['gatePassed'])
+
+    def test_malformed_sparse_morph_entries_rejected(self):
+        cases = [([dict(index=-1, weight=0)], 'integer within'),
+                 ([dict(index=True, weight=0)], 'integer within'),
+                 ([dict(index=0.0, weight=0)], 'integer within'),
+                 ([dict(index=1, weight=0)], 'integer within'),
+                 ([dict(index=0, weight=1), dict(index=0, weight=0)], 'Duplicate'),
+                 ([0], 'index/weight record'),
+                 ([dict(index=0, weight=0), None], 'index/weight record'),
+                 (None, 'must be a list')]
+        for entries, message in cases:
+            self.native['parts'][0]['morphWeights'] = entries
+            with self.subTest(entries=entries), self.assertRaisesRegex(ValueError, message):
+                model.compare(self.folder, self.native)
+
+    def test_source_dense_morph_length_rejected_before_broadcasting(self):
+        self.native['parts'][0]['morphNames'] = self.frame['meshes'][0]['morphNames'] = ['mouth', 'eye']
+        for weights in ([0], [], [0, 0, 0], None):
+            self.frame['meshes'][0]['morphWeights'] = weights; self.write()
+            with self.subTest(weights=weights), self.assertRaisesRegex(ValueError, 'Source dense morph weights'):
+                model.compare(self.folder, self.native)
+
+    def test_nonfinite_and_mistyped_morph_values_rejected(self):
+        for value in (True, '0', None, float('nan'), float('inf'), -float('inf'), 10 ** 1000):
+            for source in (False, True):
+                self.frame['meshes'][0]['morphWeights'] = [value if source else 0]
+                self.native['parts'][0]['morphWeights'] = [] if source else [dict(index=0, weight=value)]
+                self.write()
+                with self.subTest(value=value, source=source), self.assertRaisesRegex(ValueError, 'finite numeric'):
+                    model.compare(self.folder, self.native)
+
+    def test_zero_channel_weights_must_be_empty(self):
+        part, mesh = self.native['parts'][0], self.frame['meshes'][0]
+        part['morphNames'] = mesh['morphNames'] = []
+        mesh['morphWeights'] = [0]; self.write()
+        with self.assertRaisesRegex(ValueError, 'Source dense morph weights'):
+            model.compare(self.folder, self.native)
+        mesh['morphWeights'] = []; self.write()
+        part['morphWeights'] = [dict(index=0, weight=0)]
+        with self.assertRaisesRegex(ValueError, 'integer within'):
+            model.compare(self.folder, self.native)
+
+    def test_morph_error_threshold_is_unchanged(self):
+        part = self.native['parts'][0]
+        part['morphWeights'] = [dict(index=0, weight=1e-4)]
+        within = model.compare(self.folder, self.native)
+        self.assertTrue(within['gatePassed'])
+        self.assertEqual(within['parts'][0]['morphWeightMaxError'], 1e-4)
+        part['morphWeights'] = [dict(index=0, weight=1.0001e-4)]
+        self.assertFalse(model.compare(self.folder, self.native)['gatePassed'])
+
     def test_morph_and_bake_are_separate_gates(self):
         self.native['parts'][0]['morphWeights'] = [dict(index=0,weight=1)]
         self.assertFalse(model.compare(self.folder, self.native)['gatePassed'])

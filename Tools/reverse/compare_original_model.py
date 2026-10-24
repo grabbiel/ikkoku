@@ -215,6 +215,41 @@ def shape_request_gate(folder, frame, baseline_folder):
                 scope='Same source assembly/context; only requested body/face arrays may change; thumbnails excluded')
 
 
+def morph_weight_error(names, sparse, dense):
+    """Validate the two producer formats before indexing or broadcasting."""
+    count = len(names)
+    if not isinstance(dense, list) or len(dense) != count:
+        raise ValueError('Source dense morph weights must match the channel count')
+    if not isinstance(sparse, list):
+        raise ValueError('Native sparse morph weights must be a list')
+
+    def weight(value):
+        if type(value) not in (int, float):
+            raise ValueError('Morph weight must be a finite numeric value')
+        try:
+            result = float(value)
+        except OverflowError:
+            raise ValueError('Morph weight must be a finite numeric value')
+        if not np.isfinite(result):
+            raise ValueError('Morph weight must be a finite numeric value')
+        return result
+
+    expected = np.asarray([weight(value) for value in dense], dtype=np.float64)
+    actual = np.zeros(count, dtype=np.float64)
+    seen = set()
+    for entry in sparse:
+        if not isinstance(entry, dict):
+            raise ValueError('Native sparse morph weight must be an index/weight record')
+        index = entry.get('index')
+        if type(index) is not int or not 0 <= index < count:
+            raise ValueError('Native sparse morph index must be an integer within the channel count')
+        if index in seen:
+            raise ValueError('Duplicate native sparse morph index')
+        seen.add(index)
+        actual[index] = weight(entry.get('weight'))
+    return float(np.max(np.abs(actual - expected))) if count else 0.
+
+
 def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     frame_path = folder / 'frame.json'; frame = json.loads(frame_path.read_text())
     mode = frame.get('neutralModel')
@@ -276,9 +311,7 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
         vertex_check = errors(native_world, world, tolerance)
         baked_check = errors(native_world, baked_world[:, :3], tolerance)
         if part['morphNames'] != mesh['morphNames']: raise ValueError('Source morph channel identity differs')
-        morphs = np.zeros(len(mesh['morphNames']), dtype=np.float64)
-        for entry in part['morphWeights']: morphs[entry['index']] = entry['weight']
-        morph_error = float(np.max(np.abs(morphs - mesh['morphWeights']))) if len(morphs) else 0.
+        morph_error = morph_weight_error(mesh['morphNames'], part['morphWeights'], mesh['morphWeights'])
         joints = part['jointNodes']; source_joints = mesh['skinBones']
         if len(joints) > len(source_joints) or len(joints) != len(mesh['inverseBindMatrices']) or len(joints) != len(part['inverseBindMatrices']):
             raise ValueError('Source/native skin bone counts differ')
