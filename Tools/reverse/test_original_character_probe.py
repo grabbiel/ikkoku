@@ -103,7 +103,9 @@ class ArgumentTests(unittest.TestCase):
         for inputs in [dict(model_variant='other'),dict(model_variant='female00',settings=Path('s')),
                        dict(model_variant='male200',hand_patterns=Path('h')),dict(model_variant='female200',look_patterns=Path('l')),
                        dict(model_variant='female201',settings=Path('s')),dict(model_variant='female201',hand_patterns=Path('h')),
-                       dict(model_variant='female201',look_patterns=Path('l'))]:
+                       dict(model_variant='female201',look_patterns=Path('l')),
+                       dict(model_variant='male201',settings=Path('s')),dict(model_variant='male201',hand_patterns=Path('h')),
+                       dict(model_variant='male201',look_patterns=Path('l'))]:
             with self.subTest(inputs=inputs),patch('original_character_probe.player_root') as root:
                 with self.assertRaises(ValueError):probe.start('vm',Path('unused'),**inputs)
                 root.assert_not_called()
@@ -144,27 +146,28 @@ class ArgumentTests(unittest.TestCase):
         text=re.sub(r'-\n\s+','-',out.getvalue()) # argparse may wrap the path at its hyphen
         self.assertIn('character-settings.tsv',text);self.assertIn('docs/reference/character/material-expansion.md',text)
 
-    def test_female201_cli_uploads_variant_and_canonical_shapes_before_launch(self):
-        events=[]
-        def guest(vm, script, *args):
-            events.append(('guest',script))
-            return '123' if 'Start-Process' in script else ''
-        def upload(vm, path, data): events.append(('write',path,data))
-        with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);output=root/'.local/capture';shapes=root/'shapes.tsv'
-            shapes.write_text('face\t3\t.7500\nbody\t0\t.2500\n')
-            with patch.object(probe,'ROOT',root),patch.object(probe,'player_root',return_value=ROOT_A),\
-                 patch.object(probe,'write_small',side_effect=upload),patch.object(probe,'retry',side_effect=guest),\
-                 patch.object(sys,'argv',['original_character_probe.py','--vm','vm','--output',str(output),
-                                        '--model-variant','female201','--model-shapes',str(shapes)]),\
-                 patch('sys.stdout',new_callable=io.StringIO):
-                probe.main()
-            run=json.loads((output/'run.json').read_text())
-        expected=b'body\t0\t0.25\nface\t3\t0.75\n'
-        self.assertEqual(run['modelShapes'],dict(file='model-shapes.tsv',sha256=probe.digest(expected)))
-        launch=next(i for i,e in enumerate(events) if e[0]=='guest' and 'Start-Process' in e[1])
-        for name,data in [('model-variant.txt',b'female201\n'),('model-shapes.tsv',expected)]:
-            matches=[i for i,e in enumerate(events) if e[0]=='write' and e[1].endswith(name) and e[2]==data]
-            self.assertEqual(len(matches),1);self.assertLess(matches[0],launch)
+    def test_head201_cli_uploads_variant_and_canonical_shapes_before_launch(self):
+        for variant in ('female201','male201'):
+            events=[]
+            def guest(vm, script, *args):
+                events.append(('guest',script))
+                return '123' if 'Start-Process' in script else ''
+            def upload(vm, path, data): events.append(('write',path,data))
+            with tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);output=root/'.local/capture';shapes=root/'shapes.tsv'
+                shapes.write_text('face\t3\t.7500\nbody\t0\t.2500\n')
+                with patch.object(probe,'ROOT',root),patch.object(probe,'player_root',return_value=ROOT_A),\
+                     patch.object(probe,'write_small',side_effect=upload),patch.object(probe,'retry',side_effect=guest),\
+                     patch.object(sys,'argv',['original_character_probe.py','--vm','vm','--output',str(output),
+                                            '--model-variant',variant,'--model-shapes',str(shapes)]),\
+                     patch('sys.stdout',new_callable=io.StringIO):
+                    probe.main()
+                run=json.loads((output/'run.json').read_text())
+            expected=b'body\t0\t0.25\nface\t3\t0.75\n'
+            self.assertEqual(run['modelShapes'],dict(file='model-shapes.tsv',sha256=probe.digest(expected)))
+            launch=next(i for i,e in enumerate(events) if e[0]=='guest' and 'Start-Process' in e[1])
+            for name,data in [('model-variant.txt',(variant+'\n').encode()),('model-shapes.tsv',expected)]:
+                matches=[i for i,e in enumerate(events) if e[0]=='write' and e[1].endswith(name) and e[2]==data]
+                self.assertEqual(len(matches),1);self.assertLess(matches[0],launch)
 
 if __name__=='__main__':unittest.main()

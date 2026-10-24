@@ -7,7 +7,7 @@ bounded selected-model comparison, not whole-character or whole-game parity.
 
 ## Reference and capture context
 
-`Tools/reverse/original_character_probe.py --model-variant female00|female200|female201|male200`
+`Tools/reverse/original_character_probe.py --model-variant female00|female200|female201|male200|male201`
 creates a new fully clothed card in an isolated CharaStudio player. It waits for
 the Studio scene, loads the requested normal model, drives exactly one original
 `Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
@@ -382,5 +382,65 @@ unchanged. Private producer runs, source catalog/bundle hashes, converted input
 hashes, compile diagnostics, comparisons and controlled images are retained in
 `.local/codex-continue-2026-10-24/rolling/models-head201/summary.json`. Every owned
 player was stopped after collection. This adds no per-frame runtime work and
-makes no pose-cost or FPS claim. Male head201, arbitrary shape combinations,
-animated poses, full local hierarchy and appearance remain separate acceptance.
+makes no pose-cost or FPS claim. Arbitrary shape combinations, animated poses,
+full local hierarchy and appearance remain separate acceptance.
+
+
+## Normal male head201 (#171)
+
+Normal male head201 now has its own neutral, independent neutral repeat and
+coupled-shape original-player gates. This selection is established from retained
+`ChangeHeadAsync`, not inferred from the female head: both load branches select
+`(sex != 0 || exType != 1) ? 100 : 501`. For `sex=0`, `exType=0`, category 100
+therefore applies. Its row201 is the same exact `p_cf_head_03` prefab and
+`cf_anmShapeHead_03` shape animation verified above; the converted normal-male
+assembly independently records those source bundle/catalog hashes.
+
+The new variant selects expected sex from the explicit variant name. It requires
+typed requested/actual sex0, head201, bone0 and `exType=0`, plus the actual loaded
+`ct_head` and exact catalog fields. The probe now reads `character.exType`
+(`chaFile.parameter.exType`) and rejects a non-normal loaded model. Older female201
+and legacy captures without this added readback remain compatible; male201 cannot
+omit it. Cross-sex shape baselines fail before card-token comparison. Source
+Manager correction flags remain high-detail/arm-off/hand-on; the original late
+arm/hand setter has no effect on male models because its behavior is sex-gated.
+
+Three independent owned player runs on 2026-10-24 pass at the same `2e-5`
+matrix/vertex and `1e-4` morph tolerances:
+
+| State | Selected vertices | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error | Max native/BakeMesh vertex error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Neutral, two independent runs | 35,645 | 994 / 224 | 5.78e-7 | 5.62e-7 | 6.31e-7 |
+| Existing coupled body/face input | 35,645 | 994 / 224 | 6.66e-7 | 9.54e-7 | 8.37e-7 |
+
+Morph-weight error is zero. The neutral repeat has exactly equal 817 transform
+records, all 20 source geometry/BakeMesh streams and saved card bytes. Requested
+neutral height `.5` and mixed height `.25` both become saved Float32 `.6` in the
+original player. This is the sole reported coercion; the mixed input passes the
+full requested/actual and independent unedited-card-token gate. The native
+inspector uses saved height and the existing normal-male head/neck correction,
+without adding a new clamp or pose formula. Each assembly prepares 20 parts and
+selects 19 with the existing canine/shadow exclusions. Neutral/mixed controlled
+CPU silhouettes have IoU 1.0 and no differing pixels; this is not a production
+Metal color or shading result.
+
+The single probe source SHA-256 is
+`f9a2ac83ee6700e2fd9c0d5f38018e0abcea562c821e4884176da75186b9aa8b`; it compiles without
+diagnostics against the same original Studio assembly `902b9a…` recorded above.
+The converted normal-male/head201 avatar manifest SHA-256 is
+`ec4db8af4406378f2e78d2aab0c48acd142354d5281c43e8dde8aef8460fadfc`.
+The same recorded inspector binary is reused with unchanged relevant geometry
+source. All three source players and native exports exited after collection.
+Private routing evidence, source/input hashes, full comparisons and images are
+indexed by `.local/codex-continue-2026-10-24/rolling/models-male201/summary.json`.
+
+All 50 focused Python tests pass, including cross-sex and boolean identity
+rejection, missing/nonzero model-context fields, catalog corruption and the real
+CLI upload order for both head201 variants. The six earlier neutral/mixed assembly
+gates, their independent repeats and all three female201 gates/repeat still pass;
+1,266 earlier inputs, 475 female201 inputs and 472 new capture files remain
+unchanged during offline validation. No native runtime or per-frame work changes,
+pose-cost benchmark or FPS claim are included. This closes independent neutral
+and one coupled-shape coverage for the four converted female/male head200/201
+assemblies. Other shapes, alternate model types, animation, full local hierarchy
+and appearance remain separate work.
