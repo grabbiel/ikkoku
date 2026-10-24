@@ -198,10 +198,33 @@ extension StudioModel {
         }
     }
 
+    /// Interactive commands read only mode, pending state and session presence.
+    /// Startup configuration keeps using loadSourcePlugins without these UI gates.
+    var sourcePluginCommandsAvailable: Bool { isActiveMode && !sourcePluginLibraryPending }
+    var canToggleSourcePluginPlayback: Bool { sourcePluginCommandsAvailable && hasSourcePluginSession }
+
+    func toggleSourcePluginPlayback() {
+        guard canToggleSourcePluginPlayback else { return }
+        sourcePluginsRunning.toggle()
+    }
+
+    /// The modal owns the generation captured before presentation. Leaving and
+    /// returning to Studio must not turn its old selection into a fresh command.
+    func loadSourcePluginProfileInteractively(profileURL: URL, expectedGeneration: UInt64) throws {
+        guard sourcePluginCommandsAvailable, expectedGeneration == sourcePluginMountGeneration else {
+            throw CancellationError()
+        }
+        try loadSourcePlugins(profileURL: profileURL)
+    }
+
     func openSourcePluginProfile() {
+        guard sourcePluginCommandsAvailable else { return }
+        let generation = sourcePluginMountGeneration
         let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try loadSourcePlugins(profileURL: url) } catch { status = "Plugin load: \(error)" }
+        do { try loadSourcePluginProfileInteractively(profileURL: url, expectedGeneration: generation) }
+        catch is CancellationError { /* Ownership changed while the dialog was open. */ }
+        catch { status = "Plugin load: \(error)" }
     }
 
     func configureSourceMutePlugin(configURL: URL) throws {

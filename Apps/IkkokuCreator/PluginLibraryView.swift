@@ -69,8 +69,8 @@ struct PluginLibraryView: View {
                     Text(mounted.revisions.map { "\($0.guid) \($0.version)" }.joined(separator: " · "))
                         .font(.caption).textSelection(.enabled)
                     HStack {
-                        Button(studio.sourcePluginsRunning ? "Pause" : "Run") { studio.sourcePluginsRunning.toggle() }
-                            .disabled(!studio.hasSourcePluginSession)
+                        Button(studio.sourcePluginsRunning ? "Pause" : "Run") { studio.toggleSourcePluginPlayback() }
+                            .disabled(!studio.canToggleSourcePluginPlayback)
                         Button("Unload") { studio.unloadSourcePluginLibrary() }
                     }.disabled(app.mode != .studio || studio.sourcePluginLibraryPending)
                 }

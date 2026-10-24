@@ -306,6 +306,26 @@ the tracked tree checked clean before continuing development. This GUI run
 proves cancellation/serialization behavior, not latency or decoder throughput.
 The older acceptance below describes the preceding build.
 
+Interactive legacy commands use the same Studio ownership boundary as library
+mounts. “Load Translated Studio Plugins…” is unavailable outside Studio or during
+a pending library mount. Its model entry checks that boundary before opening the
+dialog and before reading the selected profile; the completion also requires the
+generation captured before the dialog. Leaving and returning to Studio, or
+unloading plugins, invalidates an older selection without changing the current
+status. Both menu and library-panel Run/Pause actions use one guarded method that
+also requires an existing session. These are event-only checks of narrow state;
+they add no work to frame ticks and do not read the scene document for menu
+availability. The programmatic startup loader and fresh-profile callback behavior
+remain unchanged.
+
+The bounded `pluginLibrary` scenario now includes held-preparation, inactive,
+leave/return and unload rejection checks through those production methods,
+comparing runtime snapshots, document/session identity, sampled shared-frame
+fields and resource counts. It separately exercises active Run/Pause, successful
+profile load, a normal missing-file failure and the inactive programmatic startup
+path. Build, scenario and visible-menu acceptance for this follow-up are pending;
+the earlier results above are not attributed to the new command checks.
+
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
 attached world transform. Repeating undo and trying redo preserve the old
