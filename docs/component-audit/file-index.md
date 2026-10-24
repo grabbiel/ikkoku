@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**921 files indexed; 921 assigned; 0 unassigned.**
+**931 files indexed; 931 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 104 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 125 |
 | [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 174 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 178 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 204 |
+| Conversion / recovery / verification tool | 209 |
 | Documentation / historical evidence | 58 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 29 |
-| Runtime / shared shader declaration | 211 |
-| Test / validation | 190 |
+| Reference host / controlled fixture | 30 |
+| Runtime / shared shader declaration | 213 |
+| Test / validation | 192 |
 
 ## App / gameplay / plugins
 
@@ -73,10 +73,11 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/Assets.xcassets/Contents.json](../../Apps/IkkokuCreator/Assets.xcassets/Contents.json) | App resource metadata / icon |
 | [Apps/IkkokuCreator/ContentView.swift](../../Apps/IkkokuCreator/ContentView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
-| [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/HideStudioUIScenario.swift](../../Apps/IkkokuCreator/HideStudioUIScenario.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / app menus and editor-owned plugin commands |
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift) | Runtime / shared shader declaration |
-| [Apps/IkkokuCreator/PluginLibraryScenario.swift](../../Apps/IkkokuCreator/PluginLibraryScenario.swift) | Runtime / deterministic plugin mount cancellation and restore checks |
+| [Apps/IkkokuCreator/PluginLibraryScenario.swift](../../Apps/IkkokuCreator/PluginLibraryScenario.swift) | Runtime / deterministic plugin command ownership, cancellation and restore checks |
 | [Apps/IkkokuCreator/PluginLibraryView.swift](../../Apps/IkkokuCreator/PluginLibraryView.swift) | Runtime / Studio plugin selection panel and request-owned operation state |
 | [Apps/IkkokuCreator/ViewportRenderThread.swift](../../Apps/IkkokuCreator/ViewportRenderThread.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
@@ -92,6 +93,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Sources/Gameplay/SourceGameplayHost.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayHost.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceGameplayHostScenario.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplayHostScenario.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift](../../Packages/Engine/Sources/Gameplay/SourceGameplaySession.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Gameplay/SourceHideStudioUIPlugin.swift](../../Packages/Engine/Sources/Gameplay/SourceHideStudioUIPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceIRProgram.swift](../../Packages/Engine/Sources/Gameplay/SourceIRProgram.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift](../../Packages/Engine/Sources/Gameplay/SourceMuteInBackgroundPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift](../../Packages/Engine/Sources/Gameplay/SourceNativePluginPackage.swift) | Runtime / shared shader declaration |
@@ -111,6 +113,7 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayExecutionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplayHostTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplayHostTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceGameplaySessionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceHideStudioUITests.swift](../../Packages/Engine/Tests/EngineTests/SourceHideStudioUITests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMuteInBackgroundTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift](../../Packages/Engine/Tests/EngineTests/SourceNativePluginPackageTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift](../../Packages/Engine/Tests/EngineTests/SourcePluginFaultInjectionTests.swift) | Test / validation |
@@ -131,12 +134,15 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Tools/reverse/fixtures/MutePluginOracle/Host.cs](../../Tools/reverse/fixtures/MutePluginOracle/Host.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/MutePluginOracle/Program.cs](../../Tools/reverse/fixtures/MutePluginOracle/Program.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalADVBindingProbe.cs](../../Tools/reverse/fixtures/OriginalADVBindingProbe.cs) | Reference host / controlled fixture |
+| [Tools/reverse/fixtures/OriginalHideStudioUIProbe.cs](../../Tools/reverse/fixtures/OriginalHideStudioUIProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/fixtures/OriginalLifecycleProbe.cs](../../Tools/reverse/fixtures/OriginalLifecycleProbe.cs) | Reference host / controlled fixture |
 | [Tools/reverse/original_adv_binding_probe.py](../../Tools/reverse/original_adv_binding_probe.py) | Conversion / recovery / verification tool |
+| [Tools/reverse/original_hide_studio_ui_probe.py](../../Tools/reverse/original_hide_studio_ui_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/original_lifecycle_probe.py](../../Tools/reverse/original_lifecycle_probe.py) | Conversion / recovery / verification tool |
 | [Tools/reverse/test_gameplay_contract.py](../../Tools/reverse/test_gameplay_contract.py) | Test / validation |
 | [Tools/reverse/test_gameplay_execution_contract.py](../../Tools/reverse/test_gameplay_execution_contract.py) | Test / validation |
 | [Tools/reverse/test_original_adv_binding_probe.py](../../Tools/reverse/test_original_adv_binding_probe.py) | Test / validation |
+| [Tools/reverse/test_original_hide_studio_ui_probe.py](../../Tools/reverse/test_original_hide_studio_ui_probe.py) | Test / validation |
 | [Tools/translation/fixtures/LifecycleFixture.cs](../../Tools/translation/fixtures/LifecycleFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/fixtures/StudioMotionFixture.cs](../../Tools/translation/fixtures/StudioMotionFixture.cs) | Reference host / controlled fixture |
 | [Tools/translation/frontend/Program.cs](../../Tools/translation/frontend/Program.cs) | Conversion / recovery / verification tool |
@@ -294,7 +300,7 @@ Feature assessment: [studio.md](studio.md).
 | File | Role |
 | --- | --- |
 | [Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift) | Runtime / shared shader declaration |
-| [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / plugin session staging, adapters and guarded interactive commands |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
@@ -873,9 +879,11 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/private-source.json](../../Tools/verification/lanes/private-source.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
+| [Tools/verification/metal_derivative_repro.swift](../../Tools/verification/metal_derivative_repro.swift) | Conversion / recovery / verification tool |
 | [Tools/verification/perf_trace.py](../../Tools/verification/perf_trace.py) | Conversion / recovery / verification tool |
 | [Tools/verification/prerequisites.json](../../Tools/verification/prerequisites.json) | Build / repository configuration |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/accessory-labels-missing.json](../../Tools/verification/scenarios/accessory-labels-missing.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/accessory-toggle.json](../../Tools/verification/scenarios/accessory-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/animation-select.json](../../Tools/verification/scenarios/animation-select.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/blink-toggle.json](../../Tools/verification/scenarios/blink-toggle.json) | Conversion / recovery / verification tool |
@@ -909,6 +917,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/neck-look-orbit.json](../../Tools/verification/scenarios/neck-look-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/neck-target-orbit.json](../../Tools/verification/scenarios/neck-target-orbit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/outfit-select.json](../../Tools/verification/scenarios/outfit-select.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-accessory-labels.json](../../Tools/verification/scenarios/reload-load-accessory-labels.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/expression-edit.json](../../Tools/verification/scenarios/expression-edit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-expression.json](../../Tools/verification/scenarios/reload-save-expression.json) | Conversion / recovery / verification tool |
@@ -919,6 +928,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-load-outfit.json](../../Tools/verification/scenarios/reload-load-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-props.json](../../Tools/verification/scenarios/reload-load-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-route.json](../../Tools/verification/scenarios/reload-load-route.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-accessory-labels.json](../../Tools/verification/scenarios/reload-save-accessory-labels.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-camera.json](../../Tools/verification/scenarios/reload-save-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-clothes.json](../../Tools/verification/scenarios/reload-save-clothes.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-half-state.json](../../Tools/verification/scenarios/reload-save-half-state.json) | Conversion / recovery / verification tool |

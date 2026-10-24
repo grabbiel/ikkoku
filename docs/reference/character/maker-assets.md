@@ -404,6 +404,20 @@ female control flow; the two-sex API checks above separately cover persistence,
 latest edits and rollback. It does not establish male GUI or whole-Maker/source
 appearance parity. The parent-owned review is retained as `root-gui-review.json`.
 
+The four new synthetic appearance-transaction tests run each complete load and
+lifetime sequence on a dedicated thread, returning their 22 observations to the
+calling Swift Testing task for assertion. This follows the existing live-tick
+fixture helper and keeps synchronous MetalKit texture work off cooperative test
+workers without changing test selection, parallelism, assertions or the public
+lane's 600-second limit. The local full Engine suite passes with this arrangement
+in 15.333 s; the unmodified local baseline also passed, including with a strict
+cooperative pool. Hosted runs of the original tests repeatedly timed out while
+their appearance tests were outstanding. The first hosted diagnostic identified
+`swiftpm-testing-helper` as the test process but missed its stack because it
+only matched older executable names; the sampler now includes that helper.
+Worker starvation remains a hypothesis pending hosted evidence. This is test
+isolation, with no production runtime or performance claim.
+
 
 ### Prepared head appearance inputs (#192)
 

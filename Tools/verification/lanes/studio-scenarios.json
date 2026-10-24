@@ -2118,6 +2118,125 @@
         }
       ],
       "timeout": 900
+    },
+    {
+      "id": "studio-scenario-reload-save-accessory-labels",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_ACCESSORY_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_NATIVE_PLUGIN_MANIFEST",
+          "kind": "file",
+          "from": "IKKOKU_ACCESSORY_NAMES_MANIFEST"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-save-accessory-labels.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-save-accessory-labels.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Exact accessory-name adapter mount/unload, 20 UTF-8 model labels, loaded slot and hidden-accessory label retention, outfit replacement, negative assertions and bounded synchronous label-call samples before native save. Actual displayed AX labels require separate GUI acceptance; no layout/GPU timing claim.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-save-accessory-labels.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/reload-save-accessory-labels.png",
+          "kind": "saved-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-reload-load-accessory-labels",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_ACCESSORY_NAMES_MANIFEST",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/reload-load-accessory-labels.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-reload-load-accessory-labels.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Fresh process starts without source import or startup plugin mount, restores the pinned native accessory-name adapter and all 20 model labels, hidden accessory state, outfit selection and Undo. Report retains native reference hashes for comparison with save phase.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-reload-load-accessory-labels.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-accessory-labels-missing",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_STUDIO_SCENARIO_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_MAKER_LIBRARY",
+          "kind": "file"
+        },
+        {
+          "env": "IKKOKU_NATIVE_PLUGIN_MANIFEST",
+          "kind": "file",
+          "from": "IKKOKU_ACCESSORY_NAMES_MANIFEST"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/accessory-labels-missing.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-accessory-labels-missing.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Mounted accessory-name adapter keeps all 20 numbered fallbacks for empty and conversion-missing source slots. Restoring the original outfit preserves original scene bytes across export/reimport; bounded label-call samples exclude SwiftUI layout and rendering.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-accessory-labels-missing.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/accessory-labels-missing.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
     }
   ]
 }

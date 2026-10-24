@@ -58,10 +58,11 @@ struct IkkokuApp: App {
                 Button("Reload Mod Library") { app.reloadModLibrary() }.disabled(app.modProfile == nil)
                 Divider()
                 Button("Load Translated Studio Plugins…") { app.studio?.openSourcePluginProfile() }
-                Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }
+                    .disabled(app.studio?.sourcePluginCommandsAvailable != true)
+                Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }.disabled(app.mode != .studio)
                 Button(app.studio?.sourcePluginsRunning == true ? "Pause Studio Plugins" : "Run Studio Plugins") {
-                    app.studio?.sourcePluginsRunning.toggle()
-                }.disabled(app.studio?.hasSourcePluginSession != true)
+                    app.studio?.toggleSourcePluginPlayback()
+                }.disabled(app.studio?.canToggleSourcePluginPlayback != true)
                 Divider()
                 Button("Load Bone Modifiers…") { app.openBoneModifiers() }.disabled(app.maker?.sourceRigPreview == nil)
                 Button("Clear Bone Modifiers") { app.maker?.clearBoneModifiers() }.disabled(app.maker?.sourceBoneModifiers == nil)
@@ -70,6 +71,8 @@ struct IkkokuApp: App {
                 Button("Character Maker") { app.mode = .maker }.keyboardShortcut("1", modifiers: [.command])
                 Button("Studio") { app.mode = .studio }.keyboardShortcut("2", modifiers: [.command])
                 Divider()
+                Button("Show Studio Interface") { app.studio?.revealSourceInterface() }
+                    .disabled(app.mode != .studio || app.studio?.sourceInterfaceVisible != false)
                 Button("Reset Camera") { app.resetCamera() }.keyboardShortcut("r", modifiers: [.command, .shift])
                 Divider()
                 // R1/CMT-04 opt-in: converted source characters draw with the translated

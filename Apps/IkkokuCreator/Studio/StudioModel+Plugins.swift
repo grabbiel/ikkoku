@@ -19,6 +19,7 @@ extension StudioModel {
     struct PreparedNativePlugins {
         let muteEnabled: Bool?
         let accessoryNames: Bool
+        var hideStudioUI = false
     }
 
     func loadSourcePlugins(profileURL: URL) throws {
@@ -197,10 +198,33 @@ extension StudioModel {
         }
     }
 
+    /// Interactive commands read only mode, pending state and session presence.
+    /// Startup configuration keeps using loadSourcePlugins without these UI gates.
+    var sourcePluginCommandsAvailable: Bool { isActiveMode && !sourcePluginLibraryPending }
+    var canToggleSourcePluginPlayback: Bool { sourcePluginCommandsAvailable && hasSourcePluginSession }
+
+    func toggleSourcePluginPlayback() {
+        guard canToggleSourcePluginPlayback else { return }
+        sourcePluginsRunning.toggle()
+    }
+
+    /// The modal owns the generation captured before presentation. Leaving and
+    /// returning to Studio must not turn its old selection into a fresh command.
+    func loadSourcePluginProfileInteractively(profileURL: URL, expectedGeneration: UInt64) throws {
+        guard sourcePluginCommandsAvailable, expectedGeneration == sourcePluginMountGeneration else {
+            throw CancellationError()
+        }
+        try loadSourcePlugins(profileURL: profileURL)
+    }
+
     func openSourcePluginProfile() {
+        guard sourcePluginCommandsAvailable else { return }
+        let generation = sourcePluginMountGeneration
         let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try loadSourcePlugins(profileURL: url) } catch { status = "Plugin load: \(error)" }
+        do { try loadSourcePluginProfileInteractively(profileURL: url, expectedGeneration: generation) }
+        catch is CancellationError { /* Ownership changed while the dialog was open. */ }
+        catch { status = "Plugin load: \(error)" }
     }
 
     func configureSourceMutePlugin(configURL: URL) throws {
@@ -317,13 +341,17 @@ extension StudioModel {
         }
         let packages = try verified ?? refs.map { try $0.load() }
         guard packages.count == refs.count else { throw SourcePluginError.invalid("Native adapter preparation is incomplete.") }
-        var muteEnabled: Bool?, accessoryNames = false
+        var muteEnabled: Bool?, accessoryNames = false, hideStudioUI = false
         for (reference, package) in zip(refs, packages) where reference.enabled {
             if package.manifest.adapterID == SourceNativePluginPackage.muteAdapter {
                 muteEnabled = try SourceMuteInBackgroundPlugin.readConfiguration(package.configuration ?? Data())
             } else if package.manifest.adapterID == SourceNativePluginPackage.accessoryAdapter { accessoryNames = true }
+            else if package.manifest.adapterID == SourceNativePluginPackage.hideStudioUIAdapter {
+                try SourceHideStudioUIPlugin.validateConfiguration(package.configuration ?? Data())
+                hideStudioUI = true
+            }
         }
-        return .init(muteEnabled: muteEnabled, accessoryNames: accessoryNames)
+        return .init(muteEnabled: muteEnabled, accessoryNames: accessoryNames, hideStudioUI: hideStudioUI)
     }
 
     func commitSourceNativePlugins(_ prepared: PreparedNativePlugins) {
@@ -334,11 +362,15 @@ extension StudioModel {
         }
         mountSourceFocusAdapter(adapter)
         sourceAccessoryNamesEnabled = prepared.accessoryNames
+        sourceHideStudioUI = prepared.hideStudioUI ? SourceHideStudioUIPlugin() : nil
     }
 
     func openSourceNativePlugin() {
+        // Interactive mounts belong to Studio. The underlying loader remains
+        // available to startup/capture and validated native-scene restoration.
+        guard isActiveMode else { return }
         let panel = NSOpenPanel(); panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, isActiveMode, let url = panel.url else { return }
         do { try loadSourceNativePlugin(url: url) } catch { status = "Native plugin load: \(error)" }
     }
 }
