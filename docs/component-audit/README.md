@@ -162,6 +162,22 @@ matches in this pair. Five hair pixels (maximum channel difference 2) and one
 front-hair pixel (maximum 1) still vary. This bounded integration check adds no
 source-parity or performance claim.
 
+**Implementation handed to final acceptance — HideAllUI, [#185](https://github.com/grabbiel/ikkoku/pull/185):**
+The third exact-revision native adapter implements Studio interface visibility
+with session-local state, viewport-owned Space, and recovery that preserves host
+preferences. Sixteen focused Engine tests and 21 native app checks plus four
+fresh-process restore checks pass without skips. The independent original-player
+trace covers ten phases and sixteen retained targets; its corrected validator
+pins the observed exception while preserving the initial failed validations.
+Root GUI checks verify library mounting, text-field Space ownership and hidden
+panels leaving the accessibility tree. Menu recovery, preference preservation and
+unload still need their remaining visible checks after a stale UI-tool binding;
+the process sample showed no application deadlock. Representative synchronous
+event cost and final CI acceptance remain pending. No per-frame callback was
+added; the native panel mapping does not establish general Unity Canvas, input
+or Harmony compatibility. Private evidence is retained under
+`wave-three/plugins/hide-studio-ui/`; this task is not yet marked fully accepted.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
