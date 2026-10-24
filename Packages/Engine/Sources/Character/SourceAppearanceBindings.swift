@@ -185,7 +185,7 @@ public extension SourcePreviewAppearance {
                             layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
                                 SourceMaterialLayer(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
                                     transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
-                            })
+                            }, timings: timings)
                     }
                 } else {
                     let count = dimensions.width * dimensions.height

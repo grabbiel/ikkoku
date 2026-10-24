@@ -20,6 +20,9 @@ struct SourceMaterialLayer {
 
 final class SourceMaterialCompositor {
     let device: any MTLDevice, pipeline: any MTLComputePipelineState, queue: any MTLCommandQueue
+    // Written only at creation, then bound read-only for this compositor's recipes.
+    // Each optional is filled lazily; absent non-main slots all share zero.
+    private var fallbackWhite: (any MTLTexture)?, fallbackZero: (any MTLTexture)?
     init(device: any MTLDevice) throws {
         self.device = device
         let options = MTLCompileOptions(); options.fastMathEnabled = false
@@ -32,7 +35,21 @@ final class SourceMaterialCompositor {
 
     func compose(kind: SourceColorComposition.Kind, width: Int, height: Int,
                  main: SourceMaterialImage?, mask: SourceMaterialImage?, colors: [Float4], blend: Float, encodeSRGB: Bool,
-                 patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer]) throws -> any MTLTexture {
+                 patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer],
+                 timings: SourceAppearanceTimings? = nil) throws -> any MTLTexture {
+        var phase: SourceAppearanceTimings.CompositionPhase = .allocationUpload
+        var phaseStart = timings.map { _ in ProcessInfo.processInfo.systemUptime }
+        func advance(to next: SourceAppearanceTimings.CompositionPhase) {
+            guard let timings, let start = phaseStart else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            timings.recordComposition(phase, milliseconds: (now - start) * 1000)
+            phase = next; phaseStart = now
+        }
+        defer {
+            if let start = phaseStart {
+                timings?.recordComposition(phase, milliseconds: (ProcessInfo.processInfo.systemUptime - start) * 1000)
+            }
+        }
         let kinds: [SourceColorComposition.Kind] = [.head, .eye, .eyeWhite, .clothes, .hair]
         var parameters = [Float4](repeating: .zero, count: 1 + 3 + 3 * 2 + 8 * 4)
         parameters[0] = Float4(Float(kinds.firstIndex(of: kind)!), Float(layers.count), blend, encodeSRGB ? 1 : 0)
@@ -56,15 +73,18 @@ final class SourceMaterialCompositor {
         }
         // Missing main is white; all other absent inputs are zero. Kernels branch
         // on metadata before sampling inactive pattern/layer slots.
-        let white = SourceMaterialImage(width: 1, height: 1, repeating: false, bytes: [255,255,255,255])
-        let zero = SourceMaterialImage(width: 1, height: 1, repeating: false, bytes: [0,0,0,0])
         var inputs: [any MTLTexture] = []
         for (index, optional) in inputImages.enumerated() {
-            let image = optional ?? (index == 0 ? white : zero)
+            guard let image = optional else {
+                inputs.append(try fallbackTexture(white: index == 0, timings: timings))
+                timings?.recordFallbackBinding()
+                continue
+            }
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm,
                 width: image.width, height: image.height, mipmapped: false)
             descriptor.storageMode = .shared; descriptor.usage = .shaderRead
             guard let texture = device.makeTexture(descriptor: descriptor) else { throw SourceCharacterCardError.invalid("Unable to allocate source material input.") }
+            timings?.recordInputAllocation(fallback: false)
             image.bytes.withUnsafeBytes { texture.replace(region: MTLRegionMake2D(0,0,image.width,image.height), mipmapLevel: 0,
                 withBytes: $0.baseAddress!, bytesPerRow: image.width * 4) }
             inputs.append(texture)
@@ -74,6 +94,7 @@ final class SourceMaterialCompositor {
         guard let output = device.makeTexture(descriptor: descriptor), let buffer = queue.makeCommandBuffer(), let encoder = buffer.makeComputeCommandEncoder() else {
             throw SourceCharacterCardError.invalid("Unable to allocate source material output.")
         }
+        advance(to: .encodeSubmit)
         encoder.setComputePipelineState(pipeline)
         parameters.withUnsafeBytes { encoder.setBytes($0.baseAddress!, length: $0.count, index: 0) }
         for (index, texture) in inputs.enumerated() { encoder.setTexture(texture, index: index) }
@@ -81,11 +102,28 @@ final class SourceMaterialCompositor {
         let groupWidth = pipeline.threadExecutionWidth
         encoder.dispatchThreads(MTLSize(width: width, height: height, depth: 1), threadsPerThreadgroup: MTLSize(width: groupWidth,
             height: max(1, min(8, pipeline.maxTotalThreadsPerThreadgroup / groupWidth)), depth: 1))
-        encoder.endEncoding(); buffer.commit(); buffer.waitUntilCompleted()
+        encoder.endEncoding(); buffer.commit()
+        advance(to: .waitAndView)
+        buffer.waitUntilCompleted()
         guard buffer.status == .completed, let display = output.makeTextureView(pixelFormat: .rgba8Unorm_srgb) else {
             throw SourceCharacterCardError.invalid("Source material Metal dispatch failed: \(buffer.error?.localizedDescription ?? "texture view unavailable").")
         }
         return display
+    }
+
+    private func fallbackTexture(white: Bool, timings: SourceAppearanceTimings?) throws -> any MTLTexture {
+        if let texture = white ? fallbackWhite : fallbackZero { return texture }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        descriptor.storageMode = .shared; descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            throw SourceCharacterCardError.invalid("Unable to allocate source material input.")
+        }
+        timings?.recordInputAllocation(fallback: true)
+        let bytes: [UInt8] = white ? [255,255,255,255] : [0,0,0,0]
+        bytes.withUnsafeBytes { texture.replace(region: MTLRegionMake2D(0,0,1,1), mipmapLevel: 0,
+            withBytes: $0.baseAddress!, bytesPerRow: 4) }
+        if white { fallbackWhite = texture } else { fallbackZero = texture }
+        return texture
     }
 
     // Re-expressed from the recovered equations, with bounded texture indexing.

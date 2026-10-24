@@ -6,6 +6,73 @@ import Assets
 import Renderer
 import Character
 
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialFallbackReusePreservesPixelsAndIndependentOutputLeases() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let names = ["maskOnly", "mainOnly", "both"]
+    let preview = try AppearanceTestFixture.preview(directory: directory, resources: resources, names: names)
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let main = try AppearanceTestFixture.texture([40,120,230,255, 220,70,20,180], directory: directory)
+    let mask = try AppearanceTestFixture.texture([255,0,0,255, 0,255,0,128], directory: directory)
+    let entries = names.map { name -> [String: Any] in
+        var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+        entry["parts"] = [name]
+        if name != "maskOnly" { entry["main"] = main }
+        if name != "mainOnly" { entry["mask"] = mask }
+        return entry
+    }
+    let bindings = try AppearanceTestFixture.bindings(entries, directory: directory)
+    func pixels(_ application: SourcePreviewAppearance.CardApplication) throws -> [[UInt8]] {
+        try names.map { name in
+            let texture = try #require(resources.texture(application.appearance.materials[name]?.first?.base))
+            var bytes = [UInt8](repeating: 0, count: 8)
+            bytes.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: 8,
+                from: MTLRegionMake2D(0,0,2,1), mipmapLevel: 0) }
+            return bytes
+        }
+    }
+    let expected = try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources, backend: .cpu))
+    let before = resources.statistics().textures
+    let timings = SourceAppearanceTimings()
+    var first: SourcePreviewAppearance.CardApplication? = try preview.applying(card, bindings: bindings,
+        directory: directory, resources: resources, timings: timings)
+    #expect(zip(try pixels(first!), expected).allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
+    let initial = try #require(timings.sample.composition)
+    #expect(initial.realInputAllocations == 4)
+    #expect(initial.fallbackAllocations == 2) // shared across all three recipes
+    #expect(initial.fallbackBindings == 59) // 3×21 slots minus four actual inputs
+    #expect(initial.calls == ["allocationUpload": 3, "encodeSubmit": 3, "waitAndView": 3])
+    #expect(initial.milliseconds.values.allSatisfy { $0.isFinite && $0 >= 0 })
+    #expect(initial.milliseconds.values.reduce(0, +) <= (timings.sample.milliseconds["composeEncodeWait"] ?? 0) + 0.001)
+    let firstHandles = names.compactMap { first?.appearance.materials[$0]?.first?.base }
+    #expect(firstHandles.count == 3 && resources.statistics().textures == before + 3)
+    var second: SourcePreviewAppearance.CardApplication? = try first!.appearance.applying(card, bindings: bindings,
+        directory: directory, resources: resources, timings: timings)
+    let secondHandles = names.compactMap { second?.appearance.materials[$0]?.first?.base }
+    #expect(Set(firstHandles).isDisjoint(with: secondHandles))
+    #expect(zip(try pixels(second!), expected).allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
+    #expect(timings.sample.composition?.fallbackAllocations == 4) // a fresh compositor per applying call
+    first = nil
+    #expect(firstHandles.allSatisfy { resources.texture($0) == nil })
+    #expect(secondHandles.allSatisfy { resources.texture($0) != nil })
+    second = nil
+    #expect(resources.statistics().textures == before)
+    // Default callers produce the same pixels without a diagnostic collector.
+    #expect(zip(try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources)), expected)
+        .allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
+    #expect(resources.statistics().textures == before)
+    // No absent main means white is never allocated, even across two recipes.
+    let zeroOnly = SourceAppearanceTimings()
+    _ = try preview.applying(card, bindings: bindings.restricted(to: ["mainOnly", "both"]),
+        directory: directory, resources: resources, timings: zeroOnly)
+    #expect(zeroOnly.sample.composition?.fallbackAllocations == 1)
+    #expect(zeroOnly.sample.composition?.realInputAllocations == 3)
+    #expect(zeroOnly.sample.composition?.fallbackBindings == 39)
+    #expect(resources.statistics().textures == before)
+}
+
 private enum MakeupFixture {
     typealias F = OriginalCardFixture
     static func card(enabled: UInt8, modProperty: String? = nil) throws -> SourceCharacterCard {
