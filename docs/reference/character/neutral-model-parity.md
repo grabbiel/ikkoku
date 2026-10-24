@@ -7,7 +7,7 @@ bounded selected-model comparison, not whole-character or whole-game parity.
 
 ## Reference and capture context
 
-`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|male00|male200|male201`
+`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|male00|male00-bone1|male200|male201`
 creates a new fully clothed card in an isolated CharaStudio player. It waits for
 the Studio scene, loads the requested normal model, drives exactly one original
 `Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
@@ -538,8 +538,8 @@ the independent same-assembly baseline's unedited card tokens agree. Each native
 assembly prepares 20 parts and selects 19 under the existing inactive-canine and
 hash-bound-shadow exclusions. Neutral/mixed CPU silhouettes have IoU 1.0 and zero
 differing pixels; these are geometry diagnostics, not Metal shading or color
-parity. The bone-type-1 correction-table/collider gate remains separately scoped
-to the corrected female fixture above.
+parity. The bone-type-1 correction-table/collider gates are separately scoped to the
+corrected female fixture above and the corrected male fixture below.
 
 All three captures use probe source SHA-256
 `8edccde0a2fdb60f9aaae57abe27995751d2b5f0e8494f7605c82ef7134e3879`, compiled without
@@ -557,6 +557,65 @@ corrected female three-run set/repeats remain passing. The 472 new capture files
 remain unchanged during validation. Private source/input hashes, helper reviews,
 comparisons and images are indexed by
 `.local/codex-continue-2026-10-24/rolling/models-male00/summary.json`.
-This does not establish arbitrary shape combinations, corrected male types,
-animation, full local hierarchy or appearance parity. No per-frame runtime work
+This bone-type-0 result does not establish arbitrary shape combinations, other
+corrected types, animation, full local hierarchy or appearance parity. No per-frame runtime work
 or performance benchmark is included.
+
+
+## Corrected male head00 skeleton (#189)
+
+The explicit `male00-bone1` variant extends the correction-table/collider gate to
+normal male/head00, with typed requested and actual sex 0, head 0, bone type 1
+and exType 0. The retained `ChangeHeadAsync` routing predicate still selects
+category 100, row 0; the actual loaded `ct_head` reports that row's exact
+`p_cf_head_00`, `cf_anmShapeHead_00` and `abdata` fields. The native inspector reuses
+the existing normal-male head/neck 0.91 factor, saved height 0.6 and additive
+correction-table path. No native pose formula or converted asset changes are
+needed for this combination.
+
+Both active source shape controllers report `typeBone=1`; these values are bone
+types, not sex identifiers. The independently serialized 32-entry correction
+table remains SHA-256
+`a4c048d96181991c3696ab508ed176a751af0447fb5cbeeacdaef2b3191c1ace`, exactly matching
+the same bytes consumed by the native decoder. Measured head correction
+`0.8695652` passes the existing Float32 formula/JSON check, and the unique
+`cf_hit_head` local-scale comparison passes at error `4.29e-8` against 1.08.
+
+Three original-player runs on 2026-10-24 pass the unchanged `2e-5` matrix/vertex
+and `1e-4` morph thresholds:
+
+| State | Selected vertices | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error | Max native/BakeMesh vertex error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Neutral, two independent runs | 35,573 | 773 / 226 | 6.86e-7 | 8.35e-7 | 5.18e-7 |
+| Existing coupled body/face input | 35,573 | 773 / 226 | 5.78e-7 | 7.15e-7 | 8.30e-7 |
+
+Morph error is zero. The independent neutral repeat has exactly equal 817
+transform records, all 20 source geometry/BakeMesh streams and saved card bytes.
+Requested height .5 (neutral) or .25 (mixed) becomes saved Float32 .6; it is the
+only coercion. The coupled input passes the independent same-sex/head/bone/table
+baseline and full unedited-card-token checks. Each assembly prepares 20 parts
+and selects 19 under the existing inactive-canine and hash-bound-shadow
+exclusions. Neutral and mixed controlled CPU silhouettes have IoU 1.0 and zero
+differing pixels; these remain geometry diagnostics, not Metal color or shading
+parity.
+
+All three runs use probe source SHA-256
+`502dbe2f9beab4c88714c78032af19ba88b46c3c16a18c18f2c2f86b360efe8a`, compiled without
+diagnostics against original Studio assembly `902b9a…`. The prior Release
+inspector `7a4d1ad…` is reused with byte-identical inspection, body/face correction
+and preview sources and identical converted inputs. All three owned players and
+native exports exited; a final PID/path query confirmed no owned player remained.
+The 475 capture files remain unchanged through offline validation.
+
+All 61 focused Python checks pass, including corrected-male typed identity,
+missing/mismatched table, independent collider corruption with matching skin
+vertices, sole-height coercion, cross-sex/bone/table baseline rejection before
+card payload access, and actual CLI input upload ordering. Every earlier retained
+neutral/mixed gate and the female201, male201, corrected-female and normal-male00
+three-run sets/repeats also pass. Immutable producer/comparator copies, input
+hashes, helper reviews and results are indexed privately by
+`.local/codex-continue-2026-10-24/rolling/models-male00-bone1/summary.json`.
+This completes one corrected male combination and one coupled input; arbitrary
+shape combinations, other corrected heads/types, animation, full hierarchy and
+appearance remain open. No runtime or per-frame cost changed, and no FPS or
+pose-cost benchmark is claimed.
