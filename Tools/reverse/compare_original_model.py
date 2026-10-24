@@ -176,6 +176,9 @@ def shape_request_gate(folder, frame, baseline_folder):
         raise ValueError('Shape input differs from owned producer request')
     baseline_path = baseline_folder / 'frame.json'; baseline = json.loads(baseline_path.read_text()); base = baseline['neutralModel']
     if base.get('shapeRequest') is not None: raise ValueError('Shape baseline must be an unmodified model capture')
+    base_run = json.loads((baseline_folder / 'run.json').read_text())
+    if 'modelShapes' in base_run or (baseline_folder / 'model-shapes.tsv').exists():
+        raise ValueError('Shape baseline retains producer shape input')
     for key in ('variant', 'sex', 'headID', 'boneType', 'requestedSex', 'requestedHeadID', 'requestedBoneType',
                 'loadedHeadCatalogID', 'assemblySHA256', 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize',
                 'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate', 'animators'):

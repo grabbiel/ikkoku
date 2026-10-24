@@ -127,12 +127,25 @@ class ShapeCaptureTests(unittest.TestCase):
         result = model.compare(self.folder, self.native, shape_baseline=self.baseline)
         self.assertTrue(result['gatePassed']); self.assertEqual(result['shapeRequest']['overrides'], self.rows)
     def test_same_producer_and_changed_player_context_fail(self):
-        (self.baseline / 'run.json').write_text(json.dumps(self.run))
+        repeated = copy.deepcopy(self.run); repeated.pop('modelShapes')
+        (self.baseline / 'run.json').write_text(json.dumps(repeated))
         with self.assertRaisesRegex(ValueError, 'same producer'): model.compare(self.folder, self.native, shape_baseline=self.baseline)
         (self.baseline / 'run.json').write_text(json.dumps(self.base_run))
         status = dict(error=None, unity='different source version', graphicsAPI='authored test', colorSpace='Linear')
         (self.baseline / 'status.json').write_text(json.dumps(status))
         with self.assertRaisesRegex(ValueError, 'context differs'): model.compare(self.folder, self.native, shape_baseline=self.baseline)
+
+    def test_baseline_without_shape_request_rejects_retained_producer_input(self):
+        request = self.frame['neutralModel']['shapeRequest']
+        for marker in [dict(file=request['file'], sha256=request['sha256']), None]:
+            retained = copy.deepcopy(self.base_run); retained['modelShapes'] = marker
+            (self.baseline / 'run.json').write_text(json.dumps(retained))
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, 'retains producer shape input'):
+                model.compare(self.folder, self.native, shape_baseline=self.baseline)
+        (self.baseline / 'run.json').write_text(json.dumps(self.base_run))
+        (self.baseline / 'model-shapes.tsv').write_bytes(self.shape_data)
+        with self.assertRaisesRegex(ValueError, 'retains producer shape input'):
+            model.compare(self.folder, self.native, shape_baseline=self.baseline)
 
     def test_missing_baseline_input_hash_context_and_payload_fail(self):
         with self.assertRaises(ValueError): model.compare(self.folder, self.native)

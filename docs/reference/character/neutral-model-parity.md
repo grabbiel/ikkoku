@@ -248,6 +248,9 @@ python Tools/reverse/compare_original_model.py <private-folder> <native.json> \
 ```
 
 A shaped capture requires an independent, unmodified same-model neutral baseline.
+Both its frame and producer record must omit shape-input metadata, and it must
+have no retained `model-shapes.tsv`; removing only frame metadata cannot turn a
+shaped producer run into a neutral reference.
 The gate binds the exact source assembly, player/fixture versions, sex/head/bone
 identity, shape context, Animator state, detail/correction flags and selected
 original rest identities. Requested arrays must equal the baseline arrays plus
@@ -291,7 +294,7 @@ Private captures, exact baseline identities, input/build hashes, full comparison
 controlled images and logs are retained under
 `.local/codex-continue-2026-10-24/mixed-shapes/`, with `summary.json` as the entry point.
 
-All 36 focused Python tests pass, including malformed input, Float32 JSON
+All 37 focused Python tests pass, including malformed input, Float32 JSON
 representation, changed identities/context, copied producer records, geometry
 corruption and preservation of unknown/plugin/unedited shape tokens. The three
 retained neutral comparisons remain compatible. No runtime discrepancy was
