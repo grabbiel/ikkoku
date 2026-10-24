@@ -275,7 +275,11 @@ automated phase below, not by this GUI run. A direct converted-manifest mount sa
 Plugins panel therefore omitted its mounted summary and Unload control. Visible
 unload is not claimed for that run. The mounted-panel follow-up now presents
 individual references separately from library generations and delegates its
-guarded Unload to the existing model method; its new app/GUI acceptance is pending.
+guarded Unload to the existing model method. Its clean Release `71e1309` passed
+42 plugin/session checks and the extended 18-step save/9-step fresh-load pair,
+including exact native identity and fallback labels after unloading. The actual
+new panel controls still require visible acceptance; this does not relabel the
+earlier GUI run as having an Unload control.
 Unicode edge cases remain recovered-code oracle
 coverage rather than displayed fixture observations.
 

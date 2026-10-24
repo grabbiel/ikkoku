@@ -356,8 +356,20 @@ identity, direct native save/fresh reload and fallback labels after unloading.
 An empty-binding profile remains an explicit loader error; its rejected load
 must retain the current session and summary. Optional empty presentation inputs
 are checked separately without claiming that the loader accepts such a profile.
-These assertions do not substitute for an AX check of visible controls. Build,
-focused scenario and root-visible acceptance for this follow-up are pending.
+These assertions do not substitute for an AX check of visible controls.
+
+The 2026-10-24 clean Release build at `71e1309` passed 42 plugin/session checks,
+18 native-save steps and 9 fresh-process load steps, with no failures or skips;
+the runner's 84 Python tests also passed. The saved native reference and exact
+presentation identity survived reload; interactive unload restored all 20 fallback
+labels while preserving the selected outfit and saved accessory visibility.
+The first attempt retained two harness failures: an invalid assumption that an
+empty-binding profile could load, and an ordinary fresh-load checklist still in
+Maker mode. The corrected checklist selects Studio through `AppState` before
+ordinary steps and preserves the loader and inactive-action guards. Special
+mode/cancellation scenarios retain their own activation paths. Visible panel
+acceptance remains pending; no throughput or UI-latency claim follows from these
+functional runs.
 
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
