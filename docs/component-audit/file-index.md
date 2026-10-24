@@ -74,10 +74,10 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/ContentView.swift](../../Apps/IkkokuCreator/ContentView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/EngineHost.swift](../../Apps/IkkokuCreator/EngineHost.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/HideStudioUIScenario.swift](../../Apps/IkkokuCreator/HideStudioUIScenario.swift) | Runtime / shared shader declaration |
-| [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / app menus and editor-owned plugin commands |
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift) | Runtime / shared shader declaration |
-| [Apps/IkkokuCreator/PluginLibraryScenario.swift](../../Apps/IkkokuCreator/PluginLibraryScenario.swift) | Runtime / deterministic plugin mount cancellation and restore checks |
+| [Apps/IkkokuCreator/PluginLibraryScenario.swift](../../Apps/IkkokuCreator/PluginLibraryScenario.swift) | Runtime / deterministic plugin command ownership, cancellation and restore checks |
 | [Apps/IkkokuCreator/PluginLibraryView.swift](../../Apps/IkkokuCreator/PluginLibraryView.swift) | Runtime / Studio plugin selection panel and request-owned operation state |
 | [Apps/IkkokuCreator/ViewportRenderThread.swift](../../Apps/IkkokuCreator/ViewportRenderThread.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
@@ -299,7 +299,7 @@ Feature assessment: [studio.md](studio.md).
 | File | Role |
 | --- | --- |
 | [Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift) | Runtime / shared shader declaration |
-| [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / plugin session staging, adapters and guarded interactive commands |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
