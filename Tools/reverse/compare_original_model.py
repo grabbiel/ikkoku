@@ -159,10 +159,19 @@ def shape_card_payload(baseline, current, mode, rows=()):
 
 HEAD201_CATALOG = dict(Name='タイプ０３', MainManifest='add50', MainAB='chara/bo_head_50.unity3d',
                        MainData='p_cf_head_03', ShapeAnime='cf_anmShapeHead_03')
+HEAD00_CATALOG = dict(Name='タイプ０１', MainManifest='abdata', MainAB='chara/bo_head_00.unity3d',
+                      MainData='p_cf_head_00', ShapeAnime='cf_anmShapeHead_00')
 
 
 def source_head_identity(mode):
     """Pin the new head's measured catalog; retain old capture compatibility."""
+    if mode.get('variant') == 'female00-bone1':
+        expected = dict(sex=1, headID=0, boneType=1, exType=0, requestedSex=1,
+                        requestedHeadID=0, requestedBoneType=1, requestedExType=0, loadedHeadCatalogID=0)
+        if any(type(mode.get(k)) is not int or mode[k] != v for k, v in expected.items()):
+            raise ValueError('Bone1 requested/loaded normal model identity differs')
+        if mode.get('loadedHeadName') != 'ct_head' or mode.get('loadedHeadCatalog') != HEAD00_CATALOG:
+            raise ValueError('Bone1 loaded head name or catalog differs from the exact source prefab')
     if mode.get('variant') in ('female201', 'male201') or mode.get('headID') == 201:
         variant = mode.get('variant')
         if variant not in ('female201', 'male201'):
@@ -176,6 +185,84 @@ def source_head_identity(mode):
         if mode.get('loadedHeadName') != 'ct_head' or mode.get('loadedHeadCatalog') != HEAD201_CATALOG:
             raise ValueError('Head201 loaded head name or catalog differs from the exact source prefab')
     return dict(loadedHeadName=mode.get('loadedHeadName'), loadedHeadCatalog=mode.get('loadedHeadCatalog'))
+
+
+def body_correction_identity(folder, mode, native=None):
+    """Measured source SaveCorrectInfo bytes versus the native decoder input."""
+    if mode.get('variant') != 'female00-bone1': return None
+    source_head_identity(mode)
+    record = mode.get('bodyCorrection')
+    if (not isinstance(record, dict) or record.get('file') != 'body-correction.bytes'
+            or not isinstance(record.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', record['sha256'])
+            or any(type(record.get(k)) is not int or record[k] != v
+                   for k, v in [('entries', 32), ('sourceBodyType', 1), ('sourceFaceType', 1)])):
+        raise ValueError('Invalid corrected body table metadata')
+    path = folder / record['file']
+    if not path.is_file(): raise ValueError('Missing corrected body table sidecar')
+    data = path.read_bytes()
+    if (len(data) != 4 + 32 * 9 * 4 or struct.unpack_from('<i', data)[0] != 32
+            or hashlib.sha256(data).hexdigest() != record['sha256']):
+        raise ValueError('Changed or malformed corrected body table')
+    values = np.frombuffer(data, dtype='<f4', offset=4).reshape(32, 9)
+    if not np.isfinite(values).all(): raise ValueError('Nonfinite corrected body table')
+    # Original Float32 evaluation order, including the addition before division.
+    denominator = np.float32(1) + values[2, 7]
+    if not np.isfinite(denominator) or denominator <= 0:
+        raise ValueError('Invalid corrected head scale denominator')
+    expected = float(np.float32(1) / denominator)
+    measured = record.get('headCorrectValue')
+    if type(measured) not in (int, float):
+        raise ValueError('Measured head correction must be finite numeric')
+    try: measured = float(measured)
+    except OverflowError: raise ValueError('Measured head correction must be finite numeric')
+    if (not np.isfinite(measured)
+            or not np.isfinite(expected) or abs(measured - expected) > 2e-7):
+        raise ValueError('Measured head correction differs from the active body table')
+    if native is not None:
+        inputs = native.get('inputs')
+        if not isinstance(inputs, dict) or inputs.get('bodyCorrectionSHA256') != record['sha256']:
+            raise ValueError('Source/native corrected body table identity differs')
+    return dict(sha256=record['sha256'], entries=32, sourceBodyType=1, sourceFaceType=1,
+                headCorrectValue=expected, measuredHeadCorrectValue=float(np.float32(measured)),
+                encoding='LE Int32 count; positionXYZ, rotationXYZ, scaleXYZ Float32 per entry')
+
+
+def head_collider_scale(frame, native, matching, tolerance):
+    """Gate one collider's local column scales, independently of drawable skin."""
+    targets = [i for i, name in enumerate(native['nodeNames']) if name == 'cf_hit_head']
+    originals = [b for b in frame['bones'] if b['path'].rsplit('/', 1)[-1] == 'cf_hit_head']
+    if len(targets) != 1 or len(originals) != 1:
+        raise ValueError('Corrected model requires exactly one source and native cf_hit_head')
+    index, source = targets[0], originals[0]
+    if matching['pairs'].get(index) != source['path']:
+        raise ValueError('Corrected cf_hit_head hierarchy identity differs')
+    locals_ = native.get('nodeLocalMatrices')
+    if not isinstance(locals_, list) or len(locals_) != len(native['nodeNames']):
+        raise ValueError('Corrected collider needs aligned native local matrices')
+    def vector(values, size):
+        if (not isinstance(values, list) or len(values) != size
+                or any(type(x) not in (int, float) for x in values)):
+            raise ValueError('Corrected collider needs finite numeric local matrix/scale dimensions')
+        try: result = np.asarray(values, dtype=np.float64)
+        except (ValueError, OverflowError): raise ValueError('Corrected collider needs finite numeric matrix/scale')
+        if not np.isfinite(result).all(): raise ValueError('Corrected collider needs finite numeric matrix/scale')
+        return result
+    local = vector(locals_[index], 16).reshape(4, 4).T
+    source_scale = vector(source['scale'], 3)
+    actual = np.linalg.norm(local[:3, :3], axis=0)
+    if (np.any(source_scale <= 0) or np.any(actual <= 0) or not np.isfinite(actual).all()
+            or not np.allclose(local[3], [0, 0, 0, 1], rtol=0, atol=1e-7)
+            or np.linalg.det(local[:3, :3]) <= 0):
+        raise ValueError('Corrected collider needs positive affine local scales')
+    required = float(np.float32(1.08))
+    # Both already-evaluated scales must equal 1.08; never multiply the source
+    # scale by the correction again or derive it from drawable vertices.
+    error = float(max(np.max(np.abs(actual - source_scale)), np.max(np.abs(actual - required)),
+                      np.max(np.abs(source_scale - required))))
+    return dict(gatePassed=error <= tolerance, target='cf_hit_head', nativeNode=index, sourcePath=source['path'],
+                nativeColumnScales=actual.tolist(), sourceLocalScale=source_scale.tolist(), requiredScale=required,
+                maximumScaleError=error, tolerance=tolerance,
+                scope='Unique cf_hit_head local column scales only; no general local hierarchy parity')
 
 
 def shape_request_gate(folder, frame, baseline_folder):
@@ -206,6 +293,8 @@ def shape_request_gate(folder, frame, baseline_folder):
                 'loadedHeadCatalogID', 'assemblySHA256', 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize',
                 'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate', 'animators'):
         if base[key] != mode[key]: raise ValueError('Shape baseline source identity/context differs: ' + key)
+    if body_correction_identity(baseline_folder, base) != body_correction_identity(folder, mode):
+        raise ValueError('Shape baseline corrected body table differs')
     if baseline['schemaVersion'] != frame['schemaVersion']: raise ValueError('Shape fixture version differs')
     status = [json.loads((p / 'status.json').read_text()) for p in (baseline_folder, folder)]
     if any(s.get('error') is not None for s in status): raise ValueError('Source capture reported an error')
@@ -278,14 +367,19 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     mode = frame.get('neutralModel')
     if not mode or native.get('kind') != 'ikkoku-neutral-source-model': raise ValueError('Requires neutral source and native model captures')
     identity = native['identity']
-    variants = {'female00': (1, 0), 'female200': (1, 200), 'female201': (1, 201), 'male200': (0, 200), 'male201': (0, 201)}
+    variants = {'female00': (1, 0), 'female00-bone1': (1, 0), 'female200': (1, 200), 'female201': (1, 201), 'male200': (0, 200), 'male201': (0, 201)}
     if mode.get('variant') not in variants or (mode['sex'], mode['headID']) != variants[mode['variant']]:
         raise ValueError('Unsupported source neutral model identity')
     for key in ('Sex', 'HeadID', 'BoneType'):
         if mode['requested' + key] != mode[key[0].lower() + key[1:]]: raise ValueError('Source silently changed requested identity')
-    if mode['loadedHeadCatalogID'] != mode['headID'] or mode['boneType'] != 0 or identity['exType'] != 0:
+    expected_bone = 1 if mode['variant'] == 'female00-bone1' else 0
+    if expected_bone == 1 and any(type(identity.get(k)) is not int or identity[k] != v
+                                  for k, v in [('sex', 1), ('headID', 0), ('boneType', 1), ('exType', 0)]):
+        raise ValueError('Native corrected model identity differs')
+    if mode['loadedHeadCatalogID'] != mode['headID'] or mode['boneType'] != expected_bone or identity['exType'] != 0:
         raise ValueError('Loaded head or normal body identity differs')
     source_head_identity(mode)
+    correction = body_correction_identity(folder, mode, native)
     if mode.get('handControllerCounts') != {'L': 1, 'R': 1}: raise ValueError('Expected exactly two driven hand controllers')
     if mode['handPatterns'] != [0, 0] or mode['elapsedFramesAfterLoad'] != 0:
         raise ValueError('Requires quiescent pattern-zero capture')
@@ -303,6 +397,7 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     shape_request = shape_request_gate(folder, frame, shape_baseline)
     original_tree = compose_original_worlds(frame['bones']); tree = build_native_tree(native)
     matching = match_bones(tree, original_tree)
+    collider = head_collider_scale(frame, native, matching, tolerance) if expected_bone == 1 else None
     hierarchy = {key: value for key, value in matching.items() if key != 'pairs'}
     hierarchy.update(matchedUniquePaths=len(matching['pairs']), nativeNodes=len(native['nodeNames']), sourceRecords=len(frame['bones']))
     candidates = {}
@@ -367,9 +462,11 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     passed = all(row['reason'] != 'unaccounted original visible mesh' for row in original_omitted) and bool(rows) and all(b['maximumMatrixError'] <= tolerance for r in rows for b in r['skinBones'])
     passed &= all(r['vertices']['overTolerance'] == 0 and r['nativeVersusBakeMesh']['overTolerance'] == 0
                   and r['bakeMeshVersusSourceMatrix']['overTolerance'] == 0 and r['morphWeightMaxError'] <= 1e-4 for r in rows)
+    if collider is not None: passed &= collider['gatePassed']
     return dict(schemaVersion=1, gatePassed=bool(passed), reference='original Unity player transforms, raw BakeMesh and separately calculated source matrix skinning',
-                scope='Exact selected rest-position SHA and triangle order; selected skin-joint world matrices and all selected vertices; local/full hierarchy parity is not gated. No fitted time or alignment. Only hash-bound source shadow meshes excluded; color not compared.',
+                scope='Exact selected rest-position SHA and triangle order; selected skin-joint world matrices and all selected vertices. Apart from the separately reported cf_hit_head local-scale gate for bone1, local/full hierarchy parity is not gated. No fitted time or alignment. Only hash-bound source shadow meshes excluded; color not compared.',
                 sourceFrame=file_record(frame_path), shapeRequest=shape_request, shapeCoercions=coercions, nativeInputs=native['inputs'], identity=identity, neutralModel=mode,
+                bodyCorrection=correction, headColliderScale=collider,
                 hierarchyDiagnostics=hierarchy, selectedSkinBindings=sum(len(r['skinBones']) for r in rows),
                 selectedUniqueNativeBones=len({b['nativeNode'] for r in rows for b in r['skinBones']}),
                 skinBoneMatrixTolerance=tolerance, skinBoneMaximumMatrixError=max((b['maximumMatrixError'] for r in rows for b in r['skinBones']), default=0), parts=rows, selectedParts=len(rows), selectedVertexEntries=sum(r['vertices']['count'] for r in rows),
@@ -396,6 +493,8 @@ def compare_repeat(first, second):
     a = json.loads((first / 'frame.json').read_text()); b = json.loads((second / 'frame.json').read_text())
     if source_head_identity(a['neutralModel']) != source_head_identity(b['neutralModel']):
         raise ValueError('Repeated loaded head context differs')
+    if body_correction_identity(first, a['neutralModel']) != body_correction_identity(second, b['neutralModel']):
+        raise ValueError('Repeated corrected body table differs')
     for key in ('variant', 'sex', 'headID', 'boneType', 'requestedSex', 'requestedHeadID', 'requestedBoneType', 'loadedHeadCatalogID',
                 'requestedBodyValues', 'requestedFaceValues', 'actualBodyValues', 'actualFaceValues', 'assemblySHA256', 'animators',
                 'hiPoly', 'enableCorrectArmSize', 'enableCorrectHandSize', 'handControllerCounts', 'handPatterns', 'elapsedFramesAfterLoad', 'eyeAngleHRate', 'eyeAngleVRate'):

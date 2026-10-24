@@ -70,6 +70,97 @@ class ModelComparisonTests(unittest.TestCase):
                                          loadedHeadName='ct_head', loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG))
         self.native['identity']['headID']=201;self.write()
 
+    def bone1(self):
+        self.frame['neutralModel'].update(variant='female00-bone1',boneType=1,requestedBoneType=1,
+            exType=0,requestedExType=0,loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG))
+        table=np.zeros((32,9),dtype='<f4');table[0,0]=-.25;table[2,7]=.25
+        data=struct.pack('<i',32)+table.tobytes();sha=hashlib.sha256(data).hexdigest()
+        (self.folder/'body-correction.bytes').write_bytes(data)
+        self.frame['neutralModel']['bodyCorrection']=dict(file='body-correction.bytes',sha256=sha,entries=32,
+            sourceBodyType=1,sourceFaceType=1,headCorrectValue=.8)
+        self.native['identity']['boneType']=1;self.native['inputs']['bodyCorrectionSHA256']=sha
+        local=np.diag([1.08,1.08,1.08,1.]).T.reshape(-1).tolist()
+        self.frame['bones'].append(dict(path='root/p_cf_body_bone/cf_hit_head',position=[0,0,0],rotation=[0,0,0,1],scale=[1.08]*3))
+        self.native['nodeNames'].append('cf_hit_head');self.native['nodeParents'].append(0)
+        self.native['nodeWorldMatrices'].append(local);self.native['nodeLocalMatrices']=[self.identity,local]
+        self.write()
+
+    def test_corrected_model_table_and_collider_pass_independently_of_skin(self):
+        self.bone1();result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['selectedSkinBindings'],1)
+        self.assertTrue(result['headColliderScale']['gatePassed'])
+        self.assertEqual(result['bodyCorrection']['sha256'],self.native['inputs']['bodyCorrectionSHA256'])
+        # The collider is not a skin joint: corrupting only its local scale
+        # must fail even when every selected world vertex still matches.
+        self.native['nodeLocalMatrices'][1][0]=1.2
+        result=model.compare(self.folder,self.native)
+        self.assertFalse(result['gatePassed']);self.assertEqual(result['parts'][0]['vertices']['maximum'],0)
+        self.native['nodeLocalMatrices'][1][0]=1.08
+        self.frame['bones'][-1]['scale']=[1.2]*3;self.write()
+        self.assertFalse(model.compare(self.folder,self.native)['gatePassed'])
+
+    def test_corrected_model_rejects_identity_and_table_metadata(self):
+        self.bone1();valid=copy.deepcopy(self.frame)
+        for key,value in [('boneType',0),('boneType',True),('requestedBoneType',True),('sex',0),
+                          ('requestedHeadID',200),('exType',False),('requestedExType',1),('variant','female00'),
+                          ('loadedHeadName','p_cf_head_00'),('loadedHeadCatalog',{}),('bodyCorrection',None),('bodyCorrection',[])]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key,value in [('file','../body-correction.bytes'),('sha256','x'*64),('entries',None),('entries',True),
+                          ('sourceBodyType',True),('sourceFaceType',0),('headCorrectValue',True),
+                          ('headCorrectValue',float('nan')),('headCorrectValue',10**1000),('headCorrectValue',.9)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['bodyCorrection'][key]=value;self.write()
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        self.frame=valid;self.write();identity=copy.deepcopy(self.native['identity'])
+        for key,value in [('boneType',True),('exType',False),('sex',True),('headID',False)]:
+            self.native['identity']=dict(identity,**{key:value})
+            with self.subTest(nativeKey=key),self.assertRaisesRegex(ValueError,'Native corrected model identity'):
+                model.compare(self.folder,self.native)
+        self.native['identity']=identity;self.native['inputs'].pop('bodyCorrectionSHA256')
+        with self.assertRaisesRegex(ValueError,'table identity'):model.compare(self.folder,self.native)
+
+    def test_corrected_model_rejects_changed_truncated_count_and_nonfinite_table(self):
+        self.bone1();path=self.folder/'body-correction.bytes';valid=path.read_bytes()
+        changed=bytearray(valid);struct.pack_into('<f',changed,4,-.5)
+        path.write_bytes(changed)
+        with self.assertRaisesRegex(ValueError,'Changed or malformed'):model.compare(self.folder,self.native)
+        nonfinite=bytearray(valid);struct.pack_into('<f',nonfinite,4,float('nan'))
+        denominator=bytearray(valid);struct.pack_into('<f',denominator,4+(2*9+7)*4,-1)
+        for data in (valid[:-1],struct.pack('<i',31)+valid[4:],bytes(nonfinite),bytes(denominator)):
+            path.write_bytes(data);sha=hashlib.sha256(data).hexdigest()
+            self.frame['neutralModel']['bodyCorrection']['sha256']=sha;self.native['inputs']['bodyCorrectionSHA256']=sha;self.write()
+            with self.subTest(bytes=len(data)),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+
+    def test_corrected_collider_requires_unique_hierarchy_and_finite_local_matrix(self):
+        self.bone1();frame,native=copy.deepcopy(self.frame),copy.deepcopy(self.native)
+        mutations=[lambda: self.frame['bones'].pop(),lambda: self.frame['bones'].append(copy.deepcopy(self.frame['bones'][-1])),
+            lambda: self.frame['bones'][-1].update(path='root/cf_hit_head'),
+            lambda: self.native['nodeNames'].__setitem__(1,'other'),
+            lambda: self.native['nodeNames'].__setitem__(0,'cf_hit_head'),
+            lambda: self.native.pop('nodeLocalMatrices'),
+            lambda: self.native['nodeLocalMatrices'].__setitem__(1,[0]*15),
+            lambda: self.native['nodeLocalMatrices'][1].__setitem__(0,True),
+            lambda: self.native['nodeLocalMatrices'][1].__setitem__(0,float('nan')),
+            lambda: self.native['nodeLocalMatrices'][1].__setitem__(0,0),
+            lambda: self.native['nodeLocalMatrices'][1].__setitem__(0,-1.08)]
+        for index,mutate in enumerate(mutations):
+            self.frame,self.native=copy.deepcopy(frame),copy.deepcopy(native);mutate();self.write()
+            with self.subTest(index=index),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+
+    def test_corrected_repeat_validates_each_table_and_detects_different_table(self):
+        self.bone1()
+        with tempfile.TemporaryDirectory() as tmp:
+            other=Path(tmp)
+            for path in self.folder.iterdir():(other/path.name).write_bytes(path.read_bytes())
+            run=copy.deepcopy(self.run);run['processID']=101;(other/'run.json').write_text(json.dumps(run))
+            self.assertTrue(model.compare_repeat(self.folder,other)['gatePassed'])
+            data=bytearray((other/'body-correction.bytes').read_bytes());struct.pack_into('<f',data,4,-.5)
+            (other/'body-correction.bytes').write_bytes(data)
+            with self.assertRaisesRegex(ValueError,'Changed or malformed'):model.compare_repeat(self.folder,other)
+            changed=copy.deepcopy(self.frame);changed['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(data).hexdigest()
+            (other/'frame.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError,'Repeated corrected body table differs'):model.compare_repeat(self.folder,other)
+
     def test_head201_requires_exact_measured_catalog_and_loaded_identity(self):
         self.head201();self.assertTrue(model.compare(self.folder,self.native)['gatePassed'])
         valid=copy.deepcopy(self.frame)
