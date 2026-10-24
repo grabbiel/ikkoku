@@ -3978,6 +3978,72 @@ Private executable SHA-256 is
 report SHA-256 is
 `e66f35112cc6503a520631be8780362f432200db0d59d33f34e1ba0731b583d5`.
 
+A **private explicit-gradient discriminator** adds only
+`gradient2d(diagnosticDX, diagnosticDY)` to the existing first MainTex sample
+in each observed-prefix pass. The UV expression, already-present derivative
+declarations, instruction order, original mask/comparison/discard, vertex path
+and five MRT outputs are unchanged. The derivatives and MainTex sample already
+precede the discard. Removing the one added argument restores each pinned source
+byte for byte; program metadata changes only its source digest. Supplying these
+explicit derivatives is a diagnostic, not an assumed equivalent implementation
+of implicit sampling.
+
+The private Release bundle builds at `6071394` with temporary test instrumentation
+and exact source restoration. One locked process completes sixteen draws: four
+repeats × implicit/explicit gradients × native-store/captured providers. Both
+cases explicitly select MSL 4.0 (262144), fast math disabled and
+`preserveInvariance = false`. All four compile-input records have `mathMode = 0`
+and `mathFloatingPointFunctions = 1`; the host remains M2 Ultra/macOS 27.0.1.
+
+**Fresh implicit controls vary, and explicit-gradient sampling also varies:**
+
+| Changed pixels against the first draw | Native implicit | Native explicit | Captured implicit | Captured explicit |
+| --- | ---: | ---: | ---: | ---: |
+| Color0 | 61 / 64 / 67 | 7 / 8 / 15 | 25 / 13 / 20 | 28 / 13 / 13 |
+| `dfdx` | 90 / 92 / 98 | 6 / 5 / 17 | 28 / 9 / 15 | 31 / 17 / 17 |
+| `dfdy` | 104 / 104 / 104 | 10 / 10 / 33 | 44 / 26 / 35 | 53 / 24 / 24 |
+| First MainTex sample | 77 / 81 / 84 | 9 / 10 / 22 | 36 / 17 / 25 | 43 / 23 / 23 |
+
+Color0 repeat maxima are respectively 37, 16, 20 and 17 bytes. Per provider,
+all eight draws retain the same 2,948-pixel coverage, primitive/pass IDs, alpha,
+UVs, mask 1 and predicate 0; all visible pixels lie on its common-ID mask.
+The fixed cross-provider UV difference remains 17 pixels, maximum
+1.7881393432617188e-7. Visible observations do not describe helper invocations.
+
+The paired implicit/explicit draws also differ substantially: sampled RGBA
+changes at 794–800 native-store and 959–964 captured-provider pixels; Color0
+changes at 601–605 and 610–616 pixels respectively, maximum 45 bytes in either
+provider. These are cross-variant differences, separate from repeat variation.
+An independent raw-readback comparison finds that every explicit-case sample
+change coincides with a recorded `dfdx` or `dfdy` change. Implicit repeats have
+7 / 8 / 7 native-store and 3 / 1 / 1 captured sample changes with identical
+recorded UVs and derivatives; those diagnostic derivatives need not expose the
+implicit sampler's internal gradient calculation. This correlation does not
+establish causation or general equivalence.
+
+Eighty full-plane attachment hashes verify; all 148 bound mip-level instances
+remain unchanged, twenty paired texture chains and ten packed constant-buffer
+hashes match. Ten transformer tests and 39 combined literal audit checks pass.
+The RG readback module and its tests are unchanged from the prior 21-test
+validation. The independent decoder's first attempt used a wrapped zlib header
+instead of the recorded raw-deflate format and failed before comparison; the
+corrected decoder verifies all eighty hashes. The failed script is retained,
+with no capture or input mutation. The GPU collection has no failed or skipped
+draws and no retry.
+
+This explicit-gradient change neither eliminates the observed repeat gap nor
+preserves the implicit case's pixels. Four repeats cannot establish a reliable
+reduction in variability, and compiler perturbation remains a limit. No
+production shader, source gate, material coverage, parity or timing claim
+changes; #188 remains open.
+
+Evidence, retained bundle and reviewed helper proposals are under
+`.local/codex-continue-2026-10-24/rolling/materials-explicit-gradients/`.
+Private executable SHA-256 is
+`70cad4e29fb4df113e368b814059c088346c7aa7f43eee5465a30d42540dc29c`;
+report SHA-256 is
+`ff6fecc3dcc8cd49580660b452e52857fa97e4441f5d37bd041bc9610be46f61`.
+
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
 correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
