@@ -1168,6 +1168,18 @@ the base and edited 512×1024 targets, exact input/program identities, unchanged
 hits, recolour/revert and released-target bounds. The native store must contain
 both bottom inputs; retained capture pixels are comparison data only.
 
+`IKKOKU_INNER_SHOE_COMPOSITE_PROBE` names the distinct-colour inner-shoe
+capture. Its three `innerShoeBaseColor` settings edit slot 7 only; Status and
+outer slot 8 remain unchanged. `captureInnerShoeCompositeInputs` records the
+active `ct_shoes_inner` catalog and direct `rendNormal01` target identity as well
+as the BC7 main/RGB24 mask input readbacks. The gated
+`liveSourceNormalInnerShoeCompositeMatchesBaseAndDistinctOriginalColours`
+checks base and edited 512×512 targets, exact input/program identities, visible
+slot selection, unchanged hits, recolour/revert and released-target bounds.
+Only the base level has independent GPU readback evidence; ten generated
+output mips and the single authored mip of each input remain separate checks.
+Outer-shoe composition remains unsupported.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,

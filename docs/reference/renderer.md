@@ -3400,6 +3400,59 @@ Private reports, source/binary hashes and preserved binaries are under
 The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
 [the fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
 
+### Native normal inner-shoe composite (R1/CMT-04 #177, 2026-10-24)
+
+The next bounded normal-clothes recipe is inner shoe slot 7, selected through
+`ChaControl.ChangeClothesShoesAsync(type: 0)` and the normal `rendNormal01`
+creator. The explicit supported slots are 0, 1 and 7; outer slot 8 remains
+unresolved. Patterned, secondary, alpha, emblem, accessory and special-male
+branches retain their existing unsupported reasons. The native path resolves
+and composes at material assembly; conversion stays offline, and draws reuse
+the assembled textures.
+
+The controlled card selects catalog 112/id 3 (`p_o_shoes_run01`) with saved
+`shoesType == 0`. Its active `ct_shoes_inner` renderer is `o_shoes_run01`.
+Changing outer-slot colors first left the displayed target byte-identical:
+that capture is a negative visibility control, not evidence for outer-shoe
+composition. The subsequent inner-color capture changes only the nine RGB
+components in slot 7’s first three base colors in each of seven coordinates.
+Every other card block, including Status, and all other coordinate data remain
+unchanged. The probe records the selected slot/type/catalog/object activity and
+the direct `rendNormal01` `_MainTex` file, avoiding an ambiguous mesh-name match.
+
+The source producer SHA-256 is
+`c8188d3384241d47cc285dbf72e44373650d629c46f19f06490a8e5d65084551`.
+The selected bundle `chara/co_shoes_00.unity3d` has SHA-256
+`dde13cf97a4160d9d13cb8ea8102c7ba6e6c092908855180110c6391cf6066d0`,
+serialized file `CAB-b9a8ff574f24c2b427e59cd30ae00421`.
+Its main texture `cf_shoes_run01_t` (path ID `-7640729741191341103`) is
+sRGB BC7; `cf_shoes_run01_mc` (`-2274634555552161051`) is linear RGB24.
+Both are 512×512, Bilinear/Repeat/aniso 1, with one authored mip. The source
+normal-clothes create program is the already verified `d709d6fc…` program;
+the 512×512 sRGB target has ten generated mips. Only base-level input/target
+pixels have independent original-player readbacks. Input float16 comparisons
+have maximum absolute difference 0.00048828125 for both main and mask; this
+does not substitute for the strict final composite comparison.
+
+The isolated native store adds those two inputs to the accepted 54-entry store.
+All prior entries and all create-program identities/bytes are unchanged; the
+normal program’s use list adds the inner shoe. The path-independent content
+fingerprint is `39b9ac57ffe55f523b0722468f869f4f94eda6e21fb123506c77b5eae85c3656`.
+The regression selects the visible slot explicitly, checks hidden outer 8 stays
+unresolved, and retains the existing base/distinct-color max-one-byte gate,
+unchanged-hit, recolor/revert and released-target checks. All seven strict
+Release GPU checks pass, with no skips: the base/distinct shoe targets have
+maximum one-byte error in 2,295/1,495 of 1,048,576 channels. The exact live set
+increases from 17 to 18 of 20 slots; body and face remain unresolved. Five
+composite keys are retained, with the existing shared iris/eye-white hits.
+Hair, eye, top and bottom gates retain their thresholds and pass. Each shoe
+recolor releases its target; 15 edits retain two uploaded asset textures, one
+default texture and one sampler, and revert returns the original target.
+Release cost and default-off app acceptance are pending; no frame-time or FPS
+claim follows from these functional checks. Private evidence is under
+`.local/codex-continue-2026-10-24/rolling/materials-shoes/`; the private fixture key
+is `IKKOKU_INNER_SHOE_COMPOSITE_PROBE`.
+
 ### Native pose gate
 
 The R2 transform gate compares original-player local bone transforms composed into

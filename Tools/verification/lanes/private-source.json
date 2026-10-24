@@ -329,6 +329,11 @@
           "env": "IKKOKU_BOTTOM_COMPOSITE_PROBE",
           "kind": "directory",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_INNER_SHOE_COMPOSITE_PROBE",
+          "kind": "directory",
+          "optional": true
         }
       ],
       "env": {},
