@@ -3233,6 +3233,62 @@ original captures are retained independently of the worker checkout with their
 relative payloads and a complete file-hash inventory; global fixture promotion
 is a separate maintainer step.
 
+### Composite sampler allocation (R1/CMT-04, 2026-10-24)
+
+`TranslatedSourceProgram.SamplerConfiguration` now normalizes sampler state as
+an internal value before `SourceShaderTextureStore` looks up its per-resource
+sampler cache. An `MTLSamplerDescriptor` is constructed only on a locked miss.
+The public descriptor API uses the same normalization. Raw filter/wrap/aniso
+strings still participate in composite identity, even when they normalize to
+the same GPU sampler; quality settings, weak owner/device boundaries, generated
+target ownership and all input validation remain unchanged. This changes
+assembly/edit lookup work, not rendering per frame or live-slot coverage.
+
+**Allocation evidence.** A private Objective-C observer in isolated Release test
+processes counts public `MTLSamplerDescriptor` constructions once, excluding the
+class cluster's internal forwarding. Its positive control counts exactly 44
+constructions from the 22-case descriptor test. The unchanged synthetic cache
+test (initial assembly, 20 unchanged hits, recolour/revert and a replacement
+resource owner) falls from 48 constructions to 4: two distinct cold sampler
+states for each owner, none on the unchanged hits. A concurrent test with 16
+requests across two owners constructs 2 descriptors and produces exactly two
+composites, one per owner. This instrumentation is private and is never linked
+into the application or used in timing measurements. The machine has one Metal
+device; cross-device behavior is preserved by the existing resource-owner
+boundary, not established by a second-device run.
+
+**Uninstrumented Release timing.** Three isolated pairs on M2 Ultra, ordered
+old/new, new/old, old/new, each run the existing normal-top regression with 15
+warm edits and 15 unchanged hits. Per-run median unchanged-hit costs are
+0.130/0.103/0.107 ms before and 0.119/0.116/0.101 ms after. The ranges overlap;
+median of run medians is 0.107 → 0.116 ms. These samples do not establish a timing
+speedup. First composition is 12.163–13.209 ms before and 12.437–13.163 ms after
+with the driver cache already warm; edit GPU medians are 0.086–0.093 ms and
+0.085–0.088 ms respectively. Two asset uploads, one default texture and one
+sampler stay constant through the top edit loop. No FPS, startup-compilation or
+whole-app performance claim follows from this allocation reduction.
+
+The baseline is the retained `f52cfa87` Release Engine test bundle, SHA-256
+`706212cf7412c3447247b68dfdcf107a0c41419b7ce47e56bd4ce308f1cd16a9`.
+All material/compositor/GPU, Character/Assets/math, package configuration and
+controlled-test sources are byte-identical to the accepted `9ee3ab93` base. The
+only intervening Renderer difference is an unrelated `CaptureRequest` startup
+input registration, unused by these direct tests. The candidate is `60dca9bf`,
+Release with `-Xswiftc -enable-testing`, test binary SHA-256
+`0536c203f13d272127ea5ef972a871a116332ace6b7884c1a627f280999ecc82`.
+Both use the retained normal-top inputs documented above; private provenance,
+input paths/hashes, observer source/calibration and ordered logs are under
+`.local/codex-continue-2026-10-24/wave-three/materials/`.
+
+**Validation.** Debug and Release each pass 10 focused checks, including 22
+literal normalization cases, raw-distinct/effective-equal sampler metadata,
+concurrent cold requests and owner release/replacement. Five strict private
+Release gates pass: controlled live frame, base iris, base eye-white,
+distinct eye colours and base/distinct normal top. The top base is byte-exact;
+the colour edit retains max 1 byte with 1,235 differing channels. Existing hair
+and eye limits are unchanged, and controlled native coverage stays 16/20.
+This slice adds no UI behavior and makes no new app/VM capture claim.
+
 ### Native pose gate
 
 The R2 transform gate compares original-player local bone transforms composed into
