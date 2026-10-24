@@ -86,6 +86,21 @@ or hardens the implementation. Task IDs in the reports are stable references.
 | Materials / R1, CMT-04 | [#162](https://github.com/grabbiel/ikkoku/pull/162) adds one normal-top GPU composite: independent base output is byte-exact and distinct colors differ by at most one byte. The controlled live fixture reaches 16/20 slots; three default-off capture pairs stay identical. [#165](https://github.com/grabbiel/ikkoku/pull/165) reduces sampler descriptor constructions from 48 to 4 in the measured cache workload. Each focused Debug/Release run executes nine passing tests with one named fixture skip; strict private Release separately passes all five gates, including that skipped case. [#173](https://github.com/grabbiel/ikkoku/pull/173) adds the normal-bottom composite: independent base/distinct targets meet the unchanged one-byte gate and controlled coverage reaches 17/20. All six strict private gates, five Debug/Release tests (six cases each), and three byte-identical default-off PNG pairs pass. | Body, face and shoes remain fallbacks in that fixture. Adding the top increased GPU work and memory. The sampler change establishes fewer allocations, with no demonstrated timing speedup: warm-hit median of run medians is 0.107 → 0.116 ms with overlapping ranges. [Renderer evidence and costs](../reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24). |
 | Plugins / P-T02, P-T03 | [#161](https://github.com/grabbiel/ikkoku/pull/161) connects exact library revisions and scene targets, with pinned native save/fresh-process restore and identical same-clock PNGs. [#166](https://github.com/grabbiel/ikkoku/pull/166) adds prompt mount cancellation and request-owned panel state: four queue tests and 24 production app checks pass with no skips. A separate diagnostic GUI run verifies Cancel before worker release, queued retry, no stale mount, then successful retry, Pause and Unload for two adapters plus one translated fixture. [#172](https://github.com/grabbiel/ikkoku/pull/172) adds bounded offline DLL metadata inventory: all 13 synthetic tests and 51 private assertions pass; six retained originals yield six declarations and the two existing exact-hash adapters, with byte-identical repeat reports. | Inventory reads metadata without assembly execution, dependency resolution or mounting. The later complete installed snapshot below extends discovery only. Its timings are offline diagnostics, not a runtime speedup. [Inventory contract](../reference/mods/plugin-inventory.md). GUI cancellation used a temporary worker gate, separately hashed from production; it establishes behavior, not latency. Scene-open restoration still resolves files synchronously. General DLL/Harmony/API compatibility and GUID-specific original save adapters remain open. [Execution and app evidence](../reference/mods/plugin-execution.md#saved-scenes-and-migration). |
 
+The completed corrected-model task [#178](https://github.com/grabbiel/ikkoku/pull/178)
+adds independent neutral, neutral-repeat and coupled-shape acceptance for normal
+female/head 0 with `boneType=1`. All three comparisons cover 37,052 selected
+vertices and 773 skin bindings / 226 joints at the existing tolerances. The active
+1,156-byte correction table matches exactly, the unique `cf_hit_head` local scale
+matches 1.08, and the neutral repeat preserves all 814 transform records, 20
+geometry streams and card bytes. Fifty-six focused Python checks pass; root
+review also verifies all 32 hashed evidence descriptors in the summary. The
+inspector hashes its correction input once; no runtime pose formula or per-frame
+work changes, and no timing speedup is claimed. Original-player coverage for
+normal male/head 0, other corrected types, broader shapes, full hierarchy and
+appearance remains open. The measured producer and separately compiled merged
+producer retain distinct provenance. The task is reviewed locally; its four CI
+jobs and merge are pending. [Detailed scope and measurements](https://github.com/grabbiel/ikkoku/pull/178).
+
 A later read-only snapshot covers all 243 installed DLLs (26,759,208 bytes),
 with identical before/after source manifests. Eight bounded shards per scan give
 byte-identical repeat reports: 212 files declare 218 plugin entries, 30 are managed
