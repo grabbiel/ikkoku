@@ -52,9 +52,11 @@ struct PluginLibraryScenario: Decodable {
             func configuration(_ key: Int32) -> SourceStudioPluginConfiguration {
                 .init(fixedDeltaTime: initial.fixedDeltaTime, bindings: [.init(guid: binding.guid, type: binding.type, sourceObjectKey: key)])
             }
+            let mountStart = ProcessInfo.processInfo.systemUptime
             try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10))
             try check("mount", studio.doc.sourcePluginLibrary == request.selection && studio.sourceAccessoryNamesEnabled
-                && studio.sourceFocus.adapter != nil && studio.sourcePluginSession != nil)
+                && studio.sourceFocus.adapter != nil && studio.sourcePluginSession != nil,
+                "Initial UI-path mount wall \((ProcessInfo.processInfo.systemUptime - mountStart) * 1000) ms; preparation, scheduling and commit combined")
             try studio.stepSourcePlugins(deltaTime: 0.02)
             let firstSession = studio.sourcePluginSession, firstState = try firstSession?.savedDocument()
             try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10))

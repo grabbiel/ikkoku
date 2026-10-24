@@ -6,7 +6,7 @@ asset environment. No installed card thumbnails or arbitrary windows are read.
 With original adapter manifests, each run/reload/continue launch also delivers
 headless focus loss/gain and reports mounts, observers and generated-tone gain.
 """
-import argparse, hashlib, json, math, os, struct, subprocess
+import argparse, hashlib, json, math, os, struct, subprocess, time
 from pathlib import Path
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -85,7 +85,7 @@ def main():
  profile=out/'profile.json';profile.write_text(json.dumps(dict(schemaVersion=1,fixedDeltaTime=.02,packages=[dict(manifest=str(a.manifest.resolve()),bindings=[dict(type='StudioMotionFixture',sourceObjectKey=10)])]),indent=2))
  base={k:v for k,v in os.environ.items() if not k.startswith('IKKOKU_')};base.update(json.loads(a.environment.read_text()))
  base.update(IKKOKU_CAPTURE_W='600',IKKOKU_CAPTURE_H='800',IKKOKU_CAPTURE_GRID='0',IKKOKU_CAPTURE_GIZMOS='0')
- app_pids={}
+ app_pids={};process_wall={}
  for mode in ['run','reload','continue']:
   env=base|dict(IKKOKU_AUTOCAPTURE=str(out/(mode+'.png')))|animation_environment(a.animation_time,mode)
   if a.native_manifest or a.animation_time is not None:env['IKKOKU_NATIVE_PLUGIN_REPORT']=str(out/(mode+'-adapters.json'))
@@ -101,10 +101,12 @@ def main():
    if mode=='reload' and request:env['IKKOKU_SAVE_SCENE']=str(out/'reloaded-native.png')
    if mode=='continue':env.update(IKKOKU_SOURCE_PLUGIN_STEPS='30',IKKOKU_SAVE_SCENE=str(out/'continued-native.png'))
   with (out/(mode+'.log')).open('w') as log:
+   started=time.monotonic()
    process=subprocess.Popen([str(a.executable.resolve())],env=env,stdout=log,stderr=subprocess.STDOUT)
    app_pids[mode]=process.pid;print('[plugin-probe]',mode,'PID',process.pid,flush=True)
    try:code=process.wait(timeout=240)
    except subprocess.TimeoutExpired:process.kill();process.wait();raise
+   process_wall[mode]=time.monotonic()-started
   if code:raise RuntimeError('Native '+mode+' failed; inspect '+str(out/(mode+'.log')))
  from PIL import Image, ImageChops
  first=Image.open(out/'run.png').convert('RGB');second=Image.open(out/'reload.png').convert('RGB')
@@ -134,6 +136,8 @@ def main():
  report=dict(schemaVersion=1,pixelIdentical=difference is None,differenceBounds=difference,pluginGUID=identity,starts=scalar(next_fields['starts']),elapsed=scalar(next_fields['elapsed']),sourceObjectKey=10,nativeObjectID=source['id'],executableSHA256=digest(a.executable),sourceSceneSHA256=digest(a.scene),packageSHA256=digest(a.manifest))
  if request:report['librarySelection']=request['selection'];report['libraryConfiguration']=request['configuration'];report['reloadStateIdentical']=True
  report['appPIDs']=app_pids
+ report['processWallSeconds']=process_wall
+ report['processWallScope']='Whole process: startup, asset loading, plugin preparation/restore, rendering, PNG I/O and exit; not isolated UI scene-open or plugin-only cost.'
  report['requestedSourceAnimationTime']=a.animation_time
  report['effectiveSourceAnimationTimes']={mode:value.get('sourceAnimationTime') for mode,value in focus.items()}
  if a.animation_time is not None and any(value!=a.animation_time for value in report['effectiveSourceAnimationTimes'].values()):raise ValueError('Effective source animation clock differs from its explicit control')
