@@ -9,6 +9,54 @@ import Assets
 import GPU
 import ShaderTypes
 
+/// Optional observations for a caller's synchronous texture-loading interval. The
+/// caller owns this collector; ResourceStore never retains or shares it.
+/// Image creation may defer decoding into MetalKit's texture load. Neither
+/// interval is a measurement of CPU decoding or GPU execution alone.
+public final class ResourceTextureLoadTimings {
+    enum Phase: String { case dataCacheLookup, imageCreation, imageCacheLookup, metalTextureLoad, registration }
+    public struct Sample: Encodable {
+        public let milliseconds: [String: Double], calls: [String: Int], failures: [String: Int]
+        /// Supplied encoded Data, including shared-cache hits. This is not a
+        /// count of file reads, decoded pixels or retained texture memory.
+        public let dataRequests: Int, encodedBytesPresented: Int
+        public let dataCacheHits: Int, dataCacheMisses: Int, imageCacheHits: Int, imageCacheMisses: Int
+        public let registeredTextures: Int
+    }
+    private var milliseconds: [String: Double] = [:], calls: [String: Int] = [:], failures: [String: Int] = [:]
+    private var dataRequests = 0, encodedBytesPresented = 0
+    private var dataCacheHits = 0, dataCacheMisses = 0, imageCacheHits = 0, imageCacheMisses = 0
+    private var registeredTextures = 0
+    public init() {}
+    public var sample: Sample {
+        Sample(milliseconds: milliseconds, calls: calls, failures: failures,
+            dataRequests: dataRequests, encodedBytesPresented: encodedBytesPresented,
+            dataCacheHits: dataCacheHits, dataCacheMisses: dataCacheMisses,
+            imageCacheHits: imageCacheHits, imageCacheMisses: imageCacheMisses,
+            registeredTextures: registeredTextures)
+    }
+    fileprivate func recordData(_ data: Data) { dataRequests += 1; encodedBytesPresented += data.count }
+    fileprivate func recordLookup(image: Bool, hit: Bool) {
+        if image {
+            if hit { imageCacheHits += 1 } else { imageCacheMisses += 1 }
+        } else {
+            if hit { dataCacheHits += 1 } else { dataCacheMisses += 1 }
+        }
+    }
+    fileprivate func recordRegistration() { registeredTextures += 1 }
+    fileprivate static func measure<T>(_ timings: ResourceTextureLoadTimings?, _ phase: Phase,
+                                       _ body: () throws -> T) rethrows -> T {
+        guard let timings else { return try body() }
+        let start = ProcessInfo.processInfo.systemUptime
+        var succeeded = false
+        defer {
+            timings.milliseconds[phase.rawValue, default: 0] += (ProcessInfo.processInfo.systemUptime - start) * 1000
+            timings.calls[phase.rawValue, default: 0] += 1
+            if !succeeded { timings.failures[phase.rawValue, default: 0] += 1 }
+        }
+        let value = try body(); succeeded = true; return value
+    }
+}
 /// GPU-resident mesh: base vertices + optional skin/morph data + indices.
 public final class GPUMesh: @unchecked Sendable {
     public let name: String
@@ -393,23 +441,38 @@ public final class ResourceStore: @unchecked Sendable {
     }
 
     public func texture(data: Data, key: String, srgb: Bool = true, cacheNew: Bool = true,
+                        timings: ResourceTextureLoadTimings? = nil,
                         didCreate: ((TextureHandle) -> Void)? = nil) throws -> TextureHandle {
         let fullKey = "\(key)#\(srgb)"
-        if let h = lookup(key: fullKey) { return h }
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil), let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
-            throw ResourceError.imageDecode(key)
+        timings?.recordData(data)
+        let cached = ResourceTextureLoadTimings.measure(timings, .dataCacheLookup) { lookup(key: fullKey) }
+        timings?.recordLookup(image: false, hit: cached != nil)
+        if let cached { return cached }
+        let cg = try ResourceTextureLoadTimings.measure(timings, .imageCreation) {
+            guard let src = CGImageSourceCreateWithData(data as CFData, nil), let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+                throw ResourceError.imageDecode(key)
+            }
+            return cg
         }
-        return try texture(cgImage: cg, key: fullKey, srgb: srgb, cacheNew: cacheNew, didCreate: didCreate)
+        return try texture(cgImage: cg, key: fullKey, srgb: srgb, cacheNew: cacheNew, timings: timings, didCreate: didCreate)
     }
 
     /// Candidate loads can defer cache publication. The callback reports only a
     /// handle registered by this call, never a shared cache hit.
     public func texture(cgImage: CGImage, key: String, srgb: Bool = true, cacheNew: Bool = true,
+                        timings: ResourceTextureLoadTimings? = nil,
                         didCreate: ((TextureHandle) -> Void)? = nil) throws -> TextureHandle {
-        if let h = lookup(key: key) { return h }
-        let t = try textureLoader.newTexture(cgImage: cgImage, options: [.SRGB: srgb, .generateMipmaps: true, .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue])
+        let cached = ResourceTextureLoadTimings.measure(timings, .imageCacheLookup) { lookup(key: key) }
+        timings?.recordLookup(image: true, hit: cached != nil)
+        if let cached { return cached }
+        let t = try ResourceTextureLoadTimings.measure(timings, .metalTextureLoad) {
+            try textureLoader.newTexture(cgImage: cgImage, options: [.SRGB: srgb, .generateMipmaps: true, .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue])
+        }
         t.label = key
-        let handle = register(texture: t, key: cacheNew ? key : nil)
+        let handle = ResourceTextureLoadTimings.measure(timings, .registration) {
+            register(texture: t, key: cacheNew ? key : nil)
+        }
+        timings?.recordRegistration()
         didCreate?(handle)
         return handle
     }

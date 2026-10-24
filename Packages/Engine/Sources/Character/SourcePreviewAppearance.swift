@@ -7,6 +7,53 @@ import ShaderTypes
 import Scene
 import Assets
 
+/// API-level observations nested inside one base-appearance load. Leaf intervals
+/// do not overlap, but omit validation, loop and diagnostic overhead. Encoded
+/// bytes count successful file reads, including repeated reads; they are not
+/// decoded pixel storage or RSS. Failed loads retain partial observations and
+/// increment loadFailures instead of being reported as completed loads.
+public final class SourceBaseAppearanceTimings {
+    enum Phase: String {
+        case documentRead, documentDecode, pathResolution, modPackageLoad, modLibraryCreation
+        case modTextureResolution, textureFileRead, transactionLookup
+    }
+    public struct Sample: Encodable {
+        public let milliseconds: [String: Double], calls: [String: Int], failures: [String: Int]
+        public let loadAttempts: Int, loadFailures: Int, textureRequests: Int, transactionReuses: Int
+        public let documentBytesRead: Int, encodedTextureBytesRead: Int
+        public let textureLoads: ResourceTextureLoadTimings.Sample
+    }
+    private var milliseconds: [String: Double] = [:], calls: [String: Int] = [:], failures: [String: Int] = [:]
+    private var loadAttempts = 0, loadFailures = 0, textureRequests = 0, transactionReuses = 0
+    private var documentBytesRead = 0, encodedTextureBytesRead = 0
+    fileprivate let textureLoads = ResourceTextureLoadTimings()
+    public init() {}
+    public var sample: Sample {
+        Sample(milliseconds: milliseconds, calls: calls, failures: failures,
+            loadAttempts: loadAttempts, loadFailures: loadFailures, textureRequests: textureRequests,
+            transactionReuses: transactionReuses, documentBytesRead: documentBytesRead,
+            encodedTextureBytesRead: encodedTextureBytesRead, textureLoads: textureLoads.sample)
+    }
+    fileprivate func recordLoad(succeeded: Bool) { loadAttempts += 1; if !succeeded { loadFailures += 1 } }
+    fileprivate func recordTextureRequest() { textureRequests += 1 }
+    fileprivate func recordTransactionReuse() { transactionReuses += 1 }
+    fileprivate func recordRead(bytes: Int, document: Bool) {
+        if document { documentBytesRead += bytes } else { encodedTextureBytesRead += bytes }
+    }
+    fileprivate static func measure<T>(_ timings: SourceBaseAppearanceTimings?, _ phase: Phase,
+                                       _ body: () throws -> T) rethrows -> T {
+        guard let timings else { return try body() }
+        let start = ProcessInfo.processInfo.systemUptime
+        var succeeded = false
+        defer {
+            timings.milliseconds[phase.rawValue, default: 0] += (ProcessInfo.processInfo.systemUptime - start) * 1000
+            timings.calls[phase.rawValue, default: 0] += 1
+            if !succeeded { timings.failures[phase.rawValue, default: 0] += 1 }
+        }
+        let value = try body(); succeeded = true; return value
+    }
+}
+
 /// Opt-in diagnostics for one synchronous candidate. The top-level intervals do
 /// not overlap. Composition's nested intervals sit inside its existing aggregate;
 /// instrumentation/cleanup can remain outside them. Do not add child intervals again.
@@ -73,11 +120,12 @@ public final class SourceAppearanceLoadTransaction {
 
     public init(resources: ResourceStore) { self.resources = resources }
 
-    fileprivate func texture(data: Data, key: String, srgb: Bool) throws -> TextureHandle {
+    fileprivate func texture(data: Data, key: String, srgb: Bool, timings: SourceBaseAppearanceTimings?) throws -> TextureHandle {
         precondition(!committed, "Appearance transaction is already committed.")
         let fullKey = "\(key)#\(srgb)"
-        if let lease = created[fullKey] { return lease.handle }
-        return try resources.texture(data: data, key: key, srgb: srgb, cacheNew: false) { handle in
+        let existing = SourceBaseAppearanceTimings.measure(timings, .transactionLookup) { created[fullKey] }
+        if let existing { timings?.recordTransactionReuse(); return existing.handle }
+        return try resources.texture(data: data, key: key, srgb: srgb, cacheNew: false, timings: timings?.textureLoads) { handle in
             self.created[fullKey] = SourceAppearanceTextureLease(resources: self.resources, handle: handle)
         }
     }
@@ -155,43 +203,60 @@ public struct SourcePreviewAppearance: Sendable {
     }
 
     public static func load(url: URL, resources: ResourceStore, modLibrary: SourceModLibrary? = nil,
-                            transaction: SourceAppearanceLoadTransaction? = nil) throws -> Self {
+                            transaction: SourceAppearanceLoadTransaction? = nil,
+                            timings: SourceBaseAppearanceTimings? = nil) throws -> Self {
+        var succeeded = false
+        defer { timings?.recordLoad(succeeded: succeeded) }
         guard transaction == nil || transaction?.resources === resources else {
             throw RigError.invalid("Appearance transaction belongs to a different resource store.")
         }
-        let document = try JSONDecoder().decode(Document.self, from: Data(contentsOf: url))
+        let data = try SourceBaseAppearanceTimings.measure(timings, .documentRead) { try Data(contentsOf: url) }
+        timings?.recordRead(bytes: data.count, document: true)
+        let document = try SourceBaseAppearanceTimings.measure(timings, .documentDecode) {
+            try JSONDecoder().decode(Document.self, from: data)
+        }
         guard document.schemaVersion == 1 else { throw RigError.invalid("Unsupported preview appearance schema.") }
         let directory = url.deletingLastPathComponent().resolvingSymlinksInPath()
         func contained(_ path: String) throws -> URL {
-            let file = directory.appendingPathComponent(path).resolvingSymlinksInPath()
-            guard !path.isEmpty, !path.hasPrefix("/"), file.path.hasPrefix(directory.path + "/") else {
-                throw RigError.invalid("Preview resources must remain inside their appearance folder.")
+            try SourceBaseAppearanceTimings.measure(timings, .pathResolution) {
+                let file = directory.appendingPathComponent(path).resolvingSymlinksInPath()
+                guard !path.isEmpty, !path.hasPrefix("/"), file.path.hasPrefix(directory.path + "/") else {
+                    throw RigError.invalid("Preview resources must remain inside their appearance folder.")
+                }
+                return file
             }
-            return file
         }
         let mods: SourceModLibrary
         if let modLibrary { mods = modLibrary }
         else {
-            mods = try SourceModLibrary(packages: (document.modPackages ?? []).map {
-                try SourceModPackage.load(url: contained($0))
-            })
+            let packages = try (document.modPackages ?? []).map {
+                let package = try contained($0)
+                return try SourceBaseAppearanceTimings.measure(timings, .modPackageLoad) { try SourceModPackage.load(url: package) }
+            }
+            mods = try SourceBaseAppearanceTimings.measure(timings, .modLibraryCreation) { try SourceModLibrary(packages: packages) }
         }
         // Explicit source identities bind converted textures to known native shader
         // inputs. Material, shader and catalog conversion remain separate adapters.
         func loadTexture(_ data: Data, key: String, srgb: Bool) throws -> TextureHandle {
-            if let transaction { return try transaction.texture(data: data, key: key, srgb: srgb) }
-            return try resources.texture(data: data, key: key, srgb: srgb)
+            if let transaction { return try transaction.texture(data: data, key: key, srgb: srgb, timings: timings) }
+            return try resources.texture(data: data, key: key, srgb: srgb, timings: timings?.textureLoads)
         }
         func texture(_ path: String?, srgb: Bool = true) throws -> TextureHandle? {
             guard let path else { return nil }
+            timings?.recordTextureRequest()
             if let binding = document.textureBindings?[path] {
-                guard let resolved = try mods.texture(bundlePath: binding.bundlePath, assetName: binding.assetName) else {
-                    throw RigError.invalid("No mounted mod provides '\(binding.bundlePath)' / '\(binding.assetName)'.")
+                let resolved = try SourceBaseAppearanceTimings.measure(timings, .modTextureResolution) {
+                    guard let resolved = try mods.texture(bundlePath: binding.bundlePath, assetName: binding.assetName) else {
+                        throw RigError.invalid("No mounted mod provides '\(binding.bundlePath)' / '\(binding.assetName)'.")
+                    }
+                    return resolved
                 }
                 return try loadTexture(resolved.data, key: resolved.cacheKey + "#\(srgb)", srgb: srgb)
             }
             let file = try contained(path)
-            return try loadTexture(Data(contentsOf: file), key: file.path + "#\(srgb)", srgb: srgb)
+            let data = try SourceBaseAppearanceTimings.measure(timings, .textureFileRead) { try Data(contentsOf: file) }
+            timings?.recordRead(bytes: data.count, document: false)
+            return try loadTexture(data, key: file.path + "#\(srgb)", srgb: srgb)
         }
         var materials: [String: [MaterialState]] = [:]
         for entry in document.parts {
@@ -254,7 +319,9 @@ public struct SourcePreviewAppearance: Sendable {
             material.transparent = entry.alphaMode == "BLEND"
             materials[entry.part, default: []].append(material)
         }
-        return Self(materials: materials, textureOwner: transaction?.owner(for: materials))
+        let appearance = Self(materials: materials, textureOwner: transaction?.owner(for: materials))
+        succeeded = true
+        return appearance
     }
 
     private struct Document: Decodable {
