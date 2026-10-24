@@ -3292,6 +3292,23 @@ the colour edit retains max 1 byte with 1,235 differing channels. Existing hair
 and eye limits are unchanged, and controlled native coverage stays 16/20.
 This slice adds no UI behavior and makes no new app/VM capture claim.
 
+**Later combined application check.** The Release build at `6ff81db` has the
+merged #165/#166 runtime sources (identical to `b302a27`) and passes all 24 plugin
+scenario checks. Replaying the retained live-material probe keeps its 16 live
+and four fallback slots, attachment report and composite content keys unchanged.
+Ten native output PNGs covering toon, geometry, opaque garments, eyes, nose and
+items are byte-identical to the retained run and a fresh pre-change/new pair.
+
+Strict equality of every live image is not established. Three retained runs of
+the same pre-change executable already vary by four to five hair pixels (maximum
+one to two byte levels) and one full-frame pixel (maximum two). A fresh pair and
+a repeat of the new executable reproduce small differences; one front-hair pixel
+also varies within the new executable. The arithmetic cause remains unassigned.
+This is a live-capture repeatability gap, not evidence for a new tolerance or an
+all-pixels-identical claim. Existing source comparison limits are unchanged.
+The private `wave-three/integration` evidence retains both the initial strict
+comparison failure and the repeat measurements. These runs do not measure speed.
+
 ### Native normal-bottom composite (R1/CMT-04, #168, 2026-10-24)
 
 The normal-clothes recipe also handles clothing slot 1, using its own saved
@@ -3397,6 +3414,20 @@ eye and composite gates remain unchanged; no all-live byte-equality, full
 character parity or window/FPS claim follows from these offscreen controls.
 Private reports, source/binary hashes and preserved binaries are under
 `.local/codex-continue-2026-10-24/rolling/materials-bottom/`.
+**Combined application acceptance.** Release build `04225ae` combines this
+material path with the accepted plugin runtime; its runtime sources match merged
+`76ce58a`. Binary SHA-256
+`bc9af1f86a1a60c27e084ab57b0410ad93c370dd542b2aace100e47514a5e29c` passes all 24 plugin
+scenario checks. Replaying the same 54-entry input store retains 17 live and
+three fallback slots, identical attachment reports and composite content keys.
+Ten stable native diagnostic PNGs are byte-identical to the measured `b178932`
+build, and the full-frame PNG also matches in this pair. Five hair pixels differ
+by at most two channel levels and one front-hair pixel by one, consistent with
+the separately retained repeatability gap. This is bounded integration evidence;
+it neither establishes whole-image equality nor adds a source-parity or timing
+claim. The private `rolling/integration-bottom` directory retains build/input
+hashes, owned process exits and per-image differences.
+
 The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
 [the fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
 
