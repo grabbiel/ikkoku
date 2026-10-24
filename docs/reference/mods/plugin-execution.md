@@ -367,9 +367,18 @@ The first attempt retained two harness failures: an invalid assumption that an
 empty-binding profile could load, and an ordinary fresh-load checklist still in
 Maker mode. The corrected checklist selects Studio through `AppState` before
 ordinary steps and preserves the loader and inactive-action guards. Special
-mode/cancellation scenarios retain their own activation paths. Visible panel
-acceptance remains pending; no throughput or UI-latency claim follows from these
-functional runs.
+mode/cancellation scenarios retain their own activation paths.
+
+Visible acceptance on the same binary confirmed generation 1 with its three
+identities, then opened the retained native scene through the actual File dialog.
+Its individual-plugin summary had Run disabled and Unload enabled, without an
+invented generation. Maker disabled both controls; the panel's Switch to Studio
+button reenabled Unload. Actual unload restored `スロット01` with visibility off
+and outfit 2 retained. The translated-profile dialog then loaded the controlled
+profile; its separate summary, Pause → Run → Pause and Unload worked. Mixed-origin
+and concurrent pending/stale cases remain automated coverage. The visible run
+checked AX values/actions and readable layout; its screenshot was inspected but
+not retained. No throughput or UI-latency claim follows from these functional runs.
 
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
