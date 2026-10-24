@@ -2,6 +2,8 @@ import Foundation
 import Character
 import CoreMath
 import Renderer
+import Scene
+import Studio
 
 /// JSON-driven Maker scenario: a scripted sequence of checklist moves over the
 /// imported source card, run headlessly behind `IKKOKU_MAKER_SCENARIO` so the
@@ -94,6 +96,9 @@ struct MakerScenario: Decodable {
             let ok: Bool
             let detail: String
             let selectionMilliseconds: Double?
+            let selectionStages: MakerModel.SourceSelectionTiming?
+            let mainActorMaximumGapMilliseconds: Double?
+            let mainActorHeartbeatCount: Int?
             let resourcesBefore: ResourceStore.Statistics?
             let resources: ResourceStore.Statistics?
         }
@@ -117,8 +122,43 @@ struct MakerScenario: Decodable {
     /// Runs the steps against the imported card. A failing step records its
     /// detail and the run continues; a failed `export`/`reimport` stops it,
     /// because every later step depends on the file they were to write.
-    static func run(_ scenario: MakerScenario, maker: MakerModel) -> Report {
+    static func run(_ scenario: MakerScenario, maker: MakerModel, app: AppState) async -> Report {
         var results: [Report.StepResult] = []
+        var heldSelection: (task: Task<Void, Error>, gate: MakerSelectionGate)?
+        defer { heldSelection?.gate.release(); heldSelection?.task.cancel() }
+        var heartbeat: MakerSelectionHeartbeat?
+        var inactiveStudioFrame: RenderFrame?
+        struct SelectionState: Equatable {
+            let preview: ObjectIdentifier?, card: Data?, face: [Float], body: [Float], coordinate: Int
+            let colors: [String: Float4]
+            let customization: Bool, applyBoneModifiers: Bool, boneModifierHash: String?
+        }
+        func selectionState() -> SelectionState {
+            SelectionState(preview: maker.sourceRigPreview.map(ObjectIdentifier.init), card: maker.importedSourceCard?.preservedData,
+                face: maker.sourceFaceValues, body: maker.sourceBodyValues, coordinate: maker.sourceBoneModifierCoordinate,
+                colors: Dictionary(uniqueKeysWithValues: (maker.sourceAppearanceDraft?.colors ?? []).map { ($0.id, $0.rgba) }),
+                customization: maker.applySourceCustomization, applyBoneModifiers: maker.applySourceBoneModifiers,
+                boneModifierHash: maker.sourceBoneModifiers?.source.payloadSHA256)
+        }
+        func showEmptyStudio() throws -> RenderFrame {
+            guard let studio = app.studio else { throw RigError.invalid("Mode check needs Studio.") }
+            studio.liveAnimation = false; studio.timelinePlaying = false
+            studio.newScene()
+            app.mode = .studio // Exercise the same app transition as the mode picker.
+            let frame = maker.host.renderer.currentFrame()
+            guard frame.items.isEmpty, frame.skinSets.isEmpty, frame.gizmos.isEmpty, frame.lights.isEmpty else {
+                throw RigError.invalid("Mode check expected an empty Studio frame.")
+            }
+            return frame
+        }
+        func studioFrameMatches(_ expected: RenderFrame) -> Bool {
+            let actual = maker.host.renderer.currentFrame()
+            return app.mode == .studio && !maker.isActiveMode && app.studio?.doc.objects.isEmpty == true
+                && actual.items.isEmpty && actual.skinSets.isEmpty && actual.camera == expected.camera
+                && actual.mainLight == expected.mainLight && actual.effects == expected.effects
+                && actual.sceneBounds == expected.sceneBounds && actual.time == expected.time
+                && actual.gizmos.count == expected.gizmos.count && actual.lights.count == expected.lights.count
+        }
         // The file the model currently holds: the `IKKOKU_SOURCE_CARD` import,
         // replaced by each `reimport`. The export guard below never deletes it.
         var heldCardPath = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_CARD"].map {
@@ -132,8 +172,11 @@ struct MakerScenario: Decodable {
         func record(_ step: Step, _ ok: Bool, _ detail: String) -> Bool {
             results.append(Report.StepResult(op: step.op, ok: ok, detail: detail,
                 selectionMilliseconds: step.op == "selectAsset" ? (ProcessInfo.processInfo.systemUptime - stepStart) * 1000 : nil,
+                selectionStages: step.op == "selectAsset" ? maker.sourceSelectionTiming : nil,
+                mainActorMaximumGapMilliseconds: heartbeat?.maximumGapMilliseconds,
+                mainActorHeartbeatCount: heartbeat?.count,
                 resourcesBefore: resourcesBefore,
-                resources: ["selectAsset", "captureResources"].contains(step.op) || step.resourcesAtMost != nil ? maker.host.renderer.resources.statistics() : nil))
+                resources: ["selectAsset", "captureResources", "beginSelection", "finishSelection"].contains(step.op) || step.resourcesAtMost != nil ? maker.host.renderer.resources.statistics() : nil))
             return ok
         }
         func insideLocal(_ path: String) -> URL? {
@@ -167,6 +210,7 @@ struct MakerScenario: Decodable {
         scenarioLoop: for step in scenario.steps {
             stepStart = ProcessInfo.processInfo.systemUptime
             resourcesBefore = nil
+            heartbeat = nil
             switch step.op {
             case "customization":
                 guard let on = step.on else { record(step, false, "customization: missing on"); continue }
@@ -189,8 +233,12 @@ struct MakerScenario: Decodable {
                 let resources = maker.host.renderer.resources.statistics()
                 resourcesBefore = resources
                 var failure: Error?
-                do { try maker.selectSourceAsset(selection.destination(currentCoordinate: coordinate), id: selection.sourceID) }
+                let pulse = MakerSelectionHeartbeat()
+                heartbeat = pulse
+                let pulseTask = Task { await pulse.run() }
+                do { try await maker.selectSourceAsset(selection.destination(currentCoordinate: coordinate), id: selection.sourceID) }
                 catch { failure = error }
+                pulseTask.cancel(); pulse.sample()
                 if (failure != nil) != (step.expectFailure == true) {
                     record(step, false, "selectAsset: \(failure.map(String.init(describing:)) ?? "expected failure but selection succeeded")"); continue
                 }
@@ -210,6 +258,122 @@ struct MakerScenario: Decodable {
                     }
                 }
                 record(step, true, failure.map { "rejected atomically: \($0)" } ?? "selected \(selection.kind) slot \(selection.slot), source ID \(selection.sourceID)")
+            case "beginSelection":
+                guard heldSelection == nil, let selection = step.selection else {
+                    record(step, false, "beginSelection needs one selection and no held request"); continue
+                }
+                do {
+                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
+                    let gate = MakerSelectionGate()
+                    let preview = maker.sourceRigPreview.map(ObjectIdentifier.init)
+                    let bytes = maker.importedSourceCard?.preservedData
+                    let resources = maker.host.renderer.resources.statistics()
+                    resourcesBefore = resources
+                    let task = Task {
+                        defer { gate.finished() }
+                        try await maker.selectSourceAsset(slot, id: selection.sourceID, beforePreparation: { gate.arriveAndWait() })
+                    }
+                    heldSelection = (task, gate)
+                    let arrived = await gate.arrival()
+                    let after = maker.host.renderer.resources.statistics()
+                    record(step, arrived && maker.sourceSelectionPending != nil && preview == maker.sourceRigPreview.map(ObjectIdentifier.init)
+                        && bytes == maker.importedSourceCard?.preservedData && resources.meshes == after.meshes && resources.textures == after.textures,
+                        "worker reached=\(arrived), pending=\(maker.sourceSelectionPending != nil), previewSame=\(preview == maker.sourceRigPreview.map(ObjectIdentifier.init)), cardSame=\(bytes == maker.importedSourceCard?.preservedData); meshes \(resources.meshes)→\(after.meshes), textures \(resources.textures)→\(after.textures)")
+                } catch { record(step, false, "beginSelection: \(error)") }
+            case "finishSelection":
+                guard let held = heldSelection else { record(step, false, "finishSelection has no held request"); continue }
+                let beforeRelease = selectionState()
+                let beforeResources = maker.host.renderer.resources.statistics()
+                resourcesBefore = beforeResources
+                held.gate.release()
+                let result = await held.task.result
+                await maker.waitForSourceSelectionPreparation()
+                heldSelection = nil
+                switch result {
+                case .success:
+                    let after = selectionState()
+                    record(step, step.expectFailure != true && maker.sourceSelectionPending == nil
+                        && beforeRelease.face == after.face && beforeRelease.body == after.body && beforeRelease.colors == after.colors
+                        && beforeRelease.coordinate == after.coordinate && beforeRelease.customization == after.customization
+                        && beforeRelease.applyBoneModifiers == after.applyBoneModifiers && beforeRelease.boneModifierHash == after.boneModifierHash,
+                        "held selection committed with the latest edits and customization/ABMX modes")
+                case .failure(let error):
+                    let afterResources = maker.host.renderer.resources.statistics()
+                    let expectedError = step.diagnosticContains.map { String(describing: error).contains($0) } ?? (error is CancellationError)
+                    let framePreserved = inactiveStudioFrame.map(studioFrameMatches) ?? true
+                    record(step, step.expectFailure == true && expectedError && maker.sourceSelectionPending == nil
+                        && beforeRelease == selectionState() && beforeResources.meshes == afterResources.meshes
+                        && beforeResources.textures == afterResources.textures && beforeResources.deformBuffers == afterResources.deformBuffers && framePreserved,
+                        "held selection: \(error); contextSame=\(beforeRelease == selectionState()), pending=\(maker.sourceSelectionPending != nil), inactiveFramePreserved=\(framePreserved); meshes \(beforeResources.meshes)→\(afterResources.meshes), textures \(beforeResources.textures)→\(afterResources.textures), deform \(beforeResources.deformBuffers)→\(afterResources.deformBuffers)")
+                }
+            case "mode":
+                do {
+                    switch step.id {
+                    case "studio": inactiveStudioFrame = try showEmptyStudio()
+                    case "maker": app.mode = .maker; inactiveStudioFrame = nil
+                    default: throw RigError.invalid("Mode check needs maker or studio.")
+                    }
+                    record(step, true, "active mode: \(app.mode.rawValue)")
+                } catch { record(step, false, "mode: \(error)") }
+            case "queueSelectionThenStudio":
+                guard heldSelection == nil, app.mode == .maker, let selection = step.selection else {
+                    record(step, false, "queueSelectionThenStudio needs an active Maker and no held request"); continue
+                }
+                do {
+                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
+                    let before = selectionState(), resources = maker.host.renderer.resources.statistics()
+                    let gate = MakerSelectionGate(); gate.release() // Records entry without holding a faulty implementation.
+                    let task = Task {
+                        defer { gate.finished() }
+                        try await maker.selectSourceAsset(slot, id: selection.sourceID, beforePreparation: { gate.arriveAndWait() })
+                    }
+                    inactiveStudioFrame = try showEmptyStudio() // No yield: the queued Task has not entered yet.
+                    let result = await task.result
+                    await maker.waitForSourceSelectionPreparation()
+                    let enteredWorker = await gate.arrival()
+                    let after = maker.host.renderer.resources.statistics()
+                    let cancelled: Bool
+                    if case .failure(let error) = result { cancelled = error is CancellationError } else { cancelled = false }
+                    let framePreserved = inactiveStudioFrame.map(studioFrameMatches) == true
+                    record(step, cancelled && !enteredWorker && before == selectionState() && maker.sourceSelectionPending == nil
+                        && resources.meshes == after.meshes && resources.textures == after.textures
+                        && resources.deformBuffers == after.deformBuffers && framePreserved,
+                        "queued inactive selection cancelled=\(cancelled), enteredWorker=\(enteredWorker), contextSame=\(before == selectionState()), studioFramePreserved=\(framePreserved)")
+                } catch { record(step, false, "queueSelectionThenStudio: \(error)") }
+            case "supersedeSelection":
+                guard let held = heldSelection, let selection = step.selection else {
+                    record(step, false, "supersedeSelection needs a held request and replacement"); continue
+                }
+                do {
+                    let slot = try selection.destination(currentCoordinate: maker.sourceBoneModifierCoordinate)
+                    let replacement = Task { try await maker.selectSourceAsset(slot, id: selection.sourceID) }
+                    // The old caller must finish while its worker is still held.
+                    let old = await held.task.result
+                    held.gate.release()
+                    try await replacement.value
+                    await maker.waitForSourceSelectionPreparation()
+                    heldSelection = nil
+                    if case .failure(let error) = old, error is CancellationError {
+                        record(step, true, "superseded caller cancelled before worker release; replacement completed")
+                    } else { record(step, false, "superseded caller did not cancel promptly") }
+                } catch { held.gate.release(); heldSelection = nil; record(step, false, "supersedeSelection: \(error)") }
+            case "boneModifiers":
+                guard let on = step.on else { record(step, false, "boneModifiers needs on"); continue }
+                maker.applySourceBoneModifiers = on
+                record(step, true, "applySourceBoneModifiers=\(on)")
+            case "cancelSelection":
+                maker.cancelSourceSelection()
+                record(step, maker.sourceSelectionPending == nil, "cancelled pending selection")
+            case "closeSource":
+                maker.closeSourceRig()
+                record(step, maker.sourceRigPreview == nil && maker.sourceSelectionPending == nil, "closed source preview")
+            case "reloadCard":
+                guard let path = heldCardPath else { record(step, false, "reloadCard has no imported path"); continue }
+                do { try maker.importSourceCardSettings(url: URL(fileURLWithPath: path)); record(step, true, "reloaded committed input") }
+                catch { record(step, false, "reloadCard: \(error)") }
+            case "clearModLibrary":
+                do { try maker.setModLibrary(nil); record(step, true, "replaced mod library") }
+                catch { record(step, false, "clearModLibrary: \(error)") }
             case "captureResources":
                 guard let id = step.id else { record(step, false, "captureResources: missing id"); continue }
                 resourceSnapshots[id] = maker.host.renderer.resources.statistics()
@@ -286,6 +450,7 @@ struct MakerScenario: Decodable {
                 }
             case "assert":
                 var problems: [String] = []
+                if let on = step.on, maker.applySourceCustomization != on { problems.append("assert customization flag changed") }
                 if let expected = step.selection {
                     do {
                         let destination = try expected.destination(currentCoordinate: maker.sourceBoneModifierCoordinate).destination()
@@ -344,5 +509,51 @@ struct MakerScenario: Decodable {
         }
         let passed = results.filter(\.ok).count
         return Report(steps: results, passed: passed, failed: results.count - passed)
+    }
+}
+
+
+/// A deterministic scenario barrier on the CPU worker, never the main actor.
+/// Both normal arrival and an early validation failure wake the scenario.
+nonisolated private final class MakerSelectionGate: @unchecked Sendable {
+    private let condition = NSCondition()
+    private var arrived = false, released = false, complete = false
+    private var waiter: CheckedContinuation<Bool, Never>?
+    func arriveAndWait() {
+        condition.lock()
+        arrived = true; waiter?.resume(returning: true); waiter = nil
+        while !released { condition.wait() }
+        condition.unlock()
+    }
+    func arrival() async -> Bool {
+        await withCheckedContinuation { continuation in
+            condition.lock(); defer { condition.unlock() }
+            if arrived || complete { continuation.resume(returning: arrived) } else { waiter = continuation }
+        }
+    }
+    func finished() {
+        condition.lock(); complete = true; waiter?.resume(returning: arrived); waiter = nil; condition.unlock()
+    }
+    func release() {
+        condition.lock(); released = true; condition.broadcast(); condition.unlock()
+    }
+}
+
+/// Scenario-only responsiveness evidence. A presented frame can continue on the
+/// render thread even while input is blocked, so sample the actual main actor.
+private final class MakerSelectionHeartbeat {
+    private var last = ProcessInfo.processInfo.systemUptime
+    private(set) var maximumGapMilliseconds = 0.0
+    private(set) var count = 0
+    func sample() {
+        let now = ProcessInfo.processInfo.systemUptime
+        maximumGapMilliseconds = max(maximumGapMilliseconds, (now - last) * 1000)
+        last = now; count += 1
+    }
+    func run() async {
+        while !Task.isCancelled {
+            do { try await Task.sleep(for: .milliseconds(1)) } catch { return }
+            sample()
+        }
     }
 }

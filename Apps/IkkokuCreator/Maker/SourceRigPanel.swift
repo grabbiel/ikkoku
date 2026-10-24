@@ -32,18 +32,30 @@ struct SourceRigPanel: View {
                                     ForEach(0..<model.sourceCoordinateCount, id: \.self) { Text("Outfit \($0 + 1)").tag($0) }
                                 }
                             }
+                            if let pending = model.sourceSelectionPending {
+                                HStack {
+                                    ProgressView().controlSize(.small)
+                                    Text(pending).font(.caption)
+                                    Button("Cancel") { model.cancelSourceSelection() }
+                                }
+                                Text("The displayed character stays editable. Export cancels the pending choice and saves current selections and edits.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             ForEach(model.sourceSelectionRows) { row in
                                 Picker(row.label, selection: Binding(get: { row.selectedID }, set: { id in
                                     guard let id else { return }
-                                    do { try model.selectSourceAsset(row.slot, id: id) }
-                                    catch { model.status = "Selection: \(error)" }
+                                    Task {
+                                        do { try await model.selectSourceAsset(row.slot, id: id) }
+                                        catch is CancellationError { }
+                                        catch { model.status = "Selection: \(error)" }
+                                    }
                                 })) {
                                     if row.selectedID == nil {
                                         Text("Unavailable · \(row.current)").tag(Int?.none).disabled(true)
                                     }
                                     ForEach(row.choices) { choice in Text(choice.name).tag(Int?.some(choice.id)) }
                                 }
-                                .disabled(row.choices.isEmpty)
+                                .disabled(row.choices.isEmpty || model.sourceSelectionPending != nil)
                                 .accessibilityIdentifier("source-selection-" + row.id)
                                 .help(row.current)
                             }

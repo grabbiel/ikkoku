@@ -181,8 +181,8 @@ were 646.05/645.93/648.42 ms. The median of run medians fell from 845.83 to 646.
 a 23.62% reduction. Individual ranges were 802.78–873.80 ms and 610.36–672.43 ms,
 respectively; no-op requests took 0.058–0.070 ms. These measurements include
 synchronous file/asset preparation and validation, not UI throughput or frame
-rate. Changed selection still blocks for roughly 0.61–0.67 seconds and remains a
-responsiveness limitation. No per-frame work is added by the selection controls.
+rate. At that revision, changed selection still blocked for roughly 0.61–0.67
+seconds. No per-frame work was added by the selection controls.
 
 All six runs passed 46/46 scenario checks. Warmed back-hair 2 → 9 → 2 cycles
 settled at 36 store-owned meshes and 55 textures; warmed top 39 → 38 → 39 cycles
@@ -204,3 +204,89 @@ are retained in the private `.local/codex-renderer-maker-models-2026-10-23/`
 evidence directory. The earlier 34-step Debug run and the smaller bounds/pose
 optimization comparison also passed; their timings are not used for the deferred
 reference-loading result above.
+
+### Asynchronous selection preparation (CMT-02, 2026-10-24)
+
+Source asset selection sends immutable card/library inputs to a dedicated serial
+CPU queue. One assembly may be decoding and at most one newer request may wait;
+newer requests cancel older callers promptly and discard their results. Existing
+path, size, hash, identity and assembly validation remains in `prepare`. The queue
+never receives a preview or GPU resources. Appearance construction, pose/frame
+validation and the final replacement still run without suspension on the main
+actor, so this change does not eliminate every selection pause.
+
+The previous character remains visible while decoding. Hair/clothing pickers are
+disabled until completion or Cancel, preventing independent choices from being
+silently replaced by a request based on the same old card. Shapes, expressions,
+colors and customization/ABMX toggles remain editable. At commit the transaction
+reads and validates those current edits; it does not restore a pre-decode copy.
+An import, rig/library replacement, outfit change, source close, mode exit or
+explicit Cancel invalidates the request. Switching back to Maker does not revive
+an old request. A picker task first entering after leaving Maker rejects before
+starting preparation; inactive results cannot submit a Maker frame over Studio.
+Export cancels pending selection and saves the displayed,
+committed card and its supported edits; the pending UI states that behavior.
+Resolved no-ops do no preparation and preserve preview/GPU identity.
+
+`maker-async-selection.json` holds the actual worker at deterministic barriers to
+exercise these interleavings. It never substitutes a fabricated assembly or skips
+validation. The existing selection round trip retains numeric and resource gates;
+its report also records snapshot/preparation/commit wall times (including the
+final refresh in commit) and main-actor heartbeat gaps. The async scenario runs
+after app initialization, while the older synchronous scenario ran inside
+initialization. Its validated capture mode keeps
+the interactive Maker view and viewport absent, preserving the headless harness:
+SwiftUI preview lifetimes and display-link resource allocations must not enter
+its strict resource checks. Main-actor timers can now advance while preparation
+runs, so elapsed timings still include a scheduling difference and must not be
+presented as a pure decoder speedup. Separate visible UI verification is needed
+for pending controls and interactive editing responsiveness.
+
+Validation on 2026-10-24 passed 39 focused Engine tests with no skips (including
+four deterministic queue tests), 81 runner tests, and the 55-step async scenario.
+The scenario covers current shape/color/mode edits, precise late pose rejection,
+explicit cancellation, supersession, export, outfit/library/import replacement
+and source close. Its state and resource comparisons remain strict. The existing
+46-step selection scenario also passed; its original-format export is byte-equal
+to the baseline. An independent audit of the async export found exactly seven
+intended scalar leaves changed (face/body rates, two selection IDs and three color
+components), with unrelated records/tokens, other outfits and trailer preserved.
+
+The quiet Release comparison, before the later mode-exit guard, alternated
+baseline `72e7af6` and candidate `a987e4f`
+three times, using the same synthetic card and preserved pre-half-state library.
+All six runs passed 46/46 steps, with 15 successful changed selections per run;
+the initial seed no-op, explicit no-op and rejected selections are excluded from
+these timing distributions. The library SHA-256 was
+`d898fea155e53abd30226d0633c832649a60570cffbcbbf1f47dc4c474cbb609`.
+The fixture map was promoted during this window, but both launcher snapshots and
+the preserved input files had identical hashes; all six runs used that same old
+library. This comparison does not measure half-state assembly performance.
+
+| Metric (ms) | Baseline | Async candidate |
+| --- | --- | --- |
+| Total selection, median of three run medians | 658.36 | 653.60 |
+| Total selection, individual run medians | 646.91 / 672.64 / 658.36 | 637.35 / 653.60 / 656.24 |
+| Snapshot, median of run medians | not instrumented | 0.28 |
+| CPU preparation wait, median of run medians | not instrumented | 543.86 |
+| Owner-thread commit including refresh, median of run medians | not instrumented | 110.47 |
+| Maximum main-actor heartbeat gap per selection, median of run medians | not instrumented | 112.42 |
+
+The baseline's entire selection call ran synchronously on the main actor. The
+candidate's longest individual heartbeat gap was 131.90 ms; heartbeats advanced
+during CPU preparation. Total completion time remained similar, and the candidate
+has different scheduling and heartbeat instrumentation, so this is evidence for
+a shorter main-thread stall, not a decoder or whole-selection throughput gain.
+The roughly 110 ms synchronous commit remains a responsiveness limit. Every
+per-step resource snapshot and all six exported cards matched exactly. Baseline
+and candidate executable SHA-256 hashes were
+`5e4d1d9cd4143dd71eaba4df14cfdd8b4f26fed2a871b087c3d27ee5f7502fd2`
+and `19e37c16884738345244b4b9311bc65f0099f952569adf30c56c76afe9d5b62b`.
+Reports, input hashes and byte audits remain private under
+`.local/codex-continue-2026-10-24/maker/`.
+
+Integrated visible UI verification changed back hair 2 → 0 → 9, edited height to
+0.63 and checked hide/show recovery. The transient pending panel completed before
+the UI capture could observe it. Editing/cancelling while pending is therefore
+verified through deterministic production-path scenarios, not yet by a captured
+interactive workflow; no whole-character or original-player parity is claimed.
