@@ -86,9 +86,15 @@ struct HideStudioUIScenario: Decodable {
                     && sameContent(shown, studio.host.renderer.currentFrame()),
                     "12 events \((ProcessInfo.processInfo.systemUptime - repeatedStart) * 1000) ms; no tick work added")
                 let candidates = shown.gizmos.filter { PickIDs.axis(from: $0.objectID) != nil }
-                    .flatMap { $0.vertices }.prefix(128).compactMap {
-                        studio.viewCamera.project(simd_make_float3($0.position), viewport: studio.viewportSize)
-                    }
+                    .flatMap { batch in
+                        stride(from: 0, to: batch.vertices.count - 2, by: 3).compactMap { index in
+                            let center = (simd_make_float3(batch.vertices[index].position)
+                                + simd_make_float3(batch.vertices[index + 1].position)
+                                + simd_make_float3(batch.vertices[index + 2].position)) / 3
+                            let world = batch.model * SIMD4<Float>(center, 1)
+                            return studio.viewCamera.project(simd_make_float3(world), viewport: studio.viewportSize)
+                        }
+                    }.prefix(128)
                 guard let grabbed = candidates.first(where: { PickIDs.axis(from: studio.pickID(at: $0)) != nil }) else {
                     throw SourcePluginError.runtime("No real guide pixel found for hidden-drag regression.")
                 }
