@@ -696,3 +696,11 @@ Collectors belong to the synchronous caller, are not retained by `ResourceStore`
 and introduce no extra clock reads or counters when omitted. These diagnostics
 change no cache keys, publication, leases, image options, shader math or completion
 scheduling, and alone establish no responsiveness improvement.
+
+Seven focused Engine checks passed at `a54b44e` without failures or skips: four
+existing transaction rollback, lease, cache-publication and collision checks,
+plus three new diagnostic regressions. The latter verify one live private handle
+for repeated references, shared-cache bypass of deliberately invalid image bytes,
+and failed image/file loads that retain partial observations while releasing only
+private candidates. They use public synthetic inputs on dedicated threads and
+assert identities, counts and cleanup rather than elapsed-time thresholds.
