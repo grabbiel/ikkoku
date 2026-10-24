@@ -640,7 +640,9 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
 IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 
 MAKER_SCENARIO_OPS = {"customization", "selectCoordinate", "setFace", "setBody",
-                      "setColor", "setColorDraft", "selectAsset", "captureResources", "resetShapes", "export", "reimport", "assert"}
+                      "setColor", "setColorDraft", "selectAsset", "captureResources", "resetShapes", "export", "reimport", "assert",
+                      "beginSelection", "finishSelection",
+                      "supersedeSelection", "cancelSelection", "closeSource", "reloadCard", "clearModLibrary", "boneModifiers"}
 
 # App settings that name a file the app is asked to write (A-T05).
 APP_OUTPUT_VARIABLES = ("IKKOKU_AUTOCAPTURE", "IKKOKU_CAPTURE_UI", "IKKOKU_CAPTURE_UI_REPORT",
@@ -1136,7 +1138,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
                       if name.endswith(".json") and name.startswith("maker-"))
 
     def test_lane_validates_and_covers_every_maker_scenario(self):
-        self.assertEqual(len(self.checks), 5)
+        self.assertEqual(len(self.checks), 6)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_MAKER_SCENARIO"]
@@ -1171,7 +1173,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
             for step in steps:
                 op = step["op"]
                 self.assertIn(op, MAKER_SCENARIO_OPS, "unknown op in %s" % path)
-                if op == "customization":
+                if op in ("customization", "boneModifiers") or "on" in step:
                     self.assertIsInstance(step["on"], bool)
                 if op == "selectCoordinate":
                     self.assertIsInstance(step["index"], int)
@@ -1185,7 +1187,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(all(0 <= c <= 1 for c in rgba))
                 if op == "captureResources":
                     self.assertIsInstance(step["id"], str)
-                if op == "selectAsset" or "selection" in step:
+                if op in ("selectAsset", "beginSelection", "supersedeSelection") or "selection" in step:
                     selection = step["selection"]
                     self.assertIn(selection["kind"], ("hair", "clothes"))
                     self.assertIsInstance(selection["slot"], int)
@@ -1199,7 +1201,7 @@ class MakerScenarioLaneTests(unittest.TestCase):
                 if op == "assert":
                     declared = [k for k in ("coordinate", "face", "body", "color",
                                             "colorApplied", "selection", "resourcesAtMost",
-                                            "diagnosticContains") if k in step]
+                                            "diagnosticContains", "on") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if "coordinate" in step:
                         self.assertIsInstance(step["coordinate"], int)
@@ -1208,6 +1210,26 @@ class MakerScenarioLaneTests(unittest.TestCase):
                     for slot in ("face", "body"):
                         if slot in step:
                             self.assertIsInstance(step[slot]["index"], int)
+
+    def test_async_selection_barriers_are_paired_and_cover_context_changes(self):
+        path = os.path.join(self.SCENARIO_DIR, "maker-async-selection.json")
+        with open(path, encoding="utf-8") as handle:
+            steps = json.load(handle)["steps"]
+        held = False
+        covered = set()
+        for step in steps:
+            if step["op"] == "beginSelection":
+                self.assertFalse(held, "a second barrier would deadlock behind the held worker")
+                held = True
+            elif step["op"] in ("finishSelection", "supersedeSelection"):
+                self.assertTrue(held, "finishing a request that was never held")
+                held = False
+            elif held:
+                covered.add(step["op"])
+        self.assertFalse(held, "scenario exits with a worker held")
+        self.assertTrue({"setBody", "setFace", "setColorDraft", "customization", "boneModifiers",
+                         "cancelSelection", "export", "selectCoordinate", "clearModLibrary",
+                         "reloadCard", "closeSource"} <= covered)
 
     def test_every_scenario_round_trips_through_export_and_reimport(self):
         for check in self.checks:

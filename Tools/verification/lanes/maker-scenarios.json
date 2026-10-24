@@ -114,6 +114,27 @@
         }
       ],
       "timeout": 600
+    },
+    {
+      "id": "maker-scenario-async-selection",
+      "argv": [".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"],
+      "fixtures": [
+        {"env": "IKKOKU_SOURCE_CARD", "kind": "file", "from": "IKKOKU_MAKER_SCENARIO_CARD"},
+        {"env": "IKKOKU_SOURCE_AVATAR", "kind": "file"},
+        {"env": "IKKOKU_MAKER_LIBRARY", "kind": "file"}
+      ],
+      "env": {
+        "IKKOKU_MAKER_SCENARIO": "Tools/verification/scenarios/maker-async-selection.json",
+        "IKKOKU_MAKER_SCENARIO_REPORT": ".local/verification/reports/maker-scenario-async-selection.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "Deterministic CPU-worker barriers exercise the production async selection path. Current preview/card/resources remain live before completion; shape/color/customization/ABMX-mode edits survive commit. Cancellation, supersession, no-op supersession, export, outfit, library, import and close reject held results without changing the new context or GPU resource counts. Export during preparation saves committed selections and current edits; reimport checks exact vanilla IDs, shape rates within 1e-5 and colors within 1/255. The barrier affects scheduling only, never assembly validation. Scripted API evidence, not UI or original-player parity.",
+      "artifacts": [
+        {"path": ".local/verification/reports/maker-scenario-async-selection.json", "kind": "scenario-report"},
+        {"path": ".local/verification/maker-scenario-exports/maker-async-base.png", "kind": "exported-card"},
+        {"path": ".local/verification/maker-scenario-exports/maker-async-edited.png", "kind": "exported-card"}
+      ],
+      "timeout": 600
     }
   ]
 }

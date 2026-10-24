@@ -181,8 +181,8 @@ were 646.05/645.93/648.42 ms. The median of run medians fell from 845.83 to 646.
 a 23.62% reduction. Individual ranges were 802.78–873.80 ms and 610.36–672.43 ms,
 respectively; no-op requests took 0.058–0.070 ms. These measurements include
 synchronous file/asset preparation and validation, not UI throughput or frame
-rate. Changed selection still blocks for roughly 0.61–0.67 seconds and remains a
-responsiveness limitation. No per-frame work is added by the selection controls.
+rate. At that revision, changed selection still blocked for roughly 0.61–0.67
+seconds. No per-frame work was added by the selection controls.
 
 All six runs passed 46/46 scenario checks. Warmed back-hair 2 → 9 → 2 cycles
 settled at 36 store-owned meshes and 55 textures; warmed top 39 → 38 → 39 cycles
@@ -204,3 +204,37 @@ are retained in the private `.local/codex-renderer-maker-models-2026-10-23/`
 evidence directory. The earlier 34-step Debug run and the smaller bounds/pose
 optimization comparison also passed; their timings are not used for the deferred
 reference-loading result above.
+
+### Asynchronous selection preparation (CMT-02, 2026-10-24)
+
+Source asset selection sends immutable card/library inputs to a dedicated serial
+CPU queue. One assembly may be decoding and at most one newer request may wait;
+newer requests cancel older callers promptly and discard their results. Existing
+path, size, hash, identity and assembly validation remains in `prepare`. The queue
+never receives a preview or GPU resources. Appearance construction, pose/frame
+validation and the final replacement still run without suspension on the main
+actor, so this change does not eliminate every selection pause.
+
+The previous character remains visible while decoding. Hair/clothing pickers are
+disabled until completion or Cancel, preventing independent choices from being
+silently replaced by a request based on the same old card. Shapes, expressions,
+colors and customization/ABMX toggles remain editable. At commit the transaction
+reads and validates those current edits; it does not restore a pre-decode copy.
+An import, rig/library replacement, outfit change, source close or explicit Cancel
+invalidates the request. Export cancels pending selection and saves the displayed,
+committed card and its supported edits; the pending UI states that behavior.
+Resolved no-ops do no preparation and preserve preview/GPU identity.
+
+`maker-async-selection.json` holds the actual worker at deterministic barriers to
+exercise these interleavings. It never substitutes a fabricated assembly or skips
+validation. The existing selection round trip retains numeric and resource gates;
+its report also records snapshot/preparation/commit wall times (including the
+final refresh in commit) and main-actor heartbeat gaps. The async scenario runs
+after app initialization, while the older synchronous scenario ran inside
+initialization. Its validated capture mode keeps
+the interactive Maker view and viewport absent, preserving the headless harness:
+SwiftUI preview lifetimes and display-link resource allocations must not enter
+its strict resource checks. Main-actor timers can now advance while preparation
+runs, so elapsed timings still include a scheduling difference and must not be
+presented as a pure decoder speedup. Separate visible UI verification is needed
+for pending controls and interactive editing responsiveness.

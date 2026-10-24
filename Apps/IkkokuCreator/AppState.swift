@@ -25,6 +25,9 @@ final class AppState {
         }
     }
     let host: EngineHost?
+    /// The async Maker checklist outlives init. Keep its former headless
+    /// behavior: no interactive views retaining previews or starting a viewport.
+    let runsHeadlessMakerScenario: Bool
     var maker: MakerModel?
     var studio: StudioModel?
     var errorMessage: String?
@@ -47,6 +50,7 @@ final class AppState {
         let request: CaptureRequest
         do { request = try CaptureRequest.validate(env) }
         catch { print("[ikkoku] \(error)"); exit(1) }
+        runsHeadlessMakerScenario = request.mode == .makerScenario
         // R7: the performance trace records startup marks from here on.
         PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs
@@ -122,18 +126,21 @@ final class AppState {
             // every step passed, 1 otherwise) even when IKKOKU_AUTOCAPTURE is
             // unset — no capture is requested.
             if let scenarioPath = env["IKKOKU_MAKER_SCENARIO"] {
-                do {
-                    guard let maker, let reportPath = env["IKKOKU_MAKER_SCENARIO_REPORT"] else {
-                        throw RigError.invalid("IKKOKU_MAKER_SCENARIO needs the Maker and IKKOKU_MAKER_SCENARIO_REPORT.")
-                    }
-                    let scenario = try JSONDecoder().decode(MakerScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
-                    let report = MakerScenario.run(scenario, maker: maker)
-                    let reportURL = URL(fileURLWithPath: reportPath)
-                    try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try CaptureOutput.writeJSON(report.json(), to: reportURL)
-                    print("[ikkoku] maker scenario: \(report.passed) passed, \(report.failed) failed")
-                    exit(report.failed == 0 ? 0 : 1)
-                } catch { print("[ikkoku] maker scenario failed: \(error)"); exit(1) }
+                Task { @MainActor in
+                    do {
+                        guard let maker, let reportPath = env["IKKOKU_MAKER_SCENARIO_REPORT"] else {
+                            throw RigError.invalid("IKKOKU_MAKER_SCENARIO needs the Maker and IKKOKU_MAKER_SCENARIO_REPORT.")
+                        }
+                        let scenario = try JSONDecoder().decode(MakerScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
+                        let report = await MakerScenario.run(scenario, maker: maker)
+                        let reportURL = URL(fileURLWithPath: reportPath)
+                        try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try CaptureOutput.writeJSON(report.json(), to: reportURL)
+                        print("[ikkoku] maker scenario: \(report.passed) passed, \(report.failed) failed")
+                        exit(report.failed == 0 ? 0 : 1)
+                    } catch { print("[ikkoku] maker scenario failed: \(error)"); exit(1) }
+                }
+                return
             }
             // Plugin mounts, deterministic steps and focus evidence. The adapter
             // report (IKKOKU_NATIVE_PLUGIN_REPORT) and focus events are capture-only:
