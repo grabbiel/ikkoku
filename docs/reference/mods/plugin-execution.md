@@ -258,10 +258,42 @@ upgrades it. Load and undo/redo stage restoration before replacing the live
 session or history. Missing/changed files produce named errors. Plugin-library
 restoration during native open or undo/redo still resolves files synchronously;
 this slice does not move scene loading off the UI thread. Staged legacy-profile
-restoration uses the same attachment-read gate, while a fresh legacy profile load
-keeps its existing live resolver behavior. Plugin-library
+restoration uses the same attachment-read gate. A fresh legacy profile load
+supports attachment reads through the installation transaction described below. Plugin-library
 root relocation is not supported by the asset-library relocation system; keep
 the recorded root or explicitly mount a selection from its new location.
+
+Fresh-profile field initializers and active Awake/OnEnable callbacks may read a
+source-character attachment. A candidate owns any cold preview it constructs and
+uses an appearance transaction for new base textures; existing shared textures
+remain borrowed. Warm previews are checkpointed on first attachment read, retaining
+their shape, animation, dynamics and gaze history. If a later callback or saved-state
+validation fails, assignment-only rollback restores those touched previews and
+releases candidate meshes/textures without evicting another consumer's resources.
+Successful installation transfers surviving previews to the live cache; Start is
+still deferred until the first real runtime step. No checkpoint or resource scan
+is added to normal frame ticks. Successful base textures use the existing cache
+publication contract, including validated but unused inputs; failed candidates
+publish none. Resource generation and handle counters are not rewound.
+
+The retained #203 reproduction at `cdfc29e` passed 13 checks and failed one: a
+rejected cold hidden-parent initializer retained one preview, 29 meshes, 18
+textures and 12,505,092 mesh bytes after the later named Int32 arithmetic error.
+The old document/session, runtime fields/clocks, adapters and sampled frame were
+unchanged; this was a host-cache ownership failure. Successful hidden-initializer
+and first-step Start controls passed separately. Release acceptance at `b6740b0`
+(binary SHA-256 `b9e0a6f29808d3512160e6f7add72f6cb32f4512865b89b17a4e5b1da117c0f4`)
+passed all six focused Engine tests with strict fixtures and no skips, all 32
+source-backed isolation checks, and the 42 existing plugin checks. The cold
+failure now retains no preview and exactly preserves active resource counts;
+repeated partial constructors reach the named late animation-catalog error and
+release their textures/meshes. Warm shape/clock rollback and subsequent pose
+continuation preserve the existing rig and resources. The pre-commit pruned-object
+check directly exercises the production preparation context; it does not claim
+installation flushes the runtime's Destroy barrier. The malformed-neck-write
+alias branch is source-reviewed, not independently fixture-executed. These are
+functional results, with no quiet timing or speedup claim. The original failed
+report and binary remain retained separately.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
