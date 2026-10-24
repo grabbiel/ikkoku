@@ -325,6 +325,38 @@ support a performance or source-parity claim. The
 retains the exact mesh and coverage bounds. The owner next compares constant
 and varying clip-space w while preserving projected geometry and the controls.
 
+**Local acceptance — prepared head appearance inputs, [#200](https://github.com/grabbiel/ikkoku/pull/200):**
+Selected RGBA reads and hashes now run in the bounded preparation job, with
+immutable inputs checked against the exact base/component context and a 128 MiB
+aggregate candidate cap. Latest owner colors still drive composition; missing
+prepared inputs reject without owner-side file fallback. All 33 focused Engine
+checks pass across the initial 32-pass run and one fixture-configured rerun;
+the initial missing-environment failure is retained. Both sexes pass 55 selection
+and seven fresh-reload checks. Eight quiet interleaved launches preserve exported
+card bytes and GPU resource counts; root verifies both binaries and all 24
+retained artifacts. Mean owner commit falls by 19.672–32.976 ms, while total API
+latency rises by 4.582–30.054 ms. The candidate retains 32,506,112 raw input bytes
+until completion. This is a responsiveness tradeoff, with 90–144 ms owner stalls
+still present, rather than a total speedup, peak-memory or FPS result. The
+[Maker reference](../reference/character/maker-assets.md#normal-head-selection-182)
+records the two-sample-per-sex/binary limits and remaining synchronous GPU wait.
+The owner proceeds to measuring and reusing immutable fallback textures within
+each compositor, preserving its completion and failure semantics.
+
+**Diagnostic handoff — perspective sampling controls, [#201](https://github.com/grabbiel/ikkoku/pull/201):**
+The standalone tool adds constant-per-triangle and varying-per-vertex clip-space
+w while retaining projected geometry, depth, ordered UVs, shader and mip inputs.
+All seven cases remain bit-identical over four draws across the measured outputs.
+An independent reciprocal-w UV reference differs by at most 1.4997892061607843e-7
+in the varying case; its affine-gradient comparison is explicitly absent because
+no hardware quad-derivative rule was established. Root verifies all 135 artifact
+hashes and byte equality of the previous 99 control artifacts. These finite,
+coverage-matched results still do not reproduce #188 or establish source parity,
+a production fix or a performance improvement. The
+[renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+retains the exact numerical scope. The owner moves next to a reduction of the
+recovered shader while preserving the existing varying-output baseline.
+
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
 identical reload frames; enabled tone gain muted/restored. See
