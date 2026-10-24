@@ -132,7 +132,10 @@ final class StudioModel: ViewportInputHandler {
     /// message, so a frame where they solve again clears only its own message
     /// (`StudioIKStatusReport`).
     @ObservationIgnored private var ikStatusReport = StudioIKStatusReport()
-    var frame = RenderFrame()
+    var frame = RenderFrame() { didSet { frameSerial &+= 1 } }
+    /// Counts `frame` assignments, so a hover pick can tell whether the frame
+    /// it was taken against is still the current one (R7 phase 2, item 5).
+    @ObservationIgnored private var frameSerial: UInt64 = 0
     var captureSize: (Int, Int) { (doc.captureWidth, doc.captureHeight) }
     var sceneURL: URL?
     private(set) var undoStack: [StudioDocument] = []
@@ -377,6 +380,13 @@ final class StudioModel: ViewportInputHandler {
     /// orbit or pan drag runs (see `refreshCamera`).
     @ObservationIgnored private var cameraReuse: CameraReuse?
     @ObservationIgnored private var hoverAxis: GizmoAxis?
+    /// The hover pick (R7 phase 2, item 5): asynchronous, for the latest
+    /// mouse position only. `hoverPicks` decides what to pick and which
+    /// results still apply; finished picks arrive through `hoverMailbox`.
+    @ObservationIgnored private var hoverPicks = LatestPickQueue<HoverPickContext>()
+    private let hoverMailbox = PickMailbox<LatestPickQueue<HoverPickContext>.Request>()
+    /// When the pick in flight was started (`CACurrentMediaTime`), for the perf trace.
+    @ObservationIgnored private var hoverPickStarted: CFTimeInterval = 0
     @ObservationIgnored private var lastUndoPush = Date.distantPast
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var startTime = CFAbsoluteTimeGetCurrent()
@@ -2641,15 +2651,79 @@ final class StudioModel: ViewportInputHandler {
 
     // MARK: Picking & input
 
+    /// The synchronous GPU pick of the current frame: clicks, drag starts and
+    /// the scenario runner. The hover picks asynchronously (`mouseMoved`).
     private func pick(_ p: SIMD2<Float>) -> UInt32 {
         host.renderer.pick(frame: frame, pixel: p, size: (Int(viewportSize.x), Int(viewportSize.y)))
     }
 
     /// The GPU pick id of the last built frame at a viewport pixel (origin
-    /// top-left), exposed for the scenario runner's `dragGizmo` op, which has
-    /// to locate a gizmo-axis pixel before it can drive the real mouse
-    /// handlers; nothing but the scenario reads this.
+    /// top-left), exposed for the scenario runner's `dragGizmo` and
+    /// `hoverGizmo` ops, which have to locate a gizmo-axis pixel before they
+    /// can drive the real mouse handlers; nothing but the scenario reads this.
     func pickID(at p: SIMD2<Float>) -> UInt32 { pick(p) }
+
+    /// What a hover pick was taken against: the frame (by `frameSerial`) and
+    /// the viewport size. A result taken against anything else is stale.
+    struct HoverPickContext: Equatable, Sendable {
+        let frame: UInt64
+        let viewport: SIMD2<Float>
+    }
+    private var hoverPickContext: HoverPickContext { HoverPickContext(frame: frameSerial, viewport: viewportSize) }
+    /// The gizmo axis the hover highlights, for the scenario runner's `hoverGizmo` op.
+    var hoveredGizmoAxis: GizmoAxis? { hoverAxis }
+    /// The hover pick counters, for the scenario runner's `hoverGizmo` op.
+    var hoverPickStatistics: LatestPickQueue<HoverPickContext>.Statistics { hoverPicks.statistics }
+
+    /// Runs one hover pick of the current frame off the main thread. Its
+    /// result comes back through `hoverMailbox` and is applied on the main
+    /// actor by `finishHoverPicks`.
+    private func startHoverPick(_ request: LatestPickQueue<HoverPickContext>.Request) {
+        hoverPickStarted = CACurrentMediaTime()
+        PerfTrace.event(.hoverPickStarted)
+        let mailbox = hoverMailbox
+        host.renderer.pick(frame: frame, pixel: request.pixel, size: (Int(viewportSize.x), Int(viewportSize.y))) { [weak self] result in
+            mailbox.deliver(request, result)
+            DispatchQueue.main.async { self?.finishHoverPicks() }
+        }
+    }
+
+    /// Applies every finished hover pick, in order. A result applies only when
+    /// it answers the latest mouse move against the current frame and the
+    /// hover is still wanted (gizmos shown, something selected); then the
+    /// highlight changes exactly as the synchronous hover pick changed it. A
+    /// stale result is dropped and the latest move is picked again.
+    private func finishHoverPicks() {
+        while let finished = hoverMailbox.take() {
+            PerfTrace.measure(.studioHoverPick, "StudioHoverPick") {
+                if !(showGizmos && selection != nil) { hoverPicks.cancel() }
+                let (outcome, next) = hoverPicks.finish(finished.request, current: hoverPickContext)
+                PerfTrace.hoverPick(applied: outcome == .apply, latency: CACurrentMediaTime() - hoverPickStarted,
+                                    gpuTime: finished.result.gpuTime)
+                if outcome == .apply {
+                    let axis = PickIDs.axis(from: finished.result.id)
+                    if axis != hoverAxis { hoverAxis = axis; refresh() }
+                }
+                if let next { startHoverPick(next) }
+            }
+        }
+    }
+
+    /// Waits for the hover pick in flight, if any, and applies what it finds,
+    /// so the highlight answers the last mouse move before anything else
+    /// happens, as when `mouseMoved` picked synchronously. A click calls it
+    /// first; the scenario runner's `hoverGizmo` op too. Blocks the main
+    /// thread for at most one pick round trip (more only if a stale result
+    /// has to be picked again). False when no result arrived in `timeout`
+    /// seconds; the hover then stays as it was.
+    @discardableResult
+    func settleHoverPicks(timeout: TimeInterval = 2) -> Bool {
+        while !hoverPicks.isIdle {
+            guard hoverMailbox.waitForDelivery(timeout: timeout) else { return false }
+            finishHoverPicks()
+        }
+        return true
+    }
 
     private func ray(_ p: SIMD2<Float>) -> Ray { viewCamera.ray(atPixel: p, viewport: viewportSize) }
 
@@ -2672,6 +2746,10 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func mouseDown(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) {
+        // The highlight answers the last mouse move before a click or a drag
+        // starts, as the synchronous hover pick guaranteed; a result arriving
+        // mid-drag would otherwise be picked again on a moved gizmo.
+        settleHoverPicks()
         if button != 0 || modifiers.contains(.option) { drag = modifiers.contains(.shift) || button == 2 ? .pan : .orbit; return }
         let id = pick(p)
         let r = ray(p)
@@ -2850,11 +2928,14 @@ final class StudioModel: ViewportInputHandler {
 
     func mouseUp(at p: SIMD2<Float>, button: Int, modifiers: NSEvent.ModifierFlags) { drag = nil }
 
+    /// The gizmo hover (R7 phase 2, item 5): picks asynchronously and only
+    /// for the latest position. A move while a pick is in flight waits for it
+    /// and replaces any earlier waiting position; the result is applied on the
+    /// main actor by `finishHoverPicks`.
     func mouseMoved(to p: SIMD2<Float>) {
         guard showGizmos, selection != nil else { return }
-        let id = pick(p)
-        let axis = PickIDs.axis(from: id)
-        if axis != hoverAxis { hoverAxis = axis; refresh() }
+        if let request = hoverPicks.move(to: p, context: hoverPickContext) { startHoverPick(request) }
+        else { PerfTrace.event(.hoverPickCoalesced) }
     }
 
     func scrolled(delta: SIMD2<Float>, modifiers: NSEvent.ModifierFlags) {

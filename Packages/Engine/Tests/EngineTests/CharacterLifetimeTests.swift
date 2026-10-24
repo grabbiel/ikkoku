@@ -22,7 +22,8 @@ private let bundledAssets = URL(fileURLWithPath: #filePath).deletingLastPathComp
 /// image, with the bundled catalog and without `Textures/`. Building these
 /// characters therefore never calls `MTKTextureLoader`: on CI, two tests making
 /// synchronous texture loads at once stalled the whole parallel Engine suite.
-private struct UntexturedCharacterAssets {
+/// Shared with `PickTests`.
+struct UntexturedCharacterAssets {
     static var garments: [(slot: ClothSlot, id: String)] {
         [(.bottom, "bottom_skirt_pleated"), (.socks, "socks_knee"), (.shoesIn, "shoes_in_loafers"),
          (.bra, "bra_plain"), (.underwear, "underwear_plain")]
@@ -60,7 +61,8 @@ private struct UntexturedCharacterAssets {
 }
 
 /// One character's frame, built the way `MakerModel.refresh` builds it.
-private func characterFrame(_ character: CharacterInstance) -> RenderFrame {
+/// Shared with `PickTests`.
+func characterFrame(_ character: CharacterInstance) -> RenderFrame {
     let built = character.build(objectID: 1)
     var frame = RenderFrame(items: built.items, sceneBounds: built.bounds)
     frame.skinSets = [character.instanceID: built.skinSet]
