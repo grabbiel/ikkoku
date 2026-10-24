@@ -25,9 +25,13 @@ swiftc -O Tools/verification/metal_derivative_repro.swift \
 ```
 
 The output directory must not exist, and its parent must exist. Collection
-creates three 128×128 cases: a large continuous quad, the same region split
+creates five 128×128 cases: a large continuous quad, the same region split
 into 2-pixel triangles with continuous UVs, and identical small-triangle
-geometry with discontinuous per-triangle UVs. Eight CPU-authored sRGB8 mips
+geometry with discontinuous per-triangle UVs, followed by translated and
+sheared copies of the discontinuous grid. Both copies shift by (5/16, 3/16)
+screen pixels; the sheared copy additionally applies `x += (y - 64) * 3/16`
+using the original screen position. UVs, primitive order, depth and clip `w`
+remain unchanged. Eight CPU-authored sRGB8 mips
 are uploaded once and checked unchanged after all draws. Every draw preserves
 color0 and records UV, derivatives, sampled RGBA and primitive ID in three
 additional float32 attachments. Compilation uses the default Metal language
@@ -39,7 +43,12 @@ by SHA-256. Full-plane raw files use tightly packed rows: color0 is RGBA8 sRGB;
 color1 is float32 `(u, v, dU/dx, dV/dx)`; color2 is float32
 `(dU/dy, dV/dy, primitiveID + 1, valid)`; color3 is sampled float32 RGBA.
 All float words are native little-endian on supported Apple hardware.
-Attachments clear to zero, and each draw must cover exactly 4,096 pixels.
+Attachments clear to zero. A CPU union of the generated triangles at pixel
+centers determines each draw's expected coverage; GPU validity and alpha must
+match it at every pixel. Each `*-coverage.raw` stores that union as one 0/1 byte
+per pixel. The original large quad has a literal 4,096-pixel check. Inclusive
+edge tests suffice for these opaque fixtures, whose external boundaries avoid
+pixel centers; they do not implement Metal's general edge-ownership rules.
 Per-case repeats compare bit changes and finite numerical differences
 separately, retain unchanged nonfinite values as errors, and report overlap
 with color changes. Analytic affine-gradient errors are diagnostics with no
