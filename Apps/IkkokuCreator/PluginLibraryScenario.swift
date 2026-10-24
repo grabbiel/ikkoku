@@ -500,7 +500,7 @@ extension PluginLibraryScenario {
             record(name, okay, detail)
             if !okay { throw SourcePluginError.runtime("Initializer reproduction precondition failed: \(name)") }
         }
-        func snapshot() throws -> InitializerObservation {
+        func snapshot(expectedStatus: String? = nil) throws -> InitializerObservation {
             let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
             return .init(document: studio.doc, world: session?.world.document,
                 runtimeDocument: try session?.savedDocument(),
@@ -508,7 +508,7 @@ extension PluginLibraryScenario {
                 callbacks: session?.runtime.callbackTrace ?? [],
                 resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
                     r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                undo: studio.undoStack, redo: studio.redoStack, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
                 generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
                 blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
         }
@@ -538,6 +538,23 @@ extension PluginLibraryScenario {
             let ids = value.document.objects.map { $0.id.uuidString }.sorted()
             let worldIDs = value.world?.objects.map { $0.id.uuidString }.sorted() ?? []
             return "documentIDs=\(ids); worldIDs=\(worldIDs); cloneSerial=\(value.runtimeDocument?.sourcePluginState?.cloneSerial ?? 0); pending=\(value.pending); callbacks=\(value.callbacks)"
+        }
+        let topologyError = "Restoring plugin initialization changed scene object topology, identities, or clone state."
+        func checkHistoryRejection(_ name: String, action: () -> Void) throws {
+            let before = try snapshot(), session = studio.sourcePluginSession
+            let frame = studio.host.renderer.currentFrame(), adapter = studio.sourceFocus.adapter
+            let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
+            let launchObserver = studio.sourceLaunchObserver != nil
+            try persist(before, name + "-before")
+            action()
+            try persist(snapshot(), name + "-after")
+            record(name + "ExactError", studio.status == "Plugin restore: Invalid translated plugin: " + topologyError, studio.status)
+            record(name + "RetainsPrior", try snapshot(expectedStatus: before.status) == before
+                && studio.sourcePluginSession === session && studio.sourceFocus.adapter === adapter
+                && studio.sourceAudioBus.masterVolume == gain && studio.sourceFocusObservers.count == observers
+                && (studio.sourceLaunchObserver != nil) == launchObserver && !studio.sourcePluginsRunning
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Only the explicit history error status changes; target stack, scene, session, clocks, resources and frame stay intact")
         }
         let names = ["noop", "Instantiate", "SetActive", "Destroy", "changed"]
         do {
@@ -617,16 +634,29 @@ extension PluginLibraryScenario {
                     do { try studio.loadScene(from: path(name, ".png")) }
                     catch { loadError = outcome(error) }
                     let loaded = try snapshot(); try persist(loaded, name + "-reopened")
+                    let expectedLoadError = name == "changed"
+                        ? "invalid: Saved plugin profile or library bindings changed; explicit reinstallation is required."
+                        : name == "Instantiate" ? "invalid: " + topologyError : nil
                     if let loadError {
-                        record(name + "LoadOutcome", name == "changed"
-                            && loadError == "invalid: Saved plugin profile or library bindings changed; explicit reinstallation is required.", loadError)
+                        record(name + "LoadOutcome", loadError == expectedLoadError, loadError)
                         record(name + "LoadFailureRetainsPrior", loaded == before && studio.sourcePluginSession === oldSession
                             && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
                             && studio.sourceFocusObservers.count == observers && (studio.sourceLaunchObserver != nil) == launchObserver
                             && !studio.sourcePluginsRunning && sameFrame(beforeFrame, studio.host.renderer.currentFrame()))
+                        if name == "Instantiate" && loadError == expectedLoadError {
+                            // Seed the original saved target using ordinary history
+                            // capture, never replacing the stacks or invalidation token.
+                            studio.doc = saved; studio.pushUndo(force: true); studio.doc = before.document
+                            try checkHistoryRejection("InstantiateUndo", action: { studio.undo() })
+                            // A successful undo records the rejected target as redo.
+                            studio.pushUndo(force: true); studio.doc = saved; studio.undo()
+                            try require("InstantiateRedoTargetPrepared", studio.doc.objects == before.document.objects
+                                && studio.redoStack.last == saved && studio.sourcePluginSession != nil, studio.status)
+                            try checkHistoryRejection("InstantiateRedo", action: { studio.redo() })
+                        }
                         continue
                     }
-                    record(name + "LoadOutcome", name != "changed", "Loaded; " + summary(loaded))
+                    record(name + "LoadOutcome", expectedLoadError == nil, "Loaded; " + summary(loaded))
                     record(name + "InputSceneCommitted", studio.doc.objects == saved.objects
                         && studio.doc.sourcePluginState == saved.sourcePluginState)
                     let stepFrame = studio.host.renderer.currentFrame(), stepSession = studio.sourcePluginSession
@@ -950,8 +980,9 @@ extension PluginLibraryScenario {
         for mutation in ["Instantiate", "SetActive", "Destroy"] {
             let profile = try freshProfileFixture(directory: directory.appendingPathComponent("restore-" + mutation),
                 phase: "initializer", fail: false, mutation: mutation)
-            failures.append((mutation, try pinnedFailure(profile),
-                "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."))
+            failures.append((mutation, try pinnedFailure(profile), mutation == "Instantiate"
+                ? "Restoring plugin initialization changed scene object topology, identities, or clone state."
+                : "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."))
         }
         for (name, rejected, expectedError) in failures {
             let url = try write(rejected, "reject-" + name)

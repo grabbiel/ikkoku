@@ -112,6 +112,13 @@ public final class SourceStudioPluginSession {
             }
         }
         world = try SourceStudioPluginWorld(document: document, identities: saved?.objectIdentities ?? [:], cloneSerial: saved?.cloneSerial ?? 0, attachment: attachment)
+        // Normalization may add identities for unbound input objects. Snapshot
+        // that candidate, including tombstones, before replaying constructors.
+        // Fresh installation intentionally adopts constructor-created objects.
+        let restoreBaseline: (objects: Set<UUID>, identities: [UUID: String], cloneSerial: UInt64)?
+        if saved != nil {
+            restoreBaseline = (Set(world.document.objects.map(\.id)), world.identities, world.cloneSerial)
+        } else { restoreBaseline = nil }
         runtime = try SourcePluginRuntime(world: world, fixedDeltaTime: fixedDeltaTime)
         if let saved { try runtime.restoreClock(saved.clock) }
         var bindingCount = 0, identities = Set<Data>()
@@ -154,6 +161,15 @@ public final class SourceStudioPluginSession {
             }
         }
         try runtime.start()
+        if let baseline = restoreBaseline {
+            guard Set(world.document.objects.map(\.id)) == baseline.objects,
+                  world.cloneSerial == baseline.cloneSerial, world.identities.count == baseline.identities.count,
+                  baseline.identities.allSatisfy({ id, identity in
+                      world.identities[id].map { $0.utf8.elementsEqual(identity.utf8) } == true
+                  }) else {
+                throw SourcePluginError.invalid("Restoring plugin initialization changed scene object topology, identities, or clone state.")
+            }
+        }
     }
     public func step(document: StudioDocument, deltaTime: Float, afterUpdate: (() throws -> Void)? = nil) throws -> StudioDocument {
         try world.replaceDocument(document)
