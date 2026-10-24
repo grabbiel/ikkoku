@@ -253,16 +253,66 @@ the commands and the comparison in `.local/local-wave-verify/l3/`.
 ## Accessory label UI integration
 
 The source Clothes inspector now calls `StudioModel.sourceAccessoryLabels(for:)`
-and exposes each of its twenty rows as `studio.source.accessory.<slot>`. Loaded
-slots use the existing visibility toggles; unavailable slots show a disabled
-label. Mounting the adapter selects the recovered label pass, using resolved
+and exposes each of its twenty rows as `studio.source.accessory.<slot>`. Saved
+nonempty slots use the existing visibility toggles; empty slots show a
+noninteractive label. A saved slot with a missing conversion retains its toggle
+and numbered fallback label, even though it has no rendered accessory mesh. Mounting the adapter selects the recovered label pass, using resolved
 source names without changing source identities. The earlier placeholder no
 longer blocks this inspector.
 
-The accepted library-panel GUI run verifies selecting and mounting the accessory
-adapter, not the values displayed in the Clothes inspector. A visible mounted /
-unmounted label comparison, including outfit changes and unavailable slots, is
-still a separate P-T03 acceptance gate. Label-model tests alone do not close it.
+The 2026-10-24 visible check on the Release executable below used the actual
+converted-manifest command: slot 0 changed from `スロット01` to `01 スクエア`.
+Hiding that accessory retained its label, and choosing outfit 2 retained the label
+and hidden flag. File → Save Scene wrote a new native scene; a fresh process with
+no startup mount used File → Open Scene and restored outfit 2, the mounted label
+and hidden flag. Slots 1–19 displayed `スロット02` through `スロット20` as
+noninteractive text. Both owned processes exited normally.
+
+This fixture uses the same glasses in every outfit, so it does not establish
+distinct-name outfit switching. Missing-conversion fallback is covered by the
+automated phase below, not by this GUI run. A direct converted-manifest mount saves
+`sourceNativePlugins` without `sourcePluginLibrary`; the current Studio Plugins
+panel therefore omits its mounted summary and Unload control. Visible unload is
+not claimed on that route and remains a separate UI follow-up; automated unload
+uses the real model method. Unicode edge cases remain recovered-code oracle
+coverage rather than displayed fixture observations.
+
+The `studio-scenarios` lane has a bounded accessory-label checklist:
+`reload-save-accessory-labels`, `reload-load-accessory-labels` and
+`accessory-labels-missing`. The save phase uses the real mount/unload methods,
+checks all twenty labels as UTF-8 bytes, retains the label when a converted accessory
+is hidden, changes outfit, and saves a native scene. The fresh process has no
+source import or startup adapter mount; it restores the saved package reference,
+labels, outfit and visibility state. The missing-selection phase restores its
+original outfit and requires byte-identical original export before reimport.
+The lane maps `IKKOKU_ACCESSORY_NAMES_MANIFEST` to the exact adapter package's
+`manifest.json`; its missing-file check is distinct from the package identity
+validation performed by the app. Release verification at `6ddb1ea` passes
+17 save/mount checks and seven fresh-process checks. The corrected missing-slot
+scenario passes ten checks on the same executable (SHA-256
+`3885d66f5452b0111735e2e804fbd68942cae7f24289dcc059997f0ffebada29`).
+All twenty rows match exactly, saved and restored package references are identical,
+and the original export is byte-identical. The initial missing-slot run passed
+8/10: its expectation confused saved slot metadata with converted geometry.
+The corrected check requires saved slot 0, zero rendered accessories and the same
+fallback label; no runtime behavior or comparison was weakened. The first report
+is retained. A private report-summary parser failure after the passing app exit
+was corrected offline; no app rerun was attributed to that parser correction.
+Both focused Engine tests executed, including the recovered-code oracle, with
+zero skips; 83 runner tests passed. The displayed-label check above used the same
+executable; no runtime label-generation change or cache was added.
+
+`measureAccessoryLabels` records the first timed call and repeated warm calls to
+`sourceAccessoryLabels(for:)`, with a fixed 100–2,000-call bound. Every returned
+label is consumed and checked outside the timed interval. The measurement also
+checks document bytes, preview identity, resource counts, animation time and
+selected frame fields for unintended changes. It measures synchronous label
+construction, excluding package load, frame refresh, SwiftUI layout/display and
+GPU completion. The first sample is not a cold asset-load measurement. No cache
+or runtime behavior change is inferred from the presence of this checklist.
+Functional runs observed warm call medians around 0.052–0.074 ms; these were not a
+quiet performance comparison and do not establish UI latency. No caching change
+was justified by this bounded diagnostic.
 
 ## BepInEx.MuteInBackground 1.1
 
@@ -289,9 +339,9 @@ Original binaries, recovered source, configuration and trace results remain igno
 
 ## KK_StudioAccessoryNames 1.1.0
 
-`SourceStudioAccessoryNamesPlugin` adapts the installed Studio plug-in's label pass. Slot counting advances only for text containing a UTF-16 decimal digit, missing/inactive accessories keep the original Japanese slot fallback, and resolved names retain their Unicode spelling. Source button positions 100/130 become 160/190 and text width becomes 150 in the label model; native UI uses SwiftUI layout. Labels use the exact resolved accessory entry name and never alter source/mod IDs or card bytes.
+`SourceStudioAccessoryNamesPlugin` adapts the installed Studio plug-in's label pass. Slot counting advances only for text containing a UTF-16 decimal digit, missing names or inactive UI rows keep the original Japanese slot fallback, and resolved names retain their Unicode spelling. Source button positions 100/130 become 160/190 and text width becomes 150 in the label model; native UI uses SwiftUI layout. Labels use the exact resolved accessory entry name and never alter source/mod IDs or card bytes.
 
-`Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing/inactive accessories, non-slot widgets, shifted numbering and Unicode digit behavior. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. The current source Clothes inspector consumes this model as described above; the visible label-value comparison remains separate. No arbitrary Harmony or Unity coroutine host is provided.
+`Tools/reverse/analysis/accessory_names_oracle.py` compiles the unchanged recovered plug-in class against a small queried-UI host and runs its coroutine through the initial one-frame yield. Three cases cover named/missing accessories and inactive UI rows, non-slot widgets, shifted numbering and Unicode digit behavior. UI-row activity is distinct from the character’s accessory visibility flag: hiding a loaded accessory does not discard its resolved label. `SourceStudioAccessoryNamesTests` compares the entire resulting label/layout model against those traces when `IKKOKU_ACCESSORY_NAMES_ORACLE` points to the private `reference.json`. This adapter implements the original callback's label/layout result. The current source Clothes inspector consumes this model as described above; the visible label-value comparison remains separate. No arbitrary Harmony or Unity coroutine host is provided.
 
 
 ## HideAllUI 2.3.2 Studio adapter

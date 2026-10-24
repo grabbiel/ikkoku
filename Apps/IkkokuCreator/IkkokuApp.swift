@@ -58,10 +58,11 @@ struct IkkokuApp: App {
                 Button("Reload Mod Library") { app.reloadModLibrary() }.disabled(app.modProfile == nil)
                 Divider()
                 Button("Load Translated Studio Plugins…") { app.studio?.openSourcePluginProfile() }
+                    .disabled(app.studio?.sourcePluginCommandsAvailable != true)
                 Button("Load Converted Original Plugin…") { app.studio?.openSourceNativePlugin() }.disabled(app.mode != .studio)
                 Button(app.studio?.sourcePluginsRunning == true ? "Pause Studio Plugins" : "Run Studio Plugins") {
-                    app.studio?.sourcePluginsRunning.toggle()
-                }.disabled(app.studio?.hasSourcePluginSession != true)
+                    app.studio?.toggleSourcePluginPlayback()
+                }.disabled(app.studio?.canToggleSourcePluginPlayback != true)
                 Divider()
                 Button("Load Bone Modifiers…") { app.openBoneModifiers() }.disabled(app.maker?.sourceRigPreview == nil)
                 Button("Clear Bone Modifiers") { app.maker?.clearBoneModifiers() }.disabled(app.maker?.sourceBoneModifiers == nil)

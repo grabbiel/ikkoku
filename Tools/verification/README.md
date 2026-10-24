@@ -6,6 +6,52 @@ it executes the checks declared in a lane manifest, parses per-test results,
 and writes one JSON report under the git-ignored `.local/` tree. It never
 starts a CI job, downloads anything, or runs commands through a shell.
 
+## Standalone Metal derivative diagnostic
+
+`metal_derivative_repro.swift` is an asset-free numerical investigation for
+[#188](https://github.com/grabbiel/ikkoku/issues/188), separate from the lane
+runner and application. It requires macOS, the Swift SDK and a Metal device;
+it reads no original assets or environment fixtures. Build and run its CPU
+layout, literal mip-texel and floating-point classification checks first:
+
+```sh
+mkdir -p .local/metal-derivative-repro
+swiftc -O Tools/verification/metal_derivative_repro.swift \
+  -o .local/metal-derivative-repro/probe
+.local/metal-derivative-repro/probe --self-check
+# Run only with exclusive access to shared app/GPU validation resources:
+.local/metal-derivative-repro/probe \
+  --output .local/metal-derivative-repro/run-1 --repeats 4
+```
+
+The output directory must not exist, and its parent must exist. Collection
+creates three 128×128 cases: a large continuous quad, the same region split
+into 2-pixel triangles with continuous UVs, and identical small-triangle
+geometry with discontinuous per-triangle UVs. Eight CPU-authored sRGB8 mips
+are uploaded once and checked unchanged after all draws. Every draw preserves
+color0 and records UV, derivatives, sampled RGBA and primitive ID in three
+additional float32 attachments. Compilation uses the default Metal language
+version and disables fast math, matching the options of the investigated
+translated path; the effective version and device are reported.
+
+`report.json` identifies the executable, shader, vertices, mips and raw outputs
+by SHA-256. Full-plane raw files use tightly packed rows: color0 is RGBA8 sRGB;
+color1 is float32 `(u, v, dU/dx, dV/dx)`; color2 is float32
+`(dU/dy, dV/dy, primitiveID + 1, valid)`; color3 is sampled float32 RGBA.
+All float words are native little-endian on supported Apple hardware.
+Attachments clear to zero, and each draw must cover exactly 4,096 pixels.
+Per-case repeats compare bit changes and finite numerical differences
+separately, retain unchanged nonfinite values as errors, and report overlap
+with color changes. Analytic affine-gradient errors are diagnostics with no
+new tolerance or parity gate.
+
+Exit zero means collection completed; inspect `renderingStable` in the report
+for the numerical result. Nonfinite visible values retain the report and
+produce exit one. A stable synthetic case does not prove the recovered shader
+stable, and extra MRT outputs can perturb compilation. This tool measures no
+performance and changes no production sampler, source gate or rendering path.
+Keep invocation/source/compiler provenance alongside each retained report.
+
 ## Usage
 
 ```sh
