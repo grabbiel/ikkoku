@@ -107,6 +107,12 @@ The comparator binds each selected mesh by its original rest-position SHA-256,
 name, triangle order, ordered skin-joint names and inverse-bind matrices. It
 gates every selected skin-joint **world matrix** and every selected vertex at
 `2e-5` absolute source units/matrix elements; morph percentages at `1e-4`.
+Morph metadata has two explicit producer formats: the native report contains
+sparse index/weight records, while the original report contains exactly one
+dense weight per named channel. The comparator rejects nonfinite or mistyped
+weights, negative/out-of-range or duplicate indices, and dense length mismatches
+before indexing or subtraction. Signed finite weights, omitted native zero
+weights and empty channels remain valid; channel identity must still match.
 It keeps three separate vertex comparisons: native versus original runtime
 matrix skinning; native versus actual `SkinnedMeshRenderer.BakeMesh`; and
 BakeMesh versus original matrix skinning. Raw Unity 5.6 BakeMesh positions
@@ -159,6 +165,15 @@ probe/comparator tests pass. These synthetic tests cover corrupted identities,
 missing meshes, shadow exclusions, shape/flag mismatch,
 last-vertex errors, independent bone/morph/BakeMesh failures, malformed buffers,
 path traversal, same/copied run rejection and repeat drift.
+
+The 2026-10-24 morph-boundary follow-up passes 43 focused Python tests, including
+four authored malformed inputs that previously passed, signed/sparse/empty
+controls and the unchanged `1e-4` acceptance boundary. Re-evaluation of all three
+retained neutral and three mixed-shape assemblies, both independent female00
+repeats and the mixed repeat's full gate passes at the same tolerances. Hashes of
+1,266 retained input files are unchanged. Evidence is under
+`.local/codex-continue-2026-10-24/wave-three/models/`; this tightens offline
+validation without changing native runtime behavior or extending capture scope.
 
 `card-model ... --benchmark 10000` reports Release p50/p95 nanoseconds for the
 bound late pass against a disabled pass, after 32 warmups. It mutates a uniquely
