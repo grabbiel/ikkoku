@@ -661,3 +661,38 @@ rerun was needed. Both binaries, 24 artifacts and 48 stage records were independ
 verified. Frozen sources, inputs, original postprocessing attempts and corrected
 results are retained privately under
 `.local/codex-continue-2026-10-24/rolling/maker-compositor-batch/`.
+
+### Cold base-appearance attribution (#192)
+
+The normal-head selection caller records `baseAppearanceStages` on each successful
+selection; ordinary loader callers omit diagnostics by default. There is no new
+environment toggle. The sample subdivides the existing inclusive
+`baseAppearanceMilliseconds` interval. It records appearance-document
+reads and JSON decoding, contained-path resolution, mod-package loading and
+library creation, mod-texture resolution, encoded texture-file reads and private
+transaction lookups. The nested `textureLoads` sample distinguishes the existing
+data-cache and image-cache checks, ImageIO image creation, `MTKTextureLoader`
+loading and resource registration. Private transaction reuse is separate from a
+shared-cache hit; two cache misses on the data-to-image path do not mean two
+textures were created.
+
+The image-creation interval covers `CGImageSourceCreateWithData` and
+`CGImageSourceCreateImageAtIndex`. These APIs can defer decoding, so this is not a
+measurement of complete CPU image decoding. The MetalKit interval includes its
+existing loading work with sRGB, mipmap generation, shader-read usage and private
+storage unchanged; it is not isolated GPU execution time. Registration excludes
+the subsequent ownership callback. Named intervals omit surrounding validation,
+material construction and instrumentation overhead; they must not be added to
+the inclusive parent interval again.
+
+Calls and failures record each attempted API interval, including throws. A failed
+load increments `loadFailures` and retains only partial diagnostic observations;
+head selection publishes its sample alongside a successful state commit. Encoded
+file-byte counters count successful reads, including repeated references. The
+resource-level `encodedBytesPresented` instead counts supplied `Data`, including
+shared-cache hits; neither quantity measures decoded pixels, retained allocation
+bytes or RSS. Actual registrations are counted independently from lookup misses.
+Collectors belong to the synchronous caller, are not retained by `ResourceStore`
+and introduce no extra clock reads or counters when omitted. These diagnostics
+change no cache keys, publication, leases, image options, shader math or completion
+scheduling, and alone establish no responsiveness improvement.
