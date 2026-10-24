@@ -34,7 +34,7 @@
     {"op": "setIKTarget", "character": "Hana", "chain": "hand_L", "axis": "x", "delta": 0.02},
     {"op": "assert", "statusContains": "Added Kai", "ik": {"character": "Hana", "chain": "hand_R", "solved": false}},
     {"op": "setIKTarget", "character": "Hana", "chain": "hand_R", "axis": "x", "value": -0.3},
-    {"op": "assert", "statusContains": "Added Kai", "ik": {"character": "Hana", "chain": "hand_R", "solved": true, "reachesTarget": 0.001, "target": [-0.3, null, null]}},
-    {"op": "assertRejected", "statusContains": "IK left unsolved", "errorContains": "does not contain \"IK left unsolved\""}
+    {"op": "assertRejected", "statusContains": "IK left unsolved", "errorContains": "does not contain \"IK left unsolved\""},
+    {"op": "assert", "statusContains": "Added Kai", "ik": {"character": "Hana", "chain": "hand_R", "solved": true, "reachesTarget": 0.001, "target": [-0.3, null, null]}}
   ]
 }

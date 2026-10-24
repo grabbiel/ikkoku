@@ -718,7 +718,7 @@ original CharaStudio authored one without a card
 Its private path goes in the environment file as
 `IKKOKU_MIRRORED_CAMERA_SCENE`.
 
-`mirrored-camera.json` (lane check `studio-scenario-mirrored-camera`, 24
+`mirrored-camera.json` (lane check `studio-scenario-mirrored-camera`, 25
 steps since st-ux-ik-camera, 17 before; scene plus `IKKOKU_SOURCE_AVATAR`)
 runs on camera key 2 `IKKOKU-MIRROR` under item key 0 (scale (−1, 1, 1)),
 saved active, and control camera key 3 `IKKOKU-CONTROL` under item key 1
@@ -782,7 +782,9 @@ it does not contain "Viewing through". With camera 3 the indicator contains
 "Viewing through source camera "IKKOKU-CONTROL" (camera 3)", and a control
 shows it does not contain "Saved camera shown". `treeLabel` asserts the tree
 rows `IKKOKU-MIRROR (camera 2)` and `IKKOKU-CONTROL (camera 3)`. A last toggle
-deactivates camera 3, and a control shows the indicator is then empty.
+deactivates camera 3: a control shows the indicator is then empty, and the
+last step asserts no active camera, the saved view and the status "Source
+camera "IKKOKU-CONTROL" (camera 3) deactivated; orbit controls restored.".
 
 Unrendered items: the importer still names an item record it cannot render
 "Unrendered source item N". Where the converted catalog

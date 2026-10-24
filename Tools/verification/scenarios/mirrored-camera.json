@@ -23,6 +23,7 @@
     {"op": "toggleCamera", "key": 3},
     {"op": "assert", "view": {"key": 3}, "indicatorContains": "Viewing through source camera \"IKKOKU-CONTROL\" (camera 3)"},
     {"op": "toggleCamera", "key": 3},
-    {"op": "assertRejected", "indicatorContains": "camera", "errorContains": "view indicator \"\" does not contain"}
+    {"op": "assertRejected", "indicatorContains": "camera", "errorContains": "view indicator \"\" does not contain"},
+    {"op": "assert", "activeCamera": null, "view": {"saved": true}, "statusContains": "Source camera \"IKKOKU-CONTROL\" (camera 3) deactivated; orbit controls restored."}
   ]
 }
