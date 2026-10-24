@@ -19,6 +19,14 @@ import Renderer
 /// thread and waits for it (at most `terminationWait`) before the process
 /// exits, so `exit` never tears the process down under a draw.
 ///
+/// Core Animation may still deliver an occasional callback on the main
+/// thread. In four ThreadSanitizer Debug runs of the `viewport-lifecycle`
+/// workload, 2 of about 2,000 callbacks did, each shortly after the layer
+/// changed size; three Release runs had none. Creating the link on the
+/// render thread instead did not prevent it. The callback is thread-agnostic:
+/// `Renderer.draw` is safe from any thread, and the harness records which
+/// thread drew.
+///
 /// Sendable invariant: `renderer`, `log`, `link`, `finished` and `control`
 /// are set in `init` and never reassigned; `renderer`, `log`, `finished` and
 /// `control` are thread-safe. `link` is configured on the main thread before

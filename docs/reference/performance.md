@@ -70,20 +70,40 @@ the run.
 | `maker-idle` | `IKKOKU_SOURCE_CARD` | Maker with the source card, idle animation, blink and hair |
 | `maker-slider` | same | source customization on, the first bound body slider oscillates ±0.3 (one binding write per input tick) |
 | `studio-native` | avatar, Maker library | New Scene, `IKKOKU_PERF_CHARACTERS` (default 6) native characters added with the Add menu's command, live animation |
+| `viewport-lifecycle` | avatar, Maker library | `studio-native`'s scene, then every 0.5 s: three Studio/Maker switches (each replaces the viewport), a window resize to 0.7× and back, minimize for 1.5 s, restore, Studio, Maker. Before each step it counts the threads named `com.grabbiel.Ikkoku.viewport-render`. After the report it quits through `NSApp.terminate` while the link draws, instead of `exit` |
 | `startup` | as `studio-idle` | no workload; the report's `startupSeconds` marks are the result |
 
-Other options: `IKKOKU_PERF_WINDOW_W`/`_H` (default 1600×1000 points; the size
-is applied with the window's autosave name cleared, so the user's saved frame
-is untouched) and `IKKOKU_PERF_INPUT_HZ` (default 120).
+Other options:
+
+- `IKKOKU_PERF_WINDOW_W`/`_H` (default 1600×1000 points). The size is applied
+  with the window's autosave name cleared, so the user's saved frame is
+  untouched.
+- `IKKOKU_PERF_INPUT_HZ` (default 120).
+- `IKKOKU_PERF_MAIN_LOAD_MS` (0–1000, default 0) and `IKKOKU_PERF_MAIN_LOAD_HZ`
+  (1–240, default 30). While recording, a main-run-loop timer busy-waits that
+  many milliseconds that many times a second. It stands in for main-thread
+  work the app does not control (a slow SwiftUI update, a modal panel), so
+  the report shows whether presentation depends on the main thread. The time
+  is reported as the `mainLoad` phase and `mainThread.loadMsPerSecond`.
+  `perf_trace.py run --main-load-ms N [--main-load-hz H]` sets both and names
+  the report `<workload>+loadN.json`.
 
 ### What the report records
 
-[PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift), all on the main thread:
+[PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift). The draw
+samples are recorded on the thread that runs the display link, through a
+locked `PerfDrawLog`. Everything else is recorded on the main thread.
 
 - every `CAMetalDisplayLink` callback: callback time, target presentation time,
   `Renderer.draw` duration (frame preparation, deformation and pass encoding,
-  plus any wait for one of the three frame slots) and the last completed
-  command buffer's GPU time (`gpuEndTime - gpuStartTime`);
+  plus any wait for one of the three frame slots), the last completed
+  command buffer's GPU time (`gpuEndTime - gpuStartTime`), and whether it ran
+  on the main thread. `drawThread` is `main`, `render` or `mixed`. Only
+  main-thread callbacks count as main-thread draw time; render-thread draws
+  are summed in `renderThread` (callbacks, draw ms/s);
+- the frame ring's counters after each draw (`frameRing`): skin palettes and
+  palette KiB per draw, palette buffers created while recording (0 once the
+  ring is warm), and draws that used overflow buffers;
 - when each drawable was really presented (`addPresentedHandler`), giving
   presented FPS, presented-interval percentiles and hitches (an interval longer
   than 1.5 refresh periods; `skippedRefreshes` counts the periods it lost);
@@ -123,7 +143,9 @@ of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `StudioTick`,
 `StudioRefresh`, `StudioCameraRefresh`, `MakerTick`, `MakerRefresh`,
 `Startup`, and `Mark` events), so every Instruments template shows them next
 to its own tracks. The report's `schemaVersion` is 2 since the Studio hooks,
-events and view bodies were added.
+events and view bodies were added, and 3 since the draw log moved off the main
+actor (`drawThread`, `renderThread`, `frameRing`, the `mainLoad` phase and
+`configuration.mainLoadMs`/`mainLoadHz`).
 
 ### Running it
 
@@ -171,9 +193,21 @@ spends its time calling.
   lose its few drawables legitimately, so a run with fewer than 100
   drawables is not flagged on a saturated main thread.
 - **Stray input.** An idle workload (`studio-idle`, `maker-idle`,
-  `studio-native`, `startup`) sends no input. Any input calls in its report
-  came from someone's mouse over the window, so the run is checked against a
-  rerun.
+  `studio-native`, `viewport-lifecycle`, `startup`) sends no input. Any input
+  calls in its report came from someone's mouse over the window, so the run
+  is checked against a rerun.
+- **Viewport lifecycle.** `viewport-lifecycle` is exempt from the drawable
+  check, since it minimizes the window on purpose. Instead `summarize` warns
+  when any of these holds:
+  - the steps did not run;
+  - more render threads run at the end than before the first step, or more
+    than one (or than at the start, if more) before any step;
+  - no frame was presented more than 0.5 s after the restore;
+  - the window is still minimized.
+
+  It prints the per-step render-thread counts. For reports with frame-ring
+  counters, it also prints one line of per-draw skin palettes and palette
+  buffers created.
 
 `summarize` prints a `WARNING` for each flagged run. `run` repeats a launch
 whose window was not composited (`--retries`, default 2) before giving up.

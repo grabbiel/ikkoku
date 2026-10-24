@@ -641,7 +641,14 @@ the Maker) owns a `ViewportRenderThread`. That is a `Thread` named
 `com.grabbiel.Ikkoku.viewport-render` (QoS user-interactive) whose run loop
 drives the viewport's `CAMetalDisplayLink` (`preferredFrameLatency` 2, as
 before). Its callback calls `Renderer.draw(to:timestamp:)`, which presents
-from that thread. Everything else stays on the main actor:
+from that thread. Core Animation may still deliver an occasional callback on
+the main thread. In four ThreadSanitizer Debug runs of the `viewport-lifecycle`
+workload, 2 of about 2,000 callbacks did. Each came shortly after the layer
+changed size: 0.3 s after a mode switch made a new viewport, and during a
+window resize. Three Release runs had none, and creating the link on the
+render thread instead did not prevent it. Such a callback draws on the main
+thread, which is safe because every renderer entry point is. Everything else
+stays on the main actor:
 
 - The models build frames and call `Renderer.submit`, `pick`, `capture` and
   `benchmark`; their APIs are unchanged.
