@@ -141,3 +141,50 @@ func sourceDynamicsLocalOriginalHairRigWhenRequested() throws {
     var invalid = rig.restPose; invalid.localMatrices[0] = Transform.trs(.zero,.identity,Float3(-1,1,1))
     #expect(throws:(any Error).self) { try SourceDynamicBone(rig:rig,pose:invalid,definition:dynamicsConfig()) }
 }
+
+/// R7 phase 2, item 3 (C2): a step told that its input already passes
+/// `rig.evaluate` checks only the root particle's subtree and the palette
+/// entries it moves. It must throw exactly when, and with the message, the
+/// whole-rig check would. Each case puts a ~3e38 offset where the swinging
+/// chain's rotation carries it past Float.greatestFiniteMagnitude: a world
+/// matrix under the tip, a palette entry whose joint is the tip, and a
+/// palette whose mesh is the tip. The rest pose is valid in every case.
+@Test func sourceDynamicsValidatedStepThrowsExactlyWhenEvaluateWould() throws {
+    let huge = Transform.trs(Float3(3e38, 3e38, 0), .identity, .one)
+    func rig(child: Float3, skins: [RigDefinition.Skin]) throws -> RigDefinition {
+        try RigDefinition(nodes: [
+            .init(name: "owner", sourceID: "owner", parent: nil),
+            .init(name: "root", sourceID: "root", parent: 0),
+            .init(name: "tip", sourceID: "tip", parent: 1, translation: Float3(0, -1, 0)),
+            .init(name: "child", sourceID: "child", parent: 2, translation: child)
+        ], skins: skins)
+    }
+    let cases: [(name: String, rig: RigDefinition, message: String)] = [
+        ("world under the tip", try rig(child: Float3(3e38, 3e38, 0), skins: []), "Pose hierarchy overflow at node 3."),
+        ("palette joint", try rig(child: .zero, skins: [.init(name: "body", meshNode: 0, joints: [0, 2], inverseBindMatrices: [matrix_identity_float4x4, huge])]),
+         "Skin 0 produced a nonfinite palette."),
+        ("palette mesh", try rig(child: .zero, skins: [.init(name: "hair", meshNode: 2, joints: [0], inverseBindMatrices: [huge])]),
+         "Skin 0 produced a nonfinite palette.")
+    ]
+    let config = dynamicsConfig(force: Float3(0.02, 0, 0))
+    for test in cases {
+        _ = try test.rig.evaluate(test.rig.restPose)
+        var whole = try SourceDynamicBone(rig: test.rig, definition: config), changed = whole
+        var successes = 0, failures: [String] = []
+        for _ in 0..<40 {
+            let expected = Result { try whole.step(deltaTime: 1 / 60, rig: test.rig, pose: test.rig.restPose) }
+            let actual = Result { try changed.step(deltaTime: 1 / 60, rig: test.rig, pose: test.rig.restPose, validatedInput: true) }
+            switch (expected, actual) {
+            case let (.success(a), .success(b)):
+                #expect(a.localMatrices == b.localMatrices, "\(test.name)"); successes += 1
+            case let (.failure(a), .failure(b)):
+                #expect("\(a)" == "\(b)", "\(test.name)"); failures.append("\(a)")
+            default:
+                Issue.record("\(test.name): \(expected) vs \(actual)")
+            }
+            #expect(whole.positions == changed.positions && whole.previousPositions == changed.previousPositions)
+        }
+        #expect(successes > 1 && failures.first == test.message, "\(test.name): \(successes) successes, \(failures.first ?? "no failure")")
+        print("[validated-step] \(test.name): \(successes) steps agree on a pose, \(failures.count) on \(failures.first ?? "-")")
+    }
+}

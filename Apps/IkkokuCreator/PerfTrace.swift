@@ -46,7 +46,10 @@ enum PerfSignpost {
 /// - model work: Maker and Studio ticks and refreshes, the Studio's camera-only
 ///   frame rebuilds (explicit hooks in `MakerModel` and `StudioModel`) and
 ///   every input handler call;
-/// - model events: Studio document changes and camera-only changes;
+/// - the Studio live step off the main thread: its background job's wall and
+///   worker CPU time, and any main-thread wait for it;
+/// - model events: Studio document changes and camera-only changes, and live
+///   steps skipped, run serially or re-evaluated;
 /// - SwiftUI body evaluations of the Studio and Maker panels (`ViewBody`), so a
 ///   report shows which views an edit re-evaluated;
 /// - process footprint, Metal allocation and CPU time.
@@ -62,9 +65,19 @@ final class PerfTrace {
         case studioHoverPick
         /// The synthetic main-thread load (`IKKOKU_PERF_MAIN_LOAD_MS`); not model time.
         case mainLoad
+        /// The main thread blocked on a Studio live step still running off it
+        /// (something needed its previews before it finished): model time.
+        case studioLiveWait
+        /// A Studio live step's background job, from its start to its last
+        /// worker: wall time off the main thread, not model time.
+        case studioLiveJob
+        /// The same job's summed worker CPU time, recorded as an interval of
+        /// that length from the job's start: not model time.
+        case studioLiveCPU
 
-        /// Model phases: ticks, refreshes and input calls (they nest).
-        var isModel: Bool { self != .draw && self != .mainLoad }
+        /// Model phases: main-thread ticks, refreshes, input calls and live-step
+        /// waits (they nest).
+        var isModel: Bool { ![.draw, .mainLoad, .studioLiveJob, .studioLiveCPU].contains(self) }
     }
 
     /// Model events counted per recording (no duration).
@@ -75,6 +88,15 @@ final class PerfTrace {
         /// A write through the Studio's camera accessor (orbit, pan, dolly,
         /// camera slots), which only the camera's readers observe.
         case studioCameraChange
+        /// A Studio timer fire skipped because the previous live step had not
+        /// committed yet (the clock does not advance for it).
+        case studioLiveTickSkipped
+        /// A Studio live step that ran serially on the main thread (no source
+        /// previews, or a gaze that reads another preview or a route clock).
+        case studioLiveTickSerial
+        /// A settled live step whose frames a preview access dropped, so its
+        /// refresh evaluated the characters on the main thread again.
+        case studioLiveTickDiscarded
         /// A hover pick started (a mouse move with none in flight, or a stale
         /// result picked again; R7 phase 2, item 5).
         case hoverPickStarted

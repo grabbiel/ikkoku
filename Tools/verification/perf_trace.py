@@ -334,6 +334,30 @@ def ring_line(name, report):
         ring.get("drawsWithOverflow", 0))
 
 
+def live_line(name, report):
+    """The Studio live step off the main thread (R7 phase 2, item 3): its
+    background job's wall time and worker CPU, the main thread's waits for it,
+    and the steps skipped, run serially or re-evaluated; None for a report
+    without live steps."""
+    summary = report["summary"]
+    phases = summary["phases"]
+    job = phases.get("studioLiveJob")
+    events = summary.get("events", {})
+    serial = events.get("studioLiveTickSerial", {}).get("perSecond", 0)
+    if not job and not serial:
+        return None
+    cpu = phases.get("studioLiveCPU", {})
+    wait = phases.get("studioLiveWait", {})
+    text = "[perf] %s: live step" % name
+    if job:
+        text += " job wall %.2f/%.2f ms (p50/p95) x %.1f/s, worker CPU %.2f ms per job (%.0f ms/s)" % (
+            job["p50"], job["p95"], job["perSecond"], cpu.get("mean", 0), cpu.get("msPerSecond", 0))
+        text += ", main waits %.1f/s (%.2f ms/s)" % (wait.get("perSecond", 0), wait.get("msPerSecond", 0))
+    return text + ", skipped %.1f/s, serial %.1f/s, re-evaluated %.1f/s" % (
+        events.get("studioLiveTickSkipped", {}).get("perSecond", 0), serial,
+        events.get("studioLiveTickDiscarded", {}).get("perSecond", 0))
+
+
 def hover_line(name, report):
     """The asynchronous hover picks (schema 4, R7 phase 2, item 5), or None for
     a report without any: picks finished, applied and stale, their latency from
@@ -380,6 +404,9 @@ def summarize(directories):
             ring = ring_line(label, report)
             if ring:
                 rings.append(ring)
+            live = live_line(label, report)
+            if live:
+                rings.append(live)
             hover = hover_line(label, report)
             if hover:
                 rings.append(hover)

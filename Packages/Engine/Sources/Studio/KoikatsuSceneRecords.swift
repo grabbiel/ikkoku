@@ -38,6 +38,20 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
         public let diagnostics: [String]
     }
 
+    /// What `makePose` derives before it touches a pose: the FK controller
+    /// bound to the rig and catalog after the saved activation commands, the
+    /// two mode transitions it applies, its deferred effects and diagnostics.
+    /// It depends only on the rig, the catalog, the roots, the record, the
+    /// neck pattern, the kinematic state and the FK overrides, so one binding
+    /// serves every baseline while those stay the same (R7 phase 2, item 3,
+    /// C3: the Studio tick used to rebind it for every pose).
+    public struct PoseBinding: Sendable {
+        public let controller: SourceStudioPose
+        fileprivate let ik: SourceStudioPose.Transition, fk: SourceStudioPose.Transition
+        fileprivate let effects: [SourceStudioPose.Effect]
+        fileprivate let diagnostics: [String]
+    }
+
     /// Replays source AddObjectFemale/Male's flag restoration order. The input
     /// pose must already include card customization and the sampled animation.
     /// This does not replace missing character geometry with a guessed model.
@@ -45,6 +59,16 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
                          characterRoot: Int, bodyRoot: Int? = nil, hairRoot: Int? = nil,
                          neckLookPattern: Int = 0, kinematics: SourceStudioKinematicState? = nil,
                          fkOverrides: [Int: SIMD3<Float>] = [:]) throws -> PoseResult {
+        try makePose(binding: bindPose(rig: rig, catalog: catalog, characterRoot: characterRoot, bodyRoot: bodyRoot, hairRoot: hairRoot,
+                                       neckLookPattern: neckLookPattern, kinematics: kinematics, fkOverrides: fkOverrides),
+                     rig: rig, baseline: baseline)
+    }
+
+    /// The pose-independent half of `makePose`.
+    public func bindPose(rig: RigDefinition, catalog: [SourceStudioPose.Bone],
+                         characterRoot: Int, bodyRoot: Int? = nil, hairRoot: Int? = nil,
+                         neckLookPattern: Int = 0, kinematics: SourceStudioKinematicState? = nil,
+                         fkOverrides: [Int: SIMD3<Float>] = [:]) throws -> PoseBinding {
         let state = kinematics ?? SourceStudioKinematicState(record: self)
         try state.validate()
         let activeFK = state.activeFK, activeIK = state.activeIK, enableFK = state.enableFK, enableIK = state.enableIK
@@ -53,7 +77,7 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
         var controller = try SourceStudioPose(rig: rig, bones: catalog,
             rotations: rotations,
             characterRoot: characterRoot, bodyRoot: bodyRoot, hairRoot: hairRoot, sex: Int(sex), neckLookPattern: neckLookPattern)
-        var pose = baseline, effects: [SourceStudioPose.Effect] = []
+        var effects: [SourceStudioPose.Effect] = []
         // Stage preferences while FK is off. Forced mode changes must not replace them.
         for (index, group) in SourceStudioPose.Group.fkParts.enumerated() {
             _ = controller.activateFK(mask: group, active: activeFK[index])
@@ -62,19 +86,27 @@ public struct KoikatsuCharacterRecord: Sendable, Equatable {
             effects += controller.activateIK(mask: group, active: activeIK[index]).effects
         }
         let ik = controller.activateMode(.ik, active: enableIK, force: true)
-        pose = try controller.applying(ik, rig: rig, pose: pose); effects += ik.effects
         // OCIChar and _info refer to the same object: enabling IK clears the
         // later-read _info.enableFK, even if the serialized flags were both true.
+        // Applying a transition reads only the bound hierarchy, never the
+        // activation state, so both modes are activated before either applies.
         let fk = controller.activateMode(.fk, active: enableFK && !enableIK, force: true)
-        pose = try controller.applying(fk, rig: rig, pose: pose); effects += fk.effects
-        pose = try controller.applyingLateUpdate(rig: rig, pose: pose)
+        effects += ik.effects; effects += fk.effects
         let bound = Set(controller.targets.map { Int32($0.bone.id) })
         var diagnostics = ["Character appearance, animation sampling, IK, dynamics, look-at, hands, expression selection, voice and accessory attachment require separate native consumers."]
         let unbound = bones.keys.filter { !bound.contains($0) }.sorted()
         if !unbound.isEmpty { diagnostics.append("Saved FK bone IDs without a bound catalog transform: \(unbound.map(String.init).joined(separator: ", ")).") }
         if enableIK { diagnostics.append("Source IK is enabled; targets and weights are retained but the original solver is not executed.") }
         if enableFK && enableIK { diagnostics.append("Both persisted modes were enabled; original load order resolves this to IK.") }
-        return PoseResult(controller: controller, pose: pose, deferredEffects: effects, diagnostics: diagnostics)
+        return PoseBinding(controller: controller, ik: ik, fk: fk, effects: effects, diagnostics: diagnostics)
+    }
+
+    /// The pose half of `makePose`: the IK transition, the FK transition and
+    /// the FK late update on `baseline`. `rig` is the rig `binding` was made
+    /// with.
+    public func makePose(binding: PoseBinding, rig: RigDefinition, baseline: RigPose) throws -> PoseResult {
+        let pose = try binding.controller.applyingActivations(ik: binding.ik, fk: binding.fk, rig: rig, pose: baseline)
+        return PoseResult(controller: binding.controller, pose: pose, deferredEffects: binding.effects, diagnostics: binding.diagnostics)
     }
 }
 

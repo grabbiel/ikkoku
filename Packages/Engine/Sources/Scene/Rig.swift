@@ -43,10 +43,17 @@ public struct RigDefinition: Sendable {
         }
     }
 
+    /// One per `init`, shared by every copy of its result. Every stored
+    /// property is a `let` set once by `init`, so two rigs with the same
+    /// identity have the same nodes, skins and order. Per-rig caches key on
+    /// it (R7 phase 2, item 3) and hold it strongly, so it cannot be reused.
+    public final class Identity: Sendable { fileprivate init() {} }
+
     public let nodes: [Node]
     public let skins: [Skin]
     public let order: [Int]
     public let activeNodes: [Bool]
+    public let identity = Identity()
     private let names: [String: [Int]]
 
     public init(nodes: [Node], skins: [Skin]) throws {
@@ -114,7 +121,7 @@ public struct RigDefinition: Sendable {
         return RigEvaluation(worldMatrices: world, palettes: palettes)
     }
 
-    static func isFiniteAffine(_ matrix: float4x4) -> Bool {
+    public static func isFiniteAffine(_ matrix: float4x4) -> Bool {
         for column in 0..<4 { for row in 0..<4 where !matrix[column][row].isFinite { return false } }
         return abs(matrix[0].w) < 1e-5 && abs(matrix[1].w) < 1e-5 && abs(matrix[2].w) < 1e-5 && abs(matrix[3].w - 1) < 1e-5
     }

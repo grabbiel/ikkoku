@@ -25,7 +25,7 @@ struct StudioScenario: Decodable {
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
-        /// `"captureIKPose"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
+        /// `"captureIKPose"`, `"editDuringAdvance"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         let visible: Bool?
@@ -110,6 +110,10 @@ struct StudioScenario: Decodable {
         /// position (the placement `refresh()` renders it at, so a route
         /// child's position follows its route's `childRoot`).
         let position: PositionValue?
+        /// editDuringAdvance: the edit that lands while a live step runs off
+        /// the main thread: `"none"`, `"move"` (the character `key` 0.25 m
+        /// along x), `"setFK"` (`key`, `bone`, `rotation`), `"undo"` or `"redo"`.
+        let edit: String?
         /// advance: how many seconds of live animation to run. The op walks
         /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
         /// scenario exercises the app's live tick, not a re-implementation.
@@ -365,12 +369,13 @@ struct StudioScenario: Decodable {
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, state, clothes, expression,
-                 sex, character, chain, delta, ik
+                 sex, character, chain, delta, ik, edit
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             op = try c.decode(String.self, forKey: .op)
+            edit = try c.decodeIfPresent(String.self, forKey: .edit)
             key = try c.decodeIfPresent(Int32.self, forKey: .key)
             visible = try c.decodeIfPresent(Bool.self, forKey: .visible)
             name = try c.decodeIfPresent(String.self, forKey: .name)
@@ -1691,6 +1696,77 @@ struct StudioScenario: Decodable {
                     frames += 1
                 }
                 record(step, true, "advanced \(frames) live frames (\(seconds)s); animation clock \(studio.sourceAnimationTime)")
+            case "editDuringAdvance":
+                // R7 phase 2, item 3: the live step starts the way the timer
+                // starts it, off the main thread; the edit lands through the
+                // app's own method while the step is in flight; the step then
+                // completes as its completion handler completes it. The step
+                // commits before the edit, the clock moves exactly one step,
+                // and the presented frame is byte-identical to a full
+                // main-thread rebuild of the edited document at that clock.
+                // The reuse count is the contract: every frame without an
+                // edit, every frame but the moved character's after a
+                // document-only edit, none once the edit reached a preview.
+                let edit = step.edit ?? ""
+                var target: UUID?
+                switch edit {
+                case "none":
+                    break
+                case "undo", "redo":
+                    guard !(edit == "undo" ? studio.undoStack : studio.redoStack).isEmpty else {
+                        record(step, false, "editDuringAdvance: the \(edit) stack is empty"); continue
+                    }
+                case "move", "setFK":
+                    guard let id = object(step) else {
+                        record(step, false, "editDuringAdvance: no object with source key \(step.key ?? -1)"); continue
+                    }
+                    if edit == "setFK" {
+                        guard step.bone != nil, let rotation = step.rotation, rotation.count == 3, rotation.allSatisfy({ $0.isFinite }) else {
+                            record(step, false, "editDuringAdvance: setFK needs bone and rotation [3 finite degrees]"); continue
+                        }
+                    }
+                    target = id
+                default:
+                    record(step, false, "editDuringAdvance: edit must be none, move, setFK, undo or redo"); continue
+                }
+                let clock = studio.sourceAnimationTime
+                guard studio.startLiveFrameAsTimer() else {
+                    record(step, false, "editDuringAdvance: the live step ran on the main thread, so no edit could land during it"); continue
+                }
+                let requested = studio.lastLiveStepFrameRequests
+                switch edit {
+                case "move": studio.update(target!) { $0.transform.position.x += 0.25 }
+                case "setFK":
+                    let rotation = step.rotation!
+                    studio.setSourceFKRotation(target!, boneID: Int(step.bone!), degrees: Float3(rotation[0], rotation[1], rotation[2]))
+                case "undo": studio.undo()
+                case "redo": studio.redo()
+                default: break
+                }
+                studio.completeLiveFrame()
+                let reused = studio.lastRefreshLiveFramesReused
+                guard let raced = captureStudioRender(), let racedBytes = renderBytes(raced) else {
+                    record(step, false, "editDuringAdvance: the presented frame did not render"); continue
+                }
+                studio.refresh()
+                guard let rebuilt = captureStudioRender(), let rebuiltBytes = renderBytes(rebuilt) else {
+                    record(step, false, "editDuringAdvance: the rebuilt frame did not render"); continue
+                }
+                let difference = pixelDifference(racedBytes, rebuiltBytes)
+                let expectedReuse = edit == "none" ? requested : edit == "move" ? requested - 1 : 0
+                var problems: [String] = []
+                if studio.sourceAnimationTime.bitPattern != (clock + 1 / 30).bitPattern {
+                    problems.append("clock \(clock) moved to \(studio.sourceAnimationTime), not one 1/30 s step")
+                }
+                if difference.exactChanged != 0 {
+                    problems.append("\(difference.exactChanged) pixels differ from a main-thread rebuild (max channel delta \(difference.maximum))")
+                }
+                if requested == 0 || reused != expectedReuse {
+                    problems.append("the presenting refresh reused \(reused) of \(requested) step frames, expected \(expectedReuse)")
+                }
+                record(step, problems.isEmpty, problems.isEmpty
+                    ? "edit \(edit) landed while the live step ran off the main thread; clock \(clock) -> \(studio.sourceAnimationTime); the presenting refresh reused \(reused) of \(requested) step frames; its \(renderSide)x\(renderSide) render is byte-identical to a main-thread rebuild"
+                    : "editDuringAdvance (\(edit)): " + problems.joined(separator: "; "))
             case "orbit":
                 guard let dx = step.dx, let dy = step.dy, dx.isFinite, dy.isFinite else {
                     record(step, false, "orbit: dx and dy (radian drag deltas) are required"); continue

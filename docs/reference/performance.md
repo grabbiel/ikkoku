@@ -23,7 +23,10 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    (a rig name walk per catalog bone, a pose solved several times per tick,
    and the animation bindings resolved through dictionaries on every call).
    They bring the tick to 6.34 ms at 30 ticks per second, and the idle
-   scene to 120.0 FPS with no hitches.
+   scene to 120.0 FPS with no hitches. Phase 2, item 3 then took the step
+   off the main thread: the characters run in parallel on workers, and the
+   main thread keeps about 0.6 ms of snapshot and refresh per step
+   ([phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread)).
 2. **SwiftUI work on every interactive edit.** Each orbit event, Maker
    slider write or FK drag event costs 7–25 ms of SwiftUI graph update and
    layout, because the Studio and Maker views observe whole documents and
@@ -393,11 +396,11 @@ which the "per second" column shows.
 
 | Rank | Cost | ms per occurrence | % of 120 Hz / 60 Hz frame | Per second | Location | Root cause | Fix | Gain | Risk |
 | ---: | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Studio live tick, 6 source characters | 43.4 | 521% / 260% | 651 ms/s at 15 ticks/s (target 30) | `StudioModel.tick` → `SourceStudioCharacterPreview.frame`/`editedPose` | repeated work per tick (quick wins 1–3) and all character work serial on the main thread (M1) | quick wins 1–3 (this change), then C2, C3, M1 | 43.4 → 6.34 ms measured in the app; 30 ticks/s restored | low for 1–3 (byte-identical); high for M1 |
+| 1 | Studio live tick, 6 source characters | 43.4 | 521% / 260% | 651 ms/s at 15 ticks/s (target 30) | `StudioModel.tick` → `SourceStudioCharacterPreview.frame`/`editedPose` | repeated work per tick (quick wins 1–3) and all character work serial on the main thread (M1) | quick wins 1–3 (this change), then C2, C3, M1; **done** in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread) | 43.4 → 6.34 ms measured in the app; 30 ticks/s restored. Since item 3, 7 characters: 8.0 ms on the main thread → 0.6 ms, the characters on workers in 0.93–0.97 ms wall (2.75–5.8 ms CPU) | low for 1–3 (byte-identical); high for M1 |
 | 2 | SwiftUI update and layout per FK drag event | 24.5 | 294% / 147% | 673 ms/s at 27.5 drag events/s | `GraphHost.flushTransactions` for `StudioView`; `StudioModel.doc` didSet | an FK edit mutates `doc`; `StudioView.body` and its inspector read `model.doc`, so the whole window's view graph is re-evaluated and laid out again; each drag event also triggers two `refresh()` calls (55/s) | M2 + M3: per-panel observation, FK and camera state outside the observed document; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: `GraphHost.flushTransactions` 23.8 → 0.91 ms per drag event, one `refresh()` per event instead of two, 26.7 → 119.9 presented FPS | medium |
 | 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1 slider row evaluated per write instead of 44; `GraphHost.flushTransactions` 11.8 → 2.5 ms and `NSHostingView.layout` 8.3 → 3.9 ms per write; 43.4 → 119.8 presented FPS. The rest is layout of the long panel | low |
 | 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: no view body and no sampled SwiftUI pass per orbit event (8.9 ms before); 41.0 → 119.4 presented FPS | medium |
-| 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3 | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured) | low |
+| 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3; C2, C3, C5 in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread) | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured); 1.83–1.97 → 1.27–1.29 ms with C2, C3 and C5 | low |
 | 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) it no longer delays presentation; at 120 moves/s it takes 2.6 ms each (316 ms/s), the largest main-thread cost in hover after the tick | M5; **done** in [phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick) | measured: 2.29–2.41 → 0.01 ms per move on the main thread; the pick (0.47 ms CPU, 0.94 ms GPU) runs on the renderer's pick queue | low; renderer file |
 | 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) the draw runs on the render thread, so this costs no main-thread time, and G4 cut its CPU encode from 0.74 to 0.44 ms per frame (offscreen) | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis); now render-thread CPU and GPU only | low |
 | 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3; **done** for orbit and pan drags in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1.00 ms full refresh → 0.04 ms camera rebuild per drag event | medium |
@@ -643,7 +646,7 @@ gains are for the reference machine unless stated; the M1 column of the
 
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
-| M1 | All character work runs on the main thread inside the 30 Hz Studio timer, so any tick over 8.3 ms drops 120 Hz frames and a tick over 33 ms halves the timer rate | `StudioModel.advanceLiveFrame` | measured | baseline tick 43.4 ms at 15 ticks/s; the animation clock advances 1/30 s per tick, so live animation played at half speed | evaluate the source previews off the main thread and in parallel (each `SourceStudioCharacterPreview` is independent), double-buffer the resulting `RenderFrame` pieces; main thread keeps only the merge. After the quick wins the remaining ~9 ms/tick for 6 characters would drop to ~1.5–3 ms wall | High: previews are classes with caches and dynamics state; needs ownership rules and a deterministic join so captures stay byte-identical |
+| M1 | All character work runs on the main thread inside the 30 Hz Studio timer, so any tick over 8.3 ms drops 120 Hz frames and a tick over 33 ms halves the timer rate | `StudioModel.advanceLiveFrame` | measured; **done** | baseline tick 43.4 ms at 15 ticks/s; the animation clock advances 1/30 s per tick, so live animation played at half speed | evaluate the source previews off the main thread and in parallel (each `SourceStudioCharacterPreview` is independent), double-buffer the resulting `RenderFrame` pieces; main thread keeps only the merge. After the quick wins the remaining ~9 ms/tick for 6 characters would drop to ~1.5–3 ms wall. **Done** in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread): one lease per preview, a deterministic join, and the main thread keeps the snapshot, commit and merge. Idle main thread 237–251 → 22 ms/s; the 7 characters take 0.93–0.97 ms of wall time on workers | High: previews are classes with caches and dynamics state; needs ownership rules and a deterministic join so captures stay byte-identical |
 | M2 | Every document change re-evaluates all of `StudioView` | `StudioView.body` reads `model.doc` (workspace list, toolbar, inspector) | measured | orbit: `GraphHost.flushTransactions` 733 ms/s, inside it `ViewBodyAccessor.updateBody` 194 ms/s and `NSHostingView.layout` 148 ms/s, against 19 ms/s in `StudioView.body` itself ([rank 4](#ranked-costs)) | split `StudioView` into child views that each read only what they show (workspace list, toolbar, timeline, inspector), with per-event state (camera, an FK drag in progress) outside what they read. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): an FK drag event re-evaluates 4 outer views whose content is skipped, and an orbit event none | Low–medium: UI captures (`IKKOKU_CAPTURE_UI` lanes) must stay identical |
 | M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): `documentCamera` has its own observation, and orbit and pan drags reuse the frame's camera-independent content | Medium: the camera is saved with the document and undo must keep working |
 | M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): 11.8 → 2.5 ms of graph update per write; the panel's layout remains | Low |
@@ -664,10 +667,10 @@ loaded machine, so only the shares are used).
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
 | C1 | Animation sampling rebuilds a source-ID→node dictionary (~1,000 strings) per clip call and per state call and fills nested `[Int: [Int: [Float]]]` channel dictionaries | `SourceAnimationLibrary.applying(stateID:…)`, `applying(clipID:…)` | measured; **done** (quick win 3) | 3.2 ms/tick, of which ~2.8 ms is dictionary building, lookups, string hashing and their allocations; curve sampling itself is 0.1 ms | resolve each clip's bindings to node indices once per (clip, rig) and reuse a flat channel table: probe 8.63–8.73 → 5.66–5.72 ms/tick | Low: same arithmetic; a resolution is reused only while every binding still names the same node |
-| C2 | Hair dynamics rebuilds a full-rig transform state (all nodes, children lists, world matrices) per DynamicBone component per step and validates its output with a full `rig.evaluate` | `SourceDynamicBone.advance`, `DynamicsTransforms` | measured | 3.25 ms/tick: `DynamicsTransforms.init` 1.84, `pose(rig:)` 0.66 (`rig.evaluate` 0.48, `restPose` 0.13), teardown 0.32 | cache the topology per rig, transform only the required chains, validate only the changed nodes; ~2.5 ms/tick | Medium: must keep the float results bit-identical (same operation order) |
-| C3 | `SourceStudioPose` is rebuilt for every pose evaluation | `KoikatsuCharacterRecord.makePose` | measured | 1.4 ms/tick (init 0.58, apply 0.51, late update 0.23) | cache the bound pose per (rig, record, kinematics) | Low |
+| C2 | Hair dynamics rebuilds a full-rig transform state (all nodes, children lists, world matrices) per DynamicBone component per step and validates its output with a full `rig.evaluate` | `SourceDynamicBone.advance`, `DynamicsTransforms` | measured; **done** | 3.25 ms/tick: `DynamicsTransforms.init` 1.84, `pose(rig:)` 0.66 (`rig.evaluate` 0.48, `restPose` 0.13), teardown 0.32 | cache the topology per rig, transform only the required chains, validate only the changed nodes; ~2.5 ms/tick. **Done** in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread): `SourceStudioDynamics.evaluate` 358 → 75 ms and `DynamicsTransforms.init` 181 → 16 ms over the 180-tick digest run, digest unchanged | Medium: must keep the float results bit-identical (same operation order) |
+| C3 | `SourceStudioPose` is rebuilt for every pose evaluation | `KoikatsuCharacterRecord.makePose` | measured; **done** | 1.4 ms/tick (init 0.58, apply 0.51, late update 0.23) | cache the bound pose per (rig, record, kinematics). **Done** in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread): `makePose` 263 → 46 ms over the digest run (only the application of the cached binding remains) | Low |
 | C4 | Eye look evaluates the whole rig to read four nodes | `SourceStudioCharacterPreview.updateEyeLook` | measured | ~0.1 ms/tick | evaluate the ancestor chains only | Low |
-| C5 | Source expression weights are recomputed and revalidated per frame | `SourceRigPreview.expressionWeights` | measured | 0.45 ms/tick | cache per expression input | Low |
+| C5 | Source expression weights are recomputed and revalidated per frame | `SourceRigPreview.expressionWeights` | measured; **done** | 0.45 ms/tick | cache per expression input. **Done** in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread): `expressionWeights` 95 ms → no sample over the digest run | Low |
 | C6 | `refresh()` rebuilds every character's `RenderFrame` (items, skin sets, bounds) for camera-only changes | `StudioModel.refresh` | measured; **done** for drags | 0.89 ms per orbit event | see M3; orbit and pan drags now take 0.04 ms (`refreshCamera`, [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)); scroll and pinch dolly still rebuild | Medium |
 | C7 | Maker's live step evaluates the rig only to validate the pose, then the refresh evaluates it again | `MakerModel.advanceSourceMotion` | hypothesis | `makerTick` 2.0 ms p50 in `maker-idle` | reuse the validated evaluation in the refresh | Low |
 | C8 | Studio scene/character load decodes the same rig JSON once per character and component | `SourceMakerLibrary.prepare` → `SourceRig.load` | measured | probe load 6.1 s for 6 characters, 74% in `SourceRig.decode` (JSONDecoder) | cache decoded rigs by path, size and modification time; or a binary rig format | Low for the cache |
@@ -735,7 +738,7 @@ How to read the expected gain column:
 | ---: | --- | --- | --- | --- | --- |
 | 1 | **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)). Narrow SwiftUI invalidation. Move the camera out of the observed `doc`, or into its own observed value. Split `StudioView` into child views that read only their own state. Make the Maker slider rows value-driven views with per-slot observation | M2, M3, M4, C6 | orbit, FK drag and slider edits go from 7–25 ms per event to a few ms; the main thread is no longer saturated during interaction; presented FPS for those workloads rises from 24–53 toward 120 | the same edits drop from ~10–30 ms to a few ms; the difference between usable and laggy | `IKKOKU_CAPTURE_UI` window captures identical; undo/redo scenarios (`undo-camera`) pass |
 | 2 | **Done** ([phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes)), with G4. Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment. Measured: with the main thread busy 600 ms/s, 120 FPS and an 8.33 ms p95 interval, against 30–60 FPS and 25–33 ms | P1, G4 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
-| 3 | Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s) | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
+| 3 | **Done** ([phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread)), with C2, C3 and C5. Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s). Measured: idle main busy 237–251 → 22 ms/s, the step 8.0 ms on the main thread → 0.6 ms (snapshot and refresh) plus 0.93–0.97 ms of worker wall time; digest and captures identical | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
 | 4 | Skip unchanged frames and run the display link at 30–60 Hz when nothing moves; leave the shadow map alone until casters or the light move | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
 | 5 | **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)). Asynchronous hover pick for the latest mouse position only, and a scissored pick pass. Measured: 2.29–2.41 → 0.01 ms per move on the main thread, hover's main busy time 518–531 → 239–242 ms/s, pick ids identical | M5 | 2 ms per mouse move off the main thread; fixes the hover hitch rise | same | gizmo hover scenarios |
 | 6 | Startup: cache decoded rigs and load source characters concurrently off the main thread, with a progress state | C8, S1, S2, S4 | source scene ready in ~1.5 s instead of 4.7 s; first frame earlier | larger, since there is less memory bandwidth for repeated decoding | `startup` workload; scene import results identical |
@@ -1322,6 +1325,406 @@ the main thread. Item 5 is now done
 ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)). Item 4 (skip unchanged frames) would now mostly save GPU
 time and render-thread CPU, not main-thread time.
 
+## Phase 2, item 3: live tick off the main thread
+
+Done 2026-10-24, together with C2, C3 and C5 (inventory M1, C2, C3, C5).
+The Studio's 30 Hz live step no longer evaluates the source characters on
+the main thread. The main actor snapshots the step's inputs. Workers
+evaluate the characters in parallel, one owner per preview. The main actor
+then commits the result in the serial order and merges the frames. Inside
+each character, three per-tick rebuilds became caches: the dynamics
+topology, the bound pose and the expression weights. Every output is
+bit-identical. The live-tick digest is unchanged over 180 ticks of 7
+characters, both serial and parallel. Rendered frames and reports are
+byte-identical. So are 8 of 9 window captures; the ninth differs only in a
+readout that depends on startup timing in `main` too. The strict lanes
+pass.
+
+In the idle source scene, the main thread is busy 22 ms/s instead of
+237–251 ms/s. A step costs the main thread 0.17–0.19 ms for the snapshot
+plus 0.41–0.42 ms for the refresh that merges and submits, against an
+8.0–8.3 ms tick before. The 7 characters run on workers in 0.93–0.97 ms of
+wall time (p50). They take 5.6–5.8 ms of worker CPU per step when the
+process is otherwise idle, and 2.75 ms with the main thread loaded (see
+[CPU clocks](#why-orbit-took-the-slow-allocation-path-g4)). Presentation
+stays at 120 FPS with an 8.33 ms p95 interval in every workload. FK drag's
+refresh, which still evaluates on the main thread, fell from 1.83–1.97 to
+1.27–1.29 ms per event through C2, C3 and C5.
+
+### What changed
+
+- **C2: dynamics topology per rig.** Before, each `SourceDynamicBone` step
+  built a transform state for the whole rig: every node, the children lists
+  and the world matrices. It then checked its output with a full
+  `rig.evaluate`, and `SourceStudioDynamics` evaluated the rig once per
+  component. Now:
+  - Each component resolves its topology once per rig
+    (`RigDefinition.identity`): the required slots in hierarchy order, the
+    root particle's subtree, and the palette entries it moves.
+  - A step transforms only those slots and skips `restPose`.
+  - A step whose input is known to be valid checks only the nodes it
+    changed. It uses the same checks, in the same order and with the same
+    messages, as `rig.evaluate`.
+  - `SourceStudioDynamics` evaluates the whole rig once per character.
+
+  The float operations and their order are unchanged.
+- **C3: the bound pose per (rig, record, kinematics).** `makePose` is split
+  into `bindPose` (the controller, activations and transitions) and the
+  application of that binding. The preview reuses the binding while three
+  things stay the same: the rig, the effective kinematics, and the FK
+  overrides, compared bit for bit. `applyingActivations` evaluates each
+  distinct pose once.
+- **C5: expression weights per input.** `SourceRigPreview.expressionWeights`
+  keeps the last input's weights, keyed by the input's bit patterns. The
+  weights are a pure function of the input for a preview's fixed source and
+  contract, and a live tick asks for the same input until a blink or an
+  edit changes it.
+- **M1: the live step off the main thread.** `SourceStudioLiveTick.swift`
+  (Engine) and `StudioModel`:
+  - The timer's step snapshots its inputs on the main actor.
+  - It evaluates every source character's blink, gaze, dynamics, wear, face
+    state and frame in parallel, one worker per preview.
+  - It joins in lease order. The refresh merges the frames in document
+    order and submits them.
+
+  The ownership rules, the settle points, the edit order and the behavior
+  under load are in the
+  [threading contract](renderer.md#studio-live-step-threads-r7-phase-2-item-3).
+- **Harness.** New phases and events:
+  - `studioLiveJob`: the job's wall time, from start to its last worker.
+  - `studioLiveCPU`: the summed worker CPU time
+    (`CLOCK_THREAD_CPUTIME_ID`).
+  - `studioLiveWait`: main-thread time blocked on unfinished workers.
+  - Events `studioLiveTickSkipped`, `studioLiveTickSerial` and
+    `studioLiveTickDiscarded`.
+
+  `summarize` prints a `live step` line from them. `studioTick` now covers
+  only the timer's part: the snapshot and the job start. The completion's
+  refresh is recorded as `studioRefresh`, as before.
+- **Scenario.** The new `editDuringAdvance` op and the
+  `studio-scenario-live-step-edit` check (studio lane, now 53 checks).
+
+### Measurement
+
+The commands follow [measuring a change](#measuring-a-change). Release builds,
+arm64:
+
+| Label | Commit | Executable SHA-256 |
+| --- | --- | --- |
+| base | `3dec1b2` (`main` with #147, before this change) | `d1813359…80d94490` |
+| after | `ccf8858`: base plus C2, C3, C5 and the off-main step | `37f0c325…038102c81e2` |
+
+Both builds predate #148 (item 5, the asynchronous hover pick), which `main`
+merged after the measured window. The PR merges it. Base and after both pick
+the hover synchronously, so the comparison stays valid. The two changes have
+not been measured together.
+
+All runs used the 4K display (M32UC) at 120 Hz and 2×, with a 1996×1824
+drawable. Each run had a 3 s warmup and 10 s of recording, and every launch
+took the app lock. The base runs ("before") were in a quiet window granted
+earlier on 2026-10-24, at a load average of 3.0–4.7. The after runs were in
+a second window, at 3.6–6.4. That window alternated after, base and after
+per workload, so each workload has a base control run in the same window.
+`summarize` flagged one run: the loaded idle run of after had 4 stray mouse
+events. It was rerun, and only the rerun is cited. Reports are in
+`.local/r7d-live-tick/{before,before-ctl,after-perf}`.
+
+"Main tick" is `studioTick`, p50. For base it is the whole step, refresh
+included. For after it is only the timer's part: the snapshot and the job
+start. The step's own refresh is the "refresh" column.
+
+| Workload | Build | Presented FPS | Hitches/s | Presented interval p95 ms | Main busy ms/s | Main tick ms p50 | Refresh ms p50 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| studio-idle | before | 119.8, 119.8 | 0.2, 0.2 | 8.33 | 240, 251 | 7.99, 8.34 | 4.48, 4.62 (inside the tick) |
+| studio-idle | base, after's window | 119.8 | 0.2 | 8.33 | 237 | 8.03 | 4.41 (inside) |
+| studio-idle | after | 119.9, 120.0 | 0.1, 0 | 8.33 | 22, 22 | 0.19, 0.17 | 0.41, 0.42 |
+| studio-hover | before | 119.8, 119.9 | 0.2, 0.1 | 8.33 | 463, 508 | 7.90, 7.79 | 4.46, 4.30 (inside) |
+| studio-hover | base, after's window | 120.0 | 0 | 8.33 | 563 | 6.50 (28 ticks/s) | 3.58 (inside) |
+| studio-hover | after | 119.9, 119.9 | 0.1, 0.1 | 8.33 | 373, 412 | 0.16, 0.16 | 0.40, 0.41 |
+| studio-fk-drag | before | 119.8, 120.0 | 0.2, 0 | 8.33 | 396, 384 | — | 1.97, 1.89 per event |
+| studio-fk-drag | base, after's window | 120.0 | 0 | 8.33 | 379 | — | 1.83 |
+| studio-fk-drag | after | 120.0, 120.0 | 0, 0 | 8.33 | 325, 325 | — | 1.27, 1.29 |
+| studio-orbit | before | 119.6, 119.7 | 0.4, 0.3 | 8.33 | 20, 17 | — | camera 0.05 |
+| studio-orbit | base, after's window | 119.3 | 0.7 | 8.33 | 22 | — | camera 0.05 |
+| studio-orbit | after | 119.6, 119.9 | 0.4, 0.1 | 8.33 | 19, 15 | — | camera 0.05 |
+| studio-native | before | 119.8, 119.6 | 0.2, 0.4 | 8.33 | 64, 57 | 1.79, 1.68 | inside |
+| studio-native | base, after's window | 120.0 | 0 | 8.33 | 62 | 1.99 | inside |
+| studio-native | after | 119.9, 119.8 | 0.1, 0.2 | 8.33 | 61, 60 | 1.98, 1.88 | inside (serial) |
+
+The off-main step itself (`summarize`'s `live step` line):
+
+| Workload | Job wall ms p50 / p95 | Worker CPU ms per step | Worker CPU ms/s | Main waits | Skipped, serial, re-evaluated |
+| --- | --- | ---: | ---: | --- | --- |
+| studio-idle | 0.97 / 1.69, 0.93 / 1.67 | 5.83, 5.58 | 175, 167 | 0 | 0, 0, 0 per s |
+| studio-hover | 0.80 / 1.22, 0.80 / 0.93 | 4.90, 4.53 | 147, 136 | 0 | 0, 0, 0 per s |
+| studio-native | — | — | — | — | 0, 30, 0 per s (no source previews: serial) |
+
+**Busy main thread.** With `--main-load-ms 20` (about 600 ms/s of
+busy-wait on the main run loop), in the second window:
+
+| studio-idle + 20 ms × 30/s | Main busy ms/s (model) | Main tick ms p50 | Refresh ms p50 | Job wall ms p50 | Worker CPU ms per step | Draw ms p50 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| base | 773 (174) | 5.80 | 3.25 (inside) | — | — | 0.55 |
+| after | 608 (9) | 0.10 | 0.20 | 0.48 | 2.75 | 0.52 |
+
+Notes on the tables:
+
+- **Main-thread time per step.** Idle: 8.0 ms → about 0.73 ms in all
+  (22 ms/s at 30 steps/s: the snapshot, the commit, the refresh and the
+  timer). That is 9% of a 120 Hz frame instead of 96%. Hover keeps 0.6 ms of
+  step per tick; the rest of its 373–412 ms/s is the synchronous hover pick
+  of these pre-#148 builds (2.8–3.4 ms per move at 120 moves/s), which
+  item 5 removed.
+- **Total CPU per step** (main plus workers): idle 8.0 ms → 6.3–6.6 ms
+  (−20%). With the main thread loaded: 5.8 → 3.05 ms (−47%). The workers'
+  CPU time depends on how busy the machine is: 5.6–5.8 ms per step when the
+  process is otherwise idle, and 2.75 ms when the main thread is kept busy.
+  That is the clock effect found in item 2 (see [G4](#why-orbit-took-the-slow-allocation-path-g4)).
+  The 2.75 ms is close to the serial Engine test, which needs about 2.2 ms
+  of non-hashing work per 7-character tick after C2, C3 and C5.
+- **Wall time.** The 7 characters finish 0.93–0.97 ms (p50) after the
+  timer fires, against 8.0 ms of serial tick. No step was skipped, no
+  settle waited for a worker, and no step was re-evaluated in any run.
+- **Draw CPU rose with idle clocks.** The render thread's draw took
+  1.12–1.21 ms per frame in idle after, against 0.73 ms in base (151–168
+  against 87 ms/s). With the main thread loaded, both builds draw in
+  0.52–0.55 ms. The draw is unchanged code; the process simply became idle
+  enough for the clock effect of item 2. GPU time is unchanged
+  (2.08 ms p50 in both).
+- **Native scene.** It has no source previews, so it keeps the serial step
+  (30 serial events/s) and its numbers are unchanged.
+- **FK drag** has no live step (the timer skips while a drag is active). Its
+  gain is C2, C3 and C5 in the main-thread refresh: 1.83–1.97 → 1.27–1.29 ms
+  per event (about −30 to −35%), and main busy time fell from 379–396 to
+  325 ms/s.
+- **Memory.** Peak footprint in idle: 755–756 MiB against 777–802 MiB.
+
+**Per stage (C2, C3, C5).** The live-tick digest test
+(`SourceStudioLiveTickTests.swift`) steps the 7-character scenario scene 180
+times, serially on one thread, in the Studio's call order. Its blink draws
+come from a fixed generator. The run also has a camera circling each
+character, an FK edit on the first character from tick 40 to 99, a TARGET
+neck pattern on two characters, and a seek at tick 120. It hashes the following into one SHA-256:
+
+- every frame: items, model matrices, morph weights, material uniforms,
+  skin palettes and bounds;
+- the edited pose's local matrices;
+- the eye-look rates and the blink flag.
+
+`IKKOKU_LIVE_TICK_DIGEST` pins the result. It ran as
+`swift test -c release`, with Time Profiler focused on its per-character
+step (`liveTickStep`). The step is 1,260 character steps, and the times
+below are summed over them. Both runs come from the same test binary, and
+the hashing (`libcorecrypto`, 360 and 385 ms self time) is part of
+`liveTickStep` in both:
+
+| Stage | Before (ms) | After (ms) | Change |
+| --- | ---: | ---: | --- |
+| `liveTickStep`, whole step | 1,330 | 774 | −42% (hashing included) |
+| `editedPose` | 739 | 227 | −69% |
+| `SourceStudioDynamics.evaluate` (C2) | 358 | 75 | −79% |
+| `SourceDynamicBone.step` (C2) | 322 | 72 | −78% |
+| `DynamicsTransforms.init` (C2) | 181 | 16 | −91% |
+| `DynamicsTransforms.pose` (C2) | 108 | 28 | −74% |
+| `KoikatsuCharacterRecord.makePose` (C3) | 263 | 46 | −83% (now only the application of the cached binding) |
+| `SourceStudioCharacterPreview.frame` | 504 | 143 | −72% |
+| `SourceRigPreview.frame` | 141 | 63 | −55% |
+| `SourceRigPreview.expressionWeights` (C5) | 95 | 0 (no sample) | −100% |
+
+Without the hashing, the step went from about 970 to about 390 ms: 0.77 to
+0.31 ms per character step. The test's own clock gave 7.41 → 5.84 ms per
+tick with C2 alone, and 4.22 ms with C2, C3 and C5. Each of these steps is
+for all 7 characters, hashing included. The digest stayed `1c3504a1…3e800f6f`
+at every stage (`.local/r7d-live-tick/digest/digests.txt`).
+
+### What remains
+
+Time Profiler, 10 s per workload, after build (`.local/r7d-live-tick/after-tp`,
+profile text only; the traces were deleted).
+
+- **The workers: 186–194 ms/s in idle**, 6.2–6.5 ms per step under the
+  profiler. Inside `SourceStudioLiveTick.step`:
+  - The edited pose is 73% of the step (142 ms/s). The eye look's pose
+    solve is most of that: `updateEyeLook` takes 115 ms/s, and the frame
+    then reuses its pose.
+  - `RigDefinition.evaluate` is 85 ms/s. Of that, 43 ms/s is building the
+    skin palettes, and 37 ms/s is `isFiniteAffine`, the per-matrix
+    validation.
+  - The rest: the application of the bound pose (`makePose(binding:)`,
+    41 ms/s), dynamics (39 ms/s, of which `SourceDynamicBone.step` is 37),
+    `SourceStudioIK.apply` (30 ms/s), animation sampling (24 ms/s) and
+    `SourceRigPreview.frame` (35 ms/s).
+
+  None of this delays the main thread or presentation any more. It sets
+  the CPU cost and how many characters a core budget fits.
+- **The main thread in idle: 26 ms/s.**
+  - The step's refresh is 15 ms/s: the merge, gizmos and `submit`.
+  - The snapshot is 6.2 ms/s, of which 4.6 ms/s is `sourceWorldMatrix`
+    for the frame requests and gazes.
+- **FK drag: 161 ms/s of refresh on the main thread.** A drag event
+  rebuilds every character's frame on the main actor (`frame` 95 ms/s,
+  `SourceRigPreview.frame` 52 ms/s, `RigDefinition.evaluate` 44 ms/s), plus
+  about 165 ms/s of SwiftUI. Only the dragged character's pose changes. The
+  others hit their pose cache, but `SourceStudioCharacterPreview.frame`
+  has no frame cache. Their rig evaluation, palettes and validation run
+  again on every event.
+- **The render thread: the draw at 120 Hz.** It takes 151–168 ms/s in idle
+  at the idle clock speed. The frame content changes 30 times a second,
+  and the draw runs 120 times (G3, P2: item 4).
+
+### Behavior notes
+
+- **Under load**, a timer fire is skipped while the previous step is still
+  running or not yet refreshed. The clock then does not move, so the live
+  animation slows instead of jumping, as with the serial step. No run
+  skipped a step: the job's p95 wall time is 1.7 ms against a 33 ms period.
+- **Native-only scenes**, and scenes whose gaze characters hang on
+  attachment points or routes, keep the serial step. So does a scene
+  looked through a camera on such a chain. A character whose frame hangs
+  on such a chain is built on the main thread after the step.
+- **Edits during a step** land after it ("step, then edit"). The rule is in
+  the [threading contract](renderer.md#studio-live-step-threads-r7-phase-2-item-3).
+- **The status line** reports gaze, wear, face and frame errors in the
+  order the serial step wrote them.
+
+### Correctness
+
+- **Bit-identical output.** The live-tick digest (see "Per stage" under
+  [Measurement](#measurement-2)) stayed `1c3504a1…3e800f6f` in Release in
+  these runs: base `3dec1b2`, C2 alone, C2, C3 and C5, the parallel job, and
+  the merged head `e69a3c0`.
+  `sourceStudioParallelLiveTickMatchesTheSerialDigest` runs the same 180
+  ticks through `SourceStudioLiveTickJob`, 7 leases per tick, and gives the
+  serial digest. It also checks that a job refuses two leases of one
+  preview. Floats differ between build configurations, so each
+  configuration is compared with itself:
+  - Debug: `e1c631e9…` on base `3dec1b2` and on the merged head, serial and
+    parallel;
+  - ThreadSanitizer: `c55c93aa…`, serial and parallel.
+
+  Two mutation controls failed as expected:
+  - without the `.normalized` on a world rotation in
+    `DynamicsTransforms.updateNode`, the digest became `762f4989…`;
+  - skipping the palette loop of the incremental check failed
+    `sourceDynamicsValidatedStepThrowsExactlyWhenEvaluateWould`.
+- **Edits during a step.**
+  `sourceStudioEditDuringAParallelTickMatchesTheSerialOrder` runs 45 ticks
+  with an FK edit after every third one. The parallel and serial orders
+  give the same digest in every configuration (Release `911ea163…`, Debug
+  `2431c6b9…`, ThreadSanitizer `6eeb7fae…`). An unchanged frame request gets
+  the step's own frame back. In the app, `studio-scenario-live-step-edit`
+  lands `move`, `setFK`, `undo` and `redo` while a step is in flight
+  ([scenario](../../Tools/verification/README.md#edits-during-an-off-main-live-step-r7-phase-2-item-3)).
+  Its mutation control is described there: when `FrameRequest.matches`
+  ignored the world, 39,828 pixels differed and the refresh reused 7 of 7
+  frames instead of 6.
+- **Captures.** 15 captures per build, each its own launch under the app
+  lock, with the shared fixture map:
+  - the 13 of [item 2](#correctness-1);
+  - two more `IKKOKU_AUTOCAPTURE` renders with the live opt-in ON: the
+    native scene and the Maker source card. The opt-in is enabled in both,
+    but neither has a source character to draw live. Their reports list 0
+    characters and 0 live draws.
+
+  `main` `b23383b` (Release `b0f6d47b…4fe2f0`) was compared with the merged
+  head `e69a3c0` (`6b32224f…d59c9`). All 6 renders, all 12 reports and 8 of
+  the 9 window captures are byte-identical (`.local/r7d-live-tick/captures`).
+
+  The ninth window, the source pose tab, differs only in its "Eye look"
+  section. That is the known variant of [item 2](#correctness-1). `main`
+  showed the section in 3 of 3 launches, and this change in 0 of 3; the
+  tab's report was identical in all six. Live steps never re-evaluate that
+  readout, in either build. Diagnostic builds of both added timestamped
+  prints and `Self._printChanges()`, and ran 2 launches each. Every launch
+  showed the same order:
+  - the inspector evaluated once, within 8 ms of appearing, before any eye
+    rates existed;
+  - the first live step came 0.17–0.20 s later;
+  - nothing re-evaluated the inspector during the 11–13 steps before the
+    capture.
+
+  With the prints, `main` also captured the tab without the section. So
+  the section shows only if the inspector's first evaluation comes after
+  the first step: a race between the first timer fire and SwiftUI's first
+  update. Item 2 saw both variants from both of its builds, and `main`
+  `ad50c43` without the section. One diagnostic launch also drew the window
+  as active, the accent-color variant of item 2.
+- **ThreadSanitizer.**
+  - Engine: `swift test --sanitize=thread --filter SourceStudioLiveTick`
+    runs the 4 live-tick tests. Two of them run the 7 characters in
+    parallel, for 180 and 45 ticks. All pass with 0 warnings, in 536.5 s on the final tests.
+  - Engine control: the job's duplicate-preview guard was removed, and a
+    temporary test ran two leases of one preview for 3 steps. That produced
+    5 ThreadSanitizer reports, in the blink update and the eye-look solver.
+  - App: a Debug build with `-enableThreadSanitizer YES` ran
+    `studio-scenario-live-step-edit` through the runner. All 12 steps
+    passed in 158.9 s, including 5 edits landed during off-main steps, with
+    0 ThreadSanitizer reports.
+- **Engine suite** with every fixture of the shared map exported, on the
+  merged head. Two default parallel runs each passed 767 tests (266.3 and
+  249.2 s), including the 2 named skips of item 2, plus 21 in the second
+  target.
+  Earlier, while the new fixture tests ran on the test pool, two parallel
+  runs hung:
+  - All 24 pool threads were blocked in MetalKit's synchronous texture load
+    (`MTKTextureLoader newTextureWithCGImage` in `ResourceStore.texture`,
+    which generates mipmaps into private storage). No thread was running
+    anything else.
+  - Three of the blocked threads were the new tests in the first run. In
+    the second run, after they became a serialized suite, one was.
+  - The same build passed with those tests skipped (764 in 100.5 s) and
+    with `--no-parallel` (767 in 360.6 s).
+
+  Each fixture test now loads and steps on a thread of its own, and the
+  test awaits it, so it holds no pool thread. `ResourceStore` is unchanged.
+  Other tests that build previews still block pool threads while they
+  load, so more such tests could hang a parallel run the same way. The
+  cause inside MetalKit was not established.
+- **Python.** Runner self-tests 187/187 (16 in `test_perf_trace.py`), the
+  studio-inspector validator tests (11), mod tools (40), translation (33,
+  2 skipped), reverse tools (424, 6 skipped) and analysis (279) pass.
+- **Lanes**, Debug, `--strict` under the app lock, 0 skipped, on the merged
+  head `e69a3c0`: `studio-scenarios` 53/53 (1,284.2 s), with the new
+  `studio-scenario-live-step-edit`, and `maker-scenarios` 5/5 (84.3 s).
+
+### Limits
+
+- **The measured builds predate #148.** The merged head was checked for
+  correctness (digests, captures, lanes, ThreadSanitizer), not measured.
+- **C2, C3 and C5 were not measured apart from the off-main step in the
+  app.** Their separate effect is the per-stage profile of the Engine test
+  and FK drag's refresh, which still runs on the main thread.
+- **One or two runs per build and workload**, in two windows with load
+  averages of 3.0–4.7 and 3.6–6.4. Each workload has a base control run in
+  the after window.
+- **Worker CPU time depends on the clock**, which the harness infers and
+  does not read. Per-step CPU is 5.6–5.8 ms with the process idle and
+  2.75 ms with the main thread loaded.
+- **Not controlled:** which worker finishes first inside a step. The join
+  is in lease order, and the Engine test compares the orders bit for bit.
+- **ThreadSanitizer** covered the live-tick Engine tests and one Debug app
+  session, not the whole Engine suite.
+- **The live opt-in** draws live only in the source scene. The native and
+  Maker renders with it ON have no live draws.
+- **The parallel Engine suite** passed twice with the final tests.
+  The pool-exhaustion hang it hit is not fixed at its source.
+- **No M1 run.** On 8 cores, 7 characters fill the worker pool.
+
+### Recommended next
+
+Item 4: skip unchanged frames and lower the link rate (G3, G5, P2). The
+render thread now draws 151–168 ms/s in idle, and the GPU renders 2.08 ms
+frames 120 times a second, while the content changes 30 times a second.
+That is now the largest per-frame cost in idle and hover. Smaller Engine
+follow-ups:
+
+- a frame cache for characters whose inputs did not change, for FK drag's
+  161 ms/s of main-thread refresh;
+- a cheaper `isFiniteAffine` (37 ms/s on the workers);
+- C4, the eye-look pose solve (115 ms/s on the workers);
+- in the Pose tab, the "Eye look" readout, which live steps do not refresh
+  (in `main` too; see [correctness](#correctness-2)).
+
 ## Phase 2, item 5: asynchronous hover pick
 
 Done 2026-10-24 (inventory M5). The Studio's gizmo hover no longer waits for
@@ -1537,7 +1940,8 @@ Time Profiler, 5 s of hover, after build:
 
 This change does not start item 4. Item 3, the live tick off the main
 thread, is in progress separately, and the tick is now nearly all of the
-main thread's time in idle and hover. After it, item 4 (skip unchanged
+main thread's time in idle and hover. Item 3 is now done
+([phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread)). After it, item 4 (skip unchanged
 frames) is the largest per-frame cost left: the render thread
 draws 85–91 ms/s and the GPU renders 2.0 ms frames 120 times a second,
 while the content changes 30 times a second. A smaller follow-up is to let

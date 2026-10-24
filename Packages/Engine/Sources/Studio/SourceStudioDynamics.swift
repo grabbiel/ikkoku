@@ -50,16 +50,23 @@ public struct SourceStudioDynamics {
         let discontinuity = requiresReset || time < self.time || (time == self.time && input != nil)
         if discontinuity { candidate.states = initialStates }
         var result = upstream
+        // True once `result` is known to pass `rig.evaluate`: after the first
+        // component that steps, which evaluates the whole rig. Each later step
+        // checks only what it changed (`SourceDynamicBone.step(validatedInput:)`),
+        // and the final check is needed only when no component stepped.
+        var validated = false
         for i in candidate.states.indices {
             if discontinuity || (current[i] && !enabled[i]) { try candidate.states[i].resetParticles(rig: rig, pose: result) }
             // OCIChar.ActiveFKGroup disables the corresponding components. A
             // fresh upstream pose already includes reset + Animator/FK/IK, so
             // disabling must not overwrite a hair/skirt FK guide here.
             if current[i] && time > 0 && !discontinuity {
-                result = try candidate.states[i].step(deltaTime: deltaTime ?? (time - self.time), rig: rig, pose: result)
+                result = try candidate.states[i].step(deltaTime: deltaTime ?? (time - self.time), rig: rig, pose: result, validatedInput: validated)
+                // A zero-weight component returns its input unchanged and unchecked.
+                if candidate.states[i].weight > 0 { validated = true }
             }
         }
-        _ = try rig.evaluate(result)
+        if !validated { _ = try rig.evaluate(result) }
         candidate.requiresReset = false; candidate.time = time; candidate.input = upstream; candidate.output = result; candidate.enabled = current
         self = candidate; return result
     }

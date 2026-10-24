@@ -239,6 +239,13 @@ public final class SourceStudioCharacterPreview {
     /// other step is a pure function of its inputs.
     private typealias SolvedPose = (state: SourceStudioAnimationState, required: Bool, elapsed: Float, fk: [Int: Float3], ik: [Int32: SourceStudioIKEdit], kinematics: SourceStudioKinematicState?, pose: RigPose, effective: SourceStudioKinematicState, guides: [SourceStudioIK.Guide])
     private var solvedCache: SolvedPose?
+    /// The bound Studio pose (`KoikatsuCharacterRecord.bindPose`) of the last
+    /// solve, with what it was bound from: the rig, the effective kinematic
+    /// state and the FK overrides. The record, catalog and roots are fixed
+    /// for a preview. The overrides are compared bit for bit, since a signed
+    /// zero angle can reach the matrices (R7 phase 2, item 3, C3).
+    private var poseBinding: (rig: RigDefinition.Identity, kinematics: SourceStudioKinematicState, fk: [Int: Float3],
+                              binding: KoikatsuCharacterRecord.PoseBinding)?
     /// Checkpoints rewind dynamics/animation, not edits or gaze. Revisions
     /// avoid comparing rig-sized state when deciding whether their cached
     /// evaluated pose and shape-bound simulation are still compatible.
@@ -1098,9 +1105,16 @@ public final class SourceStudioCharacterPreview {
         // supported static ABMX scale from the shape baseline; FK/IK follows.
         try latePoseCorrection.apply(to: &result)
         let effective = try effectiveKinematics(fkRotations: fkRotations, ikTargets: ikTargets, kinematics: kinematics)
-        let restored = try record.makePose(rig: preview.source.rig, catalog: poseCatalog, baseline: result,
-            characterRoot: characterRoot, bodyRoot: preview.source.rig.uniqueNode(named: "p_cf_body_bone"),
-            hairRoot: preview.source.rig.uniqueNode(named: "cf_J_FaceUp_ty"), kinematics: effective, fkOverrides: fkRotations)
+        let rig = preview.source.rig, binding: KoikatsuCharacterRecord.PoseBinding
+        if let cached = poseBinding, cached.rig === rig.identity, cached.kinematics == effective, Self.sameBits(cached.fk, fkRotations) {
+            binding = cached.binding
+        } else {
+            binding = try record.bindPose(rig: rig, catalog: poseCatalog,
+                characterRoot: characterRoot, bodyRoot: rig.uniqueNode(named: "p_cf_body_bone"),
+                hairRoot: rig.uniqueNode(named: "cf_J_FaceUp_ty"), kinematics: effective, fkOverrides: fkRotations)
+            poseBinding = (rig.identity, effective, fkRotations, binding)
+        }
+        let restored = try record.makePose(binding: binding, rig: rig, baseline: result)
         let edited = restored.controller
         result = restored.pose
         var guides: [SourceStudioIK.Guide] = []
@@ -1110,6 +1124,13 @@ public final class SourceStudioCharacterPreview {
             result = solved.pose; guides = solved.guides
         } else if !ikTargets.isEmpty { throw RigError.invalid("Source IK bindings are unavailable for guide editing.") }
         return (result, effective, guides)
+    }
+
+    /// Equal keys whose angles have equal bit patterns.
+    private static func sameBits(_ a: [Int: Float3], _ b: [Int: Float3]) -> Bool {
+        a.count == b.count && a.allSatisfy { key, value in
+            b[key].map { $0.x.bitPattern == value.x.bitPattern && $0.y.bitPattern == value.y.bitPattern && $0.z.bitPattern == value.z.bitPattern } ?? false
+        }
     }
 
     /// The neck look override and hair dynamics `editedPose` applies to the

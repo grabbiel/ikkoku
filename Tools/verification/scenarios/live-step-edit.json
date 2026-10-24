@@ -1,0 +1,16 @@
+{
+  "steps": [
+    {"op": "advance", "seconds": 0.2},
+    {"op": "editDuringAdvance", "edit": "none"},
+    {"op": "editDuringAdvance", "edit": "move", "key": 65},
+    {"op": "editDuringAdvance", "edit": "setFK", "key": 65, "bone": 19, "rotation": [0, 35, 0]},
+    {"op": "assert", "fk": {"key": 65, "bone": 19, "rotation": [0, 35, 0]}},
+    {"op": "editDuringAdvance", "edit": "undo"},
+    {"op": "editDuringAdvance", "edit": "redo"},
+    {"op": "assert", "fk": {"key": 65, "bone": 19, "rotation": [0, 35, 0]}},
+    {"op": "editDuringAdvance", "edit": "none"},
+    {"op": "export", "path": ".local/verification/scenario-exports/live-step-edit.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/live-step-edit.png"},
+    {"op": "assert", "key": 65, "visible": true}
+  ]
+}
