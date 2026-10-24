@@ -230,7 +230,13 @@ the available choices. Mount is the explicit replacement operation; it starts a
 new selected runtime. Mounting the identical selection and bindings is a no-op.
 
 For a UI mount, package bytes, hashes and IR decode are prepared off the UI thread. One mount is
-prepared at a time. The existing runtime may keep stepping; owner-thread binding
+prepared at a time on the same bounded serial queue used by Maker preparation.
+Cancelling the caller, leaving Studio or editing the scene releases the pending
+mount promptly while an already-running synchronous decoder retains its CPU slot
+until it finishes. A retry waits behind that discarded work; no second resolver
+runs concurrently. Request-owned model and panel state prevent an old completion
+from clearing the retry's pending indicator, loading state, task or message.
+The existing runtime may keep stepping; owner-thread binding
 and commit use the current document after verifying that the user has not edited
 the scene or left Studio. Cancellation, invalid bindings, missing revisions and
 failed installation leave the previous session, document and native adapters
@@ -264,7 +270,22 @@ request file is an input convenience, not a new persistence dependency: the
 native scene stores both values directly. A Studio scenario may run the bounded
 `pluginLibrary` checks with a `requestFile` and no ordinary steps. Its barrier
 holds the real background preparation for mode/document-change and rollback
-checks; normal Studio scenarios keep their synchronous execution.
+checks; normal Studio scenarios keep their synchronous execution. The cancellation
+follow-up also awaits cancelled callers before releasing the worker, distinguishes
+mode/document/caller cancellation from queue supersession, and uses a never-executed
+sentinel to prove a retry is queued without scheduler sleeps or yield loops. The
+production queue itself is unchanged.
+
+The cancellation follow-up at `fdf9fad` passed a Release build, all four existing
+queue tests and 24 app-scenario checks on 2026-10-24. Cancelled callers returned
+before worker release for mode exit, mode exit/return, document edit/return and
+cancellation from another executor. The old document, session, adapters, exact
+frame and resource counts remained unchanged. The queued retry alone committed;
+stale panel completions retained the current loading state, task and message.
+Observed caller return times were 0.059–5.501 ms, including the context change;
+these are functional diagnostics with a held resolver, not a quiet latency
+benchmark or decoder throughput claim. Visible Cancel/retry acceptance remains
+pending; the dated acceptance below describes the preceding build.
 
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an

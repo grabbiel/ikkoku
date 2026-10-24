@@ -292,6 +292,134 @@ private func readbackLevel(_ texture: any MTLTexture, level: Int, device: any MT
 
 private func srgbToLinear(_ byte: UInt8) -> Float { TranslatedSourceProgram.linear(Float(byte) / 255) }
 
+/// Literal expected states pin the legacy sampler contract independently of
+/// the cache key. In particular Point still enables linear mip filtering when
+/// anisotropic, and Disable does not change Trilinear's linear mip filter.
+@Test
+func liveSourceSamplerConfigurationPreservesTheDescriptorContract() {
+    typealias Configuration = TranslatedSourceProgram.SamplerConfiguration
+    struct Case {
+        let filter: String?, wrap: String?, aniso: Int?, quality: String?
+        let minMag: MTLSamplerMinMagFilter, mip: MTLSamplerMipFilter
+        let address: MTLSamplerAddressMode, effectiveAniso: Int
+    }
+    let cases: [Case] = [
+        .init(filter: nil, wrap: nil, aniso: nil, quality: nil, minMag: .linear, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "unknown", wrap: "unknown", aniso: 0, quality: "unknown", minMag: .linear, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: -1, quality: nil, minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Point", wrap: "Repeat", aniso: 1, quality: nil, minMag: .nearest, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "Trilinear", wrap: "Clamp", aniso: 1, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 8, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 8),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 9, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 9),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 16, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 16),
+        .init(filter: "Point", wrap: "Clamp", aniso: Int.max, quality: nil, minMag: .nearest, mip: .linear, address: .clampToEdge, effectiveAniso: 16),
+        .init(filter: "Point", wrap: "Clamp", aniso: Int.min, quality: nil, minMag: .nearest, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Point", wrap: "Clamp", aniso: 8, quality: "Disable", minMag: .nearest, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Trilinear", wrap: "Clamp", aniso: Int.max, quality: "Disable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Repeat", aniso: 8, quality: "Disable", minMag: .linear, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: nil, quality: "ForceEnable", minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: Int.min, quality: "ForceEnable", minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 0, quality: "ForceEnable", minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 1, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 9),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 8, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 9),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: Int.max, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 16),
+        .init(filter: "Point", wrap: "Clamp", aniso: 1, quality: "ForceEnable", minMag: .nearest, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Point", wrap: "Clamp", aniso: 8, quality: "ForceEnable", minMag: .nearest, mip: .linear, address: .clampToEdge, effectiveAniso: 8),
+        .init(filter: "unknown", wrap: "unknown", aniso: 1, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .repeat, effectiveAniso: 9),
+    ]
+    var configurations: [Configuration] = []
+    for item in cases {
+        let configuration = Configuration(filter: item.filter, wrap: item.wrap, aniso: item.aniso, anisotropicFiltering: item.quality)
+        #expect(configuration.minFilter == item.minMag && configuration.magFilter == item.minMag)
+        #expect(configuration.mipFilter == item.mip && configuration.maxAnisotropy == item.effectiveAniso)
+        #expect(configuration.sAddressMode == item.address && configuration.tAddressMode == item.address)
+        // Exercise the existing public API too: unrelated descriptor defaults
+        // stay at their Metal defaults, not new cache-specific values.
+        let descriptor = TranslatedSourceProgram.samplerDescriptor(filter: item.filter, wrap: item.wrap, aniso: item.aniso, anisotropicFiltering: item.quality)
+        let defaults = MTLSamplerDescriptor()
+        #expect(descriptor.minFilter == item.minMag && descriptor.magFilter == item.minMag)
+        #expect(descriptor.mipFilter == item.mip && descriptor.maxAnisotropy == item.effectiveAniso)
+        #expect(descriptor.sAddressMode == item.address && descriptor.tAddressMode == item.address)
+        #expect(descriptor.rAddressMode == defaults.rAddressMode && descriptor.compareFunction == defaults.compareFunction)
+        #expect(descriptor.normalizedCoordinates == defaults.normalizedCoordinates)
+        #expect(descriptor.lodMinClamp == defaults.lodMinClamp && descriptor.lodMaxClamp == defaults.lodMaxClamp)
+        configurations.append(configuration)
+    }
+    // Equality and hashing use effective state, including address and mip
+    // modes. These two raw states normalize to the same default sampler.
+    #expect(configurations[0] == configurations[1])
+    #expect(Set([configurations[0], configurations[1]]).count == 1)
+    #expect(Set([configurations[2], configurations[3], configurations[4], configurations[5]]).count == 4)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceCompositeSharesNormalizedSamplersButKeepsRawInputIdentity() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice()), fixture = try CompositeStoreFixture.write()
+    defer { try? FileManager.default.removeItem(at: fixture.folder) }
+    let store = try SourceShaderTextureStore(url: fixture.url), resources = ResourceStore(device: device)
+    // Complete overrides are required: partial input sampler state falls back
+    // to the store entry as a unit. All three inputs below mean linear/clamp/1.
+    let variants: [(String, Int)] = [("Bilinear", 1), ("Bilinear", 0), ("unknown", -1)]
+    var targets: [any MTLTexture] = [], keys: Set<String> = []
+    for (filter, aniso) in variants {
+        var identity = CompositeStoreFixture.identity()
+        identity.composite?.textures["_MainTex"]?.identity?.filter = filter
+        identity.composite?.textures["_MainTex"]?.identity?.wrap = "Clamp"
+        identity.composite?.textures["_MainTex"]?.identity?.aniso = aniso
+        let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: nil, slot: nil)
+        let target = try store.texture(request, resources: resources).get().texture
+        let event = try #require(store.compositeEvents().last)
+        #expect(!event.cacheHit && keys.insert(event.contentKey).inserted)
+        #expect(targets.allSatisfy { $0 !== target })
+        targets.append(target)
+        #expect(try store.texture(request, resources: resources).get().texture === target)
+        #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 0, samplers: 1))
+        #expect(resources.statistics().textures == 2)
+    }
+    let first = try readback(targets[0], level: 0, device: device)
+    for target in targets.dropFirst() { #expect(try readback(target, level: 0, device: device) == first) }
+    // Request-level quality changes the effective state, adding exactly one
+    // sampler. Repeating it must reuse both the target and that sampler.
+    let forced = SourceShaderLiveTextureRequest(identity: CompositeStoreFixture.identity(), property: "_MainTex", mesh: nil, slot: nil,
+                                               anisotropicFiltering: "ForceEnable")
+    let forcedTarget = try store.texture(forced, resources: resources).get().texture
+    #expect(keys.insert(try #require(store.compositeEvents().last?.contentKey)).inserted)
+    #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 0, samplers: 2))
+    #expect(try store.texture(forced, resources: resources).get().texture === forcedTarget)
+    #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 0, samplers: 2))
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceCompositeConcurrentMissesShareWithinEachOwner() throws {
+    final class Results: @unchecked Sendable {
+        let lock = NSLock()
+        var values: [(Int, SourceShaderLiveTexture)] = []
+        func append(_ value: SourceShaderLiveTexture, owner: Int) {
+            lock.lock(); defer { lock.unlock() }; values.append((owner, value))
+        }
+    }
+    let device = try #require(MTLCreateSystemDefaultDevice()), fixture = try CompositeStoreFixture.write()
+    defer { try? FileManager.default.removeItem(at: fixture.folder) }
+    let store = try SourceShaderTextureStore(url: fixture.url), owners = [ResourceStore(device: device), ResourceStore(device: device)]
+    let request = SourceShaderLiveTextureRequest(identity: CompositeStoreFixture.identity(), property: "_MainTex", mesh: nil, slot: nil)
+    let results = Results()
+    DispatchQueue.concurrentPerform(iterations: 16) { index in
+        do { results.append(try store.texture(request, resources: owners[index % 2]).get(), owner: index % 2) }
+        catch { Issue.record(error) }
+    }
+    #expect(results.values.count == 16)
+    let first = try #require(results.values.first { $0.0 == 0 }?.1.texture)
+    let second = try #require(results.values.first { $0.0 == 1 }?.1.texture)
+    #expect(first !== second && first.device === device && second.device === device)
+    for (owner, value) in results.values { #expect(value.texture === (owner == 0 ? first : second)) }
+    for owner in owners {
+        #expect(store.compositeInputStatistics(for: owner) == .init(defaults: 0, samplers: 1))
+        #expect(owner.statistics().textures == 2)
+    }
+    let events = store.compositeEvents()
+    #expect(events.filter { !$0.cacheHit }.count == 2 && events.filter(\.cacheHit).count == 14)
+}
+
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func liveSourceCompositeMatchesTheCreateEyeReferenceAndBuildsTheMipChain() throws {
     let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)

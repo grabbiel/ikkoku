@@ -3,6 +3,36 @@ import AppKit
 import Gameplay
 import Studio
 
+/// The library read and mount share one panel. A cancelled completion must not
+/// replace a successor's message, loading state, or cancellable task handle.
+@MainActor @Observable
+final class PluginLibraryOperation {
+    var loading = false
+    var message: String?
+    @ObservationIgnored private var request: UUID?
+    @ObservationIgnored private var task: Task<Void, Never>?
+
+    func begin(loading: Bool = false) -> UUID {
+        cancel()
+        let id = UUID(); request = id; self.loading = loading
+        return id
+    }
+    func isCurrent(_ id: UUID) -> Bool { request == id }
+    func attach(_ task: Task<Void, Never>, to id: UUID) {
+        guard isCurrent(id) else { task.cancel(); return }
+        self.task = task
+    }
+    func finish(_ id: UUID, message: String?) {
+        guard isCurrent(id) else { return }
+        request = nil; task = nil; loading = false; self.message = message
+    }
+    func cancel(message: String? = nil) {
+        request = nil
+        let previous = task; task = nil; loading = false; self.message = message
+        previous?.cancel()
+    }
+}
+
 /// Library browsing never changes the mounted generation. Only Mount commits
 /// the explicitly chosen revisions and their visible scene-object bindings.
 struct PluginLibraryView: View {
@@ -12,9 +42,7 @@ struct PluginLibraryView: View {
     @State private var groups: [Group] = []
     @State private var choices: [Data: String] = [:]
     @State private var targets: [Data: UUID] = [:]
-    @State private var loading = false
-    @State private var message: String?
-    @State private var task: Task<Void, Never>?
+    @State private var operation = PluginLibraryOperation()
 
     private struct Group: Identifiable {
         let id: Data, name: String
@@ -78,29 +106,32 @@ struct PluginLibraryView: View {
                             }
                         }.padding(.trailing, 8)
                     }
-                    .disabled(loading || studio.sourcePluginLibraryPending)
+                    .disabled(operation.loading || studio.sourcePluginLibraryPending)
                     HStack {
                         Button("Mount Selection") { mount(studio) }
-                            .disabled(app.mode != .studio || loading || studio.sourcePluginLibraryPending || choices.values.allSatisfy(\.isEmpty))
+                            .disabled(app.mode != .studio || operation.loading || studio.sourcePluginLibraryPending || choices.values.allSatisfy(\.isEmpty))
                         Button("Read Latest Generation") { read(index.libraryURL) }
-                            .disabled(loading || studio.sourcePluginLibraryPending)
+                            .disabled(operation.loading || studio.sourcePluginLibraryPending)
                         if studio.sourcePluginLibraryPending {
                             ProgressView().controlSize(.small)
-                            Button("Cancel") { task?.cancel(); studio.cancelSourcePluginLibraryMount() }
+                            Button("Cancel") {
+                                operation.cancel(message: "Mount cancelled. Current plugins were retained.")
+                                studio.cancelSourcePluginLibraryMount()
+                            }
                         }
                     }
                 } else {
                     Text("Open a converted plugin library to choose its versions and scene targets.")
                     Spacer()
                 }
-                if let message { Text(message).font(.caption).textSelection(.enabled) }
+                if let message = operation.message { Text(message).font(.caption).textSelection(.enabled) }
                 HStack {
-                    Button("Open Plugin Library…") { open() }.disabled(loading || studio.sourcePluginLibraryPending)
-                    if loading { ProgressView().controlSize(.small) }
+                    Button("Open Plugin Library…") { open() }.disabled(operation.loading || studio.sourcePluginLibraryPending)
+                    if operation.loading { ProgressView().controlSize(.small) }
                 }
             }
         }.padding(24)
-        .onDisappear { task?.cancel(); app.studio?.cancelSourcePluginLibraryMount() }
+        .onDisappear { operation.cancel(); app.studio?.cancelSourcePluginLibraryMount() }
     }
 
     private func open() {
@@ -111,19 +142,21 @@ struct PluginLibraryView: View {
     }
 
     private func read(_ url: URL) {
-        loading = true; message = nil
-        task = Task {
-            defer { loading = false }
+        let id = operation.begin(loading: true)
+        let task = Task {
             do {
                 let loaded = try await Task.detached(priority: .userInitiated) { try SourcePluginLibraryIndex.load(libraryURL: url) }.value
                 try Task.checkCancellation()
+                guard operation.isCurrent(id) else { return }
                 index = loaded; choices = [:]; targets = [:]
                 let grouped = Dictionary(grouping: loaded.revisions, by: { Data($0.guid.utf8) })
                 groups = grouped.map { Group(id: $0.key, name: $0.value[0].name, revisions: $0.value) }
                     .sorted { $0.id.lexicographicallyPrecedes($1.id) }
-            } catch is CancellationError { message = "Library inspection cancelled." }
-            catch { message = String(describing: error) }
+                operation.finish(id, message: nil)
+            } catch is CancellationError { operation.finish(id, message: "Library inspection cancelled.") }
+            catch { operation.finish(id, message: String(describing: error)) }
         }
+        operation.attach(task, to: id)
     }
 
     private func mount(_ studio: StudioModel) {
@@ -140,14 +173,15 @@ struct PluginLibraryView: View {
                                  objectID: object.sourceObjectKey == nil ? id : nil)
                 }
             }
-            message = nil
-            task = Task {
+            let id = operation.begin()
+            let task = Task {
                 do {
                     try await studio.mountSourcePluginLibrary(selection: selection, configuration: .init(bindings: bindings))
-                    message = studio.status
-                } catch is CancellationError { message = "Mount cancelled because the task, scene or active editor changed. Current plugins were retained." }
-                catch { message = "Mount failed: \(error)" }
+                    operation.finish(id, message: studio.status)
+                } catch is CancellationError { operation.finish(id, message: "Mount cancelled because the task, scene or active editor changed. Current plugins were retained.") }
+                catch { operation.finish(id, message: "Mount failed: \(error)") }
             }
-        } catch { message = String(describing: error) }
+            operation.attach(task, to: id)
+        } catch { operation.message = String(describing: error) }
     }
 }
