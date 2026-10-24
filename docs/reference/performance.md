@@ -53,8 +53,8 @@ the app opens its normal editor window, sets up one workload, waits
 Every action calls the method the UI calls
 ([PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift)): mouse
 input goes through the viewport's `ViewportInputHandler` methods, Maker sliders
-through the slider binding's array element, Studio selection, pose mode and
-scene commands through `StudioModel`. Nothing is re-implemented, so the draw,
+through the slider row binding's slot setter (`MakerModel[shapeSlot:]`), Studio
+selection, pose mode and scene commands through `StudioModel`. Nothing is re-implemented, so the draw,
 the model and SwiftUI run as they do for a user. The measured window floats
 above other apps' windows (a script-launched app may not take focus, and an
 occluded window is paced differently) and the process opts out of App Nap for
@@ -89,10 +89,22 @@ is untouched) and `IKKOKU_PERF_INPUT_HZ` (default 120).
 - main run-loop busy time (after-waiting to before-waiting observers), split
   into draw, model (ticks, refreshes and input handlers, nested intervals
   counted once) and other (SwiftUI updates, layout, AppKit event handling);
-- Maker ticks and refreshes (explicit hooks in `MakerModel`), Studio live ticks
-  and `refresh()` calls (inferred from properties they assign, see
-  `PerfTrace.observeStudio`; explicit hooks in `StudioModel.swift` are left to
-  phase 2, which changes that file anyway) and every viewport input call;
+- Maker ticks and refreshes (explicit hooks in `MakerModel`), Studio live
+  ticks (`studioTick`, the timer's step outside a drag), `refresh()` calls
+  (`studioRefresh`) and camera-drag frame reuses (`studioCameraRefresh`, see
+  [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)), all explicit
+  hooks in `StudioModel.swift` (phase 2, item 9), and every viewport input call;
+- model events without a duration (`events`): `studioDocChange` counts writes
+  to the Studio document, each of which notifies every view that reads it, and
+  `studioCameraChange` counts writes through the camera accessor, which only
+  the camera's readers observe;
+- SwiftUI body evaluations (`viewBodies`, count and rate per second) for the
+  app's commands, the content view, the Studio window and each of its panels
+  and inspectors, and the Maker window, source rig panel and shape slider rows.
+  A count is one evaluation of that body, so dividing its rate by the input
+  rate says what one edit re-evaluated. `perf_trace.py summarize` prints them
+  per input event in a second table. SwiftUI's own graph update and layout are
+  not split by view; Time Profiler attributes those;
 - process CPU, main-thread CPU, peak `phys_footprint` and peak Metal
   allocation, window occlusion samples and the machine's load average;
 - startup marks in seconds since process start: `appStateInit`, `engineReady`,
@@ -106,9 +118,11 @@ A Studio tick includes the `refresh()` it ends with; the tick column below is
 the whole live step and the refresh column the frame rebuild inside it.
 
 The same phases are `os_signpost` intervals in the Points of Interest category
-of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `MakerTick`,
-`MakerRefresh`, `Startup`, and `Mark` events), so every Instruments template
-shows them next to its own tracks.
+of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `StudioTick`,
+`StudioRefresh`, `StudioCameraRefresh`, `MakerTick`, `MakerRefresh`,
+`Startup`, and `Mark` events), so every Instruments template shows them next
+to its own tracks. The report's `schemaVersion` is 2 since the Studio hooks,
+events and view bodies were added.
 
 ### Running it
 
@@ -974,9 +988,11 @@ section.
 - **Allocations slows the app about 2.4×** (idle tick 103 ms against 43 ms),
   and its statistics cover the whole run. Allocation counts are therefore
   given for the whole run, not per tick.
-- **The Studio tick and refresh are inferred** from observed `StudioModel`
-  properties, because `StudioModel.swift` was frozen for most of this work.
-  Explicit hooks are phase 2, item 9.
+- **The Studio tick and refresh were inferred** from observed `StudioModel`
+  properties in these runs, because `StudioModel.swift` was frozen for most
+  of this work. Phase 2, item 9 replaced them with explicit hooks; numbers
+  from the two kinds of hook agree where they overlap (see
+  [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)).
 - **No M1 run.** The low-end column is an estimate from core counts,
   bandwidth and drawable size.
 - **The drawable is not a full 4K frame.** It is 1996×1824 pixels, the
