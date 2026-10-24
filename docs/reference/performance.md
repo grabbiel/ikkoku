@@ -941,6 +941,126 @@ presentation at once. G4, writing skin palettes into the frame ring instead
 of new buffers, is a small renderer change that would roughly halve orbit's
 per-draw CPU. Item 3 (the tick off the main thread) comes next.
 
+## Phase 2, item 2: render thread and frame-ring skin palettes
+
+Done 2026-10-23, together with G4. Each viewport's display link now runs on
+its own render thread, so main-thread work no longer delays presentation, and
+skin palettes are written into the frame ring instead of a new `MTLBuffer` per
+skin set per prepared frame. Rendered frames and window captures are
+byte-identical.
+
+TBD-SUMMARY
+
+### What changed
+
+- **Render thread (P1).** `ViewportNSView` gives each viewport a
+  `ViewportRenderThread`: a `Thread` named `com.grabbiel.Ikkoku.viewport-render`
+  (QoS user-interactive) whose run loop drives the viewport's
+  `CAMetalDisplayLink`. The link keeps `preferredFrameLatency` 2. Its callback
+  calls `Renderer.draw`, which presents from that thread. The models still
+  build frames and call `submit`, `pick` and `capture` on the main thread; the
+  `StudioModel` and `MakerModel` APIs are unchanged. The thread starts when the
+  view enters a window and stops when it leaves it, is dismantled or
+  deinitializes. On quit, the view waits up to 0.5 s for a draw in progress.
+- **Renderer threading.** `Renderer` state that both threads touch is guarded
+  explicitly. `renderLock` covers everything a frame's preparation touches;
+  the draw now takes the pending frame under it, so frame retirement (R6)
+  stays ordered. `statusLock` covers the published diagnostics, including the
+  GPU time that the completion handler writes. The live captures check their
+  deformation errors under the render lock. The contract, lock order and the
+  reasoning about command buffers committed from two threads are in
+  [renderer threads](renderer.md#renderer-threads-r7-phase-2-item-2).
+- **Skin palettes (G4).** `FrameRing.allocatePalettes` copies all of a frame's
+  palettes into one shared buffer per ring region, each at a 256-byte aligned
+  offset; the native and live deform passes bind that buffer and offset. The
+  buffer follows the region's in-flight rule and grows by doubling from 64 KiB.
+  Once each region has seen the largest frame, no palette buffer is created.
+  The finiteness check is now four lanes at a time per column
+  (`Renderer.allFinite`), with the same result as the per-element check.
+- **Harness (schema 3).** The draw log is recorded on whichever thread runs
+  the link. Reports gain `drawThread`, `renderThread`, `frameRing`, the
+  main-thread load knob and the `viewport-lifecycle` workload (see
+  [what the report records](#what-the-report-records)).
+
+### Measurement
+
+TBD-MEASUREMENT
+
+### Why orbit took the slow allocation path (G4)
+
+TBD-G4
+
+### What remains
+
+TBD-REMAINS
+
+### Correctness
+
+- **Captures.** 13 captures per build, each its own launch under the app
+  lock, with the shared fixture map (`.local/r7c-render-thread/captures`):
+  - three `IKKOKU_AUTOCAPTURE` renders, live opt-in OFF: the source scene,
+    the native scene (`IKKOKU_CAPTURE_STUDIO`) and the Maker source card;
+  - one render of the source scene with the live opt-in ON (7 live draws, 0
+    fallbacks), and its live report;
+  - nine `IKKOKU_CAPTURE_UI` window captures: five Studio inspector tabs of
+    the source scene (object, pose, face, clothes, scene), two of the native
+    scene (object, pose), the Maker source card's rig panel and the native
+    Body tab.
+
+  Base `0c51ca1` (Release executable `3d4aeb00…dc864c`) against this change
+  at `4ce5b3d` (`190d3525…c289bd`): all 13 PNGs and all 10 reports
+  byte-identical, on the 4K display at 2×. The merged head `7a265f6`
+  (`23b1d10e…a4a26c`) was compared after the display had become a 1080p
+  virtual display at 1×, which changes the window captures' size, so base's
+  window captures were taken again on it. The four renders and all 10
+  reports match base byte for byte, and so do eight of the nine window
+  captures. The source pose tab varies in both builds: its "Eye look" readout
+  appears only when the inspector is re-evaluated after the preview first
+  computed the eye rates. Three alternating launches per build gave both
+  variants for each build (base: without, with, without; this change: with,
+  with, without), so it is not a difference between them.
+- **Thread lifetime.** `viewport-lifecycle` (three Studio/Maker switches,
+  resize, minimize and restore, quit through `NSApp.terminate` while the link
+  draws) ran three times on the Release build: one render thread before every
+  step and at the end, all callbacks on the render thread, a clean exit.
+  TBD-LIFECYCLE-PRESENTED
+- **ThreadSanitizer.**
+  - Engine: `swift test --sanitize=thread` with the renderer, frame-ring,
+    capture-request, resource-store and character-lifetime tests (33 tests),
+    on the merged head: all pass, 0 warnings. The whole suite under
+    ThreadSanitizer took more than 8 minutes on one thread and was stopped.
+  - As a control, the new render-thread test caught a deliberately unlocked
+    `publish(gpuTime:)`. It did not catch an unlocked `currentFrame()`,
+    because the frame's array storage is retained and released atomically by
+    both threads, which ThreadSanitizer counts as synchronization; the lock
+    order is documented instead.
+  - App: a Debug build with `-enableThreadSanitizer YES`, through the
+    harness, ran `studio-native` and `viewport-lifecycle` once each. Three
+    more `viewport-lifecycle` runs used a variant that created the link on the
+    render thread. All had 0 ThreadSanitizer warnings, one render thread at
+    the end and a clean quit. 2 of about 2,000 display-link callbacks arrived
+    on the main thread, one with each variant, each shortly after the layer
+    changed size (see
+    [renderer threads](renderer.md#renderer-threads-r7-phase-2-item-2)). The
+    harness counts them, and they are safe.
+- **Engine suite** with every fixture of the shared map exported, on the
+  merged head: 749 tests passed, including 2 named skips
+  (`sourceStudioExpressionPerformanceProbe`, opt-in, and
+  `sourceCardAppearanceFemaleAndMalePixelsMatchIndependentRawRGBAOracle`,
+  no `IKKOKU_APPEARANCE_REFERENCE_ROOT`), plus 21 in the second target.
+- **Python.** Runner self-tests 185/185 (15 in `test_perf_trace.py`) and the
+  studio-inspector validator tests pass.
+- **Lanes** on the merged head, Debug, `--strict` under the app lock:
+  `maker-scenarios` 5/5. TBD-STUDIO-LANE
+
+### Limits
+
+TBD-LIMITS
+
+### Recommended next
+
+TBD-NEXT
+
 ## Validation of this change
 
 The historical suites and lanes below ran on the merged head `b20ccd7`
