@@ -190,8 +190,7 @@ public final class SourceRigPreview {
                 vertices.append(GizmoVertex(position: evaluation.worldMatrices[index].translation, color: color))
             }
         }
-        // Hidden renderers (UpdateVisible) do not fit the shadow map.
-        var frameBounds = try liveBounds.bounds(evaluation: evaluation, morphWeights: morphWeights, excluding: hiddenParts)
+        var frameBounds = try liveBounds.bounds(evaluation: evaluation, morphWeights: morphWeights)
         if frameBounds.isEmpty { frameBounds = try Self.previewBounds(source: source, evaluation: evaluation, morphWeights: morphWeights) }
         var result = RenderFrame(camera: camera, mainLight: mainLight, items: items,
             gizmos: vertices.isEmpty ? [] : [GizmoBatch(primitive: .lines, vertices: vertices, depthTest: false)],

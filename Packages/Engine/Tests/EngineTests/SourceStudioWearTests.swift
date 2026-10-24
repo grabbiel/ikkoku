@@ -294,21 +294,22 @@ func sourceStudioWearLibraryAlternatesMatchUpdateVisibleAndKeepTheDressedParts()
             tagged += 1
         }
     }
-    #expect(tagged >= 8, "IKKOKU_MAKER_LIBRARY must be a library converted with half-state alternates")
+    #expect(tagged >= 5, "IKKOKU_MAKER_LIBRARY must be a library converted with half-state alternates")
 
     struct Fixtures: Decodable { let femaleBase: String }
     let fixtureURL = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_SELECTION_FIXTURES"))
     let base = URL(fileURLWithPath: try JSONDecoder().decode(Fixtures.self, from: Data(contentsOf: fixtureURL)).femaleBase)
     var card = try SourceCharacterCard.load(url: fixtureURL.deletingLastPathComponent().appendingPathComponent("female-head0-bone0.png"))
-    // T-shirt, bloomers, bra, shorts, pantyhose and sneakers outdoor; the
-    // fixture's loafers stay indoor (Maker selection refuses slot 7).
-    for (slot, id) in [(0, 38), (1, 1), (2, 1), (3, 1), (5, 1), (8, 3)] {
+    // T-shirt, bloomers, pantyhose and sneakers outdoor; the fixture's
+    // loafers stay indoor (Maker selection refuses slot 7). The library has
+    // no bra or shorts (see HALF_STATE_SELECTION).
+    for (slot, id) in [(0, 38), (1, 1), (5, 1), (8, 3)] {
         card = try SourceCharacterCard.decode(card.selectingVanillaAsset(id, at: .clothes(coordinate: 0, slot: slot)))
     }
     let maker = try library.prepare(card: card, coordinate: 0, baseURL: base)
     let studio = try library.prepare(card: card, coordinate: 0, baseURL: base, wear: true)
-    #expect(maker.clothingSlots == [0, 1, 2, 3, 5, 8] && maker.indoorShoes == .unconverted)
-    #expect(studio.clothingSlots == [0, 1, 2, 3, 5, 7, 8] && studio.indoorShoes == .assembled)
+    #expect(maker.clothingSlots == [0, 1, 5, 8] && maker.indoorShoes == .unconverted)
+    #expect(studio.clothingSlots == [0, 1, 5, 7, 8] && studio.indoorShoes == .assembled)
     let layout = SourceStudioWearLayout(source: studio.source, clothingSlots: studio.clothingSlots, indoorShoes: studio.indoorShoes)
     let catalog = try library.wearCatalog(card: card, coordinate: 0)
     let rules = SourceStudioWear(catalog: catalog.clothes, switchNodes: (0..<9).map { layout.switchNodes[$0] ?? [] },
@@ -330,9 +331,7 @@ func sourceStudioWearLibraryAlternatesMatchUpdateVisibleAndKeepTheDressedParts()
     // Top, bottom and pantyhose half with the indoor shoes.
     let half = drawn([1, 1, 0, 0, 0, 1, 0, 0, 0], 0)
     let names = Set(half.parts.map(\.mesh.name).filter { $0.hasPrefix("clothes-") })
-    #expect(names == ["clothes-0/o_top_tsyats_b/0", "clothes-1/o_bot_pants01_b/0", "clothes-2/o_bra_a/0", "clothes-3/o_shorts_a/0",
-                      "clothes-5/o_panst_00_b/0", "clothes-7/o_shoes_roafer01/0"])
+    #expect(names == ["clothes-0/o_top_tsyats_b/0", "clothes-1/o_bot_pants01_b/0", "clothes-5/o_panst_00_b/0",
+                      "clothes-7/o_shoes_roafer01/0"])
     #expect(half.fallbacks.isEmpty && half.alpha == SIMD2(0, 1))
-    #expect(Set(drawn([0, 0, 1, 2, 0, 0, 0, 0, 0], 1).parts.map(\.mesh.name).filter { $0.hasPrefix("clothes-2/") || $0.hasPrefix("clothes-3/") })
-            == ["clothes-2/o_bra_b/0", "clothes-3/o_shorts_c/0"])
 }

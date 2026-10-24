@@ -31,9 +31,12 @@ TABLES = {101: 'bo_hair_b_00', 102: 'bo_hair_f_00', 103: 'bo_hair_s_00',
 DEFAULT_SELECTION = [(101, i) for i in (0, 2, 9)] + [(102, i) for i in (1, 2, 5)] + [
     (105, 38), (105, 3), (105, 39), (105, 13), (106, 3), (106, 25),
     (112, 1), (112, 3), (123, 0)]
-# ST-C03 third slice: a StateType 0 bottom with n_bot_b, a bra (n_top_b), shorts
-# (n_bot_b/n_bot_c), pantyhose (n_panst_b) and the indoor shoes (uwabaki).
-HALF_STATE_SELECTION = [(106, 1), (107, 1), (108, 1), (110, 1), (112, 2)]
+# ST-C03 third slice: a StateType 0 bottom with n_bot_b, pantyhose (n_panst_b)
+# and the indoor shoes (uwabaki). No bra or shorts: the original masks a bra
+# under the top with the top's OverBraMask, which is not converted, and the
+# Studio fixture's dressed character wears bra 1 and shorts 1, so converting
+# them would change its dressed render (scene-editing.md, third slice).
+HALF_STATE_SELECTION = [(106, 1), (110, 1), (112, 2)]
 IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
 
 

@@ -13,16 +13,13 @@ public struct SourceRigBounds: Sendable {
     private var cache: [Int: PartCache] = [:]
     public init(source: SourceRig) { self.source = source }
 
-    /// `excluding`: part indices the frame does not draw (renderers the
-    /// source switched off); they neither bound the frame nor cost a box.
-    public mutating func bounds(evaluation: RigEvaluation, morphWeights: [String: [(index: Int, weight: Float)]] = [:],
-                                excluding: Set<Int> = []) throws -> AABB {
+    public mutating func bounds(evaluation: RigEvaluation, morphWeights: [String: [(index: Int, weight: Float)]] = [:]) throws -> AABB {
         guard evaluation.worldMatrices.count == source.rig.nodes.count, evaluation.palettes.count == source.rig.skins.count,
               Set(morphWeights.keys).isSubset(of: Set(source.parts.map { $0.mesh.name })) else {
             throw RigError.invalid("Live bounds do not match their source rig.")
         }
         var result = AABB.empty
-        for (index, part) in source.parts.enumerated() where part.rendererEnabled && source.rig.activeNodes[part.node] && !excluding.contains(index) {
+        for (index, part) in source.parts.enumerated() where part.rendererEnabled && source.rig.activeNodes[part.node] {
             let active = morphWeights[part.mesh.name] ?? []
             let key = active.map { Weight(index: $0.index, weight: $0.weight) }
             let count = source.rig.skins[part.skin].joints.count
