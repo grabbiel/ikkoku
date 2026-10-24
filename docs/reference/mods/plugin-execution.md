@@ -324,9 +324,22 @@ an actual successful attachment read, Instantiate, a visibility-changing SetActi
 or pending Destroy produces the explicit unsupported-restoration error before
 history, cache or adapter commit. Saved fields/clocks keep their existing restore
 order, and the input candidate remains the committed scene. Attachment-free
-restoration and fresh-profile callback semantics are unchanged. The candidate
-acceptance harness covers these rejections alongside same-UUID reference/outfit,
-blocked-resource, explicit-clock and transfer controls; execution is pending.
+restoration and fresh-profile callback semantics are unchanged.
+
+Release acceptance at `af6007a` (binary SHA-256
+`bb383b496dba79e0755116fd9e6c054336434e30acb378d91809fd5abf249cf6`)
+passes all 117 functional checks: ten native-save checks, 33 in a separate reopen
+process, 32 existing fresh-profile isolation checks and 42 existing library/command
+checks. Restore covers distinct same-UUID references/outfits/shapes/clocks,
+candidate resource policy, repeated reads, transfer and subsequent step, undo/redo,
+late initializer and partial-constructor failures. Each of the three mutation
+rejections runs twice and reaches the exact policy error while retaining the old
+session, document, history, previews, frame and active resources. Changed-identity
+rejection and attachment-free restore remain separate passing controls. The
+original unsupported-policy reports and binary remain preserved independently.
+These are bounded functional results; no GUI, source-game parity or performance
+claim follows. Integration with subsequent shared appearance changes requires a
+separate exact-head acceptance run.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
