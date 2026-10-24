@@ -3702,6 +3702,44 @@ Source SHA-256 is `ddc6dd37ec1ffd2f9518314674612aaa27643187507b1ec7e62ee0e35e037
 the executable is `66d8dbd646ea548ba1d3aa68cbc07537ee2399eba18b4a1eb5b2477f545545a2`;
 the report is `bfd362c16de2a01cbe5324b1b1678b8d1b3f1d16af1d1f85f773f4e8df56f232`.
 
+The next control retains those five cases and adds two clip-w variants of the
+sheared grid. Both scale the entire clip position by factors 0.5/1/2, preserving
+projected geometry, NDC depth, UVs and primitive order exactly. One uses a common
+factor per triangle; the other varies it between the three vertices. The
+shader, mip chain, sampler and compiler options remain unchanged.
+
+An independent Double reference projects each triangle, computes screen
+barycentrics and evaluates `sum(lambda * UV / w) / sum(lambda / w)`, with
+coefficients cached once per triangle. This is the mathematical
+[perspective-interpolation formula](https://registry.khronos.org/OpenGL/specs/gl/glspec33.core.pdf)
+(equation 3.9), not a hardware-precision or derivative guarantee. Literal
+interior, edge and endpoint checks distinguish reciprocal-w interpolation
+from affine interpolation; the interior control gives `(2/11, 1/11)`.
+GPU UV error is measured at pixel centers using the reported primitive ID.
+The affine-gradient comparison is JSON null where vertex w varies, while raw
+derivative repeat comparisons remain available.
+
+At clean `0b92331`, the optimized standalone build and CPU checks pass. One
+locked process collects seven cases × four draws on the same M2 Ultra/MSL 4.1
+configuration. **All seven cases remain bit-stable** in color, UV, derivatives,
+sampled values and primitive IDs. Every visible value is finite; GPU coverage
+and alpha match the computed 4,096-pixel plane for each case. Constant-w cases
+have zero rational UV and affine-gradient error. The varying-w case has maximum
+absolute rational UV error `1.4997892061607843e-7` in every draw; this is a
+numerical observation without a new tolerance and is not derivative parity.
+All 135 artifact hashes verify, and all 99 artifacts from the five-case control
+remain byte-identical. The input mips remain unchanged after drawing.
+
+These affine and perspective grid controls still do not reproduce the recovered
+shader's variation. The next discriminant is a bounded source-shader reduction
+with the original varying baseline retained, rather than further geometry
+variants. No production shader or source gate changes here. Evidence, exact
+commands and both reviewed helper proposals are under
+`.local/codex-continue-2026-10-24/rolling/materials-sampling-perspective/`.
+Source SHA-256 is `f2ef808f32d24d019a6130d11a5cbf73b159250ee1a401a32bdad1efd1809122`;
+the executable is `750f115553d92e77c404547e86482bfe36bf755f7f4e9c848534394990c35005`;
+the report is `193fa0d1f3578380f9c7ebd9690607b24620de601888566dea0a17073696ffaf`.
+
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
 correlation is not itself proof of a boundary defect: 2,596 of 2,604 visible
