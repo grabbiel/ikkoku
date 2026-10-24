@@ -210,6 +210,12 @@ final class EngineHost {
         return try SourceMakerLibrary.load(url: url)
     }
 
+    /// A cheap configuration snapshot for asynchronous preparation. Unlike
+    /// `locateSourceAvatar`, this performs no filesystem validation or decoding.
+    static func sourceAvatarCandidateURL(sex: Sex) -> URL? {
+        effectiveManifest(sex == .male ? .maleBase : .femaleBase)
+    }
+
     /// Original data is local and optional. An explicit override, or the base of the
     /// selected converted library (A-T02), must be valid; the development default
     /// is available only after its appearance is ready.

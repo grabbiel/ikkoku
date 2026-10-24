@@ -3625,14 +3625,82 @@ would therefore require fresh source-output evidence, even if it stabilized
 one native capture. The [source discard instruction](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-)
 also preserves execution for derivative calculation.
 
-The next bounded investigation is an asset-free small-triangle/UV-discontinuity
-reproducer with deterministic mip contents, the same language/compiler options,
-and same-draw color/UV/derivative readback. It should first determine whether
-the gap survives without the recovered shader body; any eventual translation
-change must retain source sampling semantics and pass independent source-color
-and Release cost gates. This experiment is proposed, not run. Fixed LOD zero,
-reduced anisotropy and blanket explicit-gradient rewrites are not production
-changes.
+An asset-free control is now available as
+[`metal_derivative_repro.swift`](../../Tools/verification/metal_derivative_repro.swift)
+with [build/run instructions](../../Tools/verification/README.md#standalone-metal-derivative-diagnostic).
+It uses eight deterministic CPU-authored sRGB8 mips, the same default language
+version/disabled-fast-math options, and same-draw color/UV/derivative/sample/ID
+readback. Three cases cover the same 64×64-pixel region of a 128×128 target:
+a two-triangle continuous quad, a regular grid of 2,048 small triangles with
+continuous UVs, and identical grid geometry with discontinuous per-triangle
+UVs. Constant clip `w = 1` makes each triangle's affine gradient independently
+calculable. The simple fragment has one implicit sample and no branch/discard;
+the instrumented MRT shader is not the recovered fragment body.
+
+On 2026-10-24, an optimized standalone Swift build and CPU-only layout, literal
+mip-texel and floating-point classification checks pass; six CLI boundary checks
+also pass. The one bounded GPU process collects four draws per case on the same
+M2 Ultra / macOS 27.0.1 host. Effective language version is MSL 4.1, fast math
+is disabled and `preserveInvariance` is false. **All three cases are stable:**
+color, UV, both derivatives, sampled RGBA and primitive IDs have zero changed
+bits between repeats. Each draw covers 4,096 pixels, every visible value is
+finite, and the maximum error against its analytic affine gradient is zero.
+All eight input mip levels remain byte-identical after drawing. The large and
+small continuous cases also render the same checker pattern; the discontinuous
+case renders a visibly distinct minified pattern.
+
+This is a negative reproducer result, not proof that the recovered path is
+stable. It excludes neither irregular/subpixel geometry, perspective
+interpolation, the larger shader body nor compiler perturbation by MRT outputs.
+Any eventual translation change must retain source sampling semantics and pass
+independent source-color and Release cost gates. Fixed LOD zero, reduced
+anisotropy and blanket explicit-gradient rewrites are not production changes.
+Issue #188 remains open, and no timing/FPS claim follows from this diagnostic.
+
+The standalone source SHA-256 is `bf69c7a98d7dea3d70e17244abc5d6efc81e90eb2c61b59579d7bf3147bac573`;
+the tested executable is `8aaf5ab963600ba4c95cb260349ed232077032cb1bfd25a39701daeec8f58255`.
+Build/command provenance, both reviewed coding-helper proposals and the result
+are retained under `.local/codex-continue-2026-10-24/rolling/materials-sampling-reproducer/`.
+Its `run-1/report.json` hashes all 60 shader/vertex/mip/raw-output artifacts;
+those hashes were checked after the process exited. These synthetic results
+are separate from the private original-shader MRT evidence above.
+
+A subsequent bounded control adds two copies of the discontinuous grid while
+retaining the original three cases. One shifts screen coordinates by
+`(5/16, 3/16)` pixels; the other adds the same shift and the shear
+`x += (originalY - 64) * 3/16`. Both preserve UVs, primitive order, depth and
+clip `w = 1`. The shader, mip generator and original mesh-generation blocks
+remain byte-identical. CPU checks independently pin the first three transformed
+positions and the first-triangle gradients; shear changes `dUV/dy` by
+`-3*dUV/dx/16`, so its expected gradient is not copied from the aligned case.
+
+The coverage reference computes the union of triangle interiors at pixel
+centers using clipped per-triangle bounds. It has literal duplicate/shared-edge,
+viewport-clipping, empty and degenerate checks. Each GPU validity and alpha
+pixel must match that plane, rather than assuming the shear leaves coverage
+unchanged. Inclusive shared-edge membership is sufficient for these opaque
+fixtures, whose outer boundaries avoid pixel centers; it is not a general
+Metal rasterizer or a primitive-ownership oracle.
+
+The optimized build and CPU checks pass at clean `b2bc839`. One locked process
+collects five cases × four draws with the same MSL 4.1 options/device. **The two
+added cases also do not reproduce the variation:** every repeat is bit-stable
+for color, UV, derivatives, sampled values and primitive IDs; all visible
+values are finite and affine-gradient error is zero. Computed and GPU coverage
+agree at every pixel and yield 4,096 pixels per case. All 99 saved artifact
+hashes verify; all 60 artifacts from the earlier three-case run, including its
+48 color/float outputs, are byte-identical. The authored input mip chain is
+unchanged after drawing.
+
+This control covers only the stated subpixel offset and shear of a regular
+affine grid. It does not test perspective interpolation, arbitrary irregular
+geometry or the recovered shader body, and it does not establish the cause of
+the private MRT variation. No production change, relaxed source gate or
+performance claim follows. Evidence and both reviewed coding-helper proposals
+are under `.local/codex-continue-2026-10-24/rolling/materials-sampling-subpixel/`.
+Source SHA-256 is `ddc6dd37ec1ffd2f9518314674612aaa27643187507b1ec7e62ee0e35e037ecd`;
+the executable is `66d8dbd646ea548ba1d3aa68cbc07537ee2399eba18b4a1eb5b2477f545545a2`;
+the report is `bfd362c16de2a01cbe5324b1b1678b8d1b3f1d16af1d1f85f773f4e8df56f232`.
 
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative

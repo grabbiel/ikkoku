@@ -237,10 +237,11 @@ public struct SourceMakerLibrary: Sendable {
         fileprivate let clearBodyMask: Bool
         public var geometryChanged: Bool { selections.contains { $0.entry != nil } }
         public func appearance(base: SourcePreviewAppearance?, card: SourceCardAppearance, resources: ResourceStore,
-                               modLibrary: SourceModLibrary?) throws -> SourcePreviewAppearance.CardApplication? {
+                               modLibrary: SourceModLibrary?, transaction: SourceAppearanceLoadTransaction? = nil) throws -> SourcePreviewAppearance.CardApplication? {
             var combined = base, fields = Set<String>(), messages = diagnostics
             for component in components {
-                var appearance = try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary)
+                var appearance = try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
+                    transaction: transaction)
                 if let url = component.bindings {
                     var bindings = try SourceAppearanceBindings.load(url: url)
                     if let slot = component.accessorySlot { bindings = try bindings.contextualized(accessorySlot: slot) }
