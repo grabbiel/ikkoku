@@ -602,9 +602,70 @@ slots (14 selections). The corrected fixture passes separately and asserts
 both shoe properties; the other tests are unchanged. CoreMath's 21 tests pass.
 The new public malformed-alternate test passes, as do the 49 focused Python
 checks with the private geometry fixture, the reverse-tool suite (434 passed,
-six optional fixture skips), and verification tools (187 passed). Full Studio
-and Maker scenario lanes and quiet resource/performance acceptance are pending
-at this checkpoint; the earlier scenario evidence above is retained separately.
+six optional fixture skips), and verification tools (187 passed). The strict
+Release app lanes on `7f2bbdb` pass **56/56 Studio checks** (465.36 s) and
+**5/5 Maker checks** (33.75 s), with no skipped checks. This includes the
+half-state edit's 42/42 steps, native save's 8/8 and fresh-process load's 7/7.
+Reports and exact input/binary hashes are retained under
+`.local/codex-continue-2026-10-24/half-state/`; `perf/` and `perf-control/`
+hold the quiet measurements below.
+
+**Resource cost (Release, 2026-10-24).** The selected complete library trees,
+including their head registry and textures but excluding historical audit
+scratch files, grow from 578,832,148 to 593,592,294 bytes: **14,760,146 bytes
+added** across 46 files. Of the 725 retained files, 723 keep their bytes;
+only `library.json` and `material-inputs.json` change. The independent Unity
+geometry audit passes all 18 converted geometry entries (75,782 selected
+vertices, five alternate meshes).
+
+On the dressed-card control, Maker assembly stays at 774 nodes, 20 parts and
+37,094 stored vertices with either library. Studio assembly has 780 nodes:
+21 parts / 40,148 vertices with the retained library (indoor shoe added),
+22 parts / 41,341 vertices with the expanded library (shirt alternate also
+added). Both Studio cases select the same 19 visible parts / 37,052 vertices.
+Hidden parts are skipped before draw-item and skin-palette construction.
+
+Two interleaved 10-second quiet windows per library and workload, each in a
+fresh process after three seconds of warmup, use Release binary
+`cb235f15c6ca816c1db004cb9f183d56a82ce4e26864db4b884afad99aaaed0c`.
+These are warm-filesystem measurements on the retained source Studio fixture;
+the ranges below are the two observed samples, not confidence intervals.
+
+| Current runtime, source Studio idle | Retained library | Expanded library |
+| --- | ---: | ---: |
+| Source scene import | 4.164–4.191 s | 4.468–4.503 s |
+| Peak Metal allocation | 468.063 MiB | 477.641 MiB |
+| End process footprint | 754.095–754.752 MiB | 764.627–766.783 MiB |
+| Peak process footprint | 796.861–798.189 MiB | 801.111–838.220 MiB |
+| Draw CPU p50 | 1.197–1.355 ms | 1.186–1.214 ms |
+| Draw CPU p95 | 2.176–3.134 ms | 2.731–3.022 ms |
+
+The extra converted content costs **9.578 MiB of Metal allocation and about
+0.31 s of scene import** in this fixture. Across both libraries and the native
+Studio control, actual presentation is 119.30–119.80 FPS; presentation p50/p95
+is 8.3334/8.3335 ms. The native control keeps 457.844 MiB of Metal allocation.
+Every measured draw creates zero palette buffers and has no palette overflow.
+The earlier baseline's source draw p95 is lower than both current-library
+ranges, so four further fresh launches interleave the clean `72e7af6` baseline
+and the current runtime, both using the same retained library, fixture map,
+10-second recording and three-second warmup. The baseline binary's SHA-256 is
+`5e4d1d9cd4143dd71eaba4df14cfdd8b4f26fed2a871b087c3d27ee5f7502fd2`.
+
+| Same retained library, Studio idle | Baseline runtime | Current runtime |
+| --- | ---: | ---: |
+| Draw CPU p50 | 1.117–1.191 ms | 1.125–1.147 ms |
+| Draw CPU p95 | 1.434–1.692 ms | 1.489–1.595 ms |
+| Process CPU | 0.433–0.450 cores | 0.419–0.459 cores |
+| Live-step job wall p95 | 1.196–1.213 ms | 1.076–1.409 ms |
+| Source scene import | 4.214–4.256 s | 4.182–4.213 s |
+
+All four windows are unoccluded and present at 119.30–119.80 FPS, with
+8.3335 ms presentation p95. The overlapping draw and process CPU ranges do
+not isolate a repeatable runtime regression; the earlier source draw p95
+difference does not persist in this interleaved control. Two samples per
+variant do not prove equivalence or bound rare stalls. The expanded-content
+memory and import costs above remain, and this check covers only the retained
+Studio fixture, not larger scenes or every garment combination.
 
 **Fallbacks that remain.** These still draw dressed with a diagnostic:
 
