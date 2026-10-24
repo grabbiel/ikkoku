@@ -123,6 +123,11 @@ separate branches/worktrees when practical. In a shared checkout, avoid concurre
 edits to the same files, preserve unrelated uncommitted work, and never reset or
 overwrite another contributor's changes to resolve your own conflict. Coordinate
 access to shared VM probes and output directories; use distinct outputs per run.
+Assign one owner at a time to GUI interaction and shared app/VM/GPU captures.
+Coordinate compiler concurrency and use the existing local app lock when present.
+Before a quiet timing run, obtain explicit no-heavy-work acknowledgments from all
+active owners and release the quiet window afterward. Functional checks performed
+alongside compilation do not establish comparative performance.
 
 Assign bounded tasks with an expected deliverable and validation criteria. The
 integrating contributor reviews the resulting diff, resolves interface conflicts
@@ -139,6 +144,20 @@ Update the owning technical reference and audit feature/task row with the change
 Keep status limited to the behavior actually implemented and verified; check app
 reachability and persistence separately where needed. Retain historical results
 as dated evidence rather than relabeling them as fresh test runs.
+
+At each task handoff, the integrating contributor or orchestrator checks the
+evidence and records a scoped completion note: the resulting behavior, tested
+commit/fixture, validation, performance cost or benefit, and remaining boundary.
+Keep pending PRs and local experiments distinct from merged support. Preserve
+failed attempts when they explain a finding; a later pass does not erase them.
+
+Keep general documentation continuous and small. Alongside a completed task,
+update only the affected README summary, audit overview, architecture boundary or
+usage instruction when it changes. If those statements remain accurate, the
+owning reference/audit update is sufficient; do not rewrite the overview or advance
+its review date merely because another test passed. A broad revamp is a separate,
+explicitly scoped review. Dated handoffs remain historical and link to the
+maintained entry points rather than becoming a second live backlog.
 
 Put instructions in `docs/guides/`, contracts in `docs/reference/`, status/tasks in
 `docs/component-audit/`, and superseded records in `docs/archive/`. Link new pages
