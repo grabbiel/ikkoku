@@ -92,6 +92,8 @@ public enum SourceShaderBindingDerivation {
         let componentTrees: [JSONValue]
         let renderers: [Renderer]
     }
+    /// `alternates.json`: the renderers under a garment's half-state switch nodes.
+    struct LibraryAlternates: Decodable { let renderers: [LibraryMaterials.Renderer] }
 
     struct HeadContract: Decodable {
         struct Source: Decodable { let path: String; let sha256: String }
@@ -626,10 +628,14 @@ public enum SourceShaderBindingDerivation {
             }
             var index = headIndex
             if let file = evidence.renderers.first?.material.serializedFile { index.bundleByFile[file] = (evidence.source.bundle, evidence.source.bundleSHA256) }
+            // ST-C03: the half-state renderers (n_top_b, n_bot_b, n_bot_c,
+            // n_panst_b) share the garment's ChaClothesComponent arrays.
+            let alternates = try library.alternateMaterialEvidenceData(for: entry).map { try JSONDecoder().decode(LibraryAlternates.self, from: $0).renderers } ?? []
             let normal = Self.componentRendererCount(evidence.componentTrees, key: "rendNormal01")
             let others = ["rendNormal02", "rendNormal03", "rendAlpha01", "rendAlpha02"].map { Self.componentRendererCount(evidence.componentTrees, key: $0) }.reduce(0, +)
-            let allNormal = normal >= evidence.renderers.count && others == 0
-            for renderer in evidence.renderers {
+            let allNormal = normal >= evidence.renderers.count + alternates.count && others == 0
+            let tagged = evidence.renderers.map { (renderer: $0, alternate: false) } + alternates.map { (renderer: $0, alternate: true) }
+            for (renderer, isAlternate) in tagged {
                 var builder = Builder(evidence: renderer.material, catalog: catalog, index: index)
                 builder.keywords(fromTree: renderer.materialTree)
                 if allNormal, let main = evidence.catalogTextures["main"], evidence.catalog["MainTex"] == main.name {
@@ -641,7 +647,14 @@ public enum SourceShaderBindingDerivation {
                 }
                 if slot <= 4 { applySiru(&builder, face: false) }
                 var visible = true, rule = "clothesState[\(slot)] == 0"
-                if let state = clothesState, state.indices.contains(slot) { visible = state[slot] == 0 } else { rule = "clothesState missing; assumed worn" ; visible = true }
+                if isAlternate {
+                    // The library's UpdateVisible clauses for the switch nodes above it.
+                    if let tag = entry.alternates?.first(where: { $0.meshName == renderer.meshName }) {
+                        rule = tag.activeWhen.map { "clothesState[\($0.kind)] in \($0.states)" }.joined(separator: " and ") + " (\(tag.switches.joined(separator: ", ")))"
+                        if let state = clothesState, state.count == 9 { visible = tag.activeWhen.allSatisfy { $0.states.contains(Int(state[$0.kind])) } }
+                        else { rule += "; clothesState missing: half-state mesh hidden"; visible = false }
+                    } else { rule = "half-state mesh without a recorded switch rule: hidden"; visible = false }
+                } else if let state = clothesState, state.indices.contains(slot) { visible = state[slot] == 0 } else { rule = "clothesState missing; assumed worn" ; visible = true }
                 if slot == 7 || slot == 8 {
                     if let shoesType { visible = visible && shoesType == (slot == 7 ? 0 : 1); rule += ", shoesType == \(slot == 7 ? 0 : 1)" }
                     else { rule += ", shoesType missing" }

@@ -27,6 +27,15 @@ class ScriptTests(unittest.TestCase):
         for root in [r'C:\Illusion\Koikatsu', ROOT_A + r'\..', r'C:\Temp\IkkokuShaderProbe-xyz']:
             with self.subTest(root=root), self.assertRaises(ValueError): probe.run_script(root, BASE, 600)
 
+    def test_shader_properties_are_fetched_into_the_plugins_folder(self):
+        script = probe.run_script(ROOT_A, BASE, 600)
+        self.assertIn(r'''$r.properties=Fetch 'shader-properties.tsv' "$p\shader-properties.tsv"''', script)
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError): probe.shader_properties(tmp)
+            (Path(tmp) / 'main_skin').mkdir()
+            (Path(tmp) / 'main_skin' / 'program.json').write_text('{"name": "Shader Forge/main_skin", "properties": [{"m_Name": "_Texture3", "m_Type": 4}, {"m_Name": "_rimV", "m_Type": 2}]}')
+            self.assertEqual(probe.shader_properties(tmp), b'Shader Forge/main_skin\t_Texture3\t4\nShader Forge/main_skin\t_rimV\t2\n')
+
     def test_bootstrap_stays_far_below_the_command_limit(self):
         self.assertLess(len(probe.bootstrap(BASE)), 400)
         self.assertIn(BASE + 'run.ps1', probe.bootstrap(BASE))
@@ -39,7 +48,7 @@ class GuardTests(unittest.TestCase):
         with patch('original_wear_probe.errno_count', return_value=5): self.assertEqual(probe.guarded(5), 5)
 
     def test_output_outside_local_or_reused_is_refused_without_vm_access(self):
-        class Args: vm = 'vm'; settings = None; model_variant = 'female00'; errno_baseline = 5; host_address = '127.0.0.1'; wait_seconds = 1
+        class Args: vm = 'vm'; settings = None; shaders = None; model_variant = 'female00'; errno_baseline = 5; host_address = '127.0.0.1'; wait_seconds = 1
         with tempfile.TemporaryDirectory() as tmp, patch('subprocess.run') as run:
             Args.output = Path(tmp)
             with self.assertRaisesRegex(ValueError, 'under .local'): probe.run(Args)

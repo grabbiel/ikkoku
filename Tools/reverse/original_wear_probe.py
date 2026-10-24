@@ -8,8 +8,9 @@ user's session. run.ps1 then, inside that one exec:
 1. refuses to start when a CharaStudio/Koikatu process already runs or the root exists;
 2. sets up C:\\Temp\\IkkokuShaderProbe-<32 hex> exactly as original_character_probe.py
    does (copies of CharaStudio.exe, the loader and BepInEx core; junctions to abdata and
-   CharaStudio_Data), downloads the probe source, the model variant and the
-   character-settings.tsv, and compiles the probe;
+   CharaStudio_Data), downloads the probe source, the model variant, the
+   character-settings.tsv and shader-properties.tsv (the material properties to record,
+   from --shaders as original_character_probe.py builds it), and compiles the probe;
 3. starts the player and waits a bounded time for it to exit, then stops anything still
    running from the root by its path;
 4. zips the probe folder with the Unity and BepInEx logs and PUTs it back to the
@@ -50,6 +51,18 @@ def guarded(baseline):
     return count
 
 
+def shader_properties(folder):
+    """original_character_probe.start's shader-properties.tsv: one `shader\tproperty\ttype`
+    line per property of each translated program, so the probe records every texture
+    and value the translated shaders read (not only its built-in list)."""
+    lines = []
+    for path in sorted(Path(folder).glob('*/program.json')):
+        program = json.loads(path.read_text())
+        lines.extend(program['name'] + '\t' + p['m_Name'] + '\t' + str(p['m_Type']) for p in program['properties'])
+    if not lines: raise ValueError(f'No translated program properties under {folder}')
+    return ('\n'.join(lines) + '\n').encode()
+
+
 def run_script(root, base, wait_seconds):
     """The whole phase. `base` is the endpoint URL ending in the token and '/'."""
     if not re.fullmatch(PLAYER_ROOT, root): raise ValueError('Unknown private player root')
@@ -67,6 +80,7 @@ $c=& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /noconfig /
 if($LASTEXITCODE -ne 0){throw "Compile failed:$c"}
 New-Item -ItemType Directory "$p\character" -Force|Out-Null
 $r.settings=Fetch 'character-settings.tsv' "$p\character\character-settings.tsv";$r.variant=Fetch 'model-variant.txt' "$p\model-variant.txt"
+$r.properties=Fetch 'shader-properties.tsv' "$p\shader-properties.tsv"
 $x=Start-Process -FilePath "$root\CharaStudio.exe" -WorkingDirectory $root -ArgumentList @('-force-d3d11','-screen-fullscreen','0','-screen-width','768','-screen-height','1024','-logFile',"$root\unity.log") -PassThru
 $r.processID=$x.Id;$r.exited=$x.WaitForExit(""" + str(int(wait_seconds) * 1000) + r""")
 $left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});Start-Sleep -Seconds 2
@@ -145,13 +159,16 @@ def run(args):
     if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: run the probe into a new output folder')
     output.mkdir(parents=True, exist_ok=True)
     settings = args.settings.read_bytes() if args.settings else b''
+    properties = shader_properties(args.shaders) if args.shaders else b''
     source = SOURCE.read_bytes()
     root = r'C:\Temp\IkkokuShaderProbe-' + uuid.uuid4().hex
-    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), settingsSHA256=digest(settings),
+    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), settingsSHA256=digest(settings), shaderPropertiesSHA256=digest(properties),
+                  shaders=str(args.shaders) if args.shaders else None,
                   modelVariant=args.model_variant, currentUser=True, stopped=False, errnoBaseline=args.errno_baseline,
                   errnoBefore=guarded(args.errno_baseline), transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint')
     dump(output / 'run.json', record)
-    files = {'CharacterProbe.cs': source, 'character-settings.tsv': settings, 'model-variant.txt': (args.model_variant + '\n').encode()}
+    files = {'CharacterProbe.cs': source, 'character-settings.tsv': settings, 'model-variant.txt': (args.model_variant + '\n').encode(),
+             'shader-properties.tsv': properties}
     with Endpoint(args.host_address, files) as endpoint:
         script = run_script(root, endpoint.base, args.wait_seconds)
         files['run.ps1'] = script.encode()
@@ -165,7 +182,8 @@ def run(args):
         raise RuntimeError('VM exec failed: ' + record['execError'])
     guest = json.loads(result.stdout.lstrip('\ufeff').strip())
     record.update(processID=int(guest.get('processID') or 0), stopped=True, guest=guest)
-    for name, key in [('CharacterProbe.cs', 'source'), ('character-settings.tsv', 'settings'), ('model-variant.txt', 'variant')]:
+    for name, key in [('CharacterProbe.cs', 'source'), ('character-settings.tsv', 'settings'), ('model-variant.txt', 'variant'),
+                      ('shader-properties.tsv', 'properties')]:
         if guest.get(key) not in (None, digest(files[name])): raise ValueError('Guest input hash differs: ' + name)
     names = []
     if upload is not None:
@@ -186,6 +204,7 @@ def main():
     p.add_argument('--vm', default='Windows 11'); p.add_argument('--output', type=Path, required=True)
     p.add_argument('--settings', type=Path, help='character-settings.tsv (wear keys: clothes, clothesState, shoesType)')
     p.add_argument('--model-variant', choices=VARIANTS, default='female00')
+    p.add_argument('--shaders', type=Path, help='translated programs (<family>/program.json) whose material properties the probe records')
     p.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     p.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     p.add_argument('--wait-seconds', type=int, default=600)

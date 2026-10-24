@@ -112,6 +112,12 @@ public struct SourceMakerLibrary: Sendable {
         guard let ref = entry.materialEvidence else { return nil }
         return try Data(contentsOf: verified(ref, maximumBytes: 32 * 1024 * 1024))
     }
+    /// Verified bytes of an entry's half-state renderer evidence
+    /// (`alternates.json`), or `nil` when the library has none for it.
+    public func alternateMaterialEvidenceData(for entry: Entry) throws -> Data? {
+        guard let ref = entry.alternateMaterialEvidence else { return nil }
+        return try Data(contentsOf: verified(ref, maximumBytes: 32 * 1024 * 1024))
+    }
     public struct Selection: Sendable {
         public let property: String, category: Int, savedID: Int, sourceID: Int
         public let modGUID: String?, entry: Entry?, status: String
