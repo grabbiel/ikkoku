@@ -25,7 +25,8 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    They bring the tick to 6.34 ms at 30 ticks per second, and the idle
    scene to 120.0 FPS with no hitches. Phase 2, item 3 then took the step
    off the main thread: the characters run in parallel on workers, and the
-   main thread keeps 0.6 ms per step ([phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread)).
+   main thread keeps about 0.6 ms of snapshot and refresh per step
+   ([phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread)).
 2. **SwiftUI work on every interactive edit.** Each orbit event, Maker
    slider write or FK drag event costs 7–25 ms of SwiftUI graph update and
    layout, because the Studio and Maker views observe whole documents and
@@ -1334,8 +1335,10 @@ then commits the result in the serial order and merges the frames. Inside
 each character, three per-tick rebuilds became caches: the dynamics
 topology, the bound pose and the expression weights. Every output is
 bit-identical. The live-tick digest is unchanged over 180 ticks of 7
-characters, both serial and parallel. Rendered frames and window captures
-are byte-identical, and the strict lanes pass.
+characters, both serial and parallel. Rendered frames and reports are
+byte-identical. So are 8 of 9 window captures; the ninth differs only in a
+readout that depends on startup timing in `main` too. The strict lanes
+pass.
 
 In the idle source scene, the main thread is busy 22 ms/s instead of
 237–251 ms/s. A step costs the main thread 0.17–0.19 ms for the snapshot
@@ -1658,8 +1661,9 @@ profile text only; the traces were deleted).
     passed in 158.9 s, including 5 edits landed during off-main steps, with
     0 ThreadSanitizer reports.
 - **Engine suite** with every fixture of the shared map exported, on the
-  merged head. The default parallel run passed 767 tests in 266.3 s,
-  including the 2 named skips of item 2, plus 21 in the second target.
+  merged head. Two default parallel runs each passed 767 tests (266.3 and
+  249.2 s), including the 2 named skips of item 2, plus 21 in the second
+  target.
   Earlier, while the new fixture tests ran on the test pool, two parallel
   runs hung:
   - All 24 pool threads were blocked in MetalKit's synchronous texture load
@@ -1702,7 +1706,7 @@ profile text only; the traces were deleted).
   session, not the whole Engine suite.
 - **The live opt-in** draws live only in the source scene. The native and
   Maker renders with it ON have no live draws.
-- **The parallel Engine suite** passed {{SUITERUNS}} with the final tests.
+- **The parallel Engine suite** passed twice with the final tests.
   The pool-exhaustion hang it hit is not fixed at its source.
 - **No M1 run.** On 8 cores, 7 characters fill the worker pool.
 
