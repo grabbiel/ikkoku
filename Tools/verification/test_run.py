@@ -635,7 +635,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "dragGizmo", "hoverGizmo", "captureBone", "captureObject", "captureRender",
                 "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
-                "export", "reimport", "assert", "assertRejected"}
+                "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels"}
 
 IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 
@@ -815,7 +815,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 56)
+        self.assertEqual(len(self.checks), 59)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -864,6 +864,19 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for step in steps:
                 op = step["op"]
                 self.assertIn(op, SCENARIO_OPS, "unknown op in %s" % path)
+                if op == "measureAccessoryLabels":
+                    self.assertIs(type(step["index"]), int)
+                    self.assertIn(step["index"], range(100, 2001))
+                    self.assertEqual(step["key"], step["accessoryLabels"]["key"])
+                if "accessoryLabels" in step:
+                    labels = step["accessoryLabels"]
+                    self.assertIs(type(labels["key"]), int)
+                    self.assertIs(type(labels["mounted"]), bool)
+                    self.assertTrue(all(isinstance(value, str) for value in labels["labels"]))
+                    self.assertEqual(labels["loadedSlots"], sorted(set(labels["loadedSlots"])))
+                    self.assertTrue(all(type(value) is int and value in range(20) for value in labels["loadedSlots"]))
+                    if op != "assertRejected":
+                        self.assertEqual(len(labels["labels"]), 20)
                 if op in ("setVisible",):
                     self.assertIsInstance(step["visible"], bool)
                 if op == "rename":
@@ -964,7 +977,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "statusContains", "indicatorContains",
                                             "treeLabel", "view", "render",
-                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -1091,7 +1104,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics", "accessory-labels")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1106,6 +1119,31 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertGreater(ops.index("reimport"), ops.index("export"))
             self.assertEqual(ops[-1], "assert",
                              "the last step must verify the reloaded state: %s" % path)
+
+    def test_accessory_label_checks_pin_fixture_and_fresh_process_boundary(self):
+        checks = {check["id"]: check for check in self.checks}
+        def steps(name):
+            with open(os.path.join(run.REPO_ROOT, checks["studio-scenario-" + name]["env"]["IKKOKU_STUDIO_SCENARIO"]), encoding="utf-8") as handle:
+                return json.load(handle)["steps"]
+        save = steps("reload-save-accessory-labels")
+        load = steps("reload-load-accessory-labels")
+        missing = steps("accessory-labels-missing")
+        for name in ("reload-save-accessory-labels", "accessory-labels-missing"):
+            fixture = next(f for f in checks["studio-scenario-" + name]["fixtures"] if f["env"] == "IKKOKU_NATIVE_PLUGIN_MANIFEST")
+            self.assertEqual(fixture["from"], "IKKOKU_ACCESSORY_NAMES_MANIFEST")
+        fresh = checks["studio-scenario-reload-load-accessory-labels"]
+        self.assertFalse({"IKKOKU_SOURCE_SCENE", "IKKOKU_NATIVE_PLUGIN_MANIFEST", "IKKOKU_NATIVE_PLUGIN_MANIFESTS", "IKKOKU_STUDIO_PLUGIN_SELECTION"} & {f["env"] for f in fresh["fixtures"]})
+        self.assertEqual(load[0]["op"], "loadDocument")
+        self.assertNotIn("loadNativePlugin", [step["op"] for step in load])
+        self.assertEqual(load[0]["path"], next(step["path"] for step in save if step["op"] == "saveDocument"))
+        self.assertLess(next(i for i, step in enumerate(save) if step["op"] == "unloadPlugins"),
+                        next(i for i, step in enumerate(save) if step["op"] == "loadNativePlugin"))
+        mounted = {step["accessoryLabels"]["mounted"] for step in save if step["op"] == "measureAccessoryLabels"}
+        self.assertEqual(mounted, {True, False})
+        self.assertTrue(any(step.get("outfit", {}).get("missing") == "outfit1.accessory0.ChaFileAccessory.PartsInfo.id" for step in missing))
+        self.assertTrue(any("exportIdenticalToSource" in step for step in missing))
+        for sequence in (save, load):
+            self.assertTrue(any(step.get("accessoryLabels", {}).get("labels", [None])[0] == "01 スクエア" for step in sequence if step["op"] == "assert"))
 
     def test_synthetic_motion_checks_do_not_discover_a_maker_library(self):
         # These minimal cards exercise blink/hand playback, not assembled

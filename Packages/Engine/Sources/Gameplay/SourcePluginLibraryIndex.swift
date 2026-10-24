@@ -171,10 +171,11 @@ extension SourcePluginGraph.Node {
                   dependencies: manifest.dependencies.map { SourcePluginGraph.Dependency(guid: $0.guid, minimumVersion: $0.minimumVersion, required: $0.required) },
                   incompatibilities: manifest.incompatibilities)
     }
-    /// Adapter manifests declare no dependencies or incompatibilities.
+    /// Exact adapters have no declared dependencies; incompatibilities are
+    /// preserved when present (older two-adapter manifests omitted the field).
     public init(nativeAdapter package: SourceNativePluginPackage) {
         self.init(kind: .nativeAdapter, guid: package.manifest.identity.guid, version: package.manifest.identity.version,
-                  processes: package.manifest.processes)
+                  processes: package.manifest.processes, incompatibilities: package.manifest.incompatibilities ?? [])
     }
 }
 
@@ -294,7 +295,7 @@ public struct SourcePluginLibraryIndex: Sendable {
                   revision.manifest == "revisions/\(revision.manifestSHA256)/manifest.json",
                   [revision.guid, revision.version, revision.name].allSatisfy(LibraryFiles.bounded),
                   !revision.types.isEmpty, revision.types.allSatisfy(LibraryFiles.bounded),
-                  revision.kind == .translated || (revision.dependencies.isEmpty && revision.incompatibilities.isEmpty && revision.types.count == 1) else {
+                  revision.kind == .translated || (revision.dependencies.isEmpty && revision.types.count == 1) else {
                 throw SourcePluginLibraryError.invalidLibrary("Generation \(number) has an invalid or duplicate revision record.")
             }
             groups[Data(revision.guid.utf8), default: []].append(revision.manifestSHA256)
@@ -426,6 +427,7 @@ public struct SourcePluginLibraryIndex: Sendable {
         guard package.manifestSHA256 == revision.manifestSHA256,
               manifest.identity.guid.utf8.elementsEqual(revision.guid.utf8), manifest.identity.version.utf8.elementsEqual(revision.version.utf8),
               manifest.identity.name.utf8.elementsEqual(revision.name.utf8), LibraryFiles.same(manifest.processes, revision.processes),
+              LibraryFiles.same(manifest.incompatibilities ?? [], revision.incompatibilities), revision.dependencies.isEmpty,
               LibraryFiles.same([manifest.type], revision.types), revision.converter["adapterID"] == manifest.adapterID else {
             throw changed
         }
