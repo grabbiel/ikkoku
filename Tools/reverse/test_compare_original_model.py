@@ -46,6 +46,53 @@ class ModelComparisonTests(unittest.TestCase):
         result = model.compare(self.folder, self.native)
         self.assertTrue(result['gatePassed']); self.assertEqual(result['selectedVertexEntries'], 3)
         self.assertEqual(result['selectedSkinBindings'], 1); self.assertEqual(result['omittedOriginalComponents'], [])
+    def test_shared_rest_geometry_requires_unique_renderer_name_and_full_coverage(self):
+        extra=copy.deepcopy(self.frame['meshes'][0]);extra.update(name='mesh_low',path='root/mesh_low')
+        self.frame['meshes'].append(extra);self.write()
+        other=copy.deepcopy(self.native['parts'][0]);other['name']='mesh_low/0';self.native['parts'].append(other)
+        result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['selectedVertexEntries'],6)
+        self.assertEqual({r['sourcePath'] for r in result['parts']},{'root/mesh','root/mesh_low'})
+        for row in result['parts']:
+            self.assertEqual(row['restSHA256'],extra['restPositions']['sha256'])
+            self.assertRegex(row['restSHA256'],r'^[0-9a-f]{64}$')
+        self.native['parts'].pop()
+        self.assertFalse(model.compare(self.folder,self.native)['gatePassed'])
+        self.frame['meshes'][0]['name']='renamed';self.write()
+        with self.assertRaisesRegex(ValueError,'Missing or ambiguous exact source vertex identity'):
+            model.compare(self.folder,self.native)
+        self.frame['meshes'][0]['name']='mesh'
+        extra['name']='mesh';self.write()
+        with self.assertRaisesRegex(ValueError,'ambiguous exact source vertex identity'):
+            model.compare(self.folder,self.native)
+    def head201(self):
+        self.frame['neutralModel'].update(variant='female201', headID=201, requestedHeadID=201, loadedHeadCatalogID=201,
+                                         loadedHeadName='ct_head', loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG))
+        self.native['identity']['headID']=201;self.write()
+
+    def test_head201_requires_exact_measured_catalog_and_loaded_identity(self):
+        self.head201();self.assertTrue(model.compare(self.folder,self.native)['gatePassed'])
+        valid=copy.deepcopy(self.frame)
+        for key,value in [('loadedHeadCatalog',None),('loadedHeadCatalog',{}),('loadedHeadCatalog',[]),
+                          ('loadedHeadName','p_cf_head_03'),('sex',True),('requestedHeadID',200)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(key=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD201_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(field=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+
+    def test_head201_repeat_rejects_matching_forged_catalogs(self):
+        self.head201()
+        with tempfile.TemporaryDirectory() as tmp:
+            other=Path(tmp)
+            for path in self.folder.iterdir():(other/path.name).write_bytes(path.read_bytes())
+            run=copy.deepcopy(self.run);run['processID']=101;(other/'run.json').write_text(json.dumps(run))
+            self.assertTrue(model.compare_repeat(self.folder,other)['gatePassed'])
+            self.frame['neutralModel']['loadedHeadCatalog']['MainData']='p_cf_head_wrong';self.write()
+            (other/'frame.json').write_text(json.dumps(self.frame))
+            with self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare_repeat(self.folder,other)
+
     def test_extra_original_visible_mesh_and_missing_native_mesh_fail(self):
         extra=copy.deepcopy(self.frame['meshes'][0]);extra['path']='root/extra';extra['name']='extra'
         # Distinct rest identity avoids the separate ambiguity rejection.

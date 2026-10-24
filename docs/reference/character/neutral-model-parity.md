@@ -7,7 +7,7 @@ bounded selected-model comparison, not whole-character or whole-game parity.
 
 ## Reference and capture context
 
-`Tools/reverse/original_character_probe.py --model-variant female00|female200|male200`
+`Tools/reverse/original_character_probe.py --model-variant female00|female200|female201|male200`
 creates a new fully clothed card in an isolated CharaStudio player. It waits for
 the Studio scene, loads the requested normal model, drives exactly one original
 `Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
@@ -318,3 +318,69 @@ Prepared part counts remain 20; no new assembly allocation, pose-cost or FPS
 measurement is claimed. Other shape combinations, animation, non-neutral
 expression/gaze, alternate bone types and material appearance remain separate
 acceptance work.
+
+
+## Normal female head201 (#169)
+
+The same original-player protocol now covers normal female head201 (`sex=1`,
+`boneType=0`, `exType=0`) in neutral and coupled-shape states. Source catalog
+category 100, `bo_head_50` row 201 (`タイプ０３`), selects manifest `add50`, bundle
+`chara/bo_head_50.unity3d`, prefab `p_cf_head_03` and shape animation
+`cf_anmShapeHead_03`. Retained managed `ChangeHeadAsync` and direct catalog/bundle
+inspection establish that identity; these are ordinary shell/probe evidence,
+not a REA tool result. The original loader renames the loaded object `ct_head`.
+
+The probe records the actual `infoHead` row's name, manifest, bundle, prefab and
+shape-animation fields and rejects a missing or mismatched loaded catalog ID.
+For head201, the comparator requires exact requested/actual sex/head/bone values,
+`ct_head` and all five measured catalog fields. It checks those fields against
+the fixed source identity independently for the selected capture, neutral shape
+baseline and repeat, so two matching forged catalog records cannot pass.
+Older captures without these newly recorded fields remain usable for their
+previously supported variants.
+
+The first player comparison exposed a comparator limitation: `cf_O_eyeline` and
+`cf_O_eyeline_low` have identical rest-position bytes (364 vertices each). The
+matcher now requires the pair of exact rest SHA and renderer name before testing
+uniqueness. Both identities were already required; their order of validation
+incorrectly rejected this valid pair. Duplicate name/SHA pairs, renamed or missing
+counterparts and uncovered visible source meshes still fail. Topology, channel
+identity, all selected vertices and ordered skin-joint checks are unchanged.
+
+Three fresh original-player runs on 2026-10-24 pass:
+
+| State | Selected vertices | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error | Max native/BakeMesh vertex error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Neutral, two independent runs | 37,124 | 994 / 224 | 7.30e-7 | 7.15e-7 | 6.62e-7 |
+| Existing coupled body/face input | 37,124 | 994 / 224 | 6.20e-7 | 5.97e-7 | 5.07e-7 |
+
+All use the existing `2e-5` matrix/vertex and `1e-4` morph-weight tolerances;
+morph-weight error is zero. The neutral repeat has exactly equal 814 transform
+records, all 20 source geometry/BakeMesh streams and saved card bytes. The mixed
+case passes the full requested/actual shape and independent unedited-card-token
+gate with no coercions. Each native assembly still prepares 20 parts and selects
+19, retaining the same inactive-canine and hash-bound shadow-only exclusions.
+Neutral and mixed controlled CPU silhouettes have IoU 1.0 and zero differing
+pixels; these images do not establish production Metal shading or color parity.
+
+All three captures compiled probe source SHA-256
+`cab3ff016cfffa2348c8a95727df6e628b8344ce202789a2f67a446f2d32f01a` against the original
+Studio assembly `902b9a237337b17a64514bdb0d857b460ece4fb6a57c658375dd32c5fa504c45`.
+The converted female201 avatar manifest SHA-256 is
+`c923d3adfb92561c4f943d0e8f266d06671479517744ba1e91dcfe9205c7dfd0`; this is a different
+artifact from the original managed assembly. The existing `b2dde03` inspector
+binary recorded above is reused after confirming identical inspector, shape,
+pose, expression and deformation source; the intervening Character change only
+adds a material recipe that `card-model` does not call. No native binary rebuild
+or runtime formula change is part of this slice.
+
+The 48 focused Python tests pass, including exact loaded identity, baseline and
+repeat corruption, same-rest distinct renderers and ambiguous duplicate identity.
+All six retained neutral/mixed assembly comparisons, both independent female00
+repeats and the mixed repeat's full gate pass; 1,266 retained input files remain
+unchanged. Private producer runs, source catalog/bundle hashes, converted input
+hashes, compile diagnostics, comparisons and controlled images are retained in
+`.local/codex-continue-2026-10-24/rolling/models-head201/summary.json`. Every owned
+player was stopped after collection. This adds no per-frame runtime work and
+makes no pose-cost or FPS claim. Male head201, arbitrary shape combinations,
+animated poses, full local hierarchy and appearance remain separate acceptance.
