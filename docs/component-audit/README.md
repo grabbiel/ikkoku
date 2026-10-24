@@ -82,9 +82,34 @@ or hardens the implementation. Task IDs in the reports are stable references.
 
 | Component | Completed scope and evidence | Remaining boundary |
 | --- | --- | --- |
-| Models / CM14 | [#163](https://github.com/grabbiel/ikkoku/pull/163) adds independent neutral-versus-mixed shape comparisons for normal female heads 0/200 and male head 200, with a separate female00 repeat. [#164](https://github.com/grabbiel/ikkoku/pull/164) rejects malformed sparse-native/dense-source morph metadata before indexing or broadcasting: four previously accepted malformed cases now fail, 43 focused Python tests pass, and retained neutral/mixed gates still pass with 1,266 input files unchanged. | Geometry and morph evidence covers these named assemblies and cases. Head 201, broader shape/expression/animation coverage and complete production appearance require separate acceptance. [Model evidence and tolerances](../reference/character/neutral-model-parity.md). |
-| Materials / R1, CMT-04 | [#162](https://github.com/grabbiel/ikkoku/pull/162) adds one normal-top GPU composite: independent base output is byte-exact and distinct colors differ by at most one byte. The controlled live fixture reaches 16/20 slots; three default-off capture pairs stay identical. [#165](https://github.com/grabbiel/ikkoku/pull/165) reduces sampler descriptor constructions from 48 to 4 in the measured cache workload. Each focused Debug/Release run executes nine passing tests with one named fixture skip; strict private Release separately passes all five gates, including that skipped case. | Body, face, bottom and shoes remain fallbacks in that fixture. Adding the top increased GPU work and memory. The sampler change establishes fewer allocations, with no demonstrated timing speedup: warm-hit median of run medians is 0.107 → 0.116 ms with overlapping ranges. [Renderer evidence and costs](../reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24). |
-| Plugins / P-T02, P-T03 | [#161](https://github.com/grabbiel/ikkoku/pull/161) connects exact library revisions and scene targets, with pinned native save/fresh-process restore and identical same-clock PNGs. [#166](https://github.com/grabbiel/ikkoku/pull/166) adds prompt mount cancellation and request-owned panel state: four queue tests and 24 production app checks pass with no skips. A separate diagnostic GUI run verifies Cancel before worker release, queued retry, no stale mount, then successful retry, Pause and Unload for two adapters plus one translated fixture. | GUI cancellation used a temporary worker gate, separately hashed from production; it establishes behavior, not latency. Scene-open restoration still resolves files synchronously. General DLL/Harmony/API compatibility and GUID-specific original save adapters remain open. [Execution and app evidence](../reference/mods/plugin-execution.md#saved-scenes-and-migration). |
+| Models / CM14 | [#163](https://github.com/grabbiel/ikkoku/pull/163) verifies neutral/mixed shapes for female heads 0/200 and male head 200; [#164](https://github.com/grabbiel/ikkoku/pull/164) rejects malformed morph metadata. [#170](https://github.com/grabbiel/ikkoku/pull/170) adds normal female head 201: three fresh source/native comparisons cover 37,124 selected vertices and 994 skin bindings, with zero morph-weight error and an exact neutral repeat. Forty-eight focused Python tests pass; all 1,266 retained and 472 new capture inputs remain unchanged. [#174](https://github.com/grabbiel/ikkoku/pull/174) independently verifies normal male head 201: three captures cover 35,645 selected vertices and 994 bindings, with an exact 817-transform neutral repeat. Fifty focused tests and the retained gates pass; requested/actual model identity and the sole normal-male height coercion are explicit. | The head 201 matcher combines the already-required exact rest hash and renderer name; duplicate identities still fail and tolerances remain unchanged. No runtime formula or per-frame work changed. Normal male head 0 still lacks this independent assembly gate. Broader shape/expression/animation coverage, special model types and complete production appearance require separate acceptance. [Model evidence and tolerances](../reference/character/neutral-model-parity.md). |
+| Materials / R1, CMT-04 | [#162](https://github.com/grabbiel/ikkoku/pull/162) adds one normal-top GPU composite: independent base output is byte-exact and distinct colors differ by at most one byte. The controlled live fixture reaches 16/20 slots; three default-off capture pairs stay identical. [#165](https://github.com/grabbiel/ikkoku/pull/165) reduces sampler descriptor constructions from 48 to 4 in the measured cache workload. Each focused Debug/Release run executes nine passing tests with one named fixture skip; strict private Release separately passes all five gates, including that skipped case. [#173](https://github.com/grabbiel/ikkoku/pull/173) adds the normal-bottom composite: independent base/distinct targets meet the unchanged one-byte gate and controlled coverage reaches 17/20. All six strict private gates, five Debug/Release tests (six cases each), and three byte-identical default-off PNG pairs pass. | Body, face and shoes remain fallbacks in that fixture. Adding the top increased GPU work and memory. The sampler change establishes fewer allocations, with no demonstrated timing speedup: warm-hit median of run medians is 0.107 → 0.116 ms with overlapping ranges. [Renderer evidence and costs](../reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24). |
+| Plugins / P-T02, P-T03 | [#161](https://github.com/grabbiel/ikkoku/pull/161) connects exact library revisions and scene targets, with pinned native save/fresh-process restore and identical same-clock PNGs. [#166](https://github.com/grabbiel/ikkoku/pull/166) adds prompt mount cancellation and request-owned panel state: four queue tests and 24 production app checks pass with no skips. A separate diagnostic GUI run verifies Cancel before worker release, queued retry, no stale mount, then successful retry, Pause and Unload for two adapters plus one translated fixture. [#172](https://github.com/grabbiel/ikkoku/pull/172) adds bounded offline DLL metadata inventory: all 13 synthetic tests and 51 private assertions pass; six retained originals yield six declarations and the two existing exact-hash adapters, with byte-identical repeat reports. | Inventory reads metadata without assembly execution, dependency resolution or mounting. The later complete installed snapshot below extends discovery only. Its timings are offline diagnostics, not a runtime speedup. [Inventory contract](../reference/mods/plugin-inventory.md). GUI cancellation used a temporary worker gate, separately hashed from production; it establishes behavior, not latency. Scene-open restoration still resolves files synchronously. General DLL/Harmony/API compatibility and GUID-specific original save adapters remain open. [Execution and app evidence](../reference/mods/plugin-execution.md#saved-scenes-and-migration). |
+
+A later read-only snapshot covers all 243 installed DLLs (26,759,208 bytes),
+with identical before/after source manifests. Eight bounded shards per scan give
+byte-identical repeat reports: 212 files declare 218 plugin entries, 30 are managed
+libraries and one has no managed metadata. All 486 source-to-report mappings
+across both scans were checked. The single-report attempt exceeded its 16 MiB
+limit and remains a recorded failure; the complete shard sets retain that per-report
+limit and fit within a separate 64 MiB aggregate budget. Historical paths/sizes
+match, but only six prior hashes establish unchanged content; the other 237 lack
+historical hashes. These counts establish neither loadability nor executable
+compatibility. Evidence is indexed privately under
+`wave-three/plugins/installed-inventory/coverage-index.json`.
+
+#170, #172, #173 and #174 passed all four CI jobs at their reviewed heads and
+merged. The #173 test-fixture type-check repair also passes focused Debug and
+Release locally. Capture/inventory validation adds no native frame work; the
+material path has the measured costs below.
+
+The bottom path increases registered textures from 76 to 81 and measured Metal
+allocation by 18,366,464 bytes. Paired run medians overlap: GPU time changes from
+0.631 to 0.655 ms and synchronous completion from 1.324 to 1.309 ms, establishing
+no speedup. Same-input live repeats still differ at a few pixels, including two
+old-store full-frame pixels with a maximum channel difference of 14 on the 0–255 scale. This remains
+a separate repeatability gap; source-composite tolerances are unchanged. See the
+[bottom scope and measurements](../reference/renderer.md#native-normal-bottom-composite-r1cmt-04-168-2026-10-24).
 
 The combined Release runtime for #161–#163 passed all six Maker and 56 Studio
 scenario checks with no skips; final merged runtime sources matched the tested
@@ -92,6 +117,22 @@ integration. #164 changes offline validation only. #165 and #166 each passed all
 four CI jobs at their merged heads and the separate local checks above; the
 earlier combined run is not evidence for those later changes. Each completed row
 retains its exact scope: these results do not mark an entire component fully ported.
+
+A later combined Release build of #165/#166 passes all 24 plugin checks and
+retains 16 live material slots with unchanged composite keys. Toon, geometry,
+top and eye outputs remain byte-identical in the controlled replay. Small hair
+image differences also occur between runs of the same pre-change executable;
+strict whole-live-image repeatability remains open. The
+[renderer reference](../reference/renderer.md#composite-sampler-allocation-r1cmt-04-2026-10-24)
+records the measured scope and limitations.
+
+A subsequent combined Release build containing #173 and the accepted plugin
+runtime passes all 24 plugin checks and retains 17 live / three fallback slots,
+with unchanged attachment reports and composite keys. Ten stable diagnostic
+PNGs are byte-identical to the measured material build; the full-frame PNG also
+matches in this pair. Five hair pixels (maximum channel difference 2) and one
+front-hair pixel (maximum 1) still vary. This bounded integration check adds no
+source-parity or performance claim.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
