@@ -5,32 +5,164 @@ import Studio
 import Gameplay
 
 extension StudioModel {
+    /// Installation keeps the candidate world isolated until all callbacks and
+    /// configurations validate. Reading a source attachment can lazily construct
+    /// live previews, so it is permitted only after this candidate commits.
+    final class PluginAttachmentAccess { var committed = false }
+    struct PreparedSourcePlugins {
+        let document: StudioDocument
+        let session: SourceStudioPluginSession?
+        let native: PreparedNativePlugins
+        let attachmentAccess: PluginAttachmentAccess?
+    }
+    struct PreparedNativePlugins {
+        let muteEnabled: Bool?
+        let accessoryNames: Bool
+    }
+
     func loadSourcePlugins(profileURL: URL) throws {
-        let session = try SourceStudioPluginSession(profileURL: profileURL, document: doc,
-            attachment: { [weak self] child, parent in
-                try MainActor.assumeIsolated {
-                    guard let self else { throw SourcePluginError.runtime("Studio closed during a plugin callback.") }
-                    return try self.pluginAttachmentFrame(child: child, parent: parent)
-                }
-            })
+        var candidate = doc
+        candidate.sourcePluginLibrary = nil; candidate.sourcePluginLibraryConfiguration = nil
+        candidate.sourcePluginState = nil
+        let session = try SourceStudioPluginSession(profileURL: profileURL, document: candidate,
+            attachment: pluginAttachmentResolver())
         let next = try session.savedDocument()
+        cancelSourcePluginLibraryMount()
         sourcePluginSession = session; doc = next; sourcePluginsRunning = true
-        status = "Loaded \(session.library.packages.count) translated plugin packages"
+        status = "Loaded \(session.library.packages.count) converted plugin packages"
+    }
+
+    func pluginAttachmentResolver(access: PluginAttachmentAccess? = nil) -> SourceStudioPluginWorld.AttachmentResolver {
+        { [weak self] child, parent in
+            try MainActor.assumeIsolated {
+                guard let self else { throw SourcePluginError.runtime("Studio closed during a plugin callback.") }
+                if let access, !access.committed {
+                    throw SourcePluginError.invalid("Source-character attachment reads during plugin installation are unsupported; no live preview was changed.")
+                }
+                return try self.pluginAttachmentFrame(child: child, parent: parent)
+            }
+        }
+    }
+
+    func prepareSourcePlugins(document: StudioDocument, restoreNativeAdapters: Bool = true) throws -> PreparedSourcePlugins {
+        if let selection = document.sourcePluginLibrary {
+            guard let configuration = document.sourcePluginLibraryConfiguration else {
+                throw SourcePluginError.invalid("Saved plugin library has no scene binding configuration.")
+            }
+            return try prepareSourcePluginLibrary(selection: selection, resolution: selection.resolve(),
+                configuration: configuration, document: document, restoring: true)
+        }
+        guard document.sourcePluginLibraryConfiguration == nil else { throw SourcePluginError.invalid("Saved plugin bindings have no library selection.") }
+        let native = restoreNativeAdapters ? try prepareSourceNativePlugins(document.sourceNativePlugins ?? [])
+            : PreparedNativePlugins(muteEnabled: nil, accessoryNames: false)
+        let session: SourceStudioPluginSession?
+        if let saved = document.sourcePluginState {
+            guard let path = saved.profileFile, saved.libraryConfigurationSHA256 == nil else {
+                throw SourcePluginError.invalid("Saved converted plugin state has no profile or library selection.")
+            }
+            session = try SourceStudioPluginSession(profileURL: URL(fileURLWithPath: path), document: document,
+                restoring: saved, attachment: pluginAttachmentResolver())
+        } else { session = nil }
+        return .init(document: document, session: session, native: native, attachmentAccess: nil)
     }
 
     func restoreSourcePlugins(restoreNativeAdapters: Bool = true) throws {
+        let prepared = try prepareSourcePlugins(document: doc, restoreNativeAdapters: restoreNativeAdapters)
+        commitSourcePlugins(prepared, running: false, mountNative: restoreNativeAdapters, replaceDocument: false)
+    }
+
+    func prepareSourcePluginLibrary(selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution,
+                                    configuration: SourceStudioPluginConfiguration, document: StudioDocument,
+                                    restoring: Bool = false) throws -> PreparedSourcePlugins {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard SourcePluginGraph.targets([selection.process], process: "CharaStudio") else {
+            throw SourcePluginError.invalid("The selected plugin process is not Studio.")
+        }
+        guard try encoder.encode(selection) == encoder.encode(resolution.selection), !selection.revisions.isEmpty else {
+            throw SourcePluginError.invalid("The verified packages differ from the requested plugin selection.")
+        }
+        let refs = resolution.nativeAdapters.map { SourceNativePluginReference(package: $0) }
+        if restoring {
+            guard try encoder.encode(document.sourceNativePlugins ?? []) == encoder.encode(refs) else {
+                throw SourcePluginError.invalid("Saved native adapters differ from the pinned library selection.")
+            }
+        }
+        let native = try prepareSourceNativePlugins(refs, packages: resolution.nativeAdapters)
+        var candidate = document
+        candidate.sourcePluginLibrary = selection; candidate.sourcePluginLibraryConfiguration = configuration
+        candidate.sourceNativePlugins = refs
+        if !restoring { candidate.sourcePluginState = nil }
+        let session: SourceStudioPluginSession?
+        let access = PluginAttachmentAccess()
+        if resolution.translated.isEmpty {
+            guard configuration.bindings.isEmpty, candidate.sourcePluginState == nil,
+                  configuration.fixedDeltaTime.isFinite, configuration.fixedDeltaTime > 0 else {
+                throw SourcePluginError.invalid("An adapter-only library selection cannot contain converted-plugin state or bindings.")
+            }
+            session = nil
+        } else {
+            guard !restoring || candidate.sourcePluginState != nil else {
+                throw SourcePluginError.invalid("Saved library selection is missing its converted-plugin state.")
+            }
+            session = try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: configuration,
+                document: candidate, restoring: restoring ? candidate.sourcePluginState : nil,
+                attachment: pluginAttachmentResolver(access: access))
+            candidate = try session!.savedDocument()
+        }
+        return .init(document: candidate, session: session, native: native, attachmentAccess: access)
+    }
+
+    /// One CPU preparation at a time. The UI retains its current mounted session
+    /// while immutable files are checked. Scene or mode changes invalidate the
+    /// result even if the user returns to the same document before it finishes.
+    func mountSourcePluginLibrary(selection: SourcePluginLibrarySelection,
+                                  configuration: SourceStudioPluginConfiguration) async throws {
+        try Task.checkCancellation()
+        guard isActiveMode else { throw CancellationError() }
+        guard !sourcePluginLibraryPending else { throw SourcePluginError.invalid("A plugin selection is already being prepared.") }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        if let mounted = doc.sourcePluginLibrary, let bindings = doc.sourcePluginLibraryConfiguration,
+           try encoder.encode(mounted) == encoder.encode(selection),
+           try encoder.encode(bindings) == encoder.encode(configuration) {
+            status = "This plugin selection is already mounted"; return
+        }
+        sourcePluginLibraryPending = true
+        sourcePluginMountGeneration &+= 1
+        let generation = sourcePluginMountGeneration, hook = sourcePluginPreparationHook
+        defer { sourcePluginLibraryPending = false }
+        let resolution = try await Task.detached(priority: .userInitiated) {
+            if let hook { await hook() }
+            try Task.checkCancellation()
+            return try selection.resolve()
+        }.value
+        try Task.checkCancellation()
+        guard isActiveMode, generation == sourcePluginMountGeneration else { throw CancellationError() }
+        let prepared = try prepareSourcePluginLibrary(selection: selection, resolution: resolution,
+            configuration: configuration, document: doc)
+        pushUndo(force: true)
+        commitSourcePlugins(prepared, running: true)
+        status = "Mounted \(selection.revisions.count) plugins · library generation \(selection.generation)"
+    }
+
+    func cancelSourcePluginLibraryMount() { sourcePluginMountGeneration &+= 1 }
+
+    func commitSourcePlugins(_ prepared: PreparedSourcePlugins, running: Bool,
+                             mountNative: Bool = true, replaceDocument: Bool = true) {
+        prepared.attachmentAccess?.committed = true
+        if mountNative { commitSourceNativePlugins(prepared.native) }
+        sourcePluginSession = prepared.session
+        sourcePluginsRunning = running && prepared.session != nil
+        if replaceDocument { doc = prepared.document }
+    }
+
+    func unloadSourcePluginLibrary() {
+        guard isActiveMode else { return }
+        cancelSourcePluginLibraryMount(); pushUndo(force: true)
         sourcePluginSession = nil; sourcePluginsRunning = false
-        if restoreNativeAdapters { try applySourceNativePlugins(doc.sourceNativePlugins ?? []) }
-        guard let saved = doc.sourcePluginState else { return }
-        sourcePluginSession = try SourceStudioPluginSession(profileURL: URL(fileURLWithPath: saved.profileFile),
-            document: doc, restoring: saved, attachment: { [weak self] child, parent in
-                try MainActor.assumeIsolated {
-                    guard let self else { throw SourcePluginError.runtime("Studio closed during a plugin callback.") }
-                    return try self.pluginAttachmentFrame(child: child, parent: parent)
-                }
-            })
-        // Reload remains paused until playback or explicit deterministic steps.
-        // Stored clocks/fields are already at the saved frame.
+        commitSourceNativePlugins(.init(muteEnabled: nil, accessoryNames: false))
+        var next = doc; next.sourcePluginLibrary = nil; next.sourcePluginLibraryConfiguration = nil
+        next.sourcePluginState = nil; next.sourceNativePlugins = nil; doc = next
+        status = "Unloaded Studio plugins"
     }
 
     func stepSourcePlugins(deltaTime: Float, advanceAnimation: Bool = false) throws {
@@ -41,7 +173,9 @@ extension StudioModel {
             let next = try session.step(document: doc, deltaTime: deltaTime, afterUpdate: {
                 if advanceAnimation { try self.advancePluginAnimation(by: deltaTime) }
             })
+            sourcePluginTickInProgress = true
             doc = next
+            sourcePluginTickInProgress = false
         } catch {
             try restorePluginDynamics(time: oldTime, checkpoints: dynamics)
             sourcePluginsRunning = false
@@ -148,6 +282,7 @@ extension StudioModel {
     }
 
     func loadSourceNativePlugin(url: URL) throws {
+        guard doc.sourcePluginLibrary == nil else { throw SourcePluginError.invalid("Unload the Studio plugin library before mounting a separate adapter.") }
         let package = try SourceNativePluginPackage.load(url: url)
         var refs = doc.sourceNativePlugins ?? []
         refs.removeAll { $0.guid.utf8.elementsEqual(package.manifest.identity.guid.utf8) }
@@ -158,23 +293,33 @@ extension StudioModel {
     }
 
     func applySourceNativePlugins(_ refs: [SourceNativePluginReference]) throws {
+        commitSourceNativePlugins(try prepareSourceNativePlugins(refs))
+    }
+
+    func prepareSourceNativePlugins(_ refs: [SourceNativePluginReference],
+                                    packages verified: [SourceNativePluginPackage]? = nil) throws -> PreparedNativePlugins {
         guard refs.count <= 32, Set(refs.map { Data($0.guid.utf8) }).count == refs.count else {
             throw SourcePluginError.invalid("Duplicate or excessive native adapter mounts.")
         }
-        let packages = try refs.map { try $0.load() }
-        var muteConfiguration: Data?
-        var accessoryNames = false
+        let packages = try verified ?? refs.map { try $0.load() }
+        guard packages.count == refs.count else { throw SourcePluginError.invalid("Native adapter preparation is incomplete.") }
+        var muteEnabled: Bool?, accessoryNames = false
         for (reference, package) in zip(refs, packages) where reference.enabled {
             if package.manifest.adapterID == SourceNativePluginPackage.muteAdapter {
-                let data = package.configuration ?? Data()
-                _ = try SourceMuteInBackgroundPlugin.readConfiguration(data)
-                muteConfiguration = data
+                muteEnabled = try SourceMuteInBackgroundPlugin.readConfiguration(package.configuration ?? Data())
             } else if package.manifest.adapterID == SourceNativePluginPackage.accessoryAdapter { accessoryNames = true }
         }
-        // Validate every package before replacing any active adapter.
-        if let configuration = muteConfiguration { try configureSourceMutePlugin(configuration: configuration) }
-        else { mountSourceFocusAdapter(nil) }
-        sourceAccessoryNamesEnabled = accessoryNames
+        return .init(muteEnabled: muteEnabled, accessoryNames: accessoryNames)
+    }
+
+    func commitSourceNativePlugins(_ prepared: PreparedNativePlugins) {
+        let adapter = prepared.muteEnabled.map { enabled in
+            SourceMuteInBackgroundPlugin(enabled: enabled,
+                readVolume: { [weak self] in MainActor.assumeIsolated { self?.sourceAudioBus.masterVolume ?? 0 } },
+                writeVolume: { [weak self] value in MainActor.assumeIsolated { self?.sourceAudioBus.masterVolume = value } })
+        }
+        mountSourceFocusAdapter(adapter)
+        sourceAccessoryNamesEnabled = prepared.accessoryNames
     }
 
     func openSourceNativePlugin() {

@@ -382,7 +382,7 @@ public struct SourcePluginLibraryIndex: Sendable {
             case .nativeAdapter: try packages.append(.nativeAdapter(loadNativeAdapter(revision)))
             }
         }
-        return SourcePluginLibraryResolution(generation: generation, order: order, packages: packages)
+        return SourcePluginLibraryResolution(selection: selection, generation: generation, order: order, packages: packages)
     }
 
     public func manifestURL(_ revision: Revision) throws -> URL {
@@ -461,6 +461,7 @@ public struct SourcePluginLibraryResolution: Sendable {
     public enum Package: Sendable {
         case translated(SourcePluginPackage), nativeAdapter(SourceNativePluginPackage)
     }
+    public let selection: SourcePluginLibrarySelection
     public let generation: Int
     public let order: [SourcePluginLibraryIndex.Revision]
     public let packages: [Package]

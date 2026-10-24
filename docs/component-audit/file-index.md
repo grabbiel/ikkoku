@@ -23,11 +23,11 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**907 files indexed; 907 assigned; 0 unassigned.**
+**909 files indexed; 909 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
-| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 99 |
+| [App / gameplay / plugins](app-gameplay-and-plugins.md) | 101 |
 | [Character / Maker / mods](character-and-mods.md) | 124 |
 | [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 326 |
@@ -41,7 +41,7 @@ may be discussed in more than one report; one primary owner is listed here.
 | Documentation / historical evidence | 57 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 28 |
-| Runtime / shared shader declaration | 208 |
+| Runtime / shared shader declaration | 210 |
 | Test / validation | 188 |
 
 ## App / gameplay / plugins
@@ -76,6 +76,8 @@ Feature assessment: [app-gameplay-and-plugins.md](app-gameplay-and-plugins.md).
 | [Apps/IkkokuCreator/IkkokuApp.swift](../../Apps/IkkokuCreator/IkkokuApp.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfTrace.swift](../../Apps/IkkokuCreator/PerfTrace.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/PluginLibraryScenario.swift](../../Apps/IkkokuCreator/PluginLibraryScenario.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/PluginLibraryView.swift](../../Apps/IkkokuCreator/PluginLibraryView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportRenderThread.swift](../../Apps/IkkokuCreator/ViewportRenderThread.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/ViewportView.swift](../../Apps/IkkokuCreator/ViewportView.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Assets/ResourceLibrary.swift](../../Packages/Engine/Sources/Assets/ResourceLibrary.swift) | Runtime / shared shader declaration |

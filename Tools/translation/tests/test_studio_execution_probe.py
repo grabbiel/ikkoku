@@ -13,6 +13,27 @@ import studio_execution_probe as probe
 ACCESSORY = 'kk-studio-accessory-names-v1'
 
 
+class SavedLibraryStateTests(unittest.TestCase):
+    def test_explicit_animation_clock_is_identical_in_each_phase(self):
+        for phase in ['run', 'reload', 'continue']:
+            self.assertEqual(probe.animation_environment(0, phase), {'IKKOKU_STUDIO_ANIMATION_TIME': '0'})
+        self.assertEqual(probe.animation_environment(None, 'run'), {'IKKOKU_STUDIO_ANIMATION_TIME': '0.5'})
+        self.assertEqual(probe.animation_environment(None, 'reload'), {})
+        for value in [-1, float('nan'), float('inf'), 86401]:
+            with self.assertRaises(ValueError): probe.animation_environment(value, 'run')
+
+    def test_uuid_dictionary_order_is_not_state_order(self):
+        first = dict(objectIdentities=['A', 'source:scene/1', 'B', 'source:scene/2'], bindings=[{'field': 2}], clock={'elapsed': 1})
+        reordered = dict(first, objectIdentities=['B', 'source:scene/2', 'A', 'source:scene/1'])
+        self.assertEqual(probe.comparable_state(first), probe.comparable_state(reordered))
+        for changed in [dict(first, objectIdentities=['A', 'source:scene/2', 'B', 'source:scene/1']),
+                        dict(first, bindings=[{'field': 3}]), dict(first, clock={'elapsed': 2})]:
+            self.assertNotEqual(probe.comparable_state(first), probe.comparable_state(changed))
+        for invalid in [['A'], ['A', 'one', 'A', 'two'], ['A', 'same', 'B', 'same']]:
+            with self.assertRaises(ValueError):
+                probe.comparable_state(dict(first, objectIdentities=invalid))
+
+
 class AdapterReportTests(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix='adapter-report-')

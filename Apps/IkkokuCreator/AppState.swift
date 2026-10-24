@@ -25,9 +25,9 @@ final class AppState {
         }
     }
     let host: EngineHost?
-    /// The async Maker checklist outlives init. Keep its former headless
-    /// behavior: no interactive views retaining previews or starting a viewport.
-    let runsHeadlessMakerScenario: Bool
+    /// Async Maker and Studio checklists outlive init. Keep scenario execution
+    /// headless: no interactive views retaining previews or starting a viewport.
+    let runsHeadlessEditorScenario: Bool
     var maker: MakerModel?
     var studio: StudioModel?
     var errorMessage: String?
@@ -50,7 +50,7 @@ final class AppState {
         let request: CaptureRequest
         do { request = try CaptureRequest.validate(env) }
         catch { print("[ikkoku] \(error)"); exit(1) }
-        runsHeadlessMakerScenario = request.mode == .makerScenario
+        runsHeadlessEditorScenario = request.mode == .makerScenario || request.mode == .studioScenario
         // R7: the performance trace records startup marks from here on.
         PerfTrace.startIfRequested(env)
         // A-T01: the gameplay host scenario is its own headless mode. It needs
@@ -164,6 +164,20 @@ final class AppState {
                         throw RigError.invalid("IKKOKU_STUDIO_SCENARIO needs the Studio and IKKOKU_STUDIO_SCENARIO_REPORT.")
                     }
                     let scenario = try JSONDecoder().decode(StudioScenario.self, from: try Data(contentsOf: URL(fileURLWithPath: scenarioPath)))
+                    if let plugins = scenario.pluginLibrary {
+                        guard scenario.steps.isEmpty else { throw RigError.invalid("Plugin library checks cannot ignore ordinary Studio steps.") }
+                        Task { @MainActor in
+                            do {
+                                let report = await plugins.run(app: self, studio: studio)
+                                let url = URL(fileURLWithPath: reportPath)
+                                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                                try CaptureOutput.writeJSON(report.json(), to: url)
+                                print("[ikkoku] plugin library scenario: \(report.passed) passed, \(report.failed) failed")
+                                exit(report.failed == 0 ? 0 : 1)
+                            } catch { print("[ikkoku] plugin library scenario failed: \(error)"); exit(1) }
+                        }
+                        return
+                    }
                     let report = StudioScenario.run(scenario, studio: studio)
                     let reportURL = URL(fileURLWithPath: reportPath)
                     try FileManager.default.createDirectory(at: reportURL.deletingLastPathComponent(), withIntermediateDirectories: true)

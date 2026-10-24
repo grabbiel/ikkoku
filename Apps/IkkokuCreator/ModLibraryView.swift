@@ -6,6 +6,13 @@ struct ModLibraryView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
+        TabView {
+            makerLibrary.tabItem { Text("Maker Mods") }
+            PluginLibraryView().tabItem { Text("Studio Plugins") }
+        }.frame(width: 760, height: 620)
+    }
+
+    private var makerLibrary: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Maker mod library").font(.title2.bold())
@@ -59,7 +66,7 @@ struct ModLibraryView: View {
                 Button("Open Library…") { app.openModLibrary() }
                 Spacer()
             }
-        }.padding(24).frame(width: 720, height: 520)
+        }.padding(24)
     }
 
     private func statusLabel(_ status: String) -> String {

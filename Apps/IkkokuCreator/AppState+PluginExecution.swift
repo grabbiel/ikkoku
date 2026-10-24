@@ -15,6 +15,16 @@ extension AppState {
             studio.liveAnimation = false
             try studio.setSourceAnimationTime(seconds)
         }
+        try applyStudioInput("IKKOKU_STUDIO_PLUGIN_SELECTION", env) { path in
+            guard env["IKKOKU_SOURCE_PLUGIN_PROFILE"] == nil, env["IKKOKU_NATIVE_PLUGIN_MANIFEST"] == nil,
+                  env["IKKOKU_NATIVE_PLUGIN_MANIFESTS"] == nil else {
+                throw SourcePluginError.invalid("A plugin library selection cannot be combined with separate profiles or adapter manifests.")
+            }
+            let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: path))
+            let prepared = try studio.prepareSourcePluginLibrary(selection: request.selection, resolution: request.selection.resolve(),
+                configuration: request.configuration, document: studio.doc)
+            studio.commitSourcePlugins(prepared, running: true)
+        }
         try applyStudioInput("IKKOKU_SOURCE_PLUGIN_PROFILE", env) { path in
             try studio.loadSourcePlugins(profileURL: URL(fileURLWithPath: path))
         }
@@ -83,9 +93,22 @@ extension AppState {
         }
         let report: [String: Any] = ["schemaVersion": 1, "applicationCreated": NSApp != nil,
             "launchFinished": NSRunningApplication.current.isFinishedLaunching, "nativePlugins": references,
-            "accessoryNamesEnabled": studio.sourceAccessoryNamesEnabled, "mount": mount, "focusTrace": trace, "final": studio.sourceFocusState()]
+            "accessoryNamesEnabled": studio.sourceAccessoryNamesEnabled, "sourceAnimationTime": studio.sourceAnimationTime, "mount": mount, "focusTrace": trace, "final": studio.sourceFocusState()]
         try CaptureOutput.writeJSON(JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]),
                                     to: URL(fileURLWithPath: path))
         print("[ikkoku] native plugin report written to \(path)")
+    }
+}
+
+/// The same selection/configuration values the inspector passes to the model.
+/// Capture input only; native scenes store both directly and need no request file.
+struct StudioPluginLibraryRequest: Codable, Sendable {
+    let selection: SourcePluginLibrarySelection
+    let configuration: SourceStudioPluginConfiguration
+    static func load(url: URL) throws -> Self {
+        let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+        let data = try handle.read(upToCount: 1024 * 1024 + 1) ?? Data()
+        guard data.count <= 1024 * 1024 else { throw SourcePluginError.invalid("Plugin selection request exceeds 1 MiB.") }
+        return try JSONDecoder().decode(Self.self, from: data)
     }
 }

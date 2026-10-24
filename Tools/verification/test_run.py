@@ -701,6 +701,14 @@ class AppOutputArtifactTests(unittest.TestCase):
                   if lane == "app-smoke.json"}
         self.assertEqual(checks["studio-inspector-capture"]["env"].get("IKKOKU_MAKER_LIBRARY"), "none")
 
+    def test_plugin_startup_binds_the_controlled_scene(self):
+        checks = {check["id"]: check for lane, check in self.app_smoke_checks()
+                  if lane == "app-smoke.json"}
+        fixtures = {item["env"]: item for item in checks["startup-mute-capture"]["fixtures"]}
+        self.assertEqual(fixtures["IKKOKU_SOURCE_SCENE"]["from"], "IKKOKU_STUDIO_HALF_STATE_SCENE")
+        self.assertFalse(fixtures["IKKOKU_SOURCE_SCENE"].get("optional", False))
+        self.assertIn("IKKOKU_SOURCE_PLUGIN_PROFILE", fixtures)
+
     def test_release_smoke_renders_with_the_optimized_app(self):
         # R6 (2026-10-23): every Release render crashed while the Debug lanes
         # passed, so app-smoke builds Release and renders one frame with it.
