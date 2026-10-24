@@ -94,10 +94,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   evidence, not fixes or added material coverage.
 - **Mods / Plugins:** immutable library selection, bounded translated profiles
   and three exact native adapters have selected app/save/restore acceptance.
-  Mounted-session controls are merged. Fresh-profile initialization can retain
-  preview resources after rejection; [#203](https://github.com/grabbiel/ikkoku/issues/203)
-  tracks the reproduced failure and its pending fix. General plugin compatibility
-  remains outside the supported subset.
+  Mounted-session controls and fresh-profile preview rollback are merged in
+  [#206](https://github.com/grabbiel/ikkoku/pull/206). Legacy saved-profile restore
+  still rejects initializer attachment reads; its loader has a separate policy.
+  General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks
@@ -443,7 +443,7 @@ but not independently exercised. The pruning control directly uses the productio
 preparation context, without claiming an installation-time Destroy barrier.
 Library installation and legacy restore retain their prior attachment policy.
 The [execution reference](../reference/mods/plugin-execution.md) records the
-scope; CI/integration are separate from this accepted runtime. The next bounded
+scope. All four CI checks pass at `e73f121`; #206 is merged. The next bounded
 task reproduces the existing legacy-profile reopen limitation before choosing a fix.
 
 **Local acceptance — compositor fallback reuse, [#207](https://github.com/grabbiel/ikkoku/pull/207):**
@@ -465,6 +465,21 @@ bytes match the control. The [Maker reference](../reference/character/maker-asse
 retains exact cases and limits. The next task evaluates bounded batching within
 one applying call while preserving synchronous completion and private failure
 cleanup; no batching improvement is claimed here.
+
+**Diagnostic handoff — MainTex-only sampling, [#209](https://github.com/grabbiel/ikkoku/pull/209):**
+Removing the AlphaMask/combine and predicate/discard blocks together makes the
+retained MainTex-only program repeat exactly, while the fresh prefix control
+still varies with both providers. All 16 draws keep the same 2,948 visible pixels,
+primitive/pass identities, alpha and UVs. Root verifies all 64 complete attachment
+hashes, exact MainTex-only repeated outputs and the recorded unchanged mip inputs.
+The actual pipelines retain MSL 4.0 with fast math and preserve-invariance disabled.
+An initial launch rejected a private card symlink before drawing; its failure is
+retained, and the same binary succeeds with byte-identical regular card copies.
+The [renderer investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
+records the two-block scope, full-plane/common-mask checks and compiler-perturbation
+limit. This neither identifies the responsible operation nor authorizes removing
+production alpha testing. The next diagnostic keeps mask/predicate work observable
+and removes only discard, requiring a fresh varying baseline before interpretation.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

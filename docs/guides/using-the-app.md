@@ -152,7 +152,8 @@ viewport, so typing in a text field does not hide the interface.
 pinned to the documented original revisions; arbitrary managed DLLs do not run
 in the app. See [native adapters](../reference/mods/native-adapters.md) and
 [plugin execution](../reference/mods/plugin-execution.md) for callback, persistence
-and acceptance boundaries, including the open fresh-profile rejection issue.
+and acceptance boundaries. A profile that reads a source attachment in its
+initializer can load fresh but is still rejected by saved-profile restoration.
 
 ## Experimental source rendering
 

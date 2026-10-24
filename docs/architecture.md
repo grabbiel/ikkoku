@@ -85,9 +85,10 @@ Mod libraries identify immutable package revisions and saved source identities.
 Plugin library preparation uses bounded work, cancellation and generation checks;
 the owner publishes an accepted session and its panel summary. Direct packages,
 translated profiles and library mounts have distinct loading/restore policies.
-Fresh-profile callbacks still have an open preview-rollback defect tracked in
-[#203](https://github.com/grabbiel/ikkoku/issues/203); library-mount isolation is
-not evidence that every loader is transactional. See the
+Fresh-profile callbacks stage cold previews and checkpoint touched warm state;
+failed candidates release private inputs and restore prior state. Library mounts
+and legacy saved-profile restoration retain their distinct attachment-read gates;
+fresh-load support does not establish saved-restore support. See the
 [plugin execution contract](reference/mods/plugin-execution.md).
 
 Measure changes at their actual boundary: background preparation, owner commit,
