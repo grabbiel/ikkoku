@@ -274,8 +274,18 @@ checks; normal Studio scenarios keep their synchronous execution. The cancellati
 follow-up also awaits cancelled callers before releasing the worker, distinguishes
 mode/document/caller cancellation from queue supersession, and uses a never-executed
 sentinel to prove a retry is queued without scheduler sleeps or yield loops. The
-production queue itself is unchanged. These expanded checks await validation;
-the dated 13-check acceptance below remains evidence for the earlier build.
+production queue itself is unchanged.
+
+The cancellation follow-up at `fdf9fad` passed a Release build, all four existing
+queue tests and 24 app-scenario checks on 2026-10-24. Cancelled callers returned
+before worker release for mode exit, mode exit/return, document edit/return and
+cancellation from another executor. The old document, session, adapters, exact
+frame and resource counts remained unchanged. The queued retry alone committed;
+stale panel completions retained the current loading state, task and message.
+Observed caller return times were 0.059–5.501 ms, including the context change;
+these are functional diagnostics with a held resolver, not a quiet latency
+benchmark or decoder throughput claim. Visible Cancel/retry acceptance remains
+pending; the dated acceptance below describes the preceding build.
 
 The 2026-10-24 Release acceptance at `8cb6d0a` passed 13 deterministic checks,
 including a rejected legacy restore whose field initializer tries to read an
