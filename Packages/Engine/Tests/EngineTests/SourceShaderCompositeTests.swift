@@ -292,6 +292,134 @@ private func readbackLevel(_ texture: any MTLTexture, level: Int, device: any MT
 
 private func srgbToLinear(_ byte: UInt8) -> Float { TranslatedSourceProgram.linear(Float(byte) / 255) }
 
+/// Literal expected states pin the legacy sampler contract independently of
+/// the cache key. In particular Point still enables linear mip filtering when
+/// anisotropic, and Disable does not change Trilinear's linear mip filter.
+@Test
+func liveSourceSamplerConfigurationPreservesTheDescriptorContract() {
+    typealias Configuration = TranslatedSourceProgram.SamplerConfiguration
+    struct Case {
+        let filter: String?, wrap: String?, aniso: Int?, quality: String?
+        let minMag: MTLSamplerMinMagFilter, mip: MTLSamplerMipFilter
+        let address: MTLSamplerAddressMode, effectiveAniso: Int
+    }
+    let cases: [Case] = [
+        .init(filter: nil, wrap: nil, aniso: nil, quality: nil, minMag: .linear, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "unknown", wrap: "unknown", aniso: 0, quality: "unknown", minMag: .linear, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: -1, quality: nil, minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Point", wrap: "Repeat", aniso: 1, quality: nil, minMag: .nearest, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "Trilinear", wrap: "Clamp", aniso: 1, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 8, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 8),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 9, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 9),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 16, quality: nil, minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 16),
+        .init(filter: "Point", wrap: "Clamp", aniso: Int.max, quality: nil, minMag: .nearest, mip: .linear, address: .clampToEdge, effectiveAniso: 16),
+        .init(filter: "Point", wrap: "Clamp", aniso: Int.min, quality: nil, minMag: .nearest, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Point", wrap: "Clamp", aniso: 8, quality: "Disable", minMag: .nearest, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Trilinear", wrap: "Clamp", aniso: Int.max, quality: "Disable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Repeat", aniso: 8, quality: "Disable", minMag: .linear, mip: .nearest, address: .repeat, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: nil, quality: "ForceEnable", minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: Int.min, quality: "ForceEnable", minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 0, quality: "ForceEnable", minMag: .linear, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 1, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 9),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: 8, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 9),
+        .init(filter: "Bilinear", wrap: "Clamp", aniso: Int.max, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .clampToEdge, effectiveAniso: 16),
+        .init(filter: "Point", wrap: "Clamp", aniso: 1, quality: "ForceEnable", minMag: .nearest, mip: .nearest, address: .clampToEdge, effectiveAniso: 1),
+        .init(filter: "Point", wrap: "Clamp", aniso: 8, quality: "ForceEnable", minMag: .nearest, mip: .linear, address: .clampToEdge, effectiveAniso: 8),
+        .init(filter: "unknown", wrap: "unknown", aniso: 1, quality: "ForceEnable", minMag: .linear, mip: .linear, address: .repeat, effectiveAniso: 9),
+    ]
+    var configurations: [Configuration] = []
+    for item in cases {
+        let configuration = Configuration(filter: item.filter, wrap: item.wrap, aniso: item.aniso, anisotropicFiltering: item.quality)
+        #expect(configuration.minFilter == item.minMag && configuration.magFilter == item.minMag)
+        #expect(configuration.mipFilter == item.mip && configuration.maxAnisotropy == item.effectiveAniso)
+        #expect(configuration.sAddressMode == item.address && configuration.tAddressMode == item.address)
+        // Exercise the existing public API too: unrelated descriptor defaults
+        // stay at their Metal defaults, not new cache-specific values.
+        let descriptor = TranslatedSourceProgram.samplerDescriptor(filter: item.filter, wrap: item.wrap, aniso: item.aniso, anisotropicFiltering: item.quality)
+        let defaults = MTLSamplerDescriptor()
+        #expect(descriptor.minFilter == item.minMag && descriptor.magFilter == item.minMag)
+        #expect(descriptor.mipFilter == item.mip && descriptor.maxAnisotropy == item.effectiveAniso)
+        #expect(descriptor.sAddressMode == item.address && descriptor.tAddressMode == item.address)
+        #expect(descriptor.rAddressMode == defaults.rAddressMode && descriptor.compareFunction == defaults.compareFunction)
+        #expect(descriptor.normalizedCoordinates == defaults.normalizedCoordinates)
+        #expect(descriptor.lodMinClamp == defaults.lodMinClamp && descriptor.lodMaxClamp == defaults.lodMaxClamp)
+        configurations.append(configuration)
+    }
+    // Equality and hashing use effective state, including address and mip
+    // modes. These two raw states normalize to the same default sampler.
+    #expect(configurations[0] == configurations[1])
+    #expect(Set([configurations[0], configurations[1]]).count == 1)
+    #expect(Set([configurations[2], configurations[3], configurations[4], configurations[5]]).count == 4)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceCompositeSharesNormalizedSamplersButKeepsRawInputIdentity() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice()), fixture = try CompositeStoreFixture.write()
+    defer { try? FileManager.default.removeItem(at: fixture.folder) }
+    let store = try SourceShaderTextureStore(url: fixture.url), resources = ResourceStore(device: device)
+    // Complete overrides are required: partial input sampler state falls back
+    // to the store entry as a unit. All three inputs below mean linear/clamp/1.
+    let variants: [(String, Int)] = [("Bilinear", 1), ("Bilinear", 0), ("unknown", -1)]
+    var targets: [any MTLTexture] = [], keys: Set<String> = []
+    for (filter, aniso) in variants {
+        var identity = CompositeStoreFixture.identity()
+        identity.composite?.textures["_MainTex"]?.identity?.filter = filter
+        identity.composite?.textures["_MainTex"]?.identity?.wrap = "Clamp"
+        identity.composite?.textures["_MainTex"]?.identity?.aniso = aniso
+        let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: nil, slot: nil)
+        let target = try store.texture(request, resources: resources).get().texture
+        let event = try #require(store.compositeEvents().last)
+        #expect(!event.cacheHit && keys.insert(event.contentKey).inserted)
+        #expect(targets.allSatisfy { $0 !== target })
+        targets.append(target)
+        #expect(try store.texture(request, resources: resources).get().texture === target)
+        #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 0, samplers: 1))
+        #expect(resources.statistics().textures == 2)
+    }
+    let first = try readback(targets[0], level: 0, device: device)
+    for target in targets.dropFirst() { #expect(try readback(target, level: 0, device: device) == first) }
+    // Request-level quality changes the effective state, adding exactly one
+    // sampler. Repeating it must reuse both the target and that sampler.
+    let forced = SourceShaderLiveTextureRequest(identity: CompositeStoreFixture.identity(), property: "_MainTex", mesh: nil, slot: nil,
+                                               anisotropicFiltering: "ForceEnable")
+    let forcedTarget = try store.texture(forced, resources: resources).get().texture
+    #expect(keys.insert(try #require(store.compositeEvents().last?.contentKey)).inserted)
+    #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 0, samplers: 2))
+    #expect(try store.texture(forced, resources: resources).get().texture === forcedTarget)
+    #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 0, samplers: 2))
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceCompositeConcurrentMissesShareWithinEachOwner() throws {
+    final class Results: @unchecked Sendable {
+        let lock = NSLock()
+        var values: [(Int, SourceShaderLiveTexture)] = []
+        func append(_ value: SourceShaderLiveTexture, owner: Int) {
+            lock.lock(); defer { lock.unlock() }; values.append((owner, value))
+        }
+    }
+    let device = try #require(MTLCreateSystemDefaultDevice()), fixture = try CompositeStoreFixture.write()
+    defer { try? FileManager.default.removeItem(at: fixture.folder) }
+    let store = try SourceShaderTextureStore(url: fixture.url), owners = [ResourceStore(device: device), ResourceStore(device: device)]
+    let request = SourceShaderLiveTextureRequest(identity: CompositeStoreFixture.identity(), property: "_MainTex", mesh: nil, slot: nil)
+    let results = Results()
+    DispatchQueue.concurrentPerform(iterations: 16) { index in
+        do { results.append(try store.texture(request, resources: owners[index % 2]).get(), owner: index % 2) }
+        catch { Issue.record(error) }
+    }
+    #expect(results.values.count == 16)
+    let first = try #require(results.values.first { $0.0 == 0 }?.1.texture)
+    let second = try #require(results.values.first { $0.0 == 1 }?.1.texture)
+    #expect(first !== second && first.device === device && second.device === device)
+    for (owner, value) in results.values { #expect(value.texture === (owner == 0 ? first : second)) }
+    for owner in owners {
+        #expect(store.compositeInputStatistics(for: owner) == .init(defaults: 0, samplers: 1))
+        #expect(owner.statistics().textures == 2)
+    }
+    let events = store.compositeEvents()
+    #expect(events.filter { !$0.cacheHit }.count == 2 && events.filter(\.cacheHit).count == 14)
+}
+
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
 func liveSourceCompositeMatchesTheCreateEyeReferenceAndBuildsTheMipChain() throws {
     let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
@@ -915,8 +1043,20 @@ func liveSourceCompositesMatchTheDistinctColourCapture() throws {
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_GARMENT_COMPOSITE_PROBE", "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY",
     "IKKOKU_HEAD_MATERIAL_CONTRACT", "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
 func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws {
+    try verifyNormalGarmentComposite(slot: 0, colourProbe: "IKKOKU_GARMENT_COMPOSITE_PROBE")
+}
+
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_BOTTOM_COMPOSITE_PROBE", "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY",
+    "IKKOKU_HEAD_MATERIAL_CONTRACT", "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
+func liveSourceNormalBottomCompositeMatchesBaseAndDistinctOriginalColours() throws {
+    try verifyNormalGarmentComposite(slot: 1, colourProbe: "IKKOKU_BOTTOM_COMPOSITE_PROBE")
+}
+
+private func verifyNormalGarmentComposite(slot: Int, colourProbe: String) throws {
+    let role = slot == 0 ? "top" : "bottom", width = slot == 0 ? 1024 : 512, height = 1024
+    let mesh = slot == 0 ? "o_top_tsyats_a" : "o_bot_pants03"
     let base = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true)
-    let colour = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_GARMENT_COMPOSITE_PROBE"), isDirectory: true)
+    let colour = URL(fileURLWithPath: try SourceFixtureSupport.require(colourProbe), isDirectory: true)
     let inputs = SourceShaderLiveAssembly.Inputs(programs: base.appendingPathComponent("shaders"),
         makerLibrary: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")),
         headContract: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT")),
@@ -924,34 +1064,45 @@ func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws 
     let store = try SourceShaderTextureStore(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_TEXTURES")))
     let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
     var textures: [any MTLTexture] = [], images: [[UInt8]] = [], identities: [SourceShaderBindingSet.TextureIdentity] = []
-    let expectedColours: [[[Float]]] = [Array(repeating: [0.12, 0.28, 0.5, 1], count: 3),
-        [[0.72, 0.13, 0.04, 1], [0.09, 0.66, 0.31, 1], [0.16, 0.23, 0.84, 1]]]
+    let expectedColours: [[[Float]]] = slot == 0
+        ? [Array(repeating: [0.12, 0.28, 0.5, 1], count: 3), [[0.72, 0.13, 0.04, 1], [0.09, 0.66, 0.31, 1], [0.16, 0.23, 0.84, 1]]]
+        : [Array(repeating: [0.12, 0.13, 0.16, 1], count: 3), [[0.68, 0.12, 0.83, 1], [0.07, 0.74, 0.29, 1], [0.91, 0.38, 0.05, 1]]]
+    let assetInputs = slot == 0
+        ? [("_MainTex", "cf_top_tsyatu02_t", "-6233972938813170750"), ("_ColorMask", "cf_top_tsyatu02_mc", "-1591564840063675426")]
+        : [("_MainTex", "cf_bot_pants03_t", "1799539927781456382"), ("_ColorMask", "cf_bot_pants03_mc", "2152893568627913941")]
+    let inputBundleHash = slot == 0 ? "2df694771a8c6437f5e966e94747f48ed905d611a7f2de036a5d64956996657a"
+        : "99ca895979e691caf55c1a68a4ffd9a6892b3d8fdfe9b260cb0812cd5fbf9d29"
+    let inputFile = slot == 0 ? "CAB-ea71f5c3f889c85d158dd90d78f65595" : "CAB-633e5b9224bb4b60a1d0f9eeb80cf32d"
+    let captureHashes = slot == 0
+        ? ["c9020d7ceeaf413ea4199482e52ce66b51e85bd34912493a5d21eea5adf1dd11", "2ba4e150536fbe5e103430dc1ceb18f988dd169c275d8846ab394e96fb91445a"]
+        : ["e896dd7f15c967a5ca310eb46448cafcce5dd601a3b8995bee32f7a0e9e5393d", "8b5641111b0c210c872ff26ce522de1c7846e3d511b32295e6c2a28c07d58ae6"]
     for (index, folder) in [base, colour].enumerated() {
         let frame = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent(index == 0 ? "frame-mips.json" : "frame.json"))) as? [String: Any])
         let meshes = try #require(frame["meshes"] as? [[String: Any]])
-        let materials = try #require(meshes.first { $0["name"] as? String == "o_top_tsyats_a" }?["materials"] as? [[String: Any]])
+        let materials = try #require(meshes.first { $0["name"] as? String == mesh }?["materials"] as? [[String: Any]])
         let properties = try #require(materials.first?["properties"] as? [String: Any])
         let capture = try #require((properties["_MainTex"] as? [String: Any])?["file"] as? String)
         let card = try SourceCharacterCard.load(url: folder.appendingPathComponent("fixture-card.png"))
         let bindings = try inputs.derive(card: card, scene: .originalCharacterProbeHarness, sceneReason: "", eyeLook: nil)
-        let identity = try #require(bindings.renderers.first { $0.mesh == "o_top_tsyats_a" && $0.materialSlot == 0 }?.material.textures["_MainTex"]?.identity)
+        let identity = try #require(bindings.renderers.first { $0.mesh == mesh && $0.materialSlot == 0 }?.material.textures["_MainTex"]?.identity)
         let recipe = try #require(identity.composite)
         #expect(recipe.material == "cf_m_clothesN_create" && recipe.shader == "Shader Forge/create_topN" && recipe.unresolved == nil)
         #expect(recipe.programSHA256 == "d709d6fc92ebecd4f8b579041c8a7abce3a13c20c18985812bde6bc42881f579")
         #expect(recipe.bundleSHA256 == "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e")
         #expect(recipe.serializedFile == "CAB-0d1f3d8317188244dde38c81a889d1d4" && recipe.pathID == "3922150014319152921")
-        #expect(identity.width == 1024 && identity.height == 1024 && identity.mipLevels == 11)
-        for (property, name, pathID) in [("_MainTex", "cf_top_tsyatu02_t", "-6233972938813170750"),
-                                       ("_ColorMask", "cf_top_tsyatu02_mc", "-1591564840063675426")] {
+        #expect(identity.width == width && identity.height == height && identity.mipLevels == 11)
+        for (property, name, pathID) in assetInputs {
             let asset = try #require(recipe.textures[property]?.identity)
             let entry = try store.entry(for: asset).get()
-            #expect(entry.name == name && entry.pathID == pathID && entry.mipLevels == 11)
-            #expect(entry.bundleSHA256 == "2df694771a8c6437f5e966e94747f48ed905d611a7f2de036a5d64956996657a")
+            #expect(entry.name == name && entry.pathID == pathID && entry.mipLevels == (slot == 0 ? 11 : 1))
+            #expect(entry.bundleSHA256 == inputBundleHash && entry.serializedFile == inputFile)
+            #expect(entry.width == width && entry.height == height)
+            #expect(entry.filter == "Bilinear" && entry.wrap == "Repeat" && entry.aniso == 1)
         }
         for (lane, name) in ["_Color", "_Color2", "_Color3"].enumerated() {
             #expect(recipe.vectors[name]?.values == expectedColours[index][lane])
         }
-        let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: "o_top_tsyats_a", slot: 0)
+        let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: mesh, slot: 0)
         let texture = try store.texture(request, resources: resources).get().texture
         #expect(texture.mipmapLevelCount == 11 && texture.pixelFormat == .rgba8Unorm_srgb)
         let resourcesBefore = resources.statistics().textures
@@ -962,14 +1113,14 @@ func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws 
         #expect(store.compositeInputStatistics(for: resources) == auxiliaries)
         let ours = try readback(texture, level: 0, device: device)
         let originalData = try Data(contentsOf: folder.appendingPathComponent(capture))
-        #expect(hex(originalData) == (index == 0 ? "c9020d7ceeaf413ea4199482e52ce66b51e85bd34912493a5d21eea5adf1dd11" : "2ba4e150536fbe5e103430dc1ceb18f988dd169c275d8846ab394e96fb91445a"))
+        #expect(hex(originalData) == captureHashes[index])
         let original = originalData.withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
-        try #require(original.count == 1024 * 1024 * 4)
+        try #require(original.count == width * height * 4)
         var largest: Float = 0, total: Double = 0, differing = 0
         var errors: [Int: Int] = [:], examples: [String] = []
-        for row in 0..<1024 {
-            for column in 0..<1024 {
-                let target = (row * 1024 + column) * 4, source = ((1023 - row) * 1024 + column) * 4
+        for row in 0..<height {
+            for column in 0..<width {
+                let target = (row * width + column) * 4, source = ((height - 1 - row) * width + column) * 4
                 for lane in 0..<4 {
                     let reference = Float(original[source + lane])
                     let referenceByte = lane == 3 ? (min(max(reference, 0), 1) * 255).rounded() : srgbByte(reference)
@@ -980,15 +1131,16 @@ func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws 
                 }
             }
         }
-        print("[normal top composite] \(index == 0 ? "base" : "distinct colour"): max byte \(largest), mean byte \(total / Double(ours.count)), \(differing) differing channels")
-        print("[normal top composite] error histogram \(errors); examples \(examples)")
+        print("[normal \(role) composite] \(index == 0 ? "base" : "distinct colour"): max byte \(largest), mean byte \(total / Double(ours.count)), \(differing) differing channels")
+        print("[normal \(role) composite] error histogram \(errors); examples \(examples)")
         #expect(largest <= 1)
         identities.append(identity); textures.append(texture); images.append(ours)
     }
     let changed = zip(images[0], images[1]).filter { $0 != $1 }.count
-    #expect(changed > 1024 * 1024, "The counterfactual must change more than a single channel per pixel on average")
+    #expect(changed > width * height, "The counterfactual must change more than a single channel per pixel on average")
     #expect(textures[0] !== textures[1])
     let uploads = resources.statistics().textures
+    #expect(uploads == 2, "Only the source main and colour-mask assets should be uploaded")
     // Every edit releases its target, while input uploads and the warm
     // pipeline are shared. The store must not retain unbounded old targets.
     var edits: [SourceShaderCompositor.Statistics] = [], hits: [Double] = []
@@ -996,8 +1148,9 @@ func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws 
         weak var released: (any MTLTexture)?
         try autoreleasepool {
             var edited = identities[1]
-            edited.composite?.vectors["_Color"] = .init([0.72, Float(index) / 32, 0.04, 1], source: "colour edit")
-            let request = SourceShaderLiveTextureRequest(identity: edited, property: "_MainTex", mesh: "o_top_tsyats_a", slot: 0)
+            var editColour = expectedColours[1][0]; editColour[1] = Float(index) / 32
+            edited.composite?.vectors["_Color"] = .init(editColour, source: "colour edit")
+            let request = SourceShaderLiveTextureRequest(identity: edited, property: "_MainTex", mesh: mesh, slot: 0)
             let texture = try store.texture(request, resources: resources).get().texture
             released = texture
             let event = try #require(store.compositeEvents().last)
@@ -1011,15 +1164,15 @@ func liveSourceNormalTopCompositeMatchesBaseAndDistinctOriginalColours() throws 
         #expect(released == nil && resources.statistics().textures == uploads)
         #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 1))
     }
-    let reverted = try store.texture(.init(identity: identities[0], property: "_MainTex", mesh: "o_top_tsyats_a", slot: 0), resources: resources).get().texture
+    let reverted = try store.texture(.init(identity: identities[0], property: "_MainTex", mesh: mesh, slot: 0), resources: resources).get().texture
     #expect(reverted === textures[0] && store.compositeEvents().last?.cacheHit == true)
     #expect(try readback(reverted, level: 0, device: device) == images[0])
     func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
-    print("[normal top composite] first events " + store.compositeEvents().prefix(4).map { event in
+    print("[normal \(role) composite] first events " + store.compositeEvents().prefix(4).map { event in
         "\(event.cacheHit ? "hit" : "composed")" + (event.statistics.map {
             String(format: " cpu %.3f ms gpu %.3f ms total %.3f ms compiled %@ %d bytes", $0.cpuEncodeMilliseconds, $0.gpuMilliseconds,
                    $0.totalMilliseconds, $0.pipelineCompiled ? "yes" : "no", $0.bytes) } ?? "")
     }.joined(separator: "; "))
-    print(String(format: "[normal top composite] 15 warm edits median cpu %.3f ms gpu %.3f ms total %.3f ms; unchanged hit %.3f ms; %d uploaded textures",
+    print(String(format: "[normal \(role) composite] 15 warm edits median cpu %.3f ms gpu %.3f ms total %.3f ms; unchanged hit %.3f ms; %d uploaded textures",
                  median(edits.map(\.cpuEncodeMilliseconds)), median(edits.map(\.gpuMilliseconds)), median(edits.map(\.totalMilliseconds)), median(hits), uploads))
 }

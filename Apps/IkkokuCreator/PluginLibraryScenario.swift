@@ -1,5 +1,6 @@
 import Foundation
 import Gameplay
+import Character
 import Studio
 import Renderer
 import CryptoKit
@@ -9,18 +10,26 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
-    private actor Barrier {
-        var entered = false
-        var entry: CheckedContinuation<Void, Never>?
-        var release: CheckedContinuation<Void, Never>?
-        func hold() async {
+    /// Stops only the dedicated CPU worker; the main actor remains responsive.
+    private final class Barrier: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var entered = false, released = false
+        private var entry: CheckedContinuation<Void, Never>?
+        func hold() {
+            condition.lock()
             entered = true; entry?.resume(); entry = nil
-            await withCheckedContinuation { release = $0 }
+            while !released { condition.wait() }
+            condition.unlock()
         }
         func wait() async {
-            if !entered { await withCheckedContinuation { entry = $0 } }
+            await withCheckedContinuation { continuation in
+                condition.lock(); defer { condition.unlock() }
+                if entered { continuation.resume() } else { entry = continuation }
+            }
         }
-        func finish() { release?.resume(); release = nil }
+        func finish() {
+            condition.lock(); released = true; condition.broadcast(); condition.unlock()
+        }
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
@@ -64,11 +73,12 @@ struct PluginLibraryScenario: Decodable {
 
             // Old runtime ticks may continue during immutable package preparation.
             let runningBarrier = Barrier()
-            studio.sourcePluginPreparationHook = { await runningBarrier.hold() }
+            defer { runningBarrier.finish() }
+            studio.sourcePluginPreparationHook = { runningBarrier.hold() }
             let replacement = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(11)) }
             await runningBarrier.wait()
             try studio.stepSourcePlugins(deltaTime: 0.02)
-            await runningBarrier.finish(); try await replacement.value
+            runningBarrier.finish(); try await replacement.value
             studio.sourcePluginPreparationHook = nil
             try check("runningReplacement", studio.doc.sourcePluginLibraryConfiguration == configuration(11)
                 && firstSession !== studio.sourcePluginSession)
@@ -79,24 +89,35 @@ struct PluginLibraryScenario: Decodable {
             studio.sourcePluginsRunning = false
             app.maker?.liveAnimation = false
 
-            for boundary in ["modeExit", "modeExitAndReturn", "documentEditAndReturn"] {
+            for boundary in ["modeExit", "modeExitAndReturn", "documentEditAndReturn", "callerCancel"] {
                 let before = studio.doc, session = studio.sourcePluginSession, adapter = studio.sourceFocus.adapter
                 let resources = resourceCounts()
                 let barrier = Barrier()
-                studio.sourcePluginPreparationHook = { await barrier.hold() }
+                defer { barrier.finish() }
+                studio.sourcePluginPreparationHook = { barrier.hold() }
                 let pending = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10)) }
                 await barrier.wait()
+                let cancellationStart = ProcessInfo.processInfo.systemUptime
                 if boundary.hasPrefix("mode") {
                     app.mode = .maker
                     if boundary == "modeExitAndReturn" { app.mode = .studio }
-                } else {
+                } else if boundary == "documentEditAndReturn" {
                     studio.doc.name = "Changed during preparation"; studio.doc = before
+                } else {
+                    // This does not call the model cancellation method: exercise
+                    // the queue's cancellation handler from another executor.
+                    await Task.detached { pending.cancel() }.value
                 }
                 let frame = studio.host.renderer.currentFrame()
                 let boundaryResources = resourceCounts()
-                await barrier.finish()
                 var cancelled = false
                 do { try await pending.value } catch is CancellationError { cancelled = true }
+                try check(boundary + "CallerBeforeWorkerRelease", cancelled && !studio.sourcePluginLibraryPending
+                    && studio.sourcePluginLibraryPreparationQueue.isRunning
+                    && !studio.sourcePluginLibraryPreparationQueue.hasPending,
+                    "Caller returned in \((ProcessInfo.processInfo.systemUptime - cancellationStart) * 1000) ms with resolver still held; functional diagnostic, including context change")
+                barrier.finish()
+                await studio.sourcePluginLibraryPreparationQueue.drain()
                 studio.sourcePluginPreparationHook = nil
                 let invariants = ["cancelled": cancelled, "document": studio.doc == before,
                     "session": studio.sourcePluginSession === session, "adapter": studio.sourceFocus.adapter === adapter,
@@ -108,6 +129,72 @@ struct PluginLibraryScenario: Decodable {
                 try check(boundary, invariants.values.allSatisfy { $0 }, detail)
                 app.mode = .studio
             }
+
+            // Supersession is an enqueue witness, distinct from context/caller
+            // cancellation above. The sentinel must never execute: awaiting its
+            // cancellation proves the real retry replaced it in the same queue.
+            let beforeRetry = studio.doc, retrySession = studio.sourcePluginSession
+            let retryAdapter = studio.sourceFocus.adapter, retryResources = resourceCounts()
+            let retryFrame = studio.host.renderer.currentFrame()
+            let heldBarrier = Barrier(), retryBarrier = Barrier()
+            defer { heldBarrier.finish(); retryBarrier.finish() }
+            studio.sourcePluginPreparationHook = { heldBarrier.hold() }
+            let held = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10)) }
+            await heldBarrier.wait()
+            let sentinel = Task {
+                try await studio.sourcePluginLibraryPreparationQueue.prepare {
+                    throw SourcePluginError.runtime("Superseded enqueue witness unexpectedly executed")
+                }
+            }
+            var heldCancelled = false
+            do { try await held.value } catch is CancellationError { heldCancelled = true }
+            try check("enqueueWitnessReady", heldCancelled && !studio.sourcePluginLibraryPending
+                && studio.sourcePluginLibraryPreparationQueue.isRunning
+                && studio.sourcePluginLibraryPreparationQueue.hasPending)
+            studio.sourcePluginPreparationHook = { retryBarrier.hold() }
+            let retry = Task { try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10)) }
+            var sentinelCancelled = false
+            do { _ = try await sentinel.value } catch is CancellationError { sentinelCancelled = true }
+            try check("retryQueuedBehindDiscardedWorker", sentinelCancelled && studio.sourcePluginLibraryPending
+                && studio.sourcePluginLibraryPreparationQueue.isRunning
+                && studio.sourcePluginLibraryPreparationQueue.hasPending
+                && studio.doc == beforeRetry && studio.sourcePluginSession === retrySession
+                && studio.sourceFocus.adapter === retryAdapter && resourceCounts() == retryResources
+                && sameFrame(retryFrame, studio.host.renderer.currentFrame()))
+            heldBarrier.finish()
+            await retryBarrier.wait()
+            try check("discardedCompletionRetainsRetry", studio.sourcePluginLibraryPending
+                && studio.sourcePluginLibraryPreparationQueue.isRunning
+                && !studio.sourcePluginLibraryPreparationQueue.hasPending
+                && studio.doc == beforeRetry && studio.sourcePluginSession === retrySession
+                && studio.sourceFocus.adapter === retryAdapter && resourceCounts() == retryResources
+                && sameFrame(retryFrame, studio.host.renderer.currentFrame()))
+            retryBarrier.finish(); try await retry.value
+            await studio.sourcePluginLibraryPreparationQueue.drain()
+            studio.sourcePluginPreparationHook = nil
+            studio.sourcePluginsRunning = false
+            try check("onlyRetryCommits", studio.doc.sourcePluginLibraryConfiguration == configuration(10)
+                && studio.sourcePluginSession !== retrySession && !studio.sourcePluginLibraryPending)
+
+            // The panel uses this same state for both read and mount tasks. No
+            // actor suspension occurs until after cancelling the successor, so
+            // its task can deterministically observe whether its handle survived.
+            let panel = PluginLibraryOperation()
+            var oldTaskCancelled = false, newTaskCancelled = false
+            let oldOperation = panel.begin()
+            let oldTask = Task { @MainActor in oldTaskCancelled = Task.isCancelled }
+            panel.attach(oldTask, to: oldOperation)
+            let newOperation = panel.begin(loading: true)
+            panel.message = "Current library read"
+            let newTask = Task { @MainActor in newTaskCancelled = Task.isCancelled }
+            panel.attach(newTask, to: newOperation)
+            panel.finish(oldOperation, message: "Stale mount failure")
+            try check("panelStaleCompletion", panel.isCurrent(newOperation) && panel.loading
+                && panel.message == "Current library read")
+            panel.cancel(message: "Cancelled current read")
+            await oldTask.value; await newTask.value
+            try check("panelSuccessorTaskRetained", oldTaskCancelled && newTaskCancelled
+                && !panel.isCurrent(newOperation) && !panel.loading && panel.message == "Cancelled current read")
 
             // A UI Task queued before removal must reject entry before scheduling
             // preparation, changing status, or touching the shared Maker frame.
@@ -165,8 +252,8 @@ struct PluginLibraryScenario: Decodable {
                 && sameFrame(legacyFrame, studio.host.renderer.currentFrame()), studio.status)
 
             // A successful retry after cancellation still mounts through the UI path.
-            try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(10))
-            try check("retry", studio.doc.sourcePluginLibraryConfiguration == configuration(10))
+            try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: configuration(11))
+            try check("retry", studio.doc.sourcePluginLibraryConfiguration == configuration(11))
             var stepTime = 0.0, snapshotTime = 0.0
             for _ in 0..<120 {
                 var time = ProcessInfo.processInfo.systemUptime
@@ -180,7 +267,9 @@ struct PluginLibraryScenario: Decodable {
         } catch {
             rows.append(.init(op: "failure", ok: false, detail: String(describing: error)))
         }
+        studio.cancelSourcePluginLibraryMount()
         studio.sourcePluginPreparationHook = nil
+        await studio.sourcePluginLibraryPreparationQueue.drain()
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 

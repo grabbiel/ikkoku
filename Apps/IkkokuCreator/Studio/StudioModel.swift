@@ -433,7 +433,9 @@ final class StudioModel: ViewportInputHandler {
     var sourcePluginLibraryPending = false
     @ObservationIgnored var sourcePluginMountGeneration: UInt64 = 0
     @ObservationIgnored var sourcePluginTickInProgress = false
-    @ObservationIgnored var sourcePluginPreparationHook: (@Sendable () async -> Void)?
+    @ObservationIgnored var sourcePluginMountRequest: UUID?
+    @ObservationIgnored var sourcePluginLibraryPreparationQueue = SourceMakerPreparationQueue<SourcePluginLibraryResolution>()
+    @ObservationIgnored var sourcePluginPreparationHook: (@Sendable () -> Void)?
     var sourceAccessoryNamesEnabled = false
     var liveAnimation = true
     var sourceAutomaticBlink = true { didSet { for preview in sourceInstances.values { preview.automaticBlink = sourceAutomaticBlink }; refresh() } }

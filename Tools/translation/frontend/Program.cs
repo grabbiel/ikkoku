@@ -156,6 +156,7 @@ class Lowerer(SemanticModel model, INamedTypeSymbol owner, HashSet<IMethodSymbol
 
 class Program {
     static int Main(string[] args) {
+        if (args.Length > 0 && args[0] == "--inventory-assembly") return AssemblyInventory.Run(args[1..]);
         if (args.Length < 4) { Console.Error.WriteLine("Usage: Translation source.cs qualified.type component|methods method1,method2"); return 2; }
         string sourcePath = Path.GetFullPath(args[0]);
         byte[] bytes = File.ReadAllBytes(sourcePath);
