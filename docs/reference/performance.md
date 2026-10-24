@@ -963,7 +963,14 @@ skin palettes are written into the frame ring instead of a new `MTLBuffer` per
 skin set per prepared frame. Rendered frames and window captures are
 byte-identical.
 
-TBD-SUMMARY
+With the main thread loaded 600 ms/s on purpose, presentation is
+unaffected. The Studio presents 119.8–120.0 FPS with a p95 interval of
+8.33 ms, against 30–60 FPS and 25–33 ms with the display link on the main
+thread. Without load, item 1 had already brought every workload to about
+120 FPS. Hover no longer drops to 90 FPS, and the draw's 94–215 ms/s left
+the main thread. G4 cut the renderer's CPU encode from 0.74 to 0.44 ms per
+frame, offscreen. Orbit's slow allocation path turned out to be the CPU
+running slower when the process is nearly idle (see [G4](#why-orbit-took-the-slow-allocation-path-g4)).
 
 ### What changed
 
@@ -1144,7 +1151,34 @@ Two consequences:
 
 ### What remains
 
-TBD-REMAINS
+Time Profiler, 5 s per workload, after build
+(`.local/r7c-render-thread/perf/after-tp`; base in `perf/base-tp`).
+
+- **The render thread: the draw.** Orbit takes 180 ms/s at 120 draws/s,
+  1.5 ms per draw. `Renderer.buildContext` takes 0.58 ms of that, and no
+  single cost dominates it: item appends, the transparent and opaque sorts,
+  the finiteness check, deformation-buffer lookups and the ring copies.
+  The palette copy into the ring (`FrameRing.allocatePalettes`) is 2 ms/s.
+  Base spent 0.70 ms per draw creating palette buffers; after creates none.
+  The main pass takes 0.37 ms per draw. The deform, shadow and post passes
+  take 0.53 ms together in orbit but 0.03 ms in FK drag, which encodes the
+  same passes. That is mostly driver encoder setup, and it is the part the
+  light CPU load inflates most (see [G4](#why-orbit-took-the-slow-allocation-path-g4)).
+- **The main thread: the live tick and the hover pick.** In hover, the main
+  thread is busy 545 ms/s:
+  - The 30 Hz tick takes 7.6 ms (226 ms/s). Its largest parts are the
+    edited pose (186 ms/s, including the dynamic bones at 78 ms/s), the eye
+    look (107 ms/s) and the frame rebuild (126 ms/s). These overlap, since
+    each is nested in the tick.
+  - The synchronous hover pick takes 2.6 ms per move (316 ms/s at 120 moves
+    per second). Most of it is a wait for the GPU: the main thread's sampled
+    CPU time was only 304 ms/s in all.
+- **FK drag.** The frame rebuild takes 1.80 ms per event (219 ms/s), and
+  SwiftUI about 145 ms/s.
+- **Maker slider.** The panel's layout takes about 480 ms/s, as in item 1.
+
+None of these delay presentation any more. They set how quickly the scene
+reacts: the model rate and the input latency.
 
 ### Correctness
 
@@ -1179,7 +1213,11 @@ TBD-REMAINS
   resize, minimize and restore, quit through `NSApp.terminate` while the link
   draws) ran three times on the Release build: one render thread before every
   step and at the end, all callbacks on the render thread, a clean exit.
-  TBD-LIFECYCLE-PRESENTED
+  Those runs were on the virtual display, which presents nothing. In the
+  measured window on the 4K display, after drew 411 frames and presented
+  406 of them after the restore, all 1,046 callbacks were on the render
+  thread, and the quit through `NSApp.terminate` exited cleanly. The harness
+  build (main-thread link) presented 318 of 327 after the restore.
 - **ThreadSanitizer.**
   - Engine: `swift test --sanitize=thread` with the renderer, frame-ring,
     capture-request, resource-store and character-lifetime tests (33 tests),
@@ -1211,11 +1249,32 @@ TBD-REMAINS
 
 ### Limits
 
-TBD-LIMITS
+- **One run per build and workload**, plus the idle and hover repeats and
+  three offscreen runs per build.
+- **The load is synthetic.** A busy-wait on the main run loop stands in for
+  slow SwiftUI updates and modal work. Presentation does not care what the
+  main thread does, but the CPU-clock effect depends on how busy the
+  machine is, so loaded draw times are not a prediction for real work.
+- **CPU clocks are inferred**, not read: the harness has no frequency
+  counters.
+- **ThreadSanitizer** covered a filtered Engine set (33 tests) and Debug app
+  sessions, not the whole Engine suite, which took more than 8 minutes
+  single-threaded and was stopped. A missing lock around `currentFrame()` is
+  not detectable by it (see [correctness](#correctness-1)).
+- **One window.** The app replaces File → New, so a second window with a
+  second render thread could not be tested.
+- **No M1 run.**
 
 ### Recommended next
 
-TBD-NEXT
+Item 3: take the live tick off the main thread and evaluate the characters
+in parallel. Main-thread work no longer costs frames, but it still sets the
+model rate and input latency. The 7.6–8.3 ms source-scene tick is the
+largest main-thread cost left in idle and hover, and it is now slightly
+slower while the draw runs beside it. Item 5, the asynchronous hover pick,
+is the smaller follow-up: hover's pick takes about 2.6 ms per mouse move on
+the main thread. Item 4 (skip unchanged frames) would now mostly save GPU
+time and render-thread CPU, not main-thread time.
 
 ## Validation of this change
 
