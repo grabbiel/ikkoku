@@ -21,8 +21,11 @@ public struct SourceShaderLiveTextureRequest: Sendable {
     public let property: String
     public let mesh: String?
     public let slot: Int?
-    public init(identity: SourceShaderBindingSet.TextureIdentity, property: String, mesh: String?, slot: Int?) {
-        self.identity = identity; self.property = property; self.mesh = mesh; self.slot = slot
+    /// The player's `QualitySettings.anisotropicFiltering`, for samplers a
+    /// provider builds itself (composite inputs).
+    public let anisotropicFiltering: String?
+    public init(identity: SourceShaderBindingSet.TextureIdentity, property: String, mesh: String?, slot: Int?, anisotropicFiltering: String? = nil) {
+        self.identity = identity; self.property = property; self.mesh = mesh; self.slot = slot; self.anisotropicFiltering = anisotropicFiltering
     }
 }
 
@@ -51,8 +54,11 @@ public protocol SourceShaderLiveTextureProvider: AnyObject, Sendable {
 /// each `Texture2D` the binding set names, decoded from the local game bundle
 /// (authored mip chain, `m_ColorSpace` sRGB textures linearized as the GPU's
 /// sRGB sampling would) into linear half-float levels, keyed by bundle and
-/// `pathID`. Runtime composites (`CustomTextureCreate` render targets) are not
-/// in the store; they are reported unavailable.
+/// `pathID`. Runtime composites (`CustomTextureCreate` render targets) hold no
+/// pixels in the store. A composite whose binding identity carries its recipe
+/// is composed on the GPU (`SourceShaderCompositor`) from store inputs and the
+/// store's translated create program (schema 2 `composites`); any other
+/// composite is reported unavailable.
 public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @unchecked Sendable {
     public struct Entry: Codable, Sendable {
         public let bundle: String
@@ -69,10 +75,33 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         public let files: [String]
         public let sha256: [String]
     }
+    /// A translated `CustomTextureCreate` fragment program (schema 2): the
+    /// create material identity, its verified DXBC program hash and the
+    /// `program.json`/`source.metal` pair with their SHA-256.
+    public struct Composite: Codable, Sendable {
+        public let material: String
+        public let bundle: String
+        public let bundleSHA256: String
+        public let serializedFile: String
+        public let pathID: String
+        public let shader: String
+        public let programSHA256: String
+        public let directory: String
+        public let files: [String]
+        public let sha256: [String]
+    }
     public struct Manifest: Codable, Sendable {
         public let schemaVersion: Int
         public let encoding: String
         public let entries: [Entry]
+        public let composites: [Composite]?
+    }
+    /// One composition (or composite cache hit) since the store was loaded.
+    public struct CompositeEvent: Sendable, Encodable {
+        public let creator: String
+        public let contentKey: String
+        public let cacheHit: Bool
+        public let statistics: SourceShaderCompositor.Statistics?
     }
 
     public let label = "native texture store"
@@ -84,7 +113,8 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
     public init(url: URL) throws {
         let data = try Data(contentsOf: url)
         let manifest = try JSONDecoder().decode(Manifest.self, from: data)
-        guard manifest.schemaVersion == 1, manifest.encoding == "linear-rgba16f-little-endian-bottom-up" else {
+        guard (1...2).contains(manifest.schemaVersion), manifest.encoding == "linear-rgba16f-little-endian-bottom-up",
+              manifest.schemaVersion == 2 || manifest.composites == nil else {
             throw SourceShaderLiveReason("Unsupported source texture store \(url.path)")
         }
         self.url = url; self.manifest = manifest
@@ -107,14 +137,34 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
             byPath[entry.bundle + "#" + entry.pathID] = entry
             byName[entry.bundle + "/" + entry.name, default: []].append(entry)
         }
-        self.byPath = byPath; self.byName = byName
+        var programs: [String: Composite] = [:]
+        for composite in manifest.composites ?? [] {
+            guard Self.safeComponent(composite.directory), composite.files == ["program.json", "source.metal"],
+                  composite.sha256.count == 2, composite.sha256.allSatisfy(Self.validDigest), Self.validDigest(composite.programSHA256),
+                  !levelPaths.contains(where: { $0.hasPrefix(composite.directory + "/") }) else {
+                throw SourceShaderLiveReason("Malformed composite program entry \(composite.material)")
+            }
+            let key = composite.bundle + "#" + composite.pathID + "#" + composite.programSHA256
+            guard programs[key] == nil else { throw SourceShaderLiveReason("Duplicate composite program \(composite.material)") }
+            programs[key] = composite
+        }
+        self.byPath = byPath; self.byName = byName; self.programs = programs
     }
 
     public func texture(_ request: SourceShaderLiveTextureRequest, resources: ResourceStore) -> Result<SourceShaderLiveTexture, SourceShaderLiveReason> {
         let identity = request.identity
-        guard identity.kind == .asset else {
-            return .failure(.init("runtime composite \(identity.creator ?? identity.name ?? "texture") is not composed natively for the live path"))
+        guard identity.kind == .asset else { return composite(request, resources: resources) }
+        let entry: Entry
+        switch self.entry(for: identity) {
+        case .failure(let reason): return .failure(reason)
+        case .success(let found): entry = found
         }
+        return upload(entry, resources: resources)
+    }
+
+    /// The store entry for an asset identity: matched by bundle and path ID
+    /// (else a unique name), with every recorded identity field checked.
+    func entry(for identity: SourceShaderBindingSet.TextureIdentity) -> Result<Entry, SourceShaderLiveReason> {
         guard let bundle = identity.bundle else { return .failure(.init("texture \(identity.name ?? "?") has no bundle identity")) }
         let entry: Entry
         if let pathID = identity.pathID {
@@ -135,24 +185,35 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
         if let width = identity.width, width != entry.width { return .failure(.init("\(entry.name) store width differs")) }
         if let height = identity.height, height != entry.height { return .failure(.init("\(entry.name) store height differs")) }
         if let levels = identity.mipLevels, levels != entry.mipLevels { return .failure(.init("\(entry.name) store mip count differs")) }
+        return .success(entry)
+    }
+
+    static func contentKey(_ entry: Entry) -> String {
+        "source-native-linear-half-v1#\(entry.width)x\(entry.height)#\(entry.mipLevels)#" + entry.sha256.joined(separator: "#")
+    }
+
+    private func uploads(_ resources: ResourceStore) -> Uploads {
+        // Caller holds `lock`.
+        let owner = ObjectIdentifier(resources)
+        if let existing = uploaded[owner], existing.owner === resources { return existing }
+        // A store may outlive a renderer. Weak ownership avoids retaining
+        // old renderers and checking it prevents recycled object IDs from
+        // returning another resource store's textures.
+        uploaded = uploaded.filter { $0.value.owner != nil }
+        let cache = Uploads(owner: resources); uploaded[owner] = cache
+        return cache
+    }
+
+    private func upload(_ entry: Entry, resources: ResourceStore) -> Result<SourceShaderLiveTexture, SourceShaderLiveReason> {
         // One upload per store entry and resource store: several characters
         // (or a rebuilt assembly) share the GPU texture. Serialize cold misses
         // too; concurrent assembly construction must not upload duplicates.
         lock.lock(); defer { lock.unlock() }
-        let owner = ObjectIdentifier(resources), cacheKey = entry.bundle + "#" + entry.pathID
-        let cache: Uploads
-        if let existing = uploaded[owner], existing.owner === resources {
-            cache = existing
-        } else {
-            // A store may outlive a renderer. Weak ownership avoids retaining
-            // old renderers and checking it prevents recycled object IDs from
-            // returning another resource store's textures.
-            uploaded = uploaded.filter { $0.value.owner != nil }
-            cache = Uploads(owner: resources); uploaded[owner] = cache
-        }
+        let cacheKey = entry.bundle + "#" + entry.pathID
+        let cache = uploads(resources)
         if let cached = cache.textures[cacheKey] { return .success(cached) }
         do {
-            let contentKey = "source-native-linear-half-v1#\(entry.width)x\(entry.height)#\(entry.mipLevels)#" + entry.sha256.joined(separator: "#")
+            let contentKey = Self.contentKey(entry)
             let handle: TextureHandle
             if let existing = resources.lookup(key: contentKey) {
                 // A newly constructed store can reuse previously verified
@@ -182,6 +243,172 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
             return .success(result)
         } catch { return .failure(.init("\(entry.name) store load failed: \(error)")) }
     }
+    /// Composes a `CustomTextureCreate` target from its recipe (R1/CMT-04):
+    /// the store's translated create program, the recipe's textures from the
+    /// store (or the program's Unity defaults where the recipe binds none) and
+    /// its vectors (colours linearized as a linear-space player binds them).
+    /// All-or-nothing: any input the store or recipe cannot supply is the
+    /// slot's fallback reason. The result is cached per resource store by a
+    /// content key over the recipe version, the program, the target layout,
+    /// every input's content key and sampler, and every vector's bits. The
+    /// cache holds composites weakly: the materials that bind a composite own
+    /// it, and it is released with them.
+    private func composite(_ request: SourceShaderLiveTextureRequest, resources: ResourceStore) -> Result<SourceShaderLiveTexture, SourceShaderLiveReason> {
+        let identity = request.identity
+        let label = identity.creator ?? identity.name ?? "texture"
+        guard let recipe = identity.composite else {
+            return .failure(.init("runtime composite \(label) is not composed natively for the live path"))
+        }
+        func fail(_ text: String) -> Result<SourceShaderLiveTexture, SourceShaderLiveReason> {
+            .failure(.init("runtime composite \(recipe.material): \(text)"))
+        }
+        if let reason = recipe.unresolved { return fail(reason) }
+        guard let width = identity.width, let height = identity.height, let mipLevels = identity.mipLevels else { return fail("target size not derived") }
+        guard let pathID = recipe.pathID, let programSHA = recipe.programSHA256 else { return fail("create material identity not derived") }
+        guard let entry = programs[recipe.bundle + "#" + pathID + "#" + programSHA] else {
+            return fail("create program \(programSHA) is not in the native texture store")
+        }
+        if let expected = recipe.bundleSHA256, expected != entry.bundleSHA256 { return fail("store create program comes from a different \(recipe.bundle)") }
+        if recipe.shader != entry.shader || recipe.serializedFile != entry.serializedFile || recipe.material != entry.material {
+            return fail("store create program identity differs from the recipe")
+        }
+        let program: TranslatedSourceProgram
+        switch loadProgram(entry) {
+        case .failure(let reason): return fail(reason.text)
+        case .success(let loaded): program = loaded
+        }
+        // Inputs, resolved through the store exactly like material textures.
+        var textures: [Int: any MTLTexture] = [:], samplers: [Int: any MTLSamplerState] = [:]
+        var keyParts: [String] = [], provenance: [String] = []
+        for parameter in program.fragment.textures {
+            let name = parameter.name
+            guard let binding = recipe.textures[name] else { return fail("input \(name) not derived") }
+            if let reason = binding.identityUnresolved { return fail("input \(name): \(reason)") }
+            let texture: any MTLTexture, filter: String?, wrap: String?, aniso: Int?, inputKey: String
+            if let input = binding.identity {
+                guard input.kind == .asset else { return fail("input \(name) is itself a runtime composite (not modelled)") }
+                let found: Entry
+                switch self.entry(for: input) {
+                case .failure(let reason): return fail("input \(name): \(reason.text)")
+                case .success(let value): found = value
+                }
+                switch upload(found, resources: resources) {
+                case .failure(let reason): return fail("input \(name): \(reason.text)")
+                case .success(let uploaded):
+                    texture = uploaded.texture; provenance.append("\(name)=\(uploaded.provenance)")
+                }
+                if let f = input.filter, let w = input.wrap, let a = input.aniso { filter = f; wrap = w; aniso = a }
+                else if let f = found.filter, let w = found.wrap, let a = found.aniso { filter = f; wrap = w; aniso = a }
+                else { return fail("input \(name) sampler state not derived") }
+                inputKey = Self.contentKey(found)
+            } else {
+                guard let kind = program.properties[name]?.defaultTexture else { return fail("input \(name) has no Unity default") }
+                do { texture = try TranslatedSourceProgram.makeDefaultTexture(kind, device: resources.device) }
+                catch { return fail("default texture \(kind): \(error)") }
+                filter = nil; wrap = nil; aniso = nil; inputKey = "unity-default-" + kind
+                provenance.append("\(name)=Unity default \(kind)")
+            }
+            let descriptor = TranslatedSourceProgram.samplerDescriptor(filter: filter, wrap: wrap, aniso: aniso, anisotropicFiltering: request.anisotropicFiltering)
+            guard let sampler = resources.device.makeSamplerState(descriptor: descriptor) else { return fail("sampler state for \(name)") }
+            textures[parameter.slot] = texture; samplers[parameter.samplerSlot] = sampler
+            keyParts.append("t:\(name)@\(parameter.slot)/\(parameter.samplerSlot)=\(inputKey)|\(filter ?? "-")|\(wrap ?? "-")|\(aniso.map(String.init) ?? "-")|\(descriptor.maxAnisotropy)|\(descriptor.mipFilter.rawValue)")
+        }
+        // Constants: recipe vectors and the textures' saved transforms. The
+        // create programs read no per-frame or global values; any other name
+        // is a reason, never a default.
+        var values: [String: [Float]] = [:]
+        for buffer in program.fragment.constantBuffers {
+            for parameter in buffer.vectors where values[parameter.name] == nil {
+                let name = parameter.name
+                var value: [Float]
+                if let property = program.properties[name], property.type != 4 {
+                    guard let vector = recipe.vectors[name] else { return fail("\(name) not derived") }
+                    guard let found = vector.values else { return fail("\(name): \(vector.unresolved ?? "unresolved")") }
+                    value = found
+                    if property.type == 0 { for i in 0..<min(3, value.count) { value[i] = TranslatedSourceProgram.linear(value[i]) } }
+                } else if name.hasSuffix("_ST"), program.properties[String(name.dropLast(3))]?.type == 4 {
+                    let base = String(name.dropLast(3))
+                    guard let texture = recipe.textures[base], let scale = texture.scale, let offset = texture.offset,
+                          scale.count == 2, offset.count == 2 else { return fail("\(name) not derived") }
+                    value = scale + offset
+                } else {
+                    return fail("create program reads \(name), which the compositor does not supply")
+                }
+                guard value.count >= parameter.dimension, value.allSatisfy(\.isFinite) else { return fail("\(name) has \(value.count) lanes") }
+                values[name] = value
+                keyParts.append("v:\(name)=" + value.prefix(parameter.dimension).map { String(format: "%08x", $0.bitPattern) }.joined(separator: ","))
+            }
+        }
+        let buffers: [(slot: Int, data: [Float])]
+        do {
+            buffers = try TranslatedSourceProgram.pack(program.fragment, uniform: { name in
+                guard let value = values[name] else { throw SourceShaderLiveReason("\(name) not resolved") }
+                return value
+            }, matrix: { name in throw SourceShaderLiveReason("create program matrix \(name) is not supplied") })
+        } catch { return fail("\(error)") }
+        let material = keyParts.sorted().joined(separator: "#")
+        let contentKey = SHA256.hash(data: Data([
+            Self.compositeRecipeVersion, programSHA, program.sourceSHA256, entry.sha256[0],
+            "\(width)x\(height)", "\(mipLevels)", "rgba8Unorm_srgb", "clear-0000", material,
+        ].joined(separator: "|").utf8)).map { String(format: "%02x", $0) }.joined()
+        let description = "composite \(recipe.material) \(width)x\(height) [\(contentKey.prefix(12))] from " + provenance.sorted().joined(separator: ", ")
+
+        // Serialize compositions: concurrent assemblies with one content key
+        // must share one GPU composite, and `lock` is not held while the
+        // inputs upload (`upload` takes it).
+        compositeLock.lock(); defer { compositeLock.unlock() }
+        lock.lock()
+        let cache = uploads(resources)
+        if let cached = cache.composites[contentKey]?.texture {
+            record(CompositeEvent(creator: label, contentKey: contentKey, cacheHit: true, statistics: nil))
+            lock.unlock()
+            return .success(SourceShaderLiveTexture(texture: cached, filter: nil, wrap: nil, aniso: nil, provenance: description))
+        }
+        cache.composites = cache.composites.filter { $0.value.texture != nil }
+        let compositor = cache.compositor ?? SourceShaderCompositor(device: resources.device)
+        cache.compositor = compositor
+        lock.unlock()
+        do {
+            let (texture, statistics) = try compositor.compose(program: program, width: width, height: height, mipLevels: mipLevels,
+                                                               textures: textures, samplers: samplers, buffers: buffers, label: recipe.material)
+            lock.lock()
+            cache.composites[contentKey] = WeakComposite(texture: texture, provenance: description)
+            record(CompositeEvent(creator: label, contentKey: contentKey, cacheHit: false, statistics: statistics))
+            lock.unlock()
+            return .success(SourceShaderLiveTexture(texture: texture, filter: nil, wrap: nil, aniso: nil, provenance: description))
+        } catch { return fail("composition failed: \(error)") }
+    }
+
+    /// Bumped whenever composition changes what a content key produces.
+    static let compositeRecipeVersion = "source-composite-v1"
+
+    /// The translated create program for a store entry, with both files
+    /// checked against the manifest and the program's own DXBC and material
+    /// identity checked against the entry. Loaded once per store.
+    private func loadProgram(_ entry: Composite) -> Result<TranslatedSourceProgram, SourceShaderLiveReason> {
+        lock.lock(); defer { lock.unlock() }
+        if let loaded = loadedPrograms[entry.directory] { return .success(loaded) }
+        let folder = url.deletingLastPathComponent().appendingPathComponent(entry.directory)
+        do {
+            for (file, digest) in zip(entry.files, entry.sha256) {
+                let data = try Data(contentsOf: folder.appendingPathComponent(file))
+                guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == digest else {
+                    return .failure(.init("create program \(file) does not match its SHA-256"))
+                }
+            }
+            let programURL = folder.appendingPathComponent("program.json")
+            guard let root = try JSONSerialization.jsonObject(with: Data(contentsOf: programURL)) as? [String: Any],
+                  ((root["programs"] as? [String: Any])?["fragment"] as? [String: Any])?["sha256"] as? String == entry.programSHA256,
+                  root["materialPathID"] as? String == entry.pathID, root["material"] as? String == entry.material,
+                  root["bundleSHA256"] as? String == entry.bundleSHA256, root["name"] as? String == entry.shader else {
+                return .failure(.init("create program identity differs from the store entry"))
+            }
+            let program = try TranslatedSourceProgram(url: programURL, fragmentOnly: true)
+            loadedPrograms[entry.directory] = program
+            return .success(program)
+        } catch { return .failure(.init("create program unusable: \(error)")) }
+    }
+
     private static func safeComponent(_ path: String) -> Bool {
         !path.isEmpty && path == (path as NSString).lastPathComponent && !path.hasPrefix(".")
     }
@@ -191,10 +418,32 @@ public final class SourceShaderTextureStore: SourceShaderLiveTextureProvider, @u
     private final class Uploads {
         weak var owner: ResourceStore?
         var textures: [String: SourceShaderLiveTexture] = [:]
+        /// Composites are owned by the materials that bind them (never
+        /// registered in the resource store): the cache only shares a live
+        /// one between owners with the same content key.
+        var composites: [String: WeakComposite] = [:]
+        var compositor: SourceShaderCompositor?
         init(owner: ResourceStore) { self.owner = owner }
     }
+    final class WeakComposite {
+        weak var texture: (any MTLTexture)?
+        let provenance: String
+        init(texture: any MTLTexture, provenance: String) { self.texture = texture; self.provenance = provenance }
+    }
     private let lock = NSLock()
+    private let compositeLock = NSLock()
     private var uploaded: [ObjectIdentifier: Uploads] = [:]
+    private let programs: [String: Composite]
+    private var loadedPrograms: [String: TranslatedSourceProgram] = [:]
+    private var events: [CompositeEvent] = []
+
+    /// Compositions and cache hits so far, in order (the most recent 256).
+    public func compositeEvents() -> [CompositeEvent] { lock.lock(); defer { lock.unlock() }; return events }
+    /// Caller holds `lock`. A long Maker session must not grow the log without bound.
+    private func record(_ event: CompositeEvent) {
+        events.append(event)
+        if events.count > 256 { events.removeFirst(events.count - 256) }
+    }
 }
 
 /// VALIDATION ONLY. Takes pixels from an original-player capture
@@ -433,7 +682,8 @@ public final class SourceShaderLiveMaterial: @unchecked Sendable {
                 var filter: String?, wrap: String?, aniso: Int?
                 let gpuTexture: any MTLTexture
                 if let identity {
-                    switch provider.texture(.init(identity: identity, property: name, mesh: request.mesh, slot: request.slot), resources: resources) {
+                    switch provider.texture(.init(identity: identity, property: name, mesh: request.mesh, slot: request.slot,
+                                                   anisotropicFiltering: anisotropicFiltering), resources: resources) {
                     case .failure(let reason): throw SourceShaderLiveReason("texture \(name): \(reason.text)")
                     case .success(let found):
                         gpuTexture = found.texture; sources[name] = found.provenance

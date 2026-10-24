@@ -57,6 +57,9 @@ public struct SourceShaderLiveFixtureProbe {
     /// Every input, as recorded in `live-report.json`.
     public let inputs: [String: String]
     public let notes: [String]
+    /// Runtime composites the store composed (or shared from its cache)
+    /// while the assembly resolved this character, with their cost.
+    public let composites: [SourceShaderTextureStore.CompositeEvent]
 
     public init(_ request: Request, renderer: Renderer) throws {
         func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
@@ -120,6 +123,7 @@ public struct SourceShaderLiveFixtureProbe {
         assembly = SourceShaderLiveAssembly(bindings: bindings, programs: inputs.programs, resources: renderer.resources,
                                             textures: shared.textures, streams: shared.streams, anisotropicFiltering: anisotropicFiltering)
         attach = assembly.attach(to: &frame, resources: renderer.resources)
+        composites = (shared.textures as? SourceShaderTextureStore)?.compositeEvents() ?? []
         self.frame = frame
         width = probe.width; height = probe.height; sourceFar = probe.sourceFar
 
@@ -166,7 +170,15 @@ public struct SourceShaderLiveFixtureProbe {
         ["schemaVersion": 1, "inputs": inputs, "notes": notes, "bindingProvenance": bindings.provenance, "resolution": assembly.resolution,
          "attach": ["live": attach.live, "fallbacks": attach.fallbacks, "hidden": attach.hidden, "unmatched": attach.unmatched],
          "renderer": ["draws": renderer.draws, "fallbacks": renderer.fallbacks],
-         "liveFamilies": liveFamilies, "captureFamiliesNotLive": captureFamiliesNotLive]
+         "liveFamilies": liveFamilies, "captureFamiliesNotLive": captureFamiliesNotLive,
+         "composites": composites.map { event -> [String: Any] in
+             var row: [String: Any] = ["creator": event.creator, "contentKey": event.contentKey, "cacheHit": event.cacheHit]
+             if let cost = event.statistics {
+                 row["cpuEncodeMilliseconds"] = cost.cpuEncodeMilliseconds; row["gpuMilliseconds"] = cost.gpuMilliseconds
+                 row["totalMilliseconds"] = cost.totalMilliseconds; row["pipelineCompiled"] = cost.pipelineCompiled; row["bytes"] = cost.bytes
+             }
+             return row
+         }]
     }
 
     /// `native-report.json` for the comparator (source frame identity and the

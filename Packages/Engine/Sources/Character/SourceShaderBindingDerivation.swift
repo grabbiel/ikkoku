@@ -100,7 +100,13 @@ public enum SourceShaderBindingDerivation {
         struct Slot: Decodable { let name: String; let pathID: String }
         struct Draw: Decodable { let materialSlot: Int; let submesh: Int }
         struct Renderer: Decodable { let nodeName: String; let activeSelf: Bool; let enabled: Bool; let materialSlots: [Slot]; let draws: [Draw] }
+        /// `head_material_contract.py`: the create pass's DXBC fragment program
+        /// hash, checked against the equations recovered for that shader.
+        struct VerifiedShader: Decodable { let shader: String; let programSHA256: String }
         let sources: [Source], catalogRows: [CatalogRow], textures: [Texture], drawMaterials: [Evidence], renderers: [Renderer]
+        /// `chara/mm_base.unity3d` create materials (`cf_m_eye_create`, ...).
+        let createMaterials: [Evidence]?
+        let verifiedCreateShaders: [VerifiedShader]?
     }
 
     /// `Tools/reverse/source_binding_supplement.py` output: source metadata the
@@ -443,6 +449,81 @@ public enum SourceShaderBindingDerivation {
             result.filter = "Bilinear"; result.wrap = "Clamp"; result.aniso = 1
             return result
         }
+        /// A `CustomTextureCreate` recipe before its create method's setters:
+        /// `Initialize` clones the create material, so every saved value and
+        /// texture transform is the material's own. `InitBaseCustomTextureEtc`
+        /// and `InitBaseCustomTextureFace` load the create materials from
+        /// `chara/mm_base.unity3d`.
+        func createRecipe(material name: String, method: String) -> Set_.CompositeRecipe {
+            let bundle = "chara/mm_base.unity3d"
+            guard let evidence = head.createMaterials?.first(where: { $0.name == name }) else {
+                return Set_.CompositeRecipe(method: method, material: name, bundle: bundle, bundleSHA256: bundleSHA[bundle],
+                                            unresolved: "create material \(name) is not in the head material contract")
+            }
+            var recipe = Set_.CompositeRecipe(method: method, material: name, bundle: bundle, bundleSHA256: bundleSHA[bundle],
+                serializedFile: evidence.serializedFile, pathID: evidence.pathID, shader: evidence.shader,
+                programSHA256: head.verifiedCreateShaders?.first { $0.shader == evidence.shader }?.programSHA256)
+            if recipe.programSHA256 == nil { recipe.unresolved = "\(evidence.shader) create program is not verified by the head material contract" }
+            for (key, value) in evidence.colors where value.count == 4 { recipe.vectors[key] = .init(value.map(Float.init), source: "create material m_Colors") }
+            for (key, value) in evidence.floats { recipe.vectors[key] = .init([Float(value)], source: "create material m_Floats") }
+            for (key, environment) in evidence.textures {
+                recipe.textures[key] = Set_.Texture(identity: environment.texture.map(headIndex.identity), identitySource: "create material m_TexEnvs",
+                    scale: environment.scale.map(Float.init), offset: environment.offset.map(Float.init),
+                    transformSource: "create material m_TexEnvs (Graphics.Blit sets only the texture)")
+            }
+            return recipe
+        }
+        /// `ChaControl.SetCreateTexture`: the catalog texture (`_low` unless
+        /// hiPoly) becomes `texMain` (`main`) or a material texture. A `"0"`
+        /// row loads null: `Graphics.Blit` with a null source is not modelled,
+        /// and a null material texture samples the property's Unity default.
+        func setCreateTexture(_ recipe: inout Set_.CompositeRecipe, _ property: String, main: Bool,
+                              _ value: Result<Set_.TextureIdentity?, Reason>, source: String) {
+            var texture = recipe.textures[property] ?? Set_.Texture(identity: nil, identitySource: "", scale: [1, 1], offset: [0, 0],
+                                                                    transformSource: "no saved TexEnv: [1, 1, 0, 0]")
+            switch value {
+            case .success(let identity?):
+                texture.identity = identity; texture.identitySource = source; texture.identityUnresolved = nil
+            case .success(nil) where main:
+                texture.identity = nil; texture.identitySource = "unresolved"
+                texture.identityUnresolved = "\(source) loads no texture; Graphics.Blit with a null texMain is not modelled"
+            case .success(nil):
+                texture.identity = nil; texture.identitySource = "\(source) loads no texture: the property's Unity default"; texture.identityUnresolved = nil
+            case .failure(let reason):
+                texture.identity = nil; texture.identitySource = "unresolved"; texture.identityUnresolved = reason.text
+            }
+            recipe.textures[property] = texture
+        }
+        /// `ctCreateEyeL`/`R`: `ChangeSettingEye(lr, true, true, true)` as
+        /// `ChangeHeadAsync` calls it (Maker pupil edits rerun parts of it with
+        /// `releaseCustomInputTexture` off, so the full recipe is the same).
+        func irisComposite(eye: Int) -> Set_.TextureIdentity {
+            let creator = "ctCreateEye\(eye == 0 ? "L" : "R"): cf_m_eye_create (chara/mm_base.unity3d) over mt_eye[face.pupil.\(eye).id] and mt_eye_gradation"
+            var identity = composite(hiPoly ? 512 : 256, creator: creator)
+            var recipe = createRecipe(material: "cf_m_eye_create",
+                method: "ChaControl.ChangeSettingEye(\(eye), updateBaseTex: true, updateMaskTex: true, updateColorAndOffset: true)")
+            let pupil = "face.pupil.\(eye)"
+            setCreateTexture(&recipe, "_MainTex", main: true,
+                catalogTexture(408, table: "mt_eye", id: pupil + ".id", key: "EyeTex"),
+                source: "mt_eye[\(pupil).id] MainAB/EyeTex via ChaControl.SetCreateTexture (main)")
+            setCreateTexture(&recipe, "_ColorMask", main: false,
+                catalogTexture(409, table: "mt_eye_gradation", id: pupil + ".gradMaskId", bundleKey: "ColorMaskAB", key: "ColorMaskTex"),
+                source: "mt_eye_gradation[\(pupil).gradMaskId] ColorMaskAB/ColorMaskTex via ChaControl.SetCreateTexture (_ColorMask)")
+            for (name, key) in [("_Color", "baseColor"), ("_Color2", "subColor")] {
+                if let rgba = card.color("\(pupil).\(key)") {
+                    recipe.vectors[name] = .init(rgba, source: "card \(pupil).\(key) via ChaControl.ChangeSettingEye → SetColor(\(name))")
+                } else { recipe.vectors[name] = .init(unresolved: card.missing("\(pupil).\(key)")) }
+            }
+            if let blend = card.number("\(pupil).gradBlend") {
+                recipe.vectors["_Blend"] = .init([blend], source: "card \(pupil).gradBlend via ChaControl.ChangeSettingEye → SetFloat(_Blend)")
+            } else { recipe.vectors["_Blend"] = .init(unresolved: card.missing("\(pupil).gradBlend")) }
+            if let offset = card.number("\(pupil).gradOffsetY"), let scale = card.number("\(pupil).gradScale") {
+                recipe.vectors["_grad"] = .init([0, lerp(-0.5, 0.5, offset), 0, lerp(-1, 1, scale)],
+                    source: "card \(pupil).gradOffsetY/gradScale via ChaControl.ChangeSettingEye → SetVector4(_grad, (0, Lerp(-0.5, 0.5, y), 0, Lerp(-1, 1, scale)))")
+            } else { recipe.vectors["_grad"] = .init(unresolved: card.missing("\(pupil).gradOffsetY/gradScale")) }
+            identity.composite = recipe
+            return identity
+        }
         // MARK: Hair (ChaControl.ChangeHairAsync → ChangeSettingHair*)
         if let parts = card.appearance.value("hair.parts")?.arrayValue {
             // ChaControl.LoadHairGlossMask: mt_hairgloss[hair.glossId] MainTexAB/MainTex (no _low suffix).
@@ -621,8 +702,7 @@ public enum SourceShaderBindingDerivation {
                     case "cf_Ohitomi_L02", "cf_Ohitomi_R02":
                         // rendEye[0] = ObjEyeL (cf_Ohitomi_L02), rendEye[1] = ObjEyeR.
                         let eye = renderer.nodeName == "cf_Ohitomi_L02" ? 0 : 1
-                        builder.setTexture("_MainTex", composite(hiPoly ? 512 : 256, creator: "ctCreateEye\(eye == 0 ? "L" : "R"): cf_m_eye_create (chara/mm_base.unity3d) over mt_eye[face.pupil.\(eye).id] and mt_eye_gradation"),
-                                           source: "ChaControl.ChangeSettingEye")
+                        builder.setTexture("_MainTex", irisComposite(eye: eye), source: "ChaControl.ChangeSettingEye")
                         apply(&builder, texture: "_overtex1", catalogTexture(410, table: "mt_eye_hi_up", id: "face.hlUpId", key: "EyeHiUpTex"), source: "ChaControl.ChangeSettingEyeHiUp")
                         applyColor(&builder, "_overcolor1", "face.hlUpColor", method: "ChangeSettingEyeHiUpColor")
                         apply(&builder, texture: "_overtex2", catalogTexture(411, table: "mt_eye_hi_down", id: "face.hlDownId", key: "EyeHiDownTex"), source: "ChaControl.ChangeSettingEyeHiDown")

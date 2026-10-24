@@ -113,12 +113,58 @@ public struct SourceShaderBindingSet: Codable, Sendable, Equatable {
         public var filter: String?
         public var wrap: String?
         public var aniso: Int?
+        /// The full recipe of a `runtimeComposite` the derivation can name
+        /// input by input; `nil` for composites that are only described by
+        /// `creator` (their inputs are not derived).
+        public var composite: CompositeRecipe?
         public init(kind: Kind, name: String? = nil, bundle: String? = nil, bundleSHA256: String? = nil, serializedFile: String? = nil,
                     pathID: String? = nil, width: Int? = nil, height: Int? = nil, mipLevels: Int? = nil, creator: String? = nil,
-                    filter: String? = nil, wrap: String? = nil, aniso: Int? = nil) {
+                    filter: String? = nil, wrap: String? = nil, aniso: Int? = nil, composite: CompositeRecipe? = nil) {
             self.kind = kind; self.name = name; self.bundle = bundle; self.bundleSHA256 = bundleSHA256
             self.serializedFile = serializedFile; self.pathID = pathID; self.width = width; self.height = height
             self.mipLevels = mipLevels; self.creator = creator; self.filter = filter; self.wrap = wrap; self.aniso = aniso
+            self.composite = composite
+        }
+    }
+
+    /// One `CustomTextureCreate` render target, as the source builds it:
+    /// `Initialize` loads the create material (`CommonLib.LoadAsset(createMatABName,
+    /// createMatName)`) and makes an ARGB32 (sRGB) `RenderTexture` with
+    /// `useMipMap`; the create method sets textures and colours on that
+    /// material; `RebuildTextureAndSetMaterial` clears the target to transparent
+    /// and runs `Graphics.Blit(texMain, createTex, matCreate, 0)` under
+    /// `GL.sRGBWrite`. The target size, mip count and sampler state are on the
+    /// owning `TextureIdentity`.
+    public struct CompositeRecipe: Codable, Sendable, Equatable {
+        /// The `ChaControl` method that rebuilds this target (cited).
+        public var method: String
+        /// Create material identity.
+        public var material: String
+        public var bundle: String
+        public var bundleSHA256: String?
+        public var serializedFile: String?
+        public var pathID: String?
+        /// Create material shader (`Shader Forge/create_eye`).
+        public var shader: String?
+        /// SHA-256 of the create pass's DXBC fragment program the derivation
+        /// verified against the source (`head_material_contract.py`).
+        public var programSHA256: String?
+        /// Material textures after the create method's setters: `_MainTex`
+        /// is `texMain`, the `Graphics.Blit` source. Scale/offset stay the
+        /// create material's saved `m_TexEnvs`.
+        public var textures: [String: Texture]
+        /// Material vectors after the setters (Unity `Material` values:
+        /// gamma-space colours, as the draw materials store them).
+        public var vectors: [String: Vector]
+        /// Why this recipe cannot be composed (unconverted create material,
+        /// unverified program, ...).
+        public var unresolved: String?
+        public init(method: String, material: String, bundle: String, bundleSHA256: String? = nil, serializedFile: String? = nil,
+                    pathID: String? = nil, shader: String? = nil, programSHA256: String? = nil,
+                    textures: [String: Texture] = [:], vectors: [String: Vector] = [:], unresolved: String? = nil) {
+            self.method = method; self.material = material; self.bundle = bundle; self.bundleSHA256 = bundleSHA256
+            self.serializedFile = serializedFile; self.pathID = pathID; self.shader = shader; self.programSHA256 = programSHA256
+            self.textures = textures; self.vectors = vectors; self.unresolved = unresolved
         }
     }
 }

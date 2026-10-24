@@ -16,11 +16,17 @@ recorded for when the binding identity carries no sampler state.
 Nothing is substituted: an identity whose bundle is not local, whose asset is
 missing or ambiguous, or whose format is not decodable is listed under
 `unavailable` with the reason, and the live path keeps that material on toon.
-Runtime composites (`CustomTextureCreate` render targets) are never in the store.
+Runtime composites (`CustomTextureCreate` render targets) are never in the store
+as pixels. When the binding set carries a composite's recipe, its input textures
+are stored like any other asset, and its create pass's DXBC fragment program is
+re-extracted from the local bundle, checked against the recipe's verified hash
+and translated from a retained disassembly (`--create-shader-cache`) into
+`composites`, so the runtime can compose the target itself. A recipe whose
+program cannot be exported is listed under `unavailableComposites`.
 Outputs must stay under a `.local` folder.
 """
 from __future__ import annotations
-import argparse, hashlib, json
+import argparse, hashlib, json, shutil
 from pathlib import Path
 import numpy as np
 
@@ -59,12 +65,66 @@ def identities(report):
 
     for renderer in bindings.get('renderers', []):
         for name, texture in renderer['material'].get('textures', {}).items():
-            add(texture.get('identity'), '%s slot %s %s' % (renderer['mesh'], renderer['materialSlot'], name))
+            use = '%s slot %s %s' % (renderer['mesh'], renderer['materialSlot'], name)
+            add(texture.get('identity'), use)
+            # A composite recipe's inputs are source assets like any other.
+            recipe = (texture.get('identity') or {}).get('composite') or {}
+            for input_name, value in sorted(recipe.get('textures', {}).items()):
+                add(value.get('identity'), '%s composite %s' % (use, input_name))
     for name, texture in bindings.get('globalTextures', {}).items():
         add(texture.get('identity'), 'global ' + name)
     return sorted(found.values(), key=lambda item: (item['identity'].get('bundle') or '',
                   item['identity'].get('pathID') or '', item['identity'].get('name') or '',
                   json.dumps(item['identity'], sort_keys=True)))
+
+
+def recipes(report):
+    """Distinct composite recipes (create material + verified program) with their users."""
+    bindings = report.get('bindings', report)
+    found = {}
+    for renderer in bindings.get('renderers', []):
+        for name, texture in renderer['material'].get('textures', {}).items():
+            recipe = (texture.get('identity') or {}).get('composite')
+            if not recipe:
+                continue
+            key = tuple(recipe.get(field) for field in ('bundle', 'bundleSHA256', 'serializedFile', 'pathID', 'material', 'shader', 'programSHA256'))
+            entry = found.setdefault(key, dict(recipe={k: recipe.get(k) for k in ('bundle', 'bundleSHA256', 'serializedFile', 'pathID',
+                                                                                    'material', 'shader', 'programSHA256', 'unresolved')}, uses=[]))
+            entry['uses'].append('%s slot %s %s' % (renderer['mesh'], renderer['materialSlot'], name))
+    return [found[key] for key in sorted(found, key=lambda k: json.dumps(k))]
+
+
+def export_composites(report, roots, output, caches):
+    """Translate every recipe's create fragment program into `output`; never substitute."""
+    from source_shader_translation import extract_fragment
+    composites, unavailable = [], []
+    for item in recipes(report):
+        recipe = item['recipe']
+        record = dict(material=recipe['material'], shader=recipe['shader'], bundle=recipe['bundle'], uses=item['uses'])
+        if recipe.get('unresolved'):
+            unavailable.append(dict(record, reason='recipe unresolved: ' + recipe['unresolved'])); continue
+        if not recipe.get('programSHA256') or not recipe.get('pathID'):
+            unavailable.append(dict(record, reason='recipe names no verified program or material path ID')); continue
+        path = locate(recipe['bundle'], roots)
+        if path is None:
+            unavailable.append(dict(record, reason='bundle not in the local bundle roots')); continue
+        if recipe.get('bundleSHA256') and hashlib.sha256(path.read_bytes()).hexdigest() != recipe['bundleSHA256']:
+            unavailable.append(dict(record, reason='local bundle SHA-256 differs from the recipe')); continue
+        key = 'create-' + hashlib.sha256(('%s#%s#%s' % (recipe['bundle'], recipe['pathID'], recipe['programSHA256'])).encode()).hexdigest()[:20]
+        try:
+            program = extract_fragment(path, recipe['pathID'], recipe['material'], output / key, caches, expected_sha=recipe['programSHA256'])
+        except Exception as error:  # no retained disassembly, differing variants, wrong identity
+            shutil.rmtree(output / key, ignore_errors=True)
+            unavailable.append(dict(record, reason=str(error))); continue
+        if program['name'] != recipe['shader'] or (recipe.get('serializedFile') and program['serializedFile'] != recipe['serializedFile']):
+            shutil.rmtree(output / key, ignore_errors=True)
+            unavailable.append(dict(record, reason='bundle material shader or serialized file differs from the recipe')); continue
+        files = ['program.json', 'source.metal']
+        composites.append(dict(material=recipe['material'], bundle=recipe['bundle'], bundleSHA256=program['bundleSHA256'],
+                               serializedFile=program['serializedFile'], pathID=str(recipe['pathID']), shader=program['name'],
+                               programSHA256=program['programs']['fragment']['sha256'], directory=key, files=files,
+                               sha256=[hashlib.sha256((output / key / f).read_bytes()).hexdigest() for f in files], uses=item['uses']))
+    return composites, unavailable
 
 
 def locate(bundle, roots):
@@ -104,7 +164,7 @@ def decode_levels(texture):
         width, height = max(1, width // 2), max(1, height // 2)
 
 
-def build(report, roots, output, source=None):
+def build(report, roots, output, source=None, create_caches=()):
     import UnityPy
     output.mkdir(parents=True, exist_ok=True)
     entries, unavailable, bundles, exported = [], [], {}, {}
@@ -175,10 +235,13 @@ def build(report, roots, output, source=None):
                             mipLevels=len(levels), colorSpace=color_space, textureFormat=int(getattr(fmt, 'value', fmt)),
                             filter=filter_mode, wrap=wrap, aniso=aniso, directory=key, files=files, sha256=hashes, uses=list(item['uses']))
         entries.append(entry); exported[asset_key] = entry
-    manifest = dict(schemaVersion=1, encoding=ENCODING,
-                    scope='Texture2D pixels decoded from local game bundles for the identities a native shader binding set names. '
-                          'Runtime composites are excluded. Unavailable asset identities are listed with their reasons.',
-                    roots=[str(root) for root in roots], entries=entries, unavailable=unavailable)
+    composites, unavailable_composites = export_composites(report, roots, output, list(create_caches))
+    manifest = dict(schemaVersion=2, encoding=ENCODING,
+                    scope='Texture2D pixels decoded from local game bundles for the identities a native shader binding set names, '
+                          'including runtime-composite inputs, and the translated create programs of composite recipes. '
+                          'Composite pixels are never stored. Unavailable identities and programs are listed with their reasons.',
+                    roots=[str(root) for root in roots], entries=entries, unavailable=unavailable,
+                    composites=composites, unavailableComposites=unavailable_composites)
     if source is not None:
         manifest['source'] = source
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
@@ -243,19 +306,24 @@ def main():
     parser.add_argument('output', type=Path, help='store folder (under .local)')
     parser.add_argument('--bundle-root', type=Path, action='append', required=True)
     parser.add_argument('--verify-frame', type=Path, help='capture frame JSON to compare retained mip pixels against')
-    parser.add_argument('--require-complete', action='store_true', help='fail if any requested asset identity is unavailable (runtime composites are excluded)')
+    parser.add_argument('--create-shader-cache', type=Path, action='append', default=[],
+                        help='folder of retained <name>.dxbc/<name>.asm create-pass disassemblies (no VM is used)')
+    parser.add_argument('--require-complete', action='store_true',
+                        help='fail if any requested asset identity or composite recipe program is unavailable')
     args = parser.parse_args()
     if '.local' not in args.output.resolve().parts:
         raise SystemExit('Decoded source textures must stay under a .local folder')
     data = args.bindings.read_bytes()
     manifest = build(json.loads(data), args.bundle_root, args.output,
-                     source=dict(file=str(args.bindings), sha256=hashlib.sha256(data).hexdigest()))
+                     source=dict(file=str(args.bindings), sha256=hashlib.sha256(data).hexdigest()),
+                     create_caches=args.create_shader_cache)
     summary = dict(entries=len(manifest['entries']), unavailable=len(manifest['unavailable']),
-                   unavailableReasons=sorted({u['reason'] for u in manifest['unavailable']}))
+                   unavailableReasons=sorted({u['reason'] for u in manifest['unavailable']}),
+                   composites=len(manifest['composites']), unavailableComposites=manifest['unavailableComposites'])
     if args.verify_frame:
         summary['verification'] = verify(args.output / 'manifest.json', args.verify_frame)
     print(json.dumps(summary, indent=2))
-    if args.require_complete and manifest['unavailable']:
+    if args.require_complete and (manifest['unavailable'] or manifest['unavailableComposites']):
         raise SystemExit(1)
 
 
