@@ -7,6 +7,32 @@ import ShaderTypes
 import Scene
 import Assets
 
+/// Opt-in diagnostics for one synchronous candidate. These leaf intervals do
+/// not overlap; component/body-mask loads include their texture creation, while
+/// compose includes encoding and the existing synchronous GPU completion wait.
+public final class SourceAppearanceTimings {
+    public enum Phase: String { case bindingPreparation, pixelReadHash, pipelineCreation, composeEncodeWait, componentLoad, bodyMaskLoad }
+    public struct Sample: Encodable {
+        public let milliseconds: [String: Double]
+        public let calls: [String: Int]
+    }
+    private var milliseconds: [String: Double] = [:]
+    private var calls: [String: Int] = [:]
+    public init() {}
+    public var sample: Sample { Sample(milliseconds: milliseconds, calls: calls) }
+
+    public static func measure<T>(_ timings: SourceAppearanceTimings?, _ phase: Phase,
+                                  _ body: () throws -> T) rethrows -> T {
+        guard let timings else { return try body() }
+        let start = ProcessInfo.processInfo.systemUptime
+        defer {
+            timings.milliseconds[phase.rawValue, default: 0] += (ProcessInfo.processInfo.systemUptime - start) * 1000
+            timings.calls[phase.rawValue, default: 0] += 1
+        }
+        return try body()
+    }
+}
+
 /// A synchronous candidate's new base textures stay private until commit. Cache
 /// hits are never owned here. Abandoned loads release their own handles through
 /// leases, including partial loads; appearances retain any unpublished handles

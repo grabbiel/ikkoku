@@ -67,6 +67,7 @@ final class MakerModel: ViewportInputHandler {
     struct SourceSelectionTiming: Encodable {
         let snapshotMilliseconds: Double, preparationMilliseconds: Double, commitMilliseconds: Double
         var headOwnerStages: HeadOwnerStages? = nil
+        var cardAppearanceStages: SourceAppearanceTimings.Sample? = nil
 
         /// Consecutive owner intervals, including the final refresh. These are
         /// per-selection wall times, not CPU samples or animation-frame work.
@@ -605,17 +606,22 @@ final class MakerModel: ViewportInputHandler {
 
     private func applyCardAppearance(_ draft: SourceCardAppearance, base: SourcePreviewAppearance, url: URL,
                                      prepared: SourceMakerLibrary.Prepared? = nil, modLibrary: SourceModLibrary?,
-                                     transaction: SourceAppearanceLoadTransaction? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+                                     transaction: SourceAppearanceLoadTransaction? = nil,
+                                     timings: SourceAppearanceTimings? = nil) throws -> SourcePreviewAppearance.CardApplication? {
         let bindingsURL = url.deletingPathExtension().appendingPathExtension("card-appearance.json")
         var current = base, fields = Set<String>(), diagnostics: [String] = []
         if FileManager.default.fileExists(atPath: bindingsURL.path) {
-            var bindings = try SourceAppearanceBindings.load(url: bindingsURL)
-            if let prepared { bindings = bindings.restricted(to: Set(prepared.source.parts.map { $0.mesh.name })) }
-            let applied = try current.applying(draft, bindings: bindings, directory: url.deletingLastPathComponent(), resources: host.renderer.resources)
+            let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
+                var value = try SourceAppearanceBindings.load(url: bindingsURL)
+                if let prepared { value = value.restricted(to: Set(prepared.source.parts.map { $0.mesh.name })) }
+                return value
+            }
+            let applied = try current.applying(draft, bindings: bindings, directory: url.deletingLastPathComponent(), resources: host.renderer.resources,
+                timings: timings)
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         if let prepared, let applied = try prepared.appearance(base: current, card: draft, resources: host.renderer.resources,
-            modLibrary: modLibrary, transaction: transaction) {
+            modLibrary: modLibrary, transaction: transaction, timings: timings) {
             current = applied.appearance; fields.formUnion(applied.appliedFields); diagnostics += applied.diagnostics
         }
         return .init(appearance: current, appliedFields: fields, diagnostics: diagnostics)
@@ -913,8 +919,9 @@ final class MakerModel: ViewportInputHandler {
         let base = try SourcePreviewAppearance.load(url: url.deletingPathExtension().appendingPathExtension("appearance.json"),
             resources: host.renderer.resources, modLibrary: sourceModLibrary, transaction: appearanceTransaction)
         let baseAppearanceFinished = ProcessInfo.processInfo.systemUptime
+        let appearanceTimings = SourceAppearanceTimings()
         let application = try applyCardAppearance(draft, base: base, url: url, prepared: head.assets, modLibrary: sourceModLibrary,
-            transaction: appearanceTransaction)
+            transaction: appearanceTransaction, timings: appearanceTimings)
         let cardAppearanceFinished = ProcessInfo.processInfo.systemUptime
         let preview = try SourceRigPreview(source: head.assets.source, contract: head.contract, resources: host.renderer.resources,
             appearance: application?.appearance ?? base, expressionContract: head.expressions, bodyOptions: head.bodyOptions,
@@ -949,7 +956,8 @@ final class MakerModel: ViewportInputHandler {
                     cardAppearanceMilliseconds: (cardAppearanceFinished - baseAppearanceFinished) * 1000,
                     previewMilliseconds: (previewFinished - cardAppearanceFinished) * 1000,
                     poseFrameMilliseconds: (poseFrameFinished - previewFinished) * 1000,
-                    commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000))
+                    commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000),
+                cardAppearanceStages: appearanceTimings.sample)
         }
         importedSourceCard = candidate
         sourceRigURL = url; sourceHeadID = head.headID

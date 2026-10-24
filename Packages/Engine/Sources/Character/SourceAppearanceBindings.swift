@@ -129,7 +129,8 @@ public extension SourcePreviewAppearance {
     }
 
     func applying(_ card: SourceCardAppearance, bindings: SourceAppearanceBindings, directory: URL,
-                  resources: ResourceStore, backend: SourceAppearanceCompositionBackend = .metal) throws -> CardApplication {
+                  resources: ResourceStore, backend: SourceAppearanceCompositionBackend = .metal,
+                  timings: SourceAppearanceTimings? = nil) throws -> CardApplication {
         var materials = self.materials, applied = Set<String>(), diagnostics = card.diagnostics + bindings.limitations
         var leases = textureOwner?.leases ?? [:]
         var compositor: SourceMaterialCompositor?
@@ -150,6 +151,9 @@ public extension SourcePreviewAppearance {
         let directory = directory.resolvingSymlinksInPath()
         var bytesByPath: [String: [UInt8]] = [:], totalBytes = 0
         func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
+            try SourceAppearanceTimings.measure(timings, .pixelReadHash) { try readPixels(input) }
+        }
+        func readPixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
             guard (1...4096).contains(input.width), (1...4096).contains(input.height),
                   input.width * input.height <= 4_194_304, !input.file.isEmpty, !input.file.hasPrefix("/") else {
                 throw RigError.invalid("Invalid bounded appearance texture.")
@@ -282,17 +286,23 @@ public extension SourcePreviewAppearance {
                 }
                 let gpu: any MTLTexture
                 if backend == .metal {
-                    if compositor == nil { compositor = try SourceMaterialCompositor(device: resources.device) }
+                    if compositor == nil {
+                        compositor = try SourceAppearanceTimings.measure(timings, .pipelineCreation) {
+                            try SourceMaterialCompositor(device: resources.device)
+                        }
+                    }
                     func image(_ meta: SourceAppearanceBindings.Texture, _ bytes: [UInt8]) -> SourceMaterialImage {
                         SourceMaterialImage(width: meta.width, height: meta.height, repeating: meta.wrap == "repeat", bytes: bytes)
                     }
-                    gpu = try compositor!.compose(kind: kind, width: dimensions.width, height: dimensions.height,
-                        main: entry.main.map { image($0, main!) }, mask: entry.mask.map { image($0, mask!) }, colors: colors, blend: blend, encodeSRGB: sourceLinear,
-                        patterns: patterns.map { SourceMaterialPattern(channel: $0.0, image: image($0.1, $0.2), color: $0.3, tiling: $0.4) },
-                        layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
-                            SourceMaterialLayer(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
-                                transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
-                        })
+                    gpu = try SourceAppearanceTimings.measure(timings, .composeEncodeWait) {
+                        try compositor!.compose(kind: kind, width: dimensions.width, height: dimensions.height,
+                            main: entry.main.map { image($0, main!) }, mask: entry.mask.map { image($0, mask!) }, colors: colors, blend: blend, encodeSRGB: sourceLinear,
+                            patterns: patterns.map { SourceMaterialPattern(channel: $0.0, image: image($0.1, $0.2), color: $0.3, tiling: $0.4) },
+                            layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
+                                SourceMaterialLayer(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
+                                    transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
+                            })
+                    }
                 } else {
                     let count = dimensions.width * dimensions.height
                     var output = [UInt8](repeating: 0, count: count * 4)

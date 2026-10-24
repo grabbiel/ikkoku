@@ -237,23 +237,32 @@ public struct SourceMakerLibrary: Sendable {
         fileprivate let clearBodyMask: Bool
         public var geometryChanged: Bool { selections.contains { $0.entry != nil } }
         public func appearance(base: SourcePreviewAppearance?, card: SourceCardAppearance, resources: ResourceStore,
-                               modLibrary: SourceModLibrary?, transaction: SourceAppearanceLoadTransaction? = nil) throws -> SourcePreviewAppearance.CardApplication? {
+                               modLibrary: SourceModLibrary?, transaction: SourceAppearanceLoadTransaction? = nil,
+                               timings: SourceAppearanceTimings? = nil) throws -> SourcePreviewAppearance.CardApplication? {
             var combined = base, fields = Set<String>(), messages = diagnostics
             for component in components {
-                var appearance = try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
-                    transaction: transaction)
+                var appearance = try SourceAppearanceTimings.measure(timings, .componentLoad) {
+                    try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
+                        transaction: transaction)
+                }
                 if let url = component.bindings {
-                    var bindings = try SourceAppearanceBindings.load(url: url)
-                    if let slot = component.accessorySlot { bindings = try bindings.contextualized(accessorySlot: slot) }
-                    if component.indoorShoes { bindings = try bindings.contextualizedIndoorShoes() }
-                    let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources)
+                    let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
+                        var value = try SourceAppearanceBindings.load(url: url)
+                        if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
+                        if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
+                        return value
+                    }
+                    let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources,
+                        timings: timings)
                     appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
                 }
                 appearance = appearance.renaming(component.meshNames, prefix: component.prefix)
                 combined = combined.map { $0.merging(appearance) } ?? appearance
             }
             if let mask = bodyMask, let current = combined {
-                combined = try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+                combined = try SourceAppearanceTimings.measure(timings, .bodyMaskLoad) {
+                    try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+                }
             } else if clearBodyMask, let current = combined {
                 combined = current.removingBodyMask()
             }
