@@ -9,17 +9,30 @@ import Studio
 
 // R1/CMT-04 runtime composites (`CustomTextureCreate` render targets) composed
 // natively for the live path. The synthetic store below holds a hand-written
-// fragment-only program with the `create_eye` arithmetic (the CPU reference is
-// `create_eye_base` in Tools/reverse/head_material_contract.py); nothing here
-// reads original data. The gated check at the end composes the controlled
-// fixture's irises from the private store and compares them with the retained
-// original composite readback.
+// fragment-only program with the `create_eye` or `create_eyewhite` arithmetic
+// (the CPU references are `create_eye_base` and `create_eye_white` in
+// Tools/reverse/head_material_contract.py); nothing here reads original data.
+// The gated checks at the end compose the controlled fixture's irises and eye
+// whites from the private store and compare them with the retained original
+// composite readbacks.
 
 private func hex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
 /// A schema-2 texture store: 4×4 inputs (bottom-up rows) and one create program.
 private enum CompositeStoreFixture {
     static let programSHA = String(repeating: "c", count: 64)
+
+    /// A hand-written create program: its source, `$Globals` layout, texture
+    /// slots, properties and pass blend factors.
+    struct Program: @unchecked Sendable {   // immutable once built; rows are plain JSON values
+        var source: String
+        var names: [String: String]
+        var vectors: [(index: Int, offset: Int, dim: Int)]
+        var bufferSize: Int
+        var textures: [(name: Int, slot: Int)]
+        var properties: [LiveProgramFixture.Row]
+        var blend: (source: Int, destination: Int)
+    }
 
     /// The `create_eye` fragment, written the way the translator emits it:
     /// `cb0[2]` `_Color2`, `cb0[3]` `_MainTex_ST`, `cb0[4]` `_Color`,
@@ -57,45 +70,77 @@ private enum CompositeStoreFixture {
     /// Mask input: R picks `_Color` (1) over `_Color2` (0).
     static let mask: [SIMD4<Float>] = (0..<16).map { SIMD4(Float($0 % 5) * 0.25, 0, 0, 1) }
 
+    /// `create_eye` pass 0: Blend SrcAlpha OneMinusSrcAlpha.
+    static let eye = Program(
+        source: source,
+        names: ["0": "$Globals", "1": "_Color2", "2": "_MainTex_ST", "3": "_Color", "4": "_ColorMask_ST", "5": "_Blend", "6": "_grad",
+                "7": "_MainTex", "8": "_ColorMask"],
+        vectors: [(1, 32, 4), (2, 48, 4), (3, 64, 4), (4, 80, 4), (5, 96, 1), (6, 112, 4)], bufferSize: 128,
+        textures: [(7, 0), (8, 1)],
+        properties: [LiveProgramFixture.property("_Color", type: 0, defaults: [1, 1, 1, 1]), LiveProgramFixture.property("_Color2", type: 0),
+                     LiveProgramFixture.property("_Blend", type: 3), LiveProgramFixture.property("_grad", type: 1),
+                     LiveProgramFixture.property("_MainTex", type: 4), LiveProgramFixture.property("_ColorMask", type: 4)],
+        blend: (5, 10))
+
+    /// The `create_eyewhite` fragment, written the way the translator emits it:
+    /// `cb0[2]` `_Color`, `cb0[3]` `_MainTex_ST`, `cb0[4]` `_Color2`; the
+    /// colour is `lerp(_Color2, _Color, texMain.r)` with alpha 1, and pass 0
+    /// blends One Zero.
+    static let eyeWhite = Program(
+        source: """
+        #include <metal_stdlib>
+        using namespace metal;
+        struct SourceFragmentInput { float4 v1 [[user(locn1)]]; };
+        fragment float4 source_fragment(SourceFragmentInput in [[stage_in]], constant float4 *cb0 [[buffer(8)]],
+                                        texture2d<float> t0 [[texture(0)]], sampler s0 [[sampler(0)]]) {
+            float2 mu = in.v1.xy * cb0[3].xy + cb0[3].zw;
+            float t = t0.sample(s0, float2(mu.x, 1.0 - mu.y)).x;
+            return float4(t * (cb0[2].xyz - cb0[4].xyz) + cb0[4].xyz, 1.0);
+        }
+        """,
+        names: ["0": "$Globals", "1": "_Color", "2": "_MainTex_ST", "3": "_Color2", "7": "_MainTex"],
+        vectors: [(1, 32, 4), (2, 48, 4), (3, 64, 4)], bufferSize: 80,
+        textures: [(7, 0)],
+        properties: [LiveProgramFixture.property("_Color", type: 0, defaults: [1, 1, 1, 1]), LiveProgramFixture.property("_Color2", type: 0, defaults: [1, 1, 1, 1]),
+                     LiveProgramFixture.property("_MainTex", type: 4)],
+        blend: (1, 0))
+
     struct Store { let url: URL; let folder: URL }
 
-    static func write(schemaVersion: Int = 2, compositeOverrides: [String: Any] = [:], extraComposite: Bool = false) throws -> Store {
+    static func write(schemaVersion: Int = 2, compositeOverrides: [String: Any] = [:], extraComposite: Bool = false,
+                      program spec: Program = eye, mainWrap: String = "Clamp") throws -> Store {
         let folder = try LiveProgramFixture.temporaryDirectory()
         var entries: [[String: Any]] = []
         for (name, pathID, pixels) in [("main", "11", main), ("mask", "12", mask), ("main2", "13", otherMain)] {
             try FileManager.default.createDirectory(at: folder.appendingPathComponent(name), withIntermediateDirectories: true)
             let data = pixels.flatMap { [Float16($0.x), Float16($0.y), Float16($0.z), Float16($0.w)] }.withUnsafeBytes { Data($0) }
             try data.write(to: folder.appendingPathComponent(name + "/level-0.rgba16f"))
+            let wrap: String = name == "main" ? mainWrap : "Clamp"
             entries.append(["bundle": "chara/inputs.unity3d", "bundleSHA256": "inputs-hash", "name": name, "pathID": pathID,
                             "serializedFile": "CAB-inputs", "width": 4, "height": 4, "mipLevels": 1, "colorSpace": "linear",
-                            "textureFormat": 4, "filter": "Bilinear", "wrap": "Clamp", "aniso": 1, "directory": name,
+                            "textureFormat": 4, "filter": "Bilinear", "wrap": wrap, "aniso": 1, "directory": name,
                             "files": ["level-0.rgba16f"], "sha256": [hex(data)]])
         }
         let program = folder.appendingPathComponent("create")
         try FileManager.default.createDirectory(at: program, withIntermediateDirectories: true)
-        let sourceData = Data(source.utf8)
+        let sourceData = Data(spec.source.utf8)
         try sourceData.write(to: program.appendingPathComponent("source.metal"))
-        let names = ["0": "$Globals", "1": "_Color2", "2": "_MainTex_ST", "3": "_Color", "4": "_ColorMask_ST", "5": "_Blend", "6": "_grad",
-                     "7": "_MainTex", "8": "_ColorMask"]
-        let vectors: [[String: Any]] = [(1, 32, 4), (2, 48, 4), (3, 64, 4), (4, 80, 4), (5, 96, 1), (6, 112, 4)].map {
-            ["m_NameIndex": $0.0, "m_Index": $0.1, "m_Dim": $0.2]
-        }
+        let vectors: [[String: Any]] = spec.vectors.map { ["m_NameIndex": $0.index, "m_Index": $0.offset, "m_Dim": $0.dim] }
         let metadata: [String: Any] = [
-            "m_ConstantBuffers": [["m_NameIndex": 0, "m_Size": 128, "m_VectorParams": vectors, "m_MatrixParams": []]],
+            "m_ConstantBuffers": [["m_NameIndex": 0, "m_Size": spec.bufferSize, "m_VectorParams": vectors, "m_MatrixParams": []]],
             "m_ConstantBufferBindings": [["m_NameIndex": 0, "m_Index": 0]],
-            "m_TextureParams": [["m_NameIndex": 7, "m_Index": 0, "m_SamplerIndex": 0], ["m_NameIndex": 8, "m_Index": 1, "m_SamplerIndex": 1]],
+            "m_TextureParams": spec.textures.map { ["m_NameIndex": $0.name, "m_Index": $0.slot, "m_SamplerIndex": $0.slot] },
         ]
         let state = LiveProgramFixture.state
         let root: [String: Any] = [
             "schemaVersion": 1, "stages": ["fragment"], "name": "Shader Forge/create_test", "material": "m_create", "materialPathID": "5",
-            "bundleSHA256": "create-hash", "serializedFile": "CAB-create", "names": names,
-            "properties": [LiveProgramFixture.property("_Color", type: 0, defaults: [1, 1, 1, 1]), LiveProgramFixture.property("_Color2", type: 0),
-                           LiveProgramFixture.property("_Blend", type: 3), LiveProgramFixture.property("_grad", type: 1),
-                           LiveProgramFixture.property("_MainTex", type: 4), LiveProgramFixture.property("_ColorMask", type: 4)],
+            "bundleSHA256": "create-hash", "serializedFile": "CAB-create", "names": spec.names,
+            "properties": spec.properties,
             // The create passes keep Shader Forge's ZTest LEqual, ZWrite On, Cull Back state.
             "passState": [
                 "m_Name": "FORWARD", "zTest": state(4), "zWrite": state(1), "culling": state(2), "offsetFactor": state(0), "offsetUnits": state(0),
-                "rtBlend0": ["srcBlend": state(5), "destBlend": state(10), "srcBlendAlpha": state(5), "destBlendAlpha": state(10),
+                "rtBlend0": ["srcBlend": state(spec.blend.source), "destBlend": state(spec.blend.destination),
+                             "srcBlendAlpha": state(spec.blend.source), "destBlendAlpha": state(spec.blend.destination),
                              "blendOp": state(0), "blendOpAlpha": state(0), "colMask": state(15)],
                 "stencilOp": ["comp": state(8), "pass": state(0), "fail": state(0), "zFail": state(0)],
                 "stencilReadMask": state(255), "stencilWriteMask": state(255), "stencilRef": state(0),
@@ -142,6 +187,69 @@ private enum CompositeStoreFixture {
         identity.composite = recipe
         return identity
     }
+
+    /// The eye-white composite identity as the derivation writes it
+    /// (`eyeWhiteComposite`): one main input and the two card colours.
+    static func eyeWhiteIdentity(size: Int = 16) -> SourceShaderBindingSet.TextureIdentity {
+        let recipe = SourceShaderBindingSet.CompositeRecipe(
+            method: "synthetic ChangeSettingWhiteOfEye", material: "m_create", bundle: "chara/create.unity3d", bundleSHA256: "create-hash",
+            serializedFile: "CAB-create", pathID: "5", shader: "Shader Forge/create_test", programSHA256: programSHA,
+            textures: ["_MainTex": .init(identity: input("main", pathID: "11"), identitySource: "synthetic", scale: [1, 1], offset: [0, 0],
+                                         transformSource: "create material m_TexEnvs")],
+            vectors: ["_Color": .init(color, source: "card"), "_Color2": .init(color2, source: "card")])
+        var identity = SourceShaderBindingSet.TextureIdentity(kind: .runtimeComposite, name: "", width: size, height: size,
+                                                              mipLevels: 1 + Int(log2(Double(size))), creator: "synthetic eye white",
+                                                              filter: "Bilinear", wrap: "Clamp", aniso: 1)
+        identity.composite = recipe
+        return identity
+    }
+}
+
+/// Metal's linear filter of a bottom-up input's red channel at Unity (u, v),
+/// with `repeat` or clamp-to-edge addressing (the input texture's own wrap).
+private func bilinearRed(_ texels: [SIMD4<Float>], width: Int, height: Int, u: Float, v: Float, repeats: Bool) -> Float {
+    let x = u * Float(width) - 0.5, y = v * Float(height) - 0.5
+    let x0 = Int(x.rounded(.down)), y0 = Int(y.rounded(.down)), fx = x - x.rounded(.down), fy = y - y.rounded(.down)
+    func at(_ column: Int, _ row: Int) -> Float {
+        let i = repeats ? ((column % width) + width) % width : min(max(column, 0), width - 1)
+        let j = repeats ? ((row % height) + height) % height : min(max(row, 0), height - 1)
+        return texels[j * width + i].x
+    }
+    let a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1)
+    let lower: Float = a + (b - a) * fx
+    let upper: Float = c + (d - c) * fx
+    return lower + (upper - lower) * fy
+}
+
+/// D3D `create_eyewhite` on one texel: `lerp(_Color2, _Color, t)` in linear
+/// colour (the colours are linearized at bind) with alpha 1; pass 0 blends One Zero.
+private func createEyeWhiteReference(t: Float, color: [Float], color2: [Float]) -> [Float] {
+    let linear = TranslatedSourceProgram.linear
+    var result: [Float] = []
+    for lane in 0..<3 {
+        let high = linear(color[lane]), low = linear(color2[lane])
+        result.append(t * (high - low) + low)
+    }
+    result.append(1)
+    return result
+}
+
+/// Largest byte difference between an `rgba8Unorm_srgb` level and the
+/// eye-white reference over `texels` sampled with the given addressing.
+private func eyeWhiteLargestError(_ bytes: [UInt8], size: Int, texels: [SIMD4<Float>], inputSize: Int, repeats: Bool,
+                                  color: [Float], color2: [Float]) -> Float {
+    var largest: Float = 0
+    for row in 0..<size {
+        for column in 0..<size {
+            // Target row `row` is top-down; Unity's v runs bottom-up.
+            let u = (Float(column) + 0.5) / Float(size), v = 1 - (Float(row) + 0.5) / Float(size)
+            let t = bilinearRed(texels, width: inputSize, height: inputSize, u: u, v: v, repeats: repeats)
+            let expected = createEyeWhiteReference(t: t, color: color, color2: color2)
+            let reference = [srgbByte(expected[0]), srgbByte(expected[1]), srgbByte(expected[2]), 255]
+            for lane in 0..<4 { largest = max(largest, abs(Float(bytes[(row * size + column) * 4 + lane]) - reference[lane])) }
+        }
+    }
+    return largest
 }
 
 /// D3D `create_eye` arithmetic on one texel, then the pass blend
@@ -437,6 +545,39 @@ func liveSourceCompositeProgramsAreFragmentOnlyAndValidated() throws {
     #expect(good.manifest.composites?.count == 1)
 }
 
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func liveSourceEyeWhiteCompositeMatchesTheReferenceWithTheInputsOwnSampler() throws {
+    // `create_eyewhite` magnifies its input (8×8 in the game, 4×4 here) with
+    // the input texture's own sampler: Repeat for `cw_t_sirome_kage_000`, so
+    // the edge texels blend with the opposite edge. Pass 0 blends One Zero,
+    // so the target's alpha is 1 whatever the input's alpha.
+    let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
+    var keys: [String] = []
+    var levels: [[UInt8]] = []
+    for repeats in [true, false] {
+        let fixture = try CompositeStoreFixture.write(program: CompositeStoreFixture.eyeWhite, mainWrap: repeats ? "Repeat" : "Clamp")
+        defer { try? FileManager.default.removeItem(at: fixture.folder) }
+        let store = try SourceShaderTextureStore(url: fixture.url)
+        let result = try store.texture(.init(identity: CompositeStoreFixture.eyeWhiteIdentity(), property: "_MainTex", mesh: "eye white", slot: 0),
+                                       resources: resources).get()
+        #expect(result.texture.width == 16 && result.texture.mipmapLevelCount == 5 && result.texture.pixelFormat == .rgba8Unorm_srgb)
+        #expect(result.provenance.contains("_MainTex=chara/inputs.unity3d#11"), "\(result.provenance)")
+        let bytes = try readback(result.texture, level: 0, device: device)
+        levels.append(bytes)
+        let largest = eyeWhiteLargestError(bytes, size: 16, texels: CompositeStoreFixture.main, inputSize: 4, repeats: repeats,
+                                           color: CompositeStoreFixture.color, color2: CompositeStoreFixture.color2)
+        #expect(largest <= 1, "\(repeats ? "Repeat" : "Clamp"): largest byte difference \(largest)")
+        // The other addressing mode is a mutation control: it must not match.
+        let other = eyeWhiteLargestError(bytes, size: 16, texels: CompositeStoreFixture.main, inputSize: 4, repeats: !repeats,
+                                         color: CompositeStoreFixture.color, color2: CompositeStoreFixture.color2)
+        #expect(other > 8, "the \(repeats ? "Clamp" : "Repeat") reference must differ, got \(other)")
+        keys += store.compositeEvents().map(\.contentKey)
+    }
+    // The input sampler is part of the content key.
+    #expect(keys.count == 2 && keys[0] != keys[1])
+    #expect(levels[0] != levels[1])
+}
+
 // MARK: - Controlled original fixture (private data)
 
 /// Composes the fixture card's irises (`ctCreateEyeL`/`R`) from the private
@@ -549,4 +690,184 @@ func liveSourceIrisCompositesMatchTheRetainedOriginalComposites() throws {
     print(String(format: "[iris composite] edit (median of 15): cpu encode %.3f ms, gpu %.3f ms, total %.3f ms, %d bytes; cache hit %.3f ms",
                  median(edits.map(\.cpuEncodeMilliseconds)), median(edits.map(\.gpuMilliseconds)), median(edits.map(\.totalMilliseconds)),
                  edits[0].bytes, median(hits)))
+}
+
+/// Composes the fixture card's eye whites (`ctCreateEyeW`, one target that
+/// both `rendEyeW` renderers share) from the private store and compares level
+/// 0 with the retained original composite readback (`texture-20`). The card
+/// keeps the default white base and sub colours over `whiteId` 0, whose 8×8
+/// `cw_t_sirome_kage_000` is uniformly 1, so this oracle sees only a constant
+/// white, opaque target of the right size: it cannot observe the input's
+/// sampling or the colour order. The real translated program is then checked
+/// against the CPU reference with synthetic, distinct colours over a
+/// non-uniform store texture (the iris gradient mask) with its own sampler;
+/// `liveSourceCompositesMatchTheDistinctColourCapture` has the independent check.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY", "IKKOKU_HEAD_MATERIAL_CONTRACT",
+    "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
+func liveSourceEyeWhiteCompositesMatchTheRetainedOriginalComposite() throws {
+    let folder = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true)
+    let inputs = SourceShaderLiveAssembly.Inputs(programs: folder.appendingPathComponent("shaders"),
+        makerLibrary: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")),
+        headContract: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT")),
+        supplement: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_SUPPLEMENT")))
+    let card = try SourceCharacterCard.load(url: folder.appendingPathComponent("fixture-card.png"))
+    let bindings = try inputs.derive(card: card, scene: .originalCharacterProbeHarness, sceneReason: "", eyeLook: nil)
+    let frame = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("frame-mips.json"))) as? [String: Any])
+    let store = try SourceShaderTextureStore(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_TEXTURES")))
+    let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
+    let original = try Data(contentsOf: folder.appendingPathComponent("texture-20.rgba16f")).withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
+    #expect(original.count == 512 * 512 * 4)
+    var whites: [any MTLTexture] = []
+    for mesh in ["cf_Ohitomi_L", "cf_Ohitomi_R"] {
+        let renderer = try #require(bindings.renderers.first { $0.mesh == mesh && $0.materialSlot == 0 })
+        let identity = try #require(renderer.material.textures["_MainTex"]?.identity)
+        let recipe = try #require(identity.composite)
+        #expect(recipe.material == "cf_m_eyewhite_create" && recipe.programSHA256 == "4f4f69fd421ab35d9e380e418ae04b22ac88852cad0ecf6c63f75285c895b1f9")
+        #expect(identity.width == 512 && identity.height == 512 && identity.mipLevels == 10)
+        #expect(recipe.textures["_MainTex"]?.identity?.name == "cw_t_sirome_kage_000")
+        let texture = try store.texture(.init(identity: identity, property: "_MainTex", mesh: mesh, slot: 0,
+                                              anisotropicFiltering: frame["anisotropicFiltering"] as? String), resources: resources).get().texture
+        whites.append(texture)
+        let ours = try readback(texture, level: 0, device: device)
+        var byteLargest: Float = 0, differing = 0
+        for row in 0..<512 {
+            for column in 0..<512 {
+                let target = (row * 512 + column) * 4, source = ((511 - row) * 512 + column) * 4   // capture rows are bottom-up
+                for lane in 0..<4 {
+                    let reference = Float(original[source + lane])
+                    let referenceByte = lane == 3 ? (min(max(reference, 0), 1) * 255).rounded() : srgbByte(reference)
+                    let byteError = abs(Float(ours[target + lane]) - referenceByte)
+                    byteLargest = max(byteLargest, byteError)
+                    if byteError > 0 { differing += 1 }
+                }
+            }
+        }
+        print("[eye-white composite] \(mesh) vs texture-20.rgba16f: max byte \(byteLargest), \(differing) differing channels")
+        #expect(byteLargest <= 1, "\(mesh): largest byte difference \(byteLargest)")
+    }
+    // rendEyeW[1].material = rendEyeW[0].material: one composite for both.
+    #expect(whites[0] === whites[1])
+
+    func texels(_ entry: SourceShaderTextureStore.Entry) throws -> [SIMD4<Float>] {
+        let file = store.url.deletingLastPathComponent().appendingPathComponent(entry.directory + "/" + entry.files[0])
+        let halves = try Data(contentsOf: file).withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
+        var result: [SIMD4<Float>] = []
+        result.reserveCapacity(entry.width * entry.height)
+        for texel in 0..<entry.width * entry.height {
+            let base = texel * 4
+            let r = Float(halves[base]), g = Float(halves[base + 1])
+            let b = Float(halves[base + 2]), a = Float(halves[base + 3])
+            result.append(SIMD4(r, g, b, a))
+        }
+        return result
+    }
+    var identity = try #require(bindings.renderers.first { $0.mesh == "cf_Ohitomi_L" }?.material.textures["_MainTex"]?.identity)
+    let input = try store.entry(for: try #require(identity.composite?.textures["_MainTex"]?.identity)).get()
+    #expect(input.width == 8 && input.height == 8 && input.wrap == "Repeat" && input.filter == "Bilinear")
+    #expect(Set(try texels(input).map(\.x)) == [1], "whiteId 0 is uniformly white")
+
+    // The real translated program against the CPU reference with distinct
+    // colours, over a non-uniform 512² store texture and its own sampler.
+    let iris = try #require(bindings.renderers.first { $0.mesh == "cf_Ohitomi_L02" }?.material.textures["_MainTex"]?.identity?.composite)
+    // The iris pattern (`_MainTex`), not its gradient mask: the mask is uniform.
+    let gradient = try #require(iris.textures["_MainTex"]?.identity)
+    identity.composite?.textures["_MainTex"]?.identity = gradient
+    let color: [Float] = [0.8, 0.3, 0.2, 1], color2: [Float] = [0.1, 0.5, 0.9, 1]
+    identity.composite?.vectors["_Color"] = .init(color, source: "synthetic")
+    identity.composite?.vectors["_Color2"] = .init(color2, source: "synthetic")
+    let synthetic = try store.texture(.init(identity: identity, property: "_MainTex", mesh: nil, slot: nil), resources: resources).get().texture
+    let gradientEntry = try store.entry(for: gradient).get()
+    let gradientTexels = try texels(gradientEntry), reds = Set(gradientTexels.map(\.x))
+    let bytes = try readback(synthetic, level: 0, device: device)
+    let largest = eyeWhiteLargestError(bytes, size: 512, texels: gradientTexels, inputSize: gradientEntry.width,
+                                       repeats: gradientEntry.wrap == "Repeat", color: color, color2: color2)
+    print("[eye-white composite] real program vs CPU reference (synthetic colours over \(gradientEntry.name), \(gradientEntry.wrap ?? "?")): "
+          + "max byte \(largest); \(reds.count) distinct input reds in [\(reds.min() ?? 0), \(reds.max() ?? 0)]")
+    #expect(gradientEntry.width == 512 && largest <= 1 && reds.count > 16)
+
+    // Edit cost (a Maker eye-white colour edit: new content key, warm
+    // pipeline) and the cache-hit cost of an unchanged recipe, as medians of 15.
+    func median(_ values: [Double]) -> Double { let sorted = values.sorted(); return sorted[sorted.count / 2] }
+    var edits: [SourceShaderCompositor.Statistics] = [], hits: [Double] = [], kept: [any MTLTexture] = []
+    for index in 0..<15 {
+        var edited = identity
+        edited.composite?.vectors["_Color"] = .init([0.8, 0.3, Float(index) / 32, 1], source: "synthetic edit")
+        kept.append(try store.texture(.init(identity: edited, property: "_MainTex", mesh: nil, slot: nil), resources: resources).get().texture)
+        let event = try #require(store.compositeEvents().last)
+        #expect(event.cacheHit == false && event.statistics?.pipelineCompiled == false)
+        edits.append(try #require(event.statistics))
+        let start = CACurrentMediaTime()
+        _ = try store.texture(.init(identity: edited, property: "_MainTex", mesh: nil, slot: nil), resources: resources).get()
+        hits.append((CACurrentMediaTime() - start) * 1000)
+        #expect(store.compositeEvents().last?.cacheHit == true)
+    }
+    print("[eye-white composite] events " + store.compositeEvents().prefix(2).map { event in
+        "\(event.cacheHit ? "hit" : "composed") \(event.contentKey.prefix(12))" + (event.statistics.map {
+            String(format: " cpu %.3f ms gpu %.3f ms total %.3f ms compiled %@ %d bytes", $0.cpuEncodeMilliseconds, $0.gpuMilliseconds,
+                   $0.totalMilliseconds, $0.pipelineCompiled ? "yes" : "no", $0.bytes) } ?? "")
+    }.joined(separator: "; "))
+    print(String(format: "[eye-white composite] edit (median of 15): cpu encode %.3f ms, gpu %.3f ms, total %.3f ms, %d bytes; cache hit %.3f ms",
+                 median(edits.map(\.cpuEncodeMilliseconds)), median(edits.map(\.gpuMilliseconds)), median(edits.map(\.totalMilliseconds)),
+                 edits[0].bytes, median(hits)))
+}
+
+/// The independent colour check: a second controlled original capture whose
+/// card sets a non-uniform eye-white texture, distinct eye-white colours and
+/// distinct iris colours, alpha, blend and gradient (the capture's own
+/// `character-settings.tsv`). Its eye-white and iris composites are composed
+/// from the card alone (with a supplement that adds the `mt_eye_white` rows and
+/// a store built for this card) and compared with the capture's readbacks of
+/// the original targets' base level. `IKKOKU_COMPOSITE_COLOUR_PROBE` holds
+/// `fixture-card.png`, `frame.json`, the readbacks, `supplement.json` and
+/// `textures/manifest.json`.
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_COMPOSITE_COLOUR_PROBE", "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY",
+    "IKKOKU_HEAD_MATERIAL_CONTRACT"])))
+func liveSourceCompositesMatchTheDistinctColourCapture() throws {
+    let folder = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_COMPOSITE_COLOUR_PROBE"), isDirectory: true)
+    let programs = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true).appendingPathComponent("shaders")
+    let inputs = SourceShaderLiveAssembly.Inputs(programs: programs,
+        makerLibrary: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")),
+        headContract: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT")),
+        supplement: folder.appendingPathComponent("supplement.json"))
+    let card = try SourceCharacterCard.load(url: folder.appendingPathComponent("fixture-card.png"))
+    let bindings = try inputs.derive(card: card, scene: .originalCharacterProbeHarness, sceneReason: "", eyeLook: nil)
+    let frame = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("frame.json"))) as? [String: Any])
+    let meshes = try #require(frame["meshes"] as? [[String: Any]])
+    let store = try SourceShaderTextureStore(url: folder.appendingPathComponent("textures/manifest.json"))
+    let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
+    for (mesh, material) in [("cf_Ohitomi_L", "cf_m_eyewhite_create"), ("cf_Ohitomi_R", "cf_m_eyewhite_create"),
+                             ("cf_Ohitomi_L02", "cf_m_eye_create"), ("cf_Ohitomi_R02", "cf_m_eye_create")] {
+        let source = try #require(meshes.first { $0["name"] as? String == mesh }?["materials"] as? [[String: Any]])
+        let properties = try #require(source.first?["properties"] as? [String: Any])
+        let capture = try #require((properties["_MainTex"] as? [String: Any])?["file"] as? String)
+        let renderer = try #require(bindings.renderers.first { $0.mesh == mesh && $0.materialSlot == 0 })
+        let identity = try #require(renderer.material.textures["_MainTex"]?.identity)
+        let recipe = try #require(identity.composite)
+        #expect(recipe.material == material && recipe.unresolved == nil && identity.width == 512 && identity.mipLevels == 10)
+        let texture = try store.texture(.init(identity: identity, property: "_MainTex", mesh: mesh, slot: 0,
+                                              anisotropicFiltering: frame["anisotropicFiltering"] as? String), resources: resources).get().texture
+        let ours = try readback(texture, level: 0, device: device)
+        let original = try Data(contentsOf: folder.appendingPathComponent(capture)).withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
+        #expect(original.count == 512 * 512 * 4)
+        var byteLargest: Float = 0, differing = 0, total: Double = 0
+        var distinct = Set<UInt32>()
+        for row in 0..<512 {
+            for column in 0..<512 {
+                let target = (row * 512 + column) * 4, source = ((511 - row) * 512 + column) * 4   // capture rows are bottom-up
+                var packed: UInt32 = 0
+                for lane in 0..<4 {
+                    let reference = Float(original[source + lane])
+                    let referenceByte = lane == 3 ? (min(max(reference, 0), 1) * 255).rounded() : srgbByte(reference)
+                    let byteError = abs(Float(ours[target + lane]) - referenceByte)
+                    byteLargest = max(byteLargest, byteError); total += Double(byteError)
+                    if byteError > 0 { differing += 1 }
+                    packed = packed << 8 | UInt32(referenceByte)
+                }
+                distinct.insert(packed)
+            }
+        }
+        print("[colour capture] \(mesh) (\(material)) vs \(capture): max byte \(byteLargest), \(differing) differing channels, "
+              + "mean byte \(total / Double(512 * 512 * 4)); \(distinct.count) distinct original colours")
+        #expect(byteLargest <= 1 && distinct.count > 16, "\(mesh): largest byte difference \(byteLargest), \(distinct.count) colours")
+    }
 }

@@ -903,6 +903,19 @@ Reports and logs live under the git-ignored `.local/verification/`.
 only; real values belong in your git-ignored `.local/verification/environment.json`.
 The `IKKOKU_IK_APP_ENVIRONMENT` fixture points to a JSON file path containing an object mapping `IKKOKU_SOURCE_SCENE`, `IKKOKU_EXPORT_SOURCE_SCENE`, and `IKKOKU_SAVE_SCENE` to files written by an earlier headless IK app capture, rather than to game data.
 
+### Composite colour-capture fixture
+
+`IKKOKU_COMPOSITE_COLOUR_PROBE` (a directory, optional in `private-source.json`)
+names a second controlled original capture for the native eye-white and iris
+composites: its saved `fixture-card.png`, `frame.json`, the eye-white and iris
+readbacks (`texture-20/21/24.rgba16f`), the card's own `supplement.json` and a
+native store at `textures/manifest.json`. With it, together with
+`IKKOKU_SHADER_BINDING_PROBE`, `IKKOKU_MAKER_LIBRARY` and
+`IKKOKU_HEAD_MATERIAL_CONTRACT`, the gated
+`liveSourceCompositesMatchTheDistinctColourCapture` composes the four eye
+targets from the card alone and compares them with the readbacks. How the folder
+is captured and rebuilt: [native eye-white composites](../../docs/reference/renderer.md#native-eye-white-composites-r1-2026-10-23).
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,
