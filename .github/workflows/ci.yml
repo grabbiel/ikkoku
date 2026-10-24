@@ -75,7 +75,8 @@ jobs:
                   descendants = [(pid, name) for pid, _, name in rows if pid in owned]
                   (reports / 'slow-check-processes.txt').write_text(repr(descendants) + '\n')
                   for pid, name in descendants:
-                      if 'EnginePackageTests' in name or name.endswith('/xctest'):
+                      if ('EnginePackageTests' in name or name.endswith('/xctest')
+                              or name.endswith('/swiftpm-testing-helper')):
                           subprocess.run(['sample', str(pid), '3', '-file',
                                           str(reports / f'slow-engine-{pid}.txt')], timeout=15)
               except (OSError, ValueError, subprocess.SubprocessError) as error:
