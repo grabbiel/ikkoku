@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**916 files indexed; 916 assigned; 0 unassigned.**
+**917 files indexed; 917 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 124 |
 | [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 170 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 171 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 200 |
+| Conversion / recovery / verification tool | 201 |
 | Documentation / historical evidence | 58 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 29 |
@@ -872,6 +872,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/private-source.json](../../Tools/verification/lanes/private-source.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
+| [Tools/verification/metal_derivative_repro.swift](../../Tools/verification/metal_derivative_repro.swift) | Conversion / recovery / verification tool |
 | [Tools/verification/perf_trace.py](../../Tools/verification/perf_trace.py) | Conversion / recovery / verification tool |
 | [Tools/verification/prerequisites.json](../../Tools/verification/prerequisites.json) | Build / repository configuration |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |

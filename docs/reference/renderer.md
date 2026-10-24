@@ -3625,14 +3625,45 @@ would therefore require fresh source-output evidence, even if it stabilized
 one native capture. The [source discard instruction](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/discard--sm4---asm-)
 also preserves execution for derivative calculation.
 
-The next bounded investigation is an asset-free small-triangle/UV-discontinuity
-reproducer with deterministic mip contents, the same language/compiler options,
-and same-draw color/UV/derivative readback. It should first determine whether
-the gap survives without the recovered shader body; any eventual translation
-change must retain source sampling semantics and pass independent source-color
-and Release cost gates. This experiment is proposed, not run. Fixed LOD zero,
-reduced anisotropy and blanket explicit-gradient rewrites are not production
-changes.
+An asset-free control is now available as
+[`metal_derivative_repro.swift`](../../Tools/verification/metal_derivative_repro.swift)
+with [build/run instructions](../../Tools/verification/README.md#standalone-metal-derivative-diagnostic).
+It uses eight deterministic CPU-authored sRGB8 mips, the same default language
+version/disabled-fast-math options, and same-draw color/UV/derivative/sample/ID
+readback. Three cases cover the same 64×64-pixel region of a 128×128 target:
+a two-triangle continuous quad, a regular grid of 2,048 small triangles with
+continuous UVs, and identical grid geometry with discontinuous per-triangle
+UVs. Constant clip `w = 1` makes each triangle's affine gradient independently
+calculable. The simple fragment has one implicit sample and no branch/discard;
+the instrumented MRT shader is not the recovered fragment body.
+
+On 2026-10-24, an optimized standalone Swift build and CPU-only layout, literal
+mip-texel and floating-point classification checks pass; six CLI boundary checks
+also pass. The one bounded GPU process collects four draws per case on the same
+M2 Ultra / macOS 27.0.1 host. Effective language version is MSL 4.1, fast math
+is disabled and `preserveInvariance` is false. **All three cases are stable:**
+color, UV, both derivatives, sampled RGBA and primitive IDs have zero changed
+bits between repeats. Each draw covers 4,096 pixels, every visible value is
+finite, and the maximum error against its analytic affine gradient is zero.
+All eight input mip levels remain byte-identical after drawing. The large and
+small continuous cases also render the same checker pattern; the discontinuous
+case renders a visibly distinct minified pattern.
+
+This is a negative reproducer result, not proof that the recovered path is
+stable. It excludes neither irregular/subpixel geometry, perspective
+interpolation, the larger shader body nor compiler perturbation by MRT outputs.
+Any eventual translation change must retain source sampling semantics and pass
+independent source-color and Release cost gates. Fixed LOD zero, reduced
+anisotropy and blanket explicit-gradient rewrites are not production changes.
+Issue #188 remains open, and no timing/FPS claim follows from this diagnostic.
+
+The standalone source SHA-256 is `bf69c7a98d7dea3d70e17244abc5d6efc81e90eb2c61b59579d7bf3147bac573`;
+the tested executable is `8aaf5ab963600ba4c95cb260349ed232077032cb1bfd25a39701daeec8f58255`.
+Build/command provenance, both reviewed coding-helper proposals and the result
+are retained under `.local/codex-continue-2026-10-24/rolling/materials-sampling-reproducer/`.
+Its `run-1/report.json` hashes all 60 shader/vertex/mip/raw-output artifacts;
+those hashes were checked after the process exited. These synthetic results
+are separate from the private original-shader MRT evidence above.
 
 Commands, hashes, helper reviews, immutable proxies and raw readbacks are under
 `.local/codex-continue-2026-10-24/rolling/materials-sampling/`. The derivative
