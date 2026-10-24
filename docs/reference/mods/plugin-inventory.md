@@ -112,6 +112,61 @@ SHA-256 (`0efb1b16144b10b1cf13b11e9a2358bb64ff55201a61c97d3259cc71d9cb7016`).
 Private inputs, reports, comparison assertions, helper provenance and timing live
 under `.local/codex-continue-2026-10-24/wave-three/plugins/inventory/`.
 
-Next acceptance is a complete retained installed-directory inventory, then
-ranking missing APIs using recovered reachable code and original behavior gates.
-The scanner itself does not establish new plugin execution support.
+## Complete installed snapshot, 2026-10-24
+
+A separate read-only collection of the original
+`C:\Illusion\Koikatsu\BepInEx\plugins` retained all 243 DLL paths and
+26,759,208 bytes. This is the original installed corpus, not the isolated probe
+player's injected plugin directory. Collection visited 310 entries with zero
+exclusions, under limits of 1,024 DLLs, 32 MiB per file, 64 MiB total, 20,000
+visited entries and 16 directory levels. Before/after manifests match canonical
+root, exact paths, sizes, SHA-256 values and file timestamps; every transferred
+snapshot matches its manifest. This establishes observed stability across reads,
+not an atomic filesystem snapshot or publisher authenticity. Original names map
+to ASCII snapshot filenames to avoid host filesystem case/Unicode collisions.
+No original player or assembly was executed, and the source directory was not
+modified.
+
+The historical September 24 listing has the same 243 paths and sizes: no added,
+missing or size-changed entries. Six previously retained content hashes match.
+Historical hashes are unavailable for the other 237 files, so equal sizes do not
+establish that their content is unchanged. The private manifest comparator's
+seven tests passed with zero skips.
+
+The unchanged scanner's first aggregate attempt explicitly failed its 16 MiB
+report bound after inspecting 224 files. That failure remains separate from
+acceptance. Eight fixed shards of at most 32 DLLs were then scanned twice, still
+using the existing 16 MiB per-report limit and a 64 MiB budget across both sets.
+The 16 reports total 42,301,142 bytes. Every one of the 243 unique original
+path/hash/size identities maps one-to-one into both complete sets, and all eight
+report pairs are byte-identical. An independent verification rehashed every
+snapshot and checked report hashes, bounds, row mappings and declaration
+identities. No scanner limit or implementation was changed for this collection.
+
+The snapshot contains 212 DLLs with direct plugin entries, 30 managed libraries
+without direct plugin entries, and one native/no-managed-metadata DLL. It has
+218 direct declarations and 218 distinct GUID strings. Three DLLs declare
+multiple entries (2, 3 and 4 respectively); all declarations remain separate.
+There are no duplicate GUID groups or traversal/assembly/entry diagnostics in
+this snapshot. Only the two existing registered native adapters match exact
+source hashes. These counts describe metadata, not loadability, execution or
+compatibility. Direct dependency references do not establish version or
+load-order satisfaction, and member references do not establish reachability.
+
+The two sequential scans took 32.096 and 32.360 seconds with other work allowed;
+these are functional diagnostics, not quiet performance measurements. Private
+manifests, the retained initial transfer failure, aggregate report-bound failure,
+shards, complete coverage index, independent verification and reviewed
+Cursor/DeepSeek support are under
+`.local/codex-continue-2026-10-24/wave-three/plugins/installed-inventory/`.
+
+Six small Studio candidates were subsequently recovered as hash-bound C#/IL for
+static comparison. Their output manifests retain missing external references
+and unknown-type annotations; no recovered project was compiled, executed or
+packaged. The next proposed executable slice is the exact HideAllUI 2.3.2 Studio
+path, whose recovered callback toggles game-canvas active state, optional plugin
+canvas enabled state and an optional gizmo. Acceptance still requires a real
+original Unity canvas/Find/lifecycle oracle, explicit native visibility roles,
+mode/unload recovery and event-only updates. General Harmony/input compatibility,
+Maker and H-scene behavior remain outside that proposed slice. The inventory
+itself adds no new plugin execution support.

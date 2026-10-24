@@ -19,7 +19,7 @@ class NativeAdapterTests(unittest.TestCase):
         fixture = os.environ.get('IKKOKU_NATIVE_PLUGIN_PACKAGES')
         if not fixture:
             self.skipTest('Set IKKOKU_NATIVE_PLUGIN_PACKAGES for original assembly evidence')
-        evidence = ROOT / '.local/reverse/plugin-execution'
+        evidence = ROOT / '.local/plugin-tests'
         evidence.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='adapter-packaging-', dir=evidence) as temporary:
             work = Path(temporary)
@@ -47,6 +47,22 @@ class NativeAdapterTests(unittest.TestCase):
                 changed.write_bytes(source.read_bytes() + b'changed')
                 self.assertIsNone(native_adapters.identify(changed))
             self.assertFalse(list(work.glob('.plugin-stage-*')))
+
+    def test_hide_studio_ui_retains_exact_metadata_and_configuration(self):
+        fixture = os.environ.get('IKKOKU_HIDE_STUDIO_UI_PACKAGE')
+        if not fixture:
+            self.skipTest('Set IKKOKU_HIDE_STUDIO_UI_PACKAGE for exact original HideAllUI evidence')
+        manifest = json.loads(Path(fixture).read_text())
+        original = Path(fixture).parent
+        evidence = ROOT / '.local/plugin-tests'; evidence.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='hide-ui-', dir=evidence) as temporary:
+            output = Path(temporary) / 'package'
+            report = plugin.package(original / manifest['source']['file'], manifest['type'], output,
+                config=original / manifest['configuration']['file'], tool=Path(temporary) / 'must-not-run')
+            self.assertEqual(report['adapterID'], 'kk-hide-studio-ui-v1')
+            self.assertEqual(json.loads((output / 'manifest.json').read_text()), manifest)
+            self.assertEqual(manifest['incompatibilities'], ['HideStudioUI', 'HideHInterface'])
+            self.assertFalse((output / 'program').exists())
 
 
 if __name__ == '__main__':

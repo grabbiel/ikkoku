@@ -550,8 +550,7 @@ public enum SourceShaderBindingDerivation {
         /// parts: slot), then ChangeCustomClothes's three colour setters. Other
         /// garment roles and nonzero patterns retain an explicit unresolved
         /// recipe until they have their own independent comparison.
-        func normalClothesComposite(slot: Int, evidence: LibraryMaterials, index: TextureIndex, main: LibraryMaterials.CatalogTexture) -> Set_.TextureIdentity {
-            let role = slot == 0 ? "top" : "bottom"
+        func normalClothesComposite(slot: Int, role: String, evidence: LibraryMaterials, index: TextureIndex, main: LibraryMaterials.CatalogTexture) -> Set_.TextureIdentity {
             var identity = composite(main.width, main.height,
                 creator: "ChaControl.ChangeCustomClothes: cf_m_clothesN_create (chara/mm_base.unity3d) over \(main.name) with card colorInfo")
             var recipe = createRecipe(material: "cf_m_clothesN_create",
@@ -697,8 +696,17 @@ public enum SourceShaderBindingDerivation {
                 builder.keywords(fromTree: renderer.materialTree)
                 if allNormal, let main = evidence.catalogTextures["main"], evidence.catalog["MainTex"] == main.name {
                     // InitBaseCustomTextureClothes sizes the composite from the main texture.
-                    let texture = slot <= 1 ? normalClothesComposite(slot: slot, evidence: evidence, index: index, main: main)
-                        : composite(main.width, main.height, creator: "ChaControl.ChangeCustomClothes: cf_m_clothesN_create (chara/mm_base.unity3d) over \(main.name) with card colorInfo")
+                    // Inner and outer shoes share category 112; only the inner
+                    // slot's normal creator/input flow is verified here.
+                    let role: String?
+                    switch slot {
+                    case 0: role = "top"
+                    case 1: role = "bottom"
+                    case 7: role = "inner shoe"
+                    default: role = nil
+                    }
+                    let texture = role.map { normalClothesComposite(slot: slot, role: $0, evidence: evidence, index: index, main: main) }
+                        ?? composite(main.width, main.height, creator: "ChaControl.ChangeCustomClothes: cf_m_clothesN_create (chara/mm_base.unity3d) over \(main.name) with card colorInfo")
                     builder.setTexture("_MainTex", texture,
                                        source: "ChaControl.ChangeCustomClothes → rendNormal01 _MainTex")
                 } else {
