@@ -7,19 +7,48 @@ import ShaderTypes
 import Scene
 import Assets
 
-/// Opt-in diagnostics for one synchronous candidate. These leaf intervals do
-/// not overlap; component/body-mask loads include their texture creation, while
-/// compose includes encoding and the existing synchronous GPU completion wait.
+/// Opt-in diagnostics for one synchronous candidate. The top-level intervals do
+/// not overlap. Composition's nested intervals sit inside its existing aggregate;
+/// instrumentation/cleanup can remain outside them. Do not add child intervals again.
 public final class SourceAppearanceTimings {
     public enum Phase: String { case bindingPreparation, pixelReadHash, pipelineCreation, composeEncodeWait, componentLoad, bodyMaskLoad }
+    enum CompositionPhase: String { case allocationUpload, encodeSubmit, waitAndView }
+    public struct CompositionSample: Encodable {
+        public let milliseconds: [String: Double], calls: [String: Int]
+        /// These transient input textures are not registered in ResourceStore.
+        public let realInputAllocations: Int, fallbackAllocations: Int, fallbackBindings: Int
+        public let metalEncodeDispatches: Int
+        public let metalBatchCompletions: Int
+    }
     public struct Sample: Encodable {
         public let milliseconds: [String: Double]
         public let calls: [String: Int]
+        public let composition: CompositionSample?
     }
     private var milliseconds: [String: Double] = [:]
     private var calls: [String: Int] = [:]
+    private var compositionMilliseconds: [String: Double] = [:], compositionCalls: [String: Int] = [:]
+    private var realInputAllocations = 0, fallbackAllocations = 0, fallbackBindings = 0
+    private var metalEncodeDispatches = 0, metalBatchCompletions = 0
     public init() {}
-    public var sample: Sample { Sample(milliseconds: milliseconds, calls: calls) }
+    public var sample: Sample {
+        Sample(milliseconds: milliseconds, calls: calls,
+            composition: compositionCalls.isEmpty && realInputAllocations == 0 && fallbackAllocations == 0 && fallbackBindings == 0 ? nil :
+            CompositionSample(milliseconds: compositionMilliseconds, calls: compositionCalls,
+                realInputAllocations: realInputAllocations, fallbackAllocations: fallbackAllocations, fallbackBindings: fallbackBindings,
+                metalEncodeDispatches: metalEncodeDispatches, metalBatchCompletions: metalBatchCompletions))
+    }
+
+    func recordComposition(_ phase: CompositionPhase, milliseconds: Double) {
+        compositionMilliseconds[phase.rawValue, default: 0] += milliseconds
+        compositionCalls[phase.rawValue, default: 0] += 1
+    }
+    func recordInputAllocation(fallback: Bool) {
+        if fallback { fallbackAllocations += 1 } else { realInputAllocations += 1 }
+    }
+    func recordFallbackBinding() { fallbackBindings += 1 }
+    func recordMetalEncodeDispatch() { metalEncodeDispatches += 1 }
+    func recordMetalBatchCompletion() { metalBatchCompletions += 1 }
 
     public static func measure<T>(_ timings: SourceAppearanceTimings?, _ phase: Phase,
                                   _ body: () throws -> T) rethrows -> T {

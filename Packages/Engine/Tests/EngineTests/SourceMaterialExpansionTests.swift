@@ -5,6 +5,218 @@ import CoreMath
 import Assets
 import Renderer
 import Character
+import Scene
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialFallbackReusePreservesPixelsAndIndependentOutputLeases() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let names = ["maskOnly", "mainOnly", "both"]
+    let preview = try AppearanceTestFixture.preview(directory: directory, resources: resources, names: names)
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let main = try AppearanceTestFixture.texture([40,120,230,255, 220,70,20,180], directory: directory)
+    let mask = try AppearanceTestFixture.texture([255,0,0,255, 0,255,0,128], directory: directory)
+    let entries = names.map { name -> [String: Any] in
+        var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+        entry["parts"] = [name]
+        if name != "maskOnly" { entry["main"] = main }
+        if name != "mainOnly" { entry["mask"] = mask }
+        return entry
+    }
+    let bindings = try AppearanceTestFixture.bindings(entries, directory: directory)
+    func pixels(_ application: SourcePreviewAppearance.CardApplication) throws -> [[UInt8]] {
+        try names.map { name in
+            let texture = try #require(resources.texture(application.appearance.materials[name]?.first?.base))
+            var bytes = [UInt8](repeating: 0, count: 8)
+            bytes.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: 8,
+                from: MTLRegionMake2D(0,0,2,1), mipmapLevel: 0) }
+            return bytes
+        }
+    }
+    let expected = try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources, backend: .cpu))
+    let before = resources.statistics().textures
+    let timings = SourceAppearanceTimings()
+    var first: SourcePreviewAppearance.CardApplication? = try preview.applying(card, bindings: bindings,
+        directory: directory, resources: resources, timings: timings)
+    #expect(zip(try pixels(first!), expected).allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
+    let initial = try #require(timings.sample.composition)
+    #expect(initial.realInputAllocations == 4)
+    #expect(initial.fallbackAllocations == 2) // shared across all three recipes
+    #expect(initial.fallbackBindings == 59) // 3×21 slots minus four actual inputs
+    #expect(initial.calls == ["allocationUpload": 3, "encodeSubmit": 1, "waitAndView": 1])
+    #expect(initial.metalEncodeDispatches == 3)
+    #expect(initial.metalBatchCompletions == 1)
+    #expect(initial.milliseconds.values.allSatisfy { $0.isFinite && $0 >= 0 })
+    #expect(initial.milliseconds.values.reduce(0, +) <= (timings.sample.milliseconds["composeEncodeWait"] ?? 0) + 0.001)
+    let firstHandles = names.compactMap { first?.appearance.materials[$0]?.first?.base }
+    #expect(firstHandles.count == 3 && resources.statistics().textures == before + 3)
+    var second: SourcePreviewAppearance.CardApplication? = try first!.appearance.applying(card, bindings: bindings,
+        directory: directory, resources: resources, timings: timings)
+    let secondHandles = names.compactMap { second?.appearance.materials[$0]?.first?.base }
+    #expect(Set(firstHandles).isDisjoint(with: secondHandles))
+    #expect(zip(try pixels(second!), expected).allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
+    #expect(timings.sample.composition?.fallbackAllocations == 4) // a fresh compositor per applying call
+    first = nil
+    #expect(firstHandles.allSatisfy { resources.texture($0) == nil })
+    #expect(secondHandles.allSatisfy { resources.texture($0) != nil })
+    second = nil
+    #expect(resources.statistics().textures == before)
+    // Default callers produce the same pixels without a diagnostic collector.
+    #expect(zip(try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources)), expected)
+        .allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
+    #expect(resources.statistics().textures == before)
+    // No absent main means white is never allocated, even across two recipes.
+    let zeroOnly = SourceAppearanceTimings()
+    _ = try preview.applying(card, bindings: bindings.restricted(to: ["mainOnly", "both"]),
+        directory: directory, resources: resources, timings: zeroOnly)
+    let zeroComposition = try #require(zeroOnly.sample.composition)
+    #expect(zeroComposition.fallbackAllocations == 1)
+    #expect(zeroComposition.realInputAllocations == 3)
+    #expect(zeroComposition.fallbackBindings == 39)
+    #expect(zeroComposition.calls == ["allocationUpload": 2, "encodeSubmit": 1, "waitAndView": 1])
+    #expect(zeroComposition.metalEncodeDispatches == 2)
+    #expect(zeroComposition.metalBatchCompletions == 1)
+    #expect(resources.statistics().textures == before)
+}
+
+/// Read exactly the allocated extent, including one-pixel and non-square fixtures.
+private func materialTestPixels(_ handle: TextureHandle?, resources: ResourceStore) throws -> [UInt8] {
+    let texture = try #require(resources.texture(handle))
+    var bytes = [UInt8](repeating: 0, count: texture.width * texture.height * 4)
+    bytes.withUnsafeMutableBytes {
+        texture.getBytes($0.baseAddress!, bytesPerRow: texture.width * 4,
+            from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+    }
+    return bytes
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialMetalInvalidLaterRecipeKeepsPriorLiveAppearance() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let original = try AppearanceTestFixture.preview(directory: directory, resources: resources)
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let recipe = try AppearanceTestFixture.recipe(directory: directory)
+    let valid = try AppearanceTestFixture.bindings([recipe], directory: directory)
+    let prior = try original.applying(card, bindings: valid, directory: directory, resources: resources)
+    let handle = try #require(prior.appearance.materials["part"]?.first?.base)
+    let bytes = try materialTestPixels(handle, resources: resources)
+    var invalid = AppearanceTestFixture.entry()
+    invalid["parts"] = ["absent"]
+    let bindings = try AppearanceTestFixture.bindings([recipe, invalid], directory: directory)
+    let before = resources.statistics().textures
+    let timings = SourceAppearanceTimings()
+    do {
+        _ = try prior.appearance.applying(card, bindings: bindings, directory: directory, resources: resources, timings: timings)
+        Issue.record("An absent material target must reject the whole batch.")
+    } catch RigError.invalid(let message) {
+        #expect(message == "Appearance binding targets an absent material: absent.")
+    }
+    #expect(resources.statistics().textures == before)
+    #expect(prior.appearance.materials["part"]?.first?.base == handle)
+    #expect(try materialTestPixels(handle, resources: resources) == bytes)
+    #expect(timings.sample.composition == nil) // no dispatch or private allocation before recipe validation
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialMetalInputBudgetCountsRepeatedUploadsAndPreflightsFallbacks() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let preview = try AppearanceTestFixture.preview(directory: directory, resources: resources, names: ["a", "b"])
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let tex = try AppearanceTestFixture.texture([10, 20, 30, 40, 50, 60, 70, 80], directory: directory)
+    var first = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+    first["parts"] = ["a"]; first["main"] = tex
+    var second = first; second["parts"] = ["b"]
+    let one = try AppearanceTestFixture.bindings([first], directory: directory)
+    let two = try AppearanceTestFixture.bindings([first, second], directory: directory)
+    let before = resources.statistics().textures
+    // One 8-byte upload and the shared zero texel exactly fit 12 bytes.
+    var prior: SourcePreviewAppearance.CardApplication? = try preview.applying(card, bindings: one,
+        directory: directory, resources: resources, metalMaximumLogicalInputBytes: 12)
+    let handle = try #require(prior?.appearance.materials["a"]?.first?.base)
+    let pixels = try materialTestPixels(handle, resources: resources)
+    #expect(resources.statistics().textures == before + 1)
+    for limit in [0, 8, 12, 19] {
+        let timings = SourceAppearanceTimings()
+        do {
+            _ = try prior!.appearance.applying(card, bindings: two, directory: directory, resources: resources,
+                timings: timings, metalMaximumLogicalInputBytes: limit)
+            Issue.record("Repeated uploads must be charged and checked before allocation.")
+        } catch RigError.invalid(let message) {
+            #expect(message == "Composed appearance Metal inputs exceed \(limit) bytes.")
+        }
+        #expect(resources.statistics().textures == before + 1)
+        #expect(try materialTestPixels(handle, resources: resources) == pixels)
+        if limit == 0 { #expect(timings.sample.composition == nil) }
+        else {
+            let composition = try #require(timings.sample.composition)
+            #expect(composition.realInputAllocations == 1)
+            #expect(composition.fallbackAllocations == (limit == 8 ? 0 : 1))
+            #expect(composition.metalEncodeDispatches == 0 && composition.metalBatchCompletions == 0)
+        }
+    }
+    // The second real upload costs another 8 bytes; the zero texel is reused.
+    let timings = SourceAppearanceTimings()
+    var accepted: SourcePreviewAppearance.CardApplication? = try prior!.appearance.applying(card, bindings: two,
+        directory: directory, resources: resources, timings: timings, metalMaximumLogicalInputBytes: 20)
+    #expect(resources.statistics().textures == before + 3)
+    #expect(timings.sample.composition?.realInputAllocations == 2)
+    #expect(timings.sample.composition?.fallbackAllocations == 1)
+    #expect(timings.sample.composition?.metalBatchCompletions == 1)
+    #expect(try materialTestPixels(accepted?.appearance.materials["b"]?.first?.base, resources: resources) == pixels)
+    accepted = nil
+    #expect(resources.statistics().textures == before + 1)
+    // A Metal-only limit does not change the CPU reference backend.
+    var cpu: SourcePreviewAppearance.CardApplication? = try preview.applying(card, bindings: two,
+        directory: directory, resources: resources, backend: .cpu, metalMaximumLogicalInputBytes: -1)
+    #expect(resources.statistics().textures == before + 3)
+    #expect(try materialTestPixels(cpu?.appearance.materials["a"]?.first?.base, resources: resources) == pixels)
+    cpu = nil; prior = nil
+    #expect(resources.statistics().textures == before)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourceMaterialMetalBatchPreservesTextureTintAndHighlightOrder() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let preview = try AppearanceTestFixture.preview(directory: directory, resources: resources)
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let recipe = try AppearanceTestFixture.recipe(directory: directory)
+    let tint = AppearanceTestFixture.entry(kind: "tint", colors: ["body.skinMainColor"])
+    let upper = AppearanceTestFixture.entry(kind: "highlightUpper", colors: ["body.skinMainColor"])
+    let lower = AppearanceTestFixture.entry(kind: "highlightLower", colors: ["body.skinSubColor"])
+    let expectedTint = Float4(0.05087609, 0.21404114, 0.52252156, 0.8)
+    for textureLast in [false, true] {
+        let entries = textureLast ? [tint, upper, lower, recipe] : [recipe, tint, upper, lower]
+        let bindings = try AppearanceTestFixture.bindings(entries, directory: directory)
+        let cpu = try preview.applying(card, bindings: bindings, directory: directory, resources: resources, backend: .cpu)
+        let timings = SourceAppearanceTimings()
+        let metal = try preview.applying(card, bindings: bindings, directory: directory, resources: resources, timings: timings)
+        let withoutTimings = try preview.applying(card, bindings: bindings, directory: directory, resources: resources)
+        let expected = try #require(cpu.appearance.materials["part"]?.first)
+        for application in [metal, withoutTimings] {
+            let material = try #require(application.appearance.materials["part"]?.first)
+            #expect(material.base != nil && material.base != expected.base)
+            #expect(material.uniforms.baseColor == expected.uniforms.baseColor)
+            #expect(material.uniforms.overlayColor0 == expected.uniforms.overlayColor0)
+            #expect(material.uniforms.overlayColor1 == expected.uniforms.overlayColor1)
+            let actualTint = textureLast ? Float4.one : expectedTint
+            #expect((0..<4).allSatisfy { abs(material.uniforms.baseColor[$0] - actualTint[$0]) < 0.000001 })
+            #expect((0..<4).allSatisfy { abs(material.uniforms.overlayColor0[$0] - expectedTint[$0]) < 0.000001 })
+            let actualPixels = try materialTestPixels(material.base, resources: resources)
+            let expectedPixels = try materialTestPixels(expected.base, resources: resources)
+            #expect(actualPixels.count == 4 && expectedPixels.count == 4)
+            #expect(zip(actualPixels, expectedPixels).allSatisfy { abs(Int($0) - Int($1)) <= 1 })
+        }
+        #expect(metal.appliedFields == cpu.appliedFields && metal.diagnostics == cpu.diagnostics)
+        #expect(timings.sample.composition?.metalBatchCompletions == 1)
+    }
+}
 
 private enum MakeupFixture {
     typealias F = OriginalCardFixture
