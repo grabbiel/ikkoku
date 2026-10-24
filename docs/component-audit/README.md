@@ -69,7 +69,7 @@ have not been established. Current catalog counts state their actual denominator
 | Animator/dynamics | Mid-stage | Selected normal states and hair chains; remaining controllers, loop correction, cloth and full sequence parity |
 | Voice/audio | Mid-stage | Scheduler/mixer subset; original waveform coverage, spatial/lip-sync and scene sound consumers |
 | Gameplay as a playable game | Infancy | A headless native host runs one synthetic fixed event across save/reload; NPC, scene, presentation, original save state and an interactive mode are missing |
-| General managed plugin compatibility | Infancy | Strict bounded AST subset plus two exact native adapters; no general Harmony/coroutine/Unity host |
+| General managed plugin compatibility | Infancy | Strict bounded AST subset and exact-revision native adapters; no general Harmony/coroutine/Unity host |
 | Recovery/build/test infrastructure | Mid-stage | Reproducibility, explicit fixture skips, automatic orchestration and release gating |
 
 ## Highest-priority handoff
@@ -82,9 +82,37 @@ or hardens the implementation. Task IDs in the reports are stable references.
 
 | Component | Completed scope and evidence | Remaining boundary |
 | --- | --- | --- |
-| Models / CM14 | [#163](https://github.com/grabbiel/ikkoku/pull/163) verifies neutral/mixed shapes for female heads 0/200 and male head 200; [#164](https://github.com/grabbiel/ikkoku/pull/164) rejects malformed morph metadata. [#170](https://github.com/grabbiel/ikkoku/pull/170) adds normal female head 201: three fresh source/native comparisons cover 37,124 selected vertices and 994 skin bindings, with zero morph-weight error and an exact neutral repeat. Forty-eight focused Python tests pass; all 1,266 retained and 472 new capture inputs remain unchanged. [#174](https://github.com/grabbiel/ikkoku/pull/174) independently verifies normal male head 201: three captures cover 35,645 selected vertices and 994 bindings, with an exact 817-transform neutral repeat. Fifty focused tests and the retained gates pass; requested/actual model identity and the sole normal-male height coercion are explicit. | The head 201 matcher combines the already-required exact rest hash and renderer name; duplicate identities still fail and tolerances remain unchanged. No runtime formula or per-frame work changed. Normal male head 0 still lacks this independent assembly gate. Broader shape/expression/animation coverage, special model types and complete production appearance require separate acceptance. [Model evidence and tolerances](../reference/character/neutral-model-parity.md). |
+| Models / CM14 | [#163](https://github.com/grabbiel/ikkoku/pull/163) verifies neutral/mixed shapes for female heads 0/200 and male head 200; [#164](https://github.com/grabbiel/ikkoku/pull/164) rejects malformed morph metadata. [#170](https://github.com/grabbiel/ikkoku/pull/170) adds normal female head 201: three fresh source/native comparisons cover 37,124 selected vertices and 994 skin bindings, with zero morph-weight error and an exact neutral repeat. Forty-eight focused Python tests pass; all 1,266 retained and 472 new capture inputs remain unchanged. [#174](https://github.com/grabbiel/ikkoku/pull/174) independently verifies normal male head 201: three captures cover 35,645 selected vertices and 994 bindings, with an exact 817-transform neutral repeat. Fifty focused tests and the retained gates pass; requested/actual model identity and the sole normal-male height coercion are explicit. | The head 201 matcher combines the already-required exact rest hash and renderer name; duplicate identities still fail and tolerances remain unchanged. No runtime formula or per-frame work changed. The completed normal male head 0 gate is recorded below. Broader shape/expression/animation coverage, special model types and complete production appearance require separate acceptance. [Model evidence and tolerances](../reference/character/neutral-model-parity.md). |
 | Materials / R1, CMT-04 | [#162](https://github.com/grabbiel/ikkoku/pull/162) adds one normal-top GPU composite: independent base output is byte-exact and distinct colors differ by at most one byte. The controlled live fixture reaches 16/20 slots; three default-off capture pairs stay identical. [#165](https://github.com/grabbiel/ikkoku/pull/165) reduces sampler descriptor constructions from 48 to 4 in the measured cache workload. Each focused Debug/Release run executes nine passing tests with one named fixture skip; strict private Release separately passes all five gates, including that skipped case. [#173](https://github.com/grabbiel/ikkoku/pull/173) adds the normal-bottom composite: independent base/distinct targets meet the unchanged one-byte gate and controlled coverage reaches 17/20. All six strict private gates, five Debug/Release tests (six cases each), and three byte-identical default-off PNG pairs pass. | Body, face and shoes remain fallbacks in that fixture. Adding the top increased GPU work and memory. The sampler change establishes fewer allocations, with no demonstrated timing speedup: warm-hit median of run medians is 0.107 → 0.116 ms with overlapping ranges. [Renderer evidence and costs](../reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24). |
 | Plugins / P-T02, P-T03 | [#161](https://github.com/grabbiel/ikkoku/pull/161) connects exact library revisions and scene targets, with pinned native save/fresh-process restore and identical same-clock PNGs. [#166](https://github.com/grabbiel/ikkoku/pull/166) adds prompt mount cancellation and request-owned panel state: four queue tests and 24 production app checks pass with no skips. A separate diagnostic GUI run verifies Cancel before worker release, queued retry, no stale mount, then successful retry, Pause and Unload for two adapters plus one translated fixture. [#172](https://github.com/grabbiel/ikkoku/pull/172) adds bounded offline DLL metadata inventory: all 13 synthetic tests and 51 private assertions pass; six retained originals yield six declarations and the two existing exact-hash adapters, with byte-identical repeat reports. | Inventory reads metadata without assembly execution, dependency resolution or mounting. The later complete installed snapshot below extends discovery only. Its timings are offline diagnostics, not a runtime speedup. [Inventory contract](../reference/mods/plugin-inventory.md). GUI cancellation used a temporary worker gate, separately hashed from production; it establishes behavior, not latency. Scene-open restoration still resolves files synchronously. General DLL/Harmony/API compatibility and GUID-specific original save adapters remain open. [Execution and app evidence](../reference/mods/plugin-execution.md#saved-scenes-and-migration). |
+
+The completed corrected-model task [#178](https://github.com/grabbiel/ikkoku/pull/178)
+adds independent neutral, neutral-repeat and coupled-shape acceptance for normal
+female/head 0 with `boneType=1`. All three comparisons cover 37,052 selected
+vertices and 773 skin bindings / 226 joints at the existing tolerances. The active
+1,156-byte correction table matches exactly, the unique `cf_hit_head` local scale
+matches 1.08, and the neutral repeat preserves all 814 transform records, 20
+geometry streams and card bytes. Fifty-six focused Python checks pass; root
+review also verifies all 32 hashed evidence descriptors in the summary. The
+inspector hashes its correction input once; no runtime pose formula or per-frame
+work changes, and no timing speedup is claimed. Original-player coverage for
+other corrected types, broader shapes, full hierarchy and appearance remains
+open. The measured producer and separately compiled merged
+producer retain distinct provenance. All four CI jobs pass at the reviewed head
+`78fcf76`; the change is merged. [Detailed scope and measurements](../reference/character/neutral-model-parity.md#corrected-female-head00-skeleton-176).
+
+The completed normal male/head-0 task [#181](https://github.com/grabbiel/ikkoku/pull/181)
+adds three passing source/native comparisons over 35,573 selected vertices and
+773 skin bindings / 226 joints. The independent neutral repeat preserves 817
+transform records, all 20 geometry streams and saved card bytes. Its sole source
+coercion, height to Float32 0.6, is reported separately. Fifty-eight focused
+Python checks and the retained gates pass; all 472 new capture files remain
+unchanged, and root verifies the 29 hashed summary descriptors. This completes
+neutral and one coupled-shape acceptance for the six converted normal
+female/male head 0/200/201 assemblies. No runtime formula, per-frame work or
+performance benchmark changes. Broader shapes, corrected male types, animation,
+full hierarchy and appearance remain open. All four CI jobs pass at the reviewed
+head `4d7bb46`; the change is merged. [Detailed scope and measurements](../reference/character/neutral-model-parity.md#normal-male-head00-179).
 
 A later read-only snapshot covers all 243 installed DLLs (26,759,208 bytes),
 with identical before/after source manifests. Eight bounded shards per scan give
@@ -133,6 +161,60 @@ PNGs are byte-identical to the measured material build; the full-frame PNG also
 matches in this pair. Five hair pixels (maximum channel difference 2) and one
 front-hair pixel (maximum 1) still vary. This bounded integration check adds no
 source-parity or performance claim.
+
+**Local acceptance — HideAllUI, [#185](https://github.com/grabbiel/ikkoku/pull/185):**
+The third exact-revision native adapter implements Studio interface visibility
+with session-local state, viewport-owned Space, and recovery that preserves host
+preferences. Sixteen focused Engine tests and 21 native app checks plus four
+fresh-process restore checks pass without skips. The independent original-player
+trace covers ten phases and sixteen retained targets; its corrected validator
+pins the observed exception while preserving the initial failed validations.
+Root GUI checks verify library mounting, text-field Space ownership, modified
+and held Space, hidden panels leaving the accessibility tree, noninteractive
+hidden controls, preference preservation, and Studio/Maker mode recovery.
+The custom View menu still produces stale UI-tool element errors, so actual
+menu recovery and visible unload remain unverified; automated native recovery
+and unload checks pass. All four CI jobs pass at `a6dcd8c`. Three isolated seven-character runs
+with 141 draw items pass six loaded-event checks with unchanged resources.
+Hide/show median synchronous event costs span 0.409–0.440 ms, with a 0.610 ms
+maximum; this excludes deferred layout, display and GPU completion. The initial
+wrong-fixture launch failed before the scenario and remains separately retained. No per-frame callback was
+added; the native panel mapping does not establish general Unity Canvas, input
+or Harmony compatibility. Private evidence is retained under
+`wave-three/plugins/hide-studio-ui/`; the visible menu and unload checks remain open.
+
+**Local acceptance — normal head selection, [#187](https://github.com/grabbiel/ikkoku/pull/187):**
+Character Maker can prepare normal heads 0, 200 and 201 on the shared selection
+queue and atomically replace the card identity, geometry and shape/expression
+contracts while preserving current edits. Exact candidate texture ownership
+keeps failed loads from publishing partial cache entries. The checkpoint passes
+26 focused Engine/Metal checks, female and male 55-check selection plus seven-check
+fresh reload scenarios, and six existing Maker scenarios without skips. An initial
+female/male export-path collision is retained in the evidence history; the female
+pair passes again with distinct retained outputs. Root verifies the actual female
+0→200→201→0 picker sequence, success status and dressed viewport. Two isolated
+interleaved rounds pass eight further selection/reload checks. Measured owner
+commit cost remains 109–155 ms; no-op calls take 0.285–0.396 ms and warmed resource
+counts stay fixed. Appearance reads/uploads still run on the owner, so UI-owner
+latency remains a performance task. This is neither full original Maker preset
+behavior nor source appearance parity.
+The [transaction contract](../reference/character/maker-assets.md#normal-head-selection-182)
+records the exact scope, resource counts and remaining limits.
+
+**Local acceptance — inner-shoe composition, [#183](https://github.com/grabbiel/ikkoku/pull/183):**
+The normal inner-shoe slot 7 now has an independently captured GPU composite
+recipe. Seven strict GPU checks pass, live material coverage rises from 17 to 18
+of 20 slots, and three default-off app image pairs remain byte-identical. The
+additional work raises median run-p50 GPU time from 0.617 to 0.662 ms and allocated
+Metal bytes by 8,814,592 in the measured fixture; no speedup is claimed. All ten
+native target mip levels remain deterministic under repeated draws and fresh
+owners. Separate shoe-local translated-draw variation also occurs in the
+pre-change executable, but current and historical magnitudes differ; whole-frame
+repeat equality and source-color parity remain open. Final combined source-probe
+compilation passes without launching a player or relabeling captured evidence.
+The [renderer evidence](../reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24)
+retains the costs, source gates and diagnostic limits; sampling repeatability is
+the owner's next bounded task.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

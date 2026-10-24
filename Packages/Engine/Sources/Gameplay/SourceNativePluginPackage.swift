@@ -26,6 +26,8 @@ public struct SourceNativePluginPackage: Sendable {
         public let schemaVersion: Int, kind: String, adapterID: String, type: String
         public let identity: SourcePluginPackage.Manifest.Identity
         public let processes: [String]
+        /// Absent in the original two adapter manifests, which declared none.
+        public let incompatibilities: [String]?
         public let source: SourcePluginPackage.Manifest.File
         public let configuration: SourcePluginPackage.Manifest.File?
     }
@@ -33,6 +35,7 @@ public struct SourceNativePluginPackage: Sendable {
     public let configuration: Data?
     public static let muteAdapter = "bepinex-mute-in-background-v1"
     public static let accessoryAdapter = "kk-studio-accessory-names-v1"
+    public static let hideStudioUIAdapter = "kk-hide-studio-ui-v1"
     public static func load(url: URL) throws -> Self {
         func read(_ file: URL, limit: Int) throws -> Data {
             let handle = try FileHandle(forReadingFrom: file); defer { try? handle.close() }
@@ -42,19 +45,22 @@ public struct SourceNativePluginPackage: Sendable {
         }
         func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
         let bytes = try read(url, limit: 1024 * 1024), value = try JSONDecoder().decode(Manifest.self, from: bytes)
-        let expected: (String, String, String, String, String, [String])
+        let expected: (String, String, String, String, String, [String], [String])
         switch value.adapterID {
         case muteAdapter:
-            expected = ("BepInEx.MuteInBackground", "Mute In Background", "1.1", "BepInEx.MuteInBackground", "e494f24b73fed491d056c3c6a00ee73baf257409877ce8e5b44da1b0494ca96d", [])
+            expected = ("BepInEx.MuteInBackground", "Mute In Background", "1.1", "BepInEx.MuteInBackground", "e494f24b73fed491d056c3c6a00ee73baf257409877ce8e5b44da1b0494ca96d", [], [])
         case accessoryAdapter:
-            expected = ("KK_StudioAccessoryNames", "KK_StudioAccessoryNames", "1.1.0", "KK_StudioAccessoryNames.KK_StudioAccessoryNames", "c60d740ee1037040e97bcb0ae8037f8f7a1e4350322bc7ed44699fd0dc9662bd", ["CharaStudio"])
+            expected = ("KK_StudioAccessoryNames", "KK_StudioAccessoryNames", "1.1.0", "KK_StudioAccessoryNames.KK_StudioAccessoryNames", "c60d740ee1037040e97bcb0ae8037f8f7a1e4350322bc7ed44699fd0dc9662bd", ["CharaStudio"], [])
+        case hideStudioUIAdapter:
+            expected = ("keelhauled.hideallui", "HideAllUI", "2.3.2", "HideAllUI.HideAllUI", "ec11d03060502b60bf15742ef8e56b6bc804c10067e5a78ba368c7b62e3b117e", [], ["HideStudioUI", "HideHInterface"])
         default: throw SourcePluginError.invalid("No verified native behavior adapter for this assembly.")
         }
         guard value.schemaVersion == 1, value.kind == "ikkoku-native-plugin-adapter",
               value.identity.guid.utf8.elementsEqual(expected.0.utf8), value.identity.name.utf8.elementsEqual(expected.1.utf8),
               value.identity.version == expected.2, value.type == expected.3,
               value.source.sha256 == expected.4, value.processes == expected.5,
-              value.adapterID == muteAdapter || value.configuration == nil else {
+              (value.incompatibilities ?? []) == expected.6,
+              value.adapterID == muteAdapter || value.adapterID == hideStudioUIAdapter || value.configuration == nil else {
             throw SourcePluginError.invalid("Native adapter identity differs from the verified original.")
         }
         let root = url.deletingLastPathComponent().resolvingSymlinksInPath()
