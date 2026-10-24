@@ -1159,6 +1159,15 @@ supplement and native texture store,
 base and edited top targets, identity hashes, unchanged cache hits, recolour/revert
 and released-target resource bounds. See [normal-top evidence](../../docs/reference/renderer.md#native-normal-top-composite-r1cmt-04-159-2026-10-24).
 
+`IKKOKU_BOTTOM_COMPOSITE_PROBE` supplies the equivalent distinct-colour capture
+for the normal bottom in clothing slot 1. Its three `bottomBaseColor` settings
+leave the top unchanged; `captureBottomCompositeInputs` also records the catalog
+main/mask inputs in `frame.json`. The gated
+`liveSourceNormalBottomCompositeMatchesBaseAndDistinctOriginalColours` checks
+the base and edited 512×1024 targets, exact input/program identities, unchanged
+hits, recolour/revert and released-target bounds. The native store must contain
+both bottom inputs; retained capture pixels are comparison data only.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,

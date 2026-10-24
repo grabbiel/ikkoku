@@ -3292,6 +3292,76 @@ the colour edit retains max 1 byte with 1,235 differing channels. Existing hair
 and eye limits are unchanged, and controlled native coverage stays 16/20.
 This slice adds no UI behavior and makes no new app/VM capture claim.
 
+### Native normal-bottom composite (R1/CMT-04, #168, 2026-10-24)
+
+The normal-clothes recipe also handles clothing slot 1, using its own saved
+`colorInfo` fields. The independently checked selection is category 106, ID 3
+(`p_o_bot_pants03`, `o_bot_pants03`), high detail, `rendNormal01` only, with all
+three pattern IDs zero. Recovered `InitBaseCustomTextureClothes(true, 1)` loads
+`cf_m_clothesN_create`; `ChangeCustomClothes(true, 1, …)` reads
+`nowCoordinate.clothes.parts[1]`. This is the same verified create material and
+`create_topN` program identified above, despite the shader's name. Other clothing
+slots, secondary/alpha roles, low-detail inputs and unverified patterns retain
+explicit fallbacks. A synthetic fixture supplies a conflicting valid top and
+checks all bottom colors, tiling and source paths; missing bottom fields cannot
+fall back to top values.
+
+| Input | Exact identity | Decoding and sampler |
+| --- | --- | --- |
+| Main | `cf_bot_pants03_t`, path ID `1799539927781456382` | Linear BC1, 512×1024, one authored mip |
+| Color mask | `cf_bot_pants03_mc`, path ID `2152893568627913941` | Linear BC7, 512×1024, one authored mip |
+
+Both inputs use Bilinear/Repeat/aniso 1 and belong to
+`chara/co_bot_00.unity3d`, SHA-256
+`99ca895979e691caf55c1a68a4ffd9a6892b3d8fdfe9b260cb0812cd5fbf9d29`, serialized
+file `CAB-633e5b9224bb4b60a1d0f9eeb80cf32d`. The target is 512×1024 with 11
+**generated** mips, Bilinear/Clamp/aniso 1 and sRGB ARGB32-equivalent output.
+Only target level zero has independent GPU readback evidence; the remaining
+levels are structural checks. The existing offline BC1/BC7 conversion paths are
+unchanged, and no texture decoding is added to runtime frame work.
+
+**Independent original-player evidence.** One new capture changes only the
+bottom's first three base colors to `(0.68,0.12,0.83,1)`, `(0.07,0.74,0.29,1)`
+and `(0.91,0.38,0.05,1)`. `Custom`, `Parameter` and `Status` card blocks remain
+byte-identical to the retained base. In all seven coordinates, only those nine
+RGB lanes differ; coordinate tails and all other garment fields remain equal.
+The producer source SHA-256 is
+`7e0cfe8ad328438581244e890e045e00a11a1ea2662109c1cdd6f6da730838e0`.
+
+| Target level zero | Readback SHA-256 | Native error in encoded RGBA8 |
+| --- | --- | --- |
+| Retained base | `e896dd7f15c967a5ca310eb46448cafcce5dd601a3b8995bee32f7a0e9e5393d` | Max 1 byte; 376 of 2,097,152 channels differ; mean 0.00017929 byte |
+| Distinct bottom colors | `8b5641111b0c210c872ff26ce522de1c7846e3d511b32295e6c2a28c07d58ae6` | Max 1 byte; 1,279 channels differ; mean 0.00060987 byte |
+
+The same capture reads back the selected source main/mask inputs and records
+bundle/name/format/dimensions/mips independently. Comparing its filtered GPU
+blits with the offline texels gives maximum linear error 0.001953125 for the
+main (mean 0.00015604) and 0.00048828125 for the BC7 mask (mean 0.00000294).
+These input diagnostics are not exact raw-texel claims. Both final target
+comparisons pass the existing one-byte gate without changing shader coefficients,
+card colors or tolerances.
+
+**Live coverage and resources.** The rebuilt native store has 54 asset entries,
+three create programs and zero unavailable entries; all prior 52 entries and all
+program bytes are unchanged. Its path-independent content fingerprint is
+`8cd05439c63bf8d4a75e1d66a88d5c7161ac709afd7312803d3141cbc3bf7a0c`.
+The controlled native pose/vertex-stream fixture resolves 17/20 live slots;
+body, face and shoes still fall back. On `main_opaque` pixels frontmost in both
+the complete capture-provider and native subsets, 74,401 pixels have mean
+0.04965 byte error and p99 1. Existing hair and eye gates pass unchanged. This
+is a controlled native scene comparison, not whole-character production parity.
+
+The base/edit/revert test retains two asset uploads, one white default and one
+sampler. Unchanged requests return the same texture, 15 released edited targets
+do not accumulate, and reverting returns the original cached target and pixels.
+Debug and Release CPU validation each pass five tests (six parameterized cases),
+including original binding and half-state checks. All six strict private Release
+pixel/resource gates pass with no skips. Probe Python tests pass 15/15, texture
+converter tests 20/20 and verification-tool tests 191/191. Release app cost and
+default-off output controls are pending; no frame-time or FPS gain is claimed.
+The private fixture key is `IKKOKU_BOTTOM_COMPOSITE_PROBE`; see
+[the fixture contract](../../Tools/verification/README.md#composite-colour-capture-fixture).
+
 ### Native pose gate
 
 The R2 transform gate compares original-player local bone transforms composed into

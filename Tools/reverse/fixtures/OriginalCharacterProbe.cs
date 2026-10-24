@@ -48,7 +48,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // (clothes, clothesState, shoesType). Null when none is given; then the
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
-    bool captureTopCompositeInputs;
+    bool captureTopCompositeInputs,captureBottomCompositeInputs;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -257,9 +257,15 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 // Independent ChangeCustomClothes counterfactual: only the
                 // top's three base colours change, before the original load.
                 case "captureTopCompositeInputs": captureTopCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureBottomCompositeInputs": captureBottomCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "topBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[0].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[1].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[2].baseColor=ParseColor(fields[1]);break;
+                // Separate normal-bottom counterfactual; preserve the top and
+                // every other garment's saved values before original load.
+                case "bottomBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[0].baseColor=ParseColor(fields[1]);break;
+                case "bottomBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[1].baseColor=ParseColor(fields[1]);break;
+                case "bottomBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[1].colorInfo[2].baseColor=ParseColor(fields[1]);break;
                 // Wear: catalog IDs for every outfit's nine clothes slots, the
                 // saved ChaFileStatus.clothesState and shoesType. LoadAsync's
                 // UpdateClothesStateAll and the first UpdateVisible apply them.
@@ -389,17 +395,18 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 {"clothesIDs",Array.ConvertAll(character.nowCoordinate.clothes.parts,p=>p.id)},{"objClothesActive",active},{"customMatBodyAlpha",bodyAlpha},
                 {"rule","ChaControl.UpdateVisible after LoadAsync (UpdateClothesStateAll); no SetClothesStateAll(0) at capture"}};
         }
-        if(captureTopCompositeInputs) {
+        for(int slot=0;slot<2;slot++) {
+            if(!(slot==0?captureTopCompositeInputs:captureBottomCompositeInputs))continue;
             var inputs=new Dictionary<string,object>();
-            var info=character.infoClothes[0];
+            var info=character.infoClothes[slot];
             foreach(var keys in new[]{new[]{ChaListDefine.KeyType.MainTexAB,ChaListDefine.KeyType.MainTex},new[]{ChaListDefine.KeyType.ColorMaskAB,ChaListDefine.KeyType.ColorMaskTex}}) {
                 string bundle=info.GetInfo(keys[0]),name=info.GetInfo(keys[1]);
                 if(bundle=="0")bundle=info.GetInfo(ChaListDefine.KeyType.MainAB);
                 var texture=CommonLib.LoadAsset<Texture2D>(bundle,name,false,info.GetInfo(ChaListDefine.KeyType.MainManifest));
-                if(texture==null)throw new Exception("Top composite input missing: "+bundle+"/"+name);
+                if(texture==null)throw new Exception("Clothes slot "+slot+" composite input missing: "+bundle+"/"+name);
                 inputs[keys[1].ToString()]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",Sha256File(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath),"abdata"),bundle))},{"name",name},{"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},{"mipLevels",texture.mipmapCount},{"file",ExportTexture(texture)}};
             }
-            report["topCompositeInputs"]=inputs;
+            report[slot==0?"topCompositeInputs":"bottomCompositeInputs"]=inputs;
         }
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));

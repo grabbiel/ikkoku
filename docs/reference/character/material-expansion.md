@@ -139,7 +139,9 @@ rejected together with `--collect`. The accepted keys:
 | `gradBlend` / `gradOffsetY` / `gradScale` | `custom.face.pupil[0..1].gradBlend` / `.gradOffsetY` / `.gradScale` | Iris gradient blend, offset and scale (floats) behind the composite's `_Blend` and `_grad`, set on both eyes |
 
 | `topBaseColor1` / `topBaseColor2` / `topBaseColor3` | Each coordinate’s `clothes.parts[0].colorInfo[0..2].baseColor` | Distinct top RGBA inputs for the first normal garment composite |
+| `bottomBaseColor1` / `bottomBaseColor2` / `bottomBaseColor3` | Each coordinate’s `clothes.parts[1].colorInfo[0..2].baseColor` | Distinct bottom RGBA inputs; all other garment slots retain their saved values |
 | `captureTopCompositeInputs` | Diagnostic only; no card field | Boolean enabling GPU readbacks of the selected top catalog main/mask textures, with source bundle hashes, names and texture metadata |
+| `captureBottomCompositeInputs` | Diagnostic only; no card field | The same input readbacks for the selected bottom, independent of the top flag |
 
 **Combined-mode run.** On 2026-09-30 `--settings`, `--hand-patterns` and
 `--look-patterns` were supplied together to one capture
