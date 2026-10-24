@@ -185,6 +185,63 @@ def extract(bundle,material,output,vm,pass_name="FORWARD"):
  (output/'source.metal').write_text(source);result['sourceMSLSHA256']=hashlib.sha256(source.encode()).hexdigest();(output/'program.json').write_text(json.dumps(result,indent=2)+'\n')
  return result
 
+def input_semantics(assembly):
+ semantics={};signature=assembly.split('// Input signature:',1)[1].split('// Output signature:',1)[0]
+ for match in re.finditer(r'^//\s+(\w+)\s+(\d+)\s+([xyzw]+)\s+(\d+)\s+',signature,re.MULTILINE):semantics[int(match[4])]=dict(name=match[1],index=int(match[2]),mask=match[3])
+ return semantics
+
+def extract_fragment(bundle,path_id,material,output,caches,expected_sha=None,pass_name="FORWARD"):
+ """Fragment-only translation of a CustomTextureCreate pass for Graphics.Blit.
+
+ The native compositor supplies the Blit quad itself, so only the pass's DXBC
+ fragment program is translated. Every fragment variant of the pass must be
+ byte-identical (Blit's keyword variant is not modelled), its SHA-256 must
+ equal `expected_sha`, and the disassembly must come from a retained
+ `<name>.dxbc`/`<name>.asm` pair in `caches` whose DXBC bytes equal the blob:
+ no VM is used here.
+ """
+ import UnityPy
+ from UnityPy.export.ShaderConverter import ShaderProgram
+ from UnityPy.helpers import CompressionHelper
+ from UnityPy.streams import EndianBinaryReader
+ data=Path(bundle).read_bytes();env=UnityPy.load(str(bundle))
+ materials=[o for o in env.objects if o.type.name=='Material' and str(o.path_id)==str(path_id)]
+ if len(materials)!=1 or materials[0].peek_name()!=material:raise ValueError('Expected exact create material identity')
+ pointer=materials[0].read().m_Shader;shader=pointer.read();tree=pointer.read_typetree()
+ if list(shader.platforms)!=[4]:raise ValueError('Expected the D3D11 source shader platform')
+ raw=CompressionHelper.decompress_lz4(bytes(shader.compressedBlob)[shader.offsets[0]:shader.offsets[0]+shader.compressedLengths[0]],shader.decompressedLengths[0])
+ program=ShaderProgram(EndianBinaryReader(raw,endian='<'),shader.object_reader.version)
+ passes=[p for p in tree['m_ParsedForm']['m_SubShaders'][0]['m_Passes'] if p['m_State']['m_Name']==pass_name]
+ if len(tree['m_ParsedForm']['m_SubShaders'])!=1 or len(passes)!=1:raise ValueError('Expected one subshader with one %s pass'%pass_name)
+ forward=passes[0];blobs=[]
+ for sub in forward['progFragment']['m_SubPrograms']:
+  code=bytes(program.m_SubPrograms[sub['m_BlobIndex']].m_ProgramCode);start=code.find(b'DXBC')
+  if start<0 or start+28>len(code):raise ValueError('Expected a DXBC container')
+  length=struct.unpack_from('<I',code,start+24)[0]
+  if length<32 or start+length>len(code):raise ValueError('Invalid DXBC container length')
+  blobs.append((sub,code[start:start+length]))
+ if not blobs or any(blob!=blobs[0][1] for _,blob in blobs):raise ValueError('Fragment variants differ; the Blit keyword variant is not modelled')
+ sub,blob=blobs[0];sha=hashlib.sha256(blob).hexdigest()
+ if expected_sha and sha!=expected_sha:raise ValueError('Fragment program %s differs from the verified %s'%(sha,expected_sha))
+ assembly=None
+ for cache in caches:
+  for candidate in sorted(Path(cache).glob('*.dxbc')):
+   if candidate.read_bytes()==blob and candidate.with_suffix('.asm').is_file():assembly=candidate.with_suffix('.asm');break
+  if assembly:break
+ if assembly is None:raise ValueError('No retained disassembly of fragment %s; run extract (VM) first'%sha)
+ text=assembly.read_text();translated=translate(text,'fragment')
+ source='#include <metal_stdlib>\nusing namespace metal;\n'+emit_stage(translated)
+ output=Path(output);output.mkdir(parents=True,exist_ok=True);(output/'source.metal').write_text(source)
+ result=dict(schemaVersion=1,stages=['fragment'],name=tree['m_ParsedForm']['m_Name'],bundleSHA256=hashlib.sha256(data).hexdigest(),
+  material=material,materialPathID=str(path_id),serializedFile=materials[0].assets_file.name,passState=forward['m_State'],
+  properties=tree['m_ParsedForm']['m_PropInfo']['m_Props'],names={index:name for name,index in forward['m_NameIndices']},
+  programs=dict(fragment=dict(metadata=sub,sha256=sha,variants=len(blobs),inputSemantics=input_semantics(text),
+   registers={k:v for k,v in translated.items() if k!='body'},keywords=program.m_SubPrograms[sub['m_BlobIndex']].m_Keywords)),
+  disassembly=dict(file=assembly.name,sha256=hashlib.sha256(text.encode()).hexdigest(),dxbc=assembly.with_suffix('.dxbc').name),
+  sourceMSLSHA256=hashlib.sha256(source.encode()).hexdigest())
+ (output/'program.json').write_text(json.dumps(result,indent=2)+'\n')
+ return result
+
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--bundle',type=Path,required=True);p.add_argument('--material',required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--vm',default='Windows 11');p.add_argument('--pass-name',default='FORWARD');a=p.parse_args()
  if not a.output.resolve().is_relative_to(ROOT/'.local'):raise ValueError('Derived shaders must remain private .local')

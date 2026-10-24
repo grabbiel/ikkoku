@@ -62,11 +62,19 @@ public final class TranslatedSourceProgram: @unchecked Sendable {
     public let vertex: Stage
     public let fragment: Stage
     public let vertexInputs: [VertexInput]
+    /// Fragment input registers (`SV_POSITION`, `TEXCOORD0`, ...) of a
+    /// fragment-only program (`stages: ["fragment"]`); empty otherwise.
+    public let fragmentInputs: [VertexInput]
+    /// A `CustomTextureCreate` pass translated without its vertex stage
+    /// (`source_shader_translation.extract_fragment`): the compositor draws
+    /// the `Graphics.Blit` quad itself.
+    public let fragmentOnly: Bool
     public let state: PassState
     public let properties: [String: Property]
 
     /// Parses and validates `program.json` and the hash of its `source.metal`.
-    public init(url: URL) throws {
+    /// `fragmentOnly` accepts only a fragment-only program and vice versa.
+    public init(url: URL, fragmentOnly: Bool = false) throws {
         typealias Row = [String: Any]
         func invalid(_ message: String) -> ProgramError { .invalid("\(url.deletingLastPathComponent().lastPathComponent): \(message)") }
         guard let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? Row else { throw invalid("Shader descriptor") }
@@ -118,7 +126,19 @@ public final class TranslatedSourceProgram: @unchecked Sendable {
             return Stage(constantBuffers: result, textures: parameters)
         }
 
-        guard let semantics = stages["vertex"]?["inputSemantics"] as? [String: Row] else { throw invalid("Source vertex inputs") }
+        guard ((root["stages"] as? [String]) == ["fragment"]) == fragmentOnly, (stages["vertex"] == nil) == fragmentOnly else {
+            throw invalid(fragmentOnly ? "Not a fragment-only create program" : "Fragment-only program used as a draw program")
+        }
+        var fragmentInputs: [VertexInput] = []
+        if fragmentOnly {
+            guard let semantics = stages["fragment"]?["inputSemantics"] as? [String: Row] else { throw invalid("Source fragment inputs") }
+            fragmentInputs = try semantics.map { key, semantic -> VertexInput in
+                guard let register = Int(key), let name = semantic["name"] as? String else { throw invalid("Fragment input register") }
+                return VertexInput(register: register, semantic: name, index: (semantic["index"] as? NSNumber)?.intValue ?? 0)
+            }.sorted { $0.register < $1.register }
+        }
+        let semantics = fragmentOnly ? [:] : stages["vertex"]?["inputSemantics"] as? [String: Row]
+        guard let semantics else { throw invalid("Source vertex inputs") }
         let inputs = try semantics.map { key, semantic -> VertexInput in
             guard let register = Int(key) else { throw invalid("Vertex register") }
             guard let semanticName = semantic["name"] as? String else { throw invalid("Unsupported source vertex semantic") }
@@ -149,8 +169,8 @@ public final class TranslatedSourceProgram: @unchecked Sendable {
 
         self.url = url; self.name = name; self.pass = (state["m_Name"] as? String) ?? ""
         self.sourceSHA256 = digest; self.source = source
-        self.vertex = try stage("vertex"); self.fragment = try stage("fragment")
-        self.vertexInputs = inputs; self.properties = byName
+        self.vertex = fragmentOnly ? Stage(constantBuffers: [], textures: []) : try stage("vertex"); self.fragment = try stage("fragment")
+        self.vertexInputs = inputs; self.fragmentInputs = fragmentInputs; self.fragmentOnly = fragmentOnly; self.properties = byName
         self.state = PassState(zWrite: try stateValue("zWrite") == 1, culling: culling,
             sourceRGB: try factor("srcBlend"), destinationRGB: try factor("destBlend"),
             sourceAlpha: try factor("srcBlendAlpha"), destinationAlpha: try factor("destBlendAlpha"),
@@ -269,6 +289,7 @@ public final class TranslatedSourcePipelineCache: @unchecked Sendable {
     /// `depth24Quantized` the fragment re-emits depth snapped to 24-bit fixed
     /// point (`TranslatedSourceDepth24.rewrite`).
     public func entry(_ program: TranslatedSourceProgram, target: TranslatedSourceTarget, depth24Quantized: Bool = false) throws -> Entry {
+        guard !program.fragmentOnly else { throw TranslatedSourceProgram.ProgramError.invalid("A fragment-only create program is not a draw program") }
         let key = Key(program: program.url.standardizedFileURL.path + "#" + program.sourceSHA256, target: target, depth24: depth24Quantized)
         lock.lock(); if let cached = entries[key] { lock.unlock(); return cached }; lock.unlock()
         let options = MTLCompileOptions(); options.fastMathEnabled = false

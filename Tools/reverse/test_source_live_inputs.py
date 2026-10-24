@@ -86,6 +86,69 @@ class TextureStoreTests(unittest.TestCase):
             for name, expected in zip(entry['files'], entry['sha256']):
                 self.assertEqual(hashlib.sha256((root / 'out' / entry['directory'] / name).read_bytes()).hexdigest(), expected)
 
+    def composite_report(self, **recipe_overrides):
+        main = dict(kind='asset', bundle='chara/mt_eye_00.unity3d', pathID='1', name='eye')
+        mask = dict(kind='asset', bundle='chara/mt_eye_gradation_00.unity3d', pathID='2', name='grad')
+        recipe = dict(method='ChaControl.ChangeSettingEye(0, ...)', material='cf_m_eye_create', bundle='chara/mm_base.unity3d',
+                      bundleSHA256=hashlib.sha256(b'base').hexdigest(), serializedFile='CAB-base', pathID='9',
+                      shader='Shader Forge/create_eye', programSHA256='c' * 64,
+                      textures=dict(_MainTex=dict(identity=main), _ColorMask=dict(identity=mask)), vectors={})
+        recipe.update(recipe_overrides)
+        composite = dict(kind='runtimeComposite', creator='ctCreateEyeL', composite=recipe)
+        return dict(renderers=[dict(mesh=mesh, materialSlot=0, material=dict(textures=dict(_MainTex=dict(identity=composite))))
+                               for mesh in ('cf_Ohitomi_L02', 'cf_Ohitomi_R02')])
+
+    def test_composite_recipe_inputs_are_store_assets_and_recipes_are_shared(self):
+        report = self.composite_report()
+        found = store.identities(report)
+        self.assertEqual([item['identity']['name'] for item in found], ['eye', 'grad'])
+        self.assertEqual(found[0]['uses'], ['cf_Ohitomi_L02 slot 0 _MainTex composite _MainTex', 'cf_Ohitomi_R02 slot 0 _MainTex composite _MainTex'])
+        recipes = store.recipes(report)
+        self.assertEqual(len(recipes), 1)
+        self.assertEqual(recipes[0]['uses'], ['cf_Ohitomi_L02 slot 0 _MainTex', 'cf_Ohitomi_R02 slot 0 _MainTex'])
+        self.assertEqual(recipes[0]['recipe']['programSHA256'], 'c' * 64)
+        # A recipe-less composite (body, face) has no inputs and no program.
+        bare = dict(renderers=[dict(mesh='o_body_a', materialSlot=0, material=dict(textures=dict(
+            _MainTex=dict(identity=dict(kind='runtimeComposite', creator='CustomTextureControl body'))))) ])
+        self.assertEqual((store.identities(bare), store.recipes(bare)), ([], []))
+
+    def test_composite_programs_export_only_verified_recipes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'chara').mkdir()
+            (root / 'chara/mm_base.unity3d').write_bytes(b'base')
+
+            def extract(bundle, path_id, material, output, caches, expected_sha=None):
+                output.mkdir(parents=True)
+                (output / 'program.json').write_text('{}')
+                (output / 'source.metal').write_text('metal')
+                if material == 'missing-disassembly':
+                    raise ValueError('No retained disassembly of fragment')
+                return dict(name='Shader Forge/create_eye', serializedFile='CAB-base', bundleSHA256=hashlib.sha256(b'base').hexdigest(),
+                            programs=dict(fragment=dict(sha256=expected_sha)))
+
+            with patch('source_shader_translation.extract_fragment', side_effect=extract) as call:
+                composites, unavailable = store.export_composites(self.composite_report(), [root], root / 'out', [root / 'cache'])
+                self.assertEqual(unavailable, [])
+                self.assertEqual(call.call_count, 1)
+                entry = composites[0]
+                self.assertEqual((entry['pathID'], entry['programSHA256'], entry['files']), ('9', 'c' * 64, ['program.json', 'source.metal']))
+                self.assertEqual(entry['sha256'], [hashlib.sha256(b'{}').hexdigest(), hashlib.sha256(b'metal').hexdigest()])
+                self.assertEqual(len(entry['uses']), 2)
+                for overrides, reason in [(dict(unresolved='create material not converted'), 'recipe unresolved'),
+                                          (dict(programSHA256=None), 'no verified program'),
+                                          (dict(bundle='chara/other.unity3d'), 'not in the local bundle roots'),
+                                          (dict(bundleSHA256='0' * 64), 'SHA-256 differs'),
+                                          (dict(shader='Shader Forge/create_head'), 'shader or serialized file differs'),
+                                          (dict(material='missing-disassembly'), 'No retained disassembly')]:
+                    output = root / ('out-%d' % len(reason))
+                    composites, unavailable = store.export_composites(self.composite_report(**overrides), [root], output, [])
+                    self.assertEqual(composites, [])
+                    self.assertIn(reason, unavailable[0]['reason'])
+                    self.assertEqual(len(unavailable[0]['uses']), 2)
+                    # Nothing half-exported is left behind for a failed recipe.
+                    self.assertEqual(list(output.glob('create-*')), [])
+
     def test_build_reports_path_id_collisions_across_serialized_files(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
