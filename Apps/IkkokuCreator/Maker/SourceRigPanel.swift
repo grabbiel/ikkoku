@@ -9,6 +9,7 @@ struct SourceRigPanel: View {
     @Bindable var model: MakerModel
 
     var body: some View {
+        let _ = PerfTrace.body(.makerRigPanel)
         if let preview = model.sourceRigPreview {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Original model preview").font(.title2.bold())
@@ -106,8 +107,8 @@ struct SourceRigPanel: View {
                             if preview.supportsBodyCustomization {
                                 ForEach(preview.contract?.domain("body")?.slots ?? [], id: \.index) { slot in
                                     if preview.bodyCoverage?.boundSlots.contains(slot.index) == true,
-                                       model.sourceBodyValues.indices.contains(slot.index) {
-                                        shapeSlider(label: slot.label, value: $model.sourceBodyValues[slot.index])
+                                       slot.index >= 0, slot.index < model.shapeValueCount(face: false) {
+                                        SourceShapeSliderRow(model: model, slot: .init(face: false, index: slot.index), label: slot.label)
                                             .disabled(model.sourceSex == 0 && slot.index == 0)
                                     }
                                 }
@@ -116,8 +117,8 @@ struct SourceRigPanel: View {
                             }
                             if preview.supportsFaceCustomization, let face = preview.contract?.domain("face") {
                                 ForEach(face.slots, id: \.index) { slot in
-                                    shapeSlider(label: Self.faceLabels.indices.contains(slot.index) ? Self.faceLabels[slot.index] : slot.label,
-                                                value: $model.sourceFaceValues[slot.index])
+                                    SourceShapeSliderRow(model: model, slot: .init(face: true, index: slot.index),
+                                                         label: Self.faceLabels.indices.contains(slot.index) ? Self.faceLabels[slot.index] : slot.label)
                                 }
                             }
                         }.padding(.trailing, 8)
@@ -271,10 +272,7 @@ struct SourceRigPanel: View {
     }
 
     private func shapeSlider(label: String, value: Binding<Float>) -> some View {
-        VStack(spacing: 4) {
-            HStack { Text(label); Spacer(); Text(value.wrappedValue, format: .number.precision(.fractionLength(2))).monospacedDigit().foregroundStyle(.secondary) }
-            Slider(value: value, in: 0...1)
-        }
+        SourceShapeSlider(label: label, value: value)
     }
 
     // Display translations only. Slot identity and runtime mappings come from recovered data.
@@ -287,4 +285,32 @@ struct SourceRigPanel: View {
         "Eye vertical size", "Eye horizontal size", "Inner eye position", "Outer eye height", "Nose tip height", "Nose position", "Nose bridge height",
         "Mouth height", "Mouth width", "Mouth depth", "Upper lip shape", "Lower lip shape", "Mouth corner shape", "Ear size", "Ear yaw", "Ear roll",
         "Upper ear shape", "Lower ear shape"]
+}
+
+/// One body or face shape slider. It reads only its own slot
+/// (`MakerModel.subscript(shapeSlot:)`), so a write re-evaluates this row and
+/// not the panel or the other rows (R7 phase 2, item 1).
+struct SourceShapeSliderRow: View {
+    let model: MakerModel
+    let slot: MakerModel.ShapeSlot
+    let label: String
+
+    var body: some View {
+        SourceShapeSlider(label: label, value: Binding(get: { model[shapeSlot: slot] }, set: { model[shapeSlot: slot] = $0 }))
+    }
+}
+
+/// A labelled 0...1 slider with its value. Its body reads the value, so it is
+/// what a slot write re-evaluates (counted as `makerShapeRow`).
+struct SourceShapeSlider: View {
+    let label: String
+    let value: Binding<Float>
+
+    var body: some View {
+        let _ = PerfTrace.body(.makerShapeRow)
+        VStack(spacing: 4) {
+            HStack { Text(label); Spacer(); Text(value.wrappedValue, format: .number.precision(.fractionLength(2))).monospacedDigit().foregroundStyle(.secondary) }
+            Slider(value: value, in: 0...1)
+        }
+    }
 }

@@ -29,7 +29,8 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    layout, because the Studio and Maker views observe whole documents and
    arrays. The main thread then stays about 1000 ms/s busy. This is the main
    lag left after the quick wins. Its fix restructures `StudioModel.swift`
-   and the views, so it is phase 2.
+   and the views, so it is phase 2. Phase 2, item 1 has since done this, so
+   those edits present at 119–120 FPS ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)).
 3. **The display link shares the main run loop**, so any cost above turns
    into a presentation hitch.
 
@@ -53,8 +54,8 @@ the app opens its normal editor window, sets up one workload, waits
 Every action calls the method the UI calls
 ([PerfWorkload.swift](../../Apps/IkkokuCreator/PerfWorkload.swift)): mouse
 input goes through the viewport's `ViewportInputHandler` methods, Maker sliders
-through the slider binding's array element, Studio selection, pose mode and
-scene commands through `StudioModel`. Nothing is re-implemented, so the draw,
+through the slider row binding's slot setter (`MakerModel[shapeSlot:]`), Studio
+selection, pose mode and scene commands through `StudioModel`. Nothing is re-implemented, so the draw,
 the model and SwiftUI run as they do for a user. The measured window floats
 above other apps' windows (a script-launched app may not take focus, and an
 occluded window is paced differently) and the process opts out of App Nap for
@@ -89,10 +90,22 @@ is untouched) and `IKKOKU_PERF_INPUT_HZ` (default 120).
 - main run-loop busy time (after-waiting to before-waiting observers), split
   into draw, model (ticks, refreshes and input handlers, nested intervals
   counted once) and other (SwiftUI updates, layout, AppKit event handling);
-- Maker ticks and refreshes (explicit hooks in `MakerModel`), Studio live ticks
-  and `refresh()` calls (inferred from properties they assign, see
-  `PerfTrace.observeStudio`; explicit hooks in `StudioModel.swift` are left to
-  phase 2, which changes that file anyway) and every viewport input call;
+- Maker ticks and refreshes (explicit hooks in `MakerModel`), Studio live
+  ticks (`studioTick`, the timer's step outside a drag), `refresh()` calls
+  (`studioRefresh`) and camera-drag frame reuses (`studioCameraRefresh`, see
+  [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)), all explicit
+  hooks in `StudioModel.swift` (phase 2, item 9), and every viewport input call;
+- model events without a duration (`events`): `studioDocChange` counts writes
+  to the Studio document, each of which notifies every view that reads it, and
+  `studioCameraChange` counts writes through the camera accessor, which only
+  the camera's readers observe;
+- SwiftUI body evaluations (`viewBodies`, count and rate per second) for the
+  app's commands, the content view, the Studio window and each of its panels
+  and inspectors, and the Maker window, source rig panel and shape slider rows.
+  A count is one evaluation of that body, so dividing its rate by the input
+  rate says what one edit re-evaluated. `perf_trace.py summarize` prints them
+  per input event in a second table. SwiftUI's own graph update and layout are
+  not split by view; Time Profiler attributes those;
 - process CPU, main-thread CPU, peak `phys_footprint` and peak Metal
   allocation, window occlusion samples and the machine's load average;
 - startup marks in seconds since process start: `appStateInit`, `engineReady`,
@@ -106,9 +119,11 @@ A Studio tick includes the `refresh()` it ends with; the tick column below is
 the whole live step and the refresh column the frame rebuild inside it.
 
 The same phases are `os_signpost` intervals in the Points of Interest category
-of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `MakerTick`,
-`MakerRefresh`, `Startup`, and `Mark` events), so every Instruments template
-shows them next to its own tracks.
+of the `com.grabbiel.IkkokuCreator` subsystem (`Draw`, `Input`, `StudioTick`,
+`StudioRefresh`, `StudioCameraRefresh`, `MakerTick`, `MakerRefresh`,
+`Startup`, and `Mark` events), so every Instruments template shows them next
+to its own tracks. The report's `schemaVersion` is 2 since the Studio hooks,
+events and view bodies were added.
 
 ### Running it
 
@@ -328,13 +343,13 @@ which the "per second" column shows.
 | Rank | Cost | ms per occurrence | % of 120 Hz / 60 Hz frame | Per second | Location | Root cause | Fix | Gain | Risk |
 | ---: | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Studio live tick, 6 source characters | 43.4 | 521% / 260% | 651 ms/s at 15 ticks/s (target 30) | `StudioModel.tick` → `SourceStudioCharacterPreview.frame`/`editedPose` | repeated work per tick (quick wins 1–3) and all character work serial on the main thread (M1) | quick wins 1–3 (this change), then C2, C3, M1 | 43.4 → 6.34 ms measured in the app; 30 ticks/s restored | low for 1–3 (byte-identical); high for M1 |
-| 2 | SwiftUI update and layout per FK drag event | 24.5 | 294% / 147% | 673 ms/s at 27.5 drag events/s | `GraphHost.flushTransactions` for `StudioView`; `StudioModel.doc` didSet | an FK edit mutates `doc`; `StudioView.body` and its inspector read `model.doc`, so the whole window's view graph is re-evaluated and laid out again; each drag event also triggers two `refresh()` calls (55/s) | M2 + M3: per-panel observation, FK and camera state outside the observed document | most of 673 ms/s; target < 2 ms per event (hypothesis) | medium |
-| 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state | most of 775 ms/s (hypothesis) | low |
-| 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2 | as rank 2 | medium |
+| 2 | SwiftUI update and layout per FK drag event | 24.5 | 294% / 147% | 673 ms/s at 27.5 drag events/s | `GraphHost.flushTransactions` for `StudioView`; `StudioModel.doc` didSet | an FK edit mutates `doc`; `StudioView.body` and its inspector read `model.doc`, so the whole window's view graph is re-evaluated and laid out again; each drag event also triggers two `refresh()` calls (55/s) | M2 + M3: per-panel observation, FK and camera state outside the observed document; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: `GraphHost.flushTransactions` 23.8 → 0.91 ms per drag event, one `refresh()` per event instead of two, 26.7 → 119.9 presented FPS | medium |
+| 3 | SwiftUI update and layout per Maker slider write | 11.7 | 140% / 70% | 775 ms/s at 66 writes/s | `SourceRigPanel.body`; `NSHostingView.layout` 591 ms/s | each write replaces `sourceBodyValues`. The whole panel and every slider row (52 face sliders plus the bound body sliders) are rebuilt and re-laid out: `Slider.body` 53 ms/s, binding location compares 52 ms/s, material effect updates 111 ms/s | M4: slider rows as separate views over value inputs, the slider list outside the panel's other state; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1 slider row evaluated per write instead of 44; `GraphHost.flushTransactions` 11.8 → 2.5 ms and `NSHostingView.layout` 8.3 → 3.9 ms per write; 43.4 → 119.8 presented FPS. The rest is layout of the long panel | low |
+| 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: no view body and no sampled SwiftUI pass per orbit event (8.9 ms before); 41.0 → 119.4 presented FPS | medium |
 | 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3 | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured) | low |
 | 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move | M5 | ~2 ms per move | low; renderer file |
 | 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed | G3 + P2 | ~3/4 of idle draw and GPU (hypothesis) | low |
-| 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3 | 0.9 ms per event | medium |
+| 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3; **done** for orbit and pan drags in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1.00 ms full refresh → 0.04 ms camera rebuild per drag event | medium |
 | 9 | Source scene load at startup | 4,710 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
 | 10 | Engine compiled `-Onone` in Debug | 1,753 per tick | — | 0 presented frames | `Packages/Engine` build settings | an unoptimized generic-heavy Engine | B1 | Debug idle tick 1,753 → ~43 ms (measured with Engine -O) | see B1 |
 
@@ -357,7 +372,7 @@ The ranking is backed by this evidence (base Release traces):
   `Renderer.draw` 14 ms/s.
 - **Main thread idle and hover.** `StudioModel.tick` took 632 ms/s, with its
   `refresh` at 342 ms/s. `Renderer.pick` took 27 ms/s in hover.
-- **GPU** (Metal System Trace, approximate window, see [limits](#limits-of-these-numbers)).
+- **GPU** (Metal System Trace, approximate window, see [limits](#limits-of-the-historical-profiling-campaign)).
   - Idle: the GPU was busy 101 ms/s for 49 frames/s, 2.06 ms per frame
     (fragment 1.06, compute 0.79, vertex 0.22).
   - Native: 172 ms/s for 119 frames/s, 1.45 ms per frame.
@@ -564,13 +579,13 @@ gains are for the reference machine unless stated; the M1 column of the
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
 | M1 | All character work runs on the main thread inside the 30 Hz Studio timer, so any tick over 8.3 ms drops 120 Hz frames and a tick over 33 ms halves the timer rate | `StudioModel.advanceLiveFrame` | measured | baseline tick 43.4 ms at 15 ticks/s; the animation clock advances 1/30 s per tick, so live animation played at half speed | evaluate the source previews off the main thread and in parallel (each `SourceStudioCharacterPreview` is independent), double-buffer the resulting `RenderFrame` pieces; main thread keeps only the merge. After the quick wins the remaining ~9 ms/tick for 6 characters would drop to ~1.5–3 ms wall | High: previews are classes with caches and dynamics state; needs ownership rules and a deterministic join so captures stay byte-identical |
-| M2 | Every document change re-evaluates all of `StudioView` | `StudioView.body` reads `model.doc` (workspace list, toolbar, inspector) | measured | orbit: `GraphHost.flushTransactions` 733 ms/s, inside it `ViewBodyAccessor.updateBody` 194 ms/s and `NSHostingView.layout` 148 ms/s, against 19 ms/s in `StudioView.body` itself ([rank 4](#ranked-costs)) | split `StudioView` into child views that each read only what they show (workspace list, toolbar, timeline, inspector), with per-event state (camera, an FK drag in progress) outside what they read; most of the 7–25 ms per event (hypothesis until measured) | Low–medium: UI captures (`IKKOKU_CAPTURE_UI` lanes) must stay identical |
-| M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items | Medium: the camera is saved with the document and undo must keep working |
-| M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates; ~10 ms per write (hypothesis) | Low |
+| M2 | Every document change re-evaluates all of `StudioView` | `StudioView.body` reads `model.doc` (workspace list, toolbar, inspector) | measured | orbit: `GraphHost.flushTransactions` 733 ms/s, inside it `ViewBodyAccessor.updateBody` 194 ms/s and `NSHostingView.layout` 148 ms/s, against 19 ms/s in `StudioView.body` itself ([rank 4](#ranked-costs)) | split `StudioView` into child views that each read only what they show (workspace list, toolbar, timeline, inspector), with per-event state (camera, an FK drag in progress) outside what they read. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): an FK drag event re-evaluates 4 outer views whose content is skipped, and an orbit event none | Low–medium: UI captures (`IKKOKU_CAPTURE_UI` lanes) must stay identical |
+| M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): `documentCamera` has its own observation, and orbit and pan drags reuse the frame's camera-independent content | Medium: the camera is saved with the document and undo must keep working |
+| M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): 11.8 → 2.5 ms of graph update per write; the panel's layout remains | Low |
 | M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work | Low; renderer file |
 | M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking | `StudioModel.init` | hypothesis | the 15 Hz tick rate above is the late-handler case | drive the live step from the display link's target time with a fixed 1/30 s accumulator so animation speed never depends on main-thread load | Medium: the scenario lanes rely on fixed 1/30 s steps, which an accumulator keeps |
 | M7 | Status-line churn | `StudioModel.tick` → `RenderStatusReporter.status` | measured (negative) | assigns only when the text changes | none needed | — |
-| M8 | Native characters step hair dynamics once per `refresh()`, not per tick, so an orbit (one refresh per mouse event) runs their hair simulation faster than real time | `StudioModel.refresh` (`inst.stepHairDynamics(dt: 1/30)`) | measured (code path) | `studio-native` refreshes at 30/s idle; any extra refresh adds a 1/30 s step | step native hair only from the live tick | Behavior change; a correctness fix more than a performance one |
+| M8 | Native characters step hair dynamics once per `refresh()`, not per tick, so an orbit (one refresh per mouse event) runs their hair simulation faster than real time | `StudioModel.refresh` (`inst.stepHairDynamics(dt: 1/30)`) | measured (code path) | `studio-native` refreshes at 30/s idle; any extra refresh adds a 1/30 s step | step native hair only from the live tick. Since [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation), an FK drag event refreshes once instead of twice, and orbit and pan with native characters still refresh fully | Behavior change; a correctness fix more than a performance one |
 
 ### Per-frame CPU work (Engine)
 
@@ -588,7 +603,7 @@ loaded machine, so only the shares are used).
 | C3 | `SourceStudioPose` is rebuilt for every pose evaluation | `KoikatsuCharacterRecord.makePose` | measured | 1.4 ms/tick (init 0.58, apply 0.51, late update 0.23) | cache the bound pose per (rig, record, kinematics) | Low |
 | C4 | Eye look evaluates the whole rig to read four nodes | `SourceStudioCharacterPreview.updateEyeLook` | measured | ~0.1 ms/tick | evaluate the ancestor chains only | Low |
 | C5 | Source expression weights are recomputed and revalidated per frame | `SourceRigPreview.expressionWeights` | measured | 0.45 ms/tick | cache per expression input | Low |
-| C6 | `refresh()` rebuilds every character's `RenderFrame` (items, skin sets, bounds) for camera-only changes | `StudioModel.refresh` | measured | 0.89 ms per orbit event | see M3 | Medium |
+| C6 | `refresh()` rebuilds every character's `RenderFrame` (items, skin sets, bounds) for camera-only changes | `StudioModel.refresh` | measured; **done** for drags | 0.89 ms per orbit event | see M3; orbit and pan drags now take 0.04 ms (`refreshCamera`, [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)); scroll and pinch dolly still rebuild | Medium |
 | C7 | Maker's live step evaluates the rig only to validate the pose, then the refresh evaluates it again | `MakerModel.advanceSourceMotion` | hypothesis | `makerTick` 2.0 ms p50 in `maker-idle` | reuse the validated evaluation in the refresh | Low |
 | C8 | Studio scene/character load decodes the same rig JSON once per character and component | `SourceMakerLibrary.prepare` → `SourceRig.load` | measured | probe load 6.1 s for 6 characters, 74% in `SourceRig.decode` (JSONDecoder) | cache decoded rigs by path, size and modification time; or a binary rig format | Low for the cache |
 | L1 | With the live source-shader opt-in ON, every `refresh()` maps each frame item back to its source renderer again (mesh-name parsing, a filter over all binding-set renderers per item, shader-name splits, report strings); the materials themselves are cached | `StudioModel+SourceShaderLive.swift` → `SourceShaderLiveAssembly.attach` | measured | 0.39 ms per refresh (11.6 ms/s at 30 Hz), 39% in `SourceShaderLiveMaterial.family(of:)` ([live opt-in](#the-live-source-shader-opt-in-127)) | cache the item-to-slot mapping per character while its meshes, visibility and wear are unchanged, and index the renderers by (mesh, submesh); most of the 0.39 ms (hypothesis until measured) | Low; the opt-in is OFF by default and its report must stay the same |
@@ -653,7 +668,7 @@ How to read the expected gain column:
 
 | # | Work | Inventory items | Expected on the reference machine | M1 | Verification beyond the standard set |
 | ---: | --- | --- | --- | --- | --- |
-| 1 | Narrow SwiftUI invalidation. Move the camera out of the observed `doc`, or into its own observed value. Split `StudioView` into child views that read only their own state. Make the Maker slider rows value-driven views with per-slot observation | M2, M3, M4, C6 | orbit, FK drag and slider edits go from 7–25 ms per event to a few ms; the main thread is no longer saturated during interaction; presented FPS for those workloads rises from 24–53 toward 120 | the same edits drop from ~10–30 ms to a few ms; the difference between usable and laggy | `IKKOKU_CAPTURE_UI` window captures identical; undo/redo scenarios (`undo-camera`) pass |
+| 1 | **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)). Narrow SwiftUI invalidation. Move the camera out of the observed `doc`, or into its own observed value. Split `StudioView` into child views that read only their own state. Make the Maker slider rows value-driven views with per-slot observation | M2, M3, M4, C6 | orbit, FK drag and slider edits go from 7–25 ms per event to a few ms; the main thread is no longer saturated during interaction; presented FPS for those workloads rises from 24–53 toward 120 | the same edits drop from ~10–30 ms to a few ms; the difference between usable and laggy | `IKKOKU_CAPTURE_UI` window captures identical; undo/redo scenarios (`undo-camera`) pass |
 | 2 | Run the display link on its own thread. `Renderer` already snapshots the frame under `frameLock`; pick, statistics and error reporting need the same treatment | P1 | main-thread work no longer delays presentation; hitches/s fall to the GPU's own rate | larger: more of the main-thread cost is hidden | presented-interval p95 at 8.3 ms with a busy main thread (harness) |
 | 3 | Take the live tick off the main thread and evaluate the characters in parallel. Cache the dynamics topology per rig (C2) and the bound Studio pose (C3). Hair dynamics is now the largest part of the tick: `SourceDynamicBone.step` took 48% of `advanceLiveFrame` in the in-app Time Profiler run of the live opt-in (122 of 255 ms/s) | M1, C2, C3, C5 | the 6-character tick goes from ~6 ms on the main thread to < 2 ms wall-clock; more characters scale with cores | M1 has 4 performance cores, so ~4× on the tick | probe digest identical; scenario renders identical; deterministic join order |
 | 4 | Skip unchanged frames and run the display link at 30–60 Hz when nothing moves; leave the shadow map alone until casters or the light move | G3, G5, P2 | ~3/4 of idle draw CPU and GPU | the biggest GPU item on M1: idle GPU at ~10 ms/frame becomes ~2.5 ms of every 8.3 ms | captures identical (nothing renders differently, frames are only skipped) |
@@ -661,8 +676,236 @@ How to read the expected gain column:
 | 6 | Startup: cache decoded rigs and load source characters concurrently off the main thread, with a progress state | C8, S1, S2, S4 | source scene ready in ~1.5 s instead of 4.7 s; first frame earlier | larger, since there is less memory bandwidth for repeated decoding | `startup` workload; scene import results identical |
 | 7 | An opt-in optimized-Engine Debug build for app work | B1 | a Debug app at Release speed for Engine code | same | captures identical Debug and Release (already true) |
 | 8 | Texture compression at conversion time; release staging data after upload | G7, R1 | smaller footprint and bandwidth | main memory-pressure relief on 8 GB | image comparison; this is a quality trade-off, so it stays opt-in until compared |
-| 9 | Instrument `StudioModel` directly: explicit tick, refresh and doc-change hooks in place of the inferred ones | harness | exact Studio attribution (the inferred hooks cannot separate a SwiftUI pass caused by a doc change from one caused by layout) | — | `test_perf_trace.py`, harness report schema |
+| 9 | **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)). Instrument `StudioModel` directly: explicit tick, refresh and doc-change hooks in place of the inferred ones | harness | exact Studio attribution (the inferred hooks cannot separate a SwiftUI pass caused by a doc change from one caused by layout) | — | `test_perf_trace.py`, harness report schema |
 | 10 | With the live source-shader opt-in ON, cache the item-to-slot mapping between refreshes | L1 | ~0.3 ms of each 0.39 ms refresh attach, only with the opt-in ON | same share | the live report and ON captures identical |
+
+## Phase 2, item 1: narrow SwiftUI invalidation
+
+Done 2026-10-23, together with item 9 (explicit Studio hooks). Interactive
+edits no longer re-evaluate the whole window. Orbit, FK drag and Maker slider
+edits now present at 119–120 FPS with at most one hitch in 10 s. Before, they
+presented 27–43 FPS with about 30 hitches/s. Rendered frames are
+byte-identical. Window captures are too, except one toolbar picker whose
+layout already depended on its update history (see [correctness](#correctness)).
+
+### What changed
+
+- **Camera.** `StudioModel.doc` is a computed property over unobserved
+  storage. Its accessors mirror the `@Observable` macro: a whole-value set
+  notifies only when the value differs, an in-place mutation always notifies,
+  and every write still prunes voices and refreshes. Camera writes go through
+  `documentCamera`, which notifies only camera readers. That covers orbit,
+  pan, dolly, the camera slots, reset, focus and look-through. No view reads
+  the camera; the renderer gets it through the frame. A document write that
+  changes the camera, such as a scene load or undo, also notifies camera
+  readers. Saving, undo and export still read `doc.camera`.
+- **Menu commands.** `documentSourceSceneFile` and `hasSourcePluginSession`
+  are observed on their own, so the app's commands no longer read the whole
+  document.
+- **Studio window.** `StudioView` is split into panels: workspace tree,
+  toolbar, timeline, inspector tab picker, compatibility details,
+  live-shader details, inspector tab and status line. The workspace,
+  toolbar, timeline and Object inspector compute their displayed values in a
+  small outer view and pass them to an `Equatable` content view, which
+  SwiftUI skips while the values are unchanged. The controls' bindings read
+  those values and write through the same model members as before. Workspace
+  rows are `Equatable` too. The other inspectors are unchanged apart from
+  their counters.
+- **FK and IK drags.** `setSourceFKRotation` and `setSourceIKValue` edit a
+  copy of the object and write the document once, so each drag event rebuilds
+  the frame once instead of twice. The grab still pushes exactly one undo
+  snapshot; the `studio-fk-drag` workload checks this.
+- **Camera-only frames (C6).** During an orbit or pan drag, a camera write
+  reuses the last full frame's camera-independent content: items, skin sets,
+  lights, bounds and effects. Source previews take the camera only for their
+  frame's camera field. `refreshCamera` rebuilds only what depends on the
+  camera: the camera, the main light, the selected source character's FK/IK
+  guides and the selection gizmo. The light and camera glyph batch is reused.
+  The reuse is dropped by any new drag or full refresh. It is not kept for a
+  frame with native characters, whose gaze reads the camera and whose hair
+  steps per rebuild (M8), or with live source shaders, or for a rebuild that
+  wrote a status. The timer does not step the scene during a drag. A reused
+  frame keeps its creation stamp, so resource retirement treats it like the
+  frame it came from (R6). Scroll and pinch dolly, and the scenario runner's
+  `orbit` step (no drag), still do a full refresh.
+- **Maker sliders (M4).** `sourceBodyValues` and `sourceFaceValues` notify
+  per slot (`MakerModel[shapeSlot:]`) and per count (`shapeValueCount(face:)`).
+  Each body and face slider is a `SourceShapeSliderRow` that observes its own
+  slot, and its binding writes through the arrays as before. A write still
+  invalidates the simulation and refreshes, also for an unchanged value.
+  Failure handling and the cached selection rows of the Maker handoff are
+  untouched.
+- **Instrumentation (item 9).** See [what the report records](#what-the-report-records).
+
+### Measurement
+
+The commands follow [measuring a change](#measuring-a-change). Release builds,
+arm64:
+
+| Label | Commit | Executable SHA-256 |
+| --- | --- | --- |
+| base | `88d8447` (`main` before this change) | `47f5c780…a07b21` |
+| instrumented | `e6ba33d`: base plus the item 9 hooks and counters, no narrowing | `d195e598…557cbd` |
+| after | `4d34863`: this change | `e114c8a7…a26b92` |
+
+All runs used the 4K display at 120 Hz with a 1996×1824 drawable, during a
+quiet window that the orchestrator granted. No build ran, which was checked
+before and after every launch, and every launch took the app lock. The load
+average was 3.2–7.6. Base and instrumented ran all six workloads, then after
+ran all six, then base and instrumented repeated idle and hover. Each run had
+a 3 s warmup and 10 s of recording. No run was flagged invalid. Reports are
+in `.local/r7b-swiftui-invalidation/perf/{w2-base,w2-instrumented,w3-after,w3-base,w3-instrumented}`.
+
+| Workload | Build | Presented FPS | Hitches/s | Main busy ms/s (draw / model / other) | Model phases, p50 ms × rate | Input p50 ms × rate |
+| --- | --- | ---: | ---: | --- | --- | --- |
+| studio-orbit | base | 41.0 | 30.4 | 996 (38 / 79 / 879) | refresh 1.00 × 72 | 1.08 × 72 |
+| studio-orbit | after | 119.4 | 0.6 | 268 (245 / 10 / 13) | camera refresh 0.04 × 120 | 0.07 × 120 |
+| studio-fk-drag | base | 26.7 | 27.7 | 998 (27 / 93 / 877) | refresh 1.49 × 63 (2 per event) | 2.94 × 31 |
+| studio-fk-drag | after | 119.9 | 0.1 | 497 (120 / 231 / 146) | refresh 1.88 × 120 (1 per event) | 1.92 × 120 |
+| maker-slider | base | 43.4 | 30.7 | 998 (13 / 53 / 932) | refresh 0.48 × 95 | 0.57 × 65 |
+| maker-slider | after | 119.8 | 0.1 | 608 (34 / 87 / 488) | refresh 0.53 × 150 | 0.58 × 120 |
+| studio-hover | base | 105.8, 90.0 | 14.4, 30.6 | 583, 633 | tick 7.38 × 30, 7.40 × 30 | 2.47 × 95, 2.59 × 120 |
+| studio-hover | after | 90.1 | 30.5 | 611 (88 / 517 / 6) | tick 7.48 × 30 | 2.58 × 106 |
+| studio-idle | base | 90.0, 119.3 | 30.8, 0.7 | 342, 362 | tick 8.03 × 30, 7.71 × 30 | – |
+| studio-idle | after | 119.9 | 0.1 | 362 (125 / 232 / 5) | tick 7.75 × 30 | – |
+| maker-idle | base | 119.8 | 0.2 | 157 (94 / 51 / 12) | tick 1.63 × 30 | – |
+| maker-idle | after | 120.0 | 0 | 182 (111 / 56 / 15) | tick 1.69 × 30 | – |
+
+Notes on the table:
+
+- **Rates went up.** The saturated workloads' input timer now gets its
+  120 Hz, so after handles about 1.7–3.9 times more events per second. Read
+  "ms per event × rate", not the busy totals.
+- **Hover and idle are unchanged by this work, and their frame rate is
+  bimodal.** The 30 Hz tick takes 7.4–8.0 ms, just under the 8.33 ms frame.
+  Whether each tick also drops a frame depends on its phase against the
+  display link. Each build showed both modes: base hover at 105.8 and 90.0
+  FPS, instrumented at 117.8 and 90.1, base idle at 90.0 and 119.3. The
+  model and draw costs match across builds within run-to-run variation.
+- **The instrumented build costs nothing measurable.** Its rows (in the same
+  reports) match base within run-to-run variation: for example idle tick
+  7.97 against 8.03 ms and orbit refresh 1.02 against 1.00 ms. Its explicit
+  hooks agree with the inferred hooks of base within about 10% (FK drag
+  refresh 1.34 against 1.49 ms in the same window).
+
+View bodies evaluated per input event, from the item 9 counters
+(instrumented against after; base has no counters):
+
+| Workload | Instrumented (base structure) | After |
+| --- | --- | --- |
+| studio-orbit | 1 document change; window, workspace, toolbar, timeline, inspector, status line 1 each; app commands 0.87; workspace rows 27.4 | 1 camera change; no view body |
+| studio-fk-drag | 2 document changes; window, workspace, toolbar, timeline, inspector, status line, Object inspector, app commands 1 each; workspace rows 27.9 | 1 document change; workspace, toolbar, timeline and Object inspector outer views 1 each (their content views are skipped) |
+| maker-slider | 44 slider rows | 1 slider row |
+
+Attribution with Time Profiler, 5 s per workload. Base was recorded in the
+baseline window (`.local/r7b-swiftui-invalidation/perf/base-tp`) and after
+in this window (`perf/after-tp`). Main thread, per input event:
+
+| Workload | `GraphHost.flushTransactions` base → after | `NSHostingView.layout` base → after | Main thread busy base → after |
+| --- | --- | --- | --- |
+| studio-orbit | 8.9 ms (726 ms/s at 81.5/s) → none sampled | 1.96 ms → none sampled | 996 → 250 ms/s |
+| studio-fk-drag | 23.8 ms (724 ms/s at 30.4/s) → 0.91 ms | 4.4 → 1.06 ms | 997 → 537 ms/s |
+| maker-slider | 11.8 ms (787 ms/s at 66.9/s) → 2.5 ms | 8.3 → 3.9 ms | 995 → 622 ms/s |
+
+### What remains on the main thread
+
+- **Orbit: the draw.** About 94% of the remaining 250 ms/s is the display link's
+  `Renderer.draw` at 120 Hz. Its CPU time per draw is 1.83 ms p50 (3.86 p95),
+  against 0.89 ms at 41 FPS before and 0.99 ms in FK drag at the same draw
+  rate. `Renderer.buildContext` takes 1.18 ms per draw. Of that, 0.70 ms
+  creates one shared `MTLBuffer` per skin palette (`newBufferWithBytes`,
+  mostly `IOGPUResourceCreate` kernel calls, G4), against 0.31 ms per draw
+  in FK drag. Why orbit takes the slower allocation path more often is not
+  established.
+- **FK drag: the frame rebuild.** `StudioModel.refreshFrame` takes 1.95 ms
+  per event (234 ms/s). `SourceStudioCharacterPreview.frame` is 190 ms/s of
+  that, and its expression weights (C5) are 93 ms/s. SwiftUI takes about
+  1.1 ms per event for the four outer views and their skipped content. The
+  draw takes 129 ms/s.
+- **Maker slider: SwiftUI layout of the long panel.** One row is evaluated
+  per write, but the panel is still re-laid out: `NSHostingView.layout` takes
+  3.9 ms per write. That splits into graph update 2.5 ms (dirty propagation
+  from the slot's observation 0.66 ms, body updates 0.34 ms, root geometry
+  0.32 ms) and the display-list render, about 1.4 ms. Making the rows'
+  layout independent of their value text would change pixels, so it was
+  left out.
+- **Hover and idle: the 30 Hz tick** (7.4–8.0 ms) and the synchronous hover
+  pick (2.5 ms per move) are unchanged.
+
+### Behavior notes
+
+- **FK drags in mixed scenes.** A scene with both native and source
+  characters now steps native hair once per FK drag event instead of twice
+  (M8 applies per refresh). Orbit and pan with native characters keep the
+  full refresh, so M8 is unchanged there.
+- **The menu commands** re-evaluate only when the scene file or plugin
+  session presence changes, not on every document edit.
+
+### Correctness
+
+- **Captures, base against after.** 12 captures were taken with each build
+  under the app lock (`.local/r7b-swiftui-invalidation/captures`). Five were
+  `IKKOKU_CAPTURE_UI` window captures of the source scene, one per Studio
+  inspector tab (object, pose, face, clothes, scene). Two were window
+  captures of the native scene added from the Maker card (object, pose). Two
+  were window captures of the Maker: the source card's rig panel and the
+  native Body tab. Three were `IKKOKU_AUTOCAPTURE` renders: the source scene,
+  `IKKOKU_CAPTURE_STUDIO` and the Maker source card. Two base runs were
+  byte-identical to each other in all 12 PNGs and all 9 UI reports.
+  - After matched base byte for byte in all 9 UI reports, all three
+    renders, the source object tab, both native-scene tabs and both Maker
+    captures.
+  - The source pose, face, clothes and scene tab captures differ in 4,700
+    pixels, all inside one 330×40 px box: the toolbar's pose-mode picker
+    (Object/FK/IK). In those four base captures, the picker's segments are
+    laid out at equal widths and the control overflows its 150 pt frame.
+    After draws it fitted, exactly as base draws the same picker state in its
+    object-tab capture: that region is byte-identical between base's object
+    tab and after's pose tab.
+  - The likely cause: a source scene opens the app in Studio, so the
+    capture sets the inspector tab after the Studio window first appeared.
+    Base's window body read the tab, so the toolbar was rebuilt. After's
+    toolbar does not depend on the tab. The native scene opens in the Maker,
+    so its tab is set before the Studio window first appears, and base's
+    native pose tab matches after.
+  - The picker's look thus depends on whether SwiftUI updated it after its
+    first layout, and it did so before this change too. It is not new
+    content.
+- **Lanes on the merged head** (`23db124`, `main` `9baebcb`, Debug):
+  `studio-scenarios` 52/52 (1,726 s) and `maker-scenarios` 5/5, both
+  `--strict` with 0 skipped. They include the undo/redo, reload and
+  camera scenarios.
+- **Suites on the merged head.** The Engine `swift test`, run through
+  `public.json` without `--strict`, reported 763 tests: 681 passed, 82 named
+  skips without fixtures, 0 failed. The runner self-tests passed 181/181,
+  including `test_perf_trace.py`. The studio-inspector validator passed
+  11/11 and the mod tools 40/40.
+  - In `translation-tests`, one test fails in a worktree whose `.local/reverse`
+    is a symlink: `plugin.package` resolves the test's output outside the
+    worktree's `.local` and refuses it. That test is
+    `test_plugin_py_native_route_output_is_indexed_without_running_a_decompiler`.
+    This change touches no file under `Tools/translation` and no Engine
+    source.
+
+### Limits
+
+- **One run per build and workload** in this window, plus the idle and hover
+  repeats. The saturated base runs vary by tens of percent (see
+  [baseline](#baseline)). The after runs are not saturated, so their numbers
+  are steadier.
+- **Per-event SwiftUI numbers come from Time Profiler samples**, 5 s each.
+  Base was recorded in the earlier window on the same build.
+- **No M1 run.**
+
+### Recommended next
+
+Item 2: run the display link on its own thread. After this change, the
+remaining hitches come from main-thread work landing on a frame: the 7.5–8 ms
+live tick (idle and hover alternate between 90 and 120 FPS), the hover pick,
+and in orbit the draw itself (245 ms/s). Item 2 removes all of these from
+presentation at once. G4, writing skin palettes into the frame ring instead
+of new buffers, is a small renderer change that would roughly halve orbit's
+per-draw CPU. Item 3 (the tick off the main thread) comes next.
 
 ## Validation of this change
 
@@ -974,9 +1217,11 @@ section.
 - **Allocations slows the app about 2.4×** (idle tick 103 ms against 43 ms),
   and its statistics cover the whole run. Allocation counts are therefore
   given for the whole run, not per tick.
-- **The Studio tick and refresh are inferred** from observed `StudioModel`
-  properties, because `StudioModel.swift` was frozen for most of this work.
-  Explicit hooks are phase 2, item 9.
+- **The Studio tick and refresh were inferred** from observed `StudioModel`
+  properties in these runs, because `StudioModel.swift` was frozen for most
+  of this work. Phase 2, item 9 replaced them with explicit hooks. In the
+  same window, the two kinds of hook agree within about 10% (see
+  [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)).
 - **No M1 run.** The low-end column is an estimate from core counts,
   bandwidth and drawable size.
 - **The drawable is not a full 4K frame.** It is 1996×1824 pixels, the

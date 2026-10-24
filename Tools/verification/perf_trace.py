@@ -207,7 +207,7 @@ def row(name, report):
         entry = phases.get(key)
         return "%.2f" % entry[field] if entry else "-"
 
-    model = [k for k in ("studioTick", "studioRefresh", "makerTick", "makerRefresh", "input") if k in phases]
+    model = [k for k in ("studioTick", "studioRefresh", "studioCameraRefresh", "makerTick", "makerRefresh", "input") if k in phases]
     model_text = ", ".join("%s %s/%s ×%.0f/s" % (k, phase(k), phase(k, "p95"), phases[k]["perSecond"]) for k in model) or "-"
     build = report["build"]
     return "| %s | %s/%s | %.1f | %d | %s/%s | %s/%s | %.0f | %.0f | %.0f | %.0f | %s | %.0f |" % (
@@ -216,6 +216,25 @@ def row(name, report):
         phase("draw"), phase("draw", "p95"), phase("gpu"), phase("gpu", "p95"),
         main["busyMsPerSecond"], main["drawMsPerSecond"], main["modelMsPerSecond"], main["otherMsPerSecond"],
         model_text, summary["memory"]["peakFootprintBytes"] / 1048576)
+
+
+def attribution_row(name, report, top=6):
+    """Model events and SwiftUI body evaluations per second, and per input
+    event when the workload sends input (schema 2 reports; older ones lack them)."""
+    summary = report["summary"]
+    inputs = sum(summary.get("inputCalls", {}).values()) / summary["recordedSeconds"] if summary.get("recordedSeconds") else 0
+
+    def rate(entry):
+        per_second = entry["perSecond"]
+        return "%.0f/s (%.2f/input)" % (per_second, per_second / inputs) if inputs else "%.0f/s" % per_second
+
+    events = summary.get("events", {})
+    bodies = sorted(summary.get("viewBodies", {}).items(), key=lambda item: (-item[1]["perSecond"], item[0]))
+    event_text = ", ".join("%s %s" % (key, rate(events[key])) for key in sorted(events)) or "-"
+    body_text = ", ".join("%s %s" % (key, rate(entry)) for key, entry in bodies[:top]) or "-"
+    if len(bodies) > top:
+        body_text += ", +%d more" % (len(bodies) - top)
+    return "| %s | %.0f | %s | %s |" % (name, inputs, event_text, body_text)
 
 
 def uncomposited(report):
@@ -256,18 +275,27 @@ def summarize(directories):
     print("| report | app/engine | presented FPS | hitches | draw ms p50/p95 | GPU ms p50/p95 | main busy ms/s | draw ms/s | model ms/s | other ms/s | model phases ms p50/p95 × rate | peak footprint MiB |")
     print("|---|---|---:|---:|---|---|---:|---:|---:|---:|---|---:|")
     warnings = []
+    attributed = []
     for directory in directories:
         for name, report in load(directory).items():
             if "summary" not in report:
                 continue
             label = "%s/%s" % (os.path.basename(os.path.normpath(directory)), name)
             print(row(label, report))
+            if "viewBodies" in report["summary"] or "events" in report["summary"]:
+                attributed.append(attribution_row(label, report))
             reason = uncomposited(report)
             if reason:
                 warnings.append("%s: %s; the window was probably not on screen, rerun it" % (label, reason))
             stray = stray_input(report)
             if stray:
                 warnings.append("%s: %s" % (label, stray))
+    if attributed:
+        print()
+        print("| report | input events/s | model events | view bodies (most evaluated first) |")
+        print("|---|---:|---|---|")
+        for line in attributed:
+            print(line)
     for warning in warnings:
         print("[perf] WARNING " + warning)
     return 0
