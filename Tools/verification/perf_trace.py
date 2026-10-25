@@ -49,7 +49,7 @@ import sys
 
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
              "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup",
-             "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete"]
+             "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete", "studio-timeline"]
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
@@ -79,7 +79,7 @@ NATIVE_FIXTURES = {
 def fixtures_for(workload):
     if workload.startswith("maker-"):
         return MAKER_FIXTURES
-    if workload in ("studio-native", "viewport-lifecycle"):
+    if workload in ("studio-native", "studio-timeline", "viewport-lifecycle"):
         return NATIVE_FIXTURES
     # Startup measures the full source-scene startup.
     return STUDIO_FIXTURES
@@ -308,7 +308,7 @@ def uncomposited(report):
 
 # Workloads that send no viewport input, so any input call came from a person.
 INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup", "studio-static",
-                      "studio-duplicate", "studio-undo-delete"}
+                      "studio-duplicate", "studio-undo-delete", "studio-timeline"}
 
 # Workloads whose window is minimized on purpose, or whose main thread may
 # stall for seconds on purpose (the history workloads time a blocking action
@@ -438,6 +438,37 @@ def draw_line(label, report):
                 stat(summary.get("presentationLatenessMs", {}), "p50"),
                 stat(summary.get("presentationLatenessMs", {}), "p95"),
                 stat(summary.get("presentationLatenessMs", {}), "max")))
+
+
+def histogram_text(counts, limit=6):
+    """`{"4": 90, "3": 5}` -> "3:5 4:90"; counts above `limit` periods are summed as ">limit"."""
+    shown = collections.Counter()
+    for key, count in counts.items():
+        periods = int(key)
+        shown[str(periods) if periods <= limit else ">%d" % limit] += count
+    order = lambda key: limit + 1 if key.startswith(">") else int(key)
+    return " ".join("%s:%d" % (key, shown[key]) for key in sorted(shown, key=order)) or "-"
+
+
+def cadence_line(label, report):
+    """Schema 7 (R7 phase 2, live pacing): rendered frames' presented and
+    target intervals and their lateness, in display periods; hitches per
+    second; and the paced step requests (ran, busy, idle). None for an older
+    report. A 30 Hz step shows as 4 periods at 120 Hz; 3 and 5 are uneven
+    frames, which the hitch count does not see."""
+    summary = report["summary"]
+    cadence, pacing = summary.get("cadence"), summary.get("pacing")
+    if cadence is None or pacing is None:
+        return None
+    seconds = summary.get("recordedSeconds", 0)
+    hitches = summary.get("hitches", 0)
+    start = pacing.get("requestToStartMs", {})
+    return ("[perf] %s: pacing %s; presented interval periods %s; target interval periods %s; "
+            "lateness periods %s; hitches %.2f/s; requests %d (ran %d, busy %d, idle %d; request to start ms p50 %s p95 %s)" % (
+                label, pacing.get("policy", "?"), histogram_text(cadence.get("presentedIntervalPeriods", {})),
+                histogram_text(cadence.get("targetIntervalPeriods", {})), histogram_text(cadence.get("latenessPeriods", {})),
+                hitches / seconds if seconds else 0, pacing.get("requests", 0), pacing.get("ran", 0), pacing.get("busy", 0),
+                pacing.get("idle", 0), start.get("p50", "-"), start.get("p95", "-")))
 
 
 def link_line(label, report):
@@ -592,8 +623,8 @@ def summarize(directories):
             hover = hover_line(label, report)
             if hover:
                 rings.append(hover)
-            for extra in (link_line(label, report), burst_line(label, report), startup_line(label, report),
-                          actions_line(label, report)):
+            for extra in (link_line(label, report), cadence_line(label, report), burst_line(label, report),
+                          startup_line(label, report), actions_line(label, report)):
                 if extra:
                     rings.append(extra)
             if report.get("workload") == "viewport-lifecycle" and "lifecycle" in report.get("details", {}):

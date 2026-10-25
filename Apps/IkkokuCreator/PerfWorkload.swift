@@ -194,6 +194,7 @@ final class PerfWorkloadDriver {
         case "maker-slider": try prepareMakerSlider()
         case "maker-idle": try prepareMaker()
         case "studio-native": try prepareStudioNative()
+        case "studio-timeline": try prepareStudioTimeline()
         case "studio-static": try prepareStudioSource(selectKey: nil, liveAnimation: false)
         case "studio-orbit-bursts": try prepareStudioOrbitBursts()
         case "viewport-lifecycle": try prepareViewportLifecycle()
@@ -264,8 +265,11 @@ final class PerfWorkloadDriver {
     /// drag measures how quickly it returns to full rate. `details.burstInputEnds`
     /// lists when each burst's first mouseDragged handler returned, in seconds
     /// since recording began.
+    ///
+    /// `IKKOKU_PERF_BURST_LIVE=on` plays the live animation instead (R7 phase
+    /// 2, live pacing), measuring a drag's start while steps are running.
     private func prepareStudioOrbitBursts() throws {
-        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: configuration.burstLive)
         let trace = self.trace
         var last = viewportCenter(studio)
         var dragging = false
@@ -296,7 +300,7 @@ final class PerfWorkloadDriver {
             }
         }
         finishGesture = { if dragging { PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) } } }
-        trace.details["gesture"] = "repeated: \(configuration.burstIdleMilliseconds) ms without input, then a 0.5 s right-button orbit drag, live animation off"
+        trace.details["gesture"] = "repeated: \(configuration.burstIdleMilliseconds) ms without input, then a 0.5 s right-button orbit drag, live animation \(configuration.burstLive ? "on" : "off")"
     }
 
     /// The `fk-mouse-drag` scenario's grab (source key 65, bone 19, z ring),
@@ -393,6 +397,29 @@ final class PerfWorkloadDriver {
         studio.resetCamera()
         trace.details["nativeCharacters"] = configuration.nativeCharacters
         trace.details["documentObjects"] = studio.doc.objects.count
+    }
+
+    /// `studio-timeline` (R7 phase 2, live pacing): the `studio-native` scene
+    /// with a timeline on its first character, keyed at 0 s and, 1 m along x,
+    /// at 2.5 s, playing in a loop for the whole run. Each step advances the
+    /// timeline by 1/30 s.
+    private func prepareStudioTimeline() throws {
+        try prepareStudioNative()
+        let studio = try studio()
+        guard let first = studio.doc.objects.first(where: { $0.kind == .character }) else {
+            throw RigError.invalid("studio-timeline needs a native character")
+        }
+        studio.selection = first.id
+        studio.timelineTime = 0
+        studio.addKeyframe()
+        studio.timelineTime = 2.5
+        studio.updateSelected { $0.transform.position.x += 1 }
+        studio.addKeyframe()
+        studio.selection = nil
+        studio.timelineTime = 0
+        studio.timelinePlaying = true
+        trace.details["timelineKeyframes"] = studio.doc.timeline.keyframes.count
+        trace.details["timelineDuration"] = Double(studio.doc.timeline.duration)
     }
 
     /// `studio-duplicate`: the workspace Duplicate button's call on one source

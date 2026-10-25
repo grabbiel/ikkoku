@@ -481,6 +481,7 @@ private struct CaptureRecipe {
                                    "IKKOKU_PERF_WINDOW_W": "1600", "IKKOKU_PERF_WINDOW_H": "1000", "IKKOKU_PERF_CHARACTERS": "6",
                                    "IKKOKU_PERF_MAIN_LOAD_MS": "20", "IKKOKU_PERF_MAIN_LOAD_HZ": "30",
                                    "IKKOKU_PERF_LINK_RATE": "fixed", "IKKOKU_PERF_FRAME_SKIP": "off", "IKKOKU_PERF_KEEPALIVE_MS": "0", "IKKOKU_PERF_BURST_IDLE_MS": "250", "IKKOKU_PERF_DEFORM_REUSE": "off",
+                                   "IKKOKU_PERF_LIVE_PACING": "timer", "IKKOKU_PERF_BURST_LIVE": "on",
                                    "IKKOKU_PERF_ACTION_KEY": "0", "IKKOKU_PERF_RIG_PREFETCH": "off", "IKKOKU_PERF_DONATIONS": "off",
                                    "IKKOKU_SOURCE_SCENE": "/scenes/scene.png", "IKKOKU_SOURCE_AVATAR": "/rigs/source-avatar.json"]
     let request = try CaptureRequest.validate(trace)
@@ -510,6 +511,7 @@ private struct CaptureRecipe {
                               ("IKKOKU_PERF_MAIN_LOAD_MS", "-1"), ("IKKOKU_PERF_MAIN_LOAD_MS", "1001"), ("IKKOKU_PERF_MAIN_LOAD_HZ", "0"),
                               ("IKKOKU_PERF_LINK_RATE", "30"), ("IKKOKU_PERF_DEFORM_REUSE", "yes"),
                               ("IKKOKU_PERF_KEEPALIVE_MS", "-1"), ("IKKOKU_PERF_BURST_IDLE_MS", "5"),
+                              ("IKKOKU_PERF_LIVE_PACING", "link"), ("IKKOKU_PERF_BURST_LIVE", "1"),
                               ("IKKOKU_PERF_ACTION_KEY", "-1"), ("IKKOKU_PERF_ACTION_KEY", "route"),
                               ("IKKOKU_PERF_RIG_PREFETCH", "no"), ("IKKOKU_PERF_DONATIONS", "1")] {
         var environment: [String: String] = ["IKKOKU_PERF_TRACE": "/p.json"]

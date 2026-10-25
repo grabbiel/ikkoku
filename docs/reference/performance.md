@@ -55,6 +55,16 @@ there: a frame takes 1.3–2.1 ms of GPU time. The main thread is the limit.
    operation. The scene is ready 1.41 s after launch instead of 5.65 s, the
    first frame shows at 0.43 s, and a duplicate costs 45 ms of main-thread
    time ([phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)).
+7. **A free-running timer started the live step.** The Studio's 30 Hz
+   `Timer` kept whatever phase it had against the display. A step whose
+   frame was submitted near a callback went to that callback or the next,
+   so frames due 4 vsyncs apart came 3 and 5 apart, 0–15 times a second
+   depending on the run. Live pacing starts each step from the Studio
+   viewport's display link. Every step's frame now targets the callback
+   it was paced for, and with a steady compositor the frames presented
+   4 vsyncs apart except 0–0.3 times a second. CPU, GPU, idle cost and
+   the app's part of a drag start stayed at parity
+   ([live pacing](#phase-2-live-pacing)).
 
 These headline numbers are the original phase-1 measurements. The
 [resumed review](#resumed-phase-1-review-2026-10-23) retained near-120 FPS idle
@@ -95,9 +105,10 @@ the run.
 | `viewport-lifecycle` | avatar, Maker library | `studio-native`'s scene, then every 0.5 s: three Studio/Maker switches (each replaces the viewport), a window resize to 0.7× and back, minimize for 1.5 s, restore, Studio, Maker. Before each step it counts the threads named `com.grabbiel.Ikkoku.viewport-render`. After the report it quits through `NSApp.terminate` while the link draws, instead of `exit` |
 | `startup` | as `studio-idle` | no workload; the report's `startupSeconds` marks are the result |
 | `studio-static` | as `studio-idle` | the source scene with live animation off and no input: nothing changes, so it measures what an idle viewport costs ([phase 2, item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse)) |
-| `studio-orbit-bursts` | as `studio-idle` | live animation off; repeatedly `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button orbit drag. `details.burstInputEnds` records when each burst's first `mouseDragged` returned, so the summary measures every drag start after a pause |
+| `studio-orbit-bursts` | as `studio-idle` | live animation off (on with `IKKOKU_PERF_BURST_LIVE=on`, so each drag starts during playback); repeatedly `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button orbit drag. `details.burstInputEnds` records when each burst's first `mouseDragged` returned, so the summary measures every drag start after a pause |
 | `studio-duplicate` | as `studio-idle` | live animation on; selects the source object `IKKOKU_PERF_ACTION_KEY` names (any kind, such as a route with its children), else source key 963 (or the first source character), then repeats Duplicate and Undo. Each action starts 0.5 s after the previous one was ready, and is timed from its call until no character build is pending and every preview it started is installed (`details.actions`, [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Its frame rates are not cited: a build on the main thread stalls it for seconds |
 | `studio-undo-delete` | as `studio-idle` | the same with Delete and Undo; the undo restores the character |
+| `studio-timeline` | avatar, Maker library | `studio-native`'s scene with live animation on. The first character is keyed at 0 s and, moved 1 unit along x, at 2.5 s; then nothing is selected and the timeline plays from 0. It measures the timeline's step, which runs on the main thread ([live pacing](#phase-2-live-pacing)) |
 
 Other options:
 
@@ -119,6 +130,9 @@ Other options:
   - `IKKOKU_PERF_KEEPALIVE_MS` sets the idle keep-alive interval; 0 turns it off.
   - `IKKOKU_PERF_FRAME_SKIP=off` draws every callback, as before G3.
   - `IKKOKU_PERF_DEFORM_REUSE=off` dispatches every deformation in every frame and pick.
+- `IKKOKU_PERF_LIVE_PACING=timer` starts the Studio's step from its 30 Hz
+  timer instead of the display link, a measurement control for
+  [live pacing](#phase-2-live-pacing); the default is `display`.
 - `IKKOKU_PERF_ACTION_KEY` (a source key, 0 or more): the object
   `studio-duplicate` and `studio-undo-delete` act on, for example route 0 of
   `scene-route-children.png` with its folder and character. Without it they
@@ -249,6 +263,20 @@ A refresh presents the same bytes again, so it is not a rendered frame:
 
 So a refresh is never a hitch or a frame. Its cost is reported on its own.
 A static recording may also prove composition with a presented refresh.
+
+Schema 7 ([live pacing](#phase-2-live-pacing)) adds:
+
+- each callback's deadline and the GPU's start and end times (the frame rows'
+  `deadlineSeconds`, `gpuStartSeconds` and `gpuEndSeconds` columns);
+- `samples.paces`, one row per paced step request: when it was asked and
+  started, the target of the callback that asked, and the answer;
+- a `pacing` summary: the policy, requests by answer (`ran`, `busy`,
+  `idle`) and the request-to-start time;
+- a `cadence` summary: histograms of presented intervals, target intervals
+  and target-to-present lateness among rendered frames, in display periods.
+  `perf_trace.py` prints them with the hitch rate and the request counts.
+  The hitch count does not see a 3-vsync interval next to a 5, and these
+  histograms do.
 
 ### Running it
 
@@ -754,7 +782,7 @@ gains are for the reference machine unless stated; the M1 column of the
 | M3 | Camera orbit, pan and dolly mutate `doc.camera`; the `doc` didSet then runs a full `refresh()` and invalidates every view that reads `doc` | `StudioModel` (`doc` didSet, `mouseDragged` `.orbit`) | measured | orbit: `refresh()` 0.89 ms × 76/s plus the SwiftUI cost of M2 per event | keep the view camera outside the observed document (or in its own observed property) and send camera-only changes straight to the renderer's frame uniforms without rebuilding items. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): `documentCamera` has its own observation, and orbit and pan drags reuse the frame's camera-independent content | Medium: the camera is saved with the document and undo must keep working |
 | M4 | Maker slider writes invalidate the whole source rig panel | `SourceRigPanel.body` reads `sourceBodyValues`/`sourceFaceValues` for every slider | measured | `maker-slider`: `NSHostingView.layout` 591 ms/s, `Slider.body` 53 ms/s, material effect updates 111 ms/s at 66 writes/s ([rank 3](#ranked-costs)) | one row view per slider taking its value and a setter, the slider list in a child view, and per-slot observation so only the dragged row re-evaluates. **Done** ([phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation)): 11.8 → 2.5 ms of graph update per write; the panel's layout remains | Low |
 | M5 | Hover pick is a synchronous GPU round trip per `mouseMoved` | `StudioModel.mouseMoved` → `Renderer.pick` (`waitUntilCompleted`) | measured; **done** | 2.02 ms p50 per event at 46 events/s with a selection | pick asynchronously (completion handler, apply the hover on the next frame) and only for the latest mouse position; a 1×1 scissor on the pick pass cuts its GPU work. **Done** ([phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick)): 2.29–2.41 → 0.01 ms per move on the main thread; the pick pass's GPU time 0.13 → 0.06 ms, its 0.85 ms deform pass remains | Low; renderer file |
-| M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking | `StudioModel.init` | hypothesis | the 15 Hz tick rate above is the late-handler case | drive the live step from the display link's target time with a fixed 1/30 s accumulator so animation speed never depends on main-thread load | Medium: the scenario lanes rely on fixed 1/30 s steps, which an accumulator keeps |
+| M6 | The Studio timer is a default-mode `Timer`; ticks skip while the timer handler is late and it does not fire during AppKit event tracking. Its phase against the display is arbitrary, so a step's frame lands on the callback before or after the one it is due for | `StudioModel.init` | measured; **done** for the Studio | with the timer, frames due 4 vsyncs apart came 3 and 5 apart at 0–15/s, decided by the timer's phase ([attribution](#attribution)) | drive the live step from the display link. **Done** in [live pacing](#phase-2-live-pacing). The Studio viewport's link asks for each step (`LiveStepPacer`; every 4th callback at 120 Hz). Steps stay exactly 1/30 s, a busy step is still skipped, and steps still never run during event tracking. Every target interval was 4 vsyncs, at CPU, GPU and idle-cost parity. Lowering the link to 30 Hz during playback was measured and dropped. The Maker keeps its own timer | Medium: the scenario lanes rely on fixed 1/30 s steps; `advance` does not go through the link |
 | M7 | Status-line churn | `StudioModel.tick` → `RenderStatusReporter.status` | measured (negative) | assigns only when the text changes | none needed | — |
 | M8 | Native characters step hair dynamics once per `refresh()`, not per tick, so an orbit (one refresh per mouse event) runs their hair simulation faster than real time | `StudioModel.refresh` (`inst.stepHairDynamics(dt: 1/30)`) | measured (code path) | `studio-native` refreshes at 30/s idle; any extra refresh adds a 1/30 s step | step native hair only from the live tick. Since [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation), an FK drag event refreshes once instead of twice, and orbit and pan with native characters still refresh fully | Behavior change; a correctness fix more than a performance one |
 
@@ -2829,6 +2857,294 @@ Other costs:
   not tested.
 - **The Maker's creation on first use** after a deferred launch was not
   timed separately.
+- **No M1 run** ([estimate](#scaling-to-the-low-end-base-m1-8-gb)).
+
+## Phase 2: live pacing
+
+The Studio's live animation, timeline playback, route playback and plugin
+session advance in steps of exactly 1/30 s. A 30 Hz `Timer` on the main run
+loop started them (M6). Live pacing (2026-10-25) starts them from the Studio
+viewport's display link instead, so every step starts at the same point of
+the display's vsync grid. The contract is in the renderer reference:
+[live pacing](renderer.md#live-pacing-r7-phase-2).
+
+### Attribution
+
+At 120 Hz a 30 Hz step's frame should present every 4 vsyncs. With the
+timer, presented intervals of 3 and 5 vsyncs came in pairs, 0–15 times a
+second depending on the run. These are from the first window, in Release,
+with 10 s runs:
+
+| Build | Workload | Runs | Intervals not 4 vsyncs, per second |
+| --- | --- | ---: | --- |
+| `main` `42fc588` | `studio-idle` (7 source characters) | 2 | 6.6, 13.1 |
+| `main` `42fc588` | `studio-native` (6 native characters) | 2 | 0.0, 11.3 |
+| this change, timer control | `studio-idle` | 5 | 12.4, 7.4, 2.4, 15.4, 0.1 |
+| this change, timer control | `studio-native` | 5 | 10.6, 12.9, 0.4, 5.4, 6.1 |
+| this change, timer control | `studio-timeline` | 2 | 0.8, 0.0 |
+
+- **The app causes them, not the compositor.** The callbacks' own target
+  times show the same 3- and 5-vsync gaps as the presented frames, one for
+  one: the frame went to a different callback.
+- **The timer's phase against the vsync grid decides the rate.** The timer
+  keeps the phase it was created with, give or take 1–3 ms over a 10 s run.
+  - In the 15.4/s run, every step started 4 ms after a callback. Each step
+    then submitted its frame 0–2 ms before or after the next callback, so the
+    step's own jitter chose between two callbacks. Its workers take 1.5–3 ms.
+  - In the 0.1/s run, the steps started within 1 ms of a callback and
+    submitted 3–5 ms before the next one.
+- **A short step rarely straddles a callback.** The timeline's step takes
+  about 1 ms on the main thread, so it straddled less often: 0.8/s and 0/s.
+- **The harness's hitch count misses this jitter.** It counts active frames
+  presented later than expected, and a 5-vsync gap next to a 3 averages out.
+  The `cadence` histograms of schema 7 count it.
+
+### What changed
+
+- **The display link starts the step.** `LiveStepPacer` picks the callback
+  nearest each step's due time: at 120 Hz, every 4th. That callback asks the
+  main run loop for a step before it draws.
+  - The step starts 0.02–0.05 ms after the request (p50).
+  - It always starts at the same phase.
+  - It submits 3–7 ms before the callback that draws it.
+- **Busy and idle.** A step still running when the next is due is skipped,
+  as the timer skipped it, so a slow scene slows down as before. With
+  nothing to step, the pacer parks. The Studio timer, which still polls the
+  status line, resumes it when there is something to step.
+- **The Maker** keeps its own timer ([what remains](#what-remains-after-live-pacing)).
+- **Measurement.** `IKKOKU_PERF_LIVE_PACING=timer` brings the timer back in
+  the same binary.
+  - Schema 7 reports add per-request samples, a `pacing` summary, and a
+    `cadence` histogram of presented intervals, target intervals and
+    lateness.
+  - `studio-timeline` plays a keyed timeline.
+  - `IKKOKU_PERF_BURST_LIVE=on` plays the live animation during
+    `studio-orbit-bursts`.
+
+### Before and after
+
+Both windows were reserved, every launch held the app lock, and the M32UC
+ran at 120 Hz. All builds were Release, with 10 s recordings after a 3 s
+warmup (12 s for the bursts).
+
+- **First window** (13:58–14:11). It ran `main` `42fc588` and `ece3281`, a
+  WIP commit of this change. `ece3281`'s display pacing at full link rate
+  takes the same request path as the final change. Its runs had no busy or
+  idle answers, so the later changes to those answers did not apply. Its
+  rounds ran in the same order: timer, then display.
+- **Second window** (15:10–15:19). It ran the final change, `8428647`,
+  against its timer control in ABBA order: `T D D T T D D T` for idle and
+  native, and `T D D T` for the rest. One display run saw stray input; it
+  was discarded and run again inside the window.
+
+**Cadence**, as intervals other than 4 vsyncs per second:
+
+| Workload | Window | Timer: target | Display: target | Timer: presented | Display: presented |
+| --- | --- | --- | --- | --- | --- |
+| `studio-idle` | first, 5 runs each | 12.4, 7.0, 2.3, 15.4, 0 | 0 (all 5) | 12.4, 7.4, 2.4, 15.4, 0.1 | 0.2, 0.2, 0, 0, 0 |
+| `studio-native` | first, 5 runs each | 10.6, 13.0, 0, 5.4, 5.8 | 0 (all 5) | 10.6, 12.9, 0.4, 5.4, 6.1 | 0.3, 0, 0.3, 0.1, 0 |
+| `studio-timeline` | first, 2 runs each | 0.8, 0 | 0, 0 | 0.8, 0 | 0.1, 0 |
+| `studio-idle` | second, 4 runs each | 0, 0.2, 9.7, 10.1 | 0 (all 4) | 1.7, 13.2, 14.9, 18.9 | 0, 8.6, 13.2, 14.2 |
+| `studio-native` | second, 4 runs each | 0, 0.6, 0, 10.7 | 0 (all 4) | 0.7, 12.6, 11.8, 16.0 | 2.4, 7.8, 12.3, 13.0 |
+| `studio-timeline` | second, 2 runs each | 0, 0 | 0, 0 | 5.2, 4.5 | 5.0, 3.7 |
+
+- **Targets.** With display pacing no target interval in either window was
+  other than 4 vsyncs: every step went to the callback it was paced for.
+  With the timer, the rate depended on the run, as in the attribution.
+- **Presented frames, first window.** The display-paced frames presented
+  4 vsyncs apart except 0–0.3 times a second.
+- **Presented frames, second window.** The compositor presented frames 0, 1
+  or 2 vsyncs after their targets and switched between them within runs,
+  in both modes alike. Each switch makes a 3/5 or 2/6 pair although the
+  targets are 4 apart. 9–100% of each run's frames were late, with no
+  difference between the modes: 30–91% with the timer and 27–100% with
+  display pacing in idle and native, and 9–24% and 15–19% in the timeline.
+  A run whose frames were all late by the same amount had no jitter (one
+  display run of `studio-idle`). This lateness is outside the app: it does
+  not follow the GPU's finish against the frame's deadline.
+- **FPS** was 30.0 in every run of both modes, with 0 skipped steps and no
+  busy answer.
+
+**Cost**, second window, medians:
+
+| Workload | Process CPU ms/s: timer → display | Main busy ms/s | Worker CPU ms/s | GPU ms/s | Step on the main thread, p50 ms |
+| --- | --- | --- | --- | --- | --- |
+| `studio-idle` | 509 → 516 | 33.2 → 32.2 | 341 → 346 | 38.6 → 40.0 | 0.34 → 0.26 |
+| `studio-native` | 174 → 171 | 75.1 → 68.0 | — | 38.2 → 38.3 | 2.34 → 1.92 |
+| `studio-timeline` | 266 → 264 | 218 → 215 | — | 24.7 → 24.7 | 1.45 → 1.34 |
+| `studio-orbit-bursts`, live on | 483 → 493 | 31.6 → 32.8 | 245 → 250 | 57.5 → 57.2 | 0.31 → 0.27 |
+
+- **Main thread.** The main-thread part of a step is smaller with display
+  pacing in every workload. Main busy time is lower in idle, native and the
+  timeline. In the live-on bursts it is 1.2 ms/s higher.
+- **Worker CPU.** In the four `studio-idle` ABBA pairs, the workers' CPU was
+  higher with display pacing in three pairs (+20, +29 and +31 ms/s) and
+  lower in one (−20). The per-step p50 was at parity: 15.08 against 14.94,
+  10.45 against 12.18, 10.76 against 10.36, and 10.43 against 10.32 ms.
+  - The mean was 0.5 ms higher per step, from a longer upper tail.
+  - The job's wall time was at most 0.04 ms longer, and shorter in three
+    pairs: p50 1.83–2.56 against 1.95–2.52 ms.
+  - The cause is not established; the CPU clock and core placement are
+    likely, and the harness reads neither. It lies within the timer's own
+    run-to-run range of 315–397 ms/s.
+
+### The link rate during playback
+
+The brief asked to lower the display link to 30 Hz while only paced steps
+change the frame, with input returning it to full rate at once. This was
+built and measured in the first window, then dropped: it was not measurably
+better.
+
+- **CPU and GPU.** CPU and GPU ms/s stayed within run-to-run noise of
+  full-rate pacing, in rounds that ran before the full-rate ones.
+- **Draws and steps.** Each draw and step took longer at 30 callbacks a
+  second. In `studio-timeline`, the p50 step took 1.17–1.18 ms instead of
+  1.05–1.08 ms, and the p50 draw 0.57 ms instead of 0.48–0.49 ms.
+  Render-thread draw time per second went up, from 64.8 to 72.0 ms/s in
+  `studio-idle`.
+- **Latency.** A frame's target moved from 25 ms to 75 ms after its
+  callback.
+- **Cadence** was the same.
+
+The link keeps the full rate during playback, and its adaptive tiers
+(phase 2, item 4) apply as before when nothing changes.
+
+### Drag starts
+
+`studio-orbit-bursts` runs 0.5 s orbit drags with 1 s pauses, eight drag
+starts per run, the first after the warmup. "Live on" plays the live
+animation throughout, so a drag starts during playback. "Live off" is a drag
+after a pause, as in item 4. No run dropped a frame.
+
+| Live animation | Window | Pacing | Input to first rendered callback, ms (median) | Input to first presented frame, ms (median) | Frames presented late |
+| --- | --- | --- | --- | --- | --- |
+| on | second | timer | 5.4, 5.4 | 30.7, 32.0 | 38%, 44% |
+| on | second | display | 4.7, 4.9 | 30.5, 37.9 | 51%, 85% |
+| on | first | timer | 2.3 | 27.1 | 1% |
+| on | first | display | 5.3 | 38.6 | 88% |
+| off | second | timer | 5.8 | 31.1 | 43% |
+| off | second | display | 5.5 | 30.9 | 35% |
+
+- **The app's part is the same.** From the input to the first rendered
+  callback took 4.7–5.5 ms with display pacing and 5.4–5.8 ms with the
+  timer in the second window.
+- **The first image comes one vsync later in a late-presenting run.** It
+  shows after 29–31 ms when the compositor presents on target, and after
+  38–40 ms when it presents one vsync late. A run's median depends on how
+  many of its eight starts fall into the late state.
+- **Not settled for live-on drags.** In the three live-on burst runs with
+  display pacing, 51%, 85% and 88% of frames were late, against 38%, 44% and
+  1% with the timer. The cadence runs show no such difference, and live off
+  is at parity. Whether pacing makes the late state more likely during live
+  drags is not established with three runs a side.
+
+### Idle cost
+
+`studio-static`, the source scene with live animation off, after an 8 s
+warmup, second window, two runs each:
+
+| Pacing | Callbacks/s | Paced requests | Process CPU ms/s | Main busy ms/s | Render-thread draw ms/s | GPU ms/s |
+| --- | ---: | ---: | --- | --- | --- | --- |
+| timer | 15.0 | — | 19.8, 17.8 | 2.0, 1.7 | 2.2, 2.0 | 0.8, 0.8 |
+| display | 15.0 | 0 | 19.7, 20.0 | 1.5, 1.7 | 2.4, 2.3 | 0.9, 0.9 |
+
+- **Parked.** An idle Studio sends no requests. Before parking was added,
+  the link asked 15 times a second, once per callback at the slowest tier,
+  and each answer was `.idle`. In the live-on bursts, each drag start
+  parked the pacer once (8 `.idle` answers per run), and the timer resumed
+  it after the drag. A drag after a pause with live animation off sent no
+  request.
+- **Wakeups.** The main thread wakes 34 times a second in both modes (the
+  median second): 30 for the timer, plus the rest.
+- **Bursts.** Both modes showed 1–3 s bursts of about 600 main-thread
+  wakeups a second at random times in shorter runs after a 3 s warmup. The
+  longer warmup keeps them out of these runs; their source is not
+  established.
+
+### What remains after live pacing
+
+- **The Maker.** It still steps from its own 30 Hz timer, so it keeps the
+  jitter: 13.6 off-grid intervals a second in one `maker-idle` run of the
+  first window, and 0.5 in `main`'s, where the phase happened to fall well.
+  Pacing it needs Maker code. `MakerModel`'s `timer` and `tick` are
+  private, and `AppState` has no step call site to pace. It would take a
+  `LivePacedHandler` conformance in `MakerModel`, as `StudioModel` has.
+- **Compositor lateness.** The remaining presented jitter comes from the
+  compositor switching between presenting on target and one or two vsyncs
+  late. When it switched little (first window), display-paced frames
+  presented 4 vsyncs apart except 0–0.3 times a second.
+- **Drag starts during playback** need more runs in a calm compositor, to
+  settle whether pacing changes how often frames present late.
+- **Two main-thread wakeups per step.** During playback the main thread
+  wakes once for the timer, which polls the status line, and once for the
+  step. Folding the status poll into the step would save one wakeup per
+  step, which is not measured.
+- **A step near one vsync long.** Pacing fixes where a step starts. If a
+  step takes about one vsync from request to submit (8.3 ms at 120 Hz), its
+  submit straddles a callback again. That is far from the 3–5 ms here, but
+  possible on a slower machine with more characters.
+
+### Correctness of live pacing
+
+- **Captures** at `8428647`, Release, with the shared fixture map, one
+  launch each under the app lock:
+  - six `IKKOKU_AUTOCAPTURE` renders: Studio source, fixture and native,
+    Maker source, and Studio and Maker source with the live opt-in ON
+    (7 live draws);
+  - two `IKKOKU_CAPTURE_UI` windows, Studio and Maker;
+  - a scenario that steps the live animation with `advance`, orbits and sets
+    an FK rotation, with four renders and its report.
+
+  All 12 PNGs and 5 reports are byte-identical to `main` `74cee1c`.
+- **Lanes.** Debug, `--strict` under the app lock, 0 skipped, at `8428647`:
+  - `studio-scenarios` 73/73 (1,300 s);
+  - `maker-scenarios` 10/10 (246 s).
+- **Engine tests.** `LiveStepPacerTests` (9) and `DisplayLinkRatePolicyTests`
+  (4) pass, also under ThreadSanitizer with 0 warnings.
+- **Engine suite** with the fixture map, at `8428647`: 970 tests, 964
+  passed. The 6 failures are the same with the same 14 issues on `main`
+  `74cee1c`, so they come from the fixture environment:
+  - `liveSourceShadersMeetTheControlledOriginalFrameGates`, the known one;
+  - `liveSourceIrisCompositesMatchTheRetainedOriginalComposites` and
+    `liveSourceEyeWhiteCompositesMatchTheRetainedOriginalComposite`: a
+    composite program is missing from the native texture store;
+  - `sourceShaderBindingsFollowTheSavedHalfStateOverAlternateRenderers` and
+    `sourceStudioWearLibraryAlternatesMatchUpdateVisibleAndKeepTheDressedParts`:
+    the fixture map's Maker library lacks the alternates and parts they
+    expect;
+  - `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested`, which
+    reads `.local/reverse` relative to the checkout.
+
+  The 21 tests of the second target pass.
+- **App under ThreadSanitizer.** A Debug build with ThreadSanitizer ran
+  `studio-timeline`, `studio-idle`, `studio-static`, `viewport-lifecycle`
+  and `studio-orbit-bursts` with live on, 12 s each, with 0 warnings.
+  - Its steps took longer than 1/30 s, so 333 of `studio-idle`'s 355
+    requests were busy and skipped, as the timer skipped them.
+  - The timeline presented every frame 4 vsyncs apart.
+  - The static scene sent no request.
+- **`viewport-lifecycle`** (Release) is clean:
+  - one render thread before every step and at the end;
+  - 84 frames presented after the restore;
+  - no keep-alive refreshes while minimized.
+- **Python.** All pass:
+  - runner self-tests (199);
+  - `test_perf_trace.py`, with the schema 7 cadence line;
+  - `Tools/reverse` 528, with 7 skipped;
+  - `Tools/reverse/analysis` 279;
+  - the site check.
+
+### Limits
+
+- **One display.** All runs used one 120 Hz display. 60, 144 and 240 Hz,
+  119.88 and 59.94 Hz, ProMotion and a rate change are covered by
+  `LiveStepPacerTests`, not by hardware runs. No other display or
+  refresh-rate setting was available without changing system settings.
+- **Few runs.** Two to five runs per workload and mode per window, and one
+  run each for drag starts after a pause.
+- **Compositor state.** The second window's compositor switched lateness
+  often, so its presented cadence does not separate the modes. The first
+  window's does.
 - **No M1 run** ([estimate](#scaling-to-the-low-end-base-m1-8-gb)).
 
 ## Validation of this change

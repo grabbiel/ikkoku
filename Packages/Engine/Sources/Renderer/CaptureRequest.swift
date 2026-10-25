@@ -439,6 +439,8 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_KEEPALIVE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_BURST_IDLE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_DEFORM_REUSE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_LIVE_PACING", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_BURST_LIVE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_ACTION_KEY", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_RIG_PREFETCH", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_DONATIONS", [.perfTrace]),
@@ -560,6 +562,11 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_KEEPALIVE_MS", .integer(0...10000)),
         ValueRule("IKKOKU_PERF_BURST_IDLE_MS", .integer(10...10000)),
         ValueRule("IKKOKU_PERF_DEFORM_REUSE", .oneOf(["on", "off"])),
+        // R7 phase 2, live pacing: the Studio's step started by its 30 Hz
+        // timer as before ("timer") instead of the display link, and
+        // `studio-orbit-bursts` with live animation on.
+        ValueRule("IKKOKU_PERF_LIVE_PACING", .oneOf(["display", "timer"])),
+        ValueRule("IKKOKU_PERF_BURST_LIVE", .oneOf(["on", "off"])),
         // The source key of the object `studio-duplicate` and
         // `studio-undo-delete` act on (R7 phase 2, item 6 follow-up).
         ValueRule("IKKOKU_PERF_ACTION_KEY", .integer(0...Int(Int32.max))),
@@ -571,7 +578,7 @@ extension CaptureRequest {
     public static let perfWorkloads: [String] = [
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
-        "studio-duplicate", "studio-undo-delete",
+        "studio-duplicate", "studio-undo-delete", "studio-timeline",
     ]
 }
 

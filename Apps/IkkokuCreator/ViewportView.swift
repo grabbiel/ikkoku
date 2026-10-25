@@ -19,13 +19,47 @@ protocol ViewportInputHandler: AnyObject {
     func keyDown(_ event: NSEvent) -> Bool
 }
 
+/// A viewport model whose fixed-rate step the viewport's display link starts
+/// (R7 phase 2, live pacing; docs/reference/renderer.md, "Live pacing"). The
+/// Studio is one; the Maker keeps its own timer.
+@MainActor
+protocol LivePacedHandler: AnyObject {
+    /// The viewport `owner`'s display link starts the steps from now on.
+    func attachLivePacing(_ owner: any LivePacingOwner)
+    /// It no longer does (its thread stopped, or the handler changed).
+    func detachLivePacing(_ owner: any LivePacingOwner)
+    /// One step the link asked for; how it ended (`LiveStepPacer.Result`).
+    func displayStep() -> LiveStepPacer.Result
+}
+
+/// The viewport whose display link starts a `LivePacedHandler`'s steps.
+@MainActor
+protocol LivePacingOwner: AnyObject {
+    /// The model has something to step again after answering `.idle`: the
+    /// link, parked since, asks at its next callback.
+    func resumeLiveSteps()
+}
+
 /// The Metal viewport. Its display link runs on its own render thread
 /// (`ViewportRenderThread`) while the view is in a window; input is handled
 /// on the main thread and forwarded to the `handler`.
 final class ViewportNSView: NSView {
     private let renderer: Renderer
     private var renderThread: ViewportRenderThread?
-    weak var handler: (any ViewportInputHandler)?
+    weak var handler: (any ViewportInputHandler)? {
+        didSet {
+            guard handler !== oldValue, threadPaces else { return }
+            (oldValue as? LivePacedHandler)?.detachLivePacing(self)
+            (handler as? LivePacedHandler)?.attachLivePacing(self)
+        }
+    }
+    /// Whether this viewport's display link may start its model's steps (off
+    /// under `IKKOKU_PERF_LIVE_PACING=timer`, a measurement control).
+    private let pacesSteps = PerfTrace.active?.configuration.livePacing != "timer"
+    /// Whether the running render thread starts the steps: decided when it
+    /// starts, from `pacesSteps` and whether the handler is a `LivePacedHandler`
+    /// (the Maker's is not, so its link sends no requests).
+    private var threadPaces = false
     private var lastPoint = SIMD2<Float>(0, 0)
     private var tracking: NSTrackingArea?
     /// The window whose occlusion and minimizing this view follows.
@@ -66,12 +100,23 @@ final class ViewportNSView: NSView {
         }
         updateDrawableSize()
         if renderThread == nil {
-            let thread = ViewportRenderThread(layer: metalLayer, renderer: renderer, log: PerfTrace.active?.drawLog)
+            let paces = pacesSteps && (handler as? LivePacedHandler) != nil
+            var step: (@MainActor () -> LiveStepPacer.Result)?
+            if paces { step = { [weak self] in self?.displayStep() ?? .idle } }
+            let thread = ViewportRenderThread(layer: metalLayer, renderer: renderer, log: PerfTrace.active?.drawLog, pacedStep: step)
             thread.setVisible(isVisible(window))
             thread.start()
             renderThread = thread
+            threadPaces = paces
+            if paces { (handler as? LivePacedHandler)?.attachLivePacing(self) }
         }
         window.makeFirstResponder(self)
+    }
+
+    /// The step the render thread asked for, on the main thread.
+    private func displayStep() -> LiveStepPacer.Result {
+        guard threadPaces, let model = handler as? LivePacedHandler else { return .idle }
+        return model.displayStep()
     }
 
     /// The notifications that can change whether the window shows the viewport.
@@ -114,6 +159,8 @@ final class ViewportNSView: NSView {
 
     /// Stops the render thread (it exits after any draw in progress).
     func stopRendering() {
+        if threadPaces { (handler as? LivePacedHandler)?.detachLivePacing(self) }
+        threadPaces = false
         renderThread?.stop()
         renderThread = nil
     }
@@ -230,4 +277,10 @@ struct ViewportView: NSViewRepresentable {
     }
     func updateNSView(_ view: ViewportNSView, context: Context) { view.handler = handler }
     static func dismantleNSView(_ view: ViewportNSView, coordinator: ()) { view.stopRendering() }
+}
+
+extension ViewportNSView: LivePacingOwner {
+    func resumeLiveSteps() {
+        if threadPaces { renderThread?.resumePacing() }
+    }
 }
