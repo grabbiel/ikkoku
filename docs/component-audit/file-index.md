@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**974 files indexed; 974 assigned; 0 unassigned.**
+**976 files indexed; 976 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
 | [Studio / IK / animation](studio.md) | 200 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 334 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 192 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 335 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 193 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 224 |
+| Conversion / recovery / verification tool | 225 |
 | Documentation / historical evidence | 64 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 29 |
 | Runtime / shared shader declaration | 217 |
-| Test / validation | 197 |
+| Test / validation | 198 |
 
 ## App / gameplay / plugins
 
@@ -782,6 +782,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderBindingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShaderCompositeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderCompositeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift](../../Packages/Engine/Tests/EngineTests/SourceShaderLiveTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/TranslatedSourceVertexStoreTests.swift](../../Packages/Engine/Tests/EngineTests/TranslatedSourceVertexStoreTests.swift) | Test / validation |
 | [Shaders/Common.h](../../Shaders/Common.h) | Runtime / shared shader declaration |
 | [Shaders/Deform.metal](../../Shaders/Deform.metal) | Runtime / shared shader declaration |
 | [Shaders/Outline.metal](../../Shaders/Outline.metal) | Runtime / shared shader declaration |
@@ -899,6 +900,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/lanes/public.json](../../Tools/verification/lanes/public.json) | Conversion / recovery / verification tool |
 | [Tools/verification/lanes/studio-scenarios.json](../../Tools/verification/lanes/studio-scenarios.json) | Conversion / recovery / verification tool |
 | [Tools/verification/metal_derivative_repro.swift](../../Tools/verification/metal_derivative_repro.swift) | Conversion / recovery / verification tool |
+| [Tools/verification/metal_quad_merge_repro.swift](../../Tools/verification/metal_quad_merge_repro.swift) | Conversion / recovery / verification tool |
 | [Tools/verification/perf_trace.py](../../Tools/verification/perf_trace.py) | Conversion / recovery / verification tool |
 | [Tools/verification/prerequisites.json](../../Tools/verification/prerequisites.json) | Build / repository configuration |
 | [Tools/verification/run.py](../../Tools/verification/run.py) | Conversion / recovery / verification tool |
