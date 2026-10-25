@@ -214,6 +214,54 @@ private struct MakerSelectionCases: Decodable {
     }
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]) && MTLCreateSystemDefaultDevice() != nil,
+    "Requires IKKOKU_MAKER_SELECTION_FIXTURES and a Metal device"))
+func sourceMakerPreparedAppearanceScopesFollowSelectedComponentsWithoutChangingResults() async throws {
+    let checks = try await liveTickOffPool {
+        let (fixtures, directory) = try MakerSelectionCases.load()
+        let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
+        let baseURL = URL(fileURLWithPath: fixtures.femaleBase)
+        let card = try SourceCharacterCard.load(url: directory.appendingPathComponent("female-head0-bone0.png"))
+        let cardAppearance = try SourceCardAppearance(card: card)
+        let prepared = try library.prepare(card: card, coordinate: 0, baseURL: baseURL)
+        let inputs = try prepared.prepareAppearanceInputs(card: cardAppearance, baseURL: baseURL)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw RigError.invalid("Metal device unavailable.") }
+        let resources = ResourceStore(device: device)
+        let base = try SourcePreviewAppearance.load(url: baseURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources)
+        let timings = SourceAppearanceTimings()
+        let appliedBase = try inputs.applyingBase(to: base, card: cardAppearance, baseURL: baseURL, resources: resources, timings: timings)
+        guard let observed = try prepared.appearance(base: appliedBase?.appearance ?? base, card: cardAppearance,
+            resources: resources, modLibrary: nil, timings: timings, inputs: inputs),
+              let ordinary = try prepared.appearance(base: appliedBase?.appearance ?? base, card: cardAppearance,
+            resources: resources, modLibrary: nil, inputs: inputs) else { throw RigError.invalid("Fixture appearance is absent.") }
+        let sample = timings.sample, scopes = sample.scopes
+        let components = scopes.filter { $0.identity.role == .component }
+        let expected = ["hair-0/", "hair-1/", "clothes-0/", "clothes-1/", "clothes-8/", "accessory-0/"]
+        var checks: [(String, Bool)] = [
+            ("Base, six selected components and body mask retain execution order", scopes.map(\.identity.role) == [.base] + Array(repeating: .component, count: 6) + [.bodyMaskLoad]),
+            ("Component labels retain the original selected slots", components.map(\.identity.prefix) == expected.map(Optional.some)),
+            ("Component ordinals follow the prepared order", components.map(\.identity.componentIndex) == (0..<6).map(Optional.some)),
+            ("Accessory and indoor-shoe context remain explicit", components.map(\.identity.accessorySlot) == [nil, nil, nil, nil, nil, 0] && components.allSatisfy { $0.identity.indoorShoes == false }),
+            ("Each completed component loads once", components.allSatisfy { $0.succeeded && $0.calls["componentLoad"] == 1 }),
+            ("Body mask is a separate completed operation", scopes.last?.succeeded == true && scopes.last?.calls["bodyMaskLoad"] == 1),
+            ("Nil diagnostics preserve applied fields and diagnostics", observed.appliedFields == ordinary.appliedFields && observed.diagnostics == ordinary.diagnostics),
+            ("Nil diagnostics preserve material targets", Set(observed.appearance.materials.keys) == Set(ordinary.appearance.materials.keys)),
+        ]
+        for (phase, count) in sample.calls {
+            checks.append(("Scope call deltas partition aggregate \(phase)", scopes.reduce(0) { $0 + $1.calls[phase, default: 0] } == count))
+        }
+        if let aggregate = sample.composition {
+            checks.append(("Dispatch deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.metalEncodeDispatches ?? 0) } == aggregate.metalEncodeDispatches))
+            checks.append(("Completion deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.metalBatchCompletions ?? 0) } == aggregate.metalBatchCompletions))
+            checks.append(("Real-input allocation deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.realInputAllocations ?? 0) } == aggregate.realInputAllocations))
+            checks.append(("Fallback allocation deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.fallbackAllocations ?? 0) } == aggregate.fallbackAllocations))
+            checks.append(("Fallback binding deltas partition aggregate", scopes.reduce(0) { $0 + ($1.composition?.fallbackBindings ?? 0) } == aggregate.fallbackBindings))
+        }
+        return checks
+    }
+    for (name, passed) in checks { #expect(passed, "\(name)") }
+}
+
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
 @MainActor func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() throws {
     let (fixtures, directory) = try MakerSelectionCases.load()

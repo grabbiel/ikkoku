@@ -920,3 +920,62 @@ The app cache grows through 10, 11 and 12 entries, then retains 12; female/male 
 Warm candidate worker execution remains 78.665–89.667 ms and owner commit 75.877–87.006 ms. Owner outcomes are mixed; this optimization does not move or remove synchronous owner work. Warm card-appearance work costs 61.982–72.595 ms, including compositor wait/view intervals of 46.003–52.053 ms and allocation/upload of 6.904–8.232 ms; nested intervals are not additional to their parent. Shape decode remains 21.447–23.846 ms and appearance-input preparation 31.148–36.947 ms across all candidate selections. These remaining costs guide further work under #192.
 
 First/second cycle labels do not imply filesystem-cache eviction, and only the first process selection has an empty decoded-rig cache. Read/hash volumes are API bytes, not disk traffic. No FPS, heap/RSS, fresh original-player accuracy or broad hardware claim follows from this small pair. Immutable sources, binaries, original failed attempts, fixture/input proofs, all raw reports and offline analyses are retained under `.local/codex-continue-2026-10-24/rolling/maker-rig-cache/`.
+
+### Per-component appearance attribution (#192)
+
+The optional owner-local collector now labels the existing base, ordered component
+and body-mask operations. Component identity includes ordinal, mesh prefix,
+accessory slot and indoor-shoe context. Each scope records its inclusive duration,
+success or partial failure, and deltas of the existing phase/composition counters.
+These deltas partition the aggregates; neither scopes nor nested allocation,
+encode and wait intervals are additional costs to add to their parent. Nil
+collectors construct no labels or snapshots and read no additional clocks.
+Execution order, validation, candidate resource ownership and publication remain
+unchanged. Diagnostic collection does add snapshots, possible dictionary copies
+and clock reads; the measurements below do not isolate that overhead.
+
+At `581dda8`, 12 focused Engine cases pass without skips, covering lazy nil
+collection, ordered labels, thrown partial scopes, real prepared inputs and
+composition/resource failure paths. The original test-macro compile failure is
+retained; its repair only moves the same Boolean predicate outside the macro.
+Four functional app processes pass 124 checks, with four exports byte-identical
+to accepted `ec76ab5`, matching selected resources/cache counters and eight
+unchanged selections without a new successful sample.
+
+A separate quiet collection compares `ec76ab5` / binary `e7144898` with
+`581dda8` / `5c3bd5e8`. Of 559 pinned build inputs, only the three production and
+three test files in this diagnostic differ. Female A/B/B/A and male B/A/A/B
+ordering gives two observations per sex, arm, head and cycle. All eight processes
+pass 152 checks in 40.051 seconds; root verifies 27 artifact hashes, 48 raw
+observations, identical exports per sex, resource/cache vectors and scope
+partitions. The existing VM remains open (7.7% CPU at the pre-run snapshot),
+without an owned probe; its background activity is uncontrolled.
+
+Repeat-cycle median scope times, six candidate observations per sex combining
+heads 200, 201 and 0 (milliseconds):
+
+| Scope | Female inclusive | Male inclusive | Female wait/view | Male wait/view |
+| --- | ---: | ---: | ---: | ---: |
+| Base composite | 11.940 | 11.353 | 8.657 | 8.488 |
+| Back hair | 13.428 | 13.581 | 9.141 | 9.241 |
+| Front hair | 12.648 | 12.804 | 9.034 | 9.092 |
+| Top | 11.097 | 11.540 | 8.428 | 8.798 |
+| Bottom | 10.265 | 10.646 | 8.270 | 8.385 |
+| Outer shoes | 9.667 | 10.311 | 8.004 | 8.328 |
+| Accessory slot 0 | 0.092 | 0.157 | 0 | 0 |
+| Body-mask load | 1.740 | 1.926 | 0 | 0 |
+
+The repeat-cycle mean total card-appearance interval is 71.157 ms female and
+72.489 ms male. Its six compositor completions account for 52.420/52.424 ms in
+wait/view, while allocation/upload accounts for 7.742/8.010 ms. Base/hair batches
+dispatch 4/5/4 recipes; the three clothing batches dispatch one each. Accessory
+and body-mask scopes perform no composite dispatch in these fixtures. These
+observations motivate reviewing batching across components, with explicit
+transient-memory and failure-ownership limits before changing execution.
+
+Candidate-minus-control mean API differences range from −6.645 to +8.752 ms
+across the twelve sex/head/cycle cells; owner differences range from −3.471 to
++7.165 ms. This is diagnostic attribution, not a speedup, isolated observation
+cost, FPS or original-player fidelity claim. First-cycle labels include one
+empty rig-cache selection and two partial-hit selections. Full private evidence
+is retained under `.local/codex-continue-2026-10-24/rolling/maker-component-appearance-attribution/`.

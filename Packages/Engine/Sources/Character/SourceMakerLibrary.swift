@@ -262,8 +262,10 @@ public struct SourceMakerLibrary: Sendable {
                     throw RigError.invalid("Prepared appearance inputs belong to a different base assembly.")
                 }
                 guard let base else { return nil }
-                return try appearance.applying(card, bindings: base.value, directory: base.url.deletingLastPathComponent(),
-                    resources: resources, timings: timings, preparedInputs: base.pixels)
+                return try SourceAppearanceTimings.scoped(timings, .base) {
+                    try appearance.applying(card, bindings: base.value, directory: base.url.deletingLastPathComponent(),
+                        resources: resources, timings: timings, preparedInputs: base.pixels)
+                }
             }
         }
 
@@ -309,36 +311,41 @@ public struct SourceMakerLibrary: Sendable {
             }
             var combined = base, fields = Set<String>(), messages = diagnostics
             for (index, component) in components.enumerated() {
-                var appearance = try SourceAppearanceTimings.measure(timings, .componentLoad) {
-                    try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
-                        transaction: transaction)
-                }
-                if let url = component.bindings {
-                    let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
-                        if let inputs {
-                            guard let prepared = inputs.componentBindings[index], prepared.url == url else {
-                                throw RigError.invalid("Prepared component appearance binding is missing or mismatched.")
-                            }
-                            return prepared.value
-                        }
-                        var value = try SourceAppearanceBindings.load(url: url)
-                        if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
-                        if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
-                        return value
+                try SourceAppearanceTimings.scoped(timings, .component(index: index, prefix: component.prefix,
+                    accessorySlot: component.accessorySlot, indoorShoes: component.indoorShoes)) {
+                    var appearance = try SourceAppearanceTimings.measure(timings, .componentLoad) {
+                        try SourcePreviewAppearance.load(url: component.appearance, resources: resources, modLibrary: modLibrary,
+                            transaction: transaction)
                     }
-                    let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources,
-                        timings: timings, preparedInputs: inputs?.componentBindings[index]?.pixels)
-                    appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
+                    if let url = component.bindings {
+                        let bindings = try SourceAppearanceTimings.measure(timings, .bindingPreparation) {
+                            if let inputs {
+                                guard let prepared = inputs.componentBindings[index], prepared.url == url else {
+                                    throw RigError.invalid("Prepared component appearance binding is missing or mismatched.")
+                                }
+                                return prepared.value
+                            }
+                            var value = try SourceAppearanceBindings.load(url: url)
+                            if let slot = component.accessorySlot { value = try value.contextualized(accessorySlot: slot) }
+                            if component.indoorShoes { value = try value.contextualizedIndoorShoes() }
+                            return value
+                        }
+                        let applied = try appearance.applying(card, bindings: bindings, directory: url.deletingLastPathComponent(), resources: resources,
+                            timings: timings, preparedInputs: inputs?.componentBindings[index]?.pixels)
+                        appearance = applied.appearance; fields.formUnion(applied.appliedFields); messages += applied.diagnostics
+                    }
+                    appearance = appearance.renaming(component.meshNames, prefix: component.prefix)
+                    combined = combined.map { $0.merging(appearance) } ?? appearance
                 }
-                appearance = appearance.renaming(component.meshNames, prefix: component.prefix)
-                combined = combined.map { $0.merging(appearance) } ?? appearance
             }
             if let mask = bodyMask, let current = combined {
-                combined = try SourceAppearanceTimings.measure(timings, .bodyMaskLoad) {
-                    try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+                combined = try SourceAppearanceTimings.scoped(timings, .bodyMaskLoad) {
+                    try SourceAppearanceTimings.measure(timings, .bodyMaskLoad) {
+                        try current.replacingBodyMask(data: Data(contentsOf: mask), resources: resources)
+                    }
                 }
             } else if clearBodyMask, let current = combined {
-                combined = current.removingBodyMask()
+                combined = SourceAppearanceTimings.scoped(timings, .bodyMaskRemove) { current.removingBodyMask() }
             }
             guard let combined else { return nil }
             return .init(appearance: combined, appliedFields: fields, diagnostics: messages)
