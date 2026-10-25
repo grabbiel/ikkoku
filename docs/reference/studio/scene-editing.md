@@ -492,7 +492,11 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
 
     The no-op stays on the byte-identity fast path. The other topology cases also stay within run-to-run noise.
   - **Point move.** A guide drag event's median is 1.31 ms (max 1.37) while route 0 and its copy play (`route-move-playing`). On stopped routes it is 0.33–0.45 ms (`route-edit-export`), and the mouseUp is 0.00 ms.
-  - **Duplicate stall.** Duplicating route 0 with its folder and character takes a median of 696 ms (p90 700, 20 rounds). Building the route character's preview takes almost all of that time. A folder copy takes 0.25 ms.
+  - **Duplicate stall.** Duplicating route 0 with its folder and character takes a median of 119.8 ms on the main thread (p90 123.4, 20 rounds `timeDuplicate`; Release `28b0eaf`, main `42fc588` merged). Before that merge it took 696 ms (p90 700). A folder copy takes 0.24 ms.
+    - **Why it fell.** The copy's character preview is now built through `makeSourceCharacterPreview`, which borrows the original's converted assembly (R7 phase 2, item 6).
+    - **Where the time goes.** A timed build of the same probe gave these medians: `assemble` with the borrowed assembly 1.9 ms, `SourceStudioCharacterPreview.init(assembly:resources:)` 111 ms (it registers the meshes and textures and evaluates the preview), and the subtree copy and runtime entries the remaining 2–3 ms. No export plan runs on Duplicate.
+    - **Why a plain duplicate costs less.** A route character's copy is built synchronously inside the Duplicate command, in every mode. A plain character's duplicate builds through `SourceStudioCharacterBatch`, and in the interactive app that build's second half runs on `sourceBuildQueue`, so the main thread pays about 45 ms. The timing probe builds synchronously and times only the command, so it does not show the plain duplicate's build at all.
+    - **Follow-up (ST-T11 route-copy background build).** Build route-character copies through the batch on `sourceBuildQueue`, with the pending, install and cancel handling `startMissingSourceBuilds` and `installSourceBuild` give the document's characters.
   - **Idle with a playing route.** `studio-idle` ran on scene-route-children.png with route 0 playing and its character riding it, 10 s per run, two runs per build. Both builds carry the live-step fix, and `studio-idle` now counts a route's characters (`details.sourceRouteCharacters`).
 
     | Metric | Base | Branch |
