@@ -1380,7 +1380,7 @@ extension PluginLibraryScenario {
 // Route rollback reproduction uses real app clocks; no production state is injected.
 extension PluginLibraryScenario {
     struct RouteRollback: Decodable {
-        enum Phase: String, Decodable { case control, injected }
+        enum Phase: String, Decodable { case control, injected, ownership }
         let phase: Phase
         let directory: String
         let routeKey: Int32, childKey: Int32
@@ -1470,6 +1470,67 @@ extension PluginLibraryScenario {
                     from: Data(contentsOf: directory.appendingPathComponent("control/process.json")))
                 try require("IndependentRouteControlProcess", producer["pid"] != nil
                     && producer["pid"] != ProcessInfo.processInfo.processIdentifier)
+            }
+            if configuration.phase == .ownership {
+                try studio.loadScene(from: seed)
+                let document = studio.doc
+                guard let route = document.objects.first(where: { $0.sourceObjectKey == configuration.routeKey }),
+                      let child = document.objects.first(where: { $0.sourceObjectKey == configuration.childKey }) else {
+                    throw SourcePluginError.invalid("Native route seed lost a required source object.")
+                }
+                // Exercise the real rehydration boundary before its caller's
+                // first refresh. No cache field or clock state is injected.
+                studio.newScene()
+                studio.doc = document
+                studio.rehydrateSourceRuntime()
+                let lazy = studio.capturePluginDynamics(), time = studio.sourceAnimationTime
+                let before = try snapshot(), frame = studio.host.renderer.currentFrame()
+                try require("LazyRouteClockAbsent", studio.hasSourceRoutes && lazy.routes.isEmpty)
+                let initial = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                let materialized = studio.capturePluginDynamics()
+                try require("LazyQueryCreatesClock", materialized.routes[route.id] != nil)
+                guard let first = materialized.routes[route.id]?.clock else {
+                    throw SourcePluginError.invalid("Route placement did not create its clock.")
+                }
+                record("LazyQueryHasNoExternalMutation", before == (try snapshot())
+                    && sameFrame(frame, studio.host.renderer.currentFrame()))
+                try studio.restorePluginDynamics(time: time, checkpoints: lazy)
+                record("DiscardNewClock", studio.capturePluginDynamics().routes.isEmpty)
+                record("DiscardNewClockState", before == (try snapshot())
+                    && sameFrame(frame, studio.host.renderer.currentFrame()))
+                let retry = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                guard let owner = studio.capturePluginDynamics().routes[route.id]?.clock else {
+                    throw SourcePluginError.invalid("Route retry did not create its clock.")
+                }
+                record("LazyRetryNewOwner", owner !== first)
+                record("LazyRetrySamePose", retry == initial)
+                for _ in 0..<3 { try studio.advancePluginAnimation(by: 0.02) }
+                let prefix = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                try require("WarmPrefixMoved", prefix != initial)
+                let warm = studio.capturePluginDynamics(), warmTime = studio.sourceAnimationTime
+                let warmState = try snapshot(), warmFrame = studio.host.renderer.currentFrame()
+                try studio.advancePluginAnimation(by: 0.02)
+                let continuation = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                try require("WarmAdvanceMoved", continuation != prefix)
+                try studio.restorePluginDynamics(time: warmTime, checkpoints: warm)
+                record("WarmOwner", studio.capturePluginDynamics().routes[route.id]?.clock === owner)
+                record("WarmExactState", warmState == (try snapshot())
+                    && sameFrame(warmFrame, studio.host.renderer.currentFrame()))
+                record("WarmPose", matrixBits(try studio.sourceObjectWorldMatrix(child.id)) == prefix)
+                try studio.advancePluginAnimation(by: 0.02)
+                record("WarmRetryMatches", matrixBits(try studio.sourceObjectWorldMatrix(child.id)) == continuation)
+                // An old request retains its original owner even if a later
+                // lazy placement has temporarily populated the same UUID key.
+                try studio.restorePluginDynamics(time: time, checkpoints: lazy)
+                _ = try studio.sourceObjectWorldMatrix(child.id)
+                let replacement = studio.capturePluginDynamics().routes[route.id]?.clock
+                try studio.restorePluginDynamics(time: warmTime, checkpoints: warm)
+                let restoredPose = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                record("CapturedOwnerRestoredAfterReplacement", replacement !== owner
+                    && studio.capturePluginDynamics().routes[route.id]?.clock === owner
+                    && restoredPose == prefix)
+                studio.sourcePluginsRunning = false
+                return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
             }
             let cases: [(String, Float, Bool)] = [("regular", SourceStudioRouteClock.frameDelta, true), ("irregular", 0.02, true), ("stopped", 0.02, false)]
             for (name, delta, playing) in cases {

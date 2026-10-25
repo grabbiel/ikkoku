@@ -719,6 +719,16 @@ reconstruction defect in [#226](https://github.com/grabbiel/ikkoku/issues/226).
 The original red reports and binary remain retained. It establishes neither a
 general callback failure nor an original-player parity or performance result.
 
+The #226 correction uses request-owned route checkpoints alongside character
+dynamics checkpoints. Each retains the original clock owner and exact value
+state: stepper history, built world, reached time, last frame, play state and last
+action. Rollback restores those owners and drops clocks created after capture;
+it does not replay elapsed frames or re-read source data. Immutable route arrays
+remain shared through value copying. Ordinary scrubbing keeps the existing
+fixed-`1/30` rebuild contract. Focused Engine continuation/ownership cases and a
+separate app lazy-clock ownership phase accompany the unchanged 16+56 assertions;
+their execution is pending. No comparative checkpoint-cost claim is made.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone

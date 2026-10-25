@@ -75,6 +75,21 @@ public final class SourceStudioRouteClock {
         case stopped
     }
 
+    /// Exact request-local rollback state. The retained owner prevents reuse on
+    /// another clock, including after the caller removes this clock from a cache.
+    /// The stepper and frame are values; their segment/path arrays are immutable
+    /// CoW storage, so capture does not rebuild a route or copy its geometry.
+    public struct Checkpoint {
+        fileprivate let owner: SourceStudioRouteClock
+        fileprivate let stepper: SourceStudioRouteStepper?
+        fileprivate let builtWorld: float4x4?
+        fileprivate let reached: Float
+        fileprivate let frame: Frame?
+        fileprivate let playing: Bool
+        fileprivate let playStart: Float
+        fileprivate let action: Action
+    }
+
     /// The preview's fixed frame delta: live ticks should pass it and jump
     /// fast-forwards always use it, matching the Studio clock's `1 / 30`.
     public static let frameDelta: Float = 1 / 30
@@ -130,6 +145,27 @@ public final class SourceStudioRouteClock {
 
     /// What the last `rewind`, `step`, `jump` or rebuilding `placement` did.
     public private(set) var lastAction: Action = .stepped
+
+    public func captureCheckpoint() -> Checkpoint {
+        .init(owner: self, stepper: stepper, builtWorld: builtWorld, reached: reached,
+              frame: lastFrame, playing: playing, playStart: playStart, action: lastAction)
+    }
+
+    /// Restore the actual live history, not a fixed-step approximation of its
+    /// elapsed time. Validate ownership before any write; no builder or replay
+    /// runs, including for an unbuilt, stopped, completed or fallback clock.
+    public func restoreCheckpoint(_ checkpoint: Checkpoint) throws {
+        guard checkpoint.owner === self else {
+            throw RigError.invalid("Route checkpoint belongs to another clock instance.")
+        }
+        stepper = checkpoint.stepper
+        builtWorld = checkpoint.builtWorld
+        reached = checkpoint.reached
+        lastFrame = checkpoint.frame
+        playing = checkpoint.playing
+        playStart = checkpoint.playStart
+        lastAction = checkpoint.action
+    }
 
     /// The frame to render when the clock is at `time` with the route at
     /// `routeWorld`, or `nil` when the caller's continuous evaluator answers:
@@ -222,7 +258,7 @@ public final class SourceStudioRouteClock {
         return lastAction
     }
 
-    /// A jump (`setSourceAnimationTime`, a checkpoint restore, a rewind):
+    /// A jump (`setSourceAnimationTime`, a rewind):
     /// rebuild `Play` and fast-forward fixed `1/30` frames from `playStart`
     /// to the nearest frame to the new time, so the placement matches what
     /// live `1/30` stepping produces there. A jump to a time before
