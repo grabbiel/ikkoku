@@ -6,6 +6,7 @@ import Studio
 import Renderer
 import Scene
 import ShaderTypes
+import CoreMath
 import CryptoKit
 import simd
 
