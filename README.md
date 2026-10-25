@@ -69,8 +69,12 @@ Performance is part of every component's acceptance. Record responsiveness, tota
 latency, memory and GPU work separately. Prepared head-selection inputs reduce
 owner-thread stalls at a total-latency and retained-input cost. Fallback reuse and
 [bounded composition batches](docs/reference/character/maker-assets.md#bounded-synchronous-composition-batches-208)
-reduce allocations and waits; measured owner-thread timing remains mixed. Peak
-memory was not measured. Functional success alone does not establish a speedup.
+reduce allocations and waits. Maker's
+[bounded clothes groups](docs/reference/character/maker-assets.md#bounded-maker-clothes-composition-groups-234)
+reduce six completions to four and improve measured selection latency by
+15–21 ms in the retained normal-head comparison, with an estimated 5 MiB
+additional logical texture peak. Owner-thread stalls remain; RSS and universal
+performance were not measured. Functional success alone does not establish a speedup.
 
 The [current work and evidence](docs/component-audit/README.md#current-work-and-evidence)
 section distinguishes merged support, active investigations and historical

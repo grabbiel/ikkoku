@@ -59,8 +59,9 @@ extension AppState {
         catch { throw CaptureInputError(variable: variable, value: value, reason: String(describing: error)) }
     }
 
-    /// `IKKOKU_APPLICATION_FOCUS=0,1` delivers focus loss/gain through the AppKit
-    /// notification path; `IKKOKU_NATIVE_PLUGIN_REPORT` records mounts, observers
+    /// `IKKOKU_APPLICATION_FOCUS=0,1` calls the same focus consumer as the AppKit
+    /// observers directly; it does not post notifications or prove registration.
+    /// `IKKOKU_NATIVE_PLUGIN_REPORT` records mounts, observers
     /// and generated-tone gain after each event. Headless captures exit before
     /// launching finishes, so they also record the deferred initial-focus state.
     /// `launchFinished` lets the probe reject a sample taken before then (A-T04).
