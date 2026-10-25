@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "0d92f693522fd4b2d3a4e3c1cfbccde90a9e5723",
+  "revision": "6117f5da64299a65d425e72d462f092ef3440c4d",
   "components": [
     {
       "id": "character-maker",
@@ -8,9 +8,9 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "The core editing path works for selected normal characters.",
-      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports.",
-      "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining selection stalls. Rig reuse is under development; no speedup is accepted yet.",
-      "evidence": "Worker diagnostics attribute 88–90% of the selected preparation operation to rig decoding, validation and conversion. This is a measured scope, not a whole-app benchmark.",
+      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification.",
+      "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and now pay hashing/accounting costs.",
+      "evidence": "In a small Release pair, median warm normal-head selection fell from 667–701 ms to 159–161 ms. First selections cost 16–25 ms more. Logical retained rig payload reached about 39 MB; this is not total RAM or a whole-app benchmark.",
       "docs": [
         [
           "Maker contract",
@@ -19,6 +19,10 @@
         [
           "Card preservation",
           "docs/reference/character/cards.md"
+        ],
+        [
+          "Selection reuse evidence",
+          "docs/reference/character/maker-assets.md#bounded-decoded-rig-reuse-192"
         ]
       ],
       "issue": [

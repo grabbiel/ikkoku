@@ -96,7 +96,11 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.
-  These measurements identify remaining work without claiming a speedup.
+  Bounded decoded-rig reuse now skips repeated decoding while retaining actual
+  reads and byte hashes. In the small Release pair, median warm normal-head
+  selection falls from 667–701 ms to 159–161 ms; the first selection costs
+  16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
+  stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
