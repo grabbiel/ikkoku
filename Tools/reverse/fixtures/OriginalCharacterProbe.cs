@@ -68,6 +68,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         else if(modelVariant=="male00-bone1") { modelSex=0;modelHead=0;modelBone=1; }
         else if(modelVariant=="male200") { modelSex=0;modelHead=200; }
         else if(modelVariant=="male201") { modelSex=0;modelHead=201; }
+        else if(modelVariant=="male201-bone1") { modelSex=0;modelHead=201;modelBone=1; }
         else throw new Exception("Unsupported neutral model variant");
         if(handPatterns!=null || lookPhases.Count>0)throw new Exception("Neutral model mode cannot use hand/look phases");
         handPatterns=new Dictionary<string,int>{{"L",0},{"R",0}};

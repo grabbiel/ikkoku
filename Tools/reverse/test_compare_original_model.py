@@ -71,8 +71,8 @@ class ModelComparisonTests(unittest.TestCase):
         self.native['identity']['headID']=201;self.write()
 
     def bone1(self, sex=1, head_id=0):
-        assert head_id in (0, 201) and (head_id == 0 or sex == 1)
-        variant = 'female201-bone1' if head_id == 201 else ('female00-bone1' if sex else 'male00-bone1')
+        assert head_id in (0, 201) and sex in (0, 1)
+        variant = ('female' if sex else 'male') + ('201' if head_id == 201 else '00') + '-bone1'
         catalog = model.HEAD201_CATALOG if head_id == 201 else model.HEAD00_CATALOG
         self.frame['neutralModel'].update(variant=variant, sex=sex,requestedSex=sex,boneType=1,requestedBoneType=1,
             headID=head_id,requestedHeadID=head_id,loadedHeadCatalogID=head_id,
@@ -154,6 +154,89 @@ class ModelComparisonTests(unittest.TestCase):
             data=bytearray((other/'body-correction.bytes').read_bytes());struct.pack_into('<f',data,4,-.5)
             (other/'body-correction.bytes').write_bytes(data)
             changed=copy.deepcopy(valid);changed['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(data).hexdigest()
+            (other/'frame.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError,'Repeated corrected body table differs'):model.compare_repeat(self.folder,other)
+
+    def test_corrected_male_head201_requires_table_collider_and_only_height_coercion(self):
+        self.bone1(sex=0,head_id=201);result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed'])
+        self.assertEqual([(r['domain'],r['index']) for r in result['shapeCoercions']],[('body',0)])
+        self.assertEqual(result['shapeCoercions'][0]['requested'],.5)
+        self.assertEqual(result['shapeCoercions'][0]['actual'],float(np.float32(.6)))
+        self.assertEqual(result['bodyCorrection']['sourceBodyType'],1)
+        self.assertTrue(result['headColliderScale']['gatePassed'])
+        valid=copy.deepcopy(self.frame);native=copy.deepcopy(self.native)
+        # A second changed rate must fail even when native/readback agree.
+        for domain,index,value in [('Body',0,.5),('Body',1,.6),('Face',0,.6)]:
+            self.frame=copy.deepcopy(valid);self.native=copy.deepcopy(native)
+            self.frame['neutralModel']['actual'+domain+'Values'][index]=value
+            self.native[domain.lower()+'Values'][index]=value;self.write()
+            with self.subTest(domain=domain,index=index),self.assertRaises(ValueError):
+                model.compare(self.folder,self.native)
+        self.frame=valid;self.native=native;self.write()
+        self.native['nodeLocalMatrices'][1][0]=1.2
+        result=model.compare(self.folder,self.native)
+        self.assertFalse(result['gatePassed']);self.assertEqual(result['parts'][0]['vertices']['maximum'],0)
+        self.native['nodeLocalMatrices'][1][0]=1.08
+        self.native['inputs']['bodyCorrectionSHA256']='0'*64
+        with self.assertRaisesRegex(ValueError,'table identity'):model.compare(self.folder,self.native)
+        self.native['inputs']['bodyCorrectionSHA256']=valid['neutralModel']['bodyCorrection']['sha256']
+        table=self.folder/'body-correction.bytes';data=table.read_bytes();table.write_bytes(b'corrupted')
+        with self.assertRaisesRegex(ValueError,'Changed or malformed corrected body table'):
+            model.compare(self.folder,self.native)
+        table.write_bytes(data)
+        del self.frame['neutralModel']['bodyCorrection'];self.write()
+        with self.assertRaisesRegex(ValueError,'table metadata'):model.compare(self.folder,self.native)
+
+    def test_corrected_male_head201_rejects_typed_identity_catalog_and_table_mutations(self):
+        self.bone1(sex=0,head_id=201);valid=copy.deepcopy(self.frame);native=copy.deepcopy(self.native)
+        for key,wrong in [('sex',1),('requestedSex',1),('headID',0),('requestedHeadID',0),
+                          ('boneType',0),('requestedBoneType',0),('exType',1),('requestedExType',1),
+                          ('loadedHeadCatalogID',0)]:
+            for value in (False,True,None,float(valid['neutralModel'][key]),wrong):
+                self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+                with self.subTest(source=key,value=value),self.assertRaises(ValueError):
+                    model.compare(self.folder,self.native)
+        for key,value in [('variant','male201'),('variant','male00-bone1'),('variant','female201-bone1'),
+                          ('variant','male201-bone1-wrong'),
+                          ('loadedHeadName','p_cf_head_03'),('loadedHeadCatalog',None)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(source=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD201_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(catalog=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+        for key in ('sourceBodyType','sourceFaceType'):
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['bodyCorrection'][key]=0;self.write()
+            with self.subTest(controller=key),self.assertRaisesRegex(ValueError,'table metadata'):
+                model.compare(self.folder,self.native)
+        self.frame=valid;self.write()
+        for key,wrong in [('sex',1),('headID',0),('boneType',0),('exType',1)]:
+            for value in (False,True,None,float(native['identity'][key]),wrong):
+                self.native=copy.deepcopy(native);self.native['identity'][key]=value
+                with self.subTest(native=key,value=value),self.assertRaisesRegex(ValueError,'Native corrected model identity'):
+                    model.compare(self.folder,self.native)
+
+    def test_corrected_male_head201_repeat_rejects_copied_producer_and_changed_table(self):
+        self.bone1(sex=0,head_id=201)
+        with self.assertRaises(ValueError):model.compare_repeat(self.folder,self.folder)
+        with tempfile.TemporaryDirectory() as tmp:
+            other=Path(tmp)
+            for path in self.folder.iterdir():(other/path.name).write_bytes(path.read_bytes())
+            with self.assertRaisesRegex(ValueError,'same producer'):model.compare_repeat(self.folder,other)
+            run=copy.deepcopy(self.run);run.update(processID=101,root='C:\\Temp\\IkkokuShaderProbe-'+'c'*32)
+            (other/'run.json').write_text(json.dumps(run))
+            self.assertTrue(model.compare_repeat(self.folder,other)['gatePassed'])
+            changed=copy.deepcopy(self.frame)
+            changed['neutralModel'].update(variant='female201-bone1',sex=1,requestedSex=1)
+            (other/'frame.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError,'Repeated source input identity differs'):model.compare_repeat(self.folder,other)
+            changed=copy.deepcopy(self.frame);changed['neutralModel']['loadedHeadCatalog']['MainData']='wrong'
+            (other/'frame.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare_repeat(self.folder,other)
+            data=bytearray((other/'body-correction.bytes').read_bytes());struct.pack_into('<f',data,4,-.5)
+            (other/'body-correction.bytes').write_bytes(data)
+            changed=copy.deepcopy(self.frame);changed['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(data).hexdigest()
             (other/'frame.json').write_text(json.dumps(changed))
             with self.assertRaisesRegex(ValueError,'Repeated corrected body table differs'):model.compare_repeat(self.folder,other)
 
