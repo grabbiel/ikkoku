@@ -126,6 +126,23 @@ func sourceMaterialClothesGroupCapacityAndOversizeUseRealStandalonePath() throws
         #expect(completed.map(\.identity) == (0..<3).map(fixture.identity))
         #expect(timings.sample.composition?.metalEncodeDispatches == 3)
         #expect(timings.sample.composition?.metalBatchCompletions == (capacity.inputBytes == 24 && capacity.outputBytes == 8 ? 2 : 3))
+        let sample = timings.sample, scopes = sample.scopes
+        let aggregate = try #require(sample.composition)
+        for (phase, count) in sample.calls {
+            #expect(scopes.reduce(0) { $0 + $1.calls[phase, default: 0] } == count)
+            let sum = scopes.reduce(0.0) { $0 + $1.milliseconds[phase, default: 0] }
+            #expect(abs(sum - sample.milliseconds[phase, default: 0]) < 0.000001)
+        }
+        for (phase, count) in aggregate.calls {
+            #expect(scopes.reduce(0) { $0 + ($1.composition?.calls[phase] ?? 0) } == count)
+            let sum = scopes.reduce(0.0) { $0 + ($1.composition?.milliseconds[phase] ?? 0) }
+            #expect(abs(sum - aggregate.milliseconds[phase, default: 0]) < 0.000001)
+        }
+        #expect(scopes.reduce(0) { $0 + ($1.composition?.realInputAllocations ?? 0) } == aggregate.realInputAllocations)
+        #expect(scopes.reduce(0) { $0 + ($1.composition?.fallbackAllocations ?? 0) } == aggregate.fallbackAllocations)
+        #expect(scopes.reduce(0) { $0 + ($1.composition?.fallbackBindings ?? 0) } == aggregate.fallbackBindings)
+        #expect(scopes.reduce(0) { $0 + ($1.composition?.metalEncodeDispatches ?? 0) } == aggregate.metalEncodeDispatches)
+        #expect(scopes.reduce(0) { $0 + ($1.composition?.metalBatchCompletions ?? 0) } == aggregate.metalBatchCompletions)
     }
 }
 

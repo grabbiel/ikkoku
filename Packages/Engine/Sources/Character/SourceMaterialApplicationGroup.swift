@@ -100,7 +100,10 @@ final class SourceClothesMaterialGroup {
         case .standalone:
             completed = try finish()
             // No group error wrapper or silent retry: retain the existing call.
-            completed.append(.init(identity: identity, application: try plan.complete(resources: resources, timings: timings)))
+            let application = try SourceAppearanceTimings.scoped(timings, .clothesCompositionGroup(indices: [identity.index])) {
+                try plan.complete(resources: resources, timings: timings)
+            }
+            completed.append(.init(identity: identity, application: application))
             return completed
         case .flushThenAppend: completed = try finish()
         case .append: break
