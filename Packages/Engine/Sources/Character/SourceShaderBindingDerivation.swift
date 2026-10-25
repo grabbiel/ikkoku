@@ -352,6 +352,7 @@ public enum SourceShaderBindingDerivation {
         let coordinateType = status?["coordinateType"]?.integerValue ?? 0
         let coordinate = (0..<7).contains(coordinateType) ? coordinateType : 0
         let card = Card(appearance: try SourceCardAppearance(card: source, coordinate: coordinate), status: status, statusError: statusError)
+        let characterSex = try? source.customization().sex
         let head = try JSONDecoder().decode(HeadContract.self, from: headContract)
         let supplement = try supplementData.map { try JSONDecoder().decode(Supplement.self, from: $0) }
         var result = SourceShaderBindingSet(scope: "Native source-derived shader inputs for one character (card, Maker library material "
@@ -542,6 +543,95 @@ public enum SourceShaderBindingDerivation {
                 if let rgba = card.color("face.\(key)") {
                     recipe.vectors[name] = .init(rgba, source: "card face.\(key) via ChaControl.ChangeSettingWhiteOfEye → SetColor(\(name))")
                 } else { recipe.vectors[name] = .init(unresolved: card.missing("face.\(key)")) }
+            }
+            identity.composite = recipe
+            return identity
+        }
+        /// The verified high-detail female head-0 `CustomTextureControl` uses
+        /// the same create pass as `CustomTextureCreate`, then binds its target
+        /// to `matDraw._MainTex`. Nonzero makeup layers need their own gate.
+        func faceComposite(materialSlot: Int, drawMaterial: String) -> Set_.TextureIdentity {
+            var identity = composite(hiPoly ? 1024 : 512,
+                creator: "CustomTextureControl face: cf_m_face_create (chara/mm_base.unity3d) over head MainTex, skin and selected makeup inputs")
+            var recipe = createRecipe(material: "cf_m_face_create", method: "ChaControl.InitBaseCustomTextureFace → CreateFaceTexture")
+            func unsupported(_ reason: String) -> Set_.TextureIdentity {
+                if recipe.unresolved == nil { recipe.unresolved = reason }
+                identity.composite = recipe
+                return identity
+            }
+            guard hiPoly, characterSex == 1, card.number("face.headId") == 0,
+                  materialSlot == 0 else {
+                return unsupported("face composite requires the verified female head 0 high-detail material slot 0")
+            }
+            var resolverProperties: Set<String> = ["ChaFileFace.headId", "ChaFileFace.lipLineId", "ChaFileFace.moleId"]
+            if !card.appearance.usesCoordinateMakeup {
+                resolverProperties.formUnion(["ChaFileMakeup.PaintID1", "ChaFileMakeup.PaintID2", "ChaFileMakeup.cheekId"])
+            }
+            guard card.appearance.modProperties.isDisjoint(with: resolverProperties) else {
+                return unsupported("face composite resolver-backed head or selected makeup inputs are not verified")
+            }
+            guard let row = catalogRow(100, 0), row["MainManifest"] == "abdata",
+                  row["MainAB"] == "chara/bo_head_00.unity3d", row["MainData"] == "p_cf_head_00",
+                  row["MatData"] == "cf_m_face_00", drawMaterial == row["MatData"],
+                  row["MainTexAB"] == "chara/bo_head_00.unity3d", row["MainTex"] == "cf_face_00_t",
+                  row["ColorMaskAB"] == "chara/bo_head_00.unity3d", row["ColorMaskTex"] == "cf_face_00_mc" else {
+                return unsupported("face composite requires the verified bo_head ID0 creator and catalog input identities")
+            }
+            guard recipe.shader == "Shader Forge/create_head",
+                  recipe.programSHA256 == "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c" else {
+                return unsupported("face composite create_head program is not verified")
+            }
+            guard let paintMask = recipe.textures["_paintmask"]?.identity,
+                  paintMask.kind == .asset, paintMask.name == "cf_face_00_mp",
+                  paintMask.bundle == "chara/mm_base.unity3d", paintMask.pathID != nil,
+                  paintMask.width == 1024, paintMask.height == 1024 else {
+                return unsupported("face composite authored _paintmask is not converted")
+            }
+            guard card.appearance.value("makeup.version")?.stringValue == "0.0.0" else {
+                return unsupported("face composite selected makeup record is missing or unsupported")
+            }
+            setCreateTexture(&recipe, "_MainTex", main: true,
+                catalogTexture(100, table: "bo_head", id: 0, bundleKey: "MainTexAB", key: "MainTex"),
+                source: "bo_head[0] MainTexAB/MainTex via CreateFaceTexture → SetMainTexture")
+            setCreateTexture(&recipe, "_ColorMask", main: false,
+                catalogTexture(100, table: "bo_head", id: 0, bundleKey: "ColorMaskAB", key: "ColorMaskTex"),
+                source: "bo_head[0] ColorMaskAB/ColorMaskTex via CreateFaceTexture → SetTexture")
+            let layers: [(property: String, path: String, category: Int, table: String, key: String)] = [
+                ("_Texture3", "makeup.paintId.0", 405, "mt_face_paint", "PaintTex"),
+                ("_Texture7", "makeup.paintId.1", 405, "mt_face_paint", "PaintTex"),
+                ("_Texture4", "makeup.cheekId", 402, "mt_cheek", "CheekTex"),
+                ("_Texture5", "face.lipLineId", 404, "mt_lipline", "LiplineTex"),
+                ("_Texture6", "face.moleId", 415, "mt_mole", "MoleTex")]
+            for layer in layers {
+                guard card.number(layer.path) == 0, let row = catalogRow(layer.category, 0),
+                      row["MainAB"] == "0", row[layer.key] == "0" else {
+                    return unsupported("face composite requires the verified \(layer.table) ID0 no-texture row for \(layer.path)")
+                }
+                setCreateTexture(&recipe, layer.property, main: false, .success(nil),
+                    source: "\(layer.table)[0] MainAB/\(layer.key) = 0/0 via CreateFaceTexture → SetTexture(null)")
+            }
+            let makeupSource = card.appearance.usesCoordinateMakeup ? "coordinate makeup" : "face.baseMakeup"
+            func fieldSource(_ path: String) -> String {
+                path.hasPrefix("makeup.") ? "card \(path) (\(makeupSource))" : "card \(path)"
+            }
+            for (property, path) in [("_Color", "body.skinMainColor"), ("_Color2", "body.skinSubColor"),
+                                     ("_Color3", "makeup.paintColor.0"), ("_Color7", "makeup.paintColor.1"),
+                                     ("_Color4", "makeup.cheekColor"), ("_Color5", "face.lipLineColor"), ("_Color6", "face.moleColor")] {
+                if let value = card.color(path), value.allSatisfy(\.isFinite) {
+                    recipe.vectors[property] = .init(value, source: "\(fieldSource(path)) via CreateFaceTexture → SetColor(\(property))")
+                } else {
+                    recipe.vectors[property] = .init(unresolved: "face composite requires finite RGBA at \(path)")
+                }
+            }
+            for (property, path, mole) in [("_paint1", "makeup.paintLayout.0", false),
+                                          ("_paint2", "makeup.paintLayout.1", false), ("_hokuro", "face.moleLayout", true)] {
+                guard let layout = card.color(path), layout.allSatisfy(\.isFinite) else {
+                    recipe.vectors[property] = .init(unresolved: "face composite requires a finite four-component layout at \(path)")
+                    continue
+                }
+                let value: [Float] = [lerp(0.25, -0.25, layout[0]), lerp(0.3, -0.3, layout[1]),
+                                     mole ? 0 : lerp(1, -1, layout[2]), mole ? lerp(0, 0.7, layout[3]) : lerp(-8, 0.7, layout[3])]
+                recipe.vectors[property] = .init(value, source: "\(fieldSource(path)) via CreateFaceTexture → SetVector4(\(property))")
             }
             identity.composite = recipe
             return identity
@@ -756,7 +846,7 @@ public enum SourceShaderBindingDerivation {
                     switch renderer.nodeName {
                     case "cf_O_face":
                         // customTexCtrlFace.matDraw (catalog MatData) on rendFace slot 0.
-                        builder.setTexture("_MainTex", composite(hiPoly ? 1024 : 512, creator: "CustomTextureControl face: cf_m_face_create (chara/mm_base.unity3d) over head MainTex, skin and makeup inputs"),
+                        builder.setTexture("_MainTex", faceComposite(materialSlot: draw.materialSlot, drawMaterial: slotName),
                                            source: "ChaControl.CreateFaceTexture → customTexCtrlFace")
                         apply(&builder, texture: "_NormalMapDetail", catalogTexture(400, table: "mt_face_detail", id: "face.detailId", key: "NormallMapDetail"), source: "ChaControl.ChangeSettingFaceDetail")
                         apply(&builder, texture: "_LineMask", catalogTexture(400, table: "mt_face_detail", id: "face.detailId", key: "LineMask"), source: "ChaControl.ChangeSettingFaceDetail")
@@ -866,7 +956,7 @@ public enum SourceShaderBindingDerivation {
         // MARK: Body (customTexCtrlBody.matDraw = mm_base cf_m_body)
         do {
             // InitBaseCustomTextureBody: drawMatName cf_m_body (female) / cm_m_body (male) from chara/mm_base.unity3d.
-            let sex = (try? source.customization().sex) ?? 1
+            let sex = characterSex ?? 1
             let drawName = sex == 0 ? "cm_m_body" : "cf_m_body"
             let reason = "chara/mm_base.unity3d \(drawName) draw material is not converted (ChaControl.InitBaseCustomTextureBody)"
             let draw = supplement?.drawMaterials.first { $0.bundle == "chara/mm_base.unity3d" && $0.material.name == drawName }
