@@ -132,6 +132,9 @@ final class AppState {
                 do { try loadModLibrary(url: URL(fileURLWithPath: libraryPath)) }
                 catch { startupInputFailed("IKKOKU_MOD_LIBRARY", libraryPath, "Could not load mod library", error, automated: automated) }
             }
+            // A source scene that did not start importing leaves the Maker
+            // shown, so it is created now.
+            if makerDeferred, mode == .maker { ensureMaker() }
             if !makerDeferred { maker?.refresh() }
             if let path = env["IKKOKU_OPEN_RIG"] {
                 do { try maker?.openSourceRig(url: URL(fileURLWithPath: path)) }
@@ -366,10 +369,16 @@ final class AppState {
             }
         }
         if studio.asyncSourceBuilds {
-            try studio.beginSourceSceneImport(sceneURL: url, rigURL: rig, boneCatalogURL: catalog) { result in
+            let previous = mode
+            try studio.beginSourceSceneImport(sceneURL: url, rigURL: rig, boneCatalogURL: catalog) { [weak self] result in
                 switch result {
                 case .success: report(); imported?(nil)
-                case .failure(let error): imported?(error)
+                case .failure(let error):
+                    // The Studio shows while the import runs. A failed
+                    // synchronous import never left the previous mode, so a
+                    // failed commit returns to it, unless the user moved on.
+                    if let self, self.mode == .studio, previous != .studio { self.mode = previous }
+                    imported?(error)
                 }
             }
             mode = .studio
@@ -380,6 +389,11 @@ final class AppState {
         mode = .studio
         imported?(nil)
     }
+
+    /// Menu state: whether the Maker shows a source rig. A deferred Maker
+    /// (S4) counts as the Maker it becomes: `MakerModel.init` opens the
+    /// default source avatar, which the deferred launch's scene import found.
+    var makerShowsSourceRig: Bool { maker.map { $0.sourceRigPreview != nil } ?? makerDeferred }
 
     /// S4: the Maker, created now if the launch deferred it.
     @discardableResult func ensureMaker() -> MakerModel? {

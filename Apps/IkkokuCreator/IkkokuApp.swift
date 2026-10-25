@@ -28,7 +28,7 @@ struct IkkokuApp: App {
                 Button("Import Source Card…") { app.importSourceCardSettings() }
                 Button("Export Edited Source Card…") { app.exportSourceCard() }
                     .disabled(app.maker?.sourceRigPreview == nil || app.maker?.importedSourceCard == nil)
-                Button("Save Card…") { app.saveCard() }.keyboardShortcut("s", modifiers: [.command]).disabled(app.maker?.sourceRigPreview != nil)
+                Button("Save Card…") { app.saveCard() }.keyboardShortcut("s", modifiers: [.command]).disabled(app.makerShowsSourceRig)
                 Divider()
                 Button("New Scene") { app.studio?.newScene() }
                 Button("Open Scene…") { app.openScene(importing: false) }.keyboardShortcut("o", modifiers: [.command, .shift])
@@ -49,8 +49,8 @@ struct IkkokuApp: App {
                 Button("Redo") { app.studio?.redo() }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(app.mode != .studio)
             }
             CommandMenu("Character") {
-                Button("Send to Studio") { if let c = app.ensureMaker()?.card { app.studio?.addCharacter(c); app.mode = .studio } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(app.maker?.sourceRigPreview != nil)
-                Button("Randomize") { app.maker?.randomize() }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(app.maker?.sourceRigPreview != nil)
+                Button("Send to Studio") { if let c = app.ensureMaker()?.card { app.studio?.addCharacter(c); app.mode = .studio } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(app.makerShowsSourceRig)
+                Button("Randomize") { app.ensureMaker()?.randomize() }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(app.makerShowsSourceRig)
             }
             CommandMenu("Mods") {
                 Button("Open Mod Library…") { app.openModLibrary() }
@@ -64,7 +64,7 @@ struct IkkokuApp: App {
                     app.studio?.toggleSourcePluginPlayback()
                 }.disabled(app.studio?.canToggleSourcePluginPlayback != true)
                 Divider()
-                Button("Load Bone Modifiers…") { app.openBoneModifiers() }.disabled(app.maker?.sourceRigPreview == nil)
+                Button("Load Bone Modifiers…") { app.openBoneModifiers() }.disabled(!app.makerShowsSourceRig)
                 Button("Clear Bone Modifiers") { app.maker?.clearBoneModifiers() }.disabled(app.maker?.sourceBoneModifiers == nil)
             }
             CommandMenu("View") {

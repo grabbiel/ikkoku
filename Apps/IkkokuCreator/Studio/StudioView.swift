@@ -171,7 +171,7 @@ struct StudioAddMenu: View {
             Menu("Character") {
                 Button("Female") { model.addCharacter(sex: .female) }
                 Button("Male") { model.addCharacter(sex: .male) }
-                Button("From Maker") { if let c = app.maker?.card { model.addCharacter(c) } }
+                Button("From Maker") { if let c = app.ensureMaker()?.card { model.addCharacter(c) } }
                 Button("From card…") { app.openCard() }
             }
             Menu("Item") {
@@ -652,8 +652,8 @@ struct ObjectInspectorContent: View, Equatable {
                     Text(o.cardName).font(.callout)
                     if !o.isSourceCharacter {
                         HStack {
-                            Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.maker?.load(card: c); app.mode = .maker } }
-                            Button("Replace from Maker") { if let c = app.maker?.card { model.update(id) { $0.card = c; $0.name = c.profile.name } } }
+                            Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.ensureMaker()?.load(card: c); app.mode = .maker } }
+                            Button("Replace from Maker") { if let c = app.ensureMaker()?.card { model.update(id) { $0.card = c; $0.name = c.profile.name } } }
                         }
                         Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(id) { $0.clothingVisible = v } }))
                         Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(id) { $0.accessoriesVisible = v } }))
