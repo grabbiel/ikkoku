@@ -410,8 +410,21 @@ attachment-read guard also remains unchanged: a restore that actually reads an
 attachment and has pending destruction rejects explicitly before commit, even
 when those roots came from saved state. This combination remains unsupported.
 Older readers that ignore the new field do not gain queue persistence.
-Focused Engine and app acceptance of this change is pending; the original
-15+29 assertions across two processes are retained unchanged.
+
+Release `e9e6198` (binary SHA-256
+`31fa829571ecc2eb18461e40f6777e6526725dcd62944f3495b7bac893fb1ff7`)
+passes all 222 checks across nine fresh processes: the unchanged 15+29 save/reopen
+assertions, 15 malformed-root native/undo/redo checks, the prior 18+26 topology
+controls and 119 attachment/fresh/library checks. The two new attachment-policy
+checks reach the exact unsupported error after a successful read and retain the
+prior scene, session, history, previews, frame and active resources. All 34
+focused Engine tests pass with zero skips, including four new parameterized tests
+through profile and immutable-library constructors. They cover exact overlapping
+roots/unbound identity normalization, missing/null/empty state, malformed roots
+and failed-step rollback/retry without duplicate destruction. The original red
+binary/reports remain separate; no assertions were relaxed and no corrective
+rerun was needed. These are native functional results, without a GUI,
+original-player parity or comparative performance claim.
 
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
