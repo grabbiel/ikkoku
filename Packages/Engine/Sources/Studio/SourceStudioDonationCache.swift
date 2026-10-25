@@ -31,9 +31,11 @@ public final class SourceStudioDonationCache {
             self.kept = kept; self.evicted = evicted; self.refused = refused; self.replaced = replaced; self.taken = taken
         }
     }
-    /// 192 MiB: three to four of the reference scene's characters
-    /// (docs/reference/performance.md, phase 2 item 6 follow-up).
-    public static let defaultMaximumBytes = 192 << 20
+    /// 128 MiB. A character of the reference scene charges 13.0 MB, so there
+    /// the 8 entries bind first, at about 104 MB; the byte budget bounds
+    /// larger characters (docs/reference/performance.md, phase 2 item 6
+    /// follow-up).
+    public static let defaultMaximumBytes = 128 << 20
     public static let defaultMaximumEntries = 8
 
     public let maximumBytes: Int, maximumEntries: Int
