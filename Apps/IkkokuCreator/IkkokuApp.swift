@@ -74,6 +74,11 @@ struct IkkokuApp: App {
                 Button("Show Studio Interface") { app.studio?.revealSourceInterface() }
                     .disabled(app.mode != .studio || app.studio?.sourceInterfaceVisible != false)
                 Button("Reset Camera") { app.resetCamera() }.keyboardShortcut("r", modifiers: [.command, .shift])
+                // ST-A11: hides the imported scene's map without unloading it.
+                Toggle("Show Source Map", isOn: Binding(
+                    get: { app.studio?.showSourceMap ?? true },
+                    set: { app.studio?.showSourceMap = $0 }))
+                    .disabled(app.studio == nil)
                 Divider()
                 // R1/CMT-04 opt-in: converted source characters draw with the translated
                 // original shader programs; unresolved materials stay toon and are listed

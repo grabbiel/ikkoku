@@ -41,6 +41,11 @@ final class SourceSceneImportJob {
     /// Characters and items interleaved in walk order.
     let steps: [SourceStudioCharacterBatch.Step]
     let batch: SourceStudioCharacterBatch
+    /// ST-A11: the scene's map and its load, started with the characters on
+    /// its own GCD worker; the commit hands both to the model, and a cancelled
+    /// or failed import cancels the load.
+    var mapRequest: SourceMapRequest?
+    var mapLoad: SourceStudioMapLoad?
     private(set) var characters: [Result<SourceStudioCharacterPreview, Error>?]
     private var items: [Result<(name: String, url: URL), Error>?]
     private var loadedItemAssets: [String: LoadedAsset] = [:]
