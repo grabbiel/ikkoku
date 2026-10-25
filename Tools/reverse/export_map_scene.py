@@ -889,9 +889,17 @@ def write_catalog(info_bundles, converted, output):
     return catalog
 
 
+def local_roots():
+    """The ignored .local directory and the targets of symlinks placed directly in it (a
+    worktree links its private folders to the main checkout's .local that way)."""
+    local = REPO / ".local"
+    links = [entry.resolve() for entry in local.iterdir() if entry.is_symlink()] if local.is_dir() else []
+    return [local.resolve(), *links]
+
+
 def private(path):
     resolved = path.resolve()
-    if not resolved.is_relative_to((REPO / ".local").resolve()):
+    if not any(resolved.is_relative_to(root) for root in local_roots()):
         raise ValueError("Source-derived output must stay in the repository's ignored .local directory")
     return resolved
 

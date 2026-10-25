@@ -135,6 +135,11 @@ private struct CaptureRecipe {
                                     "IKKOKU_LIVE_SOURCE_REPORT": "/captures/live.json", "IKKOKU_BENCHMARK_OUTPUT": "/captures/benchmark.json",
                                     "IKKOKU_AUTOCAPTURE": png],
                       mode: .appCapture),
+        CaptureRecipe(source: "maps.md ST-A11 original comparison",
+                      environment: ["IKKOKU_SOURCE_SCENE": "/scenes/scene-map33.png", "IKKOKU_STUDIO_MAP_CATALOG": "/maps/catalog.json",
+                                    "IKKOKU_SOURCE_MAP_PROBE": "/captures/map", "IKKOKU_CAPTURE_W": "960", "IKKOKU_CAPTURE_H": "720",
+                                    "IKKOKU_CAPTURE_GRID": "0", "IKKOKU_CAPTURE_GIZMOS": "0", "IKKOKU_AUTOCAPTURE": png],
+                      mode: .appCapture),
         CaptureRecipe(source: "plugin-execution.md deterministic frames",
                       environment: ["IKKOKU_SOURCE_PLUGIN_PROFILE": "/plugins/profile.json", "IKKOKU_SOURCE_PLUGIN_STEPS": "30",
                                     "IKKOKU_SOURCE_PLUGIN_DELTA": "0.0333333333", "IKKOKU_STUDIO_ANIMATION_TIME": "0.5",
@@ -351,6 +356,9 @@ private struct CaptureRecipe {
     let simulation: [[String]] = [["IKKOKU_BENCHMARK_SIMULATION_FRAMES"]]
     #expect(captureRequestProblems(["IKKOKU_AUTOCAPTURE": "/out.png", "IKKOKU_BENCHMARK_OUTPUT": "/b.json",
                                     "IKKOKU_BENCHMARK_SIMULATION_FRAMES": "30"]) == simulation)
+    // ST-A11: the map probe draws the source scene's map, so it needs one.
+    let mapProbe: [[String]] = [["IKKOKU_SOURCE_MAP_PROBE"]]
+    #expect(captureRequestProblems(["IKKOKU_AUTOCAPTURE": "/out.png", "IKKOKU_SOURCE_MAP_PROBE": "/captures/map"]) == mapProbe)
     // Startup inputs keep their own dependencies in every mode, the interactive editor included.
     let delta: [[String]] = [["IKKOKU_SOURCE_PLUGIN_DELTA"]]
     #expect(captureRequestProblems(["IKKOKU_SOURCE_PLUGIN_DELTA": "0.1"]) == delta)

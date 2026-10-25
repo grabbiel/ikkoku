@@ -13,11 +13,21 @@ it. Nothing in C:\\Illusion\\Koikatsu is written. The Parallels errno-24 count m
 
 The local copies land under <output>/source/<relative path> with a fetch.json that records
 each file's guest SHA-256, the local SHA-256 (must match) and its size.
+
+`capture` runs fixtures/OriginalMapProbe.cs in a fresh private player root through
+original_scene_reload_probe.py's one-exec transport (`once_script`, served and compiled as
+MapProbe.cs / IkkokuMapProbe.dll). The player authors scene-map33.png (an emptied scene, map 33
+with a nonzero map transform and a camera inside the room) and, from --showoff (a character scene
+without a map, uploaded as reload-showoff.png), scene-map33-showoff.png; it reads each back through
+Studio.LoadSceneCoroutine and writes original-<case>-color.png, -map-geometry.png and
+-map-depth-normals.png with map-trace.json and status.json. The zip of that folder plus unity.log
+and LogOutput.log lands in --output with run.json and a manifest.json of hashes. The player root
+is always removed and nothing in C:\\Illusion\\Koikatsu is written.
 """
 from __future__ import annotations
 import argparse, hashlib, io, json, re, subprocess, uuid, zipfile
 from pathlib import Path, PurePosixPath
-from original_wear_probe import Endpoint, bootstrap, errno_count, guarded
+from original_wear_probe import Endpoint, bootstrap, errno_count, extract, fresh_root, guarded
 
 ROOT = Path(__file__).resolve().parents[2]
 FETCH_ROOT = r'C:\\Temp\\IkkokuMapFetch-[0-9a-f]{32}'
@@ -29,6 +39,16 @@ MAX_FETCH_BYTES = 256 * 1024 * 1024
 
 def digest(data): return hashlib.sha256(data).hexdigest()
 def dump(path, value): path.write_text(json.dumps(value, indent=2, allow_nan=False, ensure_ascii=False) + '\n')
+
+
+def private(path):
+    """`path` resolved, refused unless it lies in the ignored .local directory or under the
+    target of a symlink placed directly in it (a worktree's links to the main checkout)."""
+    local = ROOT / '.local'
+    roots = [local.resolve()] + ([entry.resolve() for entry in local.iterdir() if entry.is_symlink()] if local.is_dir() else [])
+    resolved = Path(path).resolve()
+    if not any(resolved.is_relative_to(root) for root in roots): raise ValueError('Outputs must stay under .local')
+    return resolved
 
 
 def checked_relative(value):
@@ -103,8 +123,7 @@ def place(upload, guest, output):
 
 
 def fetch(args):
-    output = args.output.resolve()
-    if not output.is_relative_to((ROOT / '.local').resolve()): raise ValueError('Outputs must stay under .local')
+    output = private(args.output)
     if (output / 'fetch.json').exists(): raise RuntimeError(f'{output}/fetch.json exists: fetch into a new output folder')
     files = [checked_relative(f) for f in (args.file or DEFAULT_FILES)]
     globs = list(args.glob if args.glob is not None else DEFAULT_GLOBS)
@@ -136,6 +155,54 @@ def fetch(args):
                 errno=[record['errnoBefore'], record['errnoAfter']])
 
 
+MAP_PROBE = Path(__file__).with_name('fixtures') / 'OriginalMapProbe.cs'
+MAP_PROBE_NAMES = ('MapProbe.cs', 'IkkokuMapProbe.dll')
+SHOWOFF_UPLOAD = 'reload-showoff.png'
+
+
+def capture(args):
+    """The whole VM phase B in one `prlctl exec` (see the module docstring)."""
+    from original_scene_reload_probe import once_script  # the reload probe's one-exec transport
+    output = private(args.output)
+    if (output / 'run.json').exists(): raise RuntimeError(f'{output}/run.json exists: capture into a new output folder')
+    source = MAP_PROBE.read_bytes(); showoff = args.showoff.read_bytes()
+    if not showoff.startswith(b'\x89PNG\r\n\x1a\n'): raise ValueError(f'--showoff is not a PNG scene record: {args.showoff}')
+    root = fresh_root()
+    record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), showoff=str(args.showoff), showoffSHA256=digest(showoff),
+                  errnoBaseline=args.errno_baseline, errnoBefore=guarded(args.errno_baseline),
+                  transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint (original_scene_reload_probe.once_script)')
+    output.mkdir(parents=True, exist_ok=True); dump(output / 'run.json', record)
+    files = {MAP_PROBE_NAMES[0]: source, SHOWOFF_UPLOAD: showoff}
+    with Endpoint(args.host_address, files, upload='reload.zip') as endpoint:
+        script = once_script(root, endpoint.base, args.wait_seconds, [SHOWOFF_UPLOAD], *MAP_PROBE_NAMES)
+        files['run.ps1'] = script.encode()
+        (output / 'run.ps1').write_text(script.replace(endpoint.base, '<endpoint>/'))
+        result = subprocess.run(['prlctl', 'exec', args.vm, '--current-user', 'powershell.exe', '-NoProfile', '-NonInteractive',
+                                 '-Command', bootstrap(endpoint.base)], text=True, capture_output=True, timeout=args.wait_seconds + 900)
+        upload = endpoint.upload
+    record['errnoAfter'] = errno_count()
+    if result.returncode:
+        record['execError'] = (result.stderr or result.stdout)[-4000:]; dump(output / 'run.json', record)
+        raise RuntimeError('VM exec failed: ' + record['execError'])
+    guest = json.loads(result.stdout.lstrip('\ufeff').strip())
+    record.update(processID=int(guest.get('processID') or 0), guest=guest)
+    if guest.get('source') not in (None, digest(source)): raise ValueError('Guest probe source hash differs')
+    if (guest.get('scenes') or {}).get(SHOWOFF_UPLOAD) not in (None, digest(showoff)): raise ValueError('Guest showoff hash differs')
+    names = []
+    if upload is not None:
+        if digest(upload) != guest.get('zipSHA256') or len(upload) != guest.get('zipBytes'): raise ValueError('Upload differs from the guest zip')
+        names = extract(upload, output)
+    (output / 'probe-source.cs').write_bytes(source)
+    dump(output / 'run.json', record)
+    provenance = [dict(file=p.name, sha256=digest(p.read_bytes()), bytes=p.stat().st_size)
+                  for p in sorted(output / n for n in set(names + ['run.json', 'probe-source.cs'])) if p.is_file()]
+    dump(output / 'manifest.json', dict(schemaVersion=1, files=provenance))
+    status = json.loads((output / 'status.json').read_text()) if (output / 'status.json').is_file() else None
+    return dict(root=root, processID=record['processID'], exited=guest.get('exited'), error=guest.get('error'),
+                cleanupError=guest.get('cleanupError'), removed=guest.get('removed'), remainingGameProcesses=guest.get('remainingGameProcesses'),
+                errno=[record['errnoBefore'], record['errnoAfter']], files=len(provenance), status=status)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = p.add_subparsers(dest='command', required=True)
@@ -146,8 +213,14 @@ def main():
     f.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
     f.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
     f.add_argument('--timeout', type=int, default=900)
+    c = commands.add_parser('capture', help='author the map fixtures in the original player and capture them (phase B)')
+    c.add_argument('--vm', default='Windows 11'); c.add_argument('--output', type=Path, required=True)
+    c.add_argument('--showoff', type=Path, required=True, help='a character scene record without a map; the player adds map 33 to it')
+    c.add_argument('--errno-baseline', type=int, required=True, help='Parallels errno-24 count that must hold before the exec')
+    c.add_argument('--host-address', default='10.211.55.2', help="the Mac's address on the VM's host-only network")
+    c.add_argument('--wait-seconds', type=int, default=900, help='bound on the player run')
     args = p.parse_args()
-    print(json.dumps(fetch(args), indent=2))
+    print(json.dumps(fetch(args) if args.command == 'fetch' else capture(args), indent=2))
 
 
 if __name__ == '__main__': main()
