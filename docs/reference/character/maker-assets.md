@@ -877,3 +877,11 @@ toward repeated rig decoding, while owner-side stalls remain separate work under
 #192. Private inputs, binary/source proofs, original failures, artifact hashes
 and phase analysis are retained under
 `.local/codex-continue-2026-10-24/rolling/maker-worker-attribution/`.
+
+Final integration at `f696571` adds the accepted plugin restore changes while all
+five measured production files and three scoped tests remain byte-identical.
+Its separate Release binary `5f2335af` passes four more functional processes
+(55 selection + 7 fresh-reload checks per sex), with four exact accepted exports,
+all 12 resource observations unchanged, and eight resource-preserving no-ops.
+This is linked-app integration acceptance; the quiet pair was not repeated or
+relabeled after the merge.
