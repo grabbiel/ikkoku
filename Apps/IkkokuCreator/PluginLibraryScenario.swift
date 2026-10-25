@@ -562,11 +562,21 @@ extension PluginLibraryScenario {
             func matrix(_ m: float4x4) -> [UInt32] { (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
             var items: [[String: Any]] = []
             for item in frame.items {
-                let m = item.material
+                let m = item.material, u = m.uniforms
+                // Do not serialize C alignment padding after irisRotation.
+                let vectors: [String: SIMD4<Float>] = ["baseColor": u.baseColor, "shadowColor": u.shadowColor,
+                    "specular": u.specular, "rim": u.rim, "outline": u.outline, "tint1": u.tint1, "tint2": u.tint2,
+                    "tint3": u.tint3, "overlayColor0": u.overlayColor0, "overlayColor1": u.overlayColor1,
+                    "overlayColor2": u.overlayColor2, "patternColor": u.patternColor, "hairGloss": u.hairGloss,
+                    "params": u.params, "eye": u.eye, "emissive": u.emissive, "uvTransform": u.uvTransform,
+                    "irisST0": u.irisST0, "irisST1": u.irisST1, "irisST2": u.irisST2]
+                let uniformFields: [String: Any] = ["vectors": vectors.mapValues { [$0.x.bitPattern, $0.y.bitPattern, $0.z.bitPattern, $0.w.bitPattern] },
+                    "kind": u.kind, "flags": u.flags, "sourceAlphaABits": u.sourceAlphaA.bitPattern,
+                    "sourceAlphaBBits": u.sourceAlphaB.bitPattern, "irisRotationBits": u.irisRotation.bitPattern]
                 let textures = [m.base, m.colorMask, m.detail, m.line, m.normal, m.overlay0, m.overlay1,
                     m.overlay2, m.pattern, m.hairGloss, m.bodyMask].map { $0?.id }
                 var value: [String: Any] = ["mesh": item.mesh.id, "objectID": item.objectID, "model": matrix(item.model),
-                    "materialUniformBytes": withUnsafeBytes(of: m.uniforms) { Array($0) }, "textures": try json(textures),
+                    "materialUniforms": uniformFields, "textures": try json(textures),
                     "transparent": m.transparent, "depthBias": m.depthBias.bitPattern,
                     "castsShadow": item.castsShadow, "outline": item.outline, "outlineScale": item.outlineScale.bitPattern,
                     "visible": item.visible, "hiddenRegions": item.hiddenRegions, "order": item.order,
