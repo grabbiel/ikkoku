@@ -633,7 +633,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "setClothesState", "setAccessoryVisible", "setShoesType", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "hoverGizmo", "captureBone", "captureObject", "captureRender",
-                "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
+                "advance", "orbit", "setAutomaticBlink", "editDuringAdvance", "backgroundBuild",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight"}
@@ -816,7 +816,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 68)
+        self.assertEqual(len(self.checks), 69)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -865,6 +865,11 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for step in steps:
                 op = step["op"]
                 self.assertIn(op, SCENARIO_OPS, "unknown op in %s" % path)
+                if op == "backgroundBuild":
+                    self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "importWhileHidden",
+                                                  "duplicate", "duplicateWhileHidden"))
+                    if step["build"].startswith("duplicate"):
+                        self.assertIs(type(step["key"]), int)
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))

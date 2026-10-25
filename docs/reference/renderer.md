@@ -1306,6 +1306,232 @@ crosses threads in a `@Sendable` closure. `StudioModel.HoverPickContext` is
 - A mutation control moved the scissor one row down. The scissored,
   asynchronous and stale-drop tests then failed.
 
+### Source character builds (R7 phase 2, item 6)
+
+A Studio source character (`SourceStudioCharacterPreview`) used to be built
+in one initializer on the main thread. A 7-character scene import took
+4.5 s there, 74% of it decoding converted rig files, many of them the same
+file read again for another character. The build now has two halves, the
+first half can run on any thread, and the builds of one operation share
+their rig decodes. Captures and scenarios keep the original order on the
+main thread. Interactive and performance-trace runs build in the
+background.
+
+**Two halves.**
+
+- **First half: `SourceStudioCharacterPreview.assemble(reference:resources:coordinate:sharing:rigs:)`.**
+  It is the old initializer up to its first resource registration: it
+  reads the scene, the card and the converted library, prepares the Maker
+  assembly (`SourceMakerLibrary.prepare`, where the rig decodes are), and
+  loads the shape contract, the animation catalog and state and the hand
+  patterns. It registers nothing in the `ResourceStore`, touches no
+  main-actor state and returns an `Assembly`, a `Sendable` value. Several
+  first halves may run at once.
+- **Second half: `init(assembly:resources:appearanceTransaction:)`.** It
+  registers the meshes and textures and evaluates the preview, exactly as
+  the rest of the old initializer did.
+- The old initializer, `init(reference:resources:coordinate:...)`, now runs
+  both halves on the calling thread.
+- **Errors.** The old initializer read the contract, the animation and the
+  hand patterns after its first registration. The first half carries those
+  results as `Result` values, and the second half throws them at the same
+  points. A failing character therefore throws the same error, after the
+  same registrations, as before.
+
+**Shared rig decodes (C8/S2).** `SourceRigDecodeShare` decodes each distinct
+converted rig file once per batch of builds.
+
+- **Key.** It uses the Maker reuse boundary's own key,
+  `SourceRigReuseKey`: the SHA-256 and byte count of the exact bytes read,
+  decoder version 1. A file's name or path never stands in for its content.
+  A hit returns the value `SourceRig.decode` produced from identical bytes.
+- **Concurrent requests.** A request for a file whose decode is in flight
+  waits for it instead of decoding again. Each decode is a leaf (it never
+  calls back into the share), so waits cannot form a cycle.
+- **Failures.** A failed decode is not kept: requests already waiting get
+  the same error, and a later request decodes again.
+- **Lifetime.** The share keeps every rig it decoded until the batch that
+  owns it is released, so it needs no size budget. The Maker's long-lived
+  `SourceRigReuseWorker` is unchanged. `SourceMakerLibrary.prepare` now
+  takes either one through an internal `SourceRigDecoding` protocol, and the
+  Maker's call passes its worker as before.
+
+**Borrowed assemblies (donations).** A loaded preview lends its converted
+assembly to a new build of the same character: the prepared Maker assembly,
+the source rig and the shape contract, all immutable values
+(`SourceStudioCharacterPreview.Donation`). A donation is used only when the
+reference, the outfit, the `ResourceStore`, the rig file and the converted
+folder all match. The new preview then skips the file reads and decodes, and
+its `sharedAssembly` is true. Donations serve:
+
+- a duplicate (the copy borrows from its original);
+- the undo or redo that rebuilds previews (the history step keeps the
+  dropped previews' donations until the next refresh has built from them);
+- a re-import of a scene that is loaded;
+- route characters, which borrow from a loaded preview of the same
+  character.
+
+**Batches.** `SourceStudioCharacterBatch` runs the builds of one operation:
+
+- The first halves start at once on GCD worker threads, at most `width` at
+  a time (the active processor count less two, at least two; QoS
+  user-initiated), in request order. GCD threads are used, not the Swift
+  concurrency pool, because the builds block on file reads, on each other's
+  rig decodes and on MetalKit's synchronous texture loads.
+- The owner runs the second halves one at a time, in request order, on a
+  thread it chooses: `build(_:)` on the calling thread, or
+  `run(_:on:main:built:finished:)` on a serial queue. `run` can also
+  interleave numbered steps that must run on the main thread.
+- Meshes therefore register in the same order as a sequential build, and
+  get the same store IDs relative to each other.
+
+**Where each build runs.** `StudioModel.asyncSourceBuilds` is set by the
+app for interactive runs without a window capture and for performance-trace
+runs. Captures and scenarios leave it off.
+
+| Build | Background (`asyncSourceBuilds`) | Captures and scenarios |
+| --- | --- | --- |
+| Scene import (startup `IKKOKU_SOURCE_SCENE`, File menu) | `beginSourceSceneImport`: see below | `importSourceScenePreview`: one batch; each second half runs on the main thread where the import's walk reaches it |
+| Previews a refresh finds missing: after undo or redo, a duplicate, a scene load or a restored outfit | `startMissingSourceBuilds` starts one batch in document order; the second halves run on `com.grabbiel.Ikkoku.source-builds`, and each preview installs itself on the main actor (`installSourceBuild`) | the same batch; `refreshFrame` builds each preview where its loop reaches it, as before |
+| Route characters of a rehydration (scene load, undo or redo) | one batch, built on the main thread in walk order | the same |
+| One character: outfit selection, a plugin attachment's parent, an export validation baseline | unchanged: the full initializer on the main thread | the same |
+
+`makeSourceCharacterPreview(reference:outfit:)` builds one preview on the
+main thread with a donation when one matches, for a caller that needs a
+single route character.
+
+**Background import.** `beginSourceSceneImport` runs in three parts:
+
+1. **Prepare (main actor).** It reads and decodes the scene, loads the
+   catalogs, and walks the scene once in the import's own order. That walk
+   collects every character's reference and every item record, and the
+   order in which the import reaches them. It writes no model state. It
+   then starts the batch.
+2. **Build.** The first halves run on workers. On the build queue,
+   `run` takes the walk's steps in order: each character's second half
+   runs there, and each item load (`AssetLibrary` is main-thread only) runs
+   on the main thread through `DispatchQueue.main.sync`. Each finished
+   character is delivered to the main actor (`Delivery`) and counted in
+   `sourceBuildProgress`. The Studio status area shows "Importing
+   <scene>: N of M".
+3. **Commit (main actor).** The import's original walk runs again on the
+   main actor and takes each character and item from the job, in the same
+   order. It builds the document, names, diagnostics and runtime caches, and
+   installs them in one step, as the synchronous import does. The
+   completion then runs: the app's startup marks `sourceSceneReady` there.
+   On a failure, the app returns to the mode it showed before the import
+   (a failed synchronous import never left it) and reports the error.
+
+Until the commit, the Studio shows the current document and stays
+editable. `isLoadingSourceScene` is true. Nothing the import built reaches
+the model before the commit. An edit made in the meantime goes to the
+document the commit replaces; the commit's undo entry keeps it, as for an
+import started after the edit.
+
+**Missing previews in the background.** While a character's build is in
+flight, the frame leaves that character out, together with any object
+attached to it, without a status message. When the build arrives, it
+installs only if its object still shows the same character and outfit.
+Otherwise it is dropped. A failed build is kept per object, and the frame
+reports its error on the status line, like the synchronous build, without
+retrying it every frame. A later change of that object's reference or
+outfit builds again. `pendingSourceCharacterBuilds` counts the builds in
+flight.
+
+**Cancellation.** `cancelSourceBuilds()` runs on the main actor for a new
+import (synchronous or background), New Scene and a scene load. It cancels
+every batch in flight:
+
+- queued first halves never start, a running one finishes and is dropped,
+  and every later `build` throws `CancellationError`;
+- `run` starts no further step, and no `main`, `built` or `finished`
+  callback runs after the cancel. Each callback checks the flag on the main
+  actor, where the cancel runs, so a callback already queued sees it;
+- the commit never runs, so the document and the runtime caches are
+  untouched;
+- the previews already built have no owner left and release their meshes
+  and buffers when dropped, through R6 retirement
+  ([character and import lifetime](#character-and-import-lifetime-r6-second-slice)).
+
+Item assets the import loaded before the cancel stay in the `AssetLibrary`
+cache, as after a failed import. An undo or redo does not cancel an import:
+its commit later replaces the document, as a synchronous import started
+then would. Quitting needs no step: nothing reaches the document before a
+commit, and builds write nothing to disk.
+
+**Rules for callers.**
+
+- The main thread must never wait on `sourceBuildQueue`: an item step
+  blocks that queue until the main thread runs it. `cancelSourceBuilds`
+  only sets a flag.
+- Only the main actor touches `StudioModel`, the import job and installed
+  previews. A preview built on the build queue crosses to the main actor in
+  a `Delivery`, after the queue dropped its own reference.
+- The live step ([Studio live step threads](#studio-live-step-threads-r7-phase-2-item-3))
+  never sees a preview under construction: a preview enters
+  `sourceInstances` only on the main actor, through the setter that settles
+  the step first.
+- The Maker and the Studio share one renderer. A commit or an install can
+  land while the Maker is shown, so neither refreshes the Studio then (the
+  Studio's `refresh` was always run while it was shown); the Maker's frame
+  stays, and switching back to the Studio refreshes it.
+
+**Draw order.** Captures and scenarios register every mesh in the same
+order as before, so their mesh IDs and the renderer's sort tie-breaks are
+unchanged. In a background build, a character's registrations can
+interleave with registrations on the main thread in the same period, such
+as a native character added during an import. That changes the relative
+IDs of meshes from different objects. It matters only where two draws tie
+on every other sort key (the item order and material kind when opaque; the
+distance and item order when transparent).
+
+**Concurrency checking.** Three new `@unchecked Sendable` types, each with
+its invariant written on the type:
+
+- `SourceRigDecodeShare`: an `NSCondition` guards its slots and counts;
+- `SourceStudioCharacterBatch`: an `NSCondition` guards the assemblies, the
+  next index, the cancel flag and the counts; the requests, the store and
+  the share are immutable;
+- `SourceStudioCharacterBatch.Delivery`: a preview crossing to the main
+  actor that has no other owner.
+
+`Assembly` and `Donation` are plain `Sendable` values.
+
+**Tests** (`SourceStudioCharacterBatchTests.swift`):
+
+- Without fixtures, the decode share decodes each distinct file once, and
+  every result equals a plain decode. It keeps no failed decode and decodes
+  it again later. Sixteen concurrent requests for one file run one decode.
+- With the Studio scenario fixtures:
+  - A 7-character batch equals 7 sequential builds: the same diagnostics,
+    the same source rig, the same store mesh IDs and byte-identical pixels
+    of every character rendered into one frame. It ran 10 rig decodes
+    instead of 70.
+  - Cancelling before the first build and after one build drops the rest
+    with `CancellationError`. No first half is left running, and once the
+    built previews are released, the store holds what it held before. A
+    later batch builds normally.
+  - A preview built from a donation renders byte-identical to a fresh build,
+    and an edit of the copy leaves the original's render unchanged. A
+    donation is not used for another store or another outfit.
+
+  These three run one at a time, each on a thread of its own
+  (`liveTickOffPool`), and the test's task reports their checks. A build
+  blocks its thread in MetalKit's synchronous texture load. On the test
+  pool, they were among the tests holding all 24 pool threads blocked there
+  when a parallel suite hung.
+
+In the app, the strict Studio lane's `studio-scenario-background-build`
+check runs `Tools/verification/scenarios/background-build.json`. Its
+`backgroundBuild` op repeats an import, two overlapping imports, an import
+cancelled by New Scene, and a duplicate with its undo, first synchronously and
+then with background builds. It requires the same document summary and a
+byte-identical render, the right completions, and no build left pending. An
+import and a duplicate also run with the Studio hidden while their builds
+land, and the frame standing in for the Maker's must stay current. The
+op is described in `Tools/verification/README.md`. When the op skipped its
+wait for the builds, three of its four steps failed.
+
 ## Checked math, legacy skeletons and cameras (R4)
 
 The unchecked CoreMath helpers (`normalize`, `simd_quatf.rotation(from:to:)`,

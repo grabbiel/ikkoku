@@ -261,6 +261,9 @@ public final class SourceStudioCharacterPreview {
     /// appearance/bindings documents, so a rebuild matches the import exactly.
     private let appearanceCard: SourceCharacterCard
     private let appearancePrepared: SourceMakerLibrary.Prepared?
+    /// True when the build used another preview's converted assembly,
+    /// source rig and shape contract (`Donation`) instead of decoding them.
+    public let sharedAssembly: Bool
     private let appearanceRigURL: URL
     private let appearanceDirectory: URL
     private let appearanceBindingsURL: URL
@@ -346,11 +349,84 @@ public final class SourceStudioCharacterPreview {
     /// baseline, IK and dynamics bindings — is built for that outfit exactly
     /// as an import of a card saved with it. nil keeps the saved outfit; an
     /// index outside 0...6 or one the card does not save is rejected.
-    public init(reference: SourceStudioCharacterReference, resources: ResourceStore, coordinate selectedCoordinate: Int? = nil,
-                appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws {
-        self.reference = reference
-        self.resources = resources
-        attachments = try reference.attachmentCatalogFile.map { try SourceStudioAttachments.load(url: URL(fileURLWithPath: $0)) }
+    public convenience init(reference: SourceStudioCharacterReference, resources: ResourceStore, coordinate selectedCoordinate: Int? = nil,
+                appearanceTransaction: SourceAppearanceLoadTransaction? = nil, sharing donor: SourceStudioCharacterPreview? = nil,
+                rigs: SourceRigDecodeShare? = nil) throws {
+        let assembly = try Self.assemble(reference: reference, resources: resources, coordinate: selectedCoordinate,
+                                         sharing: donor?.donation, rigs: rigs)
+        try self.init(assembly: assembly, resources: resources, appearanceTransaction: appearanceTransaction)
+    }
+
+    /// What a loaded preview lends a later build of the same character
+    /// (R7 phase 2 item 6, after stt03h's duplicate sharing): its converted
+    /// assembly (`SourceMakerLibrary.Prepared`, an immutable value of the
+    /// card, outfit and converted files), the assembled source rig and the
+    /// decoded shape contract. Read on the thread that owns the preview; the
+    /// value itself is immutable and may cross threads.
+    public struct Donation: Sendable {
+        public let reference: SourceStudioCharacterReference
+        /// The outfit the donor shows and the card's saved one.
+        public let coordinate: Int, savedCoordinate: Int
+        let resources: ObjectIdentifier
+        let rigURL: URL, directory: URL
+        let prepared: SourceMakerLibrary.Prepared?, source: SourceRig, contract: SourceShapeContract?
+    }
+    public var donation: Donation {
+        Donation(reference: reference, coordinate: coordinate, savedCoordinate: savedCoordinate, resources: ObjectIdentifier(resources),
+                 rigURL: appearanceRigURL, directory: appearanceDirectory, prepared: appearancePrepared,
+                 source: preview.source, contract: preview.contract)
+    }
+
+    /// R7 phase 2 item 6 (S1): everything a character build reads and
+    /// decodes before it registers a mesh, texture or buffer — the scene
+    /// record and card, the converted Maker assembly (the rig decode that
+    /// dominates a build), the shape contract, the animation catalog, the
+    /// saved animation and the hand patterns. `assemble` touches no
+    /// `ResourceStore`, so it may run on any thread, concurrently with other
+    /// builds, and a dropped assembly leaves nothing behind.
+    /// `init(assembly:resources:)` then registers the preview's resources;
+    /// the Studio runs those in its original import order. The pair is the
+    /// public init split in two: the same inputs are read and checked in the
+    /// same order, and a failure throws the same error, so a build's result
+    /// and diagnostics do not depend on where or when each half ran.
+    /// Errors from the prefetched catalog, animation and hand-pattern loads
+    /// are carried and thrown where the full init reads them.
+    public struct Assembly: Sendable {
+        let reference: SourceStudioCharacterReference
+        let attachments: SourceStudioAttachments?
+        let sceneVersion: String
+        let record: KoikatsuCharacterRecord
+        let card: SourceCharacterCard
+        let identity: SourceCharacterCard.Customization
+        let status: [String: SourceMessagePackValue]
+        let coordinate: Int, savedCoordinate: Int, outfitCount: Int
+        let eyesBlink: Bool, blinkDiagnostic: String?
+        let savedFace: SourceCharacterCard.StatusFace, faceDiagnostics: [String]
+        let library: SourceMakerLibrary?
+        let rigURL: URL, selectedManifest: SourceAvatarManifest, directory: URL
+        let options: SourceBodyShapePose.Options
+        let prepared: SourceMakerLibrary.Prepared?
+        let source: SourceRig
+        /// The decode or the donation of `character-shape-contract.json`.
+        let contract: Result<SourceShapeContract, Error>
+        let animationCatalog: Result<SourceStudioAnimationCatalog?, Error>
+        /// The saved state's animation, resolved when the catalog loaded.
+        let animation: Result<SourceStudioAnimation, Error>?
+        let handPatterns: Result<SourceStudioHandPatterns?, Error>
+        /// True when `sharing` lent the assembly, source rig and contract.
+        public let sharedAssembly: Bool
+    }
+
+    /// The first half of a build (see `Assembly`). `sharing` is a loaded
+    /// preview's `donation`: when it shows the same reference (scene
+    /// SHA-256, record key and converted files) and outfit on the same
+    /// resource store and resolved the same assembly file, its assembly,
+    /// source rig and contract are used instead of decoding them again;
+    /// every other input is still read and checked here. `rigs` decodes each
+    /// distinct converted rig file once across the builds that share it.
+    public static func assemble(reference: SourceStudioCharacterReference, resources: ResourceStore, coordinate selectedCoordinate: Int? = nil,
+                                sharing donor: Donation? = nil, rigs: SourceRigDecodeShare? = nil) throws -> Assembly {
+        let attachments = try reference.attachmentCatalogFile.map { try SourceStudioAttachments.load(url: URL(fileURLWithPath: $0)) }
         let data = try Self.read(URL(fileURLWithPath: reference.sceneFile), maximum: 256 * 1024 * 1024)
         guard SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == reference.sceneSHA256 else {
             throw RigError.invalid("The referenced source scene changed; import it again to update this preview.")
@@ -363,7 +439,6 @@ public final class SourceStudioCharacterPreview {
             if let character = object.character { stack += character.accessoryChildren.values.flatMap { $0 } }
         }
         guard let record = match else { throw RigError.invalid("Source character record is missing.") }
-        self.record = record
         let card = try record.card(), identity = try card.customization()
         guard identity.sex == Int(record.sex) else { throw RigError.invalid("Scene character/card sex identities differ.") }
         try SourceMakerLibrary.validateAssemblyIdentity(card: card)
@@ -376,16 +451,11 @@ public final class SourceStudioCharacterPreview {
             guard selectedCoordinate < outfitCount else { throw RigError.invalid("This card saves no outfit \(selectedCoordinate).") }
         }
         let coordinate = selectedCoordinate ?? savedCoordinate
-        self.coordinate = coordinate
-        self.savedCoordinate = savedCoordinate
-        self.outfitCount = outfitCount
         let (eyesBlink, blinkDiagnostic) = SourceStudioBlink.decode(status)
         // ST-C04: the saved face-state Status fields, read per field so one
         // unreadable token keeps its MemberInit default and is reported.
         var (savedFace, faceDiagnostics) = SourceStudioExpressionState.savedFace(status: status)
         savedFace.eyesBlink = eyesBlink
-        // OCIChar.ChangeBlink applies the saved card flag right after the load.
-        self.blink = SourceStudioBlink(eyesBlink: eyesBlink)
         let library = try reference.makerLibraryFile.map { try SourceMakerLibrary.load(url: URL(fileURLWithPath: $0)) }
         var rigURL = URL(fileURLWithPath: reference.rigFile)
         let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Self.read(rigURL, maximum: 1024 * 1024))
@@ -402,9 +472,55 @@ public final class SourceStudioCharacterPreview {
             correctionData = try Self.read(correction, maximum: 1024 * 1024)
         }
         let options = try SourceMakerAssemblyOptions.body(sex: identity.sex, exType: identity.exType, boneType: identity.boneType, correctionData: correctionData)
-        let prepared = try library?.prepare(card: card, coordinate: coordinate, baseURL: rigURL, wear: true)
+        let shared = donor.flatMap { $0.reference == reference && $0.coordinate == coordinate && $0.resources == ObjectIdentifier(resources)
+            && $0.rigURL == rigURL && $0.directory == directory ? $0 : nil }
+        let prepared = try shared.map { $0.prepared } ?? library.map { library in
+            try rigs.map { try library.prepare(card: card, coordinate: coordinate, baseURL: rigURL, wear: true, sharing: $0) }
+                ?? library.prepare(card: card, coordinate: coordinate, baseURL: rigURL, wear: true)
+        }
+        let source = try prepared?.source ?? shared?.source ?? SourceRig.loadModel(url: rigURL)
+        // The reads the build would make next, in its order; a failure is
+        // thrown where the second half reads it.
+        let contract = shared?.contract.map { Result<SourceShapeContract, Error>.success($0) } ?? Result {
+            try SourceShapeContract.decode(Self.read(directory.appendingPathComponent("character-shape-contract.json"), maximum: 32 * 1024 * 1024))
+        }
+        let animationCatalog = Result { try reference.animationCatalogFile.map { try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: $0)) } }
+        var animation: Result<SourceStudioAnimation, Error>?
+        if case .success(let catalog?) = animationCatalog, let file = reference.animationCatalogFile {
+            let state = SourceStudioAnimationState(record: record)
+            animation = Result { try catalog.resolve(state, directory: URL(fileURLWithPath: file).deletingLastPathComponent()) }
+        }
+        let handPatterns = Result { try reference.handPatternsFile.map { try SourceStudioHandPatterns.load(url: URL(fileURLWithPath: $0)) } }
+        return Assembly(reference: reference, attachments: attachments, sceneVersion: scene.snapshot.version, record: record,
+            card: card, identity: identity, status: status, coordinate: coordinate, savedCoordinate: savedCoordinate,
+            outfitCount: outfitCount, eyesBlink: eyesBlink, blinkDiagnostic: blinkDiagnostic, savedFace: savedFace,
+            faceDiagnostics: faceDiagnostics, library: library, rigURL: rigURL, selectedManifest: selectedManifest,
+            directory: directory, options: options, prepared: prepared, source: source, contract: contract,
+            animationCatalog: animationCatalog, animation: animation, handPatterns: handPatterns, sharedAssembly: shared != nil)
+    }
+
+    /// The second half of a build: registers the preview's meshes, textures
+    /// and composites in `resources` and evaluates its saved state.
+    public init(assembly: Assembly, resources: ResourceStore, appearanceTransaction: SourceAppearanceLoadTransaction? = nil) throws {
+        let reference = assembly.reference
+        self.reference = reference
+        self.resources = resources
+        attachments = assembly.attachments
+        let record = assembly.record, card = assembly.card, identity = assembly.identity, status = assembly.status
+        self.record = record
+        let coordinate = assembly.coordinate, savedCoordinate = assembly.savedCoordinate
+        self.coordinate = coordinate
+        self.savedCoordinate = savedCoordinate
+        self.outfitCount = assembly.outfitCount
+        let eyesBlink = assembly.eyesBlink, blinkDiagnostic = assembly.blinkDiagnostic
+        let savedFace = assembly.savedFace, faceDiagnostics = assembly.faceDiagnostics
+        // OCIChar.ChangeBlink applies the saved card flag right after the load.
+        self.blink = SourceStudioBlink(eyesBlink: eyesBlink)
+        let library = assembly.library, rigURL = assembly.rigURL, selectedManifest = assembly.selectedManifest
+        let directory = assembly.directory, options = assembly.options, prepared = assembly.prepared
+        sharedAssembly = assembly.sharedAssembly
         selections = prepared?.selections ?? []
-        let source = try prepared?.source ?? SourceRig.loadModel(url: rigURL)
+        let source = assembly.source
         // ST-C03: the saved wear, the outfit's catalog rows and the assembled
         // garment structure give the clothes state the load leaves and the
         // renderers UpdateVisible switches off.
@@ -476,7 +592,7 @@ public final class SourceStudioCharacterPreview {
             wearMessages.append("Accessory slots \(unknownHair.sorted().map(String.init).joined(separator: ", ")) have no converted catalog row; their HideHair flags are unknown and never hide the hair.")
         }
         wearMessages += wearEvaluation.fallbacks
-        let contract = try SourceShapeContract.decode(Self.read(directory.appendingPathComponent("character-shape-contract.json"), maximum: 32 * 1024 * 1024))
+        let contract = try assembly.contract.get()
         var appearance = try SourcePreviewAppearance.load(url: rigURL.deletingPathExtension().appendingPathExtension("appearance.json"), resources: resources, transaction: appearanceTransaction)
         var messages: [String] = []
         if let blinkDiagnostic { messages.append(blinkDiagnostic) }
@@ -549,13 +665,13 @@ public final class SourceStudioCharacterPreview {
         guard roots.count == 1 else { throw RigError.invalid("Source scene preview requires a single assembled root.") }
         characterRoot = roots[0]; animationHeight = identity.bodyValues.first ?? 0.5
         animationDirectory = reference.animationCatalogFile.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
-        animationCatalog = try reference.animationCatalogFile.map { try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: $0)) }
-        handPatternLibrary = try reference.handPatternsFile.map { try SourceStudioHandPatterns.load(url: URL(fileURLWithPath: $0)) }
+        animationCatalog = try assembly.animationCatalog.get()
+        handPatternLibrary = try assembly.handPatterns.get()
         var animationBaseline = baseline
         if let animationCatalog, let animationDirectory {
             do {
                 let state = SourceStudioAnimationState(record: record)
-                let animation = try animationCatalog.resolve(state, directory: animationDirectory)
+                let animation = try (assembly.animation ?? Result { try animationCatalog.resolve(state, directory: animationDirectory) }).get()
                 animationCache["\(state.group)/\(state.category)/\(state.no)"] = animation
                 animationBaseline = try animation.pose(state: state, elapsed: 0, height: animationHeight, rig: source.rig, baseline: baseline)
                 let low = Set(animation.entry.lowDetailOnlyPaths ?? [])
@@ -621,7 +737,7 @@ public final class SourceStudioCharacterPreview {
             do {
                 let lookData = try Self.read(URL(fileURLWithPath: lookSettingsFile), maximum: 4 * 1024 * 1024)
                 let eyeSettings = try SourceStudioEyeLookSettings(json: lookData)
-                let savedEyes = try SourceStudioEyeLookData(bytes: record.eyesData, sceneVersion: scene.snapshot.version)
+                let savedEyes = try SourceStudioEyeLookData(bytes: record.eyesData, sceneVersion: assembly.sceneVersion)
                 let angles: (horizontal: [Double], vertical: [Double])?
                 if let angleH = savedEyes.angleH, let angleV = savedEyes.angleV {
                     angles = (horizontal: angleH.map(Double.init), vertical: angleV.map(Double.init))
@@ -634,7 +750,7 @@ public final class SourceStudioCharacterPreview {
         let savedEyesPattern = lookStatus.eyesLookPtn ?? eyeLookSource?.settings.eyeControllerPattern ?? Int32(savedFace.eyesLookPtn)
         let eye = Self.resolveEyeLook(source: eyeLookSource, pattern: savedEyesPattern, targetType: eyesTargetType)
         if eye.live != nil, eyeLookSource?.savedAngles == nil {
-            messages.append("Scene version \(scene.snapshot.version) saves no eye angles; the calculator Inits flat instead.")
+            messages.append("Scene version \(assembly.sceneVersion) saves no eye angles; the calculator Inits flat instead.")
         }
         messages += eye.messages
         self.eyeLookSource = eyeLookSource
