@@ -366,10 +366,10 @@ extension StudioModel {
 
     /// ST-T03 / ST-T11: the preview of a route character's copy, built from
     /// its original's reference (a route child's document entry is a
-    /// placeholder without one). The one construction site for copies, so a
-    /// faster or asynchronous character build can route it.
+    /// placeholder without one) through `makeSourceCharacterPreview`, so the
+    /// copy borrows the original's converted assembly.
     func makeSourceRouteCharacterPreview(like original: SourceStudioCharacterPreview) throws -> SourceStudioCharacterPreview {
-        let preview = try SourceStudioCharacterPreview(reference: original.reference, resources: host.renderer.resources)
+        let preview = try makeSourceCharacterPreview(reference: original.reference)
         preview.automaticBlink = sourceAutomaticBlink
         return preview
     }

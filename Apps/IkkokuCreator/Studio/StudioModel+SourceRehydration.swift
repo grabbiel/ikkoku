@@ -144,6 +144,38 @@ extension StudioModel {
             }
         }
         var loadedItemAssets: [String: LoadedAsset] = [:]
+        // The route characters' preview reference, as the import gives it.
+        func routeCharacterReference(_ record: KoikatsuObjectRecord, _ character: KoikatsuCharacterRecord) throws -> SourceStudioCharacterReference {
+            let selectedRig = character.sex == 0
+                ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
+            return SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
+                rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
+                makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath,
+                animationCatalogFile: animationPath,
+                dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
+                handPatternsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"],
+                lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
+        }
+        // R7 phase 2 item 6: every route character's first half starts now,
+        // together (`sourceCharacterBatch`); the walk below builds each one
+        // where it reaches it, so registration keeps the walk's order.
+        var routeCharacters: [SourceStudioCharacterReference] = []
+        var plan = source.snapshot.roots.reversed().map { ($0, false) }
+        while let (record, routeChild) = plan.popLast() {
+            plan += record.children.reversed().map { ($0, routeChild || record.kind == .route) }
+            if let character = record.character {
+                for key in character.accessoryChildren.keys.sorted().reversed() {
+                    plan += (character.accessoryChildren[key] ?? []).reversed().map { ($0, routeChild) }
+                }
+                if routeChild, let ids = byKey[record.sourceKey] {
+                    let reference = try routeCharacterReference(record, character)
+                    routeCharacters += ids.map { _ in reference }
+                }
+            }
+        }
+        let routeBatch = sourceCharacterBatch(routeCharacters.map { ($0, nil) })
+        defer { routeBatch.cancel() }
+        var routeIndex = 0
         var stack = source.snapshot.roots.reversed().map { ($0, false) }
         while let (record, routeChild) = stack.popLast() {
             defer {
@@ -156,21 +188,14 @@ extension StudioModel {
             }
             guard let ids = byKey[record.sourceKey] else { continue }
             for id in ids {
-                if let character = record.character {
+                if record.character != nil {
                     // Only route children live here; an ordinary character's
                     // preview belongs to `sourceInstances`, which `refresh()`
                     // rebuilds lazily from the document's own reference.
                     guard routeChild else { continue }
-                    let selectedRig = character.sex == 0
-                        ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
-                    let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
-                        rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
-                        makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath,
-                        animationCatalogFile: animationPath,
-                        dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
-                        handPatternsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"],
-                        lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
-                    if let preview = try? SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources) {
+                    let index = routeIndex
+                    routeIndex += 1
+                    if let preview = try? routeBatch.build(index) {
                         preview.automaticBlink = sourceAutomaticBlink
                         bundle.routeCharacterPreviews[id] = preview
                     }

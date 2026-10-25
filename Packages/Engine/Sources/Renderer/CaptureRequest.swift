@@ -563,6 +563,7 @@ extension CaptureRequest {
     public static let perfWorkloads: [String] = [
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
+        "studio-duplicate", "studio-undo-delete",
     ]
 }
 

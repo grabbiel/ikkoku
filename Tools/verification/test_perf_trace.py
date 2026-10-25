@@ -322,6 +322,39 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("3 rendered frames dropped before it (1 after the first start)", text)
         self.assertIn("gap since the last present ms 50.00/60.00/60.00", text)
 
+    def test_startup_line_reports_the_ready_scene_and_the_main_thread_until_then(self):
+        data = report()
+        self.assertIsNone(perf_trace.startup_line("none", data))
+        data["summary"]["startupMainThread"] = {"ready": False}
+        self.assertIsNone(perf_trace.startup_line("none", data))
+        data["summary"]["startupMainThread"] = {"ready": True, "readySeconds": 2.5, "windowMs": 2400, "busyMs": 900.4,
+                                                "longestStallMs": 410.6, "periods": 40, "stallsOver50Ms": 3, "stallsOver100Ms": 2}
+        data["startupSeconds"] = {"sourceSceneImport.begin": 1.0, "sourceSceneImport.end": 1.025, "makerReady": 0.9,
+                                  "firstDraw": 1.4}
+        text = perf_trace.startup_line("startup", data)
+        self.assertIn("startup scene ready at 2.50 s (import call 25 ms, makerReady 0.90, appStateReady -, firstDraw 1.40)", text)
+        self.assertIn("busy 900 of 2400 ms, longest stall 411 ms, 3 periods over 50 ms, 2 over 100 ms", text)
+
+    def test_action_stats_take_medians_of_measured_actions_only(self):
+        data = report()
+        self.assertEqual(perf_trace.action_stats(data), {})
+        self.assertIsNone(perf_trace.actions_line("none", data))
+
+        def action(name, call, ready, busy, stall, measured=True):
+            return {"name": name, "measured": measured, "startSeconds": 1, "callMs": call, "readyMs": ready,
+                    "busyMs": busy, "longestStallMs": stall}
+        data["details"] = {"actions": [action("select", 5, 5, 5, 5, measured=False),
+                                       action("duplicate", 10, 100, 20, 8), action("duplicate", 12, 120, 30, 9),
+                                       action("duplicate", 30, 300, 40, 50), action("undo", 4, 60, 10, 4),
+                                       action("undo", 6, 80, 14, 6)]}
+        stats = perf_trace.action_stats(data)
+        self.assertEqual(sorted(stats), ["duplicate", "undo"])
+        self.assertEqual(stats["duplicate"], {"count": 3, "callMs": 12, "readyMs": 120, "busyMs": 30, "longestStallMs": 9,
+                                              "maxStallMs": 50})
+        self.assertEqual(stats["undo"]["readyMs"], 70)
+        text = perf_trace.actions_line("dup", data)
+        self.assertIn("duplicate x3 call 12.0, ready 120.0, main busy 30.0, longest stall 9.0 (max 50.0)", text)
+
     def test_attribution_row_reports_events_and_view_bodies_per_input(self):
         orbit = report()
         orbit["summary"].update(recordedSeconds=10, inputCalls={"mouseDown": 1, "mouseDragged": 1199},
