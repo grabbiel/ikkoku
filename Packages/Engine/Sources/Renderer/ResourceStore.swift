@@ -211,7 +211,7 @@ public final class ResourceStore: @unchecked Sendable {
             hiddenBuffers: hiddenBuffers.count, meshBufferBytes: buffers.values.reduce(0) { $0 + $1.length },
             deformBufferBytes: deformBuffers.values.reduce(0) { $0 + $1.length },
             hiddenBufferBytes: hiddenBuffers.values.reduce(0) { $0 + $1.length },
-            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count)
+            retiring: retiringMeshes.count + retiringDeformKeys.count + retiringHiddenKeys.count + retiringTextures.count)
     }
 
     @discardableResult
@@ -382,6 +382,7 @@ public final class ResourceStore: @unchecked Sendable {
     private var retiringMeshes: [UInt32: UInt64] = [:]
     private var retiringDeformKeys: [UInt64: UInt64] = [:]
     private var retiringHiddenKeys: [UInt64: UInt64] = [:]
+    private var retiringTextures: [UInt32: UInt64] = [:]
     /// Stamp of the newest completed retirement. A frame created before it gets
     /// transient deformation buffers (see `deformBuffer`).
     private var newestCompletedRetirement: UInt64 = 0
@@ -402,11 +403,25 @@ public final class ResourceStore: @unchecked Sendable {
         for key in hiddenKeys where hiddenBuffers[key] != nil { retiringHiddenKeys[key] = stamp }
     }
 
+    /// `retire` for textures an owner registered itself (ST-A11 source map
+    /// textures). Their cache keys go at once, so a later load of the same
+    /// file creates its own textures; the handles keep resolving for a frame
+    /// created before this call until a later submitted frame is prepared.
+    /// `unregister(texture:)` releases at once and cancels the retirement.
+    public func retire(textures handles: [TextureHandle]) {
+        let stamp = ResourceClock.tick()
+        lock.lock(); defer { lock.unlock() }
+        let ids = Set(handles.map(\.id))
+        for id in ids where textures[id] != nil { retiringTextures[id] = stamp }
+        textureKeys = textureKeys.filter { !ids.contains($0.value.id) }
+    }
+
     /// Called while the renderer prepares a submitted frame created at `stamp`:
     /// releases everything retired before that frame existed.
     func completeRetirements(createdBefore stamp: UInt64) {
         lock.lock(); defer { lock.unlock() }
-        guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty else { return }
+        guard !retiringMeshes.isEmpty || !retiringDeformKeys.isEmpty || !retiringHiddenKeys.isEmpty
+              || !retiringTextures.isEmpty else { return }
         var newest = newestCompletedRetirement
         var changed = false
         for (id, retired) in retiringMeshes where retired < stamp {
@@ -417,6 +432,9 @@ public final class ResourceStore: @unchecked Sendable {
         }
         for (key, retired) in retiringHiddenKeys where retired < stamp {
             hiddenBuffers[key] = nil; retiringHiddenKeys[key] = nil; newest = max(newest, retired); changed = true
+        }
+        for (id, retired) in retiringTextures where retired < stamp {
+            textures[id] = nil; retiringTextures[id] = nil; newest = max(newest, retired); changed = true
         }
         if changed { generationValue &+= 1 }
         newestCompletedRetirement = newest
@@ -516,6 +534,7 @@ public final class ResourceStore: @unchecked Sendable {
     public func unregister(texture handle: TextureHandle) {
         lock.lock(); defer { lock.unlock() }
         textures.removeValue(forKey: handle.id)
+        retiringTextures[handle.id] = nil
         textureKeys = textureKeys.filter { $0.value.id != handle.id }
         generationValue &+= 1
     }

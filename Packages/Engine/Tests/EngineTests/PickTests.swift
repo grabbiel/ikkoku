@@ -237,6 +237,41 @@ struct PickTests {
         #expect(pickAsync(renderer, scene.frame, Float2(1, 1), (0, 0)) == RenderPickResult(id: 0))
     }
 
+    /// ST-A11: source map geometry is id 0 but occludes the pick pass, so a
+    /// pick or hover over map pixels selects nothing, even with an object
+    /// behind them; gizmos still draw on top. An id-0 item without the flag
+    /// stays out of the pick pass, as before.
+    @Test func pickOccludersHideWhatIsBehindThemAndPickNothing() throws {
+        let renderer = try makeSourceShaderRenderer()
+        let scene = try PickScene(renderer: renderer)
+        defer { scene.assets.remove() }
+        let reference = try #require(renderer.pickTarget(frame: scene.frame, size: Self.size))
+        let wall = try renderer.resources.register(mesh: MeshData(
+            name: "map-wall", positions: [Float3(-0.5, -0.5, 0), Float3(0.5, -0.5, 0), Float3(0.5, 0.5, 0), Float3(-0.5, 0.5, 0)],
+            normals: [Float3](repeating: Float3(0, 0, 1), count: 4),
+            uvs: [Float2(0, 1), Float2(1, 1), Float2(1, 0), Float2(0, 0)], indices: [0, 1, 2, 0, 2, 3]))
+        var occluded = scene.frame
+        var item = RenderItem(mesh: wall, material: MaterialState(uniforms: .make(kind: MaterialKindItem)),
+                              model: Transform.trs(Float3(0, 1.0, 0.5), .identity, Float3(repeating: 1)), objectID: 0)
+        occluded.items.append(item)
+        // Without the flag the id-0 wall is not in the pick pass at all.
+        #expect(try #require(renderer.pickTarget(frame: occluded, size: Self.size)) == reference)
+        item.pickOccluder = true
+        occluded.items[occluded.items.count - 1] = item
+        let picked = try #require(renderer.pickTarget(frame: occluded, size: Self.size))
+        let characterBefore = reference.filter { $0 == 1 }.count, characterAfter = picked.filter { $0 == 1 }.count
+        #expect(characterAfter + 200 < characterBefore, "character pixels \(characterBefore) -> \(characterAfter)")
+        // Covered pixels became 0 or a gizmo; nothing new is picked.
+        let gizmoIDs = Set([GizmoAxis.x, .y, .z, .xy, .yz, .xz].map(PickIDs.gizmo)).union([PickIDs.bone(7)])
+        for (index, id) in picked.enumerated() where id != reference[index] {
+            #expect(id == 0 || gizmoIDs.contains(id), "pixel \(index): \(String(id, radix: 16))")
+        }
+        #expect(gizmoIDs.intersection(Set(reference)) == gizmoIDs.intersection(Set(picked)))
+        let (w, h) = Self.size
+        #expect(renderer.pick(frame: occluded, pixel: Float2(Float(w) / 2, Float(h) / 2), size: Self.size)
+                == picked[(h / 2) * w + w / 2])
+    }
+
     /// Asynchronous picks driven through `LatestPickQueue`, the way the
     /// Studio's hover runs them: a result for an older move or an older frame
     /// is dropped, never applied, and the latest move is picked again against

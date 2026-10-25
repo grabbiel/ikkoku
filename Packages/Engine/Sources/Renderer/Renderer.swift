@@ -1486,7 +1486,7 @@ public final class Renderer: @unchecked Sendable {
         enc.setRenderPipelineState(pipelines.pick)
         enc.setDepthStencilState(pipelines.depthWrite)
         enc.setCullMode(.none)
-        for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 {
+        for rec in ctx.opaque + ctx.transparent + ctx.live.map(\.record) where rec.item.objectID != 0 || rec.item.pickOccluder {
             bindDraw(enc, rec)
             enc.setFragmentTexture(ctx.frame.texture(rec.item.material.bodyMask, resources: resources) ?? resources.blackTexture,
                                    index: Int(TextureIndexBodyMask.rawValue))
