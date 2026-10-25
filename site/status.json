@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-25",
-  "revision": "d0b3c4cb1586a8dfaabd3e49732623d0ce563983",
+  "revision": "653dc20c9f569bad7b9aaf8acf1f708fc5941b8b",
   "components": [
     {
       "id": "character-maker",
@@ -44,10 +44,14 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Six normal assemblies have bounded original-player comparisons.",
-      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Bone-type-1 checks cover heads 0 and 201 for both sexes.",
+      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Bone-type-1 checks cover heads 0 and 201 for both sexes and female head 200.",
       "remaining": "Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. Passing selected vertex and binding checks does not establish full-character parity.",
-      "evidence": "Corrected head 201 passes three independent original/native cases for each sex, covering 37,124 selected female vertices and 35,645 male vertices, with unchanged tolerances and exact neutral repeats. The reference retains exact identities, hashes and exclusions; CPU silhouettes establish geometry only.",
+      "evidence": "Corrected female head 200 passes three independent original/native cases across 38,594 selected vertices, with unchanged tolerances, zero shape coercions and exact neutral repeats. Corrected head 201 also passes three cases for each sex, covering 37,124 selected female vertices and 35,645 male vertices. The reference retains exact identities, hashes and exclusions; CPU silhouettes establish geometry only.",
       "docs": [
+        [
+          "Corrected female head 200",
+          "docs/reference/character/neutral-model-parity.md#corrected-female-head200-skeleton-260"
+        ],
         [
           "Corrected female head 201",
           "docs/reference/character/neutral-model-parity.md#corrected-female-head201-skeleton-251"
@@ -198,7 +202,7 @@
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
       "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership. Direct translated-profile/native loading and saved scene open, undo and redo reject incompatible candidate pairs before changing the live session. Disposing a temporary Studio model now releases its focus observers. Native library-backed scene open, undo and redo can now read attachments during read-only initialization using the candidate scene; the prepared session is reused after acceptance.",
       "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate state is rejected; initial library installation retains a separate attachment-read boundary.",
-      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed.",
+      "evidence": "Metadata inventory does not establish loadability. Direct mixed-graph rejection passed 13 Engine and 38 final Release app checks. Saved candidate restoration passes 16 focused Engine and 71 integrated app checks, preserving state and frames on rejection except the expected history error status. Original tampered-file errors retain precedence. Route-only checkpoint costs have a bounded quiet measurement; graph validation cost was not timed. Temporary-owner disposal passes 59 focused and 132 lifecycle app checks; the two retained focus tokens per disposed owner are released. This does not establish an RSS or timing improvement. Library-backed attachment restoration passes 9 focused Engine invocations and 105 save/reopen app checks, including cold candidates, warm-scene isolation, repeated read failures, exact rollback and cancellation. No timing or allocation improvement is claimed. A separate 81-check installation diagnostic confirms the remaining initial library attachment-read rejection and unchanged state; it does not establish support for that path.",
       "docs": [
         [
           "Execution and persistence",
@@ -227,6 +231,10 @@
         [
           "Candidate attachment restoration",
           "docs/reference/mods/plugin-execution.md#candidate-owned-library-attachment-restoration-250"
+        ],
+        [
+          "Initial library installation boundary",
+          "docs/reference/mods/plugin-execution.md#initial-library-attachment-installation-boundary-257"
         ]
       ]
     },
