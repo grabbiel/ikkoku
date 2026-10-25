@@ -479,7 +479,31 @@ Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/774
   | route-children-edit, copy 157 | Points `[306, 308, 310, 312]`, aids `[307…313]`, children `[158, 159]`, curve point 3. `childRoot` within 7.3e-7 m, children within 7.7e-7 m. |
 
   In both loads the key index equals the file's key list, and every change amount equals its record at float32 precision. The point panel matches the app: speed 0.1–30, six eases, point limit on. The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left. The two exports' scene bytes after the PNG are identical to the current lanes' exports. A rerun re-renders only the thumbnail.
-- **Performance.** PERF-PENDING
+- **Performance.** Measured on Release builds in a quiet window, against origin/main `2dc317f`, with base and branch runs alternating. Evidence is in `.local/stt11k-route-edit/perf/` and `perf2/`.
+  - **Export.** `sourceSceneRoutePerformance` runs 60 calls per case under `swift test -c release`. Medians from two runs per build:
+
+    | Case | Base | Branch |
+    | --- | --- | --- |
+    | Route scene, no-op | 0.000 ms | 0.000 ms |
+    | Route scene, one transform | 1.00, 0.99 ms | 0.91, 0.80 ms |
+    | Route edit: 2 moves, 1 add, speed, ease, curve | n/a | 0.92, 0.83 ms |
+    | Route copy with its folder and character, both routes edited | n/a | 3.15, 2.82 ms |
+    | Topology scene, duplicate scenario | 7.58, 8.16 ms | 8.11, 7.42 ms |
+
+    The no-op stays on the byte-identity fast path. The other topology cases also stay within run-to-run noise.
+  - **Point move.** A guide drag event's median is 1.31 ms (max 1.37) while route 0 and its copy play (`route-move-playing`). On stopped routes it is 0.33–0.45 ms (`route-edit-export`), and the mouseUp is 0.00 ms.
+  - **Duplicate stall.** Duplicating route 0 with its folder and character takes a median of 696 ms (p90 700, 20 rounds). Building the route character's preview takes almost all of that time. A folder copy takes 0.25 ms.
+  - **Idle with a playing route.** `studio-idle` ran on scene-route-children.png with route 0 playing and its character riding it, 10 s per run, two runs per build. Both builds carry the live-step fix, and `studio-idle` now counts a route's characters (`details.sourceRouteCharacters`).
+
+    | Metric | Base | Branch |
+    | --- | --- | --- |
+    | Frames presented | 30.0/s | 30.0/s |
+    | Main thread busy | 36, 38 ms/s | 33, 29 ms/s |
+    | `studioTick` p50 | 1.05 ms | 1.03, 0.87 ms |
+    | GPU | 13.3 ms/s | 13.3 ms/s |
+    | Palette buffers created | 0 | 0 |
+
+    In Time Profiler attaches, route frames on the main thread take 1.5 ms/s (base) and 1.3 ms/s (branch). On the branch, `applySourceRouteEdits`' unchanged check takes 0.4 ms/s. No allocation frame appears under the route code.
 
 Reproduce the VM run from the repository root:
 
