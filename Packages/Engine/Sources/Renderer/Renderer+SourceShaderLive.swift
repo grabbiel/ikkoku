@@ -196,7 +196,7 @@ public extension Renderer {
             do { ctx = try prepare(frame: frame, targets: targets) } catch { failure = error; frameRing.abandonFrame(); return }
             // Read under the render lock: a draw on the render thread publishes its own.
             guard lastDeformationErrors.isEmpty else { failure = RenderBenchmarkError.deformation(lastDeformationErrors); frameRing.abandonFrame(); return }
-            encodeDeform(ctx, cb)
+            let writes = encodeDeform(ctx, cb)
             if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = color; pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
@@ -208,7 +208,7 @@ public extension Renderer {
             encodeLiveDraws(enc, ctx, target: .probe, families: families)
             enc.endEncoding()
             frameRing.endFrame(retainedUntilCompletionOf: cb)
-            cb.commit()
+            commit(cb, writes: writes)
         }
         if let failure { throw failure }
         cb.waitUntilCompleted()
@@ -252,7 +252,7 @@ public extension Renderer {
             do { ctx = try prepare(frame: frame, targets: targets) } catch { failure = error; frameRing.abandonFrame(); return }
             // Read under the render lock: a draw on the render thread publishes its own.
             guard lastDeformationErrors.isEmpty else { failure = RenderBenchmarkError.deformation(lastDeformationErrors); frameRing.abandonFrame(); return }
-            encodeDeform(ctx, cb)
+            let writes = encodeDeform(ctx, cb)
             let pass = MTLRenderPassDescriptor(); pass.colorAttachments[0].texture = color
             pass.colorAttachments[0].loadAction = .clear; pass.colorAttachments[0].storeAction = .store
             pass.colorAttachments[0].clearColor = depthNormals ? MTLClearColorMake(1, 1, 1, 1) : MTLClearColorMake(0, 0, 0, 1)
@@ -273,7 +273,7 @@ public extension Renderer {
             }
             enc.endEncoding()
             frameRing.endFrame(retainedUntilCompletionOf: cb)
-            cb.commit()
+            commit(cb, writes: writes)
         }
         if let failure { throw failure }
         cb.waitUntilCompleted()

@@ -131,6 +131,21 @@ final class PerfTrace {
         /// presentation still keeps pace when the main thread is busy.
         let mainLoadMilliseconds: Double
         let mainLoadHz: Double
+        /// `IKKOKU_PERF_LINK_RATE`: "adaptive" (default) or "fixed", which keeps
+        /// every viewport's display link at full rate (R7 P2 measurement control).
+        let linkRate: String
+        /// `IKKOKU_PERF_DEFORM_REUSE`: "on" (default) or "off", which dispatches
+        /// every deformation in every drawn frame and pick (R7 phase 2, item 4
+        /// measurement control).
+        let deformReuse: Bool
+        /// `IKKOKU_PERF_FRAME_SKIP`: "on" (default) or "off", which draws and
+        /// presents every callback as before G3 (measurement control).
+        let frameSkip: Bool
+        /// `IKKOKU_PERF_KEEPALIVE_MS`: the idle keep-alive interval in ms, 0 for
+        /// none; nil keeps the viewport's default.
+        let keepAliveMilliseconds: Int?
+        /// `IKKOKU_PERF_BURST_IDLE_MS`: `studio-orbit-bursts`' quiet time between drags (default 1000).
+        let burstIdleMilliseconds: Int
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -145,7 +160,12 @@ final class PerfTrace {
                 inputHz: Double(int("IKKOKU_PERF_INPUT_HZ", 120)),
                 nativeCharacters: int("IKKOKU_PERF_CHARACTERS", 6),
                 mainLoadMilliseconds: Double(int("IKKOKU_PERF_MAIN_LOAD_MS", 0)),
-                mainLoadHz: Double(int("IKKOKU_PERF_MAIN_LOAD_HZ", 30)))
+                mainLoadHz: Double(int("IKKOKU_PERF_MAIN_LOAD_HZ", 30)),
+                linkRate: env["IKKOKU_PERF_LINK_RATE"] ?? "adaptive",
+                deformReuse: env["IKKOKU_PERF_DEFORM_REUSE"] != "off",
+                frameSkip: env["IKKOKU_PERF_FRAME_SKIP"] != "off",
+                keepAliveMilliseconds: env["IKKOKU_PERF_KEEPALIVE_MS"].flatMap { Int($0) },
+                burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000))
         }
     }
 
@@ -357,6 +377,9 @@ final class PerfTrace {
             && presented[priorIndex] > 0 && presented[priorIndex] <= recordEnd
         let rendered = frames.filter { $0.outcome == .rendered }
         let unchanged = frames.filter { $0.outcome == .unchanged }
+        // The idle keep-alive: the same image presented again.
+        let refreshed = frames.filter { $0.outcome == .refreshed }
+        let refreshedPresented = refreshed.filter { presented.indices.contains($0.presentLogIndex) && presented[$0.presentLogIndex] > 0 }.count
         var presentations: [RenderPresentationSample] = []
         var presentedTimes: [Double] = []
         var dropped = 0
@@ -375,20 +398,45 @@ final class PerfTrace {
         // dropped presentations are not intentional skips. Absolute target-to-
         // present lateness is reported separately: a late earlier frame can
         // shorten the following adjusted interval.
-        let activeIntervals = RenderPresentationSample.activeIntervals(presentations,
-            unchangedTargets: unchanged.map(\.targetPresentation), period: period).map { $0 * 1000 }
+        // While a viewport's link runs at a lowered rate (R7 P2), an unchanged
+        // callback accounts for the gap to the next one, up to that rate's
+        // period; at full rate it accounts for one display period, as before.
+        var skips: [RenderPresentationSample.Skip] = []
+        var deliberateTargetSkips = 0
+        for (index, frame) in frames.enumerated() {
+            let gap = index + 1 < frames.count ? frames[index + 1].targetPresentation - frame.targetPresentation : nil
+            let hz: Float? = frame.linkHz > 0 ? frame.linkHz : nil
+            if frame.outcome == .unchanged || frame.outcome == .refreshed {
+                skips.append(.init(target: frame.targetPresentation,
+                                   allowance: RenderPresentationSample.Skip.allowance(period: period, gapToNext: gap, hz: hz)))
+            }
+            if let gap, let hz {
+                deliberateTargetSkips += max(0, Int((min(gap, 1 / Double(hz)) / period).rounded()) - 1)
+            }
+        }
+        let activeIntervals = RenderPresentationSample.activeIntervals(presentations, unchanged: skips).map { $0 * 1000 }
         let hitchIntervals = activeIntervals.filter { $0 > 1.5 * period * 1000 }
         let skippedRefreshes = hitchIntervals.reduce(0) { $0 + max(0, Int(($1 / (period * 1000)).rounded()) - 1) }
         let callbackIntervals = zip(frames.dropFirst(), frames).map { ($0.callback - $1.callback) * 1000 }
-        let targetSkips = zip(frames.dropFirst(), frames).reduce(0) { total, pair in
+        let rawTargetSkips = zip(frames.dropFirst(), frames).reduce(0) { total, pair in
             total + max(0, Int(((pair.0.targetPresentation - pair.1.targetPresentation) / period).rounded()) - 1)
         }
+        let targetSkips = max(0, rawTargetSkips - deliberateTargetSkips)
+        // Time the link spent at a lowered rate: the gaps after callbacks that
+        // ran at one, each at most that rate's period.
+        let reducedSeconds = zip(frames, frames.dropFirst()).reduce(0.0) { total, pair in
+            pair.0.linkHz > 0 ? total + min(pair.1.targetPresentation - pair.0.targetPresentation, 1 / Double(pair.0.linkHz)) : total
+        }
+        let lowerings = zip(frames, frames.dropFirst()).filter { $1.linkHz > 0 && ($0.linkHz == 0 || $1.linkHz < $0.linkHz) }.count
+        let restores = zip(frames, frames.dropFirst()).filter { $0.linkHz > 0 && $1.linkHz == 0 }.count
+        let linkHzCounts = Dictionary(grouping: frames, by: { Int($0.linkHz.rounded()) }).mapValues(\.count)
 
         func durations(_ phase: Phase) -> [Double] { (intervals[phase] ?? []).map { ($0.end - $0.start) * 1000 } }
         let draw = rendered.map(\.drawMilliseconds)
         let completed = rendered.compactMap { completions[$0.presentLogIndex] }
         let gpu = completed.map { $0.gpuTime * 1000 }
         let failed = frames.filter { $0.outcome == .failed }
+        let refreshGPU = refreshed.compactMap { completions[$0.presentLogIndex] }.map { $0.gpuTime * 1000 }
         let busyTotal = busy.reduce(0) { $0 + ($1.end - $1.start) } * 1000
         // Only callbacks that ran on the main thread take main run-loop time;
         // a render thread's draws are reported on their own.
@@ -410,7 +458,8 @@ final class PerfTrace {
             entry["msPerSecond"] = samples.reduce(0, +) / window
             phases[phase.rawValue] = entry
         }
-        for (name, values) in [("gpu", gpu), ("unchanged", unchanged.map(\.drawMilliseconds)), ("failedDraw", failed.map(\.drawMilliseconds))] {
+        for (name, values) in [("gpu", gpu), ("unchanged", unchanged.map(\.drawMilliseconds)), ("failedDraw", failed.map(\.drawMilliseconds)),
+                               ("refresh", refreshed.map(\.drawMilliseconds)), ("refreshGpu", refreshGPU)] {
             var entry = PerfTrace.statistics(values)
             entry["perSecond"] = Double(values.count) / window
             entry["msPerSecond"] = values.reduce(0, +) / window
@@ -423,6 +472,8 @@ final class PerfTrace {
             "displayLinkCallbacks": frames.count,
             "renderedDraws": rendered.count,
             "unchangedCallbacks": unchanged.count,
+            "refreshedCallbacks": refreshed.count,
+            "refreshedPresented": refreshedPresented,
             "failedCallbacks": failed.count,
             "gpuCompletedDraws": completed.count,
             "gpuPendingDraws": rendered.count - completed.count,
@@ -433,6 +484,25 @@ final class PerfTrace {
             "presentationLatenessMs": PerfTrace.statistics(presentations.map { $0.lateness * 1000 }),
             "displayLinkIntervalMs": PerfTrace.statistics(callbackIntervals),
             "displayLinkTargetSkips": targetSkips,
+            "displayLinkDeliberateTargetSkips": deliberateTargetSkips,
+            // R7 P2: the link's requested rate per callback (0 = full rate).
+            "linkRate": [
+                "policy": configuration.linkRate,
+                "callbacksByRequestedHz": Dictionary(uniqueKeysWithValues: linkHzCounts.map { (String($0.key), $0.value) }),
+                "reducedRateSeconds": PerfTrace.round(reducedSeconds),
+                "lowerings": lowerings,
+                "restores": restores,
+            ] as [String: Any],
+            // R7 phase 2, item 4: deformations rendered callbacks dispatched or
+            // found already in their buffers, the dispatches made without
+            // tracking content, and the rendered callbacks that encoded a
+            // deform pass at all.
+            "deform": [
+                "dispatches": rendered.reduce(0) { $0 + $1.deformDispatches },
+                "reuses": rendered.reduce(0) { $0 + $1.deformReuses },
+                "untracked": rendered.reduce(0) { $0 + $1.deformUntracked },
+                "passes": rendered.filter { $0.deformDispatches > 0 }.count,
+            ] as [String: Any],
             "presentedFrames": presentedTimes.count,
             "presentedFPS": Double(max(presentedTimes.count - 1, 0)) / max((presentedTimes.last ?? 0) - (presentedTimes.first ?? 0), 1e-9),
             "presentedIntervalMs": PerfTrace.statistics(presentedIntervals),
@@ -500,10 +570,10 @@ final class PerfTrace {
             let gpuMs = completions[frame.presentLogIndex].map { $0.gpuTime * 1000 } ?? -1
             return [PerfTrace.round(frame.callback - recordStart), PerfTrace.round(frame.drawMilliseconds),
                     PerfTrace.round(gpuMs), presentedAt > 0 ? PerfTrace.round(presentedAt - recordStart) : -1,
-                    frame.onMainThread ? 1 : 0, frame.outcome == .rendered ? 1 : (frame.outcome == .unchanged ? 0 : -1),
-                    PerfTrace.round(frame.targetPresentation - recordStart)]
+                    frame.onMainThread ? 1 : 0, PerfTrace.outcomeCode(frame.outcome),
+                    PerfTrace.round(frame.targetPresentation - recordStart), Double(frame.linkHz)]
         }
-        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread", "rendered", "targetSeconds"], "rows": frameRows]]
+        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread", "rendered", "targetSeconds", "linkHz"], "rows": frameRows]]
         for phase in Phase.allCases where phase != .draw {
             guard let list = intervals[phase], !list.isEmpty else { continue }
             samples[phase.rawValue] = list.map { [PerfTrace.round($0.start - recordStart), PerfTrace.round(($0.end - $0.start) * 1000)] }
@@ -514,12 +584,16 @@ final class PerfTrace {
         var startup = marks
         if let first = drawn.firstDraw { startup.append(("firstDraw", secondsSinceProcessStart(media: first))) }
         return [
-            "schemaVersion": 5,
+            "schemaVersion": 6,
             "workload": configuration.workload,
             "configuration": [
                 "seconds": configuration.seconds, "warmupSeconds": configuration.warmupSeconds,
                 "inputHz": configuration.inputHz, "nativeCharacters": configuration.nativeCharacters,
                 "mainLoadMs": configuration.mainLoadMilliseconds, "mainLoadHz": configuration.mainLoadHz,
+                "linkRate": configuration.linkRate, "deformReuse": configuration.deformReuse,
+                "frameSkip": configuration.frameSkip,
+                "keepAliveMs": configuration.keepAliveMilliseconds.map { $0 as Any } ?? NSNull(),
+                "burstIdleMs": configuration.burstIdleMilliseconds,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
@@ -548,6 +622,16 @@ final class PerfTrace {
     }
 
     static func round(_ value: Double) -> Double { (value * 10_000).rounded() / 10_000 }
+
+    /// The frame rows' `rendered` column: 1 rendered, 0 unchanged, -1 failed, 2 refreshed (keep-alive).
+    nonisolated static func outcomeCode(_ outcome: RenderDrawResult.Outcome) -> Double {
+        switch outcome {
+        case .rendered: return 1
+        case .unchanged: return 0
+        case .failed: return -1
+        case .refreshed: return 2
+        }
+    }
 
     /// Total length of the union of `intervals`, in their unit.
     static func unionSeconds(_ intervals: [(start: CFTimeInterval, end: CFTimeInterval)]) -> Double {
@@ -712,6 +796,13 @@ nonisolated final class PerfDrawLog: Sendable {
         /// The frame ring's counters returned by this exact draw under renderLock.
         var ring = FrameRing.Statistics()
         var skinPalettes = 0
+        /// Deform dispatches this draw encoded and deformations it reused (R7 phase 2, item 4).
+        var deformDispatches = 0
+        var deformReuses = 0
+        var deformUntracked = 0
+        /// The display-link rate requested for the interval after this
+        /// callback, in Hz; 0 for the display's full rate (R7 P2).
+        var linkHz: Float = 0
         /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
         var drawMilliseconds: Double { (end - callback) * 1000 }
     }
@@ -740,12 +831,14 @@ nonisolated final class PerfDrawLog: Sendable {
     /// process's first draw, which the caller marks.
     @discardableResult
     func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
-                 result: RenderDrawResult, presentIndex: Int, drawable: CGSize) -> Bool {
+                 result: RenderDrawResult, presentIndex: Int, drawable: CGSize, linkHz: Float = 0) -> Bool {
         let statistics = result.statistics
         let sample = Sample(callback: callback, end: end, targetPresentation: targetPresentation,
                             outcome: result.outcome, presentLogIndex: presentIndex,
                             onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
-                            skinPalettes: statistics.skinPalettes)
+                            skinPalettes: statistics.skinPalettes, deformDispatches: statistics.deformDispatches,
+                            deformReuses: statistics.deformReuses, deformUntracked: statistics.deformUntracked,
+                            linkHz: linkHz)
         return state.withLock { state in
             let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }
@@ -778,7 +871,10 @@ nonisolated enum ViewportFrame {
     /// (`pthread_setname_np`); the `viewport-lifecycle` workload counts them.
     static let renderThreadName = "com.grabbiel.Ikkoku.viewport-render"
 
-    static func draw(_ update: CAMetalDisplayLink.Update, renderer: Renderer, log: PerfDrawLog?) {
+    /// `afterDraw` sees the callback's outcome and returns the display-link
+    /// rate requested for the interval that follows (0 for full rate; R7 P2).
+    static func draw(_ update: CAMetalDisplayLink.Update, renderer: Renderer, log: PerfDrawLog?,
+                     refreshAfter: CFTimeInterval? = nil, afterDraw: (RenderDrawResult.Outcome) -> Float = { _ in 0 }) {
         let drawable = update.drawable
         var presentIndex = -1
         if let log {
@@ -791,18 +887,20 @@ nonisolated enum ViewportFrame {
         let result = PerfSignpost.interval("Draw") {
             if let log {
                 let index = presentIndex
-                return renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp) { completion in
+                return renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp, refreshAfter: refreshAfter) { completion in
                     log.presentLog.completed(index, result: completion)
                 }
             }
-            return renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp)
+            return renderer.draw(to: drawable, timestamp: update.targetPresentationTimestamp, refreshAfter: refreshAfter)
         }
+        // Timed with the draw: the policy step is part of the callback's cost.
+        let linkHz = afterDraw(result.outcome)
         guard let log else { return }
         let end = CACurrentMediaTime()
         let texture = drawable.texture
         if log.didDraw(callback: start, end: end, targetPresentation: update.targetPresentationTimestamp,
                        result: result, presentIndex: presentIndex,
-                       drawable: CGSize(width: texture.width, height: texture.height)) {
+                       drawable: CGSize(width: texture.width, height: texture.height), linkHz: linkHz) {
             PerfSignpost.signposter.emitEvent("Mark", "firstDraw")
         }
     }
