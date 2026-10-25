@@ -9,8 +9,10 @@
 // fixture females, neck pattern TARGET and AWAY, eyes pattern TARGET) and "mirrored-camera"
 // (scene-mirrored-camera.png: a camera under a scalable item with scale (-1, 1, 1) and a control camera
 // under an unmirrored copy of that item; it needs no card, so author-scenes.txt alone starts author mode
-// when it lists only card-free scenes); each is read back into an emptied scene and traced. No installed
-// cards, saves, media or third-party plug-ins are read or written.
+// when it lists only card-free scenes); each is read back into an emptied scene and traced. The ST-T11
+// route-edit records (reload-route-edit.png, reload-route-children-edit.png) are also traced frame by frame
+// after their load, with the route point panel's prefab values. No installed cards, saves, media or
+// third-party plug-ins are read or written.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -74,7 +76,7 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         try{File.WriteAllText(Path.Combine(folder,"reload-trace.json"),J(K("schemaVersion",1,"framesPerPhase",Frames,"cases",cases)));}catch(Exception e){if(error==null)error="trace write: "+e;}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"mode",mode,
             "voiceRepair",voiceRepair,"authorScenes",authored,
-            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent, world position and rotation, lossy scale, authored change amount and saved child lists, the root dictionary order and sun caster, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees) and scene-mirrored-camera.png (camera objects under a scalable item with scale (-1, 1, 1) and under an unmirrored copy, the render camera recorded while each is active, after toggling off and after re-activating the mirrored one); this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
+            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent, world position and rotation, lossy scale, authored change amount and saved child lists, the root dictionary order and sun caster, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees) and scene-mirrored-camera.png (camera objects under a scalable item with scale (-1, 1, 1) and under an unmirrored copy, the render camera recorded while each is active, after toggling off and after re-activating the mirrored one); every loaded route's point, aid and setting records and the line it built, and for the route-edit labels a per-frame trace (at least "+RouteTraceFrames+" frames and "+RouteTraceSeconds+" s) of every route's childRoot and children with the route point panel's speed slider range, ease list and point limit option; this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();} // repeat until the player exits
     }
@@ -365,7 +367,11 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
             "localToWorld",entries);
     }
     // Each uploaded record is loaded into an emptied scene (the camera probe's InitScene(false)-then-load rule).
-    // "afterLoad" is measured as soon as LoadScene returns, "settled" Frames frames later.
+    // "afterLoad" is measured as soon as LoadScene returns, "settled" Frames frames later. The ST-T11 route-edit
+    // labels first trace every route after the load (RouteSnap): RouteTraceFrames frames, longer if those
+    // span less than RouteTraceSeconds, never more than RouteTraceMaxFrames.
+    const int RouteTraceFrames=240,RouteTraceMaxFrames=1200;const float RouteTraceSeconds=4f;
+    static readonly string[] RouteTraceLabels={"route-edit","route-children-edit"};
     IEnumerator ReloadCase(string path) {
         string label=Path.GetFileNameWithoutExtension(path).Substring("reload-".Length);
         studio.InitScene(false);
@@ -373,9 +379,83 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         if(studio.dicObjectCtrl.Count!=0)throw new Exception("reload expects an empty scene after InitScene(false), found "+studio.dicObjectCtrl.Count+" objects");
         if(!studio.LoadScene(path))throw new Exception("Studio.LoadScene returned false for "+path);
         var afterLoad=Record();
+        List<object> routeTrace=null;
+        if(Array.IndexOf(RouteTraceLabels,label)>=0) {
+            // OriginalRouteProbe.Capture's rule, so compare_route_playback's frame pairing applies: read this frame's
+            // deltaTime, resume after the next frame's Update phase (in which StudioTween advanced by that frame's
+            // deltaTime), then snapshot. LoadScene played every route saved active; nothing is re-saved.
+            routeTrace=new List<object>();float cumulative=0f;
+            for(int i=0;i<RouteTraceMaxFrames&&(i<RouteTraceFrames||cumulative<RouteTraceSeconds);i++) {
+                float dt=Time.deltaTime;cumulative+=dt;
+                yield return null;
+                routeTrace.Add(K("frameCount",Time.frameCount,"timeScale",Time.timeScale,"deltaTime",dt,"cumulativeTime",cumulative,"routes",RouteSnap()));
+            }
+        }
         for(int i=0;i<Frames;i++)yield return new WaitForEndOfFrame();
         var settled=Record();
-        cases[label]=K("label",label,"scene",Path.GetFileName(path),"afterLoad",afterLoad,"settled",settled);
+        cases[label]=K("label",label,"scene",Path.GetFileName(path),"afterLoad",afterLoad,"settled",settled,
+            "routeTrace",routeTrace,"routeUi",routeTrace==null?null:RouteUi());
+    }
+    // Per route, in studio.dicObjectCtrl order: childRoot's world placement, the active flag, and every route child's
+    // world placement (guideObject.transformTarget, the transform the record's change amount drives).
+    List<object> RouteSnap() {
+        var routes=new List<object>();
+        foreach(var entry in studio.dicObjectCtrl) {
+            var route=entry.Value as OCIRoute;if(route==null)continue;
+            var children=new List<object>();
+            foreach(var child in route.routeInfo.child) {
+                ObjectCtrlInfo ctrl;studio.dicObjectCtrl.TryGetValue(child.dicKey,out ctrl);
+                var t=ctrl==null||ctrl.guideObject==null?null:ctrl.guideObject.transformTarget;
+                children.Add(K("dicKey",child.dicKey,"position",t==null?null:(object)V(t.position),"rotation",t==null?null:(object)Q(t.rotation)));
+            }
+            routes.Add(K("dicKey",route.routeInfo.dicKey,"position",V(route.childRoot.position),"rotation",Q(route.childRoot.rotation),
+                "active",route.routeInfo.active,"children",children));
+        }
+        return routes;
+    }
+    // The route point panel's prefab values the recovered code only reads: the speed slider range OnEndEditSpeed
+    // clamps to (MPRoutePointCtrl.inputSpeed.min/max), the ease dropdown's entries and the route point limit option.
+    // Everything goes through reflection, so the probe needs no UnityEngine.UI reference.
+    static Dictionary<string,object> RouteUi() {
+        const System.Reflection.BindingFlags Any=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+        var panels=Resources.FindObjectsOfTypeAll<MPRoutePointCtrl>();
+        object min=null,max=null,whole=null,eases=null;
+        if(panels.Length>0) {
+            var input=typeof(MPRoutePointCtrl).GetField("inputSpeed",Any).GetValue(panels[0]);
+            var slider=input==null?null:input.GetType().GetField("slider",Any).GetValue(input);
+            if(slider!=null){var type=slider.GetType();min=type.GetProperty("minValue").GetValue(slider,null);max=type.GetProperty("maxValue").GetValue(slider,null);whole=type.GetProperty("wholeNumbers").GetValue(slider,null);}
+            var dropdown=typeof(MPRoutePointCtrl).GetField("dropdownEase",Any).GetValue(panels[0]);
+            var options=dropdown==null?null:dropdown.GetType().GetProperty("options").GetValue(dropdown,null) as IList;
+            if(options!=null)eases=options.Count;
+        }
+        return K("panels",panels.Length,"speedMin",min,"speedMax",max,"speedWholeNumbers",whole,"easeOptions",eases,
+            "routePointLimit",Studio.Studio.optionSystem==null?null:(object)Studio.Studio.optionSystem.routePointLimit);
+    }
+    // ST-T11: what the player loaded of a route record (OIRouteInfo and each OIRoutePointInfo with its aid), and
+    // the line OCIRoute.UpdateLine built: OnVisible shows it only while the route is visible and visibleLine is set.
+    static readonly System.Reflection.FieldInfo RouteLine=typeof(OCIRoute).GetField("line",System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+    static object Member(object target,string name) { // a Vectrosity VectorLine member, property or field, without a Vectrosity reference
+        if(target==null)return null;const System.Reflection.BindingFlags Any=System.Reflection.BindingFlags.Public|System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance;
+        var property=target.GetType().GetProperty(name,Any);if(property!=null)return property.GetValue(target,null);
+        var field=target.GetType().GetField(name,Any);return field==null?null:field.GetValue(target);
+    }
+    static Dictionary<string,object> RouteRecord(OCIRoute route) {
+        var info=route.routeInfo;var points=new List<object>();
+        for(int i=0;i<info.route.Count;i++) {
+            var p=info.route[i];var aid=p.aidInfo;var live=i<route.listPoint.Count?route.listPoint[i]:null;
+            points.Add(K("dicKey",p.dicKey,"changePosition",V(p.changeAmount.pos),"changeRotation",V(p.changeAmount.rot),"changeScale",V(p.changeAmount.scale),
+                "speed",p.speed,"easeType",(int)p.easeType,"connection",(int)p.connection,"link",p.link,
+                "aidKey",aid==null?null:(object)aid.dicKey,"aidChangePosition",aid==null?null:(object)V(aid.changeAmount.pos),
+                "aidChangeRotation",aid==null?null:(object)V(aid.changeAmount.rot),"aidInitialized",aid==null?null:(object)aid.isInit,
+                "isLink",live==null?null:(object)live.isLink,
+                "worldPosition",live==null||live.objectItem==null?null:(object)V(live.objectItem.transform.position)));
+        }
+        var line=RouteLine==null?null:RouteLine.GetValue(route);
+        var lineActive=Member(line,"active");var linePoints=Member(line,"points3") as IList;
+        return K("name",info.name,"active",info.active,"loop",info.loop,"visibleLine",info.visibleLine,"orient",(int)info.orient,
+            "color",new[]{info.color.r,info.color.g,info.color.b,info.color.a},"pointCount",route.listPoint.Count,"points",points,
+            "lineExists",line!=null,"lineActive",lineActive,"linePoints",linePoints==null?null:(object)linePoints.Count,
+            "childRootPosition",V(route.childRoot.position),"childRootRotation",Q(route.childRoot.rotation));
     }
     // What the player shows for the loaded scene: every object's name, info-level and tree-node visibility,
     // camera active flags, the camera the view uses, each route's playing state and each character's FK state.
@@ -402,6 +482,7 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 "childKeys",ChildKeys(info),
                 "routeChildRootPosition",route==null||route.childRoot==null?null:(object)V(route.childRoot.position),
                 "character",chr==null?null:CharRecord(chr,(OICharInfo)info),
+                "route",route==null?null:RouteRecord(route),
                 "content",Content(ctrl)));
         }
         var rootKeys=new List<object>(); // sceneInfo.dicObject in enumeration order: the order SceneInfo.Save writes the roots

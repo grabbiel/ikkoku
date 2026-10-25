@@ -43,6 +43,10 @@ FK_LABELS=('charastudio-fk-edit','charastudio-fk-source') # ST-T01: our FK expor
 TOPOLOGY_LABELS=('topology-delete','topology-moved','topology-reparent','topology-item-delete',
                  'topology-duplicate','topology-camera-copy',
                  'topology-delete-source','topology-reparent-source','topology-item-source')
+# ST-T11 route edits: our route-edit-export and route-children-edit scenario exports. The probe also traces
+# every route's childRoot and children for at least 240 frames and 4 s after these loads, with the route
+# point panel's speed slider range, ease list and point limit option.
+ROUTE_LABELS=('route-edit','route-children-edit')
 SOURCE=Path(__file__).with_name('fixtures')/'OriginalSceneReloadProbe.cs'
 AUTHORED={'char':'scene-char.png','route-children':'scene-route-children.png','neck-target':'scene-neck-target.png',
           'mirrored-camera':'scene-mirrored-camera.png'} # author scene -> the file the probe saves in its folder
@@ -76,7 +80,7 @@ def start(vm,output,source=None,scenes=None,card=None,author_scenes=None):
 def upload_items(scenes):
     """(trace label, uploaded file name) per given scene. The FK source scene loads under
     its own label, so one run can compare our FK edit against the unedited load."""
-    return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS if label in (scenes or {})]
+    return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS+ROUTE_LABELS if label in (scenes or {})]
 
 
 def once_script(root,base,wait_seconds,uploads):
@@ -196,6 +200,7 @@ def main():
     for label in FK_LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the ST-T01 "%s" acceptance case'%label)
     for label in EXPRESSION_LABELS:p.add_argument('--'+label,type=Path,help='ST-C04 edited face state or its unedited source scene')
     for label in TOPOLOGY_LABELS:p.add_argument('--'+label,type=Path,help='ST-T03 topology export or its unedited source scene (--once only)')
+    for label in ROUTE_LABELS:p.add_argument('--'+label,type=Path,help='ST-T11 route-edit export, reloaded and traced at least 240 frames and 4 s (--once only)')
     p.add_argument('--once',action='store_true',help='run the whole phase in one prlctl exec (needs --errno-baseline)')
     p.add_argument('--errno-baseline',type=int,help='Parallels errno-24 count that must hold before the --once exec')
     p.add_argument('--host-address',default='10.211.55.2',help="the Mac's address on the VM's host-only network (--once)")
@@ -206,16 +211,16 @@ def main():
     if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must remain in .local')
     a.output.mkdir(parents=True,exist_ok=True)
     if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
-    topology={label:getattr(a,label.replace('-','_')) for label in TOPOLOGY_LABELS if getattr(a,label.replace('-','_')) is not None}
+    topology={label:getattr(a,label.replace('-','_')) for label in TOPOLOGY_LABELS+ROUTE_LABELS if getattr(a,label.replace('-','_')) is not None}
     if a.once:
         if a.errno_baseline is None:raise ValueError('--once needs --errno-baseline')
         if a.collect or a.author_character is not None or a.author_scenes is not None:raise ValueError('--once takes scene records only')
-        scenes={label:getattr(a,label.replace('-','_')) for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS
+        scenes={label:getattr(a,label.replace('-','_')) for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS+ROUTE_LABELS
                 if getattr(a,label.replace('-','_')) is not None}
         for label,path in scenes.items():
             if not path.is_file():raise ValueError('--'+label+' requires an existing exported scene record: '+str(path))
         print(json.dumps(run_once(a.vm,a.output,scenes,a.errno_baseline,a.host_address,a.wait_seconds,a.source),indent=2));return
-    if topology:raise ValueError('topology records run with --once only')
+    if topology:raise ValueError('topology and route-edit records run with --once only')
     if a.collect:
         for label in LABELS+FK_LABELS+EXPRESSION_LABELS:
             if getattr(a,label.replace('-','_'))is not None:raise ValueError('--collect does not take scene inputs')

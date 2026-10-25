@@ -225,8 +225,10 @@ private let identity: [Float] = [0, 0, 0, 0, 0, 0, 1, 1, 1]
     let original = try decoded(scene())
     let cases: [([SourceSceneInsertion], String)] = [
         ([.init(.duplicate(of: 99))], "cannot duplicate unknown source object 99"),
-        ([.init(.duplicate(of: 8))], "does not duplicate routes"),
-        ([.init(.duplicate(of: 9), parent: .source(8))], "does not duplicate routes"),
+        // Route 8 has no points here (see SourceSceneRouteEditTests for routes with points).
+        ([.init(.duplicate(of: 8))], "it has no points"),
+        ([.init(.duplicate(of: 9))], "keeps a copy of a route child"),
+        ([.init(.duplicate(of: 9), parent: .source(1))], "keeps a copy of a route child"),
         ([.init(.folder(name: "x"), parent: .source(8))], "inside a route's subtree"),
         ([.init(.folder(name: "x"), parent: .source(9))], "inside a route's subtree"),
         ([.init(.folder(name: "x"), parent: .source(99))], "under unknown source object 99"),

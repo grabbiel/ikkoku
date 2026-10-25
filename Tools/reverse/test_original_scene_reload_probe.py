@@ -246,11 +246,23 @@ class OnceTests(unittest.TestCase):
         items=probe.upload_items({label:Path(label) for label in probe.TOPOLOGY_LABELS})
         self.assertEqual(items,[(label,'reload-'+label+'.png') for label in probe.TOPOLOGY_LABELS])
 
+    def test_route_edit_labels_upload_under_their_own_names_and_run_once_only(self):
+        self.assertEqual(probe.upload_items({label:Path(label) for label in probe.ROUTE_LABELS}),
+                         [('route-edit','reload-route-edit.png'),('route-children-edit','reload-route-children-edit.png')])
+        with tempfile.TemporaryDirectory() as tmp:
+            record=Path(tmp)/'route.png';record.write_bytes(b'png')
+            with patch.object(sys,'argv',['original_scene_reload_probe.py','--route-edit',str(record)]),\
+                 self.assertRaisesRegex(ValueError,'route-edit records run with --once only'):probe.main()
+            with patch.object(sys,'argv',['original_scene_reload_probe.py','--once','--errno-baseline','0','--route-edit',str(record),
+                                          '--route-children-edit',str(record)]),\
+                 patch('original_scene_reload_probe.run_once',return_value={}) as once,contextlib.redirect_stdout(io.StringIO()):probe.main()
+            self.assertEqual(once.call_args.args[2],{'route-edit':record,'route-children-edit':record})
+
     def test_topology_records_need_once_and_once_needs_a_baseline(self):
         with tempfile.TemporaryDirectory() as tmp:
             record=Path(tmp)/'delete.png';record.write_bytes(b'png')
             with patch.object(sys,'argv',['original_scene_reload_probe.py','--topology-delete',str(record)]),\
-                 self.assertRaisesRegex(ValueError,'topology records run with --once only'):probe.main()
+                 self.assertRaisesRegex(ValueError,'topology and route-edit records run with --once only'):probe.main()
             with patch.object(sys,'argv',['original_scene_reload_probe.py','--once','--topology-delete',str(record)]),\
                  self.assertRaisesRegex(ValueError,'--once needs --errno-baseline'):probe.main()
             with patch.object(sys,'argv',['original_scene_reload_probe.py','--once','--errno-baseline','0','--topology-delete',str(Path(tmp)/'absent.png')]),\

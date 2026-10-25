@@ -585,6 +585,9 @@ struct ObjectInspectorState: Equatable {
     var sourceCameraFallbackReason: String?
     var routeIsSource: Bool
     var routePlaying: Bool
+    /// ST-T11: the route's edit state and the selected point handle.
+    var route: SourceStudioRouteState?
+    var routePoint: SourceRoutePointSelection?
 
     @MainActor init(model: StudioModel, object o: StudioObject) {
         let doc = model.doc
@@ -605,6 +608,8 @@ struct ObjectInspectorState: Equatable {
             ? model.activeSourceCameraView?.fallbackReason : nil
         routeIsSource = model.selectedRouteIsSource
         routePlaying = routeIsSource && model.selectedRoutePlaying
+        route = routeIsSource ? model.sourceRouteState(o.id) : nil
+        routePoint = routeIsSource ? model.selectedSourceRoutePoint : nil
     }
 
     /// The Camera section's toggle: "Deactivate" while the camera is active
@@ -715,15 +720,8 @@ struct ObjectInspectorContent: View, Equatable {
                     Text("Runtime only — original export keeps the saved camera and active flag.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if o.routeIsSource {
-                SectionBox(title: "Route") {
-                    Text("Route: \(o.routePlaying ? "Playing" : "Stopped")").font(.callout)
-                    HStack {
-                        Button(o.routePlaying ? "Stop" : "Play") { model.toggleSourceRoute(id) }
-                            .help(o.routePlaying ? "Stop this route (Stop pins its children to point 0)" : "Play this route from the current time")
-                    }
-                    Text("Runtime only — original export keeps the saved route state.").font(.caption).foregroundStyle(.secondary)
-                }
+            if o.routeIsSource, let route = o.route {
+                SourceRouteInspector(model: model, id: id, playing: o.routePlaying, route: route, point: o.routePoint)
             }
         }
     }

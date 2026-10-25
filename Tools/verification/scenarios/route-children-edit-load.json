@@ -1,0 +1,15 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/route-children-edit-document.png"},
+    {"op": "assert", "sourceRuntime": {"routes": 2, "rehydrations": 1}, "routePlaying": {"key": 0, "playing": true},
+     "route": {"key": 0, "edited": true, "points": 4, "point": [{"index": 1, "position": [1.2, 0.3, -0.2]}]}},
+    {"op": "assert", "route": {"key": 0, "copy": 0, "edited": true, "points": 4, "point": [
+      {"index": 1, "position": [1.0, 0.6, 0.1]}, {"index": 3, "position": [-0.3, 0.2, 1.0], "curve": true}]}},
+    {"op": "assertRejected", "route": {"key": 0, "copy": 0, "point": [{"index": 1, "position": [1.2, 0.3, -0.2]}]}, "errorContains": "point 1 at"},
+    {"op": "captureObject", "key": 9, "name": "folder"},
+    {"op": "captureObject", "key": 9, "copy": 0, "name": "folder-copy"},
+    {"op": "advance", "seconds": 1.5},
+    {"op": "assert", "position": {"key": 9, "from": "folder"}},
+    {"op": "assert", "position": {"key": 9, "copy": 0, "from": "folder-copy"}}
+  ]
+}

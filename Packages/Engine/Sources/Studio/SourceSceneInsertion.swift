@@ -15,6 +15,16 @@ import Foundation
 /// - `AddObjectFolder/Camera/Light.Add` create a record at the root with
 ///   `GetNewIndex` and the constructor defaults (`Record`, `Header`).
 ///
+/// - A route copy (ST-T11) is the route's bytes too: `OIRouteInfo.Load`
+///   reads its points with `_import: false`, so `SetNewIndex` finds each
+///   point and aid key taken by the original and allocates a new one after
+///   the copy's children (point, aid, point, aid, ...). `OCIRoute.
+///   OnLoadAttach` parents a copied route child under `childRoot` with
+///   `worldPositionStays: false`, keeping its saved local placement, and the
+///   copy keeps the route's saved `active` (the caller writes the play
+///   state with `routeActive`). A copy inside a route's subtree stays in its
+///   template's list or the copy of it.
+///
 /// A duplicate carries only its template's own bytes: the template's
 /// children are not copied with it. A copied subtree is one insertion per
 /// copied record, each under the copy of its parent, so a copy whose child
@@ -141,6 +151,8 @@ struct SourceSceneInsertionPlan {
     var addsLights = false
     /// Source records with an insertion somewhere below them.
     var touched = Set<Int32>()
+    /// Whether each insertion is a route or lies inside a route's subtree.
+    private var routeScope: [Bool] = []
 
     /// Every record of a snapshot, depth first.
     static func records(_ snapshot: KoikatsuSceneSnapshot) -> [KoikatsuObjectRecord] {
@@ -218,8 +230,8 @@ struct SourceSceneInsertionPlan {
             switch insertion.record {
             case .duplicate(let key):
                 guard let record = tree.records[key] else { throw fail("Original-scene export cannot duplicate unknown source object \(key).") }
-                guard !inRoute(key) else {
-                    throw fail("Original-scene export does not duplicate routes or objects inside a route's subtree yet (source object \(key)).")
+                guard record.kind != .route || record.route?.points.isEmpty == false else {
+                    throw fail("Original-scene export does not duplicate route \(key): it has no points, and CharaStudio adds a start point when it loads one.")
                 }
                 if record.kind == .light { addsLights = true }
                 what = "the copy of source object \(key)"; template = key
@@ -246,7 +258,6 @@ struct SourceSceneInsertionPlan {
                 ownerKind = nil; owner = "the root"
             case .source(let key):
                 guard let record = tree.records[key] else { throw fail("Original-scene export cannot add \(what) under unknown source object \(key).") }
-                guard !inRoute(key) else { throw fail("Original-scene export does not add objects inside a route's subtree (\(what) under source object \(key)).") }
                 ownerKind = record.kind; owner = "source object \(key)"
             case .inserted(let parent):
                 guard parent >= 0, parent < index else {
@@ -254,6 +265,18 @@ struct SourceSceneInsertionPlan {
                 }
                 ownerKind = kind(parent); owner = "insertion \(parent)"
                 if case .duplicate(let key) = insertions[parent].record { copyOf = key }
+            }
+            // Whether the new record lands inside a route's subtree (a source
+            // route's or a copied route's).
+            let parentInRoute: Bool
+            switch insertion.parent {
+            case .root: parentInRoute = false
+            case .source(let key): parentInRoute = inRoute(key)
+            case .inserted(let parent): parentInRoute = routeScope[parent]
+            }
+            routeScope.append(parentInRoute || kind(index) == .route)
+            guard template != nil || !parentInRoute else {
+                throw fail("Original-scene export does not add objects inside a route's subtree (\(what) under \(owner)).")
             }
             if let ownerKind, ownerKind == .camera || ownerKind == .light {
                 throw fail("CharaStudio cameras and lights cannot hold children (enableAddChild = false); \(what) cannot go under \(owner).")
@@ -282,8 +305,17 @@ struct SourceSceneInsertionPlan {
                     throw fail("Original-scene export does not add objects onto a character's accessory points (\(what) under \(owner)) except a duplicate beside its original.")
                 }
             case .route?:
-                throw fail("Original-scene export does not add objects under routes (\(what) under \(owner)).")
+                guard ownList else {
+                    throw fail("Original-scene export does not add objects under routes (\(what) under \(owner)) except a duplicate beside its original or in the copy of its route.")
+                }
             case .camera?, .light?: break
+            }
+            // A copy of a record inside a route's subtree keeps its saved
+            // local placement under the moving `childRoot` only in its own
+            // list (or the copy of it); anywhere else that placement would
+            // follow the route's playback position at the moment of the move.
+            if let template, templateParent.map(inRoute) == true, !ownList {
+                throw fail("Original-scene export keeps a copy of a route child (source object \(template)) in its route: its saved local placement follows the route's playback position.")
             }
             if case .inserted(let parent) = insertion.parent, case .duplicate(let key) = insertions[parent].record,
                let point = insertion.attachment, !(spans.topology.slots[key] ?? []).contains(where: { $0.point == point }) {
@@ -492,7 +524,7 @@ struct SourceSceneInsertionPlan {
             if parent == nil, record.rootDictionaryKey != key { throw mismatch("root dictionary key of insertion \(index)") }
             // An inserted record's own lists hold exactly its inserted
             // children, in order (by accessory group for a character copy).
-            if record.kind == .folder || record.kind == .item {
+            if record.kind == .folder || record.kind == .item || record.kind == .route {
                 guard (result.lists[ListID(owner: key, point: nil)] ?? []) == children[index].map({ keys[$0] }) else {
                     throw mismatch("child order of insertion \(index)")
                 }
@@ -520,6 +552,22 @@ struct SourceSceneInsertionPlan {
                 if let item = record.item, let from = original.item {
                     guard item.bones.mapValues(\.transform) == from.bones.mapValues(\.transform) else { throw mismatch("copy of source object \(template)") }
                     sub = item.bones.values.map(\.sourceKey)
+                }
+                if original.kind == .route {
+                    // Points and aids in order, each with its template's
+                    // values under the keys allocated after the children.
+                    guard let route = record.route, let from = original.route, route.points.count == from.points.count,
+                          route.active == from.active, route.loop == from.loop, route.visibleLine == from.visibleLine,
+                          route.orientation == from.orientation, route.color == from.color,
+                          zip(route.points, from.points).allSatisfy({ a, b in
+                              a.bone.transform == b.bone.transform && a.aid.transform == b.aid.transform && a.speed == b.speed
+                                  && a.easeType == b.easeType && a.connection == b.connection
+                                  && a.aidInitialized == b.aidInitialized && a.linked == b.linked
+                          }) else { throw mismatch("copy of source object \(template)") }
+                    guard route.points.flatMap({ [$0.bone.sourceKey, $0.aid.sourceKey] }) == (allocatedSubKeys[index] ?? []) else {
+                        throw mismatch("sub-info keys of the copy of source object \(template)")
+                    }
+                    sub = route.points.flatMap { [$0.bone.sourceKey, $0.aid.sourceKey] }
                 }
                 guard Set(sub) == Set(allocatedSubKeys[index] ?? []) else { throw mismatch("sub-info keys of the copy of source object \(template)") }
             case let .folder(name, header), let .camera(name, header):

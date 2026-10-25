@@ -82,6 +82,11 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Original catalog IDs and timing; nil resumes the source scene's values.
     public var sourceAnimation: SourceStudioAnimationState?
     public var sourceVoice: SourceStudioVoiceState?
+    /// ST-T11: an imported route's edited points and settings (CharaStudio's
+    /// route point guides and route panels); nil keeps the record's own.
+    /// Set on a route record or a copy of one; export writes it into the
+    /// record (`SourceSceneEdits.routes`). Older documents decode nil.
+    public var sourceRoute: SourceStudioRouteState?
     public var poseDelta = PoseDelta()
     public var ikTargets: [IKChain: IKTarget] = [:]
     public var animationPreset: String?
