@@ -677,6 +677,30 @@ compiled locally. The suite covers:
 IEEE results such as infinity remain bit-exact field values. Float literals
 outside Float range and nonfinite transform writes are rejected.
 
+The `PluginLibraryScenario.frameRollback` reproduction extends this boundary to
+the app's real source previews. Its independent control process writes successful
+warm and subtree-clone continuations; separate warm and cold processes inject a
+named `LateUpdate` failure after `advanceAnimation: true`, repeat it, then retry.
+The cloned child's initializer reads its new parent's attachment through the
+ordinary resolver. Failed-step comparisons retain exact documents, runtime state,
+clocks, preview ownership, resources and current frame. Successful cross-process
+comparisons remap only UUIDs through validated source identities and retain all
+typed document/state fields, callback order and bit-exact pose matrices.
+
+The retained 2026-10-24 Release run at `e984432` passed **44/44 checks** in three
+fresh processes: 12 clean controls, 16 warm checks and 16 cold checks. Both
+injected failures repeated the intended arithmetic error, restored exact state
+and matched the independent control on retry. The input was the retained clothed
+animation fixture (SHA-256 `b180727854178212f988b2c010044a14233c1dca379f9d279d03be01ed435d95`),
+whose saved `0/4/0` animation resolves through the configured catalog. The earlier
+compile failure, missing outer scenario `steps` startup failure and 0/2 control
+failure on an unconverted saved `2/3/4` animation remain separate evidence;
+neither failed app attempt ran injections. No rollback defect was reproduced and
+no production behavior changed. The cold clone shares the original converted
+assets, so this does not establish cleanup of every distinct cold texture input.
+Functional step timings are diagnostics; they do not establish checkpoint cost,
+source parity or a performance improvement.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone
