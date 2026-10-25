@@ -360,6 +360,8 @@ private enum FaceCompositeFixture {
     typealias F = OriginalCardFixture
     typealias Row = [String: Any]
     typealias Fields = [(String, F.Value)]
+    static let baseSHA = "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e"
+    static let headSHA = "e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e"
     static let programHash = "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c"
     static func vector(_ values: [Double]) -> F.Value { .array(values.map(F.Value.float)) }
     static func record(_ defaults: Fields, _ overrides: Fields) -> F.Value {
@@ -379,7 +381,7 @@ private enum FaceCompositeFixture {
         return record(fields, overrides)
     }
     static func card(coordinate: Bool = false, baseOverrides: Fields = [], coordinateOverrides: Fields = [],
-                     faceOverrides: Fields = [], bodyOverrides: Fields = [], sex: Int64 = 1, modProperty: String? = nil) throws -> SourceCharacterCard {
+                     faceOverrides: Fields = [], bodyOverrides: Fields = [], sex: Int64 = 1, exType: Int64 = 0, modProperty: String? = nil) throws -> SourceCharacterCard {
         let faceFields: Fields = [("version", .string("0.0.2")), ("headId", .integer(0)),
             ("shapeValueFace", .array(F.faceValues)), ("baseMakeup", makeup(coordinate: false, overrides: baseOverrides)),
             ("lipLineId", .integer(0)), ("lipLineColor", vector([0.4, 0.5, 0.6, 0.7])),
@@ -394,6 +396,8 @@ private enum FaceCompositeFixture {
         let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([coordinate ? 1 : 0])
             + F.lengthData(F.pack(makeup(coordinate: true, overrides: coordinateOverrides)))
         var blocks = F.blocks(custom: custom, sex: .integer(sex))
+        let parameter = F.map([("version", .string("0.0.5")), ("sex", .integer(sex)), ("exType", .integer(exType))])
+        blocks[1].data = F.pack(parameter)
         blocks.append(.init(name: "Coordinate", version: "0.0.0", data: F.pack(.array([.binary(outfit)]))))
         if let modProperty {
             let info = F.pack(F.map([("ModID", .string("synthetic.mod")), ("Property", .string(modProperty)), ("Slot", .integer(0))]))
@@ -405,30 +409,30 @@ private enum FaceCompositeFixture {
     static func head() -> Row {
         let bundle = "chara/bo_head_00.unity3d", base = "chara/mm_base.unity3d"
         let headRow: [String: String] = ["MainManifest": "abdata", "MainAB": bundle, "MainData": "p_cf_head_00",
-            "MatData": "cf_m_face_00", "MainTexAB": bundle, "MainTex": "cf_face_00_t", "ColorMaskAB": bundle, "ColorMaskTex": "cf_face_00_mc"]
+            "MatManifest": "abdata", "MatAB": bundle, "MatData": "cf_m_face_00", "MainTexAB": bundle, "MainTex": "cf_face_00_t", "ColorMaskAB": bundle, "ColorMaskTex": "cf_face_00_mc"]
         var rows: [Row] = [["table": "bo_head", "category": 100, "selectedID": 0, "row": headRow]]
         for (category, table, key) in [(405, "mt_face_paint", "PaintTex"), (402, "mt_cheek", "CheekTex"),
                                        (404, "mt_lipline", "LiplineTex"), (415, "mt_mole", "MoleTex")] {
             rows.append(["table": table, "category": category, "selectedID": 0, "row": ["MainAB": "0", key: "0"]])
         }
-        let draw: Row = ["name": "cf_m_face_00", "shader": "Shader Forge/main_skin", "serializedFile": "CAB-head", "pathID": "10",
+        let draw: Row = ["name": "cf_m_face_00", "shader": "Shader Forge/main_skin", "serializedFile": "CAB-b45f3dc6094104fda1eb384293a73f74", "pathID": "10",
                          "renderQueue": -1, "passes": [], "floats": [:], "colors": [:], "textures": [:]]
-        let paint: Row = ["serializedFile": "CAB-base", "pathID": "23", "name": "cf_face_00_mp"]
+        let paint: Row = ["serializedFile": "CAB-0d1f3d8317188244dde38c81a889d1d4", "pathID": "4688923211121552405", "name": "cf_face_00_mp"]
         var environments: Row = [:]
         for name in ["_MainTex", "_ColorMask", "_Texture3", "_Texture4", "_Texture5", "_Texture6", "_Texture7", "_paintmask"] {
             environments[name] = ["texture": name == "_paintmask" ? paint : NSNull(), "scale": [2, 3], "offset": [0.125, 0.25]] as Row
         }
         var creator = draw
         creator["name"] = "cf_m_face_create"; creator["shader"] = "Shader Forge/create_head"
-        creator["serializedFile"] = "CAB-base"; creator["pathID"] = "99"; creator["textures"] = environments
+        creator["serializedFile"] = "CAB-0d1f3d8317188244dde38c81a889d1d4"; creator["pathID"] = "4119387422725910578"; creator["textures"] = environments
         creator["colors"] = ["_Color": [1, 1, 1, 1], "_UnusedAuthored": [0.1, 0.2, 0.3, 0.4]]
-        let textures: [Row] = [("cf_face_00_t", bundle, "CAB-head", "21"), ("cf_face_00_mc", bundle, "CAB-head", "22"),
-                               ("cf_face_00_mp", base, "CAB-base", "23")].map { name, bundle, file, id in
+        let textures: [Row] = [("cf_face_00_t", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "4156981771398184683"), ("cf_face_00_mc", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "5632470389437020241"),
+                               ("cf_face_00_mp", base, "CAB-0d1f3d8317188244dde38c81a889d1d4", "4688923211121552405")].map { name, bundle, file, id in
             ["name": name, "bundle": bundle, "serializedFile": file, "pathID": id, "width": 1024, "height": 1024]
         }
         let renderer: Row = ["nodeName": "cf_O_face", "activeSelf": true, "enabled": true,
             "materialSlots": [["name": "cf_m_face_00", "pathID": "10"]], "draws": [["materialSlot": 0, "submesh": 0]]]
-        return ["sources": [["path": "/abdata/" + bundle, "sha256": "head-sha"], ["path": "/abdata/" + base, "sha256": "base-sha"]],
+        return ["sources": [["path": "/abdata/" + bundle, "sha256": headSHA], ["path": "/abdata/" + base, "sha256": baseSHA]],
             "catalogRows": rows, "textures": textures, "drawMaterials": [draw], "renderers": [renderer], "createMaterials": [creator],
             "verifiedCreateShaders": [["shader": "Shader Forge/create_head", "programSHA256": programHash]]]
     }
@@ -451,9 +455,9 @@ private enum FaceCompositeFixture {
     let identity = try #require(try F.derive(directory: directory)), recipe = try #require(identity.composite)
     #expect(identity.kind == .runtimeComposite && identity.width == 1024 && identity.height == 1024 && identity.mipLevels == 11)
     #expect(identity.filter == "Bilinear" && identity.wrap == "Clamp" && identity.aniso == 1)
-    #expect(recipe.unresolved == nil && recipe.programSHA256 == F.programHash && recipe.pathID == "99" && recipe.bundleSHA256 == "base-sha")
-    for (property, name, id, file, hash) in [("_MainTex", "cf_face_00_t", "21", "CAB-head", "head-sha"),
-        ("_ColorMask", "cf_face_00_mc", "22", "CAB-head", "head-sha"), ("_paintmask", "cf_face_00_mp", "23", "CAB-base", "base-sha")] {
+    #expect(recipe.unresolved == nil && recipe.programSHA256 == F.programHash && recipe.pathID == "4119387422725910578" && recipe.bundleSHA256 == F.baseSHA)
+    for (property, name, id, file, hash) in [("_MainTex", "cf_face_00_t", "4156981771398184683", "CAB-b45f3dc6094104fda1eb384293a73f74", F.headSHA),
+        ("_ColorMask", "cf_face_00_mc", "5632470389437020241", "CAB-b45f3dc6094104fda1eb384293a73f74", F.headSHA), ("_paintmask", "cf_face_00_mp", "4688923211121552405", "CAB-0d1f3d8317188244dde38c81a889d1d4", F.baseSHA)] {
         let input = try #require(recipe.textures[property]?.identity)
         #expect(input.name == name && input.pathID == id && input.serializedFile == file && input.bundleSHA256 == hash)
     }
@@ -505,6 +509,7 @@ private enum FaceCompositeFixture {
         #expect(try F.derive(directory: directory, card: F.card(faceOverrides: fields))?.composite?.unresolved != nil)
     }
     #expect(try F.derive(directory: directory, card: F.card(sex: 0))?.composite?.unresolved != nil)
+    #expect(try F.derive(directory: directory, card: F.card(exType: 1))?.composite?.unresolved != nil)
     #expect(try F.derive(directory: directory, hiPoly: false)?.composite?.unresolved != nil)
     #expect(try F.derive(directory: directory, card: F.card(faceOverrides: [("headId", .integer(1))])) == nil)
     for invalid in [F.vector([0, .nan, 0, 1]), F.vector([0, .infinity, 0, 1]), F.vector([0, 0, 0])] {
@@ -522,6 +527,32 @@ private enum FaceCompositeFixture {
     var head = F.head(); head["verifiedCreateShaders"] = []; cases.append(head)
     head = F.head(); head["verifiedCreateShaders"] = [["shader": "Shader Forge/create_head", "programSHA256": String(repeating: "a", count: 64)]]; cases.append(head)
     head = F.head(); head["createMaterials"] = []; cases.append(head)
+    for field in ["serializedFile", "pathID"] {
+        head = F.head()
+        var creators = try #require(head["createMaterials"] as? [F.Row])
+        creators[0][field] = "unverified-but-same-name"; head["createMaterials"] = creators; cases.append(head)
+    }
+    for index in 0..<2 {
+        head = F.head()
+        var sources = try #require(head["sources"] as? [F.Row])
+        sources[index]["sha256"] = String(repeating: "a", count: 64); head["sources"] = sources; cases.append(head)
+    }
+    for index in 0..<3 {
+        head = F.head()
+        var textures = try #require(head["textures"] as? [F.Row])
+        textures[index]["pathID"] = "100"; head["textures"] = textures
+        if index == 2 {
+            // Keep the altered reference internally consistent so a missing
+            // reference cannot conceal failure to enforce the accepted ID.
+            var creators = try #require(head["createMaterials"] as? [F.Row])
+            var environments = try #require(creators[0]["textures"] as? F.Row)
+            var environment = try #require(environments["_paintmask"] as? F.Row)
+            var reference = try #require(environment["texture"] as? F.Row)
+            reference["pathID"] = "100"; environment["texture"] = reference
+            environments["_paintmask"] = environment; creators[0]["textures"] = environments; head["createMaterials"] = creators
+        }
+        cases.append(head)
+    }
     for category in [100, 405, 402, 404, 415] {
         head = F.head()
         var rows = try #require(head["catalogRows"] as? [F.Row])

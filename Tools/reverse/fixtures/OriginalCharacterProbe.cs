@@ -600,7 +600,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var draw=control.matDraw;
         if(creator==null || main==null || target==null || draw==null || creator.shader.name!="Shader Forge/create_head"
             || (creator.name!="cf_m_face_create" && creator.name!="cf_m_face_create (Instance)")
-            || renderer.sharedMaterials.Length==0 || renderer.sharedMaterials[0].GetTexture("_MainTex")!=target || draw.GetTexture("_MainTex")!=target
+            || renderer.sharedMaterials.Length==0 || renderer.sharedMaterials[0]!=draw
+            || renderer.sharedMaterials[0].GetTexture("_MainTex")!=target || draw.GetTexture("_MainTex")!=target
             || target.width!=1024 || target.height!=1024 || target.format!=RenderTextureFormat.ARGB32 || !target.useMipMap)
             throw new Exception("Face composite creator/draw/target chain differs");
         var result=new Dictionary<string,object>{{"sex",character.sex},{"exType",character.exType},{"hiPoly",character.hiPoly},

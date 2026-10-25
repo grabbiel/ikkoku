@@ -352,7 +352,7 @@ public enum SourceShaderBindingDerivation {
         let coordinateType = status?["coordinateType"]?.integerValue ?? 0
         let coordinate = (0..<7).contains(coordinateType) ? coordinateType : 0
         let card = Card(appearance: try SourceCardAppearance(card: source, coordinate: coordinate), status: status, statusError: statusError)
-        let characterSex = try? source.customization().sex
+        let characterIdentity = try? source.customization()
         let head = try JSONDecoder().decode(HeadContract.self, from: headContract)
         let supplement = try supplementData.map { try JSONDecoder().decode(Supplement.self, from: $0) }
         var result = SourceShaderBindingSet(scope: "Native source-derived shader inputs for one character (card, Maker library material "
@@ -559,7 +559,7 @@ public enum SourceShaderBindingDerivation {
                 identity.composite = recipe
                 return identity
             }
-            guard hiPoly, characterSex == 1, card.number("face.headId") == 0,
+            guard hiPoly, characterIdentity?.sex == 1, characterIdentity?.exType == 0, card.number("face.headId") == 0,
                   materialSlot == 0 else {
                 return unsupported("face composite requires the verified female head 0 high-detail material slot 0")
             }
@@ -572,18 +572,29 @@ public enum SourceShaderBindingDerivation {
             }
             guard let row = catalogRow(100, 0), row["MainManifest"] == "abdata",
                   row["MainAB"] == "chara/bo_head_00.unity3d", row["MainData"] == "p_cf_head_00",
+                  row["MatManifest"] == "abdata", row["MatAB"] == "chara/bo_head_00.unity3d",
                   row["MatData"] == "cf_m_face_00", drawMaterial == row["MatData"],
                   row["MainTexAB"] == "chara/bo_head_00.unity3d", row["MainTex"] == "cf_face_00_t",
                   row["ColorMaskAB"] == "chara/bo_head_00.unity3d", row["ColorMaskTex"] == "cf_face_00_mc" else {
                 return unsupported("face composite requires the verified bo_head ID0 creator and catalog input identities")
             }
-            guard recipe.shader == "Shader Forge/create_head",
+            // This first face gate covers one source revision, not every
+            // identically named material. The store subsequently verifies
+            // these bundle hashes and exact file/path identities against the
+            // converted program/texture bytes before upload or composition.
+            let baseSHA = "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e"
+            let headSHA = "e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e"
+            let baseFile = "CAB-0d1f3d8317188244dde38c81a889d1d4"
+            let headFile = "CAB-b45f3dc6094104fda1eb384293a73f74"
+            guard recipe.bundleSHA256 == baseSHA, recipe.serializedFile == baseFile,
+                  recipe.pathID == "4119387422725910578", recipe.shader == "Shader Forge/create_head",
                   recipe.programSHA256 == "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c" else {
-                return unsupported("face composite create_head program is not verified")
+                return unsupported("face composite creator identity or create_head program is not verified")
             }
             guard let paintMask = recipe.textures["_paintmask"]?.identity,
                   paintMask.kind == .asset, paintMask.name == "cf_face_00_mp",
-                  paintMask.bundle == "chara/mm_base.unity3d", paintMask.pathID != nil,
+                  paintMask.bundle == "chara/mm_base.unity3d", paintMask.bundleSHA256 == baseSHA,
+                  paintMask.serializedFile == baseFile, paintMask.pathID == "4688923211121552405",
                   paintMask.width == 1024, paintMask.height == 1024 else {
                 return unsupported("face composite authored _paintmask is not converted")
             }
@@ -596,6 +607,12 @@ public enum SourceShaderBindingDerivation {
             setCreateTexture(&recipe, "_ColorMask", main: false,
                 catalogTexture(100, table: "bo_head", id: 0, bundleKey: "ColorMaskAB", key: "ColorMaskTex"),
                 source: "bo_head[0] ColorMaskAB/ColorMaskTex via CreateFaceTexture → SetTexture")
+            for (property, pathID) in [("_MainTex", "4156981771398184683"), ("_ColorMask", "5632470389437020241")] {
+                guard let input = recipe.textures[property]?.identity, input.bundleSHA256 == headSHA,
+                      input.serializedFile == headFile, input.pathID == pathID, input.width == 1024, input.height == 1024 else {
+                    return unsupported("face composite \(property) source texture identity is not verified")
+                }
+            }
             let layers: [(property: String, path: String, category: Int, table: String, key: String)] = [
                 ("_Texture3", "makeup.paintId.0", 405, "mt_face_paint", "PaintTex"),
                 ("_Texture7", "makeup.paintId.1", 405, "mt_face_paint", "PaintTex"),
@@ -956,7 +973,7 @@ public enum SourceShaderBindingDerivation {
         // MARK: Body (customTexCtrlBody.matDraw = mm_base cf_m_body)
         do {
             // InitBaseCustomTextureBody: drawMatName cf_m_body (female) / cm_m_body (male) from chara/mm_base.unity3d.
-            let sex = characterSex ?? 1
+            let sex = characterIdentity?.sex ?? 1
             let drawName = sex == 0 ? "cm_m_body" : "cf_m_body"
             let reason = "chara/mm_base.unity3d \(drawName) draw material is not converted (ChaControl.InitBaseCustomTextureBody)"
             let draw = supplement?.drawMaterials.first { $0.bundle == "chara/mm_base.unity3d" && $0.material.name == drawName }
