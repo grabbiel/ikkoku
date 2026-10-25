@@ -439,6 +439,7 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_KEEPALIVE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_BURST_IDLE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_DEFORM_REUSE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_ACTION_KEY", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -557,6 +558,9 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_KEEPALIVE_MS", .integer(0...10000)),
         ValueRule("IKKOKU_PERF_BURST_IDLE_MS", .integer(10...10000)),
         ValueRule("IKKOKU_PERF_DEFORM_REUSE", .oneOf(["on", "off"])),
+        // The source key of the object `studio-duplicate` and
+        // `studio-undo-delete` act on (R7 phase 2, item 6 follow-up).
+        ValueRule("IKKOKU_PERF_ACTION_KEY", .integer(0...Int(Int32.max))),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.

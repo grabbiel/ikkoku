@@ -96,7 +96,7 @@ the run.
 | `startup` | as `studio-idle` | no workload; the report's `startupSeconds` marks are the result |
 | `studio-static` | as `studio-idle` | the source scene with live animation off and no input: nothing changes, so it measures what an idle viewport costs ([phase 2, item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse)) |
 | `studio-orbit-bursts` | as `studio-idle` | live animation off; repeatedly `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button orbit drag. `details.burstInputEnds` records when each burst's first `mouseDragged` returned, so the summary measures every drag start after a pause |
-| `studio-duplicate` | as `studio-idle` | live animation on; selects source key 963 (or the first source character), then repeats Duplicate and Undo. Each action starts 0.5 s after the previous one was ready, and is timed from its call until no character build is pending and every preview it started is installed (`details.actions`, [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Its frame rates are not cited: a build on the main thread stalls it for seconds |
+| `studio-duplicate` | as `studio-idle` | live animation on; selects the source object `IKKOKU_PERF_ACTION_KEY` names (any kind, such as a route with its children), else source key 963 (or the first source character), then repeats Duplicate and Undo. Each action starts 0.5 s after the previous one was ready, and is timed from its call until no character build is pending and every preview it started is installed (`details.actions`, [phase 2, item 6](#phase-2-item-6-source-character-builds-off-the-main-thread)). Its frame rates are not cited: a build on the main thread stalls it for seconds |
 | `studio-undo-delete` | as `studio-idle` | the same with Delete and Undo; the undo restores the character |
 
 Other options:
@@ -119,6 +119,10 @@ Other options:
   - `IKKOKU_PERF_KEEPALIVE_MS` sets the idle keep-alive interval; 0 turns it off.
   - `IKKOKU_PERF_FRAME_SKIP=off` draws every callback, as before G3.
   - `IKKOKU_PERF_DEFORM_REUSE=off` dispatches every deformation in every frame and pick.
+- `IKKOKU_PERF_ACTION_KEY` (a source key, 0 or more): the object
+  `studio-duplicate` and `studio-undo-delete` act on, for example route 0 of
+  `scene-route-children.png` with its folder and character. Without it they
+  use source key 963 or the first source character.
 
 ### What the report records
 

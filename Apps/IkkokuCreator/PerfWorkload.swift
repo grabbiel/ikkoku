@@ -398,8 +398,10 @@ final class PerfWorkloadDriver {
     /// `studio-duplicate`: the workspace Duplicate button's call on one source
     /// character, then Undo, repeated. `studio-undo-delete`: Delete, then Undo
     /// (which restores the character), repeated. Live animation stays on.
-    /// The character is source key 963 (the one the ST-T03 duplicate timing
-    /// used), or the first source character when the scene has no key 963.
+    /// The object is `IKKOKU_PERF_ACTION_KEY`'s source object (any kind, such
+    /// as a route with its children), else source key 963 (the one the
+    /// ST-T03 duplicate timing used), or the first source character when the
+    /// scene has no key 963.
     /// It is selected before each cycle, outside the timed actions. Each
     /// action is timed from its call until no character build is pending
     /// and every preview it started is installed; `finishActions` adds the
@@ -407,8 +409,17 @@ final class PerfWorkloadDriver {
     private func prepareStudioHistory(_ workload: String) throws {
         let studio = try prepareStudioSource(selectKey: nil)
         let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
-        guard let target = characters.first(where: { $0.sourceObjectKey == 963 }) ?? characters.first else {
-            throw RigError.invalid("needs a source character")
+        let target: StudioObject
+        if let key = configuration.actionKey {
+            guard let object = studio.doc.objects.first(where: { $0.sourceObjectKey == key }) else {
+                throw RigError.invalid("IKKOKU_PERF_ACTION_KEY: no source object with key \(key)")
+            }
+            target = object
+        } else {
+            guard let character = characters.first(where: { $0.sourceObjectKey == 963 }) ?? characters.first else {
+                throw RigError.invalid("needs a source character")
+            }
+            target = character
         }
         let id = target.id
         let select = ("select", false, { studio.selection = id })
@@ -418,6 +429,7 @@ final class PerfWorkloadDriver {
             actionSteps = [select, ("delete", true, { studio.deleteSelection() }), ("undo", true, { studio.undo() })]
         }
         trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["actionObjectKind"] = "\(target.kind)"
         trace.details["gesture"] = workload == "studio-duplicate"
             ? "select, Duplicate, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
             : "select, Delete, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"

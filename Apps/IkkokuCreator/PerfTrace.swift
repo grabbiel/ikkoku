@@ -146,6 +146,10 @@ final class PerfTrace {
         let keepAliveMilliseconds: Int?
         /// `IKKOKU_PERF_BURST_IDLE_MS`: `studio-orbit-bursts`' quiet time between drags (default 1000).
         let burstIdleMilliseconds: Int
+        /// `IKKOKU_PERF_ACTION_KEY`: the source key of the object the action
+        /// workloads (`studio-duplicate`, `studio-undo-delete`) act on, such
+        /// as a route; nil keeps their default character.
+        let actionKey: Int32?
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -165,7 +169,8 @@ final class PerfTrace {
                 deformReuse: env["IKKOKU_PERF_DEFORM_REUSE"] != "off",
                 frameSkip: env["IKKOKU_PERF_FRAME_SKIP"] != "off",
                 keepAliveMilliseconds: env["IKKOKU_PERF_KEEPALIVE_MS"].flatMap { Int($0) },
-                burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000))
+                burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000),
+                actionKey: env["IKKOKU_PERF_ACTION_KEY"].flatMap { Int32($0) })
         }
     }
 
