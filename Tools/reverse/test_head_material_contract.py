@@ -4,7 +4,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
-from head_material_contract import BODY_TEXTURES, body_texture_metadata, create_head_base, create_eye_base, create_eye_white
+from head_material_contract import (BODY_TEXTURES, CHEEK_BUNDLE, CHEEK_NAME, body_texture_metadata,
+                                    cheek_catalog_row, cheek_texture_metadata,
+                                    create_head_base, create_eye_base, create_eye_white)
 
 
 class ShaderBaseTests(unittest.TestCase):
@@ -86,6 +88,50 @@ class BodyMetadataTests(unittest.TestCase):
                 bundles[root / "chara/mm_base.unity3d"].objects.append(main)
             with self.subTest(ambiguous=ambiguous), self.assertRaisesRegex(ValueError, "Expected one cf_body_00_t"):
                 body_texture_metadata(bundles, root)
+
+
+class CheekMetadataTests(unittest.TestCase):
+    def test_additive_row_does_not_mutate_zero_default_or_accept_other_input(self):
+        table = {"mark": "【ChaListData】", "categoryNo": 402,
+                 "lstKey": ["MainAB", "CheekTex"],
+                 "dictList": {0: ["0", "0"], 1: [CHEEK_BUNDLE, CHEEK_NAME], 2: ["other", "other"]}}
+        reader = SimpleNamespace(assets_file=SimpleNamespace(name="CAB-table"), path_id=4)
+        row = cheek_catalog_row(table, reader)
+        self.assertEqual((row["category"], row["selectedID"], row["row"]),
+                         (402, 1, {"MainAB": CHEEK_BUNDLE, "CheekTex": CHEEK_NAME}))
+        self.assertEqual(table["dictList"][0], ["0", "0"])
+        self.assertEqual(set(table["dictList"]), {0, 1, 2})
+        for invalid in [dict(table, categoryNo=403), dict(table, mark="other"),
+                        dict(table, dictList={0: ["0", "0"]}),
+                        dict(table, dictList={1: [CHEEK_BUNDLE, "other"]})]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                cheek_catalog_row(invalid, reader)
+
+    def test_metadata_preserves_non_square_one_mip_srgb_and_sampler_without_pixels(self):
+        class Reader:
+            type = SimpleNamespace(name="Texture2D")
+            assets_file = SimpleNamespace(name="CAB-cheek")
+            path_id = 123
+            def peek_name(self): return CHEEK_NAME
+            def read(self): raise AssertionError("The cheek extension must not decode pixels")
+            def read_typetree(self):
+                return {"m_Width": 832, "m_Height": 312, "m_MipCount": 1,
+                        "m_TextureFormat": 4, "m_ColorSpace": 1,
+                        "m_TextureSettings": {"m_FilterMode": 1, "m_WrapMode": 1, "m_Aniso": 1}}
+        root = Path("/synthetic")
+        objects = [Reader()]
+        bundles = {root / CHEEK_BUNDLE: SimpleNamespace(objects=objects)}
+        row = cheek_texture_metadata(bundles, root)
+        self.assertEqual({key: row[key] for key in ["width", "height", "mipLevels", "format", "serializedColorSpace", "filter", "wrap", "aniso"]},
+                         {"width": 832, "height": 312, "mipLevels": 1, "format": 4, "serializedColorSpace": 1,
+                          "filter": "Bilinear", "wrap": "Clamp", "aniso": 1})
+        self.assertTrue(row["metadataOnly"] and "file" not in row and "pngSHA256" not in row)
+        objects.append(objects[0])
+        with self.assertRaisesRegex(ValueError, "Expected one cw_t_cheek_000"):
+            cheek_texture_metadata(bundles, root)
+        objects.clear()
+        with self.assertRaisesRegex(ValueError, "Expected one cw_t_cheek_000"):
+            cheek_texture_metadata(bundles, root)
 
 
 if __name__ == "__main__":

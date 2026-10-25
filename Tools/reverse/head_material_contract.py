@@ -6,6 +6,8 @@ use verified create_* equations with a documented color-space assumption. The
 contract also records the normal-clothes create material and no-pattern row;
 garment pixels are exported separately by source_texture_store.py. The optional
 ordinary-body extension records metadata only, without decoding body pixels.
+The optional cheek-ID1 extension also records metadata only, preserving all
+ID0 inputs and previews.
 """
 from __future__ import annotations
 
@@ -47,6 +49,8 @@ CREATORS = {"cf_m_face_create", "cf_m_eye_create", "cf_m_eyewhite_create", "cf_m
 BODY_TABLES = {"mt_body_paint_00": [], "mt_sunburn_00": [], "bodypaint_layout_00": []}
 BODY_TEXTURES = {"chara/oo_base.unity3d": ["cf_body_00_t", "cf_body_00_mc"],
                  "chara/mm_base.unity3d": ["cf_body_01_mp"]}
+CHEEK_BUNDLE = "chara/mt_cheek_00.unity3d"
+CHEEK_NAME = "cw_t_cheek_000"
 VERIFIED_PROGRAMS = {
     "Shader Forge/create_head": "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c",
     "Shader Forge/create_eye": "c4bd7e1ec704b84075a666316519230ce163e1f4540be2af7ed25b9f3934fece",
@@ -115,6 +119,30 @@ def body_texture_metadata(by_bundle: dict, root: Path) -> list[dict]:
                             "format": int(texture.m_TextureFormat), "serializedColorSpace": texture.m_ColorSpace,
                             "metadataOnly": True})
     return records
+
+
+def cheek_catalog_row(table: dict, reader) -> dict:
+    """The additive stock row; it never replaces the ID0 default input."""
+    if table.get("mark") != "【ChaListData】" or table.get("categoryNo") != 402 or 1 not in table.get("dictList", {}):
+        raise ValueError("Expected the category402 cheek ID1 catalog row")
+    row = dict(zip(table["lstKey"], table["dictList"][1], strict=True))
+    if row.get("MainAB") != CHEEK_BUNDLE or row.get("CheekTex") != CHEEK_NAME:
+        raise ValueError("Unverified cheek ID1 catalog input")
+    return {"table": "mt_cheek_00", "category": 402, "selectedID": 1, "row": row, **identity(reader)}
+
+
+def cheek_texture_metadata(by_bundle: dict, root: Path) -> dict:
+    """Record authored identity and sampler state; pixels use the store producer."""
+    from source_binding_supplement import texture_settings
+    matches = [obj for obj in by_bundle[root / CHEEK_BUNDLE].objects
+               if obj.type.name == "Texture2D" and obj.peek_name() == CHEEK_NAME]
+    if len(matches) != 1:
+        raise ValueError(f"Expected one {CHEEK_NAME} texture in {CHEEK_BUNDLE}, found {len(matches)}")
+    reader = matches[0]
+    tree = reader.read_typetree()
+    return {"name": CHEEK_NAME, "bundle": CHEEK_BUNDLE, **identity(reader),
+            "format": int(tree["m_TextureFormat"]), "serializedColorSpace": tree["m_ColorSpace"],
+            **texture_settings(tree), "metadataOnly": True}
 
 
 def verify_create_shader(reader, output: Path) -> dict:
@@ -234,6 +262,8 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=REPO / ".local/reverse/rigs/head-materials")
     parser.add_argument("--body-composite", action="store_true",
                         help="Include ordinary female body creator/input/catalog metadata, without decoding body pixels")
+    parser.add_argument("--cheek-composite", action="store_true",
+                        help="Append stock cheek ID1 metadata; preserve ID0 defaults and previews")
     args = parser.parse_args()
     output, root = args.output.resolve(), args.source.resolve()
     if not output.is_relative_to((REPO / ".local").resolve()):
@@ -241,7 +271,7 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     table_path = root / "list/characustom/00.unity3d"
     tables = {**TABLES, **(BODY_TABLES if args.body_composite else {})}
-    rows, inputs = [], []
+    rows, inputs, cheek_rows = [], [], []
     for obj in UnityPy.load(str(table_path)).objects:
         if obj.type.name != "TextAsset" or obj.peek_name() not in tables:
             continue
@@ -253,14 +283,22 @@ def main() -> None:
         row = dict(zip(table["lstKey"], table["dictList"][0], strict=True))
         rows.append({"table": data.m_Name, "category": table["categoryNo"], "selectedID": 0,
                      "row": row, **identity(obj)})
+        if args.cheek_composite and data.m_Name == "mt_cheek_00":
+            cheek_rows.append(cheek_catalog_row(table, obj))
         for role, bundle_key, asset_key in tables[data.m_Name]:
             inputs.append({"role": role, "category": table["categoryNo"], "id": 0,
                            "bundle": row[bundle_key], "asset": row[asset_key]})
     if {row["table"] for row in rows} != set(tables):
         raise ValueError("A required ID0 catalog table is absent")
+    if args.cheek_composite:
+        if len(cheek_rows) != 1:
+            raise ValueError("Expected exactly one additive cheek catalog row")
+        rows.extend(cheek_rows)
     bundles = {table_path, root / "chara/bo_head_00.unity3d", root / "chara/mm_base.unity3d"}
     if args.body_composite:
         bundles.update(root / bundle for bundle in BODY_TEXTURES)
+    if args.cheek_composite:
+        bundles.add(root / CHEEK_BUNDLE)
     bundles.update(root / entry["bundle"] for entry in inputs if entry["bundle"] != "0")
     missing = sorted(str(path) for path in bundles if not path.is_file())
     if missing:
@@ -325,7 +363,8 @@ def main() -> None:
     result = {"schemaVersion": 1, "scope": "Original head00 ID0 inputs and base previews; source shader lighting is not implemented",
               "sources": [{"path": str(path), "bytes": path.stat().st_size, "sha256": digest(path)} for path in sorted(bundles)],
               "catalogRows": rows, "defaultInputs": inputs,
-              "textures": list(exported.values()) + (body_texture_metadata(by_bundle, root) if args.body_composite else []),
+              "textures": list(exported.values()) + (body_texture_metadata(by_bundle, root) if args.body_composite else [])
+                          + ([cheek_texture_metadata(by_bundle, root)] if args.cheek_composite else []),
               "drawMaterials": list(materials.values()), "createMaterials": creators, "renderers": renderers,
               "verifiedCreateShaders": verified_shaders,
               "derivedPreviews": previews(output, inputs, creators),
