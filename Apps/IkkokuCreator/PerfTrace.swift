@@ -342,7 +342,6 @@ final class PerfTrace {
         cpuAtStart = PerfTrace.cpuSeconds()
         recordStart = CACurrentMediaTime()
         recording = true
-        startupClosed = true
         // The static `mark` also emits the signpost xctrace windows on.
         PerfTrace.mark("recordingBegin")
         let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
@@ -386,7 +385,15 @@ final class PerfTrace {
                 trace.busyStart = nil
                 let end = CACurrentMediaTime()
                 if trace.recording { trace.busy.append((start, end)) }
-                if !trace.startupClosed, trace.startupReady.map({ start <= $0 }) ?? true { trace.startupBusy.append((start, end)) }
+                // A period that began before the recording window still counts
+                // (the warmup timer can open the window in the same pass as the
+                // launch stall); the accounting closes with the first period
+                // that begins after the scene is ready or inside the window.
+                if !trace.startupClosed {
+                    if trace.startupReady.map({ start > $0 }) ?? false || (trace.recording && start >= trace.recordStart) {
+                        trace.startupClosed = true
+                    } else { trace.startupBusy.append((start, end)) }
+                }
             }
         }
         for observer in [wake, sleep].compactMap({ $0 }) {
