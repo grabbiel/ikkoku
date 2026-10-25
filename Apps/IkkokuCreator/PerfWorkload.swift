@@ -195,12 +195,16 @@ final class PerfWorkloadDriver {
     private func prepareStudioSource(selectKey: Int32?, liveAnimation: Bool = true) throws -> StudioModel {
         let studio = try studio()
         let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
-        guard !characters.isEmpty else { throw RigError.invalid("needs IKKOKU_SOURCE_SCENE with converted source characters") }
+        // A character riding a route renders behind a folder-kind placeholder,
+        // so a scene whose only characters ride routes also qualifies (ST-T11).
+        let routeCharacters = studio.sourceRouteCharacterPreviews.count
+        guard !characters.isEmpty || routeCharacters > 0 else { throw RigError.invalid("needs IKKOKU_SOURCE_SCENE with converted source characters") }
         app.mode = .studio
         studio.liveAnimation = liveAnimation
         trace.details["liveAnimation"] = liveAnimation
         studio.selection = selectKey.flatMap { key in studio.doc.objects.first { $0.sourceObjectKey == key }?.id }
         trace.details["sourceCharacters"] = characters.count
+        trace.details["sourceRouteCharacters"] = routeCharacters
         trace.details["documentObjects"] = studio.doc.objects.count
         trace.details["selectedSourceKey"] = selectKey.map { Int($0) } ?? -1
         if let path = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_SCENE"],
