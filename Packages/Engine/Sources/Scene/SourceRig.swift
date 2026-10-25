@@ -23,6 +23,29 @@ public struct SourceRig: Sendable {
     public let morphChannelCount: Int
 
     public static func load(url: URL) throws -> SourceRig { try decode(Data(contentsOf: url)) }
+    /// Logical charge for retaining a decoded value, not a heap/RSS measurement.
+    /// Counts inline strides, array elements and UTF-8 payload independently for
+    /// each part, including COW-shared arrays. Excludes allocation headers, spare
+    /// capacity, String bridging and the immutable identity object's allocation.
+    /// Unsupported extras or overflow bypass cache retention, not rig decoding.
+    public var decodedCacheLogicalByteCount: Int? {
+        var charge = SourceRigLogicalCharge()
+        guard charge.add(MemoryLayout<Self>.stride), charge.string(sourcePrefab),
+              rig.addLogicalPayload(to: &charge), charge.array(parts) else { return nil }
+        for part in parts {
+            let mesh = part.mesh
+            guard mesh.extras == nil, charge.string(mesh.name),
+                  charge.array(mesh.positions), charge.array(mesh.normals), charge.array(mesh.tangents),
+                  charge.array(mesh.uvs), charge.array(mesh.uvs1), charge.array(mesh.uvs2),
+                  charge.array(mesh.colors), charge.array(mesh.joints), charge.array(mesh.weights),
+                  charge.array(mesh.indices), charge.array(mesh.regions), charge.array(mesh.morphTargets) else { return nil }
+            for morph in mesh.morphTargets {
+                guard charge.string(morph.name), charge.array(morph.positionDeltas),
+                      charge.array(morph.normalDeltas) else { return nil }
+            }
+        }
+        return charge.bytes
+    }
     public func namespacingMeshes(_ prefix: String) -> Self {
         Self(sourcePrefab: sourcePrefab, rig: rig, parts: parts.map { part in
             var mesh = part.mesh; mesh.name = prefix + mesh.name
@@ -201,4 +224,22 @@ public struct SourceRig: Sendable {
         let weight: Float, indices: [Int]
         let positionDeltas: [[Float]], normalDeltas: [[Float]], tangentDeltas: [[Float]]
     }
+}
+
+/// Scalar helpers permit overflow tests without allocating enormous arrays.
+struct SourceRigLogicalCharge {
+    private(set) var bytes = 0
+    mutating func add(_ value: Int) -> Bool {
+        guard value >= 0 else { return false }
+        let (sum, overflow) = bytes.addingReportingOverflow(value)
+        guard !overflow else { return false }
+        bytes = sum; return true
+    }
+    mutating func product(_ count: Int, _ stride: Int) -> Bool {
+        guard count >= 0, stride >= 0 else { return false }
+        let (value, overflow) = count.multipliedReportingOverflow(by: stride)
+        return !overflow && add(value)
+    }
+    mutating func array<T>(_ values: [T]) -> Bool { product(values.count, MemoryLayout<T>.stride) }
+    mutating func string(_ value: String) -> Bool { add(value.utf8.count) }
 }
