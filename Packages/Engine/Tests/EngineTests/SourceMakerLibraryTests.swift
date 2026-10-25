@@ -5,7 +5,7 @@ import Metal
 import simd
 import Assets
 import CoreMath
-import Character
+@testable import Character
 import Scene
 import Renderer
 
@@ -157,7 +157,7 @@ private enum MakerLibraryFixture {
     #expect(throws: RigError.self) { try MakerLibraryFixture.library([gloves], directory: directory) }
 }
 
-@Test func sourceMakerLibraryValidatesUnusedReferencePathsAndSelectedAssetHashes() throws {
+@MainActor @Test func sourceMakerLibraryValidatesUnusedReferencePathsAndSelectedAssetHashes() throws {
     let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
     let card = try AppearanceTestFixture.card()
     let manifest = directory.appendingPathComponent("source-avatar.json")
@@ -177,6 +177,12 @@ private enum MakerLibraryFixture {
             _ = try library.prepare(card: card, coordinate: 0, baseURL: manifest)
             Issue.record("An unused reference path escaped validation")
         } catch RigError.invalid(let reason) { #expect(reason == "Base component escapes its folder.") }
+        let worker = SourceRigReuseWorker(SourceMakerRigReuse().input()), timings = SourceMakerPreparationTimings()
+        do {
+            _ = try library.prepare(card: card, coordinate: 0, baseURL: manifest, wear: false, timings: timings, rigReuse: worker)
+            Issue.record("Reuse bypassed an unused reference path check")
+        } catch RigError.invalid(let reason) { #expect(reason == "Base component escapes its folder.") }
+        #expect(timings.sample.intervals["rigReuseSHA"] == nil && timings.sample.intervals["rigDecode"] == nil)
     }
     // The missing reference is unused, but a selected converted rig must still
     // pass its original byte hash before any geometry is accepted.
@@ -188,6 +194,12 @@ private enum MakerLibraryFixture {
         _ = try changed.prepare(card: card, coordinate: 0, baseURL: manifest)
         Issue.record("A selected asset with changed bytes was accepted")
     } catch RigError.invalid(let reason) { #expect(reason == "Changed or oversized converted Maker asset: selected.json.") }
+    let worker = SourceRigReuseWorker(SourceMakerRigReuse().input()), timings = SourceMakerPreparationTimings()
+    do {
+        _ = try changed.prepare(card: card, coordinate: 0, baseURL: manifest, wear: false, timings: timings, rigReuse: worker)
+        Issue.record("Reuse bypassed a selected asset hash failure")
+    } catch RigError.invalid(let reason) { #expect(reason == "Changed or oversized converted Maker asset: selected.json.") }
+    #expect(timings.sample.intervals["rigRead"] == nil && timings.sample.intervals["rigReuseSHA"] == nil)
 }
 
 private struct MakerSelectionCases: Decodable {
@@ -203,12 +215,13 @@ private struct MakerSelectionCases: Decodable {
 }
 
 @Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_MAKER_SELECTION_FIXTURES"]), "Requires IKKOKU_MAKER_SELECTION_FIXTURES"))
-func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() throws {
+@MainActor func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() throws {
     let (fixtures, directory) = try MakerSelectionCases.load()
     let library = try SourceMakerLibrary.load(url: URL(fileURLWithPath: fixtures.library))
     // Both sexes and standard/corrected cards use the selected assembly's own
     // controllers; this is CPU preparation, without preview/GPU allocation.
     for sample in fixtures.fixtures.prefix(6) {
+        let reuse = SourceMakerRigReuse()
         let original = try SourceCharacterCard.load(url: directory.appendingPathComponent(sample.file))
         let base = URL(fileURLWithPath: sample.sex == 1 ? fixtures.femaleBase : fixtures.maleBase)
         for id in [0, 200, 201] {
@@ -235,7 +248,54 @@ func sourceMakerHeadPreparationRebindsEachNormalAssemblyWithoutEditingInput() th
             #expect(coverage.completeSlots.count == 44)
             _ = try SourceFaceShapePose.make(rig: value.assets.source.rig, domain: face)
             #expect(try !value.expressions.weights(source: value.assets.source, inputs: value.expressions.defaults).isEmpty)
+            #expect(value.rigReuseCandidate == nil && value.rigReuseSample == nil)
+            let cached = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base,
+                rigReuse: reuse.input())
+            try expectReusedSourceMatches(cached.assets.source, value.assets.source)
+            #expect(cached.sex == value.sex && cached.headID == value.headID && cached.boneType == value.boneType)
+            #expect(cached.appearanceInputs.byteCount == value.appearanceInputs.byteCount)
+            #expect(reuse.commit(cached.rigReuseCandidate))
+            if id == 201 {
+                let warmTimings = SourceMakerPreparationTimings()
+                let warm = try SourceMakerHeadPreparation.prepare(card: card, library: library, coordinate: 1, baseURL: base,
+                    timings: warmTimings, rigReuse: reuse.input())
+                try expectReusedSourceMatches(warm.assets.source, value.assets.source)
+                let warmSample = try #require(warm.rigReuseSample)
+                #expect(warmSample.hits > 0 && warmSample.misses == 0 && !warmSample.clearOnCommit)
+                #expect(warmTimings.sample.intervals["rigDecode"] == nil)
+                #expect(warmTimings.sample.intervals["rigRead"]?.calls == warmSample.hits)
+                #expect(warmTimings.sample.intervals["rigReuseSHA"]?.calls == warmSample.hits)
+                #expect(warmSample.retainedEntries <= 16 && warmSample.logicalEntryBytes <= 64 * 1024 * 1024)
+                #expect(warmSample.liveEntries <= 16 && warmSample.liveLogicalEntryBytes <= 64 * 1024 * 1024 && warmSample.liveSnapshots <= 4)
+                print("sourceMakerRigReuseFixture sex=\(sample.sex) bone=\(sample.boneType) entries=\(warmSample.retainedEntries) logicalBytes=\(warmSample.logicalEntryBytes) hits=\(warmSample.hits)")
+            }
             #expect(card.preservedData == bytes)
+        }
+    }
+}
+
+private func expectReusedSourceMatches(_ actual: SourceRig, _ expected: SourceRig) throws {
+    #expect(actual.sourcePrefab == expected.sourcePrefab && actual.morphChannelCount == expected.morphChannelCount)
+    try #require(actual.rig.nodes.count == expected.rig.nodes.count && actual.parts.count == expected.parts.count)
+    for (a, e) in zip(actual.rig.nodes, expected.rig.nodes) {
+        #expect(a.name == e.name && a.sourceID == e.sourceID && a.parent == e.parent && a.active == e.active)
+        for column in 0..<4 { #expect(a.localMatrix[column] == e.localMatrix[column]) }
+    }
+    let a = try actual.rig.evaluate(actual.rig.restPose), e = try expected.rig.evaluate(expected.rig.restPose)
+    try #require(a.palettes.count == e.palettes.count)
+    for (ap, ep) in zip(a.palettes, e.palettes) {
+        try #require(ap.count == ep.count)
+        for (am, em) in zip(ap, ep) { for column in 0..<4 { #expect(am[column] == em[column]) } }
+    }
+    for (a, e) in zip(actual.parts, expected.parts) {
+        #expect(a.node == e.node && a.skin == e.skin && a.rendererEnabled == e.rendererEnabled && a.hasCloth == e.hasCloth)
+        #expect(a.mesh.name == e.mesh.name && a.mesh.positions == e.mesh.positions && a.mesh.normals == e.mesh.normals)
+        #expect(a.mesh.tangents == e.mesh.tangents && a.mesh.uvs == e.mesh.uvs && a.mesh.uvs1 == e.mesh.uvs1 && a.mesh.uvs2 == e.mesh.uvs2)
+        #expect(a.mesh.indices == e.mesh.indices && a.mesh.joints == e.mesh.joints && a.mesh.weights == e.mesh.weights)
+        #expect(a.mesh.colors == e.mesh.colors && a.mesh.regions == e.mesh.regions && a.mesh.materialIndex == e.mesh.materialIndex)
+        try #require(a.mesh.morphTargets.count == e.mesh.morphTargets.count)
+        for (am, em) in zip(a.mesh.morphTargets, e.mesh.morphTargets) {
+            #expect(am.name == em.name && am.positionDeltas == em.positionDeltas && am.normalDeltas == em.normalDeltas)
         }
     }
 }
@@ -506,7 +566,7 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
     #expect(try original.editedData(.init()) == original.preservedData)
 }
 
-@Test func sourceMakerWorkerDiagnosticsPreserveRigLoadErrorOrderAndPartialReads() throws {
+@MainActor @Test func sourceMakerWorkerDiagnosticsPreserveRigLoadErrorOrderAndPartialReads() throws {
     let directory = try MakerLibraryFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
     let library = try MakerLibraryFixture.library([], directory: directory)
     typealias F = OriginalCardFixture
@@ -556,10 +616,20 @@ func sourceMakerPreparedAppearanceEnforcesAggregateBudgetAndExactComponentContex
     #expect(timings.sample.intervals["rigRead"]?.calls == 1 && timings.sample.intervals["rigRead"]?.failures == 0)
     #expect(timings.sample.intervals["rigDecode"]?.calls == 1 && timings.sample.intervals["rigDecode"]?.failures == 1)
     #expect(timings.sample.intervals["assembly"] == nil)
+    let reuseTimings = SourceMakerPreparationTimings(), worker = SourceRigReuseWorker(SourceMakerRigReuse().input())
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, wear: false,
+        timings: reuseTimings, rigReuse: worker) } == reference)
+    #expect(reuseTimings.sample.intervals["rigRead"]?.calls == 1 && reuseTimings.sample.intervals["rigReuseSHA"]?.calls == 1)
+    #expect(reuseTimings.sample.intervals["rigDecode"]?.failures == 1 && reuseTimings.sample.intervals["assembly"] == nil)
     try FileManager.default.removeItem(at: first)
     let missing = SourceMakerPreparationTimings()
     #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, timings: missing) }
         == failure { _ = try SourceRig.load(url: first) })
     #expect(missing.sample.intervals["rigRead"]?.failures == 1 && missing.sample.intervals["rigDecode"] == nil)
     #expect(missing.sample.bytesRead["rigRead"] == nil)
+    let reuseMissing = SourceMakerPreparationTimings()
+    #expect(failure { _ = try library.prepare(card: card, coordinate: 0, baseURL: url, wear: false,
+        timings: reuseMissing, rigReuse: worker) } == failure { _ = try SourceRig.load(url: first) })
+    #expect(reuseMissing.sample.intervals["rigRead"]?.failures == 1)
+    #expect(reuseMissing.sample.intervals["rigReuseSHA"] == nil && reuseMissing.sample.intervals["rigDecode"] == nil)
 }

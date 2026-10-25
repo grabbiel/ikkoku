@@ -208,6 +208,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceFaceShapePose.swift](../../Packages/Engine/Sources/Character/SourceFaceShapePose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerAssemblyOptions.swift](../../Packages/Engine/Sources/Character/SourceMakerAssemblyOptions.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerHeadPreparation.swift](../../Packages/Engine/Sources/Character/SourceMakerHeadPreparation.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Character/SourceRigReuseBoundary.swift](../../Packages/Engine/Sources/Character/SourceRigReuseBoundary.swift) | Runtime / bounded immutable decoded-rig retention, admission and holder lifetimes |
 | [Packages/Engine/Sources/Character/SourceMakerLibrary.swift](../../Packages/Engine/Sources/Character/SourceMakerLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerPreparationQueue.swift](../../Packages/Engine/Sources/Character/SourceMakerPreparationQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMaterialCompositor.swift](../../Packages/Engine/Sources/Character/SourceMaterialCompositor.swift) | Runtime / shared shader declaration |
@@ -240,6 +241,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Tests/EngineTests/SourceIrisHighlightTests.swift](../../Packages/Engine/Tests/EngineTests/SourceIrisHighlightTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMakerAssemblyOptionsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerAssemblyOptionsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMakerLibraryTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerLibraryTests.swift) | Test / Maker library identity, assembly and prepared canine visibility |
+| [Packages/Engine/Tests/EngineTests/SourceRigReuseBoundaryTests.swift](../../Packages/Engine/Tests/EngineTests/SourceRigReuseBoundaryTests.swift) | Test / byte identity, accounting caps, publication, saturation and last-holder release |
 | [Packages/Engine/Tests/EngineTests/SourceMakerPreparationQueueTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMakerPreparationQueueTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMaterialExpansionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaterialExpansionTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceMessagePackTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMessagePackTests.swift) | Test / validation |

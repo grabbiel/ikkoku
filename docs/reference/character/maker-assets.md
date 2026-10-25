@@ -885,3 +885,38 @@ Its separate Release binary `5f2335af` passes four more functional processes
 all 12 resource observations unchanged, and eight resource-preserving no-ops.
 This is linked-app integration acceptance; the quiet pair was not repeated or
 relabeled after the merge.
+
+### Bounded decoded-rig reuse (#192)
+
+The dedicated normal-head preparation path can retain immutable decoded rigs in one per-Maker session. Each lookup still resolves and validates the selected identity and paths, performs the existing selected-file verification and reads the rig bytes. It then hashes the exact bytes that `SourceRig.decode` would consume. The key includes all 256 SHA bits, byte count and decoder version. A hit skips only decoding/validation/conversion of those identical bytes; a miss uses the existing decoder. Default callers without a reuse input retain their previous behavior, with no new hash or clock reads. The new `rigReuseSHA` phase is separate from `rigDecode` and does not replace existing verification reads/hashes.
+
+Only a successful, non-suspending owner commit publishes a candidate. Failed, cancelled and stale requests preserve the previous cache and the existing preview/resource transaction. New/load/closed source contexts and mode exit invalidate the epoch; source import and mod-library replacement invalidate only at successful commit. Old worker/input/delivery references retain their reservations until their last holder releases, including across resets. This is a value cache, not a texture cache or GPU publication change.
+
+A persistent admission ledger limits each Maker to 16 live entry objects, 64 MiB logical entry charge and four immutable snapshots. Limits do not wait or reject otherwise valid geometry. Intrinsically oversized, unaccountable or overflowing values bypass retention. Capacity saturation returns a clear-on-success intent; failed or stale selections cannot publish that clear. Once successful publication drops the owner's old snapshot and remaining holders release, a later fitting selection may repopulate. Repeated pressure can thrash or leave a working set uncached; there is no hit-rate guarantee or LRU eviction.
+
+Logical charge uses native Swift element strides and UTF-8 string payloads, conservatively counting repeated COW arrays per retained value. Snapshot reference payload is separate. It excludes spare container capacity, dictionary buckets, allocator/class headers and ordinary returned/assembled/preview values outside the cache; it is not heap/RSS or peak decoder memory. Successful samples distinguish candidate entry/reference payload from one instantaneous live-ledger observation at worker finish, which includes retained old input/delivery holders.
+
+At clean `5cc39db`, 28 focused Engine checks pass with no skips: 16 cache/accounting/lifetime tests, five library/head/error-order checks and seven queue/cancellation checks. Six private cards cover 18 normal-head fresh/cached comparisons plus six warm repeats. All compared node transforms, skin palettes, mesh arrays and morph arrays match exactly. Each warm repeat makes ten actual rig reads and ten cache SHA operations, with ten hits and zero `rigDecode` calls. Twelve retained entries charge 39,005,922 bytes for the female fixtures and 39,429,522 bytes for male, across the tested bone 0/1 cards; each fits the unchanged 16-entry / 64 MiB / 4-snapshot gates. Synthetic native charges are 1,059 bytes per sample rig, 1,203 including entry/key/permit and 56 bytes per one-entry snapshot (176 for 16 entries). Invalid bytes, verification/path error order, publication, capacity, epochs and last-holder release remain tested. The initial test-only macro compile failure is retained; hoisting its throwing call preserves the assertions and production code.
+
+Release acceptance uses clean `5cc39db` / binary `2c5408c3`, compared with the immutable accepted PR #222 integration producer `f696571` / binary `5f2335af`. All 559 build inputs are pinned; exactly six production and two test files differ. Four functional processes pass 55 selection plus 7 fresh-reload checks per sex. The four exported cards are byte-identical to the accepted baseline, all 12 selected before/after ResourceStore vectors match, and eight no-ops retain resources without publishing a successful sample.
+
+The separate quiet pair passes eight 19-check processes (152 checks), with 48 raw selection observations, 16 resource-preserving no-ops, matching selected resource vectors and four identical exports per sex across both arms. Collection wall time is 46.135 seconds. It uses female A/B/B/A and male B/A/A/B ordering, two samples per arm, sex, head and cycle. All owned groups exit. An existing Parallels VM remains open: the coordinator reported 3.8% CPU in its pre-run snapshot, with no probe or VM worker active. Its background activity was not controlled; no VM settings changed during measurement.
+
+Mean API time in these samples, control → candidate (milliseconds):
+
+| Selection | Candidate hits / misses | Female | Male |
+| --- | ---: | ---: | ---: |
+| First head 200, empty cache | 0 / 10 | 767.582 → 792.772 | 799.590 → 815.852 |
+| First head 201, partial reuse | 9 / 1 | 698.317 → 413.129 | 739.024 → 415.416 |
+| First head 0, partial reuse | 9 / 1 | 676.463 → 390.552 | 711.341 → 386.764 |
+| Second head 200 | 10 / 0 | 722.104 → 159.466 | 749.887 → 169.259 |
+| Second head 201 | 10 / 0 | 661.148 → 157.461 | 695.872 → 162.787 |
+| Second head 0 | 10 / 0 | 664.299 → 158.522 | 700.548 → 159.909 |
+
+The first empty-cache selection is slower: +25.190 ms female and +16.262 ms male mean API time. It still decodes all ten rigs and now pays byte hashing/accounting. Each selection performs ten actual rig reads and ten cache SHA operations; the new SHA phase costs 11.644–15.076 ms across the candidate samples. Subsequent first-cycle heads decode one new rig, while the second cycle decodes none. Warm mean API reductions are 503.687–580.627 ms across the six sex/head cells; individual warm candidate API observations are 156.539–178.129 ms. This supports a bounded repeated-selection benefit, with an explicit first-selection and retention cost, not a universal speedup.
+
+The app cache grows through 10, 11 and 12 entries, then retains 12; female/male logical charges reach 39,005,922 / 39,429,522 bytes. Instantaneous live snapshots are one or two, with no capacity/intrinsic bypass or clear in these fixtures. The separate saturation tests cover their fallback behavior. ResourceStore equality does not measure this CPU cache or total RAM.
+
+Warm candidate worker execution remains 78.665–89.667 ms and owner commit 75.877–87.006 ms. Owner outcomes are mixed; this optimization does not move or remove synchronous owner work. Warm card-appearance work costs 61.982–72.595 ms, including compositor wait/view intervals of 46.003–52.053 ms and allocation/upload of 6.904–8.232 ms; nested intervals are not additional to their parent. Shape decode remains 21.447–23.846 ms and appearance-input preparation 31.148–36.947 ms across all candidate selections. These remaining costs guide further work under #192.
+
+First/second cycle labels do not imply filesystem-cache eviction, and only the first process selection has an empty decoded-rig cache. Read/hash volumes are API bytes, not disk traffic. No FPS, heap/RSS, fresh original-player accuracy or broad hardware claim follows from this small pair. Immutable sources, binaries, original failed attempts, fixture/input proofs, all raw reports and offline analyses are retained under `.local/codex-continue-2026-10-24/rolling/maker-rig-cache/`.

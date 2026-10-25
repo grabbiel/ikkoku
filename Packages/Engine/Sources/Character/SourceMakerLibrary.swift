@@ -350,6 +350,10 @@ public struct SourceMakerLibrary: Sendable {
     /// clothes state and shoesType. The Maker assembly (`wear` false) keeps
     /// only the fully dressed meshes and the outdoor shoes.
     public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false, timings: SourceMakerPreparationTimings? = nil) throws -> Prepared {
+        try prepare(card: card, coordinate: coordinate, baseURL: baseURL, wear: wear, timings: timings, rigReuse: nil)
+    }
+    func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool,
+                 timings: SourceMakerPreparationTimings?, rigReuse: SourceRigReuseWorker?) throws -> Prepared {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
         try Self.validateAssemblyIdentity(card: card)
         let manifestBytes = try SourceMakerPreparationTimings.read(timings, .libraryManifestRead) { try Data(contentsOf: baseURL) }
@@ -371,6 +375,7 @@ public struct SourceMakerLibrary: Sendable {
         // validates and converts the rig). Resolve each URL before its read.
         func loadRig(_ url: URL) throws -> SourceRig {
             let bytes = try SourceMakerPreparationTimings.read(timings, .rigRead) { try Data(contentsOf: url) }
+            if let rigReuse { return try rigReuse.decode(bytes, timings: timings) }
             return try SourceMakerPreparationTimings.measure(timings, .rigDecode) { try SourceRig.decode(bytes) }
         }
         func base(_ path: String) throws -> SourceRig { try loadRig(componentURL(path)) }
