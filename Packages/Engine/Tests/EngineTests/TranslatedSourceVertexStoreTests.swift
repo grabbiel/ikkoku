@@ -184,6 +184,10 @@ func translatedDrawsKeepDerivativeQuadsWithinOnePrimitive() throws {
         descriptor.vertexFunction = library.makeFunction(name: "source_vertex"); descriptor.fragmentFunction = library.makeFunction(name: "source_fragment")
         descriptor.colorAttachments[0].pixelFormat = target.color
         descriptor.depthAttachmentPixelFormat = target.depthStencil; descriptor.stencilAttachmentPixelFormat = target.depthStencil
+        // The cache's blend state: translated pipelines always enable blending.
+        descriptor.colorAttachments[0].isBlendingEnabled = true
+        descriptor.colorAttachments[0].sourceRGBBlendFactor = program.state.sourceRGB; descriptor.colorAttachments[0].sourceAlphaBlendFactor = program.state.sourceAlpha
+        descriptor.colorAttachments[0].destinationRGBBlendFactor = program.state.destinationRGB; descriptor.colorAttachments[0].destinationAlphaBlendFactor = program.state.destinationAlpha
         let control = try drawGrid(grid, pipeline: try device.makeRenderPipelineState(descriptor: descriptor), entry: entry, device: device, repeats: 4)
         let changed = control.readbacks.dropFirst().map { readback in (0..<(readback.count / 4)).filter { pixel in
             (0..<4).contains { readback[pixel * 4 + $0] != control.readbacks[0][pixel * 4 + $0] } }.count }
