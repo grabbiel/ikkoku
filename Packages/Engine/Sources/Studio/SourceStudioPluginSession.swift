@@ -8,6 +8,9 @@ public struct SourceStudioPluginState: Codable, Sendable, Equatable {
     public let libraryConfigurationSHA256: String?
     public let packages: [PackageIdentity], bindings: [SourcePluginBindingState], clock: SourcePluginClockState
     public let objectIdentities: [UUID: String], cloneSerial: UInt64
+    /// Exact deferred roots, not their expanded descendants. Missing/null is a
+    /// legacy snapshot; its lost lifecycle requests cannot be inferred safely.
+    public let pendingDestructionRoots: [UUID]?
 }
 
 /// Bindings chosen in Studio for an immutable library selection. Saved inside the
@@ -111,7 +114,15 @@ public final class SourceStudioPluginSession {
                 throw SourcePluginError.invalid("Saved plugin package identity or version changed.")
             }
         }
-        world = try SourceStudioPluginWorld(document: document, identities: saved?.objectIdentities ?? [:], cloneSerial: saved?.cloneSerial ?? 0, attachment: attachment)
+        world = try SourceStudioPluginWorld(document: document, identities: saved?.objectIdentities ?? [:], cloneSerial: saved?.cloneSerial ?? 0,
+            pendingDestructionRoots: saved?.pendingDestructionRoots ?? [], attachment: attachment)
+        // Normalization may add identities for unbound input objects. Snapshot
+        // that candidate, including tombstones, before replaying constructors.
+        // Fresh installation intentionally adopts constructor-created objects.
+        let restoreBaseline: (objects: Set<UUID>, identities: [UUID: String], cloneSerial: UInt64)?
+        if saved != nil {
+            restoreBaseline = (Set(world.document.objects.map(\.id)), world.identities, world.cloneSerial)
+        } else { restoreBaseline = nil }
         runtime = try SourcePluginRuntime(world: world, fixedDeltaTime: fixedDeltaTime)
         if let saved { try runtime.restoreClock(saved.clock) }
         var bindingCount = 0, identities = Set<Data>()
@@ -154,6 +165,15 @@ public final class SourceStudioPluginSession {
             }
         }
         try runtime.start()
+        if let baseline = restoreBaseline {
+            guard Set(world.document.objects.map(\.id)) == baseline.objects,
+                  world.cloneSerial == baseline.cloneSerial, world.identities.count == baseline.identities.count,
+                  baseline.identities.allSatisfy({ id, identity in
+                      world.identities[id].map { $0.utf8.elementsEqual(identity.utf8) } == true
+                  }) else {
+                throw SourcePluginError.invalid("Restoring plugin initialization changed scene object topology, identities, or clone state.")
+            }
+        }
     }
     public func step(document: StudioDocument, deltaTime: Float, afterUpdate: (() throws -> Void)? = nil) throws -> StudioDocument {
         try world.replaceDocument(document)
@@ -164,7 +184,7 @@ public final class SourceStudioPluginSession {
         var document = world.document
         document.sourcePluginState = .init(profileFile: profileURL?.path, profileSHA256: profileSHA256, libraryConfigurationSHA256: libraryConfigurationSHA256,
             packages: packageIdentities, bindings: try runtime.savedBindings(), clock: runtime.savedClock(),
-            objectIdentities: world.identities, cloneSerial: world.cloneSerial)
+            objectIdentities: world.identities, cloneSerial: world.cloneSerial, pendingDestructionRoots: world.pendingSourceDestructionRoots())
         return document
     }
 }

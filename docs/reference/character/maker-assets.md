@@ -775,3 +775,113 @@ counterparts. Only three accepted plugin app files differ from the measured
 candidate across the 557-file source inventory; the attribution code and tests
 remain byte-identical. These are functional checks, with no repeated quiet run
 or relabeling of the original measurement producers.
+
+### Worker preparation attribution (#192)
+
+Normal-head selection records `headWorkerStages` and `headQueueStages` with the
+successful state commit. The worker creates its own synchronous diagnostic
+collector and returns an immutable sample inside the prepared head. Default
+preparation callers omit the collector and read no additional clocks or counters.
+`SourceMakerPreparationQueue.prepare` retains its ordinary value/error API;
+`prepareWithTiming` returns the same value plus immutable queue observations.
+Neither path changes the one-running/newest-pending limit or interrupts an
+already-running synchronous decoder.
+
+Queue residence covers the pending slot and serial dispatch until the closure
+starts. Operation time covers that closure, including a supplied preparation
+hook. Delivery covers worker completion to entry on the owning actor, before the
+continuation resumes; it is not worker execution. These intervals are inside the
+broader app `preparationMilliseconds` wait and omit its surrounding work. Failed,
+cancelled and superseded requests return no successful sample. A discarded
+running operation still drains before the next one begins. No shared mutable
+observer crosses the worker/owner boundary.
+
+Worker stages separate the bounded manifest, shape and expression reads from
+their decoding APIs; `bodyOptions` includes correction decoding when required.
+Library preparation includes its own manifest read/decode, converted-file
+verification reads and SHA comparisons, rig reads and `SourceRig.decode`, and
+avatar assembly. Rig decoding includes validation and coordinate/data conversion,
+not just JSON decoding. Splitting `SourceRig.load` retains its exact
+`Data(contentsOf:)` then `decode` sequence, resolved URLs and error order. The four
+base rigs load in their original argument order before assembly is timed.
+Appearance-input preparation includes binding reads/JSON decoding, recipe
+resolution, raw RGBA reads, SHA comparisons and Data-to-array copies. The library
+and appearance-input spans are inclusive; their leaf API intervals must not be
+added to those parents again. Untimed validation, namespacing, contextualization
+and instrumentation remain within the relevant parent.
+`verifiedFileRead` and `verifiedFileSHA` aggregate two call sites: assembly-registry
+verification before the top-level manifest read, and converted-component
+verification inside library preparation. Their whole aggregates are therefore
+not library children. SHA intervals include hex comparison and, on cached RGBA
+paths, materializing `Data` for the existing hash API.
+
+Each timed API counts attempts and throws with `defer`. Semantic validation after
+an API can reject its result even when that API succeeded; retained observations
+after such failures are partial, not a completed preparation. A hash mismatch has
+its own counter because hashing itself succeeded. File-byte counters record
+returned bytes, including bounded overreads and repeated verification/rig reads;
+hashed bytes count each comparison, including repeated cached RGBA checks.
+Copied bytes count only Data-to-RGBA-array copies, while cache reuse counts only
+successful repeated-path lookups. Size checks still short-circuit hashing and
+copying. These are API byte volumes, separate from retained snapshot bytes, disk
+traffic, Metal allocations or RSS. No caches, image options, resource publication,
+leases, shader math or GPU completion behavior change. Attribution alone makes no
+latency or responsiveness claim.
+
+Local acceptance used clean `1ec2e04` and Release binary `01b64854`, compared with
+the retained PR #217 integration producer `bc32a083` / binary `55b5bf0d`. All 557
+tracked build-source inputs were checked; exactly five production files and
+three test files differ. Eighteen focused Engine checks passed with no skips:
+17 passed initially, and the remaining error-order regression passed after its
+test-only comparison stopped relying on unstable NSError descriptions and
+dictionary ordering. The original failed attempt remains retained. The test
+still checks typed decoding errors, file paths, error order and partial counts.
+
+Four functional processes passed 55 selection and 7 fresh-reload checks per sex.
+All four cards and all 12 observed before/after resource vectors match the
+accepted PR #217 counterparts. Eight no-op selections retained resources and
+emitted no successful selection sample. The separate quiet pair passed eight
+19-check processes in 55.212 seconds, with 48 selection records, four identical
+exports per sex, matching selected resource vectors across both arms, and 16
+resource-preserving no-ops. The two arms used the same held-clock scenarios in
+female A/B/B/A and male B/A/A/B order. All owned process groups exited.
+
+Across the 24 candidate selections, the measured wall-time ranges were:
+
+| Phase | Calls per selection | Range (ms) |
+| --- | ---: | ---: |
+| Queue operation | 1 | 582.031–712.206 |
+| Library preparation, inclusive | 1 | 525.197–648.608 |
+| Rig decode, validation and coordinate/data conversion | 10 | 514.134–634.981 |
+| Rig file reads | 10 | 3.519–5.369 |
+| Avatar assembly | 1 | 0.815–0.962 |
+| Shape contract decode | 1 | 21.943–24.924 |
+| Appearance-input preparation, inclusive | 1 | 31.551–37.110 |
+| RGBA SHA operations | 20 | 23.589–26.581 |
+
+Rig decode accounted for 87.994–89.674% of queue operation time; these observations
+do not separate Foundation JSON decoding from validation/conversion. Queue
+residence was 0.016–0.038 ms and delivery 0.015–0.046 ms. Each selection made 12
+RGBA reads/copies and eight successful repeated-path reuses: 32,506,112 logical
+bytes read/copied/retained and 62,914,816 bytes presented to SHA. Ten rig reads
+returned 32,145,659–39,374,025 bytes, depending on the assembly. These volumes
+are not physical disk traffic or memory measurements.
+
+There are only two samples per arm, sex, head and cycle. For head 201, candidate
+minus control mean API times were female cold +16.136 ms / warm −8.022 ms and
+male cold +6.731 ms / warm +2.086 ms. The comparison observes combined
+instrumentation and run variation; it cannot isolate overhead or establish a
+speedup. “Cold” and “warm” identify the first and second selection cycles, not
+eviction of filesystem caches. The result directs the next bounded investigation
+toward repeated rig decoding, while owner-side stalls remain separate work under
+#192. Private inputs, binary/source proofs, original failures, artifact hashes
+and phase analysis are retained under
+`.local/codex-continue-2026-10-24/rolling/maker-worker-attribution/`.
+
+Final integration at `f696571` adds the accepted plugin restore changes while all
+five measured production files and three scoped tests remain byte-identical.
+Its separate Release binary `5f2335af` passes four more functional processes
+(55 selection + 7 fresh-reload checks per sex), with four exact accepted exports,
+all 12 resource observations unchanged, and eight resource-preserving no-ops.
+This is linked-app integration acceptance; the quiet pair was not repeated or
+relabeled after the merge.

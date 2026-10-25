@@ -76,8 +76,11 @@ have not been established. Current catalog counts state their actual denominator
 
 Overview reconciled **2026-10-24**; the task entries below name their acceptance
 scope and distinguish local checkpoints from merged work. The
-[README's eight-component table](../../README.md#current-scope) is the concise
-support summary. The dated handoffs below retain each producer, fixture and
+[README's eight-component table](../../README.md#current-scope) and
+[public component status website](https://ikkoku-status.felipearceo.chatgpt.site)
+provide concise support summaries. The website also covers the remaining app
+areas and links back to these references; its review date and accepted source
+commit identify the snapshot. The dated handoffs below retain each producer, fixture and
 acceptance boundary; their old “next” steps are historical, not a live queue.
 
 - **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
@@ -91,7 +94,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
   tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192). New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
-  loading; this measures the remaining work without claiming a speedup.
+  loading. A separately validated worker diagnostic attributes 88–90% of the
+  selected preparation operation to rig decoding, validation and conversion.
+  These measurements identify remaining work without claiming a speedup.
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
@@ -109,7 +114,15 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   open and history restoration support candidate-owned attachment reads when
   initialization leaves the candidate scene unchanged; library installation
   retains its separate attachment-read gate.
-  General plugin compatibility remains outside the supported subset.
+  Saved profile and library restoration also reject initialization that changes
+  object topology, identities or clone state before committing the candidate.
+  Locally validated pending-destruction persistence carries queued roots across
+  native save/reopen; older snapshots cannot recover requests they never stored.
+  A retained 44-check Release regression verifies repeated frame failures and
+  clean retries with real warm and cloned character previews, exact poses and
+  resources. It changes no production behavior; route rollback and checkpoint
+  cost still need separate acceptance. General plugin compatibility remains
+  outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks
@@ -527,6 +540,30 @@ established. Owner stalls and longer worker preparation remain open. The
 [Maker reference](../reference/character/maker-assets.md) records the exact
 counters, byte meanings, nested intervals and measurement limits.
 
+**Diagnostic acceptance — normal-head worker preparation, [#192](https://github.com/grabbiel/ikkoku/issues/192):**
+Optional worker-local observations separate file reads, verification, decoding,
+assembly and appearance inputs; queue samples distinguish residence, execution
+and delivery. Only a successful current selection publishes its immutable sample.
+Nil collectors preserve the existing uninstrumented path, and validation,
+cache keys, cancellation and resource ownership remain unchanged.
+
+At `1ec2e04`, all 18 focused cases pass across the original 17 passes and one
+corrected error-comparison rerun. Four functional processes pass 124 checks with
+byte-identical accepted exports. Eight quiet processes compare retained
+`bc32a083` and candidate `1ec2e04` Release binaries in 55.212 seconds: all 152
+checks pass, with 48 stage records, identical exports and selected resource
+vectors, and 16 unchanged selections without a new sample. Root independently
+verifies the retained hashes and raw report records.
+
+Across 24 candidate selections, ten rig decodes take 514.134–634.981 ms,
+88–90% of the queue operation. This includes decoding, validation and conversion;
+it does not isolate JSON parsing. Rig reads take 3.519–5.369 ms. Inclusive parent
+spans and their children must not be added together; verification aggregates also
+cross call boundaries. The two-sample API comparisons remain mixed, so no speedup
+or isolated observation overhead is established. The
+[Maker reference](../reference/character/maker-assets.md) records the remaining
+phase, byte-volume and publication boundaries.
+
 **Diagnostic handoff — MainTex-only sampling, [#209](https://github.com/grabbiel/ikkoku/pull/209):**
 Merged after all four CI checks pass at `0bcd33c`. Removing the AlphaMask/combine
 and predicate/discard blocks together makes the
@@ -627,6 +664,44 @@ document, session, history, previews, resources and frame. The original policy
 reproduction stays retained separately. The [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records exact scope, hashes and integration requirements. This does not establish
 GUI acceptance, general plugin compatibility, source parity or a timing benefit.
+
+**Restore boundary — constructor-created objects:**
+A fresh-installable cloning initializer previously reopened into an inconsistent
+session: the saved scene held two objects while its reconstructed runtime held
+three, and the first step failed. Shared session preparation now rejects that
+candidate after activation callbacks, before native open or history commits.
+The normalized object identities and clone serial stay pinned during restore;
+fresh installation can still create objects. Same-topology visibility changes,
+pending destruction and missing identities for unbound input objects retain their
+existing behavior. This makes rejection atomic; reopening non-idempotent cloning
+initializers remains unsupported. The
+[plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+retains the original failing reproduction and the precise supported boundary.
+At `4ebdd727`, all 30 focused Engine tests and 161 application checks pass,
+including native open and real undo/redo retention, plus the prior 117
+attachment/profile/library checks. Root independently verifies all six app
+reports and their executable/source provenance. The first Engine attempt's
+missing fixture is retained separately from the corrected run. These checks
+establish functional behavior, without a timing, GUI or general compatibility claim.
+
+**Local acceptance — queued destruction across native restore, [#221](https://github.com/grabbiel/ikkoku/issues/221):**
+A scene saved after `Awake` queued destruction previously reopened without that
+request: its next step kept the object alive instead of calling `OnDestroy` and
+removing it. At `e9e6198`, native snapshots preserve exact pending root UUIDs,
+including overlapping and unbound roots, and validate them before any restoring
+callback. The next ordinary step completes destruction; save/open does not force
+a tick or replay `Awake`. Missing/null fields retain legacy behavior. Restoring
+pending roots with an initializer that serves attachment reads remains explicitly
+unsupported under the existing atomic restoration guard.
+
+All 34 focused Engine tests and 222 app checks pass. The original 15-save/29-reopen
+reproduction now passes unchanged, alongside malformed native/undo/redo rejection,
+failed-step retry, topology and attachment/profile/library controls. Root verifies
+all nine app reports and released process groups. Snapshotting sorts only the
+pending roots, with no descendant expansion or new file access; no timing or
+general compatibility benefit is claimed. The
+[plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+records schema compatibility, exact producer hashes and the preserved failing pair.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and

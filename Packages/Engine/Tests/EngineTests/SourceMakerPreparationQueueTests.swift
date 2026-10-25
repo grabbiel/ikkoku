@@ -90,3 +90,61 @@ private final class MakerPreparationBarrier: @unchecked Sendable {
     await queue.drain()
     #expect(!queue.isRunning)
 }
+
+@MainActor @Test func makerPreparationMeasuredSupersessionReturnsOnlyNewestImmutableSample() async throws {
+    let queue = SourceMakerPreparationQueue<Int>(), barrier = MakerPreparationBarrier()
+    defer { barrier.release() }
+    let first = Task { try await queue.prepareWithTiming { barrier.waitOnWorker(); return 1 } }
+    await barrier.arrival()
+    let second = Task { try await queue.prepareWithTiming { Issue.record("Superseded measured worker ran"); return 2 } }
+    do { _ = try await first.value; Issue.record("Discarded running work returned a sample") }
+    catch { #expect(error is CancellationError) }
+    #expect(queue.isRunning && queue.hasPending)
+    let third = Task { try await queue.prepareWithTiming { 3 } }
+    do { _ = try await second.value; Issue.record("Never-started work returned a sample") }
+    catch { #expect(error is CancellationError) }
+    barrier.release()
+    let output = try await third.value
+    #expect(output.value == 3 && !queue.isRunning && !queue.hasPending)
+    let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(output.timing)) as? [String: Double])
+    #expect(Set(encoded.keys) == ["residenceMilliseconds", "operationMilliseconds", "deliveryMilliseconds"])
+    #expect(try await queue.prepare { 4 } == 4) // unmeasured callers keep the old value API
+    let later = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(output.timing)) as? [String: Double])
+    #expect(later == encoded)
+    for duration in [output.timing.residenceMilliseconds, output.timing.operationMilliseconds, output.timing.deliveryMilliseconds] {
+        #expect(duration.isFinite && duration >= 0) // domain, not a timing threshold
+    }
+}
+
+@MainActor @Test func makerPreparationMeasuredCancellationAndFailurePublishNoSample() async throws {
+    enum Failure: Error { case fixture }
+    let queue = SourceMakerPreparationQueue<Int>(), barrier = MakerPreparationBarrier()
+    defer { barrier.release() }
+    let first = Task { try await queue.prepareWithTiming { barrier.waitOnWorker(); return 1 } }
+    await barrier.arrival()
+    first.cancel()
+    do { _ = try await first.value; Issue.record("Cancelled measured preparation returned a sample") }
+    catch { #expect(error is CancellationError) }
+    #expect(queue.isRunning) // caller is cancelled before synchronous work drains
+    barrier.release()
+    await queue.drain()
+    do { _ = try await queue.prepareWithTiming { throw Failure.fixture }; Issue.record("Worker failure returned a sample") }
+    catch { #expect(error is Failure) }
+    #expect(!queue.isRunning && !queue.hasPending)
+    #expect(try await queue.prepareWithTiming { 7 }.value == 7)
+}
+
+@MainActor @Test func makerPreparationMeasuredPrecancelDoesNotSupersedeUnmeasuredWork() async throws {
+    let queue = SourceMakerPreparationQueue<Int>(), barrier = MakerPreparationBarrier()
+    defer { barrier.release() }
+    let first = Task { try await queue.prepare { barrier.waitOnWorker(); return 1 } }
+    await barrier.arrival()
+    let cancelled = Task { @MainActor in try await queue.prepareWithTiming { Issue.record("Pre-cancelled measured worker ran"); return 2 } }
+    cancelled.cancel()
+    do { _ = try await cancelled.value; Issue.record("Pre-cancelled work returned a sample") }
+    catch { #expect(error is CancellationError) }
+    #expect(queue.isRunning && !queue.hasPending)
+    barrier.release()
+    #expect(try await first.value == 1)
+    await queue.drain()
+}
