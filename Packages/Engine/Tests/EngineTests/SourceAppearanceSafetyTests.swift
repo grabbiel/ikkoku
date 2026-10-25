@@ -176,7 +176,7 @@ func sourcePreparedAppearanceSnapshotKeepsLatestColorsWithoutOwnerReadsAndReject
     #expect(resources.statistics().textures == before)
 }
 
-@Test func sourcePreparedAppearanceDiagnosticsCountReadsRechecksAndCopiesSeparately() throws {
+@Test func sourcePreparedAppearanceDiagnosticsCountReadsDigestComparisonsAndCopiesSeparately() throws {
     let directory = try AppearanceTestFixture.directory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
@@ -190,7 +190,8 @@ func sourcePreparedAppearanceSnapshotKeepsLatestColorsWithoutOwnerReadsAndReject
     #expect(measured.byteCount == plain.byteCount && measured.byteCount == 4)
     let sample = timings.sample
     #expect(sample.intervals["rgbaRead"]?.calls == 1 && sample.bytesRead["rgbaRead"] == 4)
-    #expect(sample.intervals["rgbaSHA"]?.calls == 2 && sample.bytesHashed["rgbaSHA"] == 8)
+    #expect(sample.intervals["rgbaSHA"]?.calls == 1 && sample.bytesHashed["rgbaSHA"] == 4)
+    #expect(sample.intervals["rgbaDigestComparison"]?.calls == 1)
     #expect(sample.intervals["rgbaCopy"]?.calls == 1 && sample.rgbaBytesCopied == 4)
     #expect(sample.rgbaCacheReuses == 1 && sample.hashMismatches == 0)
     #expect(sample.intervals.values.allSatisfy { $0.failures == 0 })
@@ -206,9 +207,12 @@ func sourcePreparedAppearanceSnapshotKeepsLatestColorsWithoutOwnerReadsAndReject
     let texture = try AppearanceTestFixture.texture([128,64,255,255], directory: directory)
     var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
     entry["main"] = texture
-    for (replacement, shaCalls, mismatch) in [
-        (["width": 2] as [String: Any], 1, 0),
-        (["sha256": String(repeating: "0", count: 64)] as [String: Any], 2, 1)
+    let validHash = try #require(texture["sha256"] as? String)
+    #expect(validHash.uppercased() != validHash)
+    for (replacement, comparisonCalls, mismatch) in [
+        (["width": 2, "sha256": "not-a-hash"] as [String: Any], 0, 0),
+        (["sha256": String(repeating: "0", count: 64)] as [String: Any], 1, 1),
+        (["sha256": validHash.uppercased()] as [String: Any], 1, 1)
     ] {
         entry["mask"] = texture.merging(replacement) { _, value in value }
         let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
@@ -218,11 +222,24 @@ func sourcePreparedAppearanceSnapshotKeepsLatestColorsWithoutOwnerReadsAndReject
             Issue.record("Conflicting cached metadata was accepted")
         } catch { #expect(String(describing: error).contains("Conflicting appearance texture metadata")) }
         #expect(timings.sample.intervals["rgbaRead"]?.calls == 1)
-        #expect(timings.sample.intervals["rgbaSHA"]?.calls == shaCalls)
+        #expect(timings.sample.intervals["rgbaSHA"]?.calls == 1 && timings.sample.bytesHashed["rgbaSHA"] == 4)
+        #expect((timings.sample.intervals["rgbaDigestComparison"]?.calls ?? 0) == comparisonCalls)
         #expect(timings.sample.hashMismatches == mismatch && timings.sample.rgbaCacheReuses == 0)
+        // Hash/equality APIs returned normally; the enclosing guard rejects.
+        #expect(timings.sample.intervals.values.allSatisfy { $0.failures == 0 })
         #expect(timings.sample.rgbaBytesCopied == 4) // first input only
     }
     entry.removeValue(forKey: "mask")
+    var uppercase = entry
+    uppercase["main"] = texture.merging(["sha256": validHash.uppercased()]) { _, value in value }
+    let uppercaseBindings = try AppearanceTestFixture.bindings([uppercase], directory: directory)
+    let firstHash = SourceMakerPreparationTimings()
+    do {
+        _ = try SourceAppearanceInputs.prepare(card: card, bindings: uppercaseBindings, directory: directory, timings: firstHash)
+        Issue.record("First-read uppercase digest was normalized instead of rejected.")
+    } catch { #expect(String(describing: error).contains("Appearance texture has changed or exceeds its size limit.")) }
+    #expect(firstHash.sample.intervals["rgbaSHA"]?.calls == 1 && firstHash.sample.hashMismatches == 1)
+    #expect(firstHash.sample.rgbaBytesCopied == 0 && firstHash.sample.intervals["rgbaDigestComparison"] == nil)
     let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
     let file = directory.appendingPathComponent(try #require(texture["file"] as? String))
     try Data([128,64,255]).write(to: file)
@@ -235,4 +252,109 @@ func sourcePreparedAppearanceSnapshotKeepsLatestColorsWithoutOwnerReadsAndReject
     #expect(throws: (any Error).self) { try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: missing) }
     #expect(missing.sample.intervals["rgbaRead"]?.calls == 1 && missing.sample.intervals["rgbaRead"]?.failures == 1)
     #expect(missing.sample.bytesRead["rgbaRead"] == nil && missing.sample.intervals["rgbaSHA"] == nil)
+}
+
+@Test func sourcePreparedVerifiedDigestReuseKeepsUniqueByteCapsAndSameSizeMetadata() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let texture = try AppearanceTestFixture.texture([255,0,0,255,0,255,0,255], directory: directory)
+    var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+    entry["main"] = texture
+    // Same byte count with alternate legal dimensions was already accepted.
+    // Digest reuse must not silently tighten this metadata contract.
+    entry["mask"] = texture.merging(["width": 1, "height": 2]) { _, value in value }
+    let bindings = try AppearanceTestFixture.bindings([entry, entry], directory: directory)
+    let timings = SourceMakerPreparationTimings()
+    let inputs = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, maximumBytes: 8, timings: timings)
+    #expect(inputs.byteCount == 8)
+    #expect(timings.sample.intervals["rgbaRead"]?.calls == 1 && timings.sample.bytesRead["rgbaRead"] == 8)
+    #expect(timings.sample.intervals["rgbaSHA"]?.calls == 1 && timings.sample.bytesHashed["rgbaSHA"] == 8)
+    #expect(timings.sample.intervals["rgbaDigestComparison"]?.calls == 3 && timings.sample.rgbaCacheReuses == 3)
+    #expect(timings.sample.rgbaBytesCopied == 8)
+    var extra = entry
+    extra["main"] = texture.merging(["file": "absent.rgba"]) { _, value in value }
+    extra.removeValue(forKey: "mask")
+    let capped = SourceMakerPreparationTimings()
+    do {
+        let over = try AppearanceTestFixture.bindings([entry, extra], directory: directory)
+        _ = try SourceAppearanceInputs.prepare(card: card, bindings: over, directory: directory, maximumBytes: 8, timings: capped)
+        Issue.record("A distinct input beyond the unique-byte cap was accepted.")
+    } catch { #expect(String(describing: error).contains("Appearance inputs exceed their retained byte limit.")) }
+    // The absent second path must fail at the byte cap, before FileHandle/open.
+    #expect(capped.sample.intervals["rgbaRead"]?.calls == 1 && capped.sample.intervals["rgbaSHA"]?.calls == 1)
+    #expect(capped.sample.rgbaCacheReuses == 1 && capped.sample.hashMismatches == 0)
+}
+
+@Test func sourcePreparedVerifiedDigestReuseNeverSurvivesItsReader() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let texture = try AppearanceTestFixture.texture([255,0,0,255], directory: directory)
+    var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+    entry["main"] = texture; entry["mask"] = texture
+    let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
+    let initial = SourceMakerPreparationTimings()
+    let snapshot = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: initial)
+    let initialSample = initial.sample
+    #expect(initialSample.rgbaCacheReuses == 1)
+    let path = directory.appendingPathComponent(try #require(texture["file"] as? String))
+    // Same-sized changed data must be read and rejected by a fresh reader. It
+    // cannot reuse the successful preceding reader's bytes or verified digest.
+    try Data([0,0,255,255]).write(to: path)
+    let changed = SourceMakerPreparationTimings()
+    do {
+        _ = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: changed)
+        Issue.record("A new reader reused stale verified pixels.")
+    } catch { #expect(String(describing: error).contains("Appearance texture has changed or exceeds its size limit.")) }
+    #expect(changed.sample.intervals["rgbaRead"]?.calls == 1 && changed.sample.bytesRead["rgbaRead"] == 4)
+    #expect(changed.sample.intervals["rgbaSHA"]?.calls == 1 && changed.sample.bytesHashed["rgbaSHA"] == 4)
+    #expect(changed.sample.hashMismatches == 1 && changed.sample.rgbaBytesCopied == 0)
+    #expect(changed.sample.intervals["rgbaDigestComparison"] == nil && changed.sample.rgbaCacheReuses == 0)
+    // An oversized first read still short-circuits before SHA, even though both
+    // its bytes and expected digest disagree; the bounded read returns at most5.
+    try Data([0,0,255,255,1,2,3]).write(to: path)
+    let oversized = SourceMakerPreparationTimings()
+    #expect(throws: (any Error).self) { try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: oversized) }
+    #expect(oversized.sample.bytesRead["rgbaRead"] == 5 && oversized.sample.intervals["rgbaSHA"] == nil)
+    #expect(oversized.sample.hashMismatches == 0 && oversized.sample.rgbaBytesCopied == 0)
+    #expect(snapshot.byteCount == 4 && initialSample.rgbaCacheReuses == 1 && initialSample.hashMismatches == 0)
+}
+
+@Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
+func sourcePreparedVerifiedDigestPixelsRemainIndependentAcrossCopiesAndLatestColors() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    let preview = try AppearanceTestFixture.preview(directory: directory, resources: resources)
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let texture = try AppearanceTestFixture.texture([255,0,0,255], directory: directory)
+    var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+    entry["main"] = texture; entry["mask"] = texture
+    let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
+    let snapshot = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory)
+    let copy = snapshot
+    var edited = card
+    try edited.setColor("body.skinMainColor", rgba: Float4(0.8,0.2,0.4,1))
+    func pixels(_ application: SourcePreviewAppearance.CardApplication) throws -> [UInt8] {
+        let handle = try #require(application.appearance.materials["part"]?.first?.base)
+        let texture = try #require(resources.texture(handle))
+        try #require(texture.storageMode == .shared && texture.width == 1 && texture.height == 1)
+        var value = [UInt8](repeating: 0, count: 4)
+        value.withUnsafeMutableBytes { texture.getBytes($0.baseAddress!, bytesPerRow: 4, from: MTLRegionMake2D(0,0,1,1), mipmapLevel: 0) }
+        return value
+    }
+    // Red main/mask pixels select color0's red directly: independent scalar
+    // expectations are round(0.25*255)=64 and round(0.8*255)=204.
+    let direct = try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources, backend: .cpu))
+    #expect(direct == [64,0,0,255])
+    try FileManager.default.removeItem(at: directory.appendingPathComponent(try #require(texture["file"] as? String)))
+    let before = resources.statistics().textures
+    for backend: SourceAppearanceCompositionBackend in [.cpu, .metal] {
+        let updated = try pixels(preview.applying(edited, bindings: bindings, directory: directory, resources: resources, backend: backend, preparedInputs: copy))
+        #expect(updated == [204,0,0,255])
+        let original = try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources, backend: backend, preparedInputs: snapshot))
+        #expect(original == direct)
+    }
+    #expect(resources.statistics().textures == before)
 }

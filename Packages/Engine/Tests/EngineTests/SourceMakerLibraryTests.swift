@@ -380,6 +380,10 @@ func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() asy
                 #expect(sample.intervals["assembly"]?.calls == 1 && sample.intervals.values.allSatisfy { $0.failures == 0 })
                 #expect(sample.bytesRead["rgbaRead"] == value.appearanceInputs.byteCount)
                 #expect(sample.rgbaBytesCopied == value.appearanceInputs.byteCount && sample.hashMismatches == 0)
+                #expect(sample.intervals["rgbaSHA"]?.calls == sample.intervals["rgbaRead"]?.calls)
+                #expect(sample.intervals["rgbaCopy"]?.calls == sample.intervals["rgbaRead"]?.calls)
+                #expect(sample.bytesHashed["rgbaSHA"] == sample.bytesRead["rgbaRead"])
+                #expect((sample.intervals["rgbaDigestComparison"]?.calls ?? 0) == sample.rgbaCacheReuses)
                 #expect(timings.sample.bytesRead == sample.bytesRead)
             } else { #expect(value.workerStages == nil) }
             #expect(value.sex == sample.sex && value.headID == id && value.boneType == sample.boneType && value.coordinate == 1)

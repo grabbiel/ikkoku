@@ -10,7 +10,7 @@ public final class SourceMakerPreparationTimings {
         case expressionRead, expressionDecode, correctionRead, bodyOptions, settingsValidation
         case libraryPreparation, libraryManifestRead, libraryManifestDecode
         case verifiedFileRead, verifiedFileSHA, rigRead, rigReuseSHA, rigDecode, assembly
-        case appearanceInputPreparation, bindingRead, bindingDecode, rgbaRead, rgbaSHA, rgbaCopy
+        case appearanceInputPreparation, bindingRead, bindingDecode, rgbaRead, rgbaSHA, rgbaDigestComparison, rgbaCopy
     }
     public struct Interval: Sendable, Encodable {
         public let milliseconds: Double, calls: Int, failures: Int
@@ -18,7 +18,8 @@ public final class SourceMakerPreparationTimings {
     public struct Sample: Sendable, Encodable {
         public let intervals: [String: Interval]
         /// Actual bytes returned/read, presented to SHA, or copied into RGBA arrays.
-        /// Repeated SHA checks count again; these are not retained bytes or RSS.
+        /// Repeated SHA executions count again; cached verified-digest comparisons
+        /// have a separate interval and add no hashed bytes. These are not retained bytes or RSS.
         public let bytesRead: [String: Int], bytesHashed: [String: Int], rgbaBytesCopied: Int
         public let rgbaCacheReuses: Int, hashMismatches: Int
     }
@@ -48,6 +49,9 @@ public final class SourceMakerPreparationTimings {
     }
     func hashed(_ count: Int, phase: Phase, matches: Bool) {
         bytesHashed[phase.rawValue, default: 0] += count
+        if !matches { hashMismatches += 1 }
+    }
+    func comparedRGBADigest(matches: Bool) {
         if !matches { hashMismatches += 1 }
     }
     func copied(_ count: Int) { rgbaBytesCopied += count }
