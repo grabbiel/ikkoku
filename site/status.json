@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-25",
-  "revision": "2c33e6e3c7fb989a820e10fdc4917cb9f4f8faaf",
+  "revision": "c5491043ebd860928ba8f39f9ac3411f19ac46fc",
   "components": [
     {
       "id": "character-maker",
@@ -44,10 +44,14 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Six normal assemblies have bounded original-player comparisons.",
-      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Head 0 also has bounded bone-type-1 checks for both sexes.",
+      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Bone-type-1 checks cover head 0 for both sexes and female head 201.",
       "remaining": "Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. Passing selected vertex and binding checks does not establish full-character parity.",
-      "evidence": "The owning reference records exact model identities, tolerances, original/native hashes and independent neutral repeats.",
+      "evidence": "Corrected female head 201 passes three independent original/native cases across 37,124 selected vertices, with unchanged tolerances and an exact neutral repeat. The reference retains exact identities, hashes and exclusions; CPU silhouettes establish geometry only.",
       "docs": [
+        [
+          "Corrected female head 201",
+          "docs/reference/character/neutral-model-parity.md#corrected-female-head201-skeleton-251"
+        ],
         [
           "Model comparison evidence",
           "docs/reference/character/neutral-model-parity.md"
