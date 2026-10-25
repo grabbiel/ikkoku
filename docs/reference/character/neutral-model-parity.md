@@ -7,7 +7,7 @@ bounded selected-model comparison, not whole-character or whole-game parity.
 
 ## Reference and capture context
 
-`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|male00|male00-bone1|male200|male201`
+`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|female201-bone1|male00|male00-bone1|male200|male201`
 creates a new fully clothed card in an isolated CharaStudio player. It waits for
 the Studio scene, loads the requested normal model, drives exactly one original
 `Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
@@ -619,3 +619,60 @@ This completes one corrected male combination and one coupled input; arbitrary
 shape combinations, other corrected heads/types, animation, full hierarchy and
 appearance remain open. No runtime or per-frame cost changed, and no FPS or
 pose-cost benchmark is claimed.
+
+## Corrected female head201 skeleton (#251)
+
+The explicit `female201-bone1` probe covers sex 1, head 201, bone type 1 and
+exType 0. It requires typed requested/actual identities and the exact loaded
+category-100 head row: `add50`, `chara/bo_head_50.unity3d`, `p_cf_head_03`,
+`cf_anmShapeHead_03`, with loaded object `ct_head`. This combines the existing
+head201 geometry gate with the correction-table and head-collider gates; no
+native pose formula, converted asset or per-frame work changes.
+
+Three independent original-player captures and native exports on 2026-10-25
+pass the existing `2e-5` world-matrix/vertex and `1e-4` morph thresholds:
+
+| State | Selected vertices | Skin bindings / unique joints | Max world matrix error | Max native/source vertex error | Max native/BakeMesh vertex error |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Neutral, two independent runs | 37,124 | 994 / 224 | 7.36e-7 | 8.35e-7 | 8.12e-7 |
+| Existing coupled body/face input | 37,124 | 994 / 224 | 7.09e-7 | 5.97e-7 | 6.53e-7 |
+
+Morph error is zero, with no source shape coercions. The eleven canonical body
+and face edits match requested, actual, saved and native arrays; unrelated card
+blocks/tokens and framing remain unchanged (thumbnails excluded from the mixed
+comparison). The independent neutral repeat has exactly equal 814 bone records,
+20 source mesh streams/topologies/morph weights and saved card bytes. Each
+native assembly prepares 20 parts and selects 19, retaining only the existing
+inactive-canine and exact shadow-only exclusions. Controlled CPU silhouettes
+have IoU 1.0 and zero differing pixels; this is geometry evidence, not production
+Metal appearance parity.
+
+Both source shape controllers report bone type 1. Their independently serialized
+32-entry correction table is SHA-256
+`a4c048d96181991c3696ab508ed176a751af0447fb5cbeeacdaef2b3191c1ace`, exactly the
+native decoder input. The measured head correction `0.8695651889` passes the
+existing Float32 check, and the unique `cf_hit_head` local-scale gate differs
+from 1.08 by at most `4.29e-8`.
+
+The tested tool source is `f445f5c`; the original probe source is SHA-256
+`ffaf6182634af8bfa934e947e462b8bf5f33b7c2f47697023e9f8da48ad7af58` against the
+same original Studio assembly `902b9a…`. A fresh Release inspector, SHA-256
+`b2b9a74b029eba09f6225876337b2fa3c149f9672d4e4fa7ad7f4b337f2c9585`, consumes
+only the saved card and converted inputs, never source-evaluated geometry.
+All 65 focused Python checks, 22 retained model comparisons and seven retained
+independent repeats pass. The 3,647 historical files and 505 new manifested
+capture files remain unchanged; all owned player, compiler and export processes
+are released.
+
+The first fresh capture failed in a read-only Parallels hash-receipt call and
+produced no recoverable capture. That attempt remains separate from the three
+accepted runs. The subsequent launcher bounds retries to that exact read-only
+transport failure and never retries compilation or player execution. The
+inspector build's obsolete expected-output-path failure is also retained, with
+separate fresh-product provenance; the binary was not relabeled as an older
+build. Private records and helper-review dispositions are indexed under
+`.local/codex-continue-2026-10-24/rolling/models-female201-bone1/`.
+
+This adds one corrected combination and one coupled input. Other corrected
+heads/types, arbitrary shapes, animation, complete hierarchy and source shading
+remain open. No performance benchmark or whole-character parity is claimed.
