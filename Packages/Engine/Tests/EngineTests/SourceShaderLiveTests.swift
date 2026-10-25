@@ -834,15 +834,15 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     // Native texture store only: all asset-backed slots resolve, including
     // the six ramp users and four hair-gloss users, and the iris
     // (`ctCreateEyeL`/`R`), eye-white (`ctCreateEyeW`) and normal top/bottom/inner-shoe
-    // and head-zero face composites are composed natively. Body stays explicit.
+    // and head-zero face and ordinary female body composites are composed natively.
     let storeURL = try #require(configuration.textures)
     let storeData = try Data(contentsOf: storeURL)
     let storeManifest = try #require(JSONSerialization.jsonObject(with: storeData) as? [String: Any])
-    #expect((storeManifest["entries"] as? [[String: Any]])?.count == 59)
+    #expect((storeManifest["entries"] as? [[String: Any]])?.count == 62)
     #expect((storeManifest["unavailable"] as? [[String: Any]])?.isEmpty == true)
     let compositeRows = storeManifest["composites"] as? [[String: Any]] ?? []
     let compositeMaterials: [String] = compositeRows.compactMap { $0["material"] as? String }
-    #expect(compositeRows.count == 4 && compositeMaterials == ["cf_m_eyewhite_create", "cf_m_clothesN_create", "cf_m_face_create", "cf_m_eye_create"])
+    #expect(compositeRows.count == 5 && compositeMaterials == ["cf_m_body_create", "cf_m_eyewhite_create", "cf_m_clothesN_create", "cf_m_face_create", "cf_m_eye_create"])
     #expect((storeManifest["unavailableComposites"] as? [[String: Any]])?.isEmpty == true)
     // Exclude machine-specific roots/source.file while pinning every asset,
     // mip hash, sampler and the source binding report's hash.
@@ -851,11 +851,12 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     let contentData = try JSONSerialization.data(withJSONObject: content, options: [.sortedKeys, .withoutEscapingSlashes])
     let contentHash = SHA256.hash(data: contentData).map { String(format: "%02x", $0) }.joined()
     print("[native texture fixture] store content \(contentHash)")
-    #expect(contentHash == "7b7a0a65914c46d0ab31cd72f33893aca14a0178ac5adc158bbd99c5a2c37527")
+    #expect(contentHash == "b9ae136b9d4537bb8809f9f6207fb4ebdafbfa66ba0a4d4466b20ac83b4eadce")
     request.textureProvider = "store"
     let store = try SourceShaderLiveFixtureProbe(request, renderer: renderer)
     #expect(Set(store.attach.live) == Set([
         "cf_O_face slot 0 (main_skin); convention (capture fixture default, Unity's missing-channel value unverified): COLOR absent in the source mesh: white",
+        "o_body_a slot 0 (main_skin); TEXCOORD1 from the source stream, TEXCOORD2 from the source stream",
         "cf_O_noseline slot 0 (toon_nose_lod0)", "cf_O_mayuge slot 0 (toon_eyew_lod0)", "cf_O_tooth slot 0 (main_item)",
         "cf_O_eyeline slot 0 (toon_eyew_lod0)", "cf_O_eyeline slot 1 (toon_eyew_lod0)", "cf_O_eyeline_low slot 0 (toon_eyew_lod0)",
         "cf_Ohitomi_L slot 0 (toon_eyew_lod0)", "cf_Ohitomi_R slot 0 (toon_eyew_lod0)", "o_top_tsyats_a slot 0 (main_opaque)",
@@ -863,15 +864,13 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
         "cf_hair_idol_hair_f_00 slot 0 (main_hair_front); TEXCOORD1 from the source stream",
         "cf_hair_idol_hair_f_01 slot 0 (main_hair_front); TEXCOORD1 from the source stream",
         "cf_hair_idol_hair_f_02 slot 0 (main_hair_front); TEXCOORD1 from the source stream"]))
-    #expect(store.attach.fallbacks.count == 1 && store.attach.unmatched.isEmpty)
+    #expect(store.attach.fallbacks.isEmpty && store.attach.unmatched.isEmpty)
     // Both irises share one composite and both eye whites another (one recipe
     // each on this card): each is composed once, then hit once. The normal
-    // top, bottom, inner shoe and face each have one visible renderer and compose once.
+    // top, bottom, inner shoe, face and body each have one visible renderer and compose once.
     let eventsByKey = Dictionary(grouping: store.composites, by: \.contentKey).mapValues { $0.map(\.cacheHit) }
-    #expect(eventsByKey.count == 6 && eventsByKey.values.filter { $0 == [false, true] }.count == 2
-            && eventsByKey.values.filter { $0 == [false] }.count == 4, "\(store.composites)")
-    #expect(store.attach.fallbacks.allSatisfy { $0.contains("is not composed natively for the live path") },
-            "\(store.attach.fallbacks)")
+    #expect(eventsByKey.count == 7 && eventsByKey.values.filter { $0 == [false, true] }.count == 2
+            && eventsByKey.values.filter { $0 == [false] }.count == 5, "\(store.composites)")
     let resolvedTextureCount = renderer.resources.statistics().textures
     let nativeImages = Dictionary(uniqueKeysWithValues: try store.translatedImages(renderer: renderer).map { ($0.name, try straightRGBA($0.image)) })
     #expect(renderer.resources.statistics().textures == resolvedTextureCount, "Live draws must reuse assembly textures")
@@ -880,9 +879,9 @@ func liveSourceShadersMeetTheControlledOriginalFrameGates() throws {
     for (family, bound) in [("main_opaque", 4.0), ("toon_eyew_lod0", 4.0), ("toon_eye_lod0", 4.0), ("main_hair", 24.0), ("main_hair_front", 22.0)] {
         let name = "native-translated-\(family).png"
         let only = try #require(nativeImages[name]), capturedOnly = try #require(images[name])
-        // The missing body composite changes occlusion. Compare only pixels
-        // frontmost in both the complete capture-provider frame and this
-        // native subset; do not claim a whole-character colour comparison.
+        // Retain the per-family comparison on pixels frontmost in both
+        // providers. Resolving the final composite does not establish
+        // whole-character colour or lighting parity.
         let mask = (0..<count).map { pixel in
             originalAlpha[pixel] && only[pixel * 4 + 3] > 0 && capturedOnly[pixel * 4 + 3] > 0 && (0..<3).allSatisfy {
                 nativeFull[pixel * 4 + $0] == only[pixel * 4 + $0] && full[pixel * 4 + $0] == capturedOnly[pixel * 4 + $0]

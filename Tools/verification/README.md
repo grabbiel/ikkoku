@@ -1269,6 +1269,28 @@ The native store must include the three face inputs and `create_head` program;
 original readback pixels are comparison data only. Native live-slot coverage,
 Release costs and default-off output are separate acceptance checks.
 
+`IKKOKU_BODY_COMPOSITE_BASE_PROBE` and `IKKOKU_BODY_COMPOSITE_PROBE`
+name a fresh original base/distinct pair for the ordinary female body,
+exType 0, high detail, with no body paint or sunburn. Each folder contains
+`fixture-card.png`, `frame.json`, three input readbacks and separate target
+readbacks before/after `ReleaseBodyCustomTexture`. The source probe temporarily
+retains creator inputs before loading and restores the flag afterward; this
+observation mode does not establish default input lifetime or source costs.
+Only nine decoded body RGB scalars (main skin, sub skin and nail) may change,
+with alpha 1 and other Custom/Coordinate/Status data preserved. Shared skin
+values also affect face/eyeline; this new target oracle covers body composition.
+The gated `liveSourceOrdinaryBodyCompositeMatchesBaseAndDistinctOriginalColours`
+requires both target base levels within one byte after colour-space conversion,
+exact ordinary-body creator/input identities, the white sunburn default,
+unchanged hits, recolour/revert and released-target resource bounds. The source
+`ForceEnable` policy is retained. Main/mask inputs have one authored level;
+the sRGB BC1 paint mask has 11. Only level 0 has an independent GPU oracle;
+remaining authored levels and the 12 generated target levels are structural
+checks. Input decode differences remain separate from the target tolerance.
+The isolated native store needs the three body inputs and `create_body` program;
+original readback pixels are comparison data only. Live-slot resolution,
+Release costs and default-off output remain separate acceptance checks.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,
