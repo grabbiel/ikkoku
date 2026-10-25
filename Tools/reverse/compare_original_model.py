@@ -159,12 +159,23 @@ def shape_card_payload(baseline, current, mode, rows=()):
 
 HEAD201_CATALOG = dict(Name='タイプ０３', MainManifest='add50', MainAB='chara/bo_head_50.unity3d',
                        MainData='p_cf_head_03', ShapeAnime='cf_anmShapeHead_03')
+HEAD200_CATALOG = dict(Name='タイプ０２', MainManifest='add50', MainAB='chara/bo_head_50.unity3d',
+                       MainData='p_cf_head_02', ShapeAnime='cf_anmShapeHead_02')
 HEAD00_CATALOG = dict(Name='タイプ０１', MainManifest='abdata', MainAB='chara/bo_head_00.unity3d',
                       MainData='p_cf_head_00', ShapeAnime='cf_anmShapeHead_00')
 
 
 def source_head_identity(mode):
     """Pin the new head's measured catalog; retain old capture compatibility."""
+    if mode.get('variant') == 'female200-bone1' or (mode.get('headID') == 200 and mode.get('boneType') == 1):
+        if mode.get('variant') != 'female200-bone1':
+            raise ValueError('Corrected head200 normal model variant differs')
+        expected = dict(sex=1, headID=200, boneType=1, exType=0, requestedSex=1,
+                        requestedHeadID=200, requestedBoneType=1, requestedExType=0, loadedHeadCatalogID=200)
+        if any(type(mode.get(k)) is not int or mode[k] != v for k, v in expected.items()):
+            raise ValueError('Corrected head200 requested/loaded normal model identity differs')
+        if mode.get('loadedHeadName') != 'ct_head' or mode.get('loadedHeadCatalog') != HEAD200_CATALOG:
+            raise ValueError('Corrected head200 loaded head name or catalog differs from the exact source prefab')
     if mode.get('variant') in ('female00-bone1', 'male00-bone1'):
         sex = 1 if mode['variant'] == 'female00-bone1' else 0
         expected = dict(sex=sex, headID=0, boneType=1, exType=0, requestedSex=sex,
@@ -198,7 +209,7 @@ def source_head_identity(mode):
 
 def body_correction_identity(folder, mode, native=None):
     """Measured source SaveCorrectInfo bytes versus the native decoder input."""
-    if mode.get('variant') not in ('female00-bone1', 'male00-bone1', 'female201-bone1', 'male201-bone1'): return None
+    if mode.get('variant') not in ('female00-bone1', 'male00-bone1', 'female200-bone1', 'female201-bone1', 'male201-bone1'): return None
     source_head_identity(mode)
     record = mode.get('bodyCorrection')
     if (not isinstance(record, dict) or record.get('file') != 'body-correction.bytes'
@@ -376,12 +387,12 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     mode = frame.get('neutralModel')
     if not mode or native.get('kind') != 'ikkoku-neutral-source-model': raise ValueError('Requires neutral source and native model captures')
     identity = native['identity']
-    variants = {'female00': (1, 0), 'female00-bone1': (1, 0), 'female200': (1, 200), 'female201': (1, 201), 'female201-bone1': (1, 201), 'male00': (0, 0), 'male00-bone1': (0, 0), 'male200': (0, 200), 'male201': (0, 201), 'male201-bone1': (0, 201)}
+    variants = {'female00': (1, 0), 'female00-bone1': (1, 0), 'female200': (1, 200), 'female200-bone1': (1, 200), 'female201': (1, 201), 'female201-bone1': (1, 201), 'male00': (0, 0), 'male00-bone1': (0, 0), 'male200': (0, 200), 'male201': (0, 201), 'male201-bone1': (0, 201)}
     if mode.get('variant') not in variants or (mode['sex'], mode['headID']) != variants[mode['variant']]:
         raise ValueError('Unsupported source neutral model identity')
     for key in ('Sex', 'HeadID', 'BoneType'):
         if mode['requested' + key] != mode[key[0].lower() + key[1:]]: raise ValueError('Source silently changed requested identity')
-    expected_bone = 1 if mode['variant'] in ('female00-bone1', 'male00-bone1', 'female201-bone1', 'male201-bone1') else 0
+    expected_bone = 1 if mode['variant'] in ('female00-bone1', 'male00-bone1', 'female200-bone1', 'female201-bone1', 'male201-bone1') else 0
     if mode['variant'] == 'male00' and any(type(identity.get(k)) is not int or identity[k] != 0
                                          for k in ('sex', 'headID', 'boneType', 'exType')):
         raise ValueError('Native normal male00 model identity differs')
