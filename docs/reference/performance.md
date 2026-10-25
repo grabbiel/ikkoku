@@ -3233,14 +3233,13 @@ Steady state, median (range) of two runs:
 | studio-orbit-bursts | no map | 9.4 (9.0–9.9) | 0.11 | 49.4 | 29.7 | 0.82 / 1.29 | 34.7 | 908 | 356.0 |
 | studio-orbit-bursts | map | 9.2 (8.9–9.5) | 0.11 | 49.4 | 28.3 | 0.66 / 1.31 | 35.1 | 966 | 408.5 |
 
-- **Idle main thread.** It is 4–6 ms/s higher with the map in the paired
-  rounds (28.8 → 32.6 and 23.3 → 29.2).
-  - **Measured:** 2.7–3.9 ms/s of that is `refresh()`, whose p50 rose from
-    0.47–0.53 to 0.55–0.59 ms at 30 refreshes per second.
-  - **The rest, 1–2 ms/s, is not attributed.** In the same map runs, the
-    off-main live evaluation's CPU rose by 8–29% (310 → 337 and 227 →
-    294 ms/s), although the map does not touch it. So those runs had slower
-    CPU, and the remainder is within this variation.
+- **Idle main thread.** It was 4–6 ms/s higher with the map in the paired
+  rounds (28.8 → 32.6 and 23.3 → 29.2), with `refresh()` p50 0.47–0.53 →
+  0.55–0.59 ms at 30 refreshes per second. A micro-benchmark attributes it
+  (see [refresh attribution](#refresh-attribution)): the map adds at most a
+  few microseconds per refresh. The difference is these runs' variation: in
+  the same map runs, the off-main live evaluation's CPU rose by 8–29% (310 →
+  337 and 227 → 294 ms/s), although the map does not touch it.
 - **Idle GPU:** +0.10 ms per frame (+3.5 ms/s at 30 frames per second).
 - **Orbit bursts.** The main thread and draw CPU are unchanged. GPU time per
   frame fell by 0.15 ms p50 (**not explained**; see the benchmark below).
@@ -3266,6 +3265,36 @@ Offscreen benchmark at 1996×1824, median (range) of three runs of 60 frames:
   fragments under them are never shaded. The same effect would explain the
   lower orbit GPU time when parts of the room come into view.
 
+### Refresh attribution
+
+Afterwards, outside a quiet window, a temporary hook (not committed) timed
+`refresh()` in one Release process on the showoff scene with the map loaded.
+It ran 400 refreshes per configuration, interleaved over 9 rounds (live
+animation off, a load average of 13–26), and reports the median of the
+rounds. A 4 s `sample` of the map configuration found
+`publishSourceMapLine` in 12 and the rest of the map's code in 2 of about
+4,000 main-thread samples.
+
+| Build | No map µs | Map µs | Map hidden µs | `publishSourceMapLine` µs (built / unchanged inputs) | `currentSourceMapItems` µs |
+| --- | ---: | ---: | ---: | --- | ---: |
+| before | 451.7 | 455.3 | 453.2 | 1.36 / – | 0.38 |
+| after, run 1 | 461.7 | 467.1 | 465.7 | 1.47 / 0.24 | 0.35 |
+| after, run 2 | 455.5 | 455.2 | 451.2 | 1.50 / 0.23 | 0.36 |
+
+- **The map's per-refresh cost is at most a few microseconds,** within the
+  benchmark's variation: +3.6 µs before, then +5.5 and −0.2 µs. The target
+  of 10–20 µs holds.
+- **The steady-state runs' 0.08 ms gap** was therefore not the map.
+- **The change anyway** keeps per-frame work flat:
+  - `refresh()` rebuilds the map line only when one of its inputs changed
+    (`SourceMapLineKey`: the document's and the request's scene, the map,
+    the asset's identity, placed, failed, shown). Unchanged inputs cost
+    0.24 µs instead of the 1.4 µs string build.
+  - The frame's item array is reserved at the last frame's size, so the
+    characters' and the map's appends no longer regrow it.
+
+The reports are in `.local/sta11a-maps/refresh-bench`.
+
 ### Scaling to a base M1 (estimate)
 
 This uses the method of [scaling to the low end](#scaling-to-the-low-end-base-m1-8-gb):
@@ -3279,7 +3308,7 @@ CPU × 1.25, and GPU × 76/8 cores × the 1.8 / 3.6 Mpx window ratio, about 4.75
   frame on its own. Behind characters it adds about 0.35 ms per frame, and
   0.5 ms per frame in the showoff scene's idle (+14 ms/s at 30 frames per
   second).
-- **Main thread.** About +0.06 ms per refresh.
+- **Main thread.** A few microseconds per refresh at most.
 - **Memory.** +52 MB of Metal memory and 50–62 MB more footprint fit in
   8 GB. That memory is the reason for native BC upload (G7) before larger
   maps: Map 34 would take 265.3 MB as RGBA8 against 39.8 MB as BC.

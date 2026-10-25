@@ -182,7 +182,8 @@ Release, on the reference machine, in one quiet window. The full tables are in [
 - **First draw.** The map draws in the first frame after the import's commit (`sourceSceneReady`). The window's first frame is unchanged at 0.45 s.
 - **GPU memory.** Metal grows by 52.5 MB, and the peak footprint by 50–62 MB.
 - **Steady state.**
-  - `studio-idle`: GPU +0.10 ms per frame; `refresh()` +0.07 ms at 30 per second.
+  - `studio-idle`: GPU +0.10 ms per frame. A micro-benchmark puts the map's `refresh()` cost at a few microseconds at most. The 0.08 ms higher `refresh()` p50 in the map runs was those runs' variation.
+  - `refresh()` rebuilds the map line only when its inputs change (`SourceMapLineKey`).
   - `studio-orbit-bursts`: the main thread and draw CPU are unchanged.
   - With the room fully in view, offscreen at 1996×1824, the room costs 0.40 ms of GPU per frame alone, and 0.07 ms behind the 7 characters.
 - **Base M1 (estimate).**

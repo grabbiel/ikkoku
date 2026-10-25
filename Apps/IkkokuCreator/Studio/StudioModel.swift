@@ -290,6 +290,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored var sourceMapItems: [RenderItem]?
     @ObservationIgnored var sourceMapFailure: Error?
     @ObservationIgnored var sourceMapInstallSeconds: Double = 0
+    /// What `sourceMapLine` was last built from, so `refresh()` rebuilds it
+    /// only when one of its inputs changed (`publishSourceMapLine`).
+    @ObservationIgnored var sourceMapLineKey: SourceMapLineKey?
     /// The current document's map line (status line and inspector): what the
     /// scene names and whether it is drawn. nil for a document without a map.
     internal(set) var sourceMapLine: String?
@@ -2912,6 +2915,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             sourceRuntimeCoverage = coverage
         }
         var items: [RenderItem] = []
+        // About as many items as the last frame, so appending them (the
+        // characters' and, at the end, the map's) does not regrow the array.
+        items.reserveCapacity(frame.items.count)
         var skinSets: [UInt64: [float4x4]] = [:]
         var lights: [SceneLight] = []
         var gizmos: [GizmoBatch] = []
@@ -3177,7 +3183,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
         publishActiveSourceCameraView()
-        publishSourceMapLine()
+        publishSourceMapLine(onlyIfChanged: true)
         if reusable, statusWrites == statusWritesBefore {
             cameraReuse = CameraReuse(frame: f, characterGuides: characterGuides, lightGlyphs: lightGlyphBatch, selectionGuide: selectionGuide,
                                       routeGuides: routeGuides)

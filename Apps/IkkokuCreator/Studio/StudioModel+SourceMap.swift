@@ -2,6 +2,14 @@ import Foundation
 import Renderer
 import Studio
 
+/// The inputs of `StudioModel.sourceMapLine` that can change without the map
+/// code running: the document's scene (undo, redo, New Scene) and the map
+/// state, compared by identity.
+struct SourceMapLineKey: Equatable {
+    let documentScene: String?, requestScene: String?, map: Int32?
+    let asset: ObjectIdentifier?, placed: Bool, failed: Bool, shown: Bool
+}
+
 /// ST-A11: the map an imported CharaStudio scene names, as the preview needs
 /// it: the record's map number, transform and sun type, and what the
 /// converted catalog (`IKKOKU_STUDIO_MAP_CATALOG`) resolves it to. Runtime
@@ -160,8 +168,16 @@ extension StudioModel {
     var isLoadingSourceMap: Bool { sourceMapLoad != nil }
 
     /// Rewrites `sourceMapLine` when it changes: the line for the current
-    /// document's map, nil for a document without one.
-    func publishSourceMapLine() {
+    /// document's map, nil for a document without one. The map's own state
+    /// changes call it directly. `refresh()` passes `onlyIfChanged`, so a
+    /// frame whose inputs are the same as the last build's (`SourceMapLineKey`)
+    /// compares two scene hashes and builds no string.
+    func publishSourceMapLine(onlyIfChanged: Bool = false) {
+        let key = SourceMapLineKey(documentScene: doc.sourceSceneSHA256, requestScene: sourceMapRequest?.sceneSHA256,
+                                   map: sourceMapRequest?.map, asset: sourceMapAsset.map(ObjectIdentifier.init),
+                                   placed: sourceMapItems != nil, failed: sourceMapFailure != nil, shown: showSourceMap)
+        if onlyIfChanged, key == sourceMapLineKey { return }
+        sourceMapLineKey = key
         var line: String?
         if let request = sourceMapRequest, request.sceneSHA256 == doc.sourceSceneSHA256 {
             if let target = request.converted {
