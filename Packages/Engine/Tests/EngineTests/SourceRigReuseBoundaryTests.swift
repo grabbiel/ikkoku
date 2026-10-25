@@ -199,7 +199,7 @@ private final class RigReuseBarrier: Sendable {
 @MainActor @Test func sourceRigReuseCancelledWorkerRetainsOldEpochCreditsUntilDrain() async throws {
     let admission = SourceRigReuseAdmission(maximumEntries: 1, maximumSnapshots: 1)
     let epoch = SourceRigReuseEpoch(), rig = try reuseRig(), barrier = RigReuseBarrier()
-    let queue = SourceMakerPreparationQueue<SourceRigReuseSnapshot>()
+    let queue = SourceMakerPreparationQueue<SourceRigReuseSnapshot?>()
     defer { barrier.release() }
     var input: SourceRigReuseSnapshot? = try {
         let entry = try #require(SourceRigReuseEntry(rig: rig, key: reuseKey(), epoch: epoch, admission: admission))
@@ -220,6 +220,9 @@ private final class RigReuseBarrier: Sendable {
     #expect(SourceRigReuseEntry(rig: rig, key: reuseKey(), epoch: .init(), admission: admission) == nil)
     barrier.release()
     await queue.drain()
+    // drain marks actor delivery; a following serial operation also establishes
+    // that the previous dispatch closure has finished unwinding its input.
+    #expect(try await queue.prepare { nil } == nil)
     #expect(observed == nil && admission.counts == .init())
     #expect(SourceRigReuseEntry(rig: rig, key: reuseKey(), epoch: .init(), admission: admission) != nil)
 }
