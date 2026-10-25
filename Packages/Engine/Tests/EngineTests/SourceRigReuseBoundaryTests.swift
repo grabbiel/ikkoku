@@ -25,6 +25,21 @@ private func reuseKey(_ digit: Character = "a") -> SourceRigReuseKey {
     SourceRigReuseKey(sha256: String(repeating: String(digit), count: 64), byteCount: 100)!
 }
 
+private func reuseEncodedRig(_ name: String = "fixture") throws -> Data {
+    let identity: [Float] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    return try JSONSerialization.data(withJSONObject: [
+        "schemaVersion": 1, "coordinateSpace": "unity-left-handed-y-up", "matrixLayout": "column-major",
+        "uvConvention": "unity-source", "sourcePrefab": name,
+        "nodes": [["name": "root", "sourceID": "root", "translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]]],
+        "skins": [["name": "skin", "meshNode": 0, "joints": [0], "inverseBindMatrices": [identity]]],
+        "meshes": [["name": "part", "node": 0, "skin": 0,
+            "positions": [[0, 0, 1], [1, 0, 1], [0, 1, 1]], "normals": [[0, 0, 1], [0, 0, 1], [0, 0, 1]],
+            "tangents": [], "uv0": [], "joints": [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]],
+            "weights": [[1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0]],
+            "submeshes": [["indices": [0, 1, 2]]], "morphChannels": []]]
+    ] as [String: Any], options: .sortedKeys)
+}
+
 /// Only the worker waits. Arrival resumes the test without blocking MainActor.
 /// The timeout is a deadlock guard, not a performance assertion.
 private final class RigReuseBarrier: Sendable {
@@ -265,4 +280,158 @@ private final class RigReuseBarrier: Sendable {
     #expect(admission.counts.entries == 1 && admission.counts.snapshots == 1)
     delivered = nil
     #expect(observed == nil && admission.counts == .init())
+}
+
+@MainActor @Test func sourceRigReuseHashesActualBytesAndPublishesOnlyAcceptedCandidates() throws {
+    let session = SourceMakerRigReuse(), data = try reuseEncodedRig(), timings = SourceMakerPreparationTimings()
+    let worker = SourceRigReuseWorker(session.input())
+    let first = try worker.decode(data, timings: timings), second = try worker.decode(data, timings: timings)
+    #expect(first.rig.identity === second.rig.identity)
+    let (candidate, sample) = worker.finish()
+    #expect(sample.hits == 1 && sample.misses == 1 && sample.admitted == 1 && sample.retainedEntries == 1)
+    #expect(timings.sample.intervals["rigDecode"]?.calls == 1)
+    #expect(timings.sample.intervals["rigReuseSHA"]?.calls == 2)
+    #expect(timings.sample.bytesHashed["rigReuseSHA"] == data.count * 2)
+    // A prepared-but-unpublished value must not become another worker's hit.
+    let unpublished = SourceRigReuseWorker(session.input())
+    #expect(try unpublished.decode(data, timings: nil).rig.identity !== first.rig.identity)
+    #expect(session.commit(candidate))
+    let next = SourceRigReuseWorker(session.input())
+    #expect(try next.decode(data, timings: nil).rig.identity === first.rig.identity)
+    let changedBytes = data + Data(" ".utf8)
+    let changed = try next.decode(changedBytes, timings: nil)
+    #expect(changed.rig.identity !== first.rig.identity) // equivalent JSON still has different source bytes
+    #expect(changed.parts[0].mesh.positions == first.parts[0].mesh.positions)
+    #expect(changed.parts[0].mesh.indices == first.parts[0].mesh.indices)
+    #expect(changed.parts[0].mesh.positions == [Float3(0, 0, -1), Float3(1, 0, -1), Float3(0, 1, -1)])
+    #expect(changed.parts[0].mesh.indices == [0, 2, 1]) // conversion remains exactly once
+    let nextSample = next.finish().1
+    #expect(nextSample.hits == 1 && nextSample.misses == 1)
+}
+
+@MainActor @Test func sourceRigReuseInvalidBytesKeepDecodeErrorAndDoNotPublish() throws {
+    let session = SourceMakerRigReuse(), worker = SourceRigReuseWorker(session.input())
+    let malformed = Data("not JSON".utf8), timings = SourceMakerPreparationTimings()
+    func corruptContext(_ operation: () throws -> SourceRig) -> [String] {
+        do { _ = try operation(); Issue.record("Malformed bytes were accepted"); return [] }
+        catch DecodingError.dataCorrupted(let context) { return [context.debugDescription] + context.codingPath.map(\.stringValue) }
+        catch { Issue.record("Unexpected decoding error: \(error)"); return [] }
+    }
+    #expect(corruptContext { try worker.decode(malformed, timings: timings) } == corruptContext { try SourceRig.decode(malformed) })
+    #expect(timings.sample.intervals["rigDecode"]?.failures == 1)
+    #expect(timings.sample.bytesHashed["rigReuseSHA"] == malformed.count)
+    #expect(worker.finish().1.retainedEntries == 0)
+    let data = try reuseEncodedRig(), value = try worker.decode(data, timings: nil)
+    let candidate = worker.finish().0
+    let foreign = SourceMakerRigReuse()
+    #expect(!foreign.commit(candidate))
+    session.reset()
+    #expect(!session.commit(candidate))
+    #expect(try SourceRigReuseWorker(session.input()).decode(data, timings: nil).rig.identity !== value.rig.identity)
+}
+
+@MainActor @Test func sourceRigReuseCapacityClearRequiresCommitAndLastHolderRelease() throws {
+    let ledger = SourceRigReuseAdmission(maximumEntries: 1)
+    let session = SourceMakerRigReuse(admission: ledger)
+    let oldData = try reuseEncodedRig("old"), newData = try reuseEncodedRig("new")
+    func populate(_ data: Data) throws {
+        let worker = SourceRigReuseWorker(session.input())
+        _ = try worker.decode(data, timings: nil)
+        #expect(session.commit(worker.finish().0))
+    }
+    try populate(oldData)
+    var heldInput: SourceMakerRigReuse.Input? = session.input()
+    var worker: SourceRigReuseWorker? = SourceRigReuseWorker(heldInput!)
+    let value = try worker!.decode(newData, timings: nil)
+    #expect(value.sourcePrefab == "new") // capacity must never reject valid geometry
+    let (clear, sample) = worker!.finish()
+    #expect(sample.clearOnCommit && sample.capacityBypasses == 1 && sample.retainedEntries == 0)
+    // Simulate a later appearance failure: simply do not commit its candidate.
+    let oldCheck = SourceRigReuseWorker(session.input())
+    _ = try oldCheck.decode(oldData, timings: nil)
+    #expect(oldCheck.finish().1.hits == 1 && ledger.counts.entries == 1)
+    #expect(session.commit(clear))
+    worker = nil
+    #expect(ledger.counts.entries == 1) // heldInput and oldCheck still own the old epoch snapshot
+    heldInput = nil
+    // oldCheck deliberately remains held until this helper returns.
+    func releasedCandidate() throws -> SourceMakerRigReuse.Candidate {
+        let blocked = SourceRigReuseWorker(session.input())
+        _ = try blocked.decode(newData, timings: nil)
+        return blocked.finish().0
+    }
+    try withExtendedLifetime(oldCheck) {
+        #expect(session.commit(try releasedCandidate()))
+        #expect(ledger.counts.entries == 1)
+    }
+}
+
+@MainActor @Test func sourceRigReuseSuccessfulClearAllowsDifferentKeyAfterOldInputDies() throws {
+    let ledger = SourceRigReuseAdmission(maximumEntries: 1), data = try reuseEncodedRig("next")
+    let session = SourceMakerRigReuse(admission: ledger)
+    func oldSessionWork() throws {
+        let first = SourceRigReuseWorker(session.input())
+        _ = try first.decode(reuseEncodedRig("first"), timings: nil)
+        #expect(session.commit(first.finish().0))
+        let following = SourceRigReuseWorker(session.input())
+        _ = try following.decode(data, timings: nil)
+        let (clear, sample) = following.finish()
+        #expect(sample.clearOnCommit)
+        #expect(session.commit(clear))
+        withExtendedLifetime((first, following)) { #expect(ledger.counts.entries == 1) }
+    }
+    try oldSessionWork()
+    #expect(ledger.counts == .init())
+    let next = SourceRigReuseWorker(session.input())
+    _ = try next.decode(data, timings: nil)
+    let (candidate, sample) = next.finish()
+    #expect(sample.admitted == 1 && !sample.clearOnCommit && sample.retainedEntries == 1)
+    #expect(session.commit(candidate))
+}
+
+@MainActor @Test func sourceRigReuseIntrinsicOversizeDoesNotEvictUsefulSnapshot() throws {
+    let data = try reuseEncodedRig(), decoded = try SourceRig.decode(data)
+    let key = SourceRigReuseKey(sha256: OriginalCardFixture.hash(data), byteCount: data.count)!
+    let limit = try #require(SourceRigReuseEntry.charge(rig: decoded, key: key))
+    let ledger = SourceRigReuseAdmission(maximumBytes: limit), session = SourceMakerRigReuse(admission: ledger)
+    let initial = SourceRigReuseWorker(session.input())
+    _ = try initial.decode(data, timings: nil)
+    #expect(session.commit(initial.finish().0))
+    let oversized = SourceRigReuseWorker(session.input())
+    let value = try oversized.decode(reuseEncodedRig(String(repeating: "x", count: 2048)), timings: nil)
+    #expect(value.sourcePrefab.count == 2048)
+    let (candidate, sample) = oversized.finish()
+    #expect(sample.intrinsicBypasses == 1 && !sample.clearOnCommit && sample.retainedEntries == 1)
+    #expect(session.commit(candidate))
+    let next = SourceRigReuseWorker(session.input())
+    _ = try next.decode(data, timings: nil)
+    #expect(next.finish().1.hits == 1)
+}
+
+@MainActor @Test func sourceRigReuseFullSnapshotBudgetClearsOnlyAfterSuccess() throws {
+    let ledger = SourceRigReuseAdmission(maximumSnapshots: 1), session = SourceMakerRigReuse(admission: ledger)
+    func initialCommit() throws {
+        let worker = SourceRigReuseWorker(session.input())
+        _ = try worker.decode(reuseEncodedRig("first"), timings: nil)
+        #expect(session.commit(worker.finish().0))
+    }
+    try initialCommit()
+    var held: SourceMakerRigReuse.Input? = session.input()
+    var worker: SourceRigReuseWorker? = SourceRigReuseWorker(held!)
+    let data = try reuseEncodedRig("second")
+    _ = try worker!.decode(data, timings: nil)
+    let (clear, sample) = worker!.finish()
+    #expect(sample.admitted == 1 && sample.capacityBypasses == 0 && sample.clearOnCommit)
+    #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 1)
+    worker = nil
+    #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+    #expect(session.commit(clear))
+    #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1)
+    held = nil
+    #expect(ledger.counts == .init())
+    let next = SourceRigReuseWorker(session.input())
+    _ = try next.decode(data, timings: nil)
+    let (candidate, nextSample) = next.finish()
+    #expect(!nextSample.clearOnCommit && nextSample.retainedEntries == 1)
+    #expect(session.commit(candidate))
 }

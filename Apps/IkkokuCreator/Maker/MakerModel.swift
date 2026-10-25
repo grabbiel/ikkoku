@@ -60,6 +60,7 @@ final class MakerModel: ViewportInputHandler {
         case head(SourceMakerHeadPreparation)
     }
     @ObservationIgnored private let sourcePreparation = SourceMakerPreparationQueue<PreparedSelection>()
+    @ObservationIgnored private let sourceRigReuse = SourceMakerRigReuse()
     @ObservationIgnored private var sourceNormalBaseURL: URL?
     @ObservationIgnored private var sourceSelectionGeneration: UInt64 = 0
     /// Only asset pickers are disabled while preparing; shape/color controls stay live.
@@ -69,6 +70,7 @@ final class MakerModel: ViewportInputHandler {
         var headOwnerStages: HeadOwnerStages? = nil
         var headWorkerStages: SourceMakerPreparationTimings.Sample? = nil
         var headQueueStages: SourceMakerPreparationQueueTiming? = nil
+        var headRigReuse: SourceMakerRigReuse.Sample? = nil
         var baseAppearanceStages: SourceBaseAppearanceTimings.Sample? = nil
         var cardAppearanceStages: SourceAppearanceTimings.Sample? = nil
         var preparedAppearanceBytes: Int? = nil
@@ -266,7 +268,7 @@ final class MakerModel: ViewportInputHandler {
     /// A mode exit invalidates preparation even if Maker is shown again before
     /// its worker finishes; an inactive completion must never replace Studio's frame.
     var isActiveMode = true {
-        didSet { if oldValue && !isActiveMode { cancelSourceSelection() } }
+        didSet { if oldValue && !isActiveMode { cancelSourceSelection(); sourceRigReuse.reset() } }
     }
 
     var library: AssetLibrary { host.library }
@@ -359,6 +361,7 @@ final class MakerModel: ViewportInputHandler {
 
     func newCharacter(sex: Sex) {
         cancelSourceSelection()
+        sourceRigReuse.reset()
         importedSourceCard = nil; importedSourceCardURL = nil
         sourceRigPreview = nil
         card = sex == .female ? .defaultFemale() : .defaultMale()
@@ -379,12 +382,13 @@ final class MakerModel: ViewportInputHandler {
         }
     }
 
-    func load(card: CharacterCard) { cancelSourceSelection(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
+    func load(card: CharacterCard) { cancelSourceSelection(); sourceRigReuse.reset(); importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; self.card = card }
 
     func openSourceRig(url: URL) throws { try openSourceRig(url: url, importing: nil, cardURL: nil) }
 
     private func openSourceRig(url: URL, importing imported: SourceCharacterCard?, cardURL: URL?) throws {
         cancelSourceSelection()
+        sourceRigReuse.reset()
         let manifest = try? JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: url))
         let sex = manifest?.sex ?? (manifest?.kind == "koikatsu-male-avatar" ? 0 : 1)
         let identity = try imported?.customization()
@@ -503,11 +507,12 @@ final class MakerModel: ViewportInputHandler {
         frameSourceRig()
     }
 
-    func closeSourceRig() { cancelSourceSelection(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
+    func closeSourceRig() { cancelSourceSelection(); sourceRigReuse.reset(); sourceSelectionRows = []; sourceHeadChoices = []; sourceNormalBaseURL = nil; importedSourceCard = nil; importedSourceCardURL = nil; sourceRigPreview = nil; resetCamera(); refresh(); status = "Character Maker" }
 
     func setModLibrary(_ library: SourceModLibrary?, catalog: SourceModCatalog? = nil,
                        contract: SourceModCatalogContract? = nil) throws {
         cancelSourceSelection()
+        sourceRigReuse.reset()
         let replacement: SourceRigPreview?
         var cardApplication: SourcePreviewAppearance.CardApplication?
         if let current = sourceRigPreview, let url = sourceRigURL {
@@ -891,6 +896,7 @@ final class MakerModel: ViewportInputHandler {
         guard bytes != card.preservedData else { return }
         let candidate = try SourceCharacterCard.decode(bytes)
         let coordinate = sourceBoneModifierCoordinate, baseURL = sourceNormalBaseURL
+        let rigReuseInput = sourceRigReuse.input()
         sourceSelectionPending = "Preparing head · ID \(id)"
         status = sourceSelectionPending!
         defer { if generation == sourceSelectionGeneration { sourceSelectionPending = nil } }
@@ -901,7 +907,7 @@ final class MakerModel: ViewportInputHandler {
                 beforePreparation?()
                 let timings = SourceMakerPreparationTimings()
                 return .head(try SourceMakerHeadPreparation.prepare(card: candidate, library: library,
-                    coordinate: coordinate, baseURL: baseURL, timings: timings))
+                    coordinate: coordinate, baseURL: baseURL, timings: timings, rigReuse: rigReuseInput))
             }
             guard case .head(let value) = result.value else { throw RigError.invalid("Unexpected Maker preparation result.") }
             head = value; queueTiming = result.timing
@@ -957,6 +963,7 @@ final class MakerModel: ViewportInputHandler {
         if head.sex == 0 { diagnostics.append("Normal male Maker height is fixed at 0.6 by the original game.") }
         updatingSource = true
         appearanceTransaction.commit()
+        sourceRigReuse.commit(head.rigReuseCandidate)
         defer {
             updatingSource = false
             refresh()
@@ -970,7 +977,7 @@ final class MakerModel: ViewportInputHandler {
                     previewMilliseconds: (previewFinished - cardAppearanceFinished) * 1000,
                     poseFrameMilliseconds: (poseFrameFinished - previewFinished) * 1000,
                     commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000),
-                headWorkerStages: head.workerStages, headQueueStages: queueTiming,
+                headWorkerStages: head.workerStages, headQueueStages: queueTiming, headRigReuse: head.rigReuseSample,
                 baseAppearanceStages: baseAppearanceTimings.sample,
                 cardAppearanceStages: appearanceTimings.sample, preparedAppearanceBytes: head.appearanceInputs.byteCount,
                 preparedAppearanceBytesByCall: head.appearanceInputs.perCallByteCounts)

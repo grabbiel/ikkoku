@@ -9,7 +9,7 @@ public final class SourceMakerPreparationTimings {
         case manifestRead, manifestDecode, shapeRead, shapeDecode
         case expressionRead, expressionDecode, correctionRead, bodyOptions, settingsValidation
         case libraryPreparation, libraryManifestRead, libraryManifestDecode
-        case verifiedFileRead, verifiedFileSHA, rigRead, rigDecode, assembly
+        case verifiedFileRead, verifiedFileSHA, rigRead, rigReuseSHA, rigDecode, assembly
         case appearanceInputPreparation, bindingRead, bindingDecode, rgbaRead, rgbaSHA, rgbaCopy
     }
     public struct Interval: Sendable, Encodable {
@@ -66,13 +66,16 @@ public struct SourceMakerHeadPreparation: Sendable {
     public let bodyOptions: SourceBodyShapePose.Options
     public let appearanceInputs: SourceMakerLibrary.Prepared.AppearanceInputs
     public let workerStages: SourceMakerPreparationTimings.Sample?
+    public let rigReuseCandidate: SourceMakerRigReuse.Candidate?
+    public let rigReuseSample: SourceMakerRigReuse.Sample?
 
     /// `baseURL` is a configuration snapshot for the sex's head-0 assembly, not
     /// the currently displayed head-200/201 URL. Assembly/contract I/O and the
     /// selected appearance binding/RGBA reads and hashes stay here. Base and
     /// component image loads, GPU composition and resources remain owner-side.
     public static func prepare(card: SourceCharacterCard, library: SourceMakerLibrary,
-                               coordinate: Int, baseURL: URL?, timings: SourceMakerPreparationTimings? = nil) throws -> Self {
+                               coordinate: Int, baseURL: URL?, timings: SourceMakerPreparationTimings? = nil,
+                               rigReuse: SourceMakerRigReuse.Input? = nil) throws -> Self {
         try card.validateMakerSelectionMetadata()
         try SourceMakerLibrary.validateAssemblyIdentity(card: card)
         let identity = try card.customization()
@@ -130,14 +133,17 @@ public struct SourceMakerHeadPreparation: Sendable {
         _ = try SourceMakerPreparationTimings.measure(timings, .settingsValidation) {
             try card.previewSettings(contract: contract, sex: identity.sex, headID: identity.headID, boneType: identity.boneType)
         }
+        let reuseWorker = rigReuse.map(SourceRigReuseWorker.init)
         let assets = try SourceMakerPreparationTimings.measure(timings, .libraryPreparation) {
-            try library.prepare(card: card, coordinate: coordinate, baseURL: url, timings: timings)
+            try library.prepare(card: card, coordinate: coordinate, baseURL: url, wear: false, timings: timings, rigReuse: reuseWorker)
         }
         let appearanceInputs = try SourceMakerPreparationTimings.measure(timings, .appearanceInputPreparation) {
             try assets.prepareAppearanceInputs(card: SourceCardAppearance(card: card, coordinate: coordinate), baseURL: url, timings: timings)
         }
+        let reuseResult = reuseWorker?.finish()
         return Self(manifestURL: url, sex: identity.sex, headID: identity.headID,
             boneType: identity.boneType, coordinate: coordinate, assets: assets, contract: contract,
-            expressions: expressions, bodyOptions: options, appearanceInputs: appearanceInputs, workerStages: timings?.sample)
+            expressions: expressions, bodyOptions: options, appearanceInputs: appearanceInputs, workerStages: timings?.sample,
+            rigReuseCandidate: reuseResult?.0, rigReuseSample: reuseResult?.1)
     }
 }

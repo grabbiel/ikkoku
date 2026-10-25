@@ -1,9 +1,10 @@
 import Foundation
+import CryptoKit
 import os
 import Scene
 
-/// No Maker integration yet. Immutable holders retain reservations independently
-/// of worker slots, cancellation, actor delivery and source-session epochs.
+/// Immutable holders retain reservations independently of worker slots,
+/// cancellation, actor delivery and source-session epochs.
 final class SourceRigReuseAdmission: Sendable {
     struct Counts: Sendable, Equatable {
         var entries = 0, logicalBytes = 0, snapshots = 0
@@ -68,6 +69,10 @@ final class SourceRigReuseEntry: Sendable {
     let rig: SourceRig, key: SourceRigReuseKey, epoch: SourceRigReuseEpoch, logicalCharge: Int
     fileprivate let permit: SourceRigReuseAdmission.EntryPermit
     init?(rig: SourceRig, key: SourceRigReuseKey, epoch: SourceRigReuseEpoch, admission: SourceRigReuseAdmission) {
+        guard let charge = Self.charge(rig: rig, key: key), let permit = admission.entryPermit(charge: charge) else { return nil }
+        self.rig = rig; self.key = key; self.epoch = epoch; self.logicalCharge = charge; self.permit = permit
+    }
+    static func charge(rig: SourceRig, key: SourceRigReuseKey) -> Int? {
         guard let rigBytes = rig.decodedCacheLogicalByteCount else { return nil }
         // Stored field/permit payloads are charged; class allocation headers and
         // allocator overhead remain excluded. The rig's inline stride is in rigBytes.
@@ -75,9 +80,8 @@ final class SourceRigReuseEntry: Sendable {
         guard charge.add(rigBytes), charge.add(MemoryLayout<SourceRigReuseKey>.stride), charge.add(key.sha256.utf8.count),
               charge.add(MemoryLayout<SourceRigReuseEpoch>.stride), charge.add(MemoryLayout<Int>.stride),
               charge.add(MemoryLayout<SourceRigReuseAdmission.EntryPermit>.stride),
-              charge.add(MemoryLayout<SourceRigReuseAdmission>.stride), charge.add(MemoryLayout<Int>.stride),
-              let permit = admission.entryPermit(charge: charge.bytes) else { return nil }
-        self.rig = rig; self.key = key; self.epoch = epoch; self.logicalCharge = charge.bytes; self.permit = permit
+              charge.add(MemoryLayout<SourceRigReuseAdmission>.stride), charge.add(MemoryLayout<Int>.stride) else { return nil }
+        return charge.bytes
     }
 }
 
@@ -102,6 +106,96 @@ final class SourceRigReuseSnapshot: Sendable {
     func rig(for key: SourceRigReuseKey, epoch requestedEpoch: SourceRigReuseEpoch) -> SourceRig? {
         guard requestedEpoch == epoch else { return nil }
         return entries.first(where: { $0.key == key })?.rig
+    }
+}
+
+/// Owner-side publication only. A session reset releases this owner's snapshot,
+/// but uses the same ledger until every old worker/delivery holder releases too.
+@MainActor public final class SourceMakerRigReuse {
+    public struct Input: Sendable {
+        fileprivate let admission: SourceRigReuseAdmission, epoch: SourceRigReuseEpoch
+        fileprivate let snapshot: SourceRigReuseSnapshot?
+    }
+    public struct Candidate: Sendable {
+        fileprivate let admission: SourceRigReuseAdmission, epoch: SourceRigReuseEpoch
+        /// nil is an explicit clear-on-success intent, not a failed preparation.
+        fileprivate let snapshot: SourceRigReuseSnapshot?
+    }
+    public struct Sample: Sendable, Encodable {
+        public let hits: Int, misses: Int, admitted: Int, intrinsicBypasses: Int, capacityBypasses: Int
+        public let clearOnCommit: Bool, retainedEntries: Int, logicalEntryBytes: Int, logicalReferenceBytes: Int
+    }
+    private let admission: SourceRigReuseAdmission
+    private var epoch = SourceRigReuseEpoch()
+    private var snapshot: SourceRigReuseSnapshot?
+    public init() { admission = SourceRigReuseAdmission() }
+    init(admission: SourceRigReuseAdmission) { self.admission = admission }
+    public func input() -> Input { .init(admission: admission, epoch: epoch, snapshot: snapshot) }
+    public func reset() { epoch = SourceRigReuseEpoch(); snapshot = nil }
+    /// Call only after the selection's existing validation/transaction succeeds.
+    @discardableResult public func commit(_ candidate: Candidate?) -> Bool {
+        guard let candidate, candidate.admission === admission, candidate.epoch == epoch else { return false }
+        snapshot = candidate.snapshot
+        return true
+    }
+}
+
+/// Synchronous worker-local state. Never crosses the preparation queue boundary.
+/// It receives the exact bytes read by the original load path; callers must not
+/// use it to bypass URL resolution, size/hash checks, or the original file read.
+final class SourceRigReuseWorker {
+    private let input: SourceMakerRigReuse.Input
+    private var entries: [SourceRigReuseEntry]
+    private var index: [SourceRigReuseKey: SourceRigReuseEntry]
+    private var hits = 0, misses = 0, admitted = 0, intrinsicBypasses = 0, capacityBypasses = 0
+    private var clearOnCommit = false
+    init(_ input: SourceMakerRigReuse.Input) {
+        self.input = input
+        entries = input.snapshot?.entries ?? []
+        index = Dictionary(uniqueKeysWithValues: entries.map { ($0.key, $0) })
+    }
+    func decode(_ data: Data, timings: SourceMakerPreparationTimings?) throws -> SourceRig {
+        let hash = SourceMakerPreparationTimings.measure(timings, .rigReuseSHA) {
+            let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            timings?.hashed(data.count, phase: .rigReuseSHA, matches: true)
+            return digest
+        }
+        // SHA256's canonical representation and Data.count satisfy this key's
+        // checked contract. No filename or declared manifest digest substitutes.
+        guard let key = SourceRigReuseKey(sha256: hash, byteCount: data.count) else {
+            intrinsicBypasses += 1
+            return try SourceMakerPreparationTimings.measure(timings, .rigDecode) { try SourceRig.decode(data) }
+        }
+        if let entry = index[key] { hits += 1; return entry.rig }
+        misses += 1
+        let rig = try SourceMakerPreparationTimings.measure(timings, .rigDecode) { try SourceRig.decode(data) }
+        guard let charge = SourceRigReuseEntry.charge(rig: rig, key: key), charge <= input.admission.maximumBytes else {
+            intrinsicBypasses += 1; return rig
+        }
+        guard !clearOnCommit, entries.count < input.admission.maximumEntries,
+              let entry = SourceRigReuseEntry(rig: rig, key: key, epoch: input.epoch, admission: input.admission) else {
+            capacityBypasses += 1; clearOnCommit = true; return rig
+        }
+        entries.append(entry); index[key] = entry; admitted += 1
+        return rig
+    }
+    func finish() -> (SourceMakerRigReuse.Candidate, SourceMakerRigReuse.Sample) {
+        let snapshot: SourceRigReuseSnapshot?
+        if clearOnCommit { snapshot = nil }
+        else if admitted == 0, let previous = input.snapshot { snapshot = previous }
+        else {
+            snapshot = SourceRigReuseSnapshot(entries: entries, epoch: input.epoch, admission: input.admission)
+            if snapshot == nil { clearOnCommit = true }
+        }
+        // Clear intent needs no snapshot permit. It is published only by a
+        // successful owner commit; failed/stale work cannot evict the old cache.
+        let candidate = SourceMakerRigReuse.Candidate(admission: input.admission, epoch: input.epoch, snapshot: snapshot)
+        let sample = SourceMakerRigReuse.Sample(hits: hits, misses: misses, admitted: admitted,
+            intrinsicBypasses: intrinsicBypasses, capacityBypasses: capacityBypasses,
+            clearOnCommit: clearOnCommit, retainedEntries: snapshot?.entries.count ?? 0,
+            logicalEntryBytes: snapshot?.entries.reduce(0, { $0 + $1.logicalCharge }) ?? 0,
+            logicalReferenceBytes: snapshot?.logicalReferenceBytes ?? 0)
+        return (candidate, sample)
     }
 }
 
