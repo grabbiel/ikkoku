@@ -582,7 +582,7 @@ extension PluginLibraryScenario {
         }
         func scene(_ name: String) -> URL { directory.appendingPathComponent(name + ".png") }
         func decoded(_ name: String) throws -> StudioDocument {
-            try CardIO.decode(StudioDocument.self, from: Data(contentsOf: scene(name)), keyword: CardIO.sceneKeyword)
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: scene(name)))
         }
         do {
             guard !FileManager.default.fileExists(atPath: output.path) else { throw SourcePluginError.invalid("Initial attachment acceptance requires fresh output.") }
