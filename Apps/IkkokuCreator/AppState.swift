@@ -19,6 +19,7 @@ enum AppMode: String, CaseIterable, Identifiable {
 final class AppState {
     var mode: AppMode = .maker {
         didSet {
+            if mode == .maker { ensureMaker() }
             maker?.isActiveMode = mode == .maker
             studio?.isActiveMode = mode == .studio
             if mode == .maker { maker?.refresh() } else { studio?.refresh() }
@@ -30,6 +31,10 @@ final class AppState {
     let runsHeadlessEditorScenario: Bool
     var maker: MakerModel?
     var studio: StudioModel?
+    /// S4 (R7 phase 2 item 6): a launch straight into a source scene creates
+    /// the Maker, whose default source avatar costs about a second of main
+    /// thread, on first use instead (`ensureMaker`).
+    @ObservationIgnored private var makerDeferred = false
     var errorMessage: String?
     var modProfile: SourceModProfile?
     var modCatalog: SourceModCatalog?
@@ -80,33 +85,54 @@ final class AppState {
             if let scenePath = env["IKKOKU_CAPTURE_SCENE"] {
                 AppState.captureScene(host: host, path: scenePath)
             }
-            self.maker = MakerModel(host: host)
-            PerfTrace.mark("makerReady")
+            // S4: an interactive or performance-trace launch into a source
+            // scene with no Maker input defers the Maker to its first use.
+            let backgroundBuilds = (request.mode == .interactive && !request.capturesWindow) || request.mode == .perfTrace
+            makerDeferred = backgroundBuilds && env["IKKOKU_SOURCE_SCENE"] != nil
+                && ["IKKOKU_MOD_LIBRARY", "IKKOKU_OPEN_RIG", "IKKOKU_BONE_MODIFIERS", "IKKOKU_SOURCE_CARD", "IKKOKU_MAKER_SCENARIO"].allSatisfy { env[$0] == nil }
+            if !makerDeferred {
+                self.maker = MakerModel(host: host)
+                PerfTrace.mark("makerReady")
+            }
             // The Maker falls back to the bundled character when the original base does not
             // open; with an explicit IKKOKU_SOURCE_AVATAR an automated run must not capture that.
             if automated, let avatar = env["IKKOKU_SOURCE_AVATAR"], let failure = maker?.sourceAvatarFailure {
                 AppState.failCaptureInput("IKKOKU_SOURCE_AVATAR", avatar, failure)
             }
-            self.studio = StudioModel(host: host)
+            let studioModel = StudioModel(host: host)
+            // R7 phase 2 item 6: interactive and performance-trace runs build
+            // source characters off the main thread; captures and scenarios
+            // build them synchronously.
+            studioModel.asyncSourceBuilds = backgroundBuilds
+            self.studio = studioModel
             PerfTrace.mark("studioReady")
             if let path = env["IKKOKU_SOURCE_SCENE"] {
-                do {
-                    try PerfTrace.step("sourceSceneImport") { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
+                // The import's end: synchronous here, or the background
+                // import's commit after the first frames.
+                let imported: (Error?) -> Void = { [weak self] error in
+                    guard let self else { return }
+                    if let error {
+                        self.startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated)
+                        return
+                    }
                     PerfTrace.sourceSceneReady()
-                } catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
-                // A-T02: an automated run must not capture or script a scene whose
-                // characters all failed to build (for example a converted library
-                // copied without its companion files).
-                if automated, let outcome = studio?.sourcePreviewCharacterOutcome(), outcome.built == 0, let first = outcome.retained.first {
-                    AppState.failCaptureInput("IKKOKU_SOURCE_SCENE", path,
-                        "none of the scene's characters was built (\(outcome.retained.count) retained without rendering); first: \(first)")
+                    // A-T02: an automated run must not capture or script a scene whose
+                    // characters all failed to build (for example a converted library
+                    // copied without its companion files).
+                    if automated, let outcome = self.studio?.sourcePreviewCharacterOutcome(), outcome.built == 0, let first = outcome.retained.first {
+                        AppState.failCaptureInput("IKKOKU_SOURCE_SCENE", path,
+                            "none of the scene's characters was built (\(outcome.retained.count) retained without rendering); first: \(first)")
+                    }
                 }
+                do {
+                    try PerfTrace.step("sourceSceneImport") { try importSourceScenePreview(url: URL(fileURLWithPath: path), imported: imported) }
+                } catch { imported(error) }
             }
             if let libraryPath = env["IKKOKU_MOD_LIBRARY"] {
                 do { try loadModLibrary(url: URL(fileURLWithPath: libraryPath)) }
                 catch { startupInputFailed("IKKOKU_MOD_LIBRARY", libraryPath, "Could not load mod library", error, automated: automated) }
             }
-            maker?.refresh()
+            if !makerDeferred { maker?.refresh() }
             if let path = env["IKKOKU_OPEN_RIG"] {
                 do { try maker?.openSourceRig(url: URL(fileURLWithPath: path)) }
                 catch { startupInputFailed("IKKOKU_OPEN_RIG", path, "Could not open source rig", error, automated: automated) }
@@ -319,28 +345,63 @@ final class AppState {
         panel.allowedContentTypes = [.json]
         panel.message = "Open a converted source rig. Optional character-shape-contract.json is loaded from the same folder."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try maker?.openSourceRig(url: url); mode = .maker }
+        do { try ensureMaker()?.openSourceRig(url: url); mode = .maker }
         catch { errorMessage = "Could not open source rig: \(error)" }
     }
 
-    private func importSourceScenePreview(url: URL) throws {
+    /// Imports a source scene into the Studio. With background builds
+    /// (`StudioModel.asyncSourceBuilds`) the Studio shows at once with the
+    /// current document and a progress line, and `imported` runs after the
+    /// commit; otherwise the import completes before this returns. A failure
+    /// to start throws; a failure of the background commit reaches `imported`.
+    private func importSourceScenePreview(url: URL, imported: ((Error?) -> Void)? = nil) throws {
         guard let rig = try EngineHost.locateSourceAvatar() else { throw RigError.invalid("Export the original clothed avatar before previewing source scenes.") }
         let catalog = EngineHost.studioPoseContract(forRig: rig)
-        try studio?.importSourceScenePreview(sceneURL: url, rigURL: rig, boneCatalogURL: catalog)
+        guard let studio else { imported?(nil); return }
         // A-T02: an object the preview could not build is otherwise only listed
         // under Source compatibility details.
-        for line in (studio?.doc.sourcePreviewDiagnostics ?? []) where line.contains(" retained without rendering") {
-            print("[ikkoku] \(url.lastPathComponent): \(line)")
+        let report = {
+            for line in (studio.doc.sourcePreviewDiagnostics ?? []) where line.contains(" retained without rendering") {
+                print("[ikkoku] \(url.lastPathComponent): \(line)")
+            }
         }
+        if studio.asyncSourceBuilds {
+            try studio.beginSourceSceneImport(sceneURL: url, rigURL: rig, boneCatalogURL: catalog) { result in
+                switch result {
+                case .success: report(); imported?(nil)
+                case .failure(let error): imported?(error)
+                }
+            }
+            mode = .studio
+            return
+        }
+        try studio.importSourceScenePreview(sceneURL: url, rigURL: rig, boneCatalogURL: catalog)
+        report()
         mode = .studio
+        imported?(nil)
+    }
+
+    /// S4: the Maker, created now if the launch deferred it.
+    @discardableResult func ensureMaker() -> MakerModel? {
+        if maker == nil, makerDeferred, let host {
+            makerDeferred = false
+            let created = MakerModel(host: host)
+            PerfTrace.mark("makerReady")
+            created.isActiveMode = mode == .maker
+            maker = created
+        }
+        return maker
     }
 
     func openSourceScenePreview() {
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.png]; panel.allowsMultipleSelection = false
         panel.message = "Load converted card selections, source camera and saved poses. Missing conversions are listed in the compatibility report."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try importSourceScenePreview(url: url) }
-        catch { errorMessage = "Could not preview source scene: \(error)" }
+        do {
+            try importSourceScenePreview(url: url) { [weak self] error in
+                if let error { self?.errorMessage = "Could not preview source scene: \(error)" }
+            }
+        } catch { errorMessage = "Could not preview source scene: \(error)" }
     }
 
     func exportSourceScene() {
@@ -365,7 +426,7 @@ final class AppState {
             catalog = try SourceModCatalog(library: profile.library, contract: decoded)
             dependencies = try catalog?.dependencies(library: profile.library, sourceAssets: decoded.sourceAssets ?? []) ?? []
         } else { catalog = nil; contract = nil; dependencies = [] }
-        try maker?.setModLibrary(profile.library, catalog: catalog, contract: contract)
+        try ensureMaker()?.setModLibrary(profile.library, catalog: catalog, contract: contract)
         modProfile = profile
         modCatalog = catalog
         modCatalogContract = contract
@@ -386,7 +447,7 @@ final class AppState {
         panel.allowedContentTypes = [.json]
         panel.message = "Choose bone modifiers converted from ABMX data."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try maker?.loadBoneModifiers(url: url) }
+        do { try ensureMaker()?.loadBoneModifiers(url: url) }
         catch { errorMessage = "Could not load bone modifiers: \(error)" }
     }
 
@@ -395,12 +456,12 @@ final class AppState {
         panel.allowedContentTypes = [.png]
         panel.message = "Import original card shapes, ABMX settings and supported appearance colors. The matching female or male base is selected automatically."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try maker?.importSourceCardSettings(url: url) }
+        do { try ensureMaker()?.importSourceCardSettings(url: url) }
         catch { errorMessage = "Could not import source card settings: \(error)" }
     }
 
     func exportSourceCard() {
-        guard let maker else { return }
+        guard let maker = ensureMaker() else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "character-edited.png"
@@ -417,7 +478,7 @@ final class AppState {
     }
 
     func unloadModLibrary() {
-        do { try maker?.setModLibrary(nil); modProfile = nil; modCatalog = nil; modCatalogContract = nil; modDependencies = [] }
+        do { try ensureMaker()?.setModLibrary(nil); modProfile = nil; modCatalog = nil; modCatalogContract = nil; modDependencies = [] }
         catch { errorMessage = "Could not restore the default appearance: \(error)" }
     }
 
@@ -1054,7 +1115,7 @@ final class AppState {
     }
 
     func saveCard() {
-        guard let maker else { return }
+        guard let maker = ensureMaker() else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "\(maker.card.profile.name).png"

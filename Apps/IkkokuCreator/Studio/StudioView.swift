@@ -473,6 +473,17 @@ struct StudioStatusLine: View {
         let _ = PerfTrace.body(.studioStatus)
         VStack(alignment: .leading, spacing: 2) {
             Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            // R7 phase 2 item 6: source characters building off the main
+            // thread (a background scene import, an undo or redo rebuild, a
+            // duplicate).
+            if let progress = model.sourceBuildProgress {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(progress.built), total: Double(max(progress.total, 1)))
+                        .progressViewStyle(.linear).frame(maxWidth: 120)
+                    Text("\(progress.label): \(progress.built) of \(progress.total)")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
             // Which view is shown: the camera looked through, or the saved
             // camera and why (`SourceStudioCameraLabel.indicator`).
             if let indicator = model.activeSourceCameraView?.indicator {

@@ -342,7 +342,7 @@ final class PerfWorkloadDriver {
 
     @discardableResult
     private func prepareMaker() throws -> MakerModel {
-        guard let maker = app.maker else { throw RigError.invalid("the Maker is unavailable") }
+        guard let maker = app.ensureMaker() else { throw RigError.invalid("the Maker is unavailable") }
         app.mode = .maker
         maker.liveAnimation = true
         trace.details["makerSourcePreview"] = maker.sourceRigPreview != nil
@@ -474,7 +474,7 @@ final class PerfWorkloadDriver {
     /// viewport render threads alive before each step and at the end, and the
     /// frames drawn and presented after the restore.
     private func prepareViewportLifecycle() throws {
-        guard app.maker != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
+        guard app.ensureMaker() != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
         app.mode = .maker
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
             throw RigError.invalid("no visible editor window")

@@ -20,8 +20,8 @@ struct IkkokuApp: App {
         .commands {
             let _ = PerfTrace.body(.appCommands)
             CommandGroup(replacing: .newItem) {
-                Button("New Female Character") { app.maker?.newCharacter(sex: .female) }.keyboardShortcut("n", modifiers: [.command])
-                Button("New Male Character") { app.maker?.newCharacter(sex: .male) }.keyboardShortcut("n", modifiers: [.command, .shift])
+                Button("New Female Character") { app.ensureMaker()?.newCharacter(sex: .female) }.keyboardShortcut("n", modifiers: [.command])
+                Button("New Male Character") { app.ensureMaker()?.newCharacter(sex: .male) }.keyboardShortcut("n", modifiers: [.command, .shift])
                 Divider()
                 Button("Open Card…") { app.openCard() }.keyboardShortcut("o", modifiers: [.command])
                 Button("Open Source Rig…") { app.openSourceRig() }
@@ -49,7 +49,7 @@ struct IkkokuApp: App {
                 Button("Redo") { app.studio?.redo() }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(app.mode != .studio)
             }
             CommandMenu("Character") {
-                Button("Send to Studio") { if let c = app.maker?.card { app.studio?.addCharacter(c); app.mode = .studio } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(app.maker?.sourceRigPreview != nil)
+                Button("Send to Studio") { if let c = app.ensureMaker()?.card { app.studio?.addCharacter(c); app.mode = .studio } }.keyboardShortcut("t", modifiers: [.command, .shift]).disabled(app.maker?.sourceRigPreview != nil)
                 Button("Randomize") { app.maker?.randomize() }.keyboardShortcut("d", modifiers: [.command, .shift]).disabled(app.maker?.sourceRigPreview != nil)
             }
             CommandMenu("Mods") {
