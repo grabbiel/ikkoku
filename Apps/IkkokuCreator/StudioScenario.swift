@@ -2325,8 +2325,8 @@ struct StudioScenario: Decodable {
                 }
                 var previous = start, current = start
                 // Main-thread time of each drag event (the edit, the route
-                // runtime update and the frame rebuild it triggers) and of the
-                // mouseUp, which rebuilds a moved playing route's clock.
+                // runtime update with a playing route's clock retarget, and
+                // the frame rebuild it triggers) and of the mouseUp.
                 var eventMilliseconds: [Double] = []
                 for i in 1...8 {
                     current = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)

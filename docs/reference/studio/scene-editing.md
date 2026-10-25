@@ -10,6 +10,7 @@ Supported edits are:
 - Per-object `visible` flags keyed by source object ID, nested accessory children included. The flag is the single byte immediately after the record's `treeState`, four bytes past the end of its 36-byte transform span; the reader records it while reading. The patch is one byte (0 or 1), the current byte must already be 0 or 1 and an unknown key rejects the edit; an edit to the stored value returns the input bytes unchanged. Only the object's own flag is serialized — CharaStudio propagates a hidden parent through the tree at load time, and this writer never propagates.
 - Name edits keyed by source object ID, folder, camera and route records only — the kinds whose own record stream carries a name. The reader records the full string span (seven-bit encoded UTF-8 byte length prefix plus the UTF-8 bytes) while reading, and a rename replaces that span with the same .NET `BinaryWriter.Write(string)` encoding, so the file resizes and every following record shifts. An edit to the stored name returns the input bytes unchanged. Characters, items and lights serialize no name (a character's name lives in its card) and have no name destination.
 - Camera record `active` flags and route record `active` flags, each keyed by its own record's source object ID. Both are the one-byte bool immediately after the record's name string (for a camera) or its point list (for a route); the reader records each span while reading. Like visibility the patch is one byte, the current byte must already be 0 or 1, an unknown key — or a key whose record is not of that kind, a folder for either destination — rejects the edit, and an edit to the stored value returns the input bytes unchanged. For cameras the app writes these only after the user switches the looked-through camera, and then for every camera record: CharaStudio saves the current view, so the new camera goes true and the losers must go false or their stale `true` wins on reload (load order takes the last active camera). Without a switch the file already reloads to the same winner and nothing is written. Route `active` is the play state at save time; loading a true record resumes playback.
+- Route points and route settings (ST-T11): point and aid moves, the start point's rotation, added and deleted points under CharaStudio's keys, each point's speed, ease, connection and link, and the route's loop, line visibility, orient and line colour. See [route points and settings](#route-points-and-settings-st-t11-st-t03).
 - Character FK bones, IK targets and look-at target transforms; item FK transforms identified by their original ordinal bone name.
 - Character `enableFK`, `enableIK`, seven `activeFK` flags and five `activeIK` flags. Flags are written literally; source loading gives IK precedence if both modes are enabled.
 - Character animation catalog IDs, speed, pattern, force-loop, options and normalized time; ordered voice playlists and repeat mode, including variable-length replacement.
@@ -17,7 +18,7 @@ Supported edits are:
 - Current camera and ten saved camera slots, preserving position, all three Euler angles, all three distance components and field of view. Only the 40-byte version-2 payload changes.
 - A replacement scene PNG only when explicitly supplied. It must be one complete CRC-valid PNG; an embedded card cannot acquire a PNG prefix.
 
-Transforms are expressed in the original Unity coordinate basis and Euler degrees. The native app must convert edited transforms back before export. Duplicate or unavailable destinations, invalid group counts, nonfinite values, invalid camera FOV and invalid PNGs reject the entire edit. Object IDs, root dictionary keys, unedited catalog choices/settings and trailing plug-in bytes are preserved, and so is record order except where a [topology edit](#topology-edits-deletion-and-reparenting-st-t03-st-s09) deletes or moves a record. Deleting records and moving them between the root and folders follow that section, and duplicating records and adding folders, cameras and lights follow [duplicates and added records](#duplicates-and-added-records-st-t03-st-s09-st-d03); adding characters or items, other moves, object type, item identity and plug-in behavior are outside this writer.
+Transforms are expressed in the original Unity coordinate basis and Euler degrees. The native app must convert edited transforms back before export. Duplicate or unavailable destinations, invalid group counts, nonfinite values, invalid camera FOV and invalid PNGs reject the entire edit. Object IDs, root dictionary keys, unedited catalog choices/settings and trailing plug-in bytes are preserved, and so is record order except where a [topology edit](#topology-edits-deletion-and-reparenting-st-t03-st-s09) deletes or moves a record. Deleting records and moving them between the root and folders follow that section, and duplicating records and adding folders, cameras and lights follow [duplicates and added records](#duplicates-and-added-records-st-t03-st-s09-st-d03), and route point and setting edits and route copies follow [route points and settings](#route-points-and-settings-st-t11-st-t03); adding characters or items, other moves, object type, item identity and plug-in behavior are outside this writer.
 
 The writer validates complete output framing after applying patches in source byte order. Variable-length embedded card, voice-list and thumbnail edits therefore shift following records without reconstructing their bytes. Tests cover modifications both before and after a resized card, nested objects, ordinal Unicode bone identities, unknown trailers and source `Data` slices with nonzero start indices. Reversing transform, visibility, name, camera- and route-active, flag and camera edits restores every original byte.
 
@@ -57,11 +58,11 @@ remains separate.
 
 ## App boundary and remaining work
 
-The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03).
+The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03). Route point and setting edits, and route copies, are exported as [route edits](#route-points-and-settings-st-t11-st-t03).
 
 The export validator rejects new characters and items, the topology and insertion cases those sections list as refused, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
-Implement the missing field writers, new characters and items, route duplication and the refused topology cases under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
+Implement the missing field writers, new characters and items and the refused topology cases under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
 
 ## Topology edits: deletion and reparenting (ST-T03, ST-S09)
 
@@ -234,14 +235,14 @@ The writer works in two phases. `KoikatsuSceneDocument.inserting(_:)` writes the
 
 **Supported:**
 
-- Duplicating any folder, item, light, camera or character record that is not a route and not inside a route's subtree, with its subtree, including a character with its accessory children and an item with its child items.
+- Duplicating any folder, item, light, camera, character or route record with its subtree, including a character with its accessory children, an item with its child items, and a route with its children and points ([route copies](#route-points-and-settings-st-t11-st-t03)). A route child can be duplicated beside its original.
 - Adding folders, cameras and lights at the root or in a folder (the app adds them at the root, and Set Parent moves them). Copies and new records can be moved, renamed, hidden and edited like source records, and the deletions and moves above apply to them in the same export.
 
 **Refused.** Each of these rejects the whole export, with the stated reason:
 
 | Case | Reason |
 | --- | --- |
-| Duplicating a route, or anything inside a route's subtree | A copied route's point and aid keys and its child placement depend on playback; no such file has been reloaded in the original player yet. The app refuses the command ("Duplicating routes is not supported yet."). |
+| Duplicating a route without points, or placing a copy of a route child outside its route's list | See [route points and settings](#route-points-and-settings-st-t11-st-t03). |
 | Any duplicate when the scene carries plug-in (ExtendedSave) data | Plug-ins key that data by object, and what they do on a duplicate is not recovered. The rule matches deletion: a trailer with no data, or one KKEx block holding a nil or empty map, does not block. New records with no duplicate are allowed and keep the trailer bytes. |
 | Adding characters or items | A new character needs a card and an item needs catalog identity this writer does not author. Duplicating a source one is supported. |
 | More than two lights after the export | `isLightCheck` drops a third light at load. |
@@ -334,10 +335,170 @@ Reproduce the VM run from the repository root:
 
 **Not verified:**
 
-- Duplicates in scenes that carry plug-in data, route duplicates, and new characters or items (all refused).
+- Duplicates in scenes that carry plug-in data, and new characters or items (all refused). Route copies were reloaded later ([route points and settings](#route-points-and-settings-st-t11-st-t03)).
 - Lights: the reloaded scenes had one light, the new one. The two-light limit follows the recovered code and was not reloaded.
 - A new record inside a folder, and a copy inside a character's accessory group, are covered by the Engine tests only, without a reload in the original player.
 - Rendering in the original player. The capture records state and mesh counts, not pixels.
+
+## Route points and settings (ST-T11, ST-T03)
+
+Reviewed 2026-10-25. `SourceSceneEdits.routes` writes an imported route's edited points and settings into the exported scene. `SourceSceneEdits.insertions` writes copies of routes. `SourceStudioRouteState` (`Packages/Engine/Sources/Studio/SourceStudioRouteEditing.swift`) holds the editable state of one route and its CharaStudio rules. Route edits combine with the [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), the [insertions](#duplicates-and-added-records-st-t03-st-s09-st-d03) and every leaf edit in one export. Every case the writer cannot reproduce the way CharaStudio would is refused before any byte is written, and the app shows the reason.
+
+### Recovered rules
+
+Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/77473a43…/project/Studio/`, the same assembly as the sections above. The record layout is in [scene records, Routes](scene-records.md#routes).
+
+- **Record.** `OIRouteInfo.Save` (OIRouteInfo.cs:50–71) writes the name, the children, the point count and each point, then `active`, `loop`, `visibleLine`, `orient` as an Int32, and the colour as `JsonUtility.ToJson(color)`. `OIRoutePointInfo.Save` (OIRoutePointInfo.cs:46–55) writes 94 bytes per point:
+  - the point's key and change amount;
+  - the speed (float), the ease and the connection (Int32 each);
+  - the aid's key, change amount and `isInit` flag;
+  - the `link` flag.
+- **Add a point.** `OCIRoute.AddPoint` (OCIRoute.cs:219–228) returns null once the route has more than ten points (`limitNum = 10`, line 14) while the `routePointLimit` option is on, which is the default. So a route holds at most 11 points.
+  - `AddObjectRoute.AddPoint` (AddObjectRoute.cs:106–114) builds `new OIRoutePointInfo(GetNewIndex())` and appends it to the list. It always goes after the last point, never after the selected one.
+  - The constructor (OIRoutePointInfo.cs:38–44) sets speed 2 and linear. The connection is Line and there is no link.
+  - `LoadPoint` (AddObjectRoute.cs:116–172), called with `_initialPosition 1`, places the new point at the last point's route-local position (`InverseTransformPoint` of its world position, :153–163).
+  - `InitAid` (AddObjectRoute.cs:174–199) gives the new point's aid the next `GetNewIndex()` key. The aid starts at the `p_RoutePoint` prefab's `objAid.localPosition`, uninitialised. Every aid the route fixtures' `AddPoint` created reads back as (1, 1, 1).
+- **Delete a point.** `OCIRoute.DeletePoint` (OCIRoute.cs:230–238) calls `Stop()` first. It then removes the point's node, controller and info, renumbers the names and redraws the line. The start point has no delete (`enableDelete = num != -1`, AddObjectRoute.cs:140).
+- **Guides.** `LoadPoint` sets up the guides (AddObjectRoute.cs:130–133):
+  - The start point's guide only rotates (`enableRot = num == -1`).
+  - Every other point's guide only moves (`enablePos = num != -1`).
+  - Nothing scales, and the guides work in world mode.
+  - The aid's guide only moves (`enableRot`/`enableScale` false, :187–188). It is active only for a Curve connection.
+
+  A point move or a start rotation calls only `OCIRoute.UpdateLine` (`onChangePosAfter`/`onChangeRot`, :166–169).
+- **Point panel (`MPRoutePointCtrl`).**
+  - **Speed.** A slider from 0.1 to 30, not whole numbers. These are prefab values, which the reload probe read from the loaded panel. `OnEndEditSpeed` (:234) clamps a typed value to the slider.
+  - **Ease.** The six-entry list from `Awake` (:308): linear, easeInQuad, easeOutQuad, easeInQuart, easeOutQuart and easeOutBounce.
+  - **Connection.** The `OCIRoutePoint.connection` setter (OCIRoutePoint.cs:138–153) runs `InitAidPos` (:313) when the point becomes Curve and its aid was never placed. The aid goes to the point-local midpoint toward the next point (point 0 after the last), and `isInit` becomes true. A placed aid keeps its position.
+  - **Link.** `isLink` (:172) joins a curve point into the previous point's curve segment.
+  - **Greyed-out controls.** `UpdateInteractable` (:180) greys out speed, ease, connection and link while the route plays. It also greys out speed and ease on a linked curve point that follows a curve point.
+- **Route panel (`MPRouteCtrl`).** `UpdateInteractable` (MPRouteCtrl.cs:134–143) greys out Add Point, orient and loop while the route plays.
+  - Loop (`OnValueChangedLoop`, :195) sets `routeInfo.loop` and redraws the line.
+  - The line toggle (:213) sets `visibleLine`.
+  - Orient (:225) sets `routeInfo.orient`.
+  - The line colour palette opens with `_useAlpha: false` (:262), so only RGB changes.
+- **Line.** `UpdateLine` (OCIRoute.cs:421–548) deletes the line when the route has fewer than two points. Otherwise it builds the line with Vectrosity `MakeSpline` through the point and aid transforms, 160 segments per curve. The line is active when `visibleLine` is, and `OnVisible` (:163–168) shows it only while the route is also visible. `SetVisible` (:179–190) hides the point guides together with the line.
+- **Play and Stop.** `Play` (OCIRoute.cs:240) refuses a route with fewer than two points and places `childRoot` at point 0. `Stop` (:400–420) pins `childRoot` to point 0 in every `LateUpdate`.
+- **A point moved while the route plays.** `Play` queues one `MoveTo` per segment (`SetPath`, OCIRoute.cs:338–398). Each holds the segment's point and aid `Transform`s and the speed and ease values of that moment. `StudioTween` reads the transforms' positions only when a segment starts: `TweenComplete` (StudioTween.cs:1982) calls `Next` (:3673), which calls `RetrieveArgs` and `Play`. `Play` calls `TweenStart` (:1865), which runs `GenerateMoveToPathTargets` (:1177).
+
+  So the segment in progress keeps its targets, and every later segment, including the next loop, takes the moved positions. A segment whose first point moved away from `childRoot` (Unity's `Vector3 !=`, :1201) starts with the `movetopath` leg from `childRoot`'s position. That segment's time is the joined path's length over the queued speed (:1250). A start rotation changes nothing until the next `Play`.
+- **Duplicate.** `Studio.Duplicate` saves the route and imports it again (see [duplicates](#duplicates-and-added-records-st-t03-st-s09-st-d03)).
+  - Its points load with `_import: false` (OIRouteInfo.cs:73–83). `SetNewIndex` (Studio.cs:807) therefore finds each saved point and aid key taken and hands out a new one, after the keys of the copy's children (OIRoutePointInfo.cs:57–82).
+  - `OCIRoute.OnLoadAttach` (OCIRoute.cs:111) parents each copied child under `childRoot` with `worldPositionStays: false`, so the child keeps its saved local placement.
+  - The copy keeps the saved `active` flag, so the copy of a playing route plays from point 0 when it loads.
+
+### Writer behavior
+
+- **Points.** The writer replaces the point list, from its count through the last point, with the bytes `OIRouteInfo.Save` writes.
+  - Kept points keep their point and aid keys and their saved order, and added points follow them.
+  - Each added point takes the smallest free key and its aid the next one, as `GetNewIndex` would. Allocation runs in ascending route key order, after every insertion of the export. It never reuses a key the export frees, whether a deleted point's or a deleted record's.
+- **Settings.** The `loop` and `visibleLine` bytes and the `orient` Int32 are patched in place. The colour string is rewritten only when the colour changes. The new string is `JsonUtility`'s `{"r":…,"g":…,"b":…,"a":…}` form, and each value reads back as the same float.
+- **Copies.** A route copy is written from its template's bytes. The record key, the children's keys and the point and aid keys are patched in the order `Import` assigns them: the copy, its children, then point, aid, point, aid, and so on.
+  - A copy of a route child stays in its route's child list or in the copy's.
+  - The copy keeps its template's `active` byte. The app writes a copy's play state through `routeActive` like any route's.
+  - A copy's own point edits address its staged key.
+- **Verification.** After writing, every edited route must read back exactly as planned. No key may be used twice across records, sub-infos, route points and aids. An unchanged route state writes nothing, so a no-op stays byte-identical, and editing a route back to its saved values restores the original bytes.
+
+`SourceStudioRouteState.validate(against:)` checks each state against its record before any byte is written.
+
+**Supported:**
+
+- Moving any point except the start point, rotating the start point, and moving a curve point's aid.
+- Adding points, up to 11, and deleting any point except the start point.
+- Speed (0.1–30), the six eases, connection and link on each point.
+- Loop, line visibility, orient and the RGB line colour on the route.
+- Duplicating a route with its children and points, and duplicating a route child beside its original. Copies can be edited like the original.
+
+**Refused.** Each of these rejects the whole export or the edit, with the stated reason:
+
+| Case | Reason |
+| --- | --- |
+| A 12th point | `routePointLimit` (`OCIRoute.AddPoint`). |
+| Moving or deleting the start point; rotating or scaling another point; rotating or scaling an aid; moving the aid of a Line point | The guides cannot do it (`LoadPoint`, `InitAid`). |
+| Points reordered, or a new point before a kept one | CharaStudio only appends points. |
+| A speed outside 0.1–30, an ease outside the six-entry list, an unknown connection or orientation, a nonfinite value | The panels cannot produce it. A typed speed is clamped, as `OnEndEditSpeed` clamps it. |
+| A curve point whose aid was never placed; an aid reset after it was placed; a never-placed aid that moved | `InitAidPos` places the aid once, when the point becomes Curve. |
+| A colour alpha change, or a component outside 0–1 | The palette is opened with `_useAlpha: false`. |
+| Adding or deleting route points when the scene carries plug-in (ExtendedSave) data | Route points are keyed Studio objects (`Studio.AddCtrlInfo` in `LoadPoint`), and plug-ins key their data by object. The rule matches deletion and duplicates. |
+| Duplicating a route that has no points | CharaStudio adds a start point when it loads such a route. |
+| A copy of a route child placed outside its route's list or the copy's | Its saved local placement follows the route's playback position. |
+| A new record under a route; moving a route or a route child | Unchanged from the sections above. |
+| In the app, Add Point, orient, loop, speed, ease, connection and link while the route plays | Greyed out by the panels' `UpdateInteractable`. The app's message is "stop the route first". |
+
+### App translation
+
+- **Editing.** Selecting an imported route shows its point and aid handles, and `pickID` picks them like a gizmo. The route panel in the inspector holds Play/Stop, loop, line, orient, colour and Add Point. The point panel holds the selected point's speed, ease, connection, link and Delete.
+- **Undo, save and the copy.** Every change goes through `editSourceRoute`, which pushes one undo snapshot per command (a guide drag pushes it at mouseDown). The change is stored in the document field `StudioObject.sourceRoute`, so undo/redo and native save/reload keep the edits, and the export writes them as `SourceSceneEdits.routes`. A route copy shares its original's runtime, carries its own `sourceRoute`, and plays from point 0 at the duplicate instant when the original plays.
+- **Playback.** `applySourceRouteEdits` keeps each route runtime equal to the document. A point, aid or start-rotation move under a playing route retargets the route clock (`SourceStudioRouteClock.retarget`) with CharaStudio's segment-start rule above, so a drag never makes the playing route or its character jump. Any other change to the path stops being a live edit: the clock is dropped and the route plays the edited record from its play start. The panels lock those settings while the route plays, and Delete stops the route first.
+- **Differences from CharaStudio, all display-only:**
+  - The drawn line is the path the playback follows, sampled from the tween's Catmull-Rom segments. CharaStudio draws Vectrosity's `MakeSpline` through the same transforms, which can differ on curves.
+  - Handles show for the selected route only, and also while its line is off. CharaStudio hides the point guides together with the line.
+  - The ease menu has no `OnValueChangedEase` quirk. In CharaStudio, selecting a point whose saved ease is not in the list can rewrite it to linear, because that handler does not check `isUpdateInfo`. The app keeps such an ease until the user picks one.
+
+### Evidence
+
+- **Engine.** `SourceSceneRouteEditTests` (12 tests) extend the independent `TopologyScene` builder with route points, aids and settings. They compare every byte of each export and read each destination back with the scene reader:
+  - point moves, the start rotation and aid placement, with edit-then-revert returning the original bytes;
+  - added points under the CharaStudio keys, and a deleted point's keys not reused;
+  - every point and route setting, `InitAidPos` and the linked-point lock;
+  - route edits combined with an insertion, a deletion, a rename and a play-state edit in one export;
+  - route copies with their children's and points' keys, and a route child copied beside its original;
+  - the panel and guide rules;
+  - every refusal, including the plug-in trailer rule;
+  - the path line;
+  - the playing-route retarget: the stepper keeps the segment in progress, joins the next one with the `movetopath` leg, and replays the moved route at the next loop. A retarget that changes nothing is bit-identical, a queued setting is refused, and the clock keeps its frame and hands later rebuilds the moved route. Disabling the `movetopath` leg fails the first test (negative control).
+
+  `SourceSceneTopologyTests` and `SourceSceneInsertionTests` were updated for the route copy and route child rules. PERF-PENDING-ENGINE-SUITE
+- **Lanes.** Five new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
+  - `route-edit-export.json` on the stt11c route scene:
+    - a guide drag of point 2 while route 0 plays, and locked settings refused while it plays;
+    - after Stop: Add Point at the CharaStudio defaults, moves, speed, ease, curve connections, link, loop, orient, colour and the line, with undo and redo;
+    - on the second route: an aid drag, a start rotation and a point delete, which stops the route;
+    - export and reimport, which read back points `[1, 6, 10, 14, 18]` with aids `[2, 7, 11, 15, 19]` and `[4, 8, 12]` with aids `[5, 9, 13]`.
+  - `route-children-edit.json` on scene-route-children.png:
+    - a guide drag and a point move with undo/redo, then Stop and Play;
+    - Duplicate of the route with its folder and character, and the copy's settings locked while it plays;
+    - native save and in-process load;
+    - export and reimport as route 157 with points 306–313 after its children 158 and 159;
+    - after each step, each child's world placement within 1e-3 m and 0.1° of its capture.
+  - `route-children-edit-load.json`: a fresh process loads the saved document. Both routes rehydrate once with their edits, and both folders move.
+  - `route-move-playing.json` (scene-route-children.png): route 0 and its copy play from the same instant. Moving route 0's point 1 mid-segment, then a guide drag of its point 2, leaves route 0's folder within 1e-5 m and 0.1° of the unedited copy's. In the next segment the two folders are 0.86 m apart (negative control).
+  - `undo-route`, `reload-save-route` and `reload-load-route` still pass unchanged.
+
+  PERF-PENDING-LANES
+- **Original player.** One `prlctl exec` (`original_scene_reload_probe.py --once`, labels `route-edit` and `route-children-edit`) loaded the two exports in an isolated player copy (Unity 5.6.2f1, probe source SHA-256 `a2199f4a…`). For each route it recorded the loaded points (key, change amount, speed, ease, connection, link, aid key, aid change amount and flag), the route settings and the line `UpdateLine` built. It also traced `childRoot` and each child's world placement for 240 frames, at least 4 s, with each frame's `deltaTime`, and read the route point panel.
+
+  `compare_scene_reload.py` checked the loads against the records an independent Python reader takes from the exported files and against the scenarios' intended keys, play states and children. It checked every traced frame against `ikkoku-inspect route-steps` over the trace's own `deltaTime`s. All claims passed; the report is `.local/stt11k-route-edit/scene-reload-comparison.json`.
+
+  | Case | Original player after load |
+  | --- | --- |
+  | route-edit, route 0 `IKKOKU-A` | Points `[1, 6, 10, 14, 18]`, aids `[2, 7, 11, 15, 19]`, with speed, ease, connection, link and aid flags as written; change amounts equal; playing, no loop, orient Y, colour (0.2, 0.8, 0.4); no line shown. `childRoot` within 5.4e-7 m and 0.036° of the stepper over 435 frames (3.94 s), active flag equal in every frame. |
+  | route-edit, route 3 `IKKOKU-B2` | Points `[4, 8, 12]`, aids `[5, 9, 13]`; stopped, pinned to point 0 in every frame (0 m, 0.023°); line shown. |
+  | route-children-edit, route 0 | Points `[1, 3, 5, 7]` with the moved point 1; `childRoot`, folder 9 and character 10 within 6.7e-7 m of the stepper over 346 frames (3.98 s). |
+  | route-children-edit, copy 157 | Points `[306, 308, 310, 312]`, aids `[307…313]`, children `[158, 159]`, curve point 3. `childRoot` within 7.3e-7 m, children within 7.7e-7 m. |
+
+  In both loads the key index equals the file's key list, and every change amount equals its record at float32 precision. The point panel matches the app: speed 0.1–30, six eases, point limit on. The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left. The two exports' scene bytes after the PNG are identical to the current lanes' exports. A rerun re-renders only the thumbnail.
+- **Performance.** PERF-PENDING
+
+Reproduce the VM run from the repository root:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_scene_reload_probe.py --once --errno-baseline "$(grep -c 'errno: 24' /Library/Logs/parallels.log)" \
+  --output .local/stt11k-route-edit/reload-probe \
+  --route-edit .local/verification/scenario-exports/route-edit-export.png \
+  --route-children-edit .local/verification/scenario-exports/route-children-edit.png
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_scene_reload.py \
+  --probe .local/stt11k-route-edit/reload-probe --cli Packages/Engine/.build/debug/ikkoku-inspect \
+  --output .local/stt11k-route-edit/scene-reload-comparison.json
+```
+
+**Not verified:**
+
+- A point moved while the route plays: the segment-start rule follows the recovered `StudioTween` code and the Engine tests, but no original-player capture of a live edit exists.
+- Route edits in scenes that carry plug-in data, beyond the refusal of added and deleted points.
+- The `routePointLimit` option turned off. The app always keeps the default limit.
+- A route nested in a folder or an item. Every fixture route is a root.
+- Rendering in the original player. The capture records state and positions, not pixels, and the line's Vectrosity shape is not compared.
 
 ## Shape and color reset contract
 
