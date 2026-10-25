@@ -19,6 +19,9 @@ private final class InteractiveFixture {
     var time: Double = 1
     let mesh: MeshHandle
     var frame: RenderFrame
+    /// The newest drawable, kept as a window's compositor keeps the newest
+    /// presented one, so the layer cannot hand it out again at once.
+    private var held: (any CAMetalDrawable)?
 
     init() throws {
         renderer = try makeSourceShaderRenderer()
@@ -41,9 +44,11 @@ private final class InteractiveFixture {
 
     /// Fill a fresh swapchain drawable, run the interactive path, and read its
     /// actual pixels after that command buffer completes. No capture API involved.
-    func draw(layer override: CAMetalLayer? = nil, failPrepare: Bool = false) throws -> (RenderDrawResult, Data) {
+    func draw(layer override: CAMetalLayer? = nil, failPrepare: Bool = false,
+              refreshAfter: CFTimeInterval? = nil) throws -> (RenderDrawResult, Data) {
         try autoreleasepool {
             let drawable = try #require((override ?? layer).nextDrawable())
+            defer { held = drawable }
             let texture = drawable.texture
             let size = texture.width * texture.height * 4
             let staging = try #require(renderer.gpu.device.makeBuffer(length: size, options: .storageModeShared))
@@ -63,8 +68,8 @@ private final class InteractiveFixture {
             let result = failPrepare
                 ? renderer.draw(to: drawable, timestamp: time, completion: didComplete,
                                 configureFrameRing: { $0.abandonFrame() })
-                : renderer.draw(to: drawable, timestamp: time, completion: didComplete)
-            if result.outcome == .rendered {
+                : renderer.draw(to: drawable, timestamp: time, refreshAfter: refreshAfter, completion: didComplete)
+            if result.outcome == .rendered || result.outcome == .refreshed {
                 try #require(finished.wait(timeout: .now() + 10) == .success)
                 #expect(completion.withLock { $0?.succeeded } == true)
             } else {
@@ -194,6 +199,72 @@ struct InteractiveFrameTests {
     }
 }
 
+extension InteractiveFrameTests {
+    /// The idle keep-alive (R7 phase 2, item 4): a refreshed callback presents
+    /// exactly the last presented image's bytes, encodes no frame and never
+    /// becomes a cached image of its own.
+    @Test func keepAliveRefreshPresentsExactlyTheLastImageWithoutEncodingAFrame() throws {
+        let f = try InteractiveFixture()
+        let sentinel = Data(repeating: 0xA5, count: 64 * 64 * 4)
+        let first = try f.draw(refreshAfter: 0.05)
+        #expect(first.0.outcome == .rendered && first.1 != sentinel)
+        // Before the interval has passed the callback stays untouched.
+        let early = try f.draw(refreshAfter: 0.05)
+        #expect(early.0.outcome == .unchanged && early.1 == sentinel)
+        f.time += 0.05
+        let refreshed = try f.draw(refreshAfter: 0.05)
+        #expect(refreshed.0.outcome == .refreshed)
+        #expect(refreshed.1 == first.1)
+        #expect(refreshed.0.statistics.deformDispatches == 0)
+        // A refresh is the newest present itself: the next one copies its bytes.
+        #expect(try f.draw(refreshAfter: 0.05).0.outcome == .unchanged)
+        f.time += 0.05
+        let again = try f.draw(refreshAfter: 0.05)
+        #expect(again.0.outcome == .refreshed && again.1 == first.1)
+        // Without an interval nothing is refreshed, however long it has been.
+        f.time += 0.2
+        #expect(try f.draw().1 == sentinel)
+        // A new submission renders; later refreshes copy the new image.
+        f.frame.camera.yaw = 0.4
+        f.renderer.submit(f.frame)
+        let moved = try f.draw(refreshAfter: 0.05)
+        #expect(moved.0.outcome == .rendered && moved.1 != first.1)
+        f.time += 0.05
+        let movedAgain = try f.draw(refreshAfter: 0.05)
+        #expect(movedAgain.0.outcome == .refreshed && movedAgain.1 == moved.1)
+        // A forced redraw of the same submission gives the bytes the refresh showed.
+        f.renderer.invalidateInteractiveFrame()
+        let forced = try f.draw(refreshAfter: 0.05)
+        #expect(forced.0.outcome == .rendered && forced.1 == moved.1)
+        // A new viewport thread has no image to refresh until it presents one.
+        f.renderer.invalidateInteractiveFrame()
+        f.time += 0.05
+        #expect(try f.draw(refreshAfter: 0.05).0.outcome == .rendered)
+        // The refresh copies a whole drawable, so a resize renders first.
+        f.layer.drawableSize = CGSize(width: 32, height: 64)
+        f.time += 0.05
+        #expect(try f.draw(refreshAfter: 0.05).0.outcome == .rendered)
+    }
+
+    /// `Renderer.submit` calls its observers after the frame is pending, outside the locks.
+    @Test func submitObserversRunAfterEverySubmitUntilRemoved() throws {
+        let f = try InteractiveFixture()
+        let count = OSAllocatedUnfairLock(initialState: 0)
+        let renderer = f.renderer
+        let token = renderer.addSubmitObserver {
+            // Outside the frame lock: the observer can read the frame it was told about.
+            _ = renderer.currentFrame()
+            count.withLock { $0 += 1 }
+        }
+        f.renderer.submit(f.frame)
+        f.renderer.submit(f.frame)
+        #expect(count.withLock { $0 } == 2)
+        f.renderer.removeSubmitObserver(token)
+        f.renderer.submit(f.frame)
+        #expect(count.withLock { $0 } == 2)
+    }
+}
+
 @Test func presentationCadenceExcludesOnlyDeliberatelyUnchangedCallbacks() {
     let period = 1.0 / 120
     let samples = [RenderPresentationSample(target: 0, presented: period),
@@ -228,4 +299,302 @@ struct InteractiveFrameTests {
     #expect(abs(intervals[0] - period) < 1e-10) // reversed targets get no allowance
     #expect(intervals[1] == 0) // independently counted despite the reversed prior pair
     #expect(abs(reordered[1].lateness - 6 * period) < 1e-10)
+}
+
+/// Deformed-vertex reuse (R7 phase 2, item 4): an interactive draw or pick
+/// skips a deform dispatch only when the buffer's last committed dispatch had
+/// the same inputs, and its pixels are byte-identical to a frame that
+/// dispatched. Each test returns to earlier content after changing it, which a
+/// record of "the previous frame" instead of "the buffer's last write" would get wrong.
+extension InteractiveFrameTests {
+    /// Redraws the pending submission (no new submit) and returns the draw.
+    /// Each step here is a separate edit after a pause, so the interactive
+    /// bypass never starts (`interactiveDrawsStopTrackingWhileEveryDeformationChanges`).
+    private func redraw(_ f: InteractiveFixture) throws -> (RenderDrawResult, Data) {
+        f.time += Renderer.deformBypassPause
+        f.renderer.invalidateInteractiveFrame()
+        return try f.draw()
+    }
+
+    private func submitAndDraw(_ f: InteractiveFixture) throws -> (RenderDrawResult, Data) {
+        f.time += Renderer.deformBypassPause
+        f.renderer.submit(f.frame)
+        return try f.draw()
+    }
+
+    /// Submits `f.frame` and returns its pixels with every deformation
+    /// dispatched, as before reuse.
+    private func dispatchedPixels(_ f: InteractiveFixture) throws -> Data {
+        f.renderer.reusesDeformedVertices = false
+        defer { f.renderer.reusesDeformedVertices = true }
+        let drawn = try submitAndDraw(f)
+        #expect(drawn.0.outcome == .rendered && drawn.0.statistics.deformReuses == 0)
+        return drawn.1
+    }
+
+    private func expectReused(_ drawn: (RenderDrawResult, Data), _ pixels: Data, _ comment: Comment) {
+        #expect(drawn.0.outcome == .rendered, comment)
+        #expect(drawn.0.statistics.deformDispatches == 0 && drawn.0.statistics.deformReuses == 1, comment)
+        #expect(drawn.1 == pixels, comment)
+    }
+
+    private func expectDispatched(_ drawn: (RenderDrawResult, Data), _ pixels: Data, _ comment: Comment) {
+        #expect(drawn.0.outcome == .rendered, comment)
+        #expect(drawn.0.statistics.deformDispatches == 1 && drawn.0.statistics.deformReuses == 0, comment)
+        #expect(drawn.1 == pixels, comment)
+    }
+
+    /// Two bones, half each, so either matrix moves every vertex.
+    private func registerSkinned(_ f: InteractiveFixture, name: String = "skinned", shift: Float = 0) throws -> MeshHandle {
+        let p = [Float3(-0.6, 0, 0), Float3(0.6, 0, 0), Float3(0, 1.5, 0)].map { $0 + Float3(shift, 0, 0) }
+        let morph = MeshData.MorphTarget(name: "move", positionDeltas: [Float3](repeating: Float3(0.2, 0, 0), count: 3), normalDeltas: [])
+        return try f.renderer.resources.register(mesh: MeshData(name: name, positions: p,
+            normals: [Float3](repeating: Float3(0, 0, 1), count: 3),
+            joints: [SIMD4<UInt16>](repeating: SIMD4(0, 1, 0, 0), count: 3), weights: [Float4](repeating: Float4(0.5, 0.5, 0, 0), count: 3),
+            indices: [0, 1, 2], morphTargets: [morph]))
+    }
+
+    @Test func deformReuseFollowsThePaletteTheMorphsAndTheMeshAndChangesBack() throws {
+        let f = try InteractiveFixture()
+        let skinned = try registerSkinned(f)
+        f.frame.items[0].mesh = skinned
+        f.frame.items[0].skinSet = 7
+        f.frame.skinSets[7] = [matrix_identity_float4x4, matrix_identity_float4x4]
+        let a = try submitAndDraw(f)
+        expectDispatched(a, try dispatchedPixels(f), "first draw")
+        expectReused(try redraw(f), a.1, "same submission")
+        // Equal matrices in new storage compare by value.
+        f.frame.skinSets[7] = [matrix_identity_float4x4] + [matrix_identity_float4x4]
+        expectReused(try submitAndDraw(f), a.1, "equal palette, new array")
+
+        // Palette.
+        f.frame.skinSets[7] = [matrix_identity_float4x4, Transform.translation(Float3(0.3, 0, 0))]
+        let palette = try dispatchedPixels(f)
+        #expect(palette != a.1)
+        // The reference above dispatched, so the buffer already holds this palette.
+        expectReused(try submitAndDraw(f), palette, "moved bone")
+        f.frame.skinSets[7] = [matrix_identity_float4x4, matrix_identity_float4x4]
+        expectDispatched(try submitAndDraw(f), a.1, "bone back")
+        // One bit of one matrix element.
+        var nudged = matrix_identity_float4x4
+        nudged.columns.3.x = Float(bitPattern: 1)
+        f.frame.skinSets[7] = [matrix_identity_float4x4, nudged]
+        #expect(try submitAndDraw(f).0.statistics.deformDispatches == 1)
+        f.frame.skinSets[7] = [matrix_identity_float4x4, matrix_identity_float4x4]
+        expectDispatched(try submitAndDraw(f), a.1, "nudge back")
+
+        // Morphs: weight, then order of the same entries, then none again.
+        f.frame.items[0].morphWeights = [(index: 0, weight: 1)]
+        let morphed = try dispatchedPixels(f)
+        #expect(morphed != a.1)
+        expectReused(try submitAndDraw(f), morphed, "morph on")
+        f.frame.items[0].morphWeights = [(index: 0, weight: 0.5)]
+        #expect(try submitAndDraw(f).0.statistics.deformDispatches == 1)
+        // Entries below 1e-4 are not meaningful: the same content as no morph.
+        f.frame.items[0].morphWeights = [(index: 0, weight: 0.00001)]
+        expectDispatched(try submitAndDraw(f), a.1, "morph off")
+        f.frame.items[0].morphWeights = []
+        expectReused(try submitAndDraw(f), a.1, "no entries")
+
+        // Mesh: another mesh on the same deformation key, then back.
+        let other = try registerSkinned(f, name: "shifted", shift: 0.2)
+        f.frame.items[0].mesh = other
+        let shifted = try dispatchedPixels(f)
+        #expect(shifted != a.1)
+        expectReused(try submitAndDraw(f), shifted, "other mesh")
+        f.frame.items[0].mesh = skinned
+        expectDispatched(try submitAndDraw(f), a.1, "mesh back")
+
+        // Without skin: the morph-only fixture mesh.
+        f.frame.items[0].mesh = f.mesh
+        f.frame.items[0].skinSet = nil
+        let unskinned = try dispatchedPixels(f)
+        expectReused(try submitAndDraw(f), unskinned, "unskinned")
+        f.frame.items[0].mesh = skinned
+        f.frame.items[0].skinSet = 7
+        expectDispatched(try submitAndDraw(f), a.1, "skinned again")
+    }
+
+    @Test func deformReuseNeverTrustsAReleasedGrownOrTransientBuffer() throws {
+        let f = try InteractiveFixture()
+        let a = try f.draw()
+        #expect(a.0.statistics.deformDispatches == 1)
+        expectReused(try redraw(f), a.1, "persistent buffer")
+        // A released key gets a new buffer, which no write has filled.
+        f.renderer.resources.releaseDeformBuffers(keys: [42])
+        expectDispatched(try redraw(f), a.1, "released")
+        expectReused(try redraw(f), a.1, "new buffer filled")
+        // A larger mesh grows the key's buffer; the original mesh then reads
+        // the grown buffer, which holds the larger mesh's vertices.
+        let quad = try f.renderer.resources.register(mesh: MeshData(name: "quad",
+            positions: [Float3(-0.6, 0, 0), Float3(0.6, 0, 0), Float3(0, 1.5, 0), Float3(0.6, 1.5, 0)],
+            normals: [Float3](repeating: Float3(0, 0, 1), count: 4), indices: [0, 1, 2, 1, 3, 2],
+            morphTargets: [MeshData.MorphTarget(name: "move", positionDeltas: [Float3](repeating: Float3(0.2, 0, 0), count: 4), normalDeltas: [])]))
+        let original = f.frame
+        f.frame.items[0].mesh = quad
+        let grown = try submitAndDraw(f)
+        #expect(grown.0.statistics.deformDispatches == 1 && grown.1 != a.1)
+        f.frame = original
+        expectDispatched(try submitAndDraw(f), a.1, "back in the grown buffer")
+        // A frame created before a completed retirement of its key gets a
+        // transient buffer each time: always dispatched.
+        f.renderer.resources.retire(deformKeys: [42])
+        f.renderer.submit(RenderFrame())
+        #expect(try f.draw().0.outcome == .rendered)
+        expectDispatched(try submitAndDraw(f), a.1, "transient")
+        expectDispatched(try redraw(f), a.1, "transient again")
+    }
+
+    /// The record holds its buffer strongly. A frame that does not use a key
+    /// drops the key's record, which releases a removed character's buffer,
+    /// and the key's next use dispatches again.
+    @Test func framesDropTheRecordsOfKeysTheyDoNotUse() throws {
+        let f = try InteractiveFixture()
+        let a = try f.draw()
+        #expect(a.0.statistics.deformDispatches == 1)
+        weak var released: (any MTLBuffer)?
+        autoreleasepool {
+            released = f.renderer.resources.deformBuffer(for: 42, vertexCount: 3)
+            f.renderer.resources.releaseDeformBuffers(keys: [42])
+        }
+        #expect(released != nil, "the record holds the released buffer")
+        let original = f.frame
+        f.frame.items = []
+        #expect(try submitAndDraw(f).0.statistics.deformDispatches == 0)
+        #expect(released == nil, "the frame without the key released it")
+        f.frame = original
+        expectDispatched(try submitAndDraw(f), a.1, "key used again")
+        expectReused(try redraw(f), a.1, "recorded again")
+    }
+
+    /// While every deformation changes from draw to draw (a Maker slider drag),
+    /// interactive draws stop comparing and recording content: after two
+    /// tracked draws that reuse nothing, the next ones dispatch untracked until
+    /// the 30th or a pause. Their pixels stay exact, and nothing recorded before
+    /// them survives their writes.
+    @Test func interactiveDrawsStopTrackingWhileEveryDeformationChanges() throws {
+        let f = try InteractiveFixture()
+        let weights: [Float] = [0.25, 0.5, 0.75, 1]
+        var reference: [Data] = []
+        for w in weights {
+            f.frame.items[0].morphWeights = [(index: 0, weight: w)]
+            reference.append(try dispatchedPixels(f))
+        }
+        // A drag: a new weight in every draw, 1/120 s apart. The record holds weight 1.
+        func drag(_ i: Int) throws -> (RenderDrawResult, Data) {
+            f.frame.items[0].morphWeights = [(index: 0, weight: weights[i % 4])]
+            f.renderer.submit(f.frame)
+            return try f.draw()
+        }
+        for i in 0..<2 {
+            let d = try drag(i)
+            #expect(d.0.statistics.deformDispatches == 1 && d.0.statistics.deformUntracked == 0, "tracked \(i)")
+            #expect(d.1 == reference[i % 4], "tracked \(i)")
+        }
+        let pixel = Float2(32, 40), size = (64, 64)
+        for i in 2..<(1 + Renderer.deformBypassDraws) {
+            let d = try drag(i)
+            #expect(d.0.outcome == .rendered && d.0.statistics.deformDispatches == 1 && d.0.statistics.deformUntracked == 1,
+                    "untracked \(i)")
+            #expect(d.1 == reference[i % 4], "untracked \(i)")
+            if i == 10 {
+                // A pick still tracks: it records its content, which the next untracked draw writes over.
+                _ = f.renderer.pick(frame: f.frame, pixel: pixel, size: size)
+                #expect(f.renderer.lastFrameStatistics.deformUntracked == 0 && f.renderer.lastFrameStatistics.deformDispatches == 1)
+            }
+        }
+        // The 30th draw tracks again. No record survived the untracked writes,
+        // not even the pick's, so the pick's content dispatches.
+        f.frame.items[0].morphWeights = [(index: 0, weight: weights[2])]
+        f.renderer.submit(f.frame)
+        let probe = try f.draw()
+        #expect(probe.0.statistics.deformDispatches == 1 && probe.0.statistics.deformUntracked == 0 && probe.1 == reference[2])
+        // It recorded what it wrote: the same content is reused.
+        f.renderer.invalidateInteractiveFrame()
+        let again = try f.draw()
+        #expect(again.0.statistics.deformReuses == 1 && again.1 == reference[2])
+        // Two changing draws start another bypass; a pause of 0.1 s ends it.
+        for i in 0..<2 { #expect(try drag(i).0.statistics.deformUntracked == 0) }
+        #expect(try drag(2).0.statistics.deformUntracked == 1)
+        f.time += Renderer.deformBypassPause
+        let paused = try drag(3)
+        #expect(paused.0.statistics.deformDispatches == 1 && paused.0.statistics.deformUntracked == 0 && paused.1 == reference[3])
+        // With reuse off (a measurement control), draws track and dispatch everything.
+        f.renderer.reusesDeformedVertices = false
+        for i in 0..<4 { #expect(try drag(i).0.statistics.deformUntracked == 0) }
+        f.renderer.reusesDeformedVertices = true
+    }
+
+    /// Captures, benchmarks and picks write the same buffers. Every writer
+    /// commits under the render lock, so a later draw reads what the last of
+    /// them wrote, in queue order, even when the pick ran on the pick queue.
+    @Test func offscreenWritesBetweenDrawsKeepTheContentRecordInQueueOrder() throws {
+        let f = try InteractiveFixture()
+        let a = try f.draw()
+        var other = f.frame
+        other.items[0].morphWeights = [(index: 0, weight: 1)]
+        #expect(f.renderer.capture(frame: other, width: 64, height: 64) != nil)
+        expectDispatched(try redraw(f), a.1, "after a capture")
+        _ = try f.renderer.benchmark(frame: other, width: 32, height: 32, warmupFrames: 0, measuredFrames: 2)
+        expectDispatched(try redraw(f), a.1, "after a benchmark")
+        // A capture of the drawn content still dispatches, and leaves the record valid.
+        #expect(f.renderer.capture(frame: f.frame, width: 64, height: 64) != nil)
+        #expect(f.renderer.lastFrameStatistics.deformDispatches == 1)
+        expectReused(try redraw(f), a.1, "after a capture of the same content")
+
+        // Picks reuse too, and pick the same ids either way.
+        let pixel = Float2(32, 40), size = (64, 64)
+        let id = f.renderer.pick(frame: f.frame, pixel: pixel, size: size)
+        #expect(f.renderer.lastFrameStatistics.deformReuses == 1)
+        let otherID = f.renderer.pick(frame: other, pixel: pixel, size: size)
+        #expect(f.renderer.lastFrameStatistics.deformDispatches == 1)
+        expectDispatched(try redraw(f), a.1, "after a pick of other content")
+        f.renderer.reusesDeformedVertices = false
+        #expect(f.renderer.pick(frame: f.frame, pixel: pixel, size: size) == id)
+        #expect(f.renderer.pick(frame: other, pixel: pixel, size: size) == otherID)
+        f.renderer.reusesDeformedVertices = true
+        expectDispatched(try redraw(f), a.1, "after a dispatched pick")
+
+        // Asynchronous picks of other content interleaved with draws on this thread.
+        let finished = DispatchSemaphore(value: 0)
+        for round in 0..<12 {
+            f.renderer.pick(frame: round.isMultiple(of: 2) ? other : f.frame, pixel: pixel, size: size) { _ in finished.signal() }
+            let drawn = try redraw(f)
+            #expect(drawn.0.outcome == .rendered && drawn.1 == a.1, "round \(round)")
+        }
+        for _ in 0..<12 { #expect(finished.wait(timeout: .now() + 10) == .success) }
+        // Whatever the order, the last writer was round 11's pick or draw, both of this content.
+        expectReused(try redraw(f), a.1, "after the asynchronous picks")
+    }
+
+    /// A live source-shader draw reads the deformation the frame reused.
+    @Test func liveDrawsReadReusedDeformedVertices() throws {
+        let f = try InteractiveFixture()
+        let resources = f.renderer.resources
+        let directory = try LiveProgramFixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let program = try resources.translatedPipelines.program(url: try LiveProgramFixture.write(LiveProgramFixture.uv, family: "live_uv", to: directory))
+        let material = SourceShaderLiveMaterial(label: "o_uv slot 0", family: "live_uv", queue: 2000, passes: [program],
+                                                vectors: ["_Color": [0, 0, 1, 1]], textures: [:], conventions: [], textureSources: [:])
+        let mesh = try resources.register(mesh: MeshData(name: "o_uv/0",
+            positions: [Float3(-0.6, -0.6, 0), Float3(0.6, -0.6, 0), Float3(0, 0.8, 0)],
+            normals: [Float3](repeating: Float3(0, 0, 1), count: 3), uvs: [Float2](repeating: Float2(0.25, 0.25), count: 3),
+            uvs1: [Float2](repeating: Float2(1, 1), count: 3), indices: [0, 1, 2],
+            morphTargets: [MeshData.MorphTarget(name: "move", positionDeltas: [Float3](repeating: Float3(0.3, 0, 0), count: 3), normalDeltas: [])]))
+        f.frame.items[0].mesh = mesh
+        f.frame.items[0].sourceShader = SourceShaderLiveDraw(material: material, streams: nil, sourceOrder: 0)
+        f.frame.items[0].morphWeights = [(index: 0, weight: 1)]
+        let reference = try dispatchedPixels(f)
+        #expect(f.renderer.lastSourceShaderLive.draws == 1 && f.renderer.lastSourceShaderLive.fallbacks.isEmpty)
+        // Live frames render every callback; after the first, each reuses the deformation.
+        let first = try submitAndDraw(f)
+        expectReused(first, reference, "live, first")
+        for round in 0..<3 { expectReused(try f.draw(), reference, "live, round \(round)") }
+        #expect(f.renderer.lastSourceShaderLive.draws == 1 && f.renderer.lastSourceShaderLive.fallbacks.isEmpty)
+        f.frame.items[0].morphWeights = []
+        let moved = try submitAndDraw(f)
+        #expect(moved.0.statistics.deformDispatches == 1 && moved.1 != reference)
+        f.frame.items[0].morphWeights = [(index: 0, weight: 1)]
+        expectDispatched(try submitAndDraw(f), reference, "live, morph back")
+    }
 }

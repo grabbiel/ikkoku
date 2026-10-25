@@ -6,6 +6,7 @@ import Character
 import GPU
 import Scene
 import Studio
+import Renderer
 
 /// Drives one `IKKOKU_PERF_WORKLOAD` in the real editor window and writes the
 /// `PerfTrace` report (R7). Every action calls the method the UI calls: the
@@ -36,6 +37,7 @@ final class PerfWorkloadDriver {
     private var lifecycle: [(seconds: Double, name: String, action: () -> Void)] = []
     private var lifecycleLog: [[String: Any]] = []
     private var restoredAt: CFTimeInterval?
+    private var minimizedAt: CFTimeInterval?
     private var recordingStart: CFTimeInterval = 0
     /// Called once per injected input tick with the seconds since recording began.
     private var inject: ((Double) -> Void)?
@@ -68,6 +70,9 @@ final class PerfWorkloadDriver {
 
     private func begin() {
         trace.device = app.host?.gpu.device
+        // R7 phase 2, item 4 measurement control (default on).
+        app.host?.renderer.reusesDeformedVertices = configuration.deformReuse
+        app.host?.renderer.skipsUnchangedFrames = configuration.frameSkip
         configureWindow()
         do { try prepare() } catch { fail("\(configuration.workload): \(error)") }
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.warmupSeconds) { self.record() }
@@ -169,6 +174,8 @@ final class PerfWorkloadDriver {
         case "maker-slider": try prepareMakerSlider()
         case "maker-idle": try prepareMaker()
         case "studio-native": try prepareStudioNative()
+        case "studio-static": try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        case "studio-orbit-bursts": try prepareStudioOrbitBursts()
         case "viewport-lifecycle": try prepareViewportLifecycle()
         case "startup": break
         default: throw RigError.invalid("unknown workload \(workload)")
@@ -182,15 +189,16 @@ final class PerfWorkloadDriver {
 
     private func viewportCenter(_ studio: StudioModel) -> SIMD2<Float> { studio.viewportSize * 0.5 }
 
-    /// The source scene from `IKKOKU_SOURCE_SCENE`, live animation on, a fixed
-    /// selection, recorded with the scene file's SHA-256.
+    /// The source scene from `IKKOKU_SOURCE_SCENE`, live animation on (off for
+    /// the static workloads), a fixed selection, recorded with the scene file's SHA-256.
     @discardableResult
-    private func prepareStudioSource(selectKey: Int32?) throws -> StudioModel {
+    private func prepareStudioSource(selectKey: Int32?, liveAnimation: Bool = true) throws -> StudioModel {
         let studio = try studio()
         let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
         guard !characters.isEmpty else { throw RigError.invalid("needs IKKOKU_SOURCE_SCENE with converted source characters") }
         app.mode = .studio
-        studio.liveAnimation = true
+        studio.liveAnimation = liveAnimation
+        trace.details["liveAnimation"] = liveAnimation
         studio.selection = selectKey.flatMap { key in studio.doc.objects.first { $0.sourceObjectKey == key }?.id }
         trace.details["sourceCharacters"] = characters.count
         trace.details["documentObjects"] = studio.doc.objects.count
@@ -221,6 +229,49 @@ final class PerfWorkloadDriver {
         }
         finishGesture = { PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) } }
         trace.details["gesture"] = "right-button orbit drag, one mouseDragged per input tick"
+    }
+
+    /// The source scene with live animation off, so nothing changes between
+    /// gestures: `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button
+    /// orbit drag (mouseDown, one horizontal mouseDragged per input tick,
+    /// mouseUp), alternating direction. The quiet second lets an adaptive
+    /// display link slow down (R7 phase 2, item 4, P2), so each burst's first
+    /// drag measures how quickly it returns to full rate. `details.burstInputEnds`
+    /// lists when each burst's first mouseDragged handler returned, in seconds
+    /// since recording began.
+    private func prepareStudioOrbitBursts() throws {
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        let trace = self.trace
+        var last = viewportCenter(studio)
+        var dragging = false
+        var bursts = 0
+        var inputEnds: [Double] = []
+        let start = { [unowned self] in self.recordingStart }
+        let idle = Double(configuration.burstIdleMilliseconds) / 1000
+        inject = { t in
+            guard t.truncatingRemainder(dividingBy: idle + 0.5) >= idle else {
+                if dragging {
+                    dragging = false
+                    PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) }
+                }
+                return
+            }
+            let first = !dragging
+            if first {
+                dragging = true; bursts += 1
+                PerfTrace.input("mouseDown") { studio.mouseDown(at: last, button: 1, modifiers: []) }
+            }
+            let delta = SIMD2<Float>(bursts.isMultiple(of: 2) ? -4 : 4, 0)
+            let point = last + delta
+            PerfTrace.input("mouseDragged") { studio.mouseDragged(to: point, delta: delta, button: 1, modifiers: []) }
+            last = point
+            if first {
+                inputEnds.append(PerfTrace.round(CACurrentMediaTime() - start()))
+                trace.details["burstInputEnds"] = inputEnds
+            }
+        }
+        finishGesture = { if dragging { PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) } } }
+        trace.details["gesture"] = "repeated: \(configuration.burstIdleMilliseconds) ms without input, then a 0.5 s right-button orbit drag, live animation off"
     }
 
     /// The `fk-mouse-drag` scenario's grab (source key 65, bone 19, z ring),
@@ -342,7 +393,7 @@ final class PerfWorkloadDriver {
         }
         add("resize-small") { window.setContentSize(NSSize(width: max(800, size.width * 0.7), height: max(560, size.height * 0.7))) }
         add("resize-back") { window.setContentSize(size) }
-        add("miniaturize", settle: 1.5) { window.miniaturize(nil) }
+        add("miniaturize", settle: 1.5) { window.miniaturize(nil); self.minimizedAt = CACurrentMediaTime() }
         add("deminiaturize", settle: 1.5) { window.deminiaturize(nil); self.restoredAt = CACurrentMediaTime() }
         add("studio") { self.app.mode = .studio }
         add("maker") { self.app.mode = .maker }
@@ -374,6 +425,14 @@ final class PerfWorkloadDriver {
             let presented = trace.drawLog.presentLog.snapshot()
             result["presentedAfterRestore"] = presented.filter { $0 > restoredAt + 0.5 }.count
             result["drawsAfterRestore"] = trace.drawLog.snapshot().samples.filter { $0.callback > restoredAt + 0.5 }.count
+            if let minimizedAt {
+                // From half a second after minimizing (the occlusion change
+                // has arrived) to the restore: the viewport shows nothing, so
+                // no keep-alive refresh may present (R7 phase 2, item 4).
+                let hidden = trace.drawLog.snapshot().samples.filter { $0.callback > minimizedAt + 0.5 && $0.callback < restoredAt }
+                result["callbacksWhileMinimized"] = hidden.count
+                result["refreshesWhileMinimized"] = hidden.filter { $0.outcome == .refreshed }.count
+            }
         }
         trace.details["lifecycle"] = result
     }

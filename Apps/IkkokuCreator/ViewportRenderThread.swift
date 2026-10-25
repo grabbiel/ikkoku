@@ -27,12 +27,26 @@ import Renderer
 /// `Renderer.draw` is safe from any thread, and the harness records which
 /// thread drew.
 ///
-/// Sendable invariant: `renderer`, `log`, `link`, `finished` and `control`
-/// are set in `init` and never reassigned; `renderer`, `log`, `finished` and
-/// `control` are thread-safe. `link` is configured on the main thread before
-/// the thread starts and afterwards used only on the render thread (added to
-/// its run loop, called, invalidated). `started`, `stopRequested` and
-/// `runLoop` are only read or written while holding `control`.
+/// Adaptive link rate and keep-alive (R7 phase 2, item 4, P2): after each
+/// render-thread callback, `DisplayLinkRatePolicy` may lower the link's
+/// `preferredFrameRateRange` (30 Hz after 0.5 s of unchanged frames, 15 Hz
+/// after 3 s). `wake()` (viewport input, a resize, every `Renderer.submit`)
+/// returns it to the link's original range at once: it schedules the change
+/// on the render thread's run loop and wakes it. Each callback passes the
+/// keep-alive interval to `Renderer.draw(refreshAfter:)`, so an idle viewport
+/// presents its image again every 1/15 s. `setVisible(false)` (the window is
+/// occluded, minimizing or minimized) drops the link to 15 Hz and turns the
+/// keep-alive off until the window is visible again. `IKKOKU_PERF_LINK_RATE=fixed`
+/// keeps the full rate and `IKKOKU_PERF_KEEPALIVE_MS` overrides the interval
+/// (0 turns it off), measurement controls.
+///
+/// Sendable invariant: `renderer`, `log`, `link`, `fullRate`, `adaptive`,
+/// `keepAlive`, `finished` and `control` are set in `init` and never reassigned;
+/// `renderer`, `log`, `finished` and `control` are thread-safe. `link` is
+/// configured on the main thread before the thread starts and afterwards used
+/// only on the render thread (added to its run loop, called, its rate set,
+/// invalidated). `started`, `stopRequested`, `runLoop`, `policy` and
+/// `submitObserver` are only read or written while holding `control`.
 nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
     /// How long app termination waits for a render thread to finish its draw.
     static let terminationWait: TimeInterval = 0.5
@@ -40,6 +54,16 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     private let renderer: Renderer
     private let log: PerfDrawLog?
     private let link: CAMetalDisplayLink
+    /// The link's own range, restored whenever the policy returns to full rate.
+    private let fullRate: CAFrameRateRange
+    /// False under `IKKOKU_PERF_LINK_RATE=fixed`: the link never slows down.
+    private let adaptive: Bool
+    /// The idle keep-alive interval (`Renderer.draw(refreshAfter:)`); nil under
+    /// `IKKOKU_PERF_KEEPALIVE_MS=0`.
+    private let keepAlive: CFTimeInterval?
+    /// No tiers under `IKKOKU_PERF_LINK_RATE=fixed`.
+    private var policy: DisplayLinkRatePolicy
+    private var submitObserver: UInt64?
     /// Signalled when the thread has invalidated the link and is exiting.
     private let finished = DispatchSemaphore(value: 0)
     private let control = NSLock()
@@ -54,6 +78,11 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         self.log = log
         link = CAMetalDisplayLink(metalLayer: layer)
         link.preferredFrameLatency = 2
+        fullRate = link.preferredFrameRateRange
+        adaptive = PerfTrace.active?.configuration.linkRate != "fixed"
+        policy = DisplayLinkRatePolicy(tiers: adaptive ? DisplayLinkRatePolicy.standardTiers : [])
+        keepAlive = PerfTrace.active?.configuration.keepAliveMilliseconds.map { $0 > 0 ? Double($0) / 1000 : nil }
+            ?? DisplayLinkRatePolicy.keepAliveInterval
         super.init()
         link.delegate = self
     }
@@ -67,6 +96,14 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         control.unlock()
         let thread = Thread { [self] in run() }
         renderer.invalidateInteractiveFrame()
+        if adaptive {
+            let token = renderer.addSubmitObserver { [weak self] in self?.wake() }
+            control.lock()
+            let stopped = stopRequested
+            if !stopped { submitObserver = token }
+            control.unlock()
+            if stopped { renderer.removeSubmitObserver(token) }
+        }
         thread.name = ViewportFrame.renderThreadName
         thread.qualityOfService = .userInteractive
         thread.start()
@@ -78,7 +115,10 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         control.lock()
         stopRequested = true
         let loop = runLoop
+        let observer = submitObserver
+        submitObserver = nil
         control.unlock()
+        if let observer { renderer.removeSubmitObserver(observer) }
         // A stop requested before the loop runs is seen by its first check.
         if let loop { CFRunLoopStop(loop); CFRunLoopWakeUp(loop) }
     }
@@ -110,6 +150,8 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         // window is minimized.
         RunLoop.current.add(NSMachPort(), forMode: .default)
         link.add(to: .current, forMode: .default)
+        // A visibility change before the loop ran could not schedule its rate.
+        applyRate()
         while !isStopRequested {
             // Returns after each callback, on `stop` (CFRunLoopStop) or after
             // a quarter second, so the flag is checked even if a stop's wake-up
@@ -124,6 +166,69 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     }
 
     func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
-        autoreleasepool { ViewportFrame.draw(update, renderer: renderer, log: log) }
+        control.lock()
+        let refreshAfter = policy.refreshAfter(keepAlive)
+        control.unlock()
+        autoreleasepool {
+            ViewportFrame.draw(update, renderer: renderer, log: log, refreshAfter: refreshAfter) { self.afterDraw($0) }
+        }
+    }
+
+    // MARK: Adaptive link rate (R7 phase 2, item 4, P2)
+
+    /// Returns the link to full rate at once after input, a resize or a
+    /// submit. Thread-safe and cheap while the rate is already full: one lock.
+    func wake() {
+        guard adaptive else { return }
+        control.lock()
+        let restore = policy.wake(at: CACurrentMediaTime())
+        let loop = restore ? runLoop : nil
+        control.unlock()
+        if let loop { scheduleRate(on: loop) }
+    }
+
+    /// The window's visibility changed (`ViewportNSView`: its occlusion state
+    /// and minimizing). Not visible: the link idles at its slowest rate without the keep-alive,
+    /// ignoring submits and input. Visible again: the cached image is dropped
+    /// so the next callback renders and presents the current frame, which
+    /// returns the link to full rate. Safe from any thread.
+    func setVisible(_ visible: Bool) {
+        control.lock()
+        let returned = visible && !policy.visible
+        let changed = policy.setVisible(visible, at: CACurrentMediaTime())
+        let loop = changed ? runLoop : nil
+        control.unlock()
+        if returned { renderer.invalidateInteractiveFrame() }
+        if let loop { scheduleRate(on: loop) }
+    }
+
+    /// The link is only touched on its thread: run the change there now.
+    private func scheduleRate(on loop: CFRunLoop) {
+        CFRunLoopPerformBlock(loop, CFRunLoopMode.defaultMode.rawValue) { [self] in applyRate() }
+        CFRunLoopWakeUp(loop)
+    }
+
+    /// After one callback: updates the policy and, on the render thread,
+    /// applies a changed rate. Returns the rate in force for the interval that
+    /// follows (0 for full rate), which the harness records.
+    private func afterDraw(_ outcome: RenderDrawResult.Outcome) -> Float {
+        control.lock()
+        // A callback Core Animation delivers on the main thread draws but
+        // leaves the policy and the link alone.
+        let changed = pthread_main_np() == 0 && policy.callback(at: CACurrentMediaTime(), outcome: outcome)
+        let hz = policy.hz
+        control.unlock()
+        if changed { link.preferredFrameRateRange = range(hz) }
+        return hz ?? 0
+    }
+
+    /// Render thread only: sets the link to the policy's current rate.
+    private func applyRate() {
+        control.lock(); let hz = policy.hz; control.unlock()
+        link.preferredFrameRateRange = range(hz)
+    }
+
+    private func range(_ hz: Float?) -> CAFrameRateRange {
+        hz.map { CAFrameRateRange(minimum: $0, maximum: $0, preferred: $0) } ?? fullRate
     }
 }
