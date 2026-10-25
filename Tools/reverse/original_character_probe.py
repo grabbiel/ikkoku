@@ -56,6 +56,13 @@ def look_patterns_bytes(path):
  if not rows:raise ValueError('look-patterns has no phase rows')
  return path.read_bytes()
 
+def character_settings_bytes(path):
+ data=path.read_bytes();rows=[line.split(b'\t') for line in data.splitlines()]
+ if any(row[0]==b'cheekCompositeCase' for row in rows):
+  if len(rows)!=1 or len(rows[0])!=2 or rows[0][1] not in (b'base',b'coordinate'):
+   raise ValueError('cheekCompositeCase requires exactly one base or coordinate settings row')
+ return data
+
 PLAYER_ROOT=r'C:\\Temp\\IkkokuShaderProbe-[0-9a-f]{32}'
 # Isolated player copy shared by every driver that records its root in run.json:
 # copied executable/loader/BepInEx core plus junctions to the original game data.
@@ -92,6 +99,7 @@ def start(vm,output,settings=None,hand_patterns=None,look_patterns=None,model_va
  if model_variant is not None and (model_variant not in ('female00','female00-bone1','female200','female201','male00','male00-bone1','male200','male201') or settings is not None or hand_patterns is not None or look_patterns is not None):raise ValueError('Neutral model variant cannot be combined with other capture inputs')
  if model_shapes is not None and model_variant is None:raise ValueError('Model shapes require --model-variant')
  shape_bytes=canonical_model_shapes(model_shapes.read_bytes()) if model_shapes is not None else None
+ settings_data=character_settings_bytes(settings) if settings is not None else None
  run_path=output/'run.json';root=player_root(vm,output)
  properties=[]
  for path in sorted((output/'shaders').glob('*/program.json')):
@@ -106,7 +114,7 @@ def start(vm,output,settings=None,hand_patterns=None,look_patterns=None,model_va
   # The C# probe reads the tsv from the `character` folder under the plugin
   # directory; recreate it first because the compile step deletes it each run.
   retry(vm,"$ErrorActionPreference='Stop';New-Item -ItemType Directory "+ps_quote(root+r'\BepInEx\plugins\character')+" -Force|Out-Null")
-  write_small(vm,root+r'\BepInEx\plugins\character\character-settings.tsv',settings.read_bytes())
+  write_small(vm,root+r'\BepInEx\plugins\character\character-settings.tsv',settings_data)
  # Uploaded after the compile step and before the player starts, so the
  # plugin can read it at Start(); an absent file keeps outputs byte-identical.
  if hand_patterns is not None:write_small(vm,root+r'\BepInEx\plugins\hand-patterns.tsv',hand_patterns_bytes(hand_patterns))
@@ -144,7 +152,7 @@ def collect(vm,output):
  return dict(status=status,files=len(provenance),archiveBytes=len(data))
 
 def main():
- p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path,help='optional "key<TAB>value" character-settings.tsv (makeup, blush, nip, underhair, iris-highlight, eye-white, iris IDs/colors top/bottom/inner/outer-shoe base colors and shared skin/nail colors and face/body input readbacks); keys: docs/reference/character/material-expansion.md');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');p.add_argument('--model-variant',choices=['female00','female00-bone1','female200','female201','male00','male00-bone1','male200','male201'],help='Quiescent source model immediately after load, with hand pattern 0 and no fitted clock');p.add_argument('--model-shapes',type=Path,help='optional body/face<TAB>index<TAB>rate TSV applied before load; requires --model-variant');a=p.parse_args()
+ p=argparse.ArgumentParser(description=__doc__);p.add_argument('--vm',default='Windows 11');p.add_argument('--output',type=Path,default=ROOT/'.local/reverse/original-character-probe');p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');p.add_argument('--settings',type=Path,help='optional "key<TAB>value" character-settings.tsv (makeup, blush, nip, underhair, iris-highlight, eye-white, iris IDs/colors top/bottom/inner/outer-shoe base colors and shared skin/nail colors, face/body input readbacks, or the single cheekCompositeCase=base/coordinate oracle row); keys: docs/reference/character/material-expansion.md');p.add_argument('--hand-patterns',type=Path,help='optional "L<TAB>k"/"R<TAB>k" file driving Studio.HandAnimeCtrl patterns 1-21 (0 disables)');p.add_argument('--look-patterns',type=Path,help='optional "neckPtn<TAB>eyesPtn<TAB>frames<TAB>x,y,z" file driving the neck/eye look-at controllers one camera phase per row');p.add_argument('--model-variant',choices=['female00','female00-bone1','female200','female201','male00','male00-bone1','male200','male201'],help='Quiescent source model immediately after load, with hand pattern 0 and no fitted clock');p.add_argument('--model-shapes',type=Path,help='optional body/face<TAB>index<TAB>rate TSV applied before load; requires --model-variant');a=p.parse_args()
  # Checked before any output folder is touched: these inputs are uploaded only by the capture step.
  if a.collect and (a.settings is not None or a.hand_patterns is not None or a.look_patterns is not None or a.model_variant is not None or a.model_shapes is not None):raise ValueError('--settings/--hand-patterns/--look-patterns/--model-variant/--model-shapes belong to the capture step, not --collect')
  if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must stay under .local')

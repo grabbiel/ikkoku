@@ -92,6 +92,29 @@ class DriverWiringTests(unittest.TestCase):
                 self.assertNotIn("IkkokuShaderProbe-'+uuid",text)
 
 class ArgumentTests(unittest.TestCase):
+    def test_cheek_oracle_accepts_only_one_fixed_case_without_changing_bytes(self):
+        for value in (b'cheekCompositeCase\tbase\n',b'cheekCompositeCase\tcoordinate\r\n'):
+            with tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'settings.tsv';path.write_bytes(value)
+                self.assertEqual(probe.character_settings_bytes(path),value)
+
+    def test_cheek_oracle_rejects_extra_or_unknown_settings_before_guest_access(self):
+        for value in (b'cheekCompositeCase\tother\n',b'cheekCompositeCase\n',
+                      b'cheekCompositeCase\tbase\ncheekCompositeCase\tbase\n',
+                      b'cheekCompositeCase\tcoordinate\nskinMainColor\t1,1,1,1\n',
+                      b'cheekCompositeCase\tbase\n\n'):
+            with self.subTest(value=value),tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'settings.tsv';path.write_bytes(value)
+                with patch.object(probe,'player_root') as root:
+                    with self.assertRaisesRegex(ValueError,'cheekCompositeCase'):probe.start('vm',Path(tmp),settings=path)
+                    root.assert_not_called()
+
+    def test_other_character_settings_remain_byte_identical(self):
+        value=b'captureBodyCompositeInputs\ttrue\nskinMainColor\t.95,.75,.65,1\n'
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'settings.tsv';path.write_bytes(value)
+            self.assertEqual(probe.character_settings_bytes(path),value)
+
     def test_capture_inputs_are_rejected_with_collect_before_the_output_is_touched(self):
         for flag in ['--settings','--hand-patterns','--look-patterns','--model-variant','--model-shapes']:
             with self.subTest(flag=flag),tempfile.TemporaryDirectory() as tmp:
