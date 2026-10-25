@@ -710,6 +710,37 @@ phase-dependent pose difference. No allocation, GUI, original-player parity or
 comparative performance claim follows. Initial library installation remains a
 separate reproduction and acceptance task.
 
+
+### Initial library attachment installation boundary (#257)
+
+The diagnostic at `cf1626c` reproduces the separate initial-installation policy
+with identical manifest/program bytes, GUID/type, source binding and fixed clock
+for immutable-library and legacy-profile entry points. Cold and warm asynchronous
+library mounts reject reader and late-poison initializers at the named attachment
+read gate. The same legacy reader succeeds; its late-poison counterpart reaches
+the arithmetic error after two successful reads. This records existing unsupported
+behavior and does not enable initial library attachment reads.
+
+The corrected Release binary `37536243…` passes **81 checks**, retaining 67 raw
+artifacts. Nine public-session controls independently verify read order and the
+stored Unity-space vector `(1.25, 2.5, -3.75)` from a native-space resolver marker.
+Those counts are controls, not instrumentation of the app's real mount path.
+Eight rejected-state pairs preserve sessions, adapters, preview owners, histories,
+resources and public frames; asynchronous attempts advance only the expected mount
+generation. Warm preview values and pose matrices survive repeated failures.
+Zero-read installs, identical-selection no-ops, successful first-step preview reuse
+and two held-resolver cancellation/drain sequences also pass. These are functional
+ownership checks, with no allocation or timing claim and no added tick work.
+
+The first app attempt stopped at a diagnostic expectation that omitted the Z
+reflection (three passed/two failed rows); it reached no real mount. The corrected
+oracle follows `SourceStudioPluginWorld` and `UnityCoordinates` and persists its
+raw document before checking it. Both successful compiles initially returned a
+lifecycle-wrapper failure for an owned `ibtoold`; unchanged raw results and separate
+release/product proofs retain that distinction. Private evidence under
+`library-attachment-install/` keeps all attempts, complete app archives and the
+accepted state/frame review. Broader installation support remains a separate task.
+
 ## Execution and persistence
 
 The runtime handles Awake, OnEnable, Start, FixedUpdate, Update, LateUpdate,
