@@ -95,6 +95,12 @@ public struct SourceSceneEdits: Sendable {
     /// unchanged. Pair a move with a `.object` transform edit holding the
     /// re-authored local placement (`SourceStudioWorldTransform.reparented`).
     public var reparents: [Reparent]
+    /// ST-T03 / ST-S09 / ST-D03: records to add (duplicates and new folders,
+    /// cameras and lights), parents first. They are written before every
+    /// other edit (`KoikatsuSceneDocument.inserting`), under the keys that
+    /// call allocates; every other edit addresses inserted records by those
+    /// keys and may delete or move them like source records.
+    public var insertions: [SourceSceneInsertion]
     public struct Reparent: Sendable, Equatable {
         public var object: Int32, parent: Int32?
         public init(object: Int32, parent: Int32?) { self.object = object; self.parent = parent }
@@ -105,8 +111,9 @@ public struct SourceSceneEdits: Sendable {
                 cameraSlots: [Int: KoikatsuCameraRecord] = [:], thumbnailData: Data? = nil,
                 visibility: [Int32: Bool] = [:], names: [Int32: String] = [:],
                 cameraActive: [Int32: Bool] = [:], routeActive: [Int32: Bool] = [:],
-                mouth: [Int32: MouthEdit] = [:], deletions: Set<Int32> = [], reparents: [Reparent] = []) {
-        self.deletions = deletions; self.reparents = reparents
+                mouth: [Int32: MouthEdit] = [:], deletions: Set<Int32> = [], reparents: [Reparent] = [],
+                insertions: [SourceSceneInsertion] = []) {
+        self.deletions = deletions; self.reparents = reparents; self.insertions = insertions
         self.transforms = transforms; self.cards = cards; self.kinematics = kinematics; self.thumbnailData = thumbnailData
         self.visibility = visibility; self.names = names
         self.cameraActive = cameraActive; self.routeActive = routeActive
@@ -149,6 +156,15 @@ struct SourceSceneEditSpans {
         var records: [Int32: Range<Int>] = [:]
         /// Each record's child lists in byte order.
         var slots: [Int32: [Slot]] = [:]
+        /// The offsets of the `dicKey` Int32s a record's sub-infos carry
+        /// (`OIBoneInfo`, `OIIKTargetInfo`, `LookAtTargetInfo`,
+        /// `OIRoutePointInfo`, `OIRoutePointAidInfo`), split by whether
+        /// CharaStudio's import allocates them before or after the record's
+        /// children: character FK bones and IK targets and item FK bones
+        /// before, a character's look-at target and a route's points and
+        /// aids (point, aid, point, aid, ...) after.
+        struct SubKeys { let before: [Int], after: [Int] }
+        var subKeys: [Int32: SubKeys] = [:]
     }
     var topology = Topology()
 }
@@ -158,6 +174,10 @@ public extension KoikatsuSceneDocument {
     /// Any unsupported/missing destination or invalid input rejects the whole
     /// edit before bytes are returned; source data is never mutated.
     func editedData(_ edits: SourceSceneEdits) throws -> Data {
+        if !edits.insertions.isEmpty {
+            var rest = edits; rest.insertions = []
+            return try inserting(edits.insertions).editedData(rest)
+        }
         guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty else { return preservedData }
         guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
@@ -379,12 +399,13 @@ public extension KoikatsuSceneDocument {
     }
 }
 
-private extension KoikatsuSceneDocument {
+extension KoikatsuSceneDocument {
     /// Plug-ins key their scene data by object `dicKey` and rewrite it from
     /// live objects when CharaStudio saves, which this writer cannot run.
-    /// Deleting is therefore limited to scenes whose trailer carries no
-    /// plug-in entries: no trailer, or one KKEx block with a nil or empty map.
-    func refuseObjectKeyedExtensions() throws {
+    /// Deleting and duplicating are therefore limited to scenes whose
+    /// trailer carries no plug-in entries: no trailer, or one KKEx block
+    /// with a nil or empty map.
+    func refuseObjectKeyedExtensions(_ reason: String = "Original-scene export does not delete objects from a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object and rewrite it when CharaStudio saves. Save in native format instead.") throws {
         guard !trailingData.isEmpty else { return }
         let extensions = extensions()
         let empty: Bool
@@ -394,7 +415,7 @@ private extension KoikatsuSceneDocument {
         case .none: empty = false
         }
         guard extensions.version != nil, empty, extensions.diagnostics.count == 1 else {
-            throw SourceSceneTopologyError.unsupported("Original-scene export does not delete objects from a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object and rewrite it when CharaStudio saves. Save in native format instead.")
+            throw SourceSceneTopologyError.unsupported(reason)
         }
     }
 }

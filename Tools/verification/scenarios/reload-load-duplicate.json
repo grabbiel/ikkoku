@@ -1,0 +1,17 @@
+{
+  "steps": [
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-duplicate.png"},
+    {"op": "assert", "children": {"labels": ["0", "1", "native:Saved folder"]}, "activeCamera": 2, "sourceRuntime": {"cameras": 3, "rehydrations": 1}},
+    {"op": "assert", "children": {"parent": 1, "labels": ["2", "copy:2"]}},
+    {"op": "captureObject", "key": 2, "name": "camera-2"},
+    {"op": "toggleCamera", "key": 2, "copy": 0},
+    {"op": "assert", "activeCopyOf": 2},
+    {"op": "export", "path": ".local/verification/scenario-exports/reload-load-duplicate.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/reload-load-duplicate.png"},
+    {"op": "assert", "children": {"keys": [0, 1, 4]}, "activeCamera": 3},
+    {"op": "assert", "children": {"parent": 1, "keys": [2, 3]}},
+    {"op": "assertRejected", "activeCamera": 2, "errorContains": "assert activeCamera"},
+    {"op": "assert", "key": 3, "name": "IKKOKU-B"},
+    {"op": "assert", "position": {"key": 3, "from": "camera-2", "within": 0.0005, "rotationWithin": 0.05}}
+  ]
+}

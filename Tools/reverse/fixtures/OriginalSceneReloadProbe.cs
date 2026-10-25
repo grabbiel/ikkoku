@@ -401,7 +401,8 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 "changeScale",info.changeAmount==null?null:(object)V(info.changeAmount.scale),
                 "childKeys",ChildKeys(info),
                 "routeChildRootPosition",route==null||route.childRoot==null?null:(object)V(route.childRoot.position),
-                "character",chr==null?null:CharRecord(chr,(OICharInfo)info)));
+                "character",chr==null?null:CharRecord(chr,(OICharInfo)info),
+                "content",Content(ctrl)));
         }
         var rootKeys=new List<object>(); // sceneInfo.dicObject in enumeration order: the order SceneInfo.Save writes the roots
         foreach(var root in studio.sceneInfo.dicObject)rootKeys.Add(K("key",root.Key,"dicKey",root.Value.dicKey));
@@ -409,7 +410,43 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
             "viewCameraKey",studio.ociCamera==null?null:(object)studio.ociCamera.cameraInfo.dicKey,
             "viewCameraName",studio.ociCamera==null?null:studio.ociCamera.cameraInfo.name,
             "cameraCtrlEnabled",studio.cameraCtrl==null?null:(object)studio.cameraCtrl.enabled,
+            "indexKeys",IndexKeys(studio.sceneInfo),
             "objects",objects);
+    }
+    // ST-T03 duplicate/insert: every key SceneInfo's index holds after the load (object records and their
+    // bone, IK, look-at and route point keys; Studio.SetNewIndex hands a key already taken a fresh one),
+    // and what each loaded object shows of its catalog content: an item's catalog IDs, whether its prefab
+    // loaded and the renderers and mesh vertices under it; a light's loaded values and the Light they drive;
+    // a character's card name, sex and the renderers and mesh vertices under it.
+    static readonly System.Reflection.FieldInfo HashIndex=typeof(SceneInfo).GetField("hashIndex",
+        System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+    static object IndexKeys(SceneInfo info) {
+        var set=HashIndex==null||info==null?null:HashIndex.GetValue(info) as HashSet<int>;
+        if(set==null)return null;var keys=new List<int>(set);keys.Sort();return keys;
+    }
+    static Dictionary<string,object> Content(ObjectCtrlInfo ctrl) {
+        var item=ctrl as OCIItem;var light=ctrl as OCILight;var chr=ctrl as OCIChar;
+        if(item!=null){var ii=item.itemInfo;
+            return K("group",ii.group,"category",ii.category,"no",ii.no,"loaded",item.objectItem!=null,"meshes",Meshes(item.objectItem));}
+        if(light!=null){var li=light.lightInfo;var l=light.light;
+            return K("no",li.no,"color",new[]{li.color.r,li.color.g,li.color.b,li.color.a},"intensity",li.intensity,"range",li.range,
+                "spotAngle",li.spotAngle,"shadow",li.shadow,"enable",li.enable,"drawTarget",li.drawTarget,
+                "lightType",l==null?null:l.type.ToString(),"lightEnabled",l==null?null:(object)l.enabled,
+                "lightIntensity",l==null?null:(object)l.intensity,"lightRange",l==null?null:(object)l.range,
+                "lightSpotAngle",l==null?null:(object)l.spotAngle);}
+        if(chr!=null){var cha=chr.charInfo;
+            return K("fullname",cha==null?null:cha.fileParam.fullname,"sex",cha==null?null:(object)cha.fileParam.sex,
+                "meshes",Meshes(cha==null?null:cha.gameObject));}
+        return null;
+    }
+    static object Meshes(GameObject root) {
+        if(root==null)return null;int renderers=0,vertices=0;
+        foreach(var r in root.GetComponentsInChildren<Renderer>(true)) {
+            renderers++;Mesh mesh=null;var skinned=r as SkinnedMeshRenderer;
+            if(skinned!=null)mesh=skinned.sharedMesh;else{var filter=r.GetComponent<MeshFilter>();if(filter!=null)mesh=filter.sharedMesh;}
+            if(mesh!=null)vertices+=mesh.vertexCount;
+        }
+        return K("renderers",renderers,"vertices",vertices);
     }
     // The character's FK bookkeeping plus the acceptance bones: the bone's saved (loaded) rotation and
     // world placement, live from guideObject.transformTarget — what the player's own views would show.

@@ -182,6 +182,8 @@ struct KoikatsuBinaryReader {
     var objectCount = 0
     var sourceKeys = Set<Int32>()
     var editSpans = SourceSceneEditSpans()
+    /// The offset of the `dicKey` Int32 the last `bone()` read.
+    var lastBoneKeyOffset = 0
     static let maximumCount = 100_000
     static let maximumStringBytes = 1_048_576
 
@@ -313,12 +315,15 @@ struct KoikatsuBinaryReader {
         let alpha = try float(), lineColor = try jsonVector(["r", "g", "b", "a"]), lineWidth = try float()
         let emissionColor = try jsonVector(["r", "g", "b", "a"]), emissionPower = try float(), lightCancel = try float()
         let panel = try pattern(), enableFK = try bool(), boneCount = try count()
-        var bones: [String: KoikatsuBoneRecord] = [:]
+        var bones: [String: KoikatsuBoneRecord] = [:], subKeys: [Int] = []
         for _ in 0..<boneCount {
             let name = try string()
             guard bones[name] == nil else { throw invalid("duplicate bone name") }
             bones[name] = try bone(destination: .itemFK(object: objectKey, bone: name))
+            subKeys.append(lastBoneKeyOffset)
         }
+        // OIItemInfo.Load allocates the FK bones before the child list.
+        editSpans.topology.subKeys[objectKey] = .init(before: subKeys, after: [])
         return KoikatsuItemRecord(group: group, category: category, no: no, animationSpeed: speed,
                                  colors: colors, patterns: patterns, alpha: alpha, lineColor: lineColor,
                                  lineWidth: lineWidth, emissionColor: emissionColor, emissionPower: emissionPower,
