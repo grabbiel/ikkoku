@@ -100,7 +100,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   evidence, not fixes or added material coverage. The latest controlled split
   associates variation with a discard statement in the instrumented program;
   source alpha testing remains required. A subsequent same-source comparison
-  still varies under explicit Metal language versions 4.0 and 4.1.
+  still varies under explicit Metal language versions 4.0 and 4.1. Supplying
+  explicit sample gradients also preserves variation and changes the pixels.
 - **Mods / Plugins:** immutable library selection, bounded translated profiles
   and three exact native adapters have selected app/save/restore acceptance.
   Mounted-session controls and fresh-profile preview rollback are merged in
@@ -579,6 +580,20 @@ controls do not establish UV equality between providers. The
 retains the exact results and corrected comparison scope. This private diagnostic
 changes no production option or shader and establishes no source parity, stable
 improvement in variation magnitude or performance gain.
+
+**Diagnostic handoff — explicit sample gradients, [#188](https://github.com/grabbiel/ikkoku/issues/188):**
+Adding only an explicit gradient argument to the first MainTex sample leaves
+repeat variation in both texture providers. The original alpha test remains
+intact. The fresh implicit controls also vary, while paired implicit/explicit
+draws differ at hundreds of sampled pixels; this is neither an equivalent
+substitution nor a stable workaround. Root independently verifies all 80
+attachment planes, repeat and cross-variant counts, 20 paired mip chains,
+148 unchanged mip instances and ten constant buffers. Per-provider coverage,
+IDs, alpha, UVs, mask and predicate remain fixed; the existing 17-pixel
+cross-provider UV difference persists. Exact measurements and limitations are
+in the [renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188).
+This private diagnostic changes no production shader, material coverage,
+source-parity gate or performance claim.
 
 **Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
 A supported hidden attachment initializer loads fresh and saves successfully,
