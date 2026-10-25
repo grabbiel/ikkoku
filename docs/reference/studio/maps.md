@@ -142,6 +142,11 @@ The Python tests are `test_export_map_scene.py`, `test_compare_original_map.py` 
 - **`studio-scenario-reload-load-source-map`** loads the save in a fresh process: one rehydration, and the map draws again.
 - **`studio-scenario-source-map-none`** runs on `koikatu_cs0002591.png`, which names no map, with the catalog supplied: there is no request or line, and the export is byte-identical.
 
+On the Debug build of `ceccafa`, the full Studio lane passed 77/77 under `--strict` and `maker-scenarios` 10/10. Two negative controls ran on the same build, and both fail as they must (`.local/sta11a-maps/controls/`):
+
+- a scenario of six asserts that contradict the map scene (a map-only point picks something, a character point picks nothing, map 34, no map, 8 draws while hidden, no `hidden` note): 6 of 6 asserts fail;
+- `source-map.json` without `IKKOKU_STUDIO_MAP_CATALOG`: 5 of 15 steps fail, and the line reads `Map 33: no map catalog (IKKOKU_STUDIO_MAP_CATALOG is not set); no map shown`.
+
 Reproduce:
 
 ```sh
