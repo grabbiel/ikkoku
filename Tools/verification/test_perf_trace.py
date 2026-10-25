@@ -295,6 +295,20 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("6.50 s at a lowered rate, 2 lowerings, 1 restores, 500 deliberate target skips", text)
         self.assertIn("keep-alive refreshes 100 (96 presented, GPU 0.50 ms/s); deform dispatches 40 (20 untracked), reuses 120, deform passes 6", text)
 
+    def test_cadence_line_reports_interval_histograms_and_paced_requests_only_for_schema_7(self):
+        data = report()
+        self.assertIsNone(perf_trace.cadence_line("old", data))
+        data["summary"].update(recordedSeconds=8, hitches=4,
+                               cadence={"presentedIntervalPeriods": {"4": 230, "3": 2, "5": 2, "9": 1},
+                                        "targetIntervalPeriods": {"4": 235},
+                                        "latenessPeriods": {"2": 230, "3": 5}},
+                               pacing={"policy": "display", "requests": 240, "ran": 236, "busy": 1,
+                                       "idle": 3, "requestToStartMs": {"p50": 0.2, "p95": 1.5}})
+        text = perf_trace.cadence_line("new", data)
+        self.assertIn("pacing display; presented interval periods 3:2 4:230 5:2 >6:1; "
+                      "target interval periods 4:235; lateness periods 2:230 3:5; hitches 0.50/s", text)
+        self.assertIn("requests 240 (ran 236, busy 1, idle 3; request to start ms p50 0.2 p95 1.5)", text)
+
     def test_burst_line_reports_drag_start_latency_drops_and_the_preceding_present_gap(self):
         def row(callback, presented, outcome):
             return [callback, 0.1, 0.5, presented, 0, outcome, callback + 0.016, 0]
