@@ -17,8 +17,10 @@ struct PluginLibraryScenario: Decodable {
     let nativeProfileRestore: NativeProfileRestore?
     /// Regression only: attachment-free constructor replay across native save/open.
     let initializerProfileRestore: NativeProfileRestore?
-    /// Reproduction only: queued Awake destruction across paused native save/open.
+    /// Queued Awake destruction across paused native save/open.
     let pendingDestructionRestore: NativeProfileRestore?
+    /// Separate malformed-state/history checks; leaves the original pair intact.
+    let validatePendingDestructionPolicy: Bool?
     struct NativeProfileRestore: Decodable {
         enum Phase: String, Decodable { case save, reopen }
         let phase: Phase
@@ -546,7 +548,7 @@ extension PluginLibraryScenario {
             return "documentIDs=\(ids); worldIDs=\(worldIDs); cloneSerial=\(value.runtimeDocument?.sourcePluginState?.cloneSerial ?? 0); pending=\(value.pending); callbacks=\(value.callbacks)"
         }
         let topologyError = "Restoring plugin initialization changed scene object topology, identities, or clone state."
-        func checkHistoryRejection(_ name: String, action: () -> Void) throws {
+        func checkHistoryRejection(_ name: String, expectedError: String? = nil, action: () -> Void) throws {
             let before = try snapshot(), session = studio.sourcePluginSession
             let frame = studio.host.renderer.currentFrame(), adapter = studio.sourceFocus.adapter
             let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
@@ -554,7 +556,7 @@ extension PluginLibraryScenario {
             try persist(before, name + "-before")
             action()
             try persist(snapshot(), name + "-after")
-            record(name + "ExactError", studio.status == "Plugin restore: Invalid translated plugin: " + topologyError, studio.status)
+            record(name + "ExactError", studio.status == "Plugin restore: Invalid translated plugin: " + (expectedError ?? topologyError), studio.status)
             record(name + "RetainsPrior", try snapshot(expectedStatus: before.status) == before
                 && studio.sourcePluginSession === session && studio.sourceFocus.adapter === adapter
                 && studio.sourceAudioBus.masterVolume == gain && studio.sourceFocusObservers.count == observers
@@ -640,7 +642,9 @@ extension PluginLibraryScenario {
                     "save PID=\(savePID), reopen PID=\(ProcessInfo.processInfo.processIdentifier)")
                 // Seed a real retained session before every candidate, including
                 // changed-identity rejection. No source-character cache exists.
-                for name in pendingDestruction ? names : ["changed", "noop", "Instantiate", "SetActive", "Destroy"] {
+                let reopenNames = pendingDestruction && validatePendingDestructionPolicy == true ? []
+                    : pendingDestruction ? names : ["changed", "noop", "Instantiate", "SetActive", "Destroy"]
+                for name in reopenNames {
                     try studio.loadScene(from: path("noop", ".png"))
                     try studio.stepSourcePlugins(deltaTime: 0.06)
                     let before = try snapshot(), oldSession = studio.sourcePluginSession
@@ -727,6 +731,42 @@ extension PluginLibraryScenario {
                     // Full snapshots retain SetActive visibility, pending Destroy
                     // and callback order as observations, without imposing a new
                     // restore policy on those existing semantics.
+                }
+                if pendingDestruction && validatePendingDestructionPolicy == true {
+                    let source = try card("AwakeDestroy"), id = source.objects[0].id
+                    let error = "Invalid saved pending destruction roots."
+                    for (name, roots) in [("DuplicatePending", [id.uuidString, id.uuidString.lowercased()]),
+                                          ("UnknownPending", [UUID().uuidString])] {
+                        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(source)) as! [String: Any]
+                        var state = json["sourcePluginState"] as! [String: Any]; state["pendingDestructionRoots"] = roots
+                        json["sourcePluginState"] = state
+                        let rejected = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
+                        let url = path(name, ".png")
+                        guard !FileManager.default.fileExists(atPath: url.path) else {
+                            throw SourcePluginError.invalid("Pending-root validation needs fresh artifacts.")
+                        }
+                        try CardIO.encode(rejected, keyword: CardIO.sceneKeyword, thumbnail: nil).write(to: url)
+                        try studio.loadScene(from: path("noop", ".png")); try studio.stepSourcePlugins(deltaTime: 0.06)
+                        let before = try snapshot(), session = studio.sourcePluginSession
+                        let frame = studio.host.renderer.currentFrame(), adapter = studio.sourceFocus.adapter
+                        let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
+                        let launchObserver = studio.sourceLaunchObserver != nil
+                        try persist(before, name + "-before")
+                        var reason = ""
+                        do { try studio.loadScene(from: url) } catch { reason = outcome(error) }
+                        try persist(snapshot(), name + "-after")
+                        record(name + "ExactError", reason == "invalid: " + error, reason)
+                        record(name + "RetainsPrior", try snapshot() == before && studio.sourcePluginSession === session
+                            && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
+                            && studio.sourceFocusObservers.count == observers && (studio.sourceLaunchObserver != nil) == launchObserver
+                            && !studio.sourcePluginsRunning && sameFrame(frame, studio.host.renderer.currentFrame()))
+                        studio.doc = rejected; studio.pushUndo(force: true); studio.doc = before.document
+                        try checkHistoryRejection(name + "Undo", expectedError: error, action: { studio.undo() })
+                        studio.pushUndo(force: true); studio.doc = rejected; studio.undo()
+                        try require(name + "RedoTargetPrepared", studio.doc.objects == before.document.objects
+                            && studio.redoStack.last == rejected && studio.sourcePluginSession != nil, studio.status)
+                        try checkHistoryRejection(name + "Redo", expectedError: error, action: { studio.redo() })
+                    }
                 }
             }
         } catch { record("initializerRestoreReproductionFailure", false, String(describing: error)) }
@@ -1014,6 +1054,15 @@ extension PluginLibraryScenario {
             ("LateInitializer", poison, "Unsupported arithmetic operator or Int32 arithmetic."),
             ("PartialConstructor", partial, "Invalid or ambiguous Studio animation catalog."),
             ("MissingCandidateAsset", missing, "Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details.")]
+        // Preserving pending roots must not silently broaden #215's actual
+        // attachment-read gate. This initializer reads successfully before the
+        // existing policy rejects the live child's previously saved request.
+        var queuedJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(candidate)) as! [String: Any]
+        var queuedState = queuedJSON["sourcePluginState"] as! [String: Any]
+        queuedState["pendingDestructionRoots"] = [child.id.uuidString]; queuedJSON["sourcePluginState"] = queuedState
+        let queued = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: queuedJSON))
+        failures.append(("PendingAttachmentRead", queued,
+            "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."))
         for mutation in ["Instantiate", "SetActive", "Destroy"] {
             let profile = try freshProfileFixture(directory: directory.appendingPathComponent("restore-" + mutation),
                 phase: "initializer", fail: false, mutation: mutation)

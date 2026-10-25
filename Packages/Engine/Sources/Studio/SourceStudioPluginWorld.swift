@@ -23,6 +23,7 @@ public final class SourceStudioPluginWorld: SourceAPIEventWorld {
     private var transactions: [Snapshot] = []
 
     public init(document: StudioDocument, identities: [UUID: String] = [:], cloneSerial: UInt64 = 0,
+                pendingDestructionRoots: [UUID] = [],
                 attachment: AttachmentResolver? = nil) throws {
         try document.validateHierarchy()
         self.document = document; self.identities = identities; self.cloneSerial = cloneSerial; self.attachment = attachment
@@ -34,6 +35,18 @@ public final class SourceStudioPluginWorld: SourceAPIEventWorld {
             else { self.identities[object.id] = "native:\(object.id.uuidString)" }
         }
         guard Set(self.identities.values.map { Data($0.utf8) }).count == self.identities.count else { throw SourcePluginError.invalid("Plugin object identities collide.") }
+        // Seed saved roots before runtime construction: even an already-awake
+        // binding must observe its queued subtree as inactive during attach.
+        guard pendingDestructionRoots.count <= 10000 else { throw SourcePluginError.invalid("Invalid saved pending destruction roots.") }
+        let roots = Set(pendingDestructionRoots)
+        guard roots.count == pendingDestructionRoots.count else { throw SourcePluginError.invalid("Invalid saved pending destruction roots.") }
+        if !roots.isEmpty {
+            let live = Set(document.objects.map(\.id))
+            guard roots.isSubset(of: live), roots.allSatisfy({ self.identities[$0] != nil }) else {
+                throw SourcePluginError.invalid("Invalid saved pending destruction roots.")
+            }
+        }
+        pending = roots
     }
     public func replaceDocument(_ value: StudioDocument) throws {
         guard transactions.isEmpty else { throw SourcePluginError.runtime("Cannot replace a document inside a plugin callback.") }
@@ -112,6 +125,11 @@ public final class SourceStudioPluginWorld: SourceAPIEventWorld {
     public func pendingSourceDestruction() -> [any SourceAPIObject] {
         document.objects.filter { object in pending.contains(object.id) || pending.contains(where: { document.isDescendant(object.id, of: $0) }) }
             .compactMap { try? self.object(id: $0.id) }
+    }
+    /// Native snapshots preserve the requested roots, including overlapping
+    /// roots, without walking descendants or materializing object handles.
+    public func pendingSourceDestructionRoots() -> [UUID] {
+        pending.sorted { $0.uuidString < $1.uuidString }
     }
     public func completeSourceDestruction() {
         let ids = pending; pending.removeAll()
