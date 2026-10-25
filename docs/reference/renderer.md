@@ -1004,9 +1004,10 @@ offset.
 
 ### Studio live step threads (R7 phase 2, item 3)
 
-**Who runs what.** The Studio's 30 Hz timer still fires on the main run
-loop and calls `StudioModel.stepLive`. For a scene with source characters,
-the step now runs in three parts:
+**Who runs what.** `StudioModel.stepLive` runs on the main run loop. The
+Studio viewport's display link starts it (see [live pacing](#live-pacing-r7-phase-2)
+below); before that change the Studio's 30 Hz timer did. For a scene with
+source characters, the step now runs in three parts:
 
 1. **Start (main actor).** `startParallelLiveTick` copies every input the
    step reads into value types (`SourceStudioLiveTick.Input`):
@@ -1088,8 +1089,9 @@ in the app (no edit, an object move, an FK edit, undo, redo). For each one it
 checks the clock and the number of reused frames, and that the presented
 render is byte-identical to a main-thread rebuild.
 
-**When the timer fires during a step.** A fire while a step is running, or
-has settled but not yet refreshed, is skipped (`studioLiveTickSkipped`). The
+**When a step is due during a step.** A step due while the previous one is
+running, or has settled but not yet refreshed, is skipped
+(`studioLiveTickSkipped`; with live pacing, a `.busy` answer). The
 clock does not move for it. Every step that runs advances the clock by
 exactly 1/30 s. Under load the live animation therefore slows down instead
 of jumping, as it did when a main-thread step outlasted the timer period.
@@ -1173,6 +1175,110 @@ FK, undo and redo edits while a step is in flight in the app. ThreadSanitizer
 runs the Engine tests with `swift test --sanitize=thread --filter
 SourceStudioLiveTick`, and the app check on a Debug build with
 `-enableThreadSanitizer YES`.
+
+### Live pacing (R7 phase 2)
+
+**Who starts a step.** The Studio viewport's display link starts the
+Studio's 1/30 s step: the live animation, a playing timeline, playing routes
+and the plugin session. Before, a 30 Hz `Timer` on the main run loop started
+it, at a phase that drifted against the display. A step submitted just after
+a callback waited for the next one, so frames 4 vsyncs apart at 120 Hz came
+3 and 5 apart, 6–13 times a second (performance.md, "Phase 2: live
+pacing"). The parts:
+
+- `LiveStepPacer` (Renderer, plain data) decides which callbacks ask for a
+  step. A step is due 1/30 s after the previous one, in target-presentation
+  time. The callback whose target is nearest that time asks: the first one
+  whose target plus half the gap since the previous callback is at or past
+  it. When the asking callback's target is within 1% of a step of its due
+  time, the next step is due one interval after that target, so 60, 120 and
+  240 Hz (and 59.94 and 119.88 Hz) get every 2nd, 4th or 8th callback with
+  no drift. Otherwise the steps stay on the 30 Hz grid: at 144 Hz they come
+  5, 5, 4, 5 and 5 vsyncs apart, still 30 a second. The gap is the link's
+  own, so the adaptive tiers, ProMotion and a window that moves to another
+  display need no notice. A gap over 0.25 s asks at once instead of waiting
+  out an old schedule.
+- `ViewportRenderThread.metalDisplayLink`, on the render thread, asks the
+  pacer under `control`. A due callback calls `requestStep` before it draws.
+  That puts a block on the main run loop in the default mode
+  (`CFRunLoopPerformBlock`, then `CFRunLoopWakeUp`), so, as with the timer, no
+  step runs during AppKit event tracking. The block calls the view's
+  `pacedStep`, then reports the answer to the pacer under `control`. One
+  request is in flight at a time; a callback asks nothing while one is
+  unanswered. A thread stopped since it asked answers `.idle` without
+  stepping.
+- `StudioModel.displayStep` (`LivePacedHandler`) does what the timer's tick
+  did, minus the status line, which the timer still polls. It answers:
+  - `.ran` when a timeline, plugin or live step started;
+  - `.busy` when the previous live step is still running or not yet
+    refreshed. The step is skipped as a timer fire was: the clock does not
+    move, and the next step stays on the grid. It is not retried at the next
+    callback, so a slow scene's animation slows down exactly as before;
+  - `.idle` when there is nothing to step. That covers live animation off
+    (without a playing route, as #274's guard has it), a drag, another
+    mode, a hidden Studio and `stopBenchmarkTimer`. The pacer asks again an
+    interval later, so Play or Live waits at most 1/30 s for its first step.
+
+**Attach and detach.** `ViewportNSView` paces only a handler that is a
+`LivePacedHandler`; the Maker's is not, so its link sends no requests and
+its own timer is unchanged. When the render thread starts, the view calls
+`attachLivePacing(self)`, and from then on `StudioModel.tick` only polls the
+status line. `stopRendering` and a handler change call `detachLivePacing`,
+and the timer steps again. The model holds the view weakly, so a view
+released without detaching also hands the step back to the timer.
+
+**Hidden, minimized, another mode.** `setVisible(false)` also tells the
+pacer, and no callback asks while the window is hidden. On visible again, the
+next callback asks at once. A Studio that is not the active mode answers
+`.idle`.
+
+**What does not change.**
+
+- Every step advances the clock by exactly 1/30 s, and steps never overlap
+  or queue (#149's leases).
+- The scenario runner's `advance` (`advanceLiveFrame`) and `editDuringAdvance`
+  do not go through the link. They complete any step in flight, start one,
+  and complete it, as before.
+- Frames are drawn as before. The step's submit wakes the link like any
+  other submit, so playback keeps the display's full rate.
+
+**The link rate during playback.** Lowering the link to 30 Hz while only
+paced steps change the frame (#271's wake returning full rate on input) was
+built and measured. It was not measurably better, and it is not in this
+change. CPU and GPU ms/s stayed within run-to-run noise of full-rate pacing.
+Each draw and step took longer at the lower rate. In `studio-timeline`, the
+p50 step took 1.17–1.18 ms instead of 1.05–1.08 ms, and the p50 draw 0.57 ms
+instead of 0.48–0.49 ms. A frame's target also moved from 25 ms to 75 ms
+after its callback. Cadence was the same.
+
+**Concurrency.** The pacer, like the rate policy, is read and written only
+under `control`. The request block captures the thread object. The block
+runs `pacedStep` through `MainActor.assumeIsolated` on the main queue's run
+loop. No lock is held while the model steps. Only the Studio viewport's
+render-thread callbacks ask: a callback delivered on the main thread draws
+but leaves the pacer alone.
+
+**Measurement controls.** `IKKOKU_PERF_LIVE_PACING=timer` gives the view no
+`pacedStep`, so the timer steps as before. Schema 7 reports record each
+request (`samples.paces`: asked, started, target and answer), the `pacing`
+summary and a `cadence` histogram of presented and target intervals and
+lateness, in display periods. `studio-timeline` plays a keyed timeline in the
+native scene, and `IKKOKU_PERF_BURST_LIVE=on` plays the live animation during
+`studio-orbit-bursts`.
+
+**Tests.** `LiveStepPacerTests` covers:
+
+- the 120, 60, 30 and 240 Hz divisors;
+- the 119.88 and 59.94 Hz snap;
+- 144 Hz;
+- rate changes, including a slower link whose callbacks fall between the
+  steps' vsyncs;
+- busy skips, idle polling and one request in flight;
+- stale answers;
+- a hidden window and a long gap.
+
+The same tests pass under ThreadSanitizer. The app ran under
+ThreadSanitizer with 0 warnings (performance.md).
 
 ### Picks (R7 phase 2, item 5)
 

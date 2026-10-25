@@ -93,13 +93,18 @@ struct LiveStepPacerTests {
         #expect(steps == Array(stride(from: 0, through: 36, by: 4)) + Array(stride(from: 42, through: 78, by: 4)), "\(steps)")
     }
 
-    /// A busy answer (the previous step still running) asks again at the next
-    /// callback; the step after a retried one counts from the retry. Steps
-    /// never queue: one late step is one step, not two.
-    @Test func aBusyStepIsRetriedAtTheNextCallbackAndCountsFromThere() {
+    /// A busy answer (the previous step still running) skips that step, as a
+    /// timer fire did: no retry, no queue, and the next step stays on the grid.
+    @Test func aBusyStepIsSkippedAndTheNextOneStaysOnTheGrid() {
         let pacer = Pacer()
-        let asked = pacer.run(period: 1.0 / 120, count: 40) { $0 == 8 ? .busy : .ran }
-        #expect(asked == [0, 4, 8, 9, 13, 17, 21, 25, 29, 33, 37])
+        var results: [Int: LiveStepPacer.Result] = [:]
+        let asked = pacer.run(period: 1.0 / 120, count: 40) { index in
+            let result: LiveStepPacer.Result = index == 8 || index == 12 ? .busy : .ran
+            results[index] = result
+            return result
+        }
+        #expect(asked == Array(stride(from: 0, to: 40, by: 4)))
+        #expect(asked.filter { results[$0] == .ran }.count == 8)
     }
 
     /// Nothing to step (live animation off, a drag, another mode): asked again

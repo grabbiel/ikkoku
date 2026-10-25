@@ -31,9 +31,9 @@ import Foundation
 /// (`finished`):
 /// - `.ran`: a step started. The next one is due an interval later.
 /// - `.busy`: the previous step was still running or not yet refreshed, so
-///   this one could not start (steps never overlap or queue). The next
-///   callback asks again, and the step after a retried one is due an interval
-///   after the retry.
+///   this one could not start. As when a timer fire found a step running,
+///   the step is skipped, not retried: steps never overlap or queue, and the
+///   next one is due an interval later, on the same grid.
 /// - `.idle`: there was nothing to step (live animation off, a drag, another
 ///   mode, steps stopped). The pacer asks again an interval later, so
 ///   playback that starts (live animation on, the timeline's Play) waits at
@@ -66,8 +66,6 @@ public struct LiveStepPacer: Sendable, Equatable {
     public private(set) var pending: Double?
     public private(set) var visible = true
     private var lastTarget: Double?
-    /// The request in flight follows a `.busy` answer.
-    private var retrying = false
 
     public init(interval: Double = LiveStepPacer.standardInterval) {
         precondition(interval > 0, "the step interval must be positive")
@@ -93,24 +91,19 @@ public struct LiveStepPacer: Sendable, Equatable {
         guard pending == target else { return }
         pending = nil
         switch result {
-        case .busy:
-            // Ask again at the next callback.
-            retrying = true
         case .idle:
-            retrying = false
             due = target + interval
-        case .ran:
-            if !retrying, let due, abs(target - due) <= Self.snapTolerance {
+        case .ran, .busy:
+            if let due, abs(target - due) <= Self.snapTolerance {
                 // On the vsync grid: count from this callback.
                 self.due = target + interval
-            } else if !retrying, let due, target - due < interval {
+            } else if let due, target - due < interval {
                 // Between vsyncs (144 Hz): keep 30 steps a second.
                 self.due = due + interval
             } else {
-                // The first step, a retry, or more than a step behind.
+                // The first step, or more than a step behind.
                 self.due = target + interval
             }
-            retrying = false
         }
     }
 
@@ -120,14 +113,12 @@ public struct LiveStepPacer: Sendable, Equatable {
         guard visible != self.visible else { return }
         self.visible = visible
         due = nil
-        retrying = false
     }
 
     /// Forgets the schedule and any unanswered request; the next callback asks.
     public mutating func reset() {
         due = nil
         pending = nil
-        retrying = false
         lastTarget = nil
     }
 }
