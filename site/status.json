@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-25",
-  "revision": "2c33e6e3c7fb989a820e10fdc4917cb9f4f8faaf",
+  "revision": "4d6af99f16c4f2ace4f85e624c73c74a7cec24ab",
   "components": [
     {
       "id": "character-maker",
@@ -44,10 +44,14 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Six normal assemblies have bounded original-player comparisons.",
-      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Head 0 also has bounded bone-type-1 checks for both sexes.",
+      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Bone-type-1 checks cover head 0 for both sexes and female head 201.",
       "remaining": "Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. Passing selected vertex and binding checks does not establish full-character parity.",
-      "evidence": "The owning reference records exact model identities, tolerances, original/native hashes and independent neutral repeats.",
+      "evidence": "Corrected female head 201 passes three independent original/native cases across 37,124 selected vertices, with unchanged tolerances and an exact neutral repeat. The reference retains exact identities, hashes and exclusions; CPU silhouettes establish geometry only.",
       "docs": [
+        [
+          "Corrected female head 201",
+          "docs/reference/character/neutral-model-parity.md#corrected-female-head201-skeleton-251"
+        ],
         [
           "Model comparison evidence",
           "docs/reference/character/neutral-model-parity.md"
@@ -108,10 +112,14 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Selected native composites pass independent image gates.",
-      "available": "The controlled ordinary female fixture reaches 20 of 20 live material slots, including head-0 face with null selected layers and the verified ordinary body composite. Independent base/distinct face and body targets pass the one-byte gate.",
-      "remaining": "Other heads and body identities, makeup and paint layers, patterns, states and whole-character shading remain open. Whole-frame source-color parity and repeated-frame variation remain unresolved.",
-      "evidence": "20/20 describes one controlled fixture. Adding body coverage registers eight more textures and raises measured Metal allocation by about 97.75 MiB; first body-composition events span 1.930–140.685 ms. Six default-OFF captures match accepted controls. These bounded runs establish neither FPS gains nor full source-color parity.",
+      "available": "The controlled ordinary female fixture reaches 20 of 20 live material slots, including head-0 face and the verified ordinary body composite. Exact stock cheek ID1 now passes independent base/distinct color targets, inactive-edit reuse and transient-target cleanup checks.",
+      "remaining": "Other head/body identities, additional makeup and paint layers, patterns, states and whole-character shading remain open. Cheek comparative costs need a quiet run; whole-frame source-color parity and repeated-frame variation remain unresolved.",
+      "evidence": "20/20 is fixture-specific. Cheek targets stay within one output byte; four uploaded inputs, one default and three samplers remain stable through edits, with transient targets released. Seven final functional runs preserve unrelated composite keys and control PNGs; six default-OFF captures match prior controls. Comparative cheek timings are deferred. Earlier body costs remain in their owning reference.",
       "docs": [
+        [
+          "Stock cheek ID1 gates",
+          "docs/reference/renderer.md#native-stock-cheek-id1-composite-r1cmt-04-243-2026-10-25"
+        ],
         [
           "Body gates and costs",
           "docs/reference/renderer.md#native-ordinary-female-body-composite-r1cmt-04-231-2026-10-24"
