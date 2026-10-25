@@ -333,10 +333,11 @@ Native save/reload resolves the recorded generation; a new publication never
 upgrades it. Load and undo/redo stage restoration before replacing the live
 session or history. Missing/changed files produce named errors. Plugin-library
 restoration during native open or undo/redo still resolves files synchronously;
-this slice does not move scene loading off the UI thread. Plugin-library
-restoration retains its installation attachment-read gate. Legacy-profile native
-open and history restoration use the candidate-owned read-only preparation
-described below; fresh profile loading uses its separate installation transaction. Plugin-library
+this slice does not move scene loading off the UI thread. Library and legacy-profile
+native open and history restoration use candidate-owned read-only attachment
+preparation (the library acceptance is recorded under [#250](#candidate-owned-library-attachment-restoration-250)).
+Initial library installation and detached restoration retain the attachment-read
+gate; fresh profile loading uses its separate installation transaction. Plugin-library
 root relocation is not supported by the asset-library relocation system; keep
 the recorded root or explicitly mount a selection from its new location.
 
