@@ -701,6 +701,50 @@ assets, so this does not establish cleanup of every distinct cold texture input.
 Functional step timings are diagnostics; they do not establish checkpoint cost,
 source parity or a performance improvement.
 
+The separate `PluginLibraryScenario.routeRollback` reproduction covers a route
+child, which the character-preview case above deliberately omits. Both processes
+reopen the same native seed to retain exact UUIDs. A clean process records three
+successful-prefix continuations: moving at `1/30`, moving at `0.02`, and stopped
+at `0.02`. The second process repeats the prefix, rejects two `LateUpdate`
+callbacks after animation advancement, and retries. It compares exact route-child
+matrices before and after a real refresh as well as document/runtime state,
+resources, ownership and submitted frames. At `2d9dfc4`, the 2026-10-24 Release
+control passed 16/16; the injected process passed 50/56. All six failures belong
+to the moving `0.02` case: both rejected attempts changed only the child matrix's
+x translation from `0.02666666545` to `0.02222222276`, including after refresh,
+and retry reached `0.04444444552` instead of the clean `0.03999999911` at the same
+`0.08` clock. Exact document/runtime/history/resource and ownership checks passed;
+the `1/30` and stopped-route controls passed. This records the route-cache
+reconstruction defect in [#226](https://github.com/grabbiel/ikkoku/issues/226).
+The original red reports and binary remain retained. It establishes neither a
+general callback failure nor an original-player parity or performance result.
+
+The #226 correction uses request-owned route checkpoints alongside character
+dynamics checkpoints. Each retains the original clock owner and exact value
+state: stepper history, built world, reached time, last frame, play state and last
+action. Rollback restores those owners and drops clocks created after capture;
+it does not replay elapsed frames or re-read source data. Immutable route arrays
+remain shared through value copying. Ordinary scrubbing keeps the existing
+fixed-`1/30` rebuild contract. At `2f50237`, all **11 focused Engine tests** pass,
+including oriented loop/non-loop continuation, inactive/fallback states and
+wrong-owner rejection. Release binary `ca45c636` passes **88/88 app checks** in
+three fresh processes: the unchanged 16 controls and 56 injections, plus 16
+lazy-clock/owner-retention checks. All six previously failing assertions pass;
+rejected irregular frames retain x `0.02666666545`, and retry matches the clean
+x `0.03999999911` at clock `0.08`. Six complete before/after state pairs, twelve
+rejected/refreshed matrices and three independent typed continuations match.
+Only the two declared UUID-keyed identity maps require decoding unordered JSON
+pair arrays; no UUID remapping, tolerance or field omission is applied.
+
+The successful Release compilation initially failed its strict process-cleanup
+check because an owned `ibtoold` service remained. It exited naturally before
+cleanup; no signal was sent. The original rejection, separate cleanup proof,
+fresh current/archived binary hashes and exact source pins are retained alongside
+all original red reports in `.local/codex-continue-2026-10-24/wave-three/plugins/`.
+The integration runtime is byte-identical to the tested source. Capture work is
+linear in resident routes and shares immutable path arrays; no comparative
+checkpoint-cost or original-player parity claim is made.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone

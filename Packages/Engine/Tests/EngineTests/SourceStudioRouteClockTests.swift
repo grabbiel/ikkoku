@@ -2,13 +2,14 @@ import Foundation
 import Testing
 import simd
 import CoreMath
+import Scene
 @testable import Studio
 
 /// Pure bookkeeping tests for `SourceStudioRouteClock`: the press-time `play`
 /// offset, the live-tick mirror, the jump rebuild + fixed `1/30`
 /// fast-forward, the 18,000-step fallback and the non-loop hold frame. The
 /// stepper underneath is built directly from
-/// points (orientation none, so no `LookUpdate` state is involved); these
+/// points (the baseline cases use orientation none); these
 /// tests compare the clock against a bare stepper stepped by hand, which is
 /// exactly the equality the Studio preview placement relies on.
 /// Speed 9 on 3 m straight legs: `PathLength` re-runs the padded generator,
@@ -232,4 +233,108 @@ func routeWorldChangeRebuilds() throws {
     for _ in 0..<45 { _ = try reference.step(deltaTime: Double(SourceStudioRouteClock.frameDelta)) }
     #expect(clock.lastAction == .rebuilt(steps: 45))
     #expect(frame.placement.position == reference.current().position)
+}
+
+@Test("route checkpoint restores irregular oriented history and exact continuation", arguments: [true, false])
+func routeCheckpointContinuation(loop: Bool) throws {
+    var builds = 0
+    func makeClock() -> SourceStudioRouteClock {
+        SourceStudioRouteClock(playing: true) { _ in
+            builds += 1
+            return try? SourceStudioRouteStepper(points: testPoints(), loop: loop, orientation: .xy,
+                initialRotation: .identity, initialDelta: 0.013)
+        }
+    }
+    let clock = makeClock(), control = makeClock()
+    for value in [clock, control] {
+        _ = value.frame(at: 0, routeWorld: matrix_identity_float4x4)
+        // Cross the first segment boundary with an off-lattice history. The
+        // damped rotation and previous delta must survive as well as position.
+        for _ in 0..<53 { value.step(delta: 0.02) }
+    }
+    let checkpoint = clock.captureCheckpoint(), frame = clock.frame
+    let time = clock.reachedTime, action = clock.lastAction
+    #expect(frame?.placement.aim != nil)
+    #expect(frame == control.frame)
+    clock.step(delta: 0.011)
+    clock.play(at: 9, routeWorld: translated(4))
+    let buildsBeforeRestore = builds
+    try clock.restoreCheckpoint(checkpoint)
+    #expect(builds == buildsBeforeRestore)
+    #expect(clock.reachedTime == time && clock.lastAction == action)
+    #expect(clock.playing && clock.playStart == 0)
+    #expect(clock.frame(at: time, routeWorld: matrix_identity_float4x4) == frame)
+    #expect(builds == buildsBeforeRestore) // The saved world was restored too.
+    for index in 0..<130 {
+        let delta: Float = index.isMultiple(of: 2) ? 0.017 : 0.026
+        clock.step(delta: delta); control.step(delta: delta)
+        #expect(clock.frame == control.frame)
+        #expect(clock.reachedTime == control.reachedTime)
+    }
+    #expect(clock.frame?.placement.active == loop)
+}
+
+@Test("route checkpoint preserves lazy stopped and fallback state without building")
+func routeCheckpointInactiveStates() throws {
+    for state in ["lazy", "stopped", "beforePlay", "fallback", "unplayable"] {
+        var builds = 0
+        let clock = SourceStudioRouteClock(maxRebuildSteps: 2, playing: true) { _ in
+            builds += 1
+            if state == "unplayable" { return nil }
+            return try? SourceStudioRouteStepper(points: testPoints())
+        }
+        switch state {
+        case "stopped": clock.play(at: 0.7, routeWorld: translated(2)); clock.stop()
+        case "beforePlay": clock.play(at: 0.7, routeWorld: translated(2)); clock.jump(to: 0.2)
+        case "fallback": clock.play(at: 0, routeWorld: translated(2)); clock.jump(to: 10)
+        case "unplayable": _ = clock.frame(at: 0, routeWorld: translated(2))
+        default: break
+        }
+        let checkpoint = clock.captureCheckpoint(), frame = clock.frame
+        let time = clock.reachedTime, action = clock.lastAction
+        let playing = clock.playing, start = clock.playStart
+        clock.play(at: 12, routeWorld: translated(9)); clock.step(delta: 0.02)
+        let buildsBeforeRestore = builds
+        try clock.restoreCheckpoint(checkpoint)
+        #expect(builds == buildsBeforeRestore)
+        #expect(clock.frame == frame && clock.reachedTime == time && clock.lastAction == action)
+        #expect(clock.playing == playing && clock.playStart == start)
+        if state == "lazy" {
+            #expect(clock.frame == nil)
+            #expect(clock.frame(at: 0, routeWorld: matrix_identity_float4x4) != nil)
+            #expect(builds == buildsBeforeRestore + 1)
+        }
+    }
+}
+
+@Test("route checkpoints retain their owner and reject another clock before mutation")
+func routeCheckpointOwner() throws {
+    var original: SourceStudioRouteClock? = loopingClock()
+    weak var retained = original
+    original?.play(at: 0, routeWorld: matrix_identity_float4x4)
+    original?.step(delta: 0.02)
+    let checkpoint = try #require(original).captureCheckpoint()
+    let originalFrame = original?.frame
+    original = nil
+    #expect(retained != nil)
+    let other = loopingClock(), control = loopingClock()
+    for value in [other, control] {
+        value.play(at: 4, routeWorld: translated(5)); value.step(delta: 0.017)
+    }
+    let frame = other.frame, action = other.lastAction, time = other.reachedTime
+    do {
+        try other.restoreCheckpoint(checkpoint)
+        Issue.record("A checkpoint from another route must reject")
+    } catch RigError.invalid(let reason) {
+        #expect(reason == "Route checkpoint belongs to another clock instance.")
+    }
+    #expect(other.frame == frame && other.reachedTime == time && other.lastAction == action)
+    #expect(other.playing && other.playStart == 4)
+    #expect(retained?.frame == originalFrame && retained?.reachedTime == 0.02)
+    other.step(delta: 0.021); control.step(delta: 0.021)
+    #expect(other.frame == control.frame && other.reachedTime == control.reachedTime)
+    let owner = try #require(retained)
+    owner.step(delta: 0.07)
+    try owner.restoreCheckpoint(checkpoint)
+    #expect(owner.reachedTime == 0.02)
 }
