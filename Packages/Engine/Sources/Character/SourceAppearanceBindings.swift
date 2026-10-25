@@ -483,16 +483,23 @@ private struct SourceAppearanceRecipe {
 private final class SourceAppearanceInputReader {
     let directory: URL
     let maximumBytes: Int
-    private var bytesByPath: [String: [UInt8]] = [:]
+    private struct VerifiedInput {
+        let bytes: [UInt8]
+        let sha256: String
+    }
+    // Reader-local values only: callers receive COW arrays, never mutable access
+    // to the bytes whose digest was verified. Later readers still read and hash.
+    private var bytesByPath: [String: VerifiedInput] = [:]
     private(set) var totalBytes = 0
     private let timings: SourceMakerPreparationTimings?
     init(directory: URL, maximumBytes: Int = 128 * 1024 * 1024, timings: SourceMakerPreparationTimings? = nil) {
         self.directory = directory.resolvingSymlinksInPath(); self.maximumBytes = maximumBytes; self.timings = timings
     }
-    private func matchesHash(_ data: Data, expected: String) -> Bool {
-        let matches = SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expected
+    private func verifiedDigest(_ data: Data, expected: String) -> String? {
+        let digest = SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined()
+        let matches = digest == expected
         timings?.hashed(data.count, phase: .rgbaSHA, matches: matches)
-        return matches
+        return matches ? digest : nil
     }
     func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
         guard (1...4096).contains(input.width), (1...4096).contains(input.height),
@@ -503,13 +510,15 @@ private final class SourceAppearanceInputReader {
         guard url.path.hasPrefix(directory.path + "/") else { throw RigError.invalid("Appearance texture escapes its directory.") }
         let expected = input.width * input.height * 4
         if let cached = bytesByPath[url.path] {
-            guard cached.count == expected, SourceMakerPreparationTimings.measure(timings, .rgbaSHA, {
-                matchesHash(Data(cached), expected: input.sha256)
+            guard cached.bytes.count == expected, SourceMakerPreparationTimings.measure(timings, .rgbaDigestComparison, {
+                let matches = cached.sha256 == input.sha256
+                timings?.comparedRGBADigest(matches: matches)
+                return matches
             }) else {
                 throw RigError.invalid("Conflicting appearance texture metadata.")
             }
             timings?.reusedRGBA()
-            return cached
+            return cached.bytes
         }
         guard expected <= maximumBytes - totalBytes else {
             throw RigError.invalid("Appearance inputs exceed their retained byte limit.")
@@ -520,12 +529,12 @@ private final class SourceAppearanceInputReader {
         }
         totalBytes += data.count
         guard totalBytes <= maximumBytes, data.count == expected,
-              SourceMakerPreparationTimings.measure(timings, .rgbaSHA, { matchesHash(data, expected: input.sha256) }) else {
+              let digest = SourceMakerPreparationTimings.measure(timings, .rgbaSHA, { verifiedDigest(data, expected: input.sha256) }) else {
             throw RigError.invalid("Appearance texture has changed or exceeds its size limit.")
         }
         let result = SourceMakerPreparationTimings.measure(timings, .rgbaCopy) { [UInt8](data) }
         timings?.copied(data.count)
-        bytesByPath[url.path] = result; return result
+        bytesByPath[url.path] = VerifiedInput(bytes: result, sha256: digest); return result
     }
 }
 
