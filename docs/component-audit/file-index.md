@@ -1038,3 +1038,13 @@ a dated summary of the owning references, not a new application acceptance run.
 | [site/dist/style.css](../../site/dist/style.css) | Documentation / historical evidence |
 | [site/dist/app.js](../../site/dist/app.js) | Documentation / historical evidence |
 | [site/build.py](../../site/build.py) | Conversion / recovery / verification tool |
+
+### Bounded Maker clothes groups — 2026-10-24
+
+These two additions belong to the Character / Maker / mods report (CM-17).
+The original inventory totals above remain the dated audit snapshot.
+
+| File | Role |
+| --- | --- |
+| [Packages/Engine/Sources/Character/SourceMaterialApplicationGroup.swift](../../Packages/Engine/Sources/Character/SourceMaterialApplicationGroup.swift) | Runtime / bounded private clothes preparation and shared completion |
+| [Packages/Engine/Tests/EngineTests/SourceMaterialGroupTests.swift](../../Packages/Engine/Tests/EngineTests/SourceMaterialGroupTests.swift) | Test / caps, ordering, output ownership and atomic failure |

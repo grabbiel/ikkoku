@@ -979,3 +979,70 @@ across the twelve sex/head/cycle cells; owner differences range from −3.471 to
 cost, FPS or original-player fidelity claim. First-cycle labels include one
 empty rig-cache selection and two partial-hit selections. Full private evidence
 is retained under `.local/codex-continue-2026-10-24/rolling/maker-component-appearance-attribution/`.
+
+### Bounded Maker clothes composition groups (#234)
+
+Maker now explicitly groups consecutive clothing applications into one Metal
+completion. Base and hair applications keep their separate completions; default
+prepared-appearance callers, Studio and CPU composition remain sequential.
+Each group has separate 32 MiB logical uploaded-input and output limits, with
+checked arithmetic. Repeated uploads and each application's default textures
+count toward the input limit. An oversized application flushes the group and
+uses the existing standalone path and 128 MiB per-call limits; the grouping
+policy does not newly reject previously valid inputs.
+
+Each application retains its compositor, defaults and input leases. All output
+views validate in order before registration, and candidate resources stay private
+until the existing Maker commit. A later preparation failure first flushes prior
+staged work. A combined GPU failure rejects the entire group with ordered
+component identities and its underlying error; it cannot recover the former
+per-call GPU failure precedence. There is no execution retry or silent fallback.
+The previous preview and card survive failed candidate construction. Optional
+diagnostics use a disjoint `clothesCompositionGroup` scope, including standalone
+oversized work, and avoid labels and clock reads when collection is disabled.
+
+At `bc795c7` (Release binary `2773e233`), 19 distinct focused cases pass across
+two retained runs: 18 passed before a new fixture test attempted CPU readback
+from a private Metal texture and crashed; the corrected test uses an aligned
+shared blit buffer and passes for both sexes. Production code is identical
+between those runs. Cases cover caps, overflow, oversized admission, exact CPU
+pixels, leases, ordered failures, atomic GPU/view failures, unchanged default
+callers and actual prepared fixtures. The Release compiler succeeded, but its
+strict runner returned 126 for two lingering owned compiler daemons. Their
+exact identities were checked and released separately; the original failure
+record and supplemental product acceptance remain retained.
+
+Four fresh functional processes pass 124 checks with zero skips. Exported cards
+are byte-identical to the accepted sequential control, with identical selected
+resource/cache counts and eight unchanged or rejected selections. Work remains
+20 real uploads, eight fallback allocations, 316 fallback bindings, 16 dispatches
+and six pipelines; completions fall from six to four. The three-clothes group
+performs three dispatches and one completion. Changed aggregate call grouping
+makes per-call duration averages incomparable; scope deltas still partition the
+aggregate without adding nested costs twice.
+
+A separate quiet comparison uses control `015cd647` / binary `3ec9d665` and
+candidate `bc795c7` / `2773e233`. Eight fresh processes in female A/B/B/A and
+male B/A/A/B order pass 152 checks, with 27 retained artifact hashes, 48 raw
+observations, identical exports and 12 four-way resource/cache comparisons.
+There are two process repetitions per arm and sex; each cell below combines
+three correlated head transitions from each repetition. Cycle one includes
+mixed first-use behavior rather than uniformly cold selections.
+
+| Sex / cycle | Selection API, ms | Owner commit, ms | Clothes inclusive, ms |
+| --- | ---: | ---: | ---: |
+| Female / 1 | 539.305 → 519.156 | 103.321 → 84.686 | 29.373 → 11.395 |
+| Female / 2 | 164.438 → 149.238 | 80.237 → 64.620 | 29.694 → 12.109 |
+| Male / 1 | 559.179 → 538.105 | 106.797 → 88.283 | 29.608 → 11.325 |
+| Male / 2 | 162.648 → 144.794 | 77.977 → 60.809 | 28.615 → 11.485 |
+
+The observed API benefit is 15.2–21.1 ms and owner benefit 15.6–18.6 ms in
+these cells. Nested clothes wait/view time falls 15.4–16.5 ms. The existing
+unmanaged VM remained open (3.4% CPU at the prelaunch snapshot), with no owned
+probe; background activity is uncontrolled. The exact texture inventory estimates
+an additional 5,242,884 bytes of logical peak texture payload. This excludes
+metadata, CPU snapshots, the prior live preview, alignment and driver allocation;
+RSS was not measured. These results establish a bounded selection improvement,
+not FPS, universal latency, source appearance parity or elimination of owner
+stalls. Private evidence is retained under
+`.local/codex-continue-2026-10-24/rolling/maker-clothes-composition-groups/`.
