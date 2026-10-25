@@ -37,8 +37,9 @@ func sourceMaterialFallbackReusePreservesPixelsAndIndependentOutputLeases() thro
     let expected = try pixels(preview.applying(card, bindings: bindings, directory: directory, resources: resources, backend: .cpu))
     let before = resources.statistics().textures
     let timings = SourceAppearanceTimings()
-    var first: SourcePreviewAppearance.CardApplication? = try preview.applying(card, bindings: bindings,
-        directory: directory, resources: resources, timings: timings)
+    var first: SourcePreviewAppearance.CardApplication? = try SourceAppearanceTimings.scoped(timings, .base) {
+        try preview.applying(card, bindings: bindings, directory: directory, resources: resources, timings: timings)
+    }
     #expect(zip(try pixels(first!), expected).allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
     let initial = try #require(timings.sample.composition)
     #expect(initial.realInputAllocations == 4)
@@ -51,12 +52,26 @@ func sourceMaterialFallbackReusePreservesPixelsAndIndependentOutputLeases() thro
     #expect(initial.milliseconds.values.reduce(0, +) <= (timings.sample.milliseconds["composeEncodeWait"] ?? 0) + 0.001)
     let firstHandles = names.compactMap { first?.appearance.materials[$0]?.first?.base }
     #expect(firstHandles.count == 3 && resources.statistics().textures == before + 3)
-    var second: SourcePreviewAppearance.CardApplication? = try first!.appearance.applying(card, bindings: bindings,
-        directory: directory, resources: resources, timings: timings)
+    var second: SourcePreviewAppearance.CardApplication? = try SourceAppearanceTimings.scoped(timings,
+        .component(index: 0, prefix: "synthetic/", accessorySlot: nil, indoorShoes: false)) {
+        try first!.appearance.applying(card, bindings: bindings, directory: directory, resources: resources, timings: timings)
+    }
     let secondHandles = names.compactMap { second?.appearance.materials[$0]?.first?.base }
     #expect(Set(firstHandles).isDisjoint(with: secondHandles))
     #expect(zip(try pixels(second!), expected).allSatisfy { zip($0, $1).allSatisfy { abs(Int($0)-Int($1)) <= 1 } })
     #expect(timings.sample.composition?.fallbackAllocations == 4) // a fresh compositor per applying call
+    let scopes = timings.sample.scopes
+    #expect(scopes.map(\.identity.role) == [.base, .component])
+    #expect(scopes.allSatisfy(\.succeeded))
+    #expect(scopes[1].identity.componentIndex == 0 && scopes[1].identity.prefix == "synthetic/")
+    // Each delta contains this call's three recipes, not the cumulative total.
+    for scope in scopes {
+        let observed = try #require(scope.composition)
+        #expect(scope.calls["pipelineCreation"] == 1 && scope.calls["composeEncodeWait"] == 1)
+        #expect(observed.realInputAllocations == 4 && observed.fallbackAllocations == 2 && observed.fallbackBindings == 59)
+        #expect(observed.metalEncodeDispatches == 3 && observed.metalBatchCompletions == 1)
+    }
+    #expect(timings.sample.composition?.metalEncodeDispatches == 6 && timings.sample.composition?.metalBatchCompletions == 2)
     first = nil
     #expect(firstHandles.allSatisfy { resources.texture($0) == nil })
     #expect(secondHandles.allSatisfy { resources.texture($0) != nil })
@@ -109,7 +124,10 @@ func sourceMaterialMetalInvalidLaterRecipeKeepsPriorLiveAppearance() throws {
     let before = resources.statistics().textures
     let timings = SourceAppearanceTimings()
     do {
-        _ = try prior.appearance.applying(card, bindings: bindings, directory: directory, resources: resources, timings: timings)
+        _ = try SourceAppearanceTimings.scoped(timings,
+            .component(index: 1, prefix: "later/", accessorySlot: nil, indoorShoes: false)) {
+            try prior.appearance.applying(card, bindings: bindings, directory: directory, resources: resources, timings: timings)
+        }
         Issue.record("An absent material target must reject the whole batch.")
     } catch RigError.invalid(let message) {
         #expect(message == "Appearance binding targets an absent material: absent.")
@@ -118,6 +136,11 @@ func sourceMaterialMetalInvalidLaterRecipeKeepsPriorLiveAppearance() throws {
     #expect(prior.appearance.materials["part"]?.first?.base == handle)
     #expect(try materialTestPixels(handle, resources: resources) == bytes)
     #expect(timings.sample.composition == nil) // no dispatch or private allocation before recipe validation
+    let partial = try #require(timings.sample.scopes.first)
+    #expect(timings.sample.scopes.count == 1 && !partial.succeeded)
+    #expect(partial.identity.componentIndex == 1 && partial.identity.prefix == "later/")
+    #expect(partial.calls["pixelReadHash"] == 2 && partial.calls["composeEncodeWait"] == nil)
+    #expect(partial.composition == nil)
 }
 
 @Test(.enabled(if: MTLCreateSystemDefaultDevice() != nil))
@@ -216,6 +239,16 @@ func sourceMaterialMetalBatchPreservesTextureTintAndHighlightOrder() throws {
         #expect(metal.appliedFields == cpu.appliedFields && metal.diagnostics == cpu.diagnostics)
         #expect(timings.sample.composition?.metalBatchCompletions == 1)
     }
+    let tintOnly = try AppearanceTestFixture.bindings([tint], directory: directory)
+    let count = resources.statistics().textures, timings = SourceAppearanceTimings()
+    let applied = try SourceAppearanceTimings.scoped(timings,
+        .component(index: 0, prefix: "tint-only/", accessorySlot: nil, indoorShoes: false)) {
+        try preview.applying(card, bindings: tintOnly, directory: directory, resources: resources, timings: timings)
+    }
+    #expect(applied.appliedFields == ["body.skinMainColor"] && resources.statistics().textures == count)
+    let scope = try #require(timings.sample.scopes.first)
+    #expect(scope.succeeded && scope.composition == nil && scope.calls["pipelineCreation"] == nil && scope.calls["composeEncodeWait"] == nil)
+    #expect(timings.sample.composition == nil)
 }
 
 private enum MakeupFixture {
