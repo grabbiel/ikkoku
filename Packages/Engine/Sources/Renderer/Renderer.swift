@@ -18,11 +18,15 @@ public struct RenderFrameStatistics: Sendable, Equatable {
     public var shadedLights = 0
     /// Enabled lights left unshaded because the frame exceeded `IK_MAX_LIGHTS`.
     public var droppedLights: Int { enabledLights - shadedLights }
-    /// Deform dispatches and the meaningful morph entries they accumulate.
+    /// Deform dispatches encoded.
     public var deformDispatches = 0
+    /// Deformations whose buffer already held exactly this frame's vertices, so
+    /// no dispatch was encoded (R7 phase 2, item 4; interactive draws and picks).
+    public var deformReuses = 0
+    /// Meaningful morph entries of the frame's deformations, dispatched or reused.
     public var activeMorphEntries = 0
-    /// Largest entry list of one dispatch. Lists above `IK_MAX_ACTIVE_MORPHS` are
-    /// accumulated in full, not truncated.
+    /// Largest entry list of one deformation. Lists above `IK_MAX_ACTIVE_MORPHS`
+    /// are accumulated in full, not truncated.
     public var largestActiveMorphSet = 0
     /// Skin palettes written to the frame ring: the referenced, valid
     /// `RenderFrame.skinSets` (their bytes are `uniforms.paletteBytes`).
@@ -61,9 +65,11 @@ public struct RenderPickResult: Sendable, Equatable {
 }
 
 /// Outcome of one display-link callback. An unchanged callback submits no GPU work
-/// and leaves the previously presented image on screen.
+/// and leaves the previously presented image on screen. A refreshed callback
+/// presents that same image again, copied into the callback's drawable (the
+/// idle keep-alive, `draw(to:timestamp:refreshAfter:completion:)`).
 public struct RenderDrawResult: Sendable {
-    public enum Outcome: String, Sendable { case rendered, unchanged, failed }
+    public enum Outcome: String, Sendable { case rendered, unchanged, failed, refreshed }
     public let outcome: Outcome
     /// Counters captured under the render lock, before a pick/capture can replace them.
     public let statistics: RenderFrameStatistics
@@ -142,9 +148,9 @@ public struct RenderStatusReporter: Sendable {
 ///
 /// Sendable invariant: every mutable stored property is guarded by one of the
 /// locks above (`pendingFrame`, its revision and continuous flag by `frameLock`;
-/// `targets`, `frameIndex`, interactive invalidation and live encoder state by
-/// `renderLock`; the published values
-/// by `statusLock`); everything else is immutable after `init` or a
+/// `targets`, `frameIndex`, interactive invalidation, the deformation buffers'
+/// content record and live encoder state by `renderLock`; the published values
+/// by `statusLock`; the submit observers by `observerLock`); everything else is immutable after `init` or a
 /// thread-safe Metal or store object (`pickQueue` is a serial dispatch queue).
 public final class Renderer: @unchecked Sendable {
     public static let shadowMapSize = 2048
@@ -172,11 +178,33 @@ public final class Renderer: @unchecked Sendable {
     private weak var drawnLayer: CAMetalLayer?
     private var drawnFrame: DrawnFrame?
     private var drawSerial: UInt64 = 0
+    /// The texture of the newest drawable this renderer presented (rendered or
+    /// refreshed) and that callback's target time: the idle keep-alive's source.
+    private var lastPresented: (any MTLTexture)?
+    private var lastPresentTarget: CFTimeInterval?
     private var lastCallback: CFTimeInterval?
     private var targets: RenderTargets?
     private var frameIndex = 0
+    /// What each deformation buffer holds, by buffer identity (R7 phase 2,
+    /// item 4): the inputs of the last dispatch into it, in queue order. An
+    /// entry is removed when a dispatch into its buffer is encoded and set
+    /// again when that command buffer commits (`commit(_:writes:)`); every
+    /// command buffer that dispatches the deform pass commits while holding
+    /// renderLock, in the same hold that encoded it. See renderer.md, "Renderer
+    /// threads". Protected by renderLock.
+    private var deformContent: [ObjectIdentifier: DeformBufferContent] = [:]
+    private var deformWriteSerial: UInt64 = 0
+    /// Dead entries are dropped when the record reaches this size.
+    private var deformContentPruneAt = 32
+    private var deformReuse = true
+    private var skipUnchanged = true
     var liveEncoder: SourceShaderLiveEncoder?
     var liveEncoderError: String?
+
+    /// Guards `submitObservers` only; never held while taking another lock.
+    private let observerLock = NSLock()
+    private var submitObservers: [UInt64: @Sendable () -> Void] = [:]
+    private var nextObserver: UInt64 = 0
 
     private let statusLock = NSLock()
     private var publishedStatistics = RenderFrameStatistics()
@@ -207,6 +235,22 @@ public final class Renderer: @unchecked Sendable {
     /// Nil when the most recent frame was encoded; otherwise why it was skipped or failed.
     public var lastFrameError: RenderFrameError? {
         statusLock.lock(); defer { statusLock.unlock() }; return publishedError
+    }
+    /// Whether an interactive callback whose image is unchanged skips its draw
+    /// (R7 G3; default true). False draws and presents every callback, as
+    /// before G3: a measurement control. Safe from any thread.
+    public var skipsUnchangedFrames: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return skipUnchanged }
+        set { renderLock.lock(); skipUnchanged = newValue; renderLock.unlock() }
+    }
+    /// Whether interactive draws and picks skip the deform dispatch of a
+    /// deformation whose buffer already holds exactly the frame's vertices (R7
+    /// phase 2, item 4; default true). False dispatches every deformation in
+    /// every frame, as before: a measurement control. Captures, benchmarks and
+    /// live validation captures always dispatch. Safe from any thread.
+    public var reusesDeformedVertices: Bool {
+        get { renderLock.lock(); defer { renderLock.unlock() }; return deformReuse }
+        set { renderLock.lock(); deformReuse = newValue; renderLock.unlock() }
     }
 
     /// Loads the bundled `IkkokuShaders.metallib`.
@@ -242,6 +286,27 @@ public final class Renderer: @unchecked Sendable {
         frameLock.lock()
         pendingFrame = snapshot; pendingRevision &+= 1; pendingContinuous = continuous
         frameLock.unlock()
+        observerLock.lock()
+        let observers = submitObservers.isEmpty ? [] : Array(submitObservers.values)
+        observerLock.unlock()
+        for observer in observers { observer() }
+    }
+
+    /// Calls `observer` after every `submit`, on the submitting thread and
+    /// outside the renderer's locks, so a viewport can return its display link
+    /// to full rate at once (R7 phase 2, item 4, P2). Returns a token for
+    /// `removeSubmitObserver`. Safe from any thread.
+    public func addSubmitObserver(_ observer: @escaping @Sendable () -> Void) -> UInt64 {
+        observerLock.lock(); defer { observerLock.unlock() }
+        nextObserver &+= 1
+        submitObservers[nextObserver] = observer
+        return nextObserver
+    }
+
+    /// Stops calling the observer `token` names. Safe from any thread; a call
+    /// already in progress on another thread may still finish.
+    public func removeSubmitObserver(_ token: UInt64) {
+        observerLock.lock(); submitObservers[token] = nil; observerLock.unlock()
     }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
 
@@ -250,25 +315,35 @@ public final class Renderer: @unchecked Sendable {
     /// Invalidates the presented image when a viewport starts/rejoins its window.
     /// Safe from any thread. Does not change the resource-retirement frame stamp.
     public func invalidateInteractiveFrame() {
-        renderLock.lock(); drawnFrame = nil; renderLock.unlock()
+        renderLock.lock(); drawnFrame = nil; lastPresented = nil; lastPresentTarget = nil; renderLock.unlock()
     }
 
     /// Renders only when the submitted snapshot, resources, viewport or a live
-    /// material requires it. Callbacks still run at the display rate. Offscreen
-    /// entry points always encode their own complete pass graph.
+    /// material requires it. The viewport's render thread may lower the
+    /// display-link rate while frames are unchanged (P2). Offscreen entry
+    /// points always encode their own complete pass graph.
+    ///
+    /// `refreshAfter` (seconds; nil disables it) is the idle keep-alive (R7
+    /// phase 2, item 4). An unchanged callback whose target is at least that
+    /// long after the viewport's last present copies the last presented image
+    /// into its drawable and presents it, instead of presenting nothing. After
+    /// about a second without a present, the first few presents never reach
+    /// the screen (performance.md, "Phase 2, item 4"); the keep-alive keeps the
+    /// presentation path warm for the next change at the cost of one blit.
     @discardableResult
-    public func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval,
+    public func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval, refreshAfter: CFTimeInterval? = nil,
                      completion: (@Sendable (RenderDrawCompletion) -> Void)? = nil) -> RenderDrawResult {
-        draw(to: drawable, timestamp: timestamp, completion: completion, configureFrameRing: nil)
+        draw(to: drawable, timestamp: timestamp, refreshAfter: refreshAfter, completion: completion, configureFrameRing: nil)
     }
 
     /// Internal allocation-failure injection, like capture(configureTargets:).
     /// Called under renderLock after opening the ring and before prepare allocates.
-    func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval,
+    func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval, refreshAfter: CFTimeInterval? = nil,
               completion: (@Sendable (RenderDrawCompletion) -> Void)?,
               configureFrameRing: ((FrameRing) -> Void)?) -> RenderDrawResult {
         let tex = drawable.texture
         let failed = RenderDrawResult(outcome: .failed, statistics: .init())
+        let unchanged = RenderDrawResult(outcome: .unchanged, statistics: .init())
         guard tex.width > 0, tex.height > 0 else { return failed }
         // Cheap first check avoids even a frame-slot wait on an unchanged callback.
         // Recheck after acquiring the slot: another callback may have drawn while
@@ -277,16 +352,20 @@ public final class Renderer: @unchecked Sendable {
         let resumed = lastCallback.map { timestamp - $0 > 0.25 || timestamp < $0 } ?? true
         lastCallback = timestamp
         if resumed { drawnFrame = nil }
-        if interactiveUnchanged(layer: drawable.layer, width: tex.width, height: tex.height) {
+        if interactiveUnchanged(layer: drawable.layer, width: tex.width, height: tex.height),
+           !refreshDue(after: refreshAfter, into: tex, timestamp: timestamp) {
             renderLock.unlock()
-            return RenderDrawResult(outcome: .unchanged, statistics: .init())
+            return unchanged
         }
         renderLock.unlock()
         gpu.waitForFrameSlot()
         renderLock.lock()
         if interactiveUnchanged(layer: drawable.layer, width: tex.width, height: tex.height) {
-            renderLock.unlock(); gpu.releaseFrameSlot()
-            return RenderDrawResult(outcome: .unchanged, statistics: .init())
+            guard refreshDue(after: refreshAfter, into: tex, timestamp: timestamp) else {
+                renderLock.unlock(); gpu.releaseFrameSlot()
+                return unchanged
+            }
+            return refreshPresented(drawable, timestamp: timestamp, completion: completion)
         }
         guard let cb = gpu.commandQueue.makeCommandBuffer() else {
             publish(error: .commandBufferUnavailable); drawnFrame = nil
@@ -302,11 +381,12 @@ public final class Renderer: @unchecked Sendable {
         let generation = resources.generation
         frame.time = timestamp
         var encoded = false
+        var writes: [DeformWrite] = []
         if let targets = ensureTargets(width: tex.width, height: tex.height) {
             frameRing.beginFrame(frameIndex); frameIndex &+= 1
             do {
                 configureFrameRing?(frameRing)
-                try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb)
+                writes = try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb, deforms: .reuse)
                 frameRing.endFrame(retainedUntilCompletionOf: cb)
                 encoded = true
             } catch { frameRing.abandonFrame() }
@@ -339,14 +419,68 @@ public final class Renderer: @unchecked Sendable {
         // Commit/present in draw order, before exposing this reusable image to a
         // second callback. Neither operation waits for GPU completion.
         cb.present(drawable)
-        cb.commit()
+        commit(cb, writes: writes)
+        lastPresented = tex; lastPresentTarget = timestamp
         renderLock.unlock()
         return RenderDrawResult(outcome: .rendered, statistics: statistics)
     }
 
+    /// Caller holds renderLock and found the image unchanged. Whether this
+    /// callback should present it again (`refreshAfter`). The source is the
+    /// viewport's newest presented drawable, which the layer cannot hand out
+    /// again before a newer one is presented; when it does come back (its
+    /// present was dropped), the callback skips the refresh rather than rely
+    /// on a recycled drawable's contents.
+    private func refreshDue(after interval: CFTimeInterval?, into texture: any MTLTexture, timestamp: CFTimeInterval) -> Bool {
+        guard let interval, let source = lastPresented, let last = lastPresentTarget else { return false }
+        // Targets sit on the display's vsync grid; a millisecond of slack keeps
+        // an interval that is a whole number of periods from slipping one.
+        return timestamp - last + 0.001 >= interval && source !== texture && !texture.isFramebufferOnly
+            && source.width == texture.width && source.height == texture.height && source.pixelFormat == texture.pixelFormat
+    }
+
+    /// The idle keep-alive. Caller holds renderLock and a frame slot, and
+    /// `refreshDue` held; both are released here. One blit copies the last
+    /// presented image into `drawable`, which is then presented, in queue
+    /// order after the command buffer that wrote the source.
+    private func refreshPresented(_ drawable: any CAMetalDrawable, timestamp: CFTimeInterval,
+                                  completion: (@Sendable (RenderDrawCompletion) -> Void)?) -> RenderDrawResult {
+        let tex = drawable.texture
+        guard let source = lastPresented, let cb = gpu.commandQueue.makeCommandBuffer(),
+              let blit = cb.makeBlitCommandEncoder() else {
+            // Nothing was presented; the image on screen is still the right one.
+            renderLock.unlock(); gpu.releaseFrameSlot()
+            return RenderDrawResult(outcome: .unchanged, statistics: .init())
+        }
+        cb.label = "Refresh"
+        blit.label = "Refresh"
+        blit.copy(from: source, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: tex.width, height: tex.height, depth: 1),
+                  to: tex, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        // A refresh shows the drawn image, so it shares that draw's serial: a
+        // failure forces the next callback to render unless a newer draw did.
+        let serial = drawSerial
+        cb.addCompletedHandler { [weak self] c in
+            let succeeded = c.status == .completed
+            if !succeeded, let self {
+                self.renderLock.lock()
+                if self.drawSerial == serial { self.drawnFrame = nil }
+                self.renderLock.unlock()
+            }
+            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: max(0, c.gpuEndTime - c.gpuStartTime)))
+        }
+        gpu.releaseFrameSlot(onCompletionOf: cb)
+        cb.present(drawable)
+        cb.commit()
+        lastPresented = tex; lastPresentTarget = timestamp
+        renderLock.unlock()
+        return RenderDrawResult(outcome: .refreshed, statistics: .init())
+    }
+
     /// Caller holds renderLock. No per-item scan or buffer work on a skipped draw.
     private func interactiveUnchanged(layer: CAMetalLayer, width: Int, height: Int) -> Bool {
-        guard drawnLayer === layer, let drawnFrame else { return false }
+        guard skipUnchanged, drawnLayer === layer, let drawnFrame else { return false }
         frameLock.lock()
         let revision = pendingRevision, continuous = pendingContinuous
         frameLock.unlock()
@@ -375,8 +509,7 @@ public final class Renderer: @unchecked Sendable {
     public func pick(frame: RenderFrame, pixel: Float2, size: (Int, Int)) -> UInt32 {
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
-        guard let encoded = encodePick(frame: frame, pixel: pixel, size: size) else { return 0 }
-        encoded.commandBuffer.commit()
+        guard let encoded = commitPick(frame: frame, pixel: pixel, size: size) else { return 0 }
         encoded.commandBuffer.waitUntilCompleted()
         return encoded.readback.contents().load(as: UInt32.self)
     }
@@ -394,32 +527,33 @@ public final class Renderer: @unchecked Sendable {
         pickQueue.async { [self] in
             gpu.waitForFrameSlot()
             defer { gpu.releaseFrameSlot() }
-            guard let encoded = encodePick(frame: frame, pixel: pixel, size: size) else {
+            guard let encoded = commitPick(frame: frame, pixel: pixel, size: size) else {
                 completion(RenderPickResult(id: 0)); return
             }
             let cb = encoded.commandBuffer
-            cb.commit()
             cb.waitUntilCompleted()
             let gpuTime = cb.gpuEndTime > cb.gpuStartTime ? cb.gpuEndTime - cb.gpuStartTime : 0
             completion(RenderPickResult(id: encoded.readback.contents().load(as: UInt32.self), gpuTime: gpuTime))
         }
     }
 
-    /// A pick encoded under the render lock and not yet committed.
+    /// A pick encoded and committed under the render lock.
     private struct EncodedPick {
         let commandBuffer: any MTLCommandBuffer
         /// The id at the pixel (4 bytes), or the whole pick target (`pickTarget`).
         let readback: any MTLBuffer
     }
 
-    /// Prepares `frame` for picking and encodes its deform pass, the pick pass
-    /// and the readback copy. With a pixel, the pick pass is scissored to that
-    /// one pixel and only it is copied back: rasterization, the depth test and
-    /// the fragment shader run per pixel, so the pixel's id is the one the
-    /// whole pass would write there (`pickTarget` is the unscissored
-    /// reference). The caller holds a frame slot and commits. Nil when the
-    /// pick cannot run; the reason is published.
-    private func encodePick(frame: RenderFrame, pixel: Float2?, size: (Int, Int)) -> EncodedPick? {
+    /// Prepares `frame` for picking, encodes its deform pass (skipping
+    /// deformations whose buffers already hold the frame's vertices), the pick
+    /// pass and the readback copy, and commits it under the render lock like
+    /// every command buffer that may dispatch the deform pass. With a pixel,
+    /// the pick pass is scissored to that one pixel and only it is copied
+    /// back: rasterization, the depth test and the fragment shader run per
+    /// pixel, so the pixel's id is the one the whole pass would write there
+    /// (`pickTarget` is the unscissored reference). The caller holds a frame
+    /// slot and waits. Nil when the pick cannot run; the reason is published.
+    private func commitPick(frame: RenderFrame, pixel: Float2?, size: (Int, Int)) -> EncodedPick? {
         // An empty viewport has no pixel to read (nothing is picked there).
         guard size.0 > 0, size.1 > 0 else { return nil }
         guard let cb = gpu.commandQueue.makeCommandBuffer() else { publish(error: .commandBufferUnavailable); return nil }
@@ -433,10 +567,11 @@ public final class Renderer: @unchecked Sendable {
             renderLock.unlock(); publish(error: .renderTargetsUnavailable(width: size.0, height: size.1)); return nil
         }
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
-        guard let ctx = try? prepare(frame: frame, targets: targets, forPick: true), lastDeformationErrors.isEmpty else {
+        guard let ctx = try? prepare(frame: frame, targets: targets, forPick: true, deforms: .reuse),
+              lastDeformationErrors.isEmpty else {
             frameRing.abandonFrame(); renderLock.unlock(); return nil
         }
-        encodeDeform(ctx, cb)
+        let writes = encodeDeform(ctx, cb)
         if let pixel {
             let x = min(max(Int(pixel.x), 0), targets.width - 1), y = min(max(Int(pixel.y), 0), targets.height - 1)
             encodePick(ctx, targets: targets, scissor: MTLScissorRect(x: x, y: y, width: 1, height: 1), cb)
@@ -455,6 +590,7 @@ public final class Renderer: @unchecked Sendable {
             }
         }
         frameRing.endFrame(retainedUntilCompletionOf: cb)
+        commit(cb, writes: writes)
         renderLock.unlock()
         return EncodedPick(commandBuffer: cb, readback: readback)
     }
@@ -465,8 +601,7 @@ public final class Renderer: @unchecked Sendable {
     func pickTarget(frame: RenderFrame, size: (Int, Int)) -> [UInt32]? {
         gpu.waitForFrameSlot()
         defer { gpu.releaseFrameSlot() }
-        guard let encoded = encodePick(frame: frame, pixel: nil, size: size) else { return nil }
-        encoded.commandBuffer.commit()
+        guard let encoded = commitPick(frame: frame, pixel: nil, size: size) else { return nil }
         encoded.commandBuffer.waitUntilCompleted()
         guard encoded.commandBuffer.status == .completed else { return nil }
         let count = size.0 * size.1
@@ -499,12 +634,17 @@ public final class Renderer: @unchecked Sendable {
         configureTargets?(targets)
         frameRing.beginFrame(frameIndex); frameIndex &+= 1
         var encoded = true
-        do { try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb) } catch { encoded = false }
+        var writes: [DeformWrite] = []
+        do { writes = try encode(frame: frame, target: tex, targets: targets, commandBuffer: cb, deforms: .always) } catch { encoded = false }
         let validDeformation = lastDeformationErrors.isEmpty
-        if encoded && validDeformation { frameRing.endFrame(retainedUntilCompletionOf: cb) } else { frameRing.abandonFrame() }
+        // Commit under the lock, like every command buffer that dispatches the
+        // deform pass, so the deformation buffers' content record stays in queue order.
+        if encoded && validDeformation {
+            frameRing.endFrame(retainedUntilCompletionOf: cb)
+            commit(cb, writes: writes)
+        } else { frameRing.abandonFrame() }
         renderLock.unlock()
         guard encoded, validDeformation else { return nil }
-        cb.commit()
         cb.waitUntilCompleted()
         guard cb.status == .completed else { return nil }
         let bytesPerRow = width * 4
@@ -541,14 +681,15 @@ public final class Renderer: @unchecked Sendable {
                 let start = CACurrentMediaTime()
                 frameRing.beginFrame(frameIndex); frameIndex &+= 1
                 var failure: RenderFrameError?
-                do { try encode(frame: frame, target: target, targets: targets, commandBuffer: cb) }
+                var writes: [DeformWrite] = []
+                do { writes = try encode(frame: frame, target: target, targets: targets, commandBuffer: cb, deforms: .always) }
                 catch { failure = (error as? RenderFrameError) ?? .commandBufferUnavailable }
                 let errors = lastDeformationErrors
                 // Commit under the lock so interactive draws cannot submit after
                 // reusing the same deformation buffers but before this frame.
                 if failure == nil && errors.isEmpty {
                     frameRing.endFrame(retainedUntilCompletionOf: cb)
-                    cb.commit()
+                    commit(cb, writes: writes)
                 } else {
                     frameRing.abandonFrame()
                 }
@@ -601,6 +742,11 @@ public final class Renderer: @unchecked Sendable {
         let boneCount: Int
         let morphs: FrameAllocation
         let morphCount: Int
+        /// The dispatch's inputs; recorded as `buffer`'s content once its command buffer commits.
+        let content: DeformContent
+        /// False when `buffer` already holds exactly these vertices (`DeformMode.reuse`):
+        /// nothing is encoded, and readers bind the buffer as it is.
+        let dispatch: Bool
     }
 
     struct GizmoRecord {
@@ -710,13 +856,16 @@ public final class Renderer: @unchecked Sendable {
 
     /// Prepares a frame and publishes its statistics and error. Throws only
     /// `RenderFrameError.uniformAllocation`; nothing has been encoded by then.
-    func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false) throws -> FrameContext {
+    /// Caller holds renderLock.
+    func prepare(frame input: RenderFrame, targets: RenderTargets, forPick: Bool = false,
+                 deforms mode: DeformMode = .always) throws -> FrameContext {
         // A submitted frame created after a retirement replaced every pending frame
         // that could still name the retired resources (`ResourceStore.retire`).
         if input.submitted { resources.completeRetirements(createdBefore: input.createdAt) }
         var statistics = RenderFrameStatistics()
         do {
-            let context = try buildContext(frame: input, targets: targets, forPick: forPick, statistics: &statistics)
+            let context = try buildContext(frame: input, targets: targets, forPick: forPick,
+                                           reuse: mode == .reuse && deformReuse, statistics: &statistics)
             statistics.uniforms = frameRing.frameStatistics
             publish(statistics: statistics, error: nil)
             return context
@@ -727,7 +876,7 @@ public final class Renderer: @unchecked Sendable {
         }
     }
 
-    private func buildContext(frame input: RenderFrame, targets: RenderTargets, forPick: Bool,
+    private func buildContext(frame input: RenderFrame, targets: RenderTargets, forPick: Bool, reuse: Bool,
                               statistics: inout RenderFrameStatistics) throws -> FrameContext {
         var frame = input
         frame.retainTextures(from: resources)
@@ -803,6 +952,8 @@ public final class Renderer: @unchecked Sendable {
             return item.skinSet
         })
         var paletteKeys: [UInt64] = [], palettes: [[float4x4]] = []
+        // The matrices behind each allocation, which a deformation's content names.
+        var paletteMatrices: [UInt64: [float4x4]] = [:]
         for (key, mats) in frame.skinSets where referencedSkinSets.contains(key) {
             guard !mats.isEmpty, mats.count <= Int(UInt32.max), Renderer.allFinite(mats) else {
                 deformationErrors.append("Skin set \(key) is empty, oversized, or contains nonfinite matrices")
@@ -814,6 +965,7 @@ public final class Renderer: @unchecked Sendable {
             do {
                 for (index, allocation) in try frameRing.allocatePalettes(palettes).enumerated() {
                     skinPalettes[paletteKeys[index]] = (allocation, palettes[index].count)
+                    paletteMatrices[paletteKeys[index]] = palettes[index]
                 }
                 statistics.skinPalettes = palettes.count
             } catch {
@@ -855,10 +1007,17 @@ public final class Renderer: @unchecked Sendable {
                     let entries = Renderer.activeMorphEntries(item.morphWeights, targetCount: mesh.morphNames.count)
                     let morphs = try frameRing.allocate(array: entries)
                     let skin = mesh.skin != nil ? palette : nil
+                    let content = DeformContent(mesh: mesh, palette: skin != nil ? item.skinSet.flatMap { paletteMatrices[$0] } : nil,
+                                                morphs: entries)
+                    // The buffer already holds these vertices when the last
+                    // committed dispatch into it had the same inputs.
+                    let held = reuse ? deformContent[ObjectIdentifier(buf)] : nil
+                    let dispatch = !(held.map { $0.buffer === buf && $0.content.matches(content) } ?? false)
                     deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.allocation.buffer,
                                                 skinOffset: skin?.allocation.offset ?? 0,
-                                                boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count))
-                    statistics.deformDispatches += 1
+                                                boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count,
+                                                content: content, dispatch: dispatch))
+                    if dispatch { statistics.deformDispatches += 1 } else { statistics.deformReuses += 1 }
                     statistics.activeMorphEntries += entries.count
                     statistics.largestActiveMorphSet = max(statistics.largestActiveMorphSet, entries.count)
                 }
@@ -941,22 +1100,33 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: - Encoding
 
-    private func encode(frame: RenderFrame, target: any MTLTexture, targets: RenderTargets, commandBuffer cb: any MTLCommandBuffer) throws {
-        let ctx = try prepare(frame: frame, targets: targets)
-        encodeDeform(ctx, cb)
+    /// Encodes the whole pass graph; returns the deform writes for `commit(_:writes:)`.
+    private func encode(frame: RenderFrame, target: any MTLTexture, targets: RenderTargets, commandBuffer cb: any MTLCommandBuffer,
+                        deforms mode: DeformMode) throws -> [DeformWrite] {
+        let ctx = try prepare(frame: frame, targets: targets, deforms: mode)
+        let writes = encodeDeform(ctx, cb)
         if !ctx.live.isEmpty { encodeLiveInputs(ctx, cb) }
         encodeShadow(ctx, cb)
         encodeMain(ctx, targets: targets, cb)
         encodePost(ctx, targets: targets, target: target, cb)
         encodeOverlay(ctx, targets: targets, target: target, cb)
+        return writes
     }
 
-    func encodeDeform(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) {
-        guard !ctx.deforms.isEmpty, let enc = cb.makeComputeCommandEncoder() else { return }
+    /// Encodes the frame's deform dispatches (not the reused ones) and returns
+    /// them for `commit(_:writes:)`. Caller holds renderLock and commits `cb`
+    /// with `commit(_:writes:)` in the same hold, or abandons it. From here
+    /// until that commit the record names no content for the written buffers,
+    /// so an abandoned command buffer can only cost a later frame a dispatch.
+    @discardableResult
+    func encodeDeform(_ ctx: FrameContext, _ cb: any MTLCommandBuffer) -> [DeformWrite] {
+        let dispatched = ctx.deforms.filter(\.dispatch)
+        guard !dispatched.isEmpty, let enc = cb.makeComputeCommandEncoder() else { return [] }
         enc.label = "Deform"
         enc.setComputePipelineState(pipelines.deform)
         let dummy = resources.dummyBuffer
-        for d in ctx.deforms {
+        for d in dispatched {
+            deformContent[ObjectIdentifier(d.buffer)] = nil
             var params = DeformParams(vertexCount: UInt32(d.mesh.vertexCount), activeMorphCount: UInt32(d.morphCount),
                                       hasSkin: d.skinBuffer != nil ? 1 : 0, hasMorphNormals: d.mesh.morphNormals != nil ? 1 : 0,
                                       boneCount: UInt32(d.boneCount))
@@ -973,6 +1143,41 @@ public final class Renderer: @unchecked Sendable {
             enc.dispatchThreads(MTLSize(width: d.mesh.vertexCount, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
         }
         enc.endEncoding()
+        return dispatched.map { DeformWrite(buffer: $0.buffer, content: $0.content) }
+    }
+
+    /// Commits `cb`, which dispatched `writes`, and records what their buffers
+    /// hold now. Caller holds renderLock and has held it since `encodeDeform`
+    /// encoded `writes`: every command buffer that dispatches the deform pass
+    /// commits here, on the one `gpu.commandQueue`, so the queue runs them in
+    /// the order the record changed, and a buffer's recorded content is what
+    /// the last command buffer to write it in queue order wrote. A later
+    /// command buffer that binds the buffer without dispatching reads it after
+    /// that write (Metal tracks the hazard between them). A command buffer that
+    /// fails forgets its writes, unless a later one replaced them, and drops
+    /// the cached interactive image, which may have read them.
+    func commit(_ cb: any MTLCommandBuffer, writes: [DeformWrite]) {
+        guard !writes.isEmpty else { cb.commit(); return }
+        var recorded: [(ObjectIdentifier, UInt64)] = []
+        recorded.reserveCapacity(writes.count)
+        for write in writes {
+            deformWriteSerial &+= 1
+            let id = ObjectIdentifier(write.buffer)
+            deformContent[id] = DeformBufferContent(buffer: write.buffer, content: write.content, serial: deformWriteSerial)
+            recorded.append((id, deformWriteSerial))
+        }
+        cb.addCompletedHandler { [weak self] c in
+            guard c.status != .completed, let self else { return }
+            self.renderLock.lock()
+            for (id, serial) in recorded where self.deformContent[id]?.serial == serial { self.deformContent[id] = nil }
+            self.drawnFrame = nil
+            self.renderLock.unlock()
+        }
+        cb.commit()
+        if deformContent.count >= deformContentPruneAt {
+            deformContent = deformContent.filter { $0.value.buffer != nil }
+            deformContentPruneAt = max(32, 2 * deformContent.count)
+        }
     }
 
     func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {

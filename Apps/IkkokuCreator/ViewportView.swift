@@ -28,6 +28,8 @@ final class ViewportNSView: NSView {
     weak var handler: (any ViewportInputHandler)?
     private var lastPoint = SIMD2<Float>(0, 0)
     private var tracking: NSTrackingArea?
+    /// The window whose occlusion changes this view follows.
+    private weak var observedWindow: NSWindow?
 
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
@@ -57,17 +59,38 @@ final class ViewportNSView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else {
+        observeOcclusion(of: window)
+        guard let window else {
             stopRendering()
             return
         }
         updateDrawableSize()
         if renderThread == nil {
             let thread = ViewportRenderThread(layer: metalLayer, renderer: renderer, log: PerfTrace.active?.drawLog)
+            thread.setVisible(window.occlusionState.contains(.visible))
             thread.start()
             renderThread = thread
         }
-        window?.makeFirstResponder(self)
+        window.makeFirstResponder(self)
+    }
+
+    /// An occluded or minimized window shows nothing the viewport presents:
+    /// its render thread idles without the keep-alive until it is visible
+    /// again (R7 phase 2, item 4).
+    private func observeOcclusion(of window: NSWindow?) {
+        guard window !== observedWindow else { return }
+        let center = NotificationCenter.default
+        if let observedWindow { center.removeObserver(self, name: NSWindow.didChangeOcclusionStateNotification, object: observedWindow) }
+        observedWindow = window
+        if let window {
+            center.addObserver(self, selector: #selector(occlusionChanged(_:)),
+                               name: NSWindow.didChangeOcclusionStateNotification, object: window)
+        }
+    }
+
+    @objc private func occlusionChanged(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === self.window else { return }
+        renderThread?.setVisible(window.occlusionState.contains(.visible))
     }
 
     /// Stops the render thread (it exits after any draw in progress).
@@ -98,6 +121,7 @@ final class ViewportNSView: NSView {
     override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); updateDrawableSize() }
 
     private func updateDrawableSize() {
+        renderThread?.wake()
         let scale = window?.backingScaleFactor ?? 2
         metalLayer.contentsScale = scale
         let size = CGSize(width: max(1, bounds.width * scale), height: max(1, bounds.height * scale))
@@ -107,6 +131,10 @@ final class ViewportNSView: NSView {
 
     // MARK: Input
 
+    // Every input returns the display link to full rate before its handler
+    // runs (R7 phase 2, item 4, P2), even when the handler submits nothing yet
+    // (a hover pick still in flight, a key the handler ignores).
+
     private func pixel(_ event: NSEvent) -> SIMD2<Float> {
         let p = convert(event.locationInWindow, from: nil)
         let scale = Float(window?.backingScaleFactor ?? 2)
@@ -114,15 +142,18 @@ final class ViewportNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        renderThread?.wake()
         window?.makeFirstResponder(self)
         let p = pixel(event); lastPoint = p
         PerfTrace.input("mouseDown") { handler?.mouseDown(at: p, button: 0, modifiers: event.modifierFlags) }
     }
     override func rightMouseDown(with event: NSEvent) {
+        renderThread?.wake()
         let p = pixel(event); lastPoint = p
         PerfTrace.input("mouseDown") { handler?.mouseDown(at: p, button: 1, modifiers: event.modifierFlags) }
     }
     override func otherMouseDown(with event: NSEvent) {
+        renderThread?.wake()
         let p = pixel(event); lastPoint = p
         PerfTrace.input("mouseDown") { handler?.mouseDown(at: p, button: 2, modifiers: event.modifierFlags) }
     }
@@ -131,6 +162,7 @@ final class ViewportNSView: NSView {
     override func rightMouseDragged(with event: NSEvent) { drag(event, button: 1) }
     override func otherMouseDragged(with event: NSEvent) { drag(event, button: 2) }
     private func drag(_ event: NSEvent, button: Int) {
+        renderThread?.wake()
         let p = pixel(event)
         let d = p - lastPoint
         lastPoint = p
@@ -141,24 +173,29 @@ final class ViewportNSView: NSView {
     override func rightMouseUp(with event: NSEvent) { up(event, button: 1) }
     override func otherMouseUp(with event: NSEvent) { up(event, button: 2) }
     private func up(_ event: NSEvent, button: Int) {
+        renderThread?.wake()
         let p = pixel(event)
         PerfTrace.input("mouseUp") { handler?.mouseUp(at: p, button: button, modifiers: event.modifierFlags) }
     }
     override func mouseMoved(with event: NSEvent) {
+        renderThread?.wake()
         let p = pixel(event)
         PerfTrace.input("mouseMoved") { handler?.mouseMoved(to: p) }
     }
 
     override func scrollWheel(with event: NSEvent) {
+        renderThread?.wake()
         let scale: Float = event.hasPreciseScrollingDeltas ? 0.15 : 1.0
         let delta = SIMD2<Float>(Float(event.scrollingDeltaX) * scale, Float(event.scrollingDeltaY) * scale)
         PerfTrace.input("scrolled") { handler?.scrolled(delta: delta, modifiers: event.modifierFlags) }
     }
     override func magnify(with event: NSEvent) {
+        renderThread?.wake()
         let amount = Float(event.magnification)
         PerfTrace.input("magnified") { handler?.magnified(by: amount) }
     }
     override func keyDown(with event: NSEvent) {
+        renderThread?.wake()
         if handler?.keyDown(event) != true { super.keyDown(with: event) }
     }
 }

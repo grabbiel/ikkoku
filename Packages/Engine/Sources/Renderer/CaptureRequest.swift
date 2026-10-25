@@ -434,6 +434,11 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_CHARACTERS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_MAIN_LOAD_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_MAIN_LOAD_HZ", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_LINK_RATE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_FRAME_SKIP", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_KEEPALIVE_MS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_BURST_IDLE_MS", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_DEFORM_REUSE", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -542,12 +547,22 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_CHARACTERS", .integer(1...32)),
         ValueRule("IKKOKU_PERF_MAIN_LOAD_MS", .integer(0...1000)),
         ValueRule("IKKOKU_PERF_MAIN_LOAD_HZ", .integer(1...240)),
+        // R7 phase 2, item 4 measurement controls: the display link at full
+        // rate, every callback drawn (as before G3), and frames that never
+        // reuse deformed vertices.
+        ValueRule("IKKOKU_PERF_LINK_RATE", .oneOf(["adaptive", "fixed"])),
+        ValueRule("IKKOKU_PERF_FRAME_SKIP", .oneOf(["on", "off"])),
+        // The idle keep-alive interval (0 turns it off) and the quiet time
+        // between `studio-orbit-bursts` drags.
+        ValueRule("IKKOKU_PERF_KEEPALIVE_MS", .integer(0...10000)),
+        ValueRule("IKKOKU_PERF_BURST_IDLE_MS", .integer(10...10000)),
+        ValueRule("IKKOKU_PERF_DEFORM_REUSE", .oneOf(["on", "off"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
     public static let perfWorkloads: [String] = [
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
-        "studio-native", "viewport-lifecycle", "startup",
+        "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
     ]
 }
 

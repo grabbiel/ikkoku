@@ -85,6 +85,13 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("gpuFailedDraws", perf_trace.uncomposited(data))
         s.update(gpuFailedDraws=0, failedCallbacks=1)
         self.assertIn("failedCallbacks", perf_trace.uncomposited(data))
+        # Schema 6: an idle run whose warmup frame was dropped but whose
+        # keep-alive refreshes presented the same image is composited.
+        s.update(failedCallbacks=0, renderedDraws=0, presentedFrames=0, unchangedCallbacks=80,
+                 refreshedCallbacks=81, refreshedPresented=0, lastRenderedBeforeRecordingPresented=False)
+        self.assertIn("no rendered", perf_trace.uncomposited(data))
+        s["refreshedPresented"] = 79
+        self.assertIsNone(perf_trace.uncomposited(data))
 
     def test_draw_line_reports_completed_work_without_repeating_cached_gpu_samples(self):
         data = report()
@@ -251,6 +258,13 @@ class PerfTraceTests(unittest.TestCase):
         self.assertIn("no frame presented", perf_trace.lifecycle_problem(lifecycle([1, 1], 1, presented=0)))
         self.assertIn("still minimized", perf_trace.lifecycle_problem(lifecycle([1, 1], 1, minimized=True)))
         self.assertIsNone(perf_trace.lifecycle_problem(report()))
+        # Schema 6: the keep-alive must stop while nothing is shown.
+        quiet = lifecycle([1, 1], 1)
+        quiet["details"]["lifecycle"].update(callbacksWhileMinimized=3, refreshesWhileMinimized=0)
+        self.assertIsNone(perf_trace.lifecycle_problem(quiet))
+        self.assertIn("3 callbacks and 0 keep-alive refreshes while minimized", perf_trace.lifecycle_line("run", quiet))
+        quiet["details"]["lifecycle"]["refreshesWhileMinimized"] = 2
+        self.assertIn("2 keep-alive refreshes while the window was minimized", perf_trace.lifecycle_problem(quiet))
         # A minimized window drops drawables on purpose: no composited warning.
         hidden = lifecycle([1, 1], 1)
         hidden["summary"].update(displayLinkCallbacks=1200, droppedDrawables=600)
@@ -266,6 +280,47 @@ class PerfTraceTests(unittest.TestCase):
         self.assertNotIn("not on screen", text)
         self.assertIn("render threads before each step [1, 1], at the end 1", text)
         self.assertIn("WARNING %s/leaky: render threads 1 before, 2 at most, 2 at the end" % os.path.basename(folder), text)
+
+    def test_link_line_reports_rates_refreshes_and_deform_reuse_only_for_schema_6(self):
+        data = report()
+        self.assertIsNone(perf_trace.link_line("old", data))
+        data["summary"].update(recordedSeconds=8, displayLinkCallbacks=360, displayLinkDeliberateTargetSkips=500,
+                               refreshedCallbacks=100, refreshedPresented=96,
+                               deform={"dispatches": 40, "reuses": 120},
+                               linkRate={"policy": "adaptive", "callbacksByRequestedHz": {"0": 240, "30": 60, "15": 60},
+                                         "reducedRateSeconds": 6.5, "lowerings": 2, "restores": 1})
+        data["summary"]["phases"]["refreshGpu"] = {"msPerSecond": 0.5}
+        text = perf_trace.link_line("new", data)
+        self.assertIn("link adaptive, 360 callbacks (45.0/s; by requested rate: full Hz 240, 15 Hz 60, 30 Hz 60)", text)
+        self.assertIn("6.50 s at a lowered rate, 2 lowerings, 1 restores, 500 deliberate target skips", text)
+        self.assertIn("keep-alive refreshes 100 (96 presented, GPU 0.50 ms/s); deform dispatches 40, reuses 120", text)
+
+    def test_burst_line_reports_drag_start_latency_drops_and_the_preceding_present_gap(self):
+        def row(callback, presented, outcome):
+            return [callback, 0.1, 0.5, presented, 0, outcome, callback + 0.016, 0]
+        data = report()
+        self.assertIsNone(perf_trace.burst_line("none", data))
+        data["details"] = {"burstInputEnds": [1.0, 2.0, 3.0]}
+        rows = [row(0.5, 0.52, 1), row(0.9, -1, 0),
+                # First start: two rendered frames dropped, the third presented 50 ms after the input.
+                row(1.001, -1, 1), row(1.009, -1, 1), row(1.017, 1.05, 1),
+                # A refresh presented 60 ms before the second start, which drops nothing.
+                row(1.9, 1.94, 2), row(2.002, 2.032, 1),
+                # The third start renders but nothing it rendered was presented.
+                row(2.9, 2.95, 2), row(3.001, -1, 1)]
+        data["samples"] = {"frames": {"columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread",
+                                                  "rendered", "targetSeconds", "linkHz"], "rows": rows}}
+        latencies = perf_trace.burst_latencies(data)
+        self.assertEqual([round(c, 3) for c, _, _, _ in latencies], [1.0, 2.0, 1.0])
+        self.assertAlmostEqual(latencies[0][1], 50.0, places=6)
+        self.assertEqual([d for _, _, d, _ in latencies], [2, 0, 1])
+        self.assertAlmostEqual(latencies[1][3], 60.0, places=6)
+        self.assertIsNone(latencies[2][1])
+        text = perf_trace.burst_line("bursts", data)
+        self.assertIn("3 drag starts", text)
+        self.assertIn("to the first presented rendered frame 32.00/50.00/50.00", text)
+        self.assertIn("3 rendered frames dropped before it (1 after the first start)", text)
+        self.assertIn("gap since the last present ms 50.00/60.00/60.00", text)
 
     def test_attribution_row_reports_events_and_view_bodies_per_input(self):
         orbit = report()

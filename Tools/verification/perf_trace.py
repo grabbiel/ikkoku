@@ -48,7 +48,8 @@ import subprocess
 import sys
 
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
-             "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup"]
+             "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup",
+             "studio-static", "studio-orbit-bursts"]
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
@@ -288,7 +289,10 @@ def uncomposited(report):
                 return "%s: %d" % (name, summary[name])
         callbacks = summary["renderedDraws"]
         if not callbacks:
-            if summary.get("unchangedCallbacks", 0) and summary.get("lastRenderedBeforeRecordingPresented", False):
+            # Schema 6: a presented keep-alive refresh shows the same image,
+            # so it proves the window is composited as well.
+            if summary.get("unchangedCallbacks", 0) + summary.get("refreshedCallbacks", 0) and (
+                    summary.get("lastRenderedBeforeRecordingPresented", False) or summary.get("refreshedPresented", 0)):
                 return None
             return "no rendered or previously presented frame"
         if not summary.get("presentedFrames", 0):
@@ -303,7 +307,7 @@ def uncomposited(report):
 
 
 # Workloads that send no viewport input, so any input call came from a person.
-INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup"}
+INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup", "studio-static"}
 
 # Workloads whose window is minimized on purpose: their drawables are not all
 # shown, so the composited check does not apply and their frame rates are not cited.
@@ -329,15 +333,22 @@ def lifecycle_problem(report):
         problems.append("no frame presented after the window was restored")
     if lifecycle.get("windowMiniaturized"):
         problems.append("the window was still minimized at the end")
+    # Schema 6: nothing a minimized window presents is shown.
+    if lifecycle.get("refreshesWhileMinimized", 0):
+        problems.append("%d keep-alive refreshes while the window was minimized" % lifecycle["refreshesWhileMinimized"])
     return "; ".join(problems) or None
 
 
 def lifecycle_line(name, report):
     lifecycle = report["details"]["lifecycle"]
     steps = lifecycle.get("steps", [])
-    return "[perf] %s: %d steps, render threads before each step %s, at the end %d; %d draws and %d presented frames after the restore" % (
+    text = "[perf] %s: %d steps, render threads before each step %s, at the end %d; %d draws and %d presented frames after the restore" % (
         name, len(steps), [s["renderThreadsBefore"] for s in steps], lifecycle.get("renderThreadsAtEnd", -1),
         lifecycle.get("drawsAfterRestore", 0), lifecycle.get("presentedAfterRestore", 0))
+    if "callbacksWhileMinimized" in lifecycle:
+        text += "; %d callbacks and %d keep-alive refreshes while minimized" % (
+            lifecycle["callbacksWhileMinimized"], lifecycle.get("refreshesWhileMinimized", 0))
+    return text
 
 
 def ring_line(name, report):
@@ -426,6 +437,79 @@ def draw_line(label, report):
                 stat(summary.get("presentationLatenessMs", {}), "max")))
 
 
+def link_line(label, report):
+    """Schema 6 (R7 phase 2, item 4): callbacks per second, the display link's
+    requested rates, the keep-alive refreshes and what rendered frames did with
+    their deformations; None for an older report. Refreshes are neither
+    rendered nor presented frames: like unchanged callbacks they are
+    deliberate skips in the active cadence, so they never count as hitches."""
+    summary = report["summary"]
+    link = summary.get("linkRate")
+    if link is None:
+        return None
+    seconds = summary.get("recordedSeconds", 0)
+    callbacks = summary.get("displayLinkCallbacks", 0)
+    rates = ", ".join("%s Hz %d" % ("full" if hz == "0" else hz, count)
+                      for hz, count in sorted(link.get("callbacksByRequestedHz", {}).items(), key=lambda item: int(item[0])))
+    refresh_gpu = summary.get("phases", {}).get("refreshGpu", {}).get("msPerSecond", 0)
+    deform = summary.get("deform", {})
+    return ("[perf] %s: link %s, %d callbacks (%.1f/s; by requested rate: %s), %.2f s at a lowered rate, "
+            "%d lowerings, %d restores, %d deliberate target skips; keep-alive refreshes %d (%d presented, "
+            "GPU %.2f ms/s); deform dispatches %d, reuses %d" % (
+                label, link.get("policy", "?"), callbacks, callbacks / seconds if seconds else 0, rates or "-",
+                link.get("reducedRateSeconds", 0), link.get("lowerings", 0), link.get("restores", 0),
+                summary.get("displayLinkDeliberateTargetSkips", 0), summary.get("refreshedCallbacks", 0),
+                summary.get("refreshedPresented", 0), refresh_gpu, deform.get("dispatches", 0), deform.get("reuses", 0)))
+
+
+def burst_latencies(report):
+    """Per `studio-orbit-bursts` drag start (R7 phase 2, item 4), from the end
+    of the burst's first mouseDragged handler: (ms to the first rendered
+    callback, ms to the first rendered frame that was presented, rendered
+    frames before that one whose drawables were never presented, ms from the
+    last presentation before the input to the input or None). A start with no
+    presented frame has None latencies. The first start of a recording follows
+    the warmup, not a burst gap. Uses the frame rows, so it needs
+    `details.burstInputEnds`; [] otherwise."""
+    ends = report.get("details", {}).get("burstInputEnds") or []
+    frames = report.get("samples", {}).get("frames", {})
+    columns = frames.get("columns", [])
+    if not ends or "rendered" not in columns:
+        return []
+    callback, rendered, presented = (columns.index(name) for name in ("callbackSeconds", "rendered", "presentedSeconds"))
+    rows = sorted(frames.get("rows", []), key=lambda row: row[callback])
+    result = []
+    for end in ends:
+        after = [row for row in rows if row[callback] >= end and row[rendered] == 1]
+        if not after:
+            continue
+        shown = next((row for row in after if row[presented] > 0), None)
+        dropped = sum(1 for row in after if row[presented] <= 0 and (shown is None or row[callback] < shown[callback]))
+        before = [row[presented] for row in rows if 0 < row[presented] <= end]
+        result.append(((after[0][callback] - end) * 1000, (shown[presented] - end) * 1000 if shown else None,
+                       dropped, (end - max(before)) * 1000 if before else None))
+    return result
+
+
+def burst_line(label, report):
+    latencies = burst_latencies(report)
+    if not latencies:
+        return None
+
+    def spread(values):
+        values = sorted(v for v in values if v is not None)
+        if not values:
+            return "-"
+        return "%.2f/%.2f/%.2f" % (values[0], values[len(values) // 2], values[-1])
+
+    later = latencies[1:]
+    return ("[perf] %s: %d drag starts; input to first rendered callback ms min/median/max %s, to the first presented "
+            "rendered frame %s; %d rendered frames dropped before it (%d after the first start); gap since the last "
+            "present ms %s" % (
+                label, len(latencies), spread([c for c, _, _, _ in latencies]), spread([p for _, p, _, _ in latencies]),
+                sum(d for _, _, d, _ in latencies), sum(d for _, _, d, _ in later), spread([g for _, _, _, g in later])))
+
+
 def summarize(directories):
     print(HEADER)
     print("|---|---|---|---|---:|---:|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|")
@@ -453,6 +537,9 @@ def summarize(directories):
             hover = hover_line(label, report)
             if hover:
                 rings.append(hover)
+            for extra in (link_line(label, report), burst_line(label, report)):
+                if extra:
+                    rings.append(extra)
             if report.get("workload") == "viewport-lifecycle" and "lifecycle" in report.get("details", {}):
                 lifecycles.append(lifecycle_line(label, report))
                 problem = lifecycle_problem(report)
