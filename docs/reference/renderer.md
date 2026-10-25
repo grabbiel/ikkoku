@@ -3547,6 +3547,151 @@ launch; it does not relabel the captured evidence. The affected merged Python
 suites pass 78/78; Debug and Release derivation each pass seven tests with ten
 parameter cases, and the verification Python suite passes 191/191.
 
+### Native female head-0 face composite (R1/CMT-04 #219, 2026-10-24)
+
+The opt-in live source path derives the face creator recipe for female sex 1,
+`exType == 0`, head 0, high detail, material slot 0 of `cf_O_face`. It requires the
+exact head catalog, `cf_m_face_00` draw material, `cf_m_face_create` creator,
+`create_head` program and three input asset identities. Resolver-backed or other
+head identities, low detail and nonzero selected makeup/lip-line/mole layers
+remain explicitly unresolved. Coordinate makeup is selected only when the saved
+raw enable byte is nonzero; otherwise the base makeup record is used. Inactive
+makeup cannot substitute for that selection. Null selected layers preserve the
+source material defaults and card-derived colors/layouts. Composition uses the
+existing native GPU compositor during material assembly, with offline asset
+conversion and cached targets reused by draws. No sampling, alpha-test or shader
+language behavior changes.
+
+The creator is `cf_m_face_create`, path ID `4119387422725910578`, in
+`chara/mm_base.unity3d` (SHA-256
+`3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e`),
+serialized file `CAB-0d1f3d8317188244dde38c81a889d1d4`. Its recovered program is
+`9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c`.
+The main texture `cf_face_00_t` (path `4156981771398184683`) and mask
+`cf_face_00_mc` (`5632470389437020241`) are linear BC7, Bilinear/Clamp/aniso 1,
+from `chara/bo_head_00.unity3d` (SHA-256
+`e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e`),
+serialized file `CAB-b45f3dc6094104fda1eb384293a73f74`. The authored
+`cf_face_00_mp` paint mask (`4688923211121552405`) is a linear DXT1 dependency
+of the exported creator material in `mm_base`, with Bilinear/Repeat/aniso 1.
+All three are 1024×1024 with eleven authored mips. The target is
+1024×1024 sRGB with eleven generated levels.
+
+Fresh independent original-player base and distinct-color captures verify the
+active loaded head, renderer-material object equality, creator target and input
+object identities. The paint mask is obtained through the exact exported
+creator material's dependency, because it is not a container-exported texture.
+The original normally releases main/mask and five layer bindings after
+composition. The diagnostic temporarily disables that cleanup before load,
+records the bindings, calls the original face-input release, takes a second
+fresh readback of the same target and verifies unchanged target bytes and draw
+identity before restoring the flag. Other creators temporarily retain inputs
+as well; this probe does not establish default input lifetime or original
+runtime cost. Static CIL comparisons bridge the actual Studio assembly to the
+retained source recovery for this lifecycle. Failed observations before these
+corrections remain in the private evidence.
+
+Only six decoded RGB components change between source cards: body skin-main
+`[0.95, 0.75, 0.65]` to `[0.23, 0.61, 0.82]`, and skin-sub
+`[0.8, 0.45, 0.4]` to `[0.72, 0.28, 0.16]`; alpha stays 1. These shared skin
+inputs also affect body composition and eyeline shadow. Other decoded Custom values and raw face/hair Custom blocks remain unchanged;
+Coordinate, Parameter and Status blocks are byte-identical. The three source input
+readbacks match across cases; the face targets differ. The fixed producer SHA-256 is
+`5059f6828649621fb7f399f2e29930fb13cb8bfa6fa2b3ca99b4d4b5132d0fc1`.
+The base/distinct frame hashes are `09f49807…` / `08948c32…`, card hashes `262f5968…` / `8f773e48…`,
+and target hashes `ebe4df22…` / `efc3326e…`. Only base-level source pixels were
+read back: authored mip structure and native generated levels are not
+independent original-GPU mip parity evidence.
+
+The isolated store adds three assets and the face creator to the existing
+56-entry store: 59 assets, four creator programs, zero unavailable entries.
+All 56 prior entries retain exact metadata and level hashes. Its canonical
+content fingerprint is
+`7b7a0a65914c46d0ab31cd72f33893aca14a0178ac5adc158bbd99c5a2c37527`.
+Native decoded base-input differences versus source float16 readbacks have
+maximum absolute error 0.00048828125 for main/mask and 0.006591796875 for the
+paint mask. These differences are retained explicitly; the decoder and strict
+final composite tolerance were not changed.
+
+Five CPU derivation regressions pass at `9f0026e`. The initial Release test
+build failed at dependency-module import; a fresh scratch build with testability
+enabled passed before GPU execution. Both attempts remain recorded. The face gate
+passes at `f93a49b` / test binary `723b8877…`: base and distinct targets each
+stay within one byte in every channel, with 1,668 and 4,702 differing channels
+of 4,194,304. Fifteen distinct recolors release their targets and retain exactly
+three registered inputs, one default and two sampler states. Unchanged recipes
+reuse the same target without uploads; reverting reuses the held base target
+with identical bytes. Six existing eye/garment gates pass at that same build.
+The live-frame test initially failed only its expected face label, which omitted
+the existing absent-COLOR/white/unverified convention warning. A one-literal
+repair preserves that complete warning; the single live gate then passes at
+`76ecee6` / `cf30e09a…`, retaining every earlier quality threshold. No earlier
+run is relabeled as the repaired build.
+
+The controlled native store resolves 19 of 20 slots, up from 18 with the
+unchanged 56-entry store; the body remains the single toon fallback. Six unique
+composite keys are retained, including the shared iris/eye-white hits. Seven
+launches of the final `421e455` Release app (`8be2e4d8…`) use the order
+old56/new59/new59/old56/old56/new59/capture. Each draws the live native rig under
+held original camera/light/time, at 768×1024, with three warmup and twenty
+measured synchronous offscreen frames using reused targets. Original captured
+geometry is not drawn. Median run-p50 costs (range of three run p50s), in
+milliseconds, are:
+
+| Work | Old 56-entry store, 18 live slots | New 59-entry store, 19 live slots |
+| --- | ---: | ---: |
+| CPU encode | 0.346 (0.291–0.352) | 0.384 (0.319–0.391) |
+| GPU | 0.710 (0.704–0.711) | 0.831 (0.825–0.936) |
+| Completion | 1.412 (1.374–1.460) | 1.609 (1.583–1.644) |
+
+Registered textures increase from 85 to 91 and Metal allocated bytes from
+570,540,032 to 622,706,688, fixed across each condition's three runs. This is the
+cost of added coverage, not an equal-work speedup. The captured-pixel control
+resolves 20/20 but does not supply native compositor inputs. Other owners held
+heavy work during the measurement window; the existing background VM remained
+open and unmanaged, an uncontrolled host condition.
+
+Three isolated Release processes use the archived `76ecee6` / `cf30e09a…` test
+bundle. The timed compositor path, its dependencies, recipe derivation, test and
+package configuration are byte-identical to `421e455`; merged Maker/Studio
+setup changes are outside that timing boundary. No whole-test/setup equivalence
+is claimed. First compositions, including first pipeline creation in each
+process, take 12.755/13.608/13.021 ms total (CPU encode
+2.430/2.239/2.313 ms, GPU 8.711/9.649/9.011 ms). Driver and filesystem caches
+may already be warm. Fifteen warm recolors per process have median total costs
+0.677/0.652/0.569 ms, GPU 0.108/0.108/0.108 ms and unchanged hits
+0.130/0.134/0.134 ms. Each target reports 5,652,480 allocated bytes; the fixed
+input/default/sampler and released-target checks pass in all three processes.
+An earlier helper launch failed before tests because XCTest's search path did
+not survive the shared-lock wrapper. Its failure is retained; the successful
+three-process run sets those paths after the wrapper, with unchanged test and
+fixture bytes. The seven successful app probes were not rerun.
+
+All seven app runs have byte-identical toon, geometry and depth-normal control
+PNGs. The duplicate same-provider opaque draws still vary: old-store runs differ
+at 10/30/38 pixels (maximum channel delta 2/8/8), new-store runs at 40/44/46
+(maximum 8/27/27), and the captured provider at 24 (maximum 8), in the existing
+shoe-region bounds. Both images are translated draws of the same frame and
+textures. These observations retain the separate #188 limit; they do not prove
+its cause or whole-frame repeat equality.
+
+Six default-OFF Release launches compare source Studio, native Studio and Maker
+at 960×880. Each accepted-main/candidate PNG pair is byte-identical. The control
+is the preserved `e984432` build (`ad80d4b1…`), whose Apps/Packages/Shaders bytes
+match accepted main `66b637`. The final clean candidate `421e455` (`8be2e4d8…`)
+differs under Apps/Engine Sources/Shaders only in the face recipe. The historical
+control is not relabeled as a new main build.
+
+This remains a controlled material-resolution and target-composition result.
+Body remains unresolved; unsupported heads/layers, absent-COLOR conventions,
+scene-global recovery and the separately tracked #188 translated-draw
+repeatability gap remain open. It does not establish full source-color parity,
+whole-frame repeat equality or an interactive FPS improvement. Private evidence
+and exact commands/hashes are under
+`.local/codex-continue-2026-10-24/rolling/materials-face/`; the optional original
+fixture keys are `IKKOKU_FACE_COMPOSITE_BASE_PROBE` and
+`IKKOKU_FACE_COMPOSITE_PROBE`.
+
 ### Translated sampling repeatability investigation (#188)
 
 [Issue #188](https://github.com/grabbiel/ikkoku/issues/188) tracks the separate

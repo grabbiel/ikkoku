@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "bf55d96399918f3f59fba784369230079a226bdb",
+  "revision": "b9c50604e4cb7a7b3f019654d6d853d9c7ad94d9",
   "components": [
     {
       "id": "character-maker",
@@ -100,13 +100,13 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Selected native composites pass independent image gates.",
-      "available": "The controlled inner-shoe fixture reaches 18 of 20 live material slots. Selected native GPU composites have strict source/native image comparisons.",
-      "remaining": "Body and face are explicit fallbacks in that fixture. Broader layers, patterns, states and whole-character shading remain open. Face-composite work is not accepted coverage yet.",
-      "evidence": "18/20 describes one controlled fixture, not the material catalog. More live slots can increase GPU work and memory.",
+      "available": "The controlled fixture reaches 19 of 20 live material slots, including the verified female head-0 face composite with null selected layers. Independent base/distinct face targets pass the one-byte gate.",
+      "remaining": "Body remains an explicit fallback. Other heads, makeup layers, patterns, states and whole-character shading remain open.",
+      "evidence": "19/20 describes one controlled fixture. Added face coverage raises GPU work and memory; six default-OFF captures match the accepted controls. Full source-color parity is not established.",
       "docs": [
         [
           "Composite gates and costs",
-          "docs/reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24"
+          "docs/reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24"
         ],
         [
           "Appearance recipes",
@@ -114,7 +114,7 @@
         ]
       ],
       "issue": [
-        "Native face composite",
+        "Face composition scope",
         "219"
       ]
     },

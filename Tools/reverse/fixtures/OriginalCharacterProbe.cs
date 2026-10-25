@@ -48,7 +48,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // (clothes, clothesState, shoesType). Null when none is given; then the
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
-    bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs;
+    bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs,captureFaceCompositeInputs;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -191,6 +191,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         Finish(error!=null?error:lookError); // a look failure must not be reported as a clean run
     }
     void Finish(string error) {
+        RestoreFaceInputRetention();
         File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"device",SystemInfo.graphicsDeviceName},{"graphicsAPI",SystemInfo.graphicsDeviceVersion},{"colorSpace",QualitySettings.activeColorSpace.ToString()}}));
         // ST-T07i: written only in look mode (also when a phase failed, so the
         // partial trace reaches --collect); absent otherwise.
@@ -266,6 +267,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 case "captureBottomCompositeInputs": captureBottomCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "captureOuterShoeCompositeInputs": captureOuterShoeCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "captureInnerShoeCompositeInputs": captureInnerShoeCompositeInputs=Boolean.Parse(fields[1]);break;
+                // Shared skin inputs affect face/body composition and eyeline
+                // shadow. These two setters preserve alpha and all other fields.
+                case "captureFaceCompositeInputs": captureFaceCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "skinMainColor": body.skinMainColor=ParseOpaqueSkinColor(fields[1]);break;
+                case "skinSubColor": body.skinSubColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "topBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[0].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[1].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[2].baseColor=ParseColor(fields[1]);break;
@@ -313,6 +319,15 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         }
         character=modelSex==0 ? Manager.Character.Instance.CreateMale(0,null,1,file,true)
             : Manager.Character.Instance.CreateFemale(null,1,file,true);
+        if(captureFaceCompositeInputs) {
+            // CreateFaceTexture normally clears creator input references after
+            // composing. Retain them for exact bound-object observation only.
+            // This also temporarily retains other creators' inputs; it is not
+            // evidence of the default input lifetime or source runtime cost.
+            faceOriginalReleaseCustomInputTexture=character.releaseCustomInputTexture;
+            if(!faceOriginalReleaseCustomInputTexture.Value)throw new Exception("Unexpected original input-retention policy");
+            character.releaseCustomInputTexture=false;
+        }
         // Moment (a): right after CreateFemale returns, before LoadAsync starts.
         RecordFingers("afterCreateFemale");
         character.name="IkkokuControlledClothedFixture";
@@ -464,6 +479,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             }
             report[slot==0?"topCompositeInputs":slot==1?"bottomCompositeInputs":slot==7?"innerShoeCompositeInputs":"outerShoeCompositeInputs"]=inputs;
         }
+        if(captureFaceCompositeInputs)report["faceCompositeInputs"]=ExportFaceCompositeInputs();
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
         if(handPatterns!=null)File.WriteAllText(Path.Combine(folder,"hand-anime.json"),J(handAnimeRecords));
@@ -570,6 +586,151 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             var texture=material.GetTexture(name);if(texture!=null)properties[name]=new Dictionary<string,object>{{"file",ExportTexture(texture)},{"scale",V(material.GetTextureScale(name))},{"offset",V(material.GetTextureOffset(name))}};
         }
         return new Dictionary<string,object>{{"name",material.name},{"shader",material.shader.name},{"supported",material.shader.isSupported},{"queue",material.renderQueue},{"keywords",material.shaderKeywords},{"properties",properties}};
+    }
+    bool? faceOriginalReleaseCustomInputTexture;
+    void RestoreFaceInputRetention() {
+        if(character!=null && faceOriginalReleaseCustomInputTexture.HasValue)
+            character.releaseCustomInputTexture=faceOriginalReleaseCustomInputTexture.Value;
+    }
+    object ExportFaceCompositeInputs() {
+        Dictionary<string,object> result=null;
+        try {
+        if(!faceOriginalReleaseCustomInputTexture.HasValue || !faceOriginalReleaseCustomInputTexture.Value || character.releaseCustomInputTexture)
+            throw new Exception("Face input observation requires the explicitly retained source inputs");
+        var control=character.customTexCtrlFace;
+        var renderer=character.rendFace;
+        var component=character.objHead.GetComponent<ListInfoComponent>();
+        if(character.sex!=1 || character.exType!=0 || !character.hiPoly || character.fileFace.headId!=0
+            || character.infoHead==null || character.infoHead.Id!=0 || component==null || component.data==null || component.data.Id!=0
+            || control==null || !control.CreateInitEnd || !control.DrawInitEnd || renderer==null
+            || !renderer.enabled || !renderer.gameObject.activeInHierarchy || renderer.name!="cf_O_face")
+            throw new Exception("Face composite requires active high-detail female head0 source identity");
+        var info=component.data;
+        var catalog=new Dictionary<string,object>();
+        foreach(var key in new[]{ChaListDefine.KeyType.MainManifest,ChaListDefine.KeyType.MainAB,ChaListDefine.KeyType.MainData,
+            ChaListDefine.KeyType.MatManifest,ChaListDefine.KeyType.MatAB,ChaListDefine.KeyType.MatData,
+            ChaListDefine.KeyType.MainTexAB,ChaListDefine.KeyType.MainTex,ChaListDefine.KeyType.ColorMaskAB,ChaListDefine.KeyType.ColorMaskTex})
+            catalog[key.ToString()]=info.GetInfo(key);
+        if(info.GetInfo(ChaListDefine.KeyType.MainAB)!="chara/bo_head_00.unity3d" || info.GetInfo(ChaListDefine.KeyType.MainData)!="p_cf_head_00"
+            || info.GetInfo(ChaListDefine.KeyType.MatData)!="cf_m_face_00")throw new Exception("Face composite loaded catalog differs");
+        var creator=Required(control,"matCreate") as Material;
+        var main=Required(control,"texMain") as Texture2D;
+        var target=control.GetCreateTexture() as RenderTexture;
+        var draw=control.matDraw;
+        if(creator==null || main==null || target==null || draw==null || creator.shader.name!="Shader Forge/create_head"
+            || (creator.name!="cf_m_face_create" && creator.name!="cf_m_face_create (Instance)")
+            || renderer.sharedMaterials.Length==0 || renderer.sharedMaterials[0]!=draw
+            || renderer.sharedMaterials[0].GetTexture("_MainTex")!=target || draw.GetTexture("_MainTex")!=target
+            || target.width!=1024 || target.height!=1024 || target.format!=RenderTextureFormat.ARGB32 || !target.useMipMap)
+            throw new Exception("Face composite creator/draw/target chain differs");
+        result=new Dictionary<string,object>{{"sex",character.sex},{"exType",character.exType},{"hiPoly",character.hiPoly},
+            {"originalReleaseCustomInputTexture",faceOriginalReleaseCustomInputTexture.Value},{"observedReleaseCustomInputTexture",character.releaseCustomInputTexture},
+            {"observationScope","Creator inputs retained before LoadAsync; other creators temporarily retained too; no default-lifetime or runtime-cost claim"},
+            {"savedHeadID",character.fileFace.headId},{"loadedHeadID",character.infoHead.Id},{"componentHeadID",info.Id},
+            {"loadedHeadName",character.objHead.name},{"loadedHeadCatalog",catalog},{"renderer",renderer.name},{"rendererPath",RelativePath(renderer.transform)},
+            {"enabled",renderer.enabled},{"active",renderer.gameObject.activeInHierarchy},{"materialSlot",0},
+            {"drawMaterial",draw.name},{"drawShader",draw.shader.name},{"drawMaterialInstanceID",draw.GetInstanceID()},
+            {"rendererMaterialInstanceID",renderer.sharedMaterials[0].GetInstanceID()},
+            {"targetInstanceID",target.GetInstanceID()},{"targetFile",ExportTexture(target)},{"targetFormat",target.format.ToString()},
+            {"targetSRGB",target.sRGB},{"targetUseMipMap",target.useMipMap},
+            {"creatorMaterial",creator.name},{"creatorShader",creator.shader.name},{"creatorInstanceID",creator.GetInstanceID()},
+            {"creatorBundle","chara/mm_base.unity3d"},{"creatorBundleSHA256",SourceBundleHash("chara/mm_base.unity3d")},
+            {"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
+        var inputs=new Dictionary<string,object>();
+        result["inputs"]=inputs;
+        foreach(var property in new[]{"_MainTex","_ColorMask","_paintmask"}) {
+            var bound=property=="_MainTex"?(Texture)main:creator.GetTexture(property);
+            var texture=bound as Texture2D;
+            string bundle=property=="_paintmask"?"chara/mm_base.unity3d":info.GetInfo(property=="_MainTex"?ChaListDefine.KeyType.MainTexAB:ChaListDefine.KeyType.ColorMaskAB);
+            string name=property=="_paintmask"?"cf_face_00_mp":info.GetInfo(property=="_MainTex"?ChaListDefine.KeyType.MainTex:ChaListDefine.KeyType.ColorMaskTex);
+            // The paint mask is a serialized dependency of the exported create
+            // material, not a directly exported Texture2D asset in mm_base.
+            // Compare the exact original material's dependency object rather
+            // than assuming LoadAsset can address that dependency by its name.
+            Material sourceMaterial=null;
+            Texture2D loaded;
+            var lookup=new Dictionary<string,object>{{"kind",property=="_paintmask"?"creator-material-dependency":"catalog-texture"},
+                {"bundle",bundle},{"assetName",property=="_paintmask"?"cf_m_face_create":name},
+                {"manifest",property=="_paintmask"?"abdata":info.GetInfo(ChaListDefine.KeyType.MainManifest)},{"clone",false}};
+            if(property=="_paintmask") {
+                sourceMaterial=CommonLib.LoadAsset<Material>(bundle,"cf_m_face_create",false,"abdata");
+                loaded=sourceMaterial==null?null:sourceMaterial.GetTexture(property) as Texture2D;
+                lookup["property"]=property;
+                lookup["materialInstanceID"]=sourceMaterial==null?0:sourceMaterial.GetInstanceID();
+                lookup["materialName"]=sourceMaterial==null?null:sourceMaterial.name;
+                lookup["materialShader"]=sourceMaterial==null?null:sourceMaterial.shader.name;
+            } else {
+                loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,info.GetInfo(ChaListDefine.KeyType.MainManifest));
+            }
+            // Persist actual metadata even when a strict identity check fails.
+            inputs[property]=new Dictionary<string,object>{{"expectedBundle",bundle},{"expectedName",name},
+                {"actualNull",bound==null},{"actualName",bound==null?null:bound.name},{"actualType",bound==null?null:bound.GetType().Name},
+                {"actualInstanceID",bound==null?0:bound.GetInstanceID()},{"sourceInstanceID",loaded==null?0:loaded.GetInstanceID()},
+                {"sameSourceObject",texture!=null && loaded!=null && texture==loaded},{"lookup",lookup}};
+            File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+            if(property=="_paintmask" && (sourceMaterial==null || sourceMaterial.name!="cf_m_face_create" || sourceMaterial.shader.name!="Shader Forge/create_head"))
+                throw new Exception("Face composite paintmask source material differs");
+            if(texture==null || loaded==null || texture!=loaded || texture.name!=name)throw new Exception("Face composite bound input differs from source asset: "+property);
+            inputs[property]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",SourceBundleHash(bundle)},{"name",name},
+                {"instanceID",texture.GetInstanceID()},{"sourceInstanceID",loaded.GetInstanceID()},{"sameSourceObject",true},{"lookup",lookup},
+                {"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},
+                {"mipLevels",texture.mipmapCount},{"file",ExportTexture(texture)},
+                {"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
+        }
+        result["inputs"]=inputs;
+        var layers=new Dictionary<string,object>();
+        foreach(var property in new[]{"_Texture3","_Texture7","_Texture4","_Texture5","_Texture6"}) {
+            if(!creator.HasProperty(property) || creator.GetTexture(property)!=null)throw new Exception("Face composite requires null makeup input "+property);
+            layers[property]=new Dictionary<string,object>{{"isNull",true},{"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
+        }
+        result["nullLayers"]=layers;
+        var vectors=new Dictionary<string,object>();
+        foreach(var property in new[]{"_Color","_Color2","_Color3","_Color7","_Color4","_Color5","_Color6","_paint1","_paint2","_hokuro","_tex4uv","_tex5uv"})
+            vectors[property]=V(creator.GetVector(property));
+        result["vectors"]=vectors;
+        var makeup=character.nowCoordinate.enableMakeup?character.nowCoordinate.makeup:character.fileFace.baseMakeup;
+        result["selection"]=new Dictionary<string,object>{{"coordinateType",character.fileStatus.coordinateType},{"enableMakeup",character.nowCoordinate.enableMakeup},
+            {"paintId",makeup.paintId},{"cheekId",makeup.cheekId},{"lipLineId",character.fileFace.lipLineId},{"moleId",character.fileFace.moleId},
+            {"skinMainColor",V(character.fileBody.skinMainColor)},{"skinSubColor",V(character.fileBody.skinSubColor)}};
+        // Release using the original method, then bypass ExportTexture's object
+        // deduplication for an independent second read of the same completed RT.
+        string before=(string)result["targetFile"];
+        if(!character.ReleaseFaceCustomTexture())throw new Exception("Original face input release failed");
+        var cleared=new Dictionary<string,object>();
+        foreach(var property in new[]{"_MainTex","_ColorMask","_Texture3","_Texture4","_Texture5","_Texture6","_Texture7"}) {
+            bool isNull=creator.GetTexture(property)==null;cleared[property]=isNull;
+            if(!isNull)throw new Exception("Original face input release did not clear "+property);
+        }
+        if(control.GetCreateTexture()!=target || control.matDraw!=draw || renderer.sharedMaterials[0]!=draw || draw.GetTexture("_MainTex")!=target)
+            throw new Exception("Face release changed the target/draw identity");
+        string after=ExportTextureAgain(target);
+        string beforeHash=Sha256File(Path.Combine(folder,before)),afterHash=Sha256File(Path.Combine(folder,after));
+        result["releaseObservation"]=new Dictionary<string,object>{{"method","ReleaseFaceCustomTexture"},{"cleared",cleared},
+            {"beforeFile",before},{"afterFile",after},{"beforeSHA256",beforeHash},{"afterSHA256",afterHash},
+            {"targetInstanceID",target.GetInstanceID()},{"drawMaterialInstanceID",draw.GetInstanceID()},{"sameTargetAndDraw",true}};
+        if(beforeHash!=afterHash)throw new Exception("Original face target changed after releasing input references");
+        return result;
+        } finally {
+            RestoreFaceInputRetention();
+            if(result!=null) {
+                result["restoredReleaseCustomInputTexture"]=character.releaseCustomInputTexture;
+                File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+            }
+        }
+    }
+    string ExportTextureAgain(Texture texture) {
+        int id=texture.GetInstanceID();string previous;
+        if(!textureFiles.TryGetValue(id,out previous))throw new Exception("Fresh repeat requires an earlier target readback");
+        textureFiles.Remove(id);
+        try { return ExportTexture(texture); }
+        finally { textureFiles[id]=previous; }
+    }
+    string SourceBundleHash(string bundle) { return Sha256File(Path.Combine(Path.Combine(Path.GetDirectoryName(Application.dataPath),"abdata"),bundle)); }
+    static Color ParseOpaqueSkinColor(string value) {
+        var color=ParseColor(value);
+        foreach(float lane in V(color))if(Single.IsNaN(lane)||Single.IsInfinity(lane)||lane<0||lane>1)throw new Exception("Skin color must be finite normalized RGBA");
+        if(color.a!=1)throw new Exception("Skin counterfactual must preserve alpha1");
+        return color;
     }
     string ExportTexture(Texture texture) {
         string existing;if(textureFiles.TryGetValue(texture.GetInstanceID(),out existing))return existing;
