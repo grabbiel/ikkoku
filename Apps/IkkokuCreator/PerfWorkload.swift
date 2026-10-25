@@ -501,9 +501,11 @@ final class PerfWorkloadDriver {
     /// Tears the viewport down and builds it again (Maker and Studio each own
     /// one, so a mode switch replaces it), resizes the window, minimizes and
     /// restores it, all while the display link draws, then quits through
-    /// `NSApp.terminate`. The report's `details.lifecycle` records the
-    /// viewport render threads alive before each step and at the end, and the
-    /// frames drawn and presented after the restore.
+    /// `NSApp.terminate`. The report's `details.lifecycle` records, before
+    /// each step and at the end, the viewport render threads alive and the
+    /// live-pacing hand-over: the mode, which models a display link paces,
+    /// and how many paced steps each has run. It also records the frames
+    /// drawn and presented after the restore.
     private func prepareViewportLifecycle() throws {
         guard app.ensureMaker() != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
         app.mode = .maker
@@ -539,14 +541,27 @@ final class PerfWorkloadDriver {
     private func runLifecycleStep(_ name: String, _ action: () -> Void) {
         guard trace.recording else { return }
         // Counted before acting: the previous step has had its settle time.
-        lifecycleLog.append(["step": name, "seconds": PerfTrace.round(CACurrentMediaTime() - recordingStart),
-                             "renderThreadsBefore": Self.renderThreadCount()])
+        var entry = pacingState()
+        entry["step"] = name
+        entry["seconds"] = PerfTrace.round(CACurrentMediaTime() - recordingStart)
+        entry["renderThreadsBefore"] = Self.renderThreadCount()
+        lifecycleLog.append(entry)
         action()
+    }
+
+    /// The live-pacing hand-over (R7 phase 2): the active mode, which models a
+    /// display link paces, and the paced steps each has run.
+    private func pacingState() -> [String: Any] {
+        ["mode": app.mode == .maker ? "maker" : "studio",
+         "makerLive": app.maker?.liveAnimation ?? false,
+         "livePaced": ["maker": app.maker?.isLivePaced ?? false, "studio": app.studio?.isLivePaced ?? false],
+         "pacedSteps": ["maker": app.maker?.pacedSteps ?? 0, "studio": app.studio?.pacedSteps ?? 0]]
     }
 
     private func finishLifecycle() {
         var result: [String: Any] = ["steps": lifecycleLog, "renderThreadsAtEnd": Self.renderThreadCount(),
-                                     "windowMiniaturized": NSApp.windows.contains { $0.isMiniaturized }]
+                                     "windowMiniaturized": NSApp.windows.contains { $0.isMiniaturized },
+                                     "end": pacingState()]
         if let restoredAt {
             // Drawables presented more than half a second after the restore:
             // the display link kept running across minimize and restore.

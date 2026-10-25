@@ -317,10 +317,40 @@ INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-l
 PRESENTATION_EXEMPT = {"viewport-lifecycle", "studio-duplicate", "studio-undo-delete"}
 
 
+def pacing_handover_problems(lifecycle, policy):
+    """The live-pacing hand-over between the Studio's and the Maker's
+    viewports (R7 phase 2), from the state recorded before each lifecycle
+    step and at the end: with display pacing, exactly the active mode's model
+    is paced (none with the timer control); a model that is not active runs
+    no paced step; and the Maker runs paced steps after each switch to it
+    while its live animation is on."""
+    records = [s for s in lifecycle.get("steps", []) if "livePaced" in s]
+    if "livePaced" in lifecycle.get("end", {}):
+        records.append(dict(lifecycle["end"], step="the end"))
+    problems = []
+    for record in records:
+        paced = sorted(model for model, on in record["livePaced"].items() if on)
+        expected = [] if policy == "timer" else [record["mode"]]
+        if paced != expected:
+            problems.append("before %s, in %s mode, the link paced %s" % (
+                record["step"], record["mode"], " and ".join(paced) or "no model"))
+    for previous, current in zip(records, records[1:]):
+        mode = current["mode"]
+        for model, count in sorted(current["pacedSteps"].items()):
+            if model != mode and count > previous["pacedSteps"].get(model, 0):
+                problems.append("the %s ran %d paced steps while the %s was active, before %s" % (
+                    model, count - previous["pacedSteps"].get(model, 0), mode, current["step"]))
+        if (policy != "timer" and previous["step"] == "maker" and mode == "maker" and current.get("makerLive")
+                and current["pacedSteps"]["maker"] == previous["pacedSteps"]["maker"]):
+            problems.append("the Maker ran no paced step between its switch and %s" % current["step"])
+    return problems
+
+
 def lifecycle_problem(report):
     """Why a `viewport-lifecycle` run failed its own checks, or None: render
     threads left over after the viewport was replaced (more at the end than
-    before the first step), or no frame presented after the window was restored."""
+    before the first step), no frame presented after the window was restored,
+    or a live-pacing hand-over that went wrong (`pacing_handover_problems`)."""
     lifecycle = report.get("details", {}).get("lifecycle")
     if report.get("workload") != "viewport-lifecycle" or lifecycle is None:
         return None
@@ -339,6 +369,7 @@ def lifecycle_problem(report):
     # Schema 6: nothing a minimized window presents is shown.
     if lifecycle.get("refreshesWhileMinimized", 0):
         problems.append("%d keep-alive refreshes while the window was minimized" % lifecycle["refreshesWhileMinimized"])
+    problems += pacing_handover_problems(lifecycle, report.get("configuration", {}).get("livePacing", "display"))
     return "; ".join(problems) or None
 
 
@@ -351,6 +382,11 @@ def lifecycle_line(name, report):
     if "callbacksWhileMinimized" in lifecycle:
         text += "; %d callbacks and %d keep-alive refreshes while minimized" % (
             lifecycle["callbacksWhileMinimized"], lifecycle.get("refreshesWhileMinimized", 0))
+    end = lifecycle.get("end", {})
+    if "pacedSteps" in end:
+        text += "; paced steps: Maker %d, Studio %d; paced before each step %s" % (
+            end["pacedSteps"].get("maker", 0), end["pacedSteps"].get("studio", 0),
+            ["+".join(sorted(m for m, on in s["livePaced"].items() if on)) or "-" for s in steps if "livePaced" in s])
     return text
 
 

@@ -585,6 +585,11 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private weak var livePacer: (any LivePacingOwner)?
     /// Set by `stopBenchmarkTimer`: neither the timer nor a display link steps.
     @ObservationIgnored private var liveStepsStopped = false
+    /// Steps the display link started (`.ran` answers), for the
+    /// `viewport-lifecycle` hand-over check.
+    @ObservationIgnored private(set) var pacedSteps = 0
+    /// Whether a display link starts the steps now.
+    var isLivePaced: Bool { livePacer != nil }
 
     /// A viewport's display link starts paced steps from now on (`owner`
     /// identifies it); the timer stops stepping.
@@ -601,7 +606,9 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// nothing to step (the link then asks nothing until `tick` resumes it).
     func displayStep() -> LiveStepPacer.Result {
         guard livePacer != nil, !liveStepsStopped, isActiveMode, drag == nil else { return .idle }
-        return PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
+        let result = PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
+        if result == .ran { pacedSteps += 1 }
+        return result
     }
 
     /// Whether a paced step has something to do: outside a drag, in the
