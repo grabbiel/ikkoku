@@ -20,6 +20,8 @@ struct PluginLibraryScenario: Decodable {
     let nativeGraphRestore: NativeGraphRestore?
     /// Regression only: actual NotificationCenter registration/removal delivery.
     let focusObserverLifecycle: FocusObserverLifecycle?
+    /// Reproduction only: exact observer-token lifetime after model disposal.
+    let focusOwnerLifetime: FocusOwnerLifetime?
     /// Regression only: real preview/Animator rollback after a failed frame.
     let frameRollback: FrameRollback?
     /// Regression only: route-child placement across a rejected plugin frame.
@@ -67,6 +69,7 @@ struct PluginLibraryScenario: Decodable {
         if let nativeGraphRestore { return reproduceNativeGraphRestore(nativeGraphRestore, app: app, studio: studio) }
         if let directPluginGraph { return reproduceDirectPluginGraph(directPluginGraph, app: app, studio: studio) }
         if let focusObserverLifecycle { return verifyFocusObserverLifecycle(focusObserverLifecycle, app: app, studio: studio) }
+        if let focusOwnerLifetime { return reproduceFocusOwnerLifetime(focusOwnerLifetime, app: app, studio: studio) }
         if let routeCheckpointCost { return measureRouteCheckpointCost(routeCheckpointCost, app: app, studio: studio) }
         if let routeRollback { return await reproduceRouteRollback(routeRollback, app: app, studio: studio) }
         if let frameRollback { return await reproduceFrameRollback(frameRollback, app: app, studio: studio) }
@@ -2113,6 +2116,247 @@ extension PluginLibraryScenario {
             do { try persist(events, "notification-events") }
             catch { rows.append(.init(op: "focusEvidenceFailure", ok: false, detail: String(describing: error))) }
         }
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+}
+
+// Reproduction only: disposal is deliberately distinct from explicit unload.
+// Weak probes cannot keep the model, adapter or observer tokens alive.
+extension PluginLibraryScenario {
+    struct FocusOwnerLifetime: Decodable {
+        let directory: String, nativeManifest: String, enabledConfig: String, disabledConfig: String
+        let cycles: Int
+    }
+    private final class FocusWeakObject {
+        weak var value: AnyObject?
+        let identity: String
+        init(_ value: AnyObject) {
+            self.value = value; identity = String(describing: ObjectIdentifier(value))
+        }
+    }
+    private struct FocusOwnerProbes {
+        let owner: FocusWeakObject, focusHost: FocusWeakObject, audioBus: FocusWeakObject
+        let adapter: FocusWeakObject?
+        let tokens: [FocusWeakObject]
+        let events: [FocusOwnerEvent]
+    }
+    private struct FocusOwnerEvent: Codable {
+        let phase: String
+        let state: DirectGraphObservation
+    }
+    private struct FocusOwnerLiveness: Codable {
+        let owner: String, focusHost: String, audioBus: String, adapter: String?
+        let tokens: [String]
+        let ownerAlive: Bool, focusHostAlive: Bool, audioBusAlive: Bool, adapterAlive: Bool
+        let tokensAlive: [Bool]
+        var ownersReleased: Bool { !ownerAlive && !focusHostAlive && !audioBusAlive && !adapterAlive }
+        var tokensReleased: Bool { !tokensAlive.contains(true) }
+    }
+    private struct FocusDisposalObservation: Codable {
+        let phase: String
+        let explicitUnload: Bool, enabled: Bool
+        let liveness: FocusOwnerLiveness
+        let retainedTokensAcrossDisposedOwners: Int
+    }
+
+    @MainActor private func focusOwnerProbes(_ owner: StudioModel, events: [FocusOwnerEvent] = []) -> FocusOwnerProbes {
+        .init(owner: .init(owner), focusHost: .init(owner.sourceFocus), audioBus: .init(owner.sourceAudioBus),
+              adapter: owner.sourceFocus.adapter.map { .init($0) },
+              tokens: owner.sourceFocusObservers.map { .init($0 as AnyObject) }, events: events)
+    }
+
+    // Returning only values prevents a weak read's temporary strong reference
+    // from crossing the observation boundary into later exact-token cleanup.
+    @inline(never) @MainActor private func focusOwnerLiveness(_ probes: FocusOwnerProbes) -> FocusOwnerLiveness {
+        autoreleasepool {
+            .init(owner: probes.owner.identity, focusHost: probes.focusHost.identity, audioBus: probes.audioBus.identity,
+                  adapter: probes.adapter?.identity, tokens: probes.tokens.map(\.identity),
+                  ownerAlive: probes.owner.value != nil, focusHostAlive: probes.focusHost.value != nil,
+                  audioBusAlive: probes.audioBus.value != nil, adapterAlive: probes.adapter?.value != nil,
+                  tokensAlive: probes.tokens.map { $0.value != nil })
+        }
+    }
+
+    @inline(never) @MainActor private func removeFocusOwnerTokens(_ probes: [FocusOwnerProbes]) {
+        autoreleasepool {
+            for probe in probes {
+                for weakToken in probe.tokens {
+                    if let token = weakToken.value { NotificationCenter.default.removeObserver(token) }
+                }
+            }
+        }
+    }
+
+    @inline(never) @MainActor private func makeDisposedFocusOwner(
+        host: EngineHost, configuration: FocusOwnerLifetime, mount: Bool, enabled: Bool, explicitUnload: Bool
+    ) throws -> FocusOwnerProbes {
+        try autoreleasepool {
+            let owner = StudioModel(host: host)
+            owner.stopBenchmarkTimer(); owner.liveAnimation = false; owner.isActiveMode = true
+            var completed = false
+            // Infrastructure failures must not strand a partially mounted owner.
+            // A completed disposal experiment intentionally keeps the registration.
+            defer { if !completed { owner.mountSourceFocusAdapter(nil) } }
+            guard mount else { completed = true; return focusOwnerProbes(owner) }
+            try owner.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.nativeManifest))
+            try owner.configureSourceMutePlugin(configURL: URL(fileURLWithPath:
+                enabled ? configuration.enabledConfig : configuration.disabledConfig))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            guard owner.sourceFocus.adapter?.enabled == enabled, owner.sourceFocusObservers.count == 2,
+                  owner.sourceLaunchObserver == nil, !owner.sourceFocus.awaitingInitialFocus else {
+                throw SourcePluginError.runtime("Owner lifetime requires a settled actual focus observer pair.")
+            }
+            owner.sourceAudioBus.masterVolume = 0.75; owner.sourceAudioBus.voiceVolume = 0.5
+            let before = try directGraphSnapshot(studio: owner)
+            let beforeFrame = try directGraphFrameBytes(host.renderer.currentFrame())
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            let loss = try directGraphSnapshot(studio: owner)
+            let expectedGain: Float = enabled ? 0 : 0.75
+            let expectedOriginal: UInt32? = enabled ? Float(0.75).bitPattern : nil
+            guard loss.state == before.state, loss.focus.masterVolume == expectedGain.bitPattern,
+                  loss.focus.originalVolume == expectedOriginal, loss.focus.voiceVolume == Float(0.5).bitPattern else {
+                throw SourcePluginError.runtime("Owner lifetime focus-loss control did not match the requested setting.")
+            }
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            let gain = try directGraphSnapshot(studio: owner)
+            guard gain == before, try directGraphFrameBytes(host.renderer.currentFrame()) == beforeFrame else {
+                throw SourcePluginError.runtime("Owner lifetime single-delivery focus control changed state or frame.")
+            }
+            var events = [FocusOwnerEvent(phase: "settled", state: before),
+                          .init(phase: "loss", state: loss), .init(phase: "gain", state: gain)]
+            let weakOwner = focusOwnerProbes(owner)
+            if explicitUnload {
+                owner.unloadSourcePluginsInteractively()
+                guard owner.sourceFocus.adapter == nil, owner.sourceFocusObservers.isEmpty,
+                      owner.sourceLaunchObserver == nil, owner.doc.sourceNativePlugins == nil else {
+                    throw SourcePluginError.runtime("Owner lifetime explicit unload did not remove its mounted state.")
+                }
+                events.append(.init(phase: "unloaded", state: try directGraphSnapshot(studio: owner)))
+            }
+            completed = true
+            return .init(owner: weakOwner.owner, focusHost: weakOwner.focusHost, audioBus: weakOwner.audioBus,
+                         adapter: weakOwner.adapter, tokens: weakOwner.tokens, events: events)
+        }
+    }
+
+    @MainActor private func reproduceFocusOwnerLifetime(_ configuration: FocusOwnerLifetime,
+                                                        app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = [], observations: [FocusDisposalObservation] = []
+        var probes: [FocusOwnerProbes] = []
+        var control: StudioModel?
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func record(_ name: String, _ ok: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: ok, detail: detail))
+        }
+        func require(_ name: String, _ ok: Bool, _ detail: String = "") throws {
+            record(name, ok, detail)
+            if !ok { throw SourcePluginError.runtime("Owner lifetime control is inconclusive: \(name)") }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: directory.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func retainedTokens() -> Int {
+            probes.reduce(0) { $0 + focusOwnerLiveness($1).tokensAlive.filter { $0 }.count }
+        }
+        defer {
+            // Only exact tokens created by this diagnostic; never a global removal.
+            removeFocusOwnerTokens(probes)
+            control?.unloadSourcePluginsInteractively(); control?.stopBenchmarkTimer(); control = nil
+            studio.refresh()
+        }
+        do {
+            guard (1...8).contains(configuration.cycles), !FileManager.default.fileExists(atPath: directory.path) else {
+                throw SourcePluginError.invalid("Owner lifetime needs 1...8 cycles and a fresh output directory.")
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            try studio.setSourceAnimationTime(0.25)
+            try require("ownerFixture", studio.doc.objects.contains { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }
+                && !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil }
+                && studio.sourceFocus.adapter == nil && studio.sourceFocusObservers.isEmpty && studio.sourceLaunchObserver == nil)
+            let package = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
+            let enabled = try SourceMuteInBackgroundPlugin.readConfiguration(Data(contentsOf: URL(fileURLWithPath: configuration.enabledConfig)))
+            let disabled = try SourceMuteInBackgroundPlugin.readConfiguration(Data(contentsOf: URL(fileURLWithPath: configuration.disabledConfig)))
+            try require("ownerExactInputs", package.manifest.adapterID == SourceNativePluginPackage.muteAdapter
+                && package.manifest.identity.guid == SourceMuteInBackgroundPlugin.guid
+                && package.manifest.identity.version == SourceMuteInBackgroundPlugin.version && enabled && !disabled)
+            let original = try directGraphSnapshot(studio: studio)
+            let originalFrame = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try persist(original, "original-state")
+            try originalFrame.write(to: directory.appendingPathComponent("original-frame.json"), options: .withoutOverwriting)
+            let plain = try makeDisposedFocusOwner(host: studio.host, configuration: configuration,
+                mount: false, enabled: false, explicitUnload: false)
+            let plainLiveness = focusOwnerLiveness(plain)
+            try persist(plainLiveness, "plain-owner")
+            try require("plainOwnerReleased", plainLiveness.ownersReleased)
+            try require("plainOwnerHasNoTokens", plainLiveness.tokens.isEmpty)
+
+            control = StudioModel(host: studio.host)
+            control!.stopBenchmarkTimer(); control!.liveAnimation = false; control!.isActiveMode = true
+            try control!.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.nativeManifest))
+            try control!.configureSourceMutePlugin(configURL: URL(fileURLWithPath: configuration.enabledConfig))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            control!.sourceAudioBus.masterVolume = 0.75; control!.sourceAudioBus.voiceVolume = 0.5
+            try require("liveControlMounted", control!.sourceFocusObservers.count == 2
+                && control!.sourceFocus.adapter?.enabled == true && control!.sourceLaunchObserver == nil)
+            let liveBaseline = try directGraphSnapshot(studio: control!)
+            let controlProbes = focusOwnerProbes(control!)
+            for explicitUnload in [true, false] {
+                for cycle in 1...configuration.cycles {
+                    let name = "\(explicitUnload ? "unload" : "dispose")\(cycle)"
+                    let expectedEnabled = cycle % 2 == 1
+                    let probe = try makeDisposedFocusOwner(host: studio.host, configuration: configuration,
+                        mount: true, enabled: expectedEnabled, explicitUnload: explicitUnload)
+                    probes.append(probe)
+                    let liveness = focusOwnerLiveness(probe)
+                    let observation = FocusDisposalObservation(phase: name, explicitUnload: explicitUnload,
+                        enabled: expectedEnabled, liveness: liveness, retainedTokensAcrossDisposedOwners: retainedTokens())
+                    observations.append(observation)
+                    try persist(probe.events, name + "-events"); try persist(observation, name + "-released")
+                    try require(name + "OwnerReleased", liveness.ownersReleased,
+                        "No token-retention inference until the weak owner, focus host, adapter and bus have released")
+                    if explicitUnload {
+                        try require(name + "TokensReleased", liveness.tokensReleased,
+                            "Explicit unload is the independent token-release control")
+                    } else {
+                        record(name + "TokensReleased", liveness.tokensReleased,
+                            "Observed after owner release and before later notifications or exact-token cleanup")
+                    }
+                    try require(name + "LiveOwnerUnchanged", try directGraphSnapshot(studio: control!) == liveBaseline)
+                }
+            }
+            // Preserve all red disposal observations before the differential cleanup.
+            try persist(observations, "before-cleanup")
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            let controlLoss = try directGraphSnapshot(studio: control!)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            let controlGain = try directGraphSnapshot(studio: control!)
+            try persist([FocusOwnerEvent(phase: "loss", state: controlLoss), .init(phase: "gain", state: controlGain)],
+                        "after-disposal-notifications")
+            try persist(probes.map { focusOwnerLiveness($0) }, "after-notifications-liveness")
+            try require("disposedNotificationsLiveControl", controlLoss.state == liveBaseline.state
+                && controlLoss.focus.masterVolume == Float(0).bitPattern
+                && controlLoss.focus.originalVolume == Float(0.75).bitPattern && controlGain == liveBaseline)
+            removeFocusOwnerTokens(probes)
+            let cleaned = probes.map { focusOwnerLiveness($0) }
+            try persist(cleaned, "after-exact-token-removal")
+            try require("exactTokenRemovalReleasedTokens", cleaned.allSatisfy(\.tokensReleased))
+            try require("exactTokenRemovalOwnersStillReleased", cleaned.allSatisfy(\.ownersReleased))
+            control!.unloadSourcePluginsInteractively(); control!.stopBenchmarkTimer(); control = nil
+            let controlReleased = focusOwnerLiveness(controlProbes)
+            try persist(controlReleased, "live-control-disposed")
+            try require("liveControlReleased", controlReleased.ownersReleased && controlReleased.tokensReleased)
+            studio.refresh()
+            let final = try directGraphSnapshot(studio: studio)
+            let finalFrame = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try persist(final, "final-state")
+            try finalFrame.write(to: directory.appendingPathComponent("final-frame.json"), options: .withoutOverwriting)
+            try require("originalOwnerStateRetained", final == original)
+            try require("originalOwnerFrameRestored", finalFrame == originalFrame)
+        } catch { record("ownerLifetimeFailure", false, String(describing: error)) }
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
