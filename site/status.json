@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "0d92f693522fd4b2d3a4e3c1cfbccde90a9e5723",
+  "revision": "4457bd40acc9f8298d39366d577097257bda07ea",
   "components": [
     {
       "id": "character-maker",
@@ -168,9 +168,9 @@
       "group": "Priority",
       "stage": "Infancy",
       "summary": "A useful bounded execution subset exists; general compatibility is early.",
-      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership.",
       "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
-      "evidence": "Saved-profile restoration permits candidate-owned attachment reads only when initialization leaves the candidate scene unchanged. Metadata inventory does not establish loadability. The queued-destruction change passed 34 Engine tests and 222 app checks in its recorded acceptance.",
+      "evidence": "Saved-profile restoration permits candidate-owned attachment reads only when initialization leaves the candidate scene unchanged. Metadata inventory does not establish loadability. The queued-destruction change passed 34 Engine tests and 222 app checks in its recorded acceptance. Exact route rollback passes 11 Engine tests and 88 Release app checks; checkpoint timing cost remains unmeasured.",
       "docs": [
         [
           "Execution and persistence",
