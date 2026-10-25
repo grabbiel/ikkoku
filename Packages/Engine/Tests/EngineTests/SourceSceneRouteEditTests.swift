@@ -314,3 +314,146 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
     try edit.deletePoint(2); try edit.deletePoint(1)
     #expect(SourceStudioRoutePlayback.pathLines(route: edit.record(authored: record), routeWorld: identity, pointLocals: []).isEmpty)
 }
+
+// MARK: Moving points under a playing route
+
+/// Speed 9 on 3 m straight legs: one second per leg (`PathLength` re-runs the
+/// padded generator, so a straight segment times at three times its length).
+private func playingPoints(movingPoint1To moved: SIMD3<Double>? = nil) -> [SourceStudioRoute.Point] {
+    [SourceStudioRoute.Point(position: [0, 0, 0], speed: 9),
+     SourceStudioRoute.Point(position: moved ?? [3, 0, 0], speed: 9),
+     SourceStudioRoute.Point(position: [3, 0, 3], speed: 9)]
+}
+private let playingDelta = 1.0 / 30
+
+/// CharaStudio's queue reads a segment's transforms when that segment starts
+/// (`TweenComplete` → `Next` → `TweenStart` → `GenerateMoveToPathTargets`):
+/// a point moved mid-segment leaves the segment in progress alone, the next
+/// segment starts where `childRoot` stands with the `movetopath` leg to the
+/// moved point, and the next loop plays the moved route from point 0.
+@Test func sourceStudioRouteStepperRetargetsOnlySegmentsThatStartLater() throws {
+    var unedited = try SourceStudioRouteStepper(points: playingPoints())
+    var edited = unedited
+    for _ in 0..<10 { _ = try unedited.step(deltaTime: playingDelta); _ = try edited.step(deltaTime: playingDelta) }
+    let movedPoint = SIMD3<Double>(3, 0, -1.5)
+    try edited.retarget(points: playingPoints(movingPoint1To: movedPoint))
+    #expect(edited.current() == unedited.current())
+
+    // Segment 0 keeps its targets: both step identically until segment 1
+    // starts at the old point 1 (the frame that writes it exactly).
+    var boundary = 0
+    for frame in 1...60 {
+        let a = try unedited.step(deltaTime: playingDelta), b = try edited.step(deltaTime: playingDelta)
+        #expect(a == b)
+        if a.position == SIMD3<Double>(3, 0, 0) { boundary = frame; break }
+    }
+    #expect(boundary > 0)
+
+    // Segment 1 is the joined path from childRoot through the moved point,
+    // timed by its own length (with the PathLength padding quirk, 1.33 s
+    // here against the plain segment's 1.5 s).
+    let joined = SourceStudioRoute.Segment(startIndex: 1, path: [[3, 0, 0], movedPoint, [3, 0, 3]],
+                                           speed: 9, easeType: .linear)
+    let plain = SourceStudioRoute.Segment(startIndex: 1, path: [movedPoint, [3, 0, 3]], speed: 9, easeType: .linear)
+    #expect(abs(joined.duration - plain.duration) > 0.1)
+    var runningTime = 0.0
+    var frames = 0
+    while runningTime / joined.duration < 1 {
+        let sample = try edited.step(deltaTime: playingDelta)
+        let expected = SourceStudioRoute.interp(joined.controlPoints, runningTime / joined.duration)
+        #expect(simd_distance(sample.position, expected) < 1e-12)
+        runningTime += playingDelta; frames += 1
+    }
+    #expect(frames > 30)
+    #expect((try edited.step(deltaTime: playingDelta)).position == SIMD3<Double>(3, 0, 3))
+
+    // The rest of the loop is unmoved; the next loop plays the moved route
+    // exactly as a fresh Play of it does.
+    var replay = try SourceStudioRouteStepper(points: playingPoints(movingPoint1To: movedPoint))
+    var restarted = false
+    for _ in 0..<200 {
+        let sample = try edited.step(deltaTime: playingDelta)
+        if restarted {
+            #expect(sample == (try replay.step(deltaTime: playingDelta)))
+        } else if sample.position == SIMD3<Double>(0, 0, 0) {
+            restarted = true
+            #expect(sample == replay.current())
+        }
+    }
+    #expect(restarted)
+}
+
+/// Moving nothing changes nothing (no spurious `movetopath` leg), and a
+/// setting the playing queue holds (count, speed, ease, connection, link)
+/// refuses the retarget without touching the stepper.
+@Test func sourceStudioRouteStepperRetargetKeepsTheQueuedSettings() throws {
+    var reference = try SourceStudioRouteStepper(points: playingPoints())
+    var same = reference
+    try same.retarget(points: playingPoints())
+    for _ in 0..<300 { #expect((try same.step(deltaTime: playingDelta)) == (try reference.step(deltaTime: playingDelta))) }
+
+    let before = reference
+    var points = playingPoints()
+    func refused(_ change: [SourceStudioRoute.Point]) -> Bool {
+        var stepper = reference
+        do { try stepper.retarget(points: change); return false } catch { return stepper == before }
+    }
+    #expect(refused(Array(points.dropLast())))
+    points[1] = SourceStudioRoute.Point(position: [3, 0, 0], speed: 4)
+    #expect(refused(points))
+    points[1] = SourceStudioRoute.Point(position: [3, 0, 0], speed: 9, easeType: .easeInQuad)
+    #expect(refused(points))
+    points[1] = SourceStudioRoute.Point(position: [3, 0, 0], aid: [3, 1, 0], connection: .curve, speed: 9)
+    #expect(refused(points))
+    points[1] = SourceStudioRoute.Point(position: [3, 0, 0], speed: 9)
+    points[2] = SourceStudioRoute.Point(position: [3, 0, 3], aid: [3, 1, 3], connection: .curve, linked: true, speed: 9)
+    #expect(refused(points))
+    points[2] = SourceStudioRoute.Point(position: [.nan, 0, 3], speed: 9)
+    #expect(refused(points))
+}
+
+/// The clock keeps its frame and mirrored time across a retarget, steps the
+/// retargeted stepper, and every later rebuild (a jump) plays the moved
+/// route; a checkpoint restore brings the old builder back, and a refused
+/// retarget changes nothing.
+@Test func sourceStudioRouteClockRetargetsWithoutARebuild() throws {
+    func builder(_ moved: SIMD3<Double>?) -> (float4x4) -> SourceStudioRouteStepper? {
+        { _ in try? SourceStudioRouteStepper(points: playingPoints(movingPoint1To: moved)) }
+    }
+    let movedPoint = SIMD3<Double>(3, 0, -1.5)
+    let identity = matrix_identity_float4x4
+    let clock = SourceStudioRouteClock(playing: true, stepper: builder(nil))
+    clock.rewind(routeWorld: identity)
+    var stepper = try SourceStudioRouteStepper(points: playingPoints())
+    for _ in 0..<10 { clock.step(delta: SourceStudioRouteClock.frameDelta); _ = try stepper.step(deltaTime: Double(SourceStudioRouteClock.frameDelta)) }
+    let checkpoint = clock.captureCheckpoint()
+    let frame = clock.frame, reached = clock.reachedTime
+
+    #expect(clock.retarget(points: { _ in playingPoints(movingPoint1To: movedPoint) }, stepper: builder(movedPoint)))
+    #expect(clock.frame == frame && clock.reachedTime == reached)
+    try stepper.retarget(points: playingPoints(movingPoint1To: movedPoint))
+    for _ in 0..<90 {
+        clock.step(delta: SourceStudioRouteClock.frameDelta)
+        #expect(clock.frame?.placement == (try stepper.step(deltaTime: Double(SourceStudioRouteClock.frameDelta))))
+    }
+
+    // A jump rebuilds a fresh Play of the moved route and fast-forwards.
+    clock.jump(to: 2)
+    let fresh = SourceStudioRouteClock(playing: true, stepper: builder(movedPoint))
+    fresh.rewind(routeWorld: identity); fresh.jump(to: 2)
+    #expect(clock.frame == fresh.frame)
+
+    // Restoring the checkpoint restores the old builder too.
+    try clock.restoreCheckpoint(checkpoint)
+    clock.jump(to: 2)
+    let old = SourceStudioRouteClock(playing: true, stepper: builder(nil))
+    old.rewind(routeWorld: identity); old.jump(to: 2)
+    #expect(clock.frame == old.frame)
+
+    // A refused retarget (a queued speed changed) leaves the clock alone.
+    let held = clock.frame
+    var faster = playingPoints(); faster[0] = SourceStudioRoute.Point(position: [0, 0, 0], speed: 5)
+    #expect(!clock.retarget(points: { _ in faster }, stepper: builder(movedPoint)))
+    clock.jump(to: 2)
+    #expect(clock.frame == held)
+}

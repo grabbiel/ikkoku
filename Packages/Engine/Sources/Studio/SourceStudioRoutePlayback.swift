@@ -194,6 +194,18 @@ public enum SourceStudioRoutePlayback {
         }
     }
 
+    /// The route's points and aid targets in the same source world space
+    /// `stepper` builds from, for `SourceStudioRouteStepper.retarget` when a
+    /// point or aid moves under a playing route. A mismatched local count or
+    /// a point the evaluator refuses throws.
+    public static func points(route: KoikatsuRouteRecord, routeWorld: float4x4,
+                              pointLocals: [float4x4]) throws -> [SourceStudioRoute.Point] {
+        guard pointLocals.count == route.points.count else {
+            throw RigError.invalid("Route retarget received \(pointLocals.count) point locals for \(route.points.count) route points.")
+        }
+        return try makeEvaluator(route: route, routeWorld: routeWorld, locals: pointLocals).points
+    }
+
     /// The aim `childRoot` holds after a non-looping route's `onComplete`:
     /// at percentage 1 the lookahead clamps onto the finished position and the
     /// instantaneous aim is degenerate, so the held rotation is the last

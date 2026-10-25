@@ -514,7 +514,7 @@
         "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-children-edit.json"
       },
       "referenceTier": "app-smoke",
-      "tolerance": "ST-T11/ST-T03 route copies on the CharaStudio-authored scene-route-children.png (route key 0 playing, children folder 9 and the fixture female 10): a guide drag and a point move with undo/redo, then Duplicate of the route copies it with its children and points; the copy's settings are locked while it plays, and after Stop its curve and point moves apply and it plays again. After a 1.5 s advance the copy's folder is not where the original's is (negative control); a native save and in-process load keep both routes' edits, and after another 1.5 s advance each child is within 1e-3 m and 0.1 degrees of its pre-save capture. Export then reimport reads the original route's keys back unchanged and the copy as route 157 with point keys 306/308/310/312 and aid keys 307-313 (after its children 158 and 159), and the children land within 1e-3 m and 0.1 degrees of their captures after 1.5 s. The CharaStudio reload of the same export is Tools/reverse/original_scene_reload_probe.py (route-children-edit label).",
+      "tolerance": "ST-T11/ST-T03 route copies on the CharaStudio-authored scene-route-children.png (route key 0 playing, children folder 9 and the fixture female 10): a guide drag and a point move with undo/redo, then Stop and Play (a move under a playing route changes only the segments that start later, so the replay makes the 1.5 s captures a fresh Play of the moved points), then Duplicate of the route copies it with its children and points; the copy's settings are locked while it plays, and after Stop its curve and point moves apply and it plays again. After a 1.5 s advance the copy's folder is not where the original's is (negative control); a native save and in-process load keep both routes' edits, and after another 1.5 s advance each child is within 1e-3 m and 0.1 degrees of its pre-save capture. Export then reimport reads the original route's keys back unchanged and the copy as route 157 with point keys 306/308/310/312 and aid keys 307-313 (after its children 158 and 159), and the children land within 1e-3 m and 0.1 degrees of their captures after 1.5 s. The CharaStudio reload of the same export is Tools/reverse/original_scene_reload_probe.py (route-children-edit label).",
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-route-children-edit.json",
@@ -551,6 +551,36 @@
       "artifacts": [
         {
           "path": ".local/verification/reports/studio-scenario-route-children-edit-load.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-route-move-playing",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_CHILDREN_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-move-playing.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-move-playing.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T11 point moves under a playing route on scene-route-children.png, by CharaStudio's queue rule (StudioTween reads a segment's point transforms when that segment starts): route 0 and its Duplicate copy are played again at the same instant and their folders 9 agree within 1e-5 m and 0.1 degrees 0.9 s in; moving route 0's point 1 (the target of the segment in progress) and, 0.6 s later, a guide drag of its point 2 leave route 0's folder within 1e-5 m and 0.1 degrees of the unedited copy's (no jump, the segment in progress keeps its targets), and 1.0 s later, in the next segment, the folders are more than 0.05 m apart (negative control: the later segment takes the moved points). A drag control rejects the pre-drag route capture at point 2.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-route-move-playing.json",
           "kind": "scenario-report"
         }
       ],

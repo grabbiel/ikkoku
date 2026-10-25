@@ -24,6 +24,15 @@ import Scene
 /// (`Play`'s own frame delta seeds the first damp), and the frame after
 /// `onComplete` freezes it.
 ///
+/// A point or aid moved while the route plays (`retarget`) follows the
+/// original's queue: `Play` stores each segment's point and aid `Transform`s
+/// with the speed and ease of the time, and `GenerateMoveToPathTargets` reads
+/// their positions only when that segment starts (`TweenComplete` → `Next` →
+/// `TweenStart`, StudioTween.cs lines 1982, 3678 and 1865). So the segment in
+/// progress keeps its targets, every later segment (and the next loop) takes
+/// the moved positions, and a segment whose start moved away from where
+/// `childRoot` stands begins with the `movetopath` leg from there.
+///
 /// Nothing here is wired into the app; the clock source and integration are
 /// deliberately outside this type.
 public struct SourceStudioRouteStepper: Sendable, Equatable {
@@ -46,7 +55,14 @@ public struct SourceStudioRouteStepper: Sendable, Equatable {
     /// of residual against 0.051 at the float32 serialisation floor).
     public static let lookUpdateTime = 0.05
 
-    private let segments: [SourceStudioRoute.Segment]
+    /// The segments as each one started (`Play`'s queue until a retarget).
+    private var segments: [SourceStudioRoute.Segment]
+    /// The points `Play` queued, whose connection, link, speed and ease the
+    /// queue keeps for the whole play (a retarget may move them only).
+    private var points: [SourceStudioRoute.Point]
+    /// The segments over the latest retargeted positions, which each segment
+    /// takes when it starts; `nil` until a retarget.
+    private var targets: [SourceStudioRoute.Segment]?
     private let loop: Bool
     private let orientation: SourceStudioRoute.Orientation
     private var segmentIndex = 0
@@ -88,6 +104,7 @@ public struct SourceStudioRouteStepper: Sendable, Equatable {
         }
         let route = SourceStudioRoute(points: points, loop: loop, orientation: orientation)
         self.segments = try route.segments()
+        self.points = points
         self.loop = loop
         self.orientation = orientation
         self.position = segments[0].path[0]
@@ -136,11 +153,13 @@ public struct SourceStudioRouteStepper: Sendable, Equatable {
                 apply(segmentIndex, 1.0)
                 if segmentIndex + 1 < segments.count {
                     segmentIndex += 1
+                    begin(segmentIndex)
                     apply(segmentIndex, 0.0)
                     runningTime = 0
                     percentage = 0
                 } else if loop {
                     segmentIndex = 0
+                    begin(0)
                     apply(0, 0.0)
                     runningTime = 0
                     percentage = 0
@@ -163,6 +182,50 @@ public struct SourceStudioRouteStepper: Sendable, Equatable {
         }
         previousDelta = deltaTime
         return current()
+    }
+
+    /// A point or aid moved while the route plays: `points` are the route's
+    /// points at their new positions, in the same space `init` took. The
+    /// segment in progress keeps the targets it started with; each later
+    /// segment start reads these positions (see the type comment). The
+    /// settings `Play` queued (count, connection, link, speed, ease) cannot
+    /// change under a playing route — CharaStudio greys them out and deleting
+    /// stops the route — so a change to any of them, or an unplayable
+    /// position, throws and leaves the stepper as it was; the caller plays
+    /// the route again instead.
+    public mutating func retarget(points newPoints: [SourceStudioRoute.Point]) throws {
+        guard newPoints.count == points.count else {
+            throw RigError.invalid("A playing route keeps its \(points.count) points; Play again after adding or deleting one.")
+        }
+        for (index, (old, new)) in zip(points, newPoints).enumerated() {
+            guard old.connection == new.connection, old.linked == new.linked,
+                  old.speed == new.speed, old.easeType == new.easeType else {
+                throw RigError.invalid("Route point \(index) changed a setting the playing route queued at Play.")
+            }
+        }
+        let moved = try SourceStudioRoute(points: newPoints, loop: loop, orientation: orientation).segments()
+        guard moved.map(\.startIndex) == segments.map(\.startIndex) else {
+            throw RigError.invalid("The moved route queues different segments; Play again.")
+        }
+        points = newPoints
+        targets = moved
+    }
+
+    /// `TweenStart` of a queued segment after a retarget:
+    /// `GenerateMoveToPathTargets` reads the segment's transforms now, and a
+    /// `childRoot` away from the first one (Unity's `Vector3 !=`, a squared
+    /// distance of 1e-10 or more) prepends its own position as the
+    /// `movetopath` leg, which also lengthens the segment's time.
+    private mutating func begin(_ index: Int) {
+        guard let targets else { return }
+        let target = targets[index]
+        let offset = position - target.path[0]
+        if simd_dot(offset, offset) < 1e-10 {
+            segments[index] = target
+        } else {
+            segments[index] = SourceStudioRoute.Segment(startIndex: target.startIndex, path: [position] + target.path,
+                                                        speed: target.speed, easeType: target.easeType)
+        }
     }
 
     /// One `TweenUpdate`/`TweenStart` application: `position =

@@ -412,11 +412,7 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
     /// A new drag, or none, drops the camera drag's reusable frame.
-    /// A route point drag that ends (mouseUp, or a gesture replacing it)
-    /// rebuilds the route's playback clock if its path moved.
-    @ObservationIgnored private var drag: DragState? {
-        didSet { cameraReuse = nil; if case .routePoint(let ended)? = oldValue { endSourceRoutePointDrag(ended) } }
-    }
+    @ObservationIgnored private var drag: DragState? { didSet { cameraReuse = nil } }
     /// The camera-independent part of the last full frame, kept only while an
     /// orbit or pan drag runs (see `refreshCamera`).
     @ObservationIgnored private var cameraReuse: CameraReuse?
@@ -2558,12 +2554,14 @@ final class StudioModel: ViewportInputHandler {
         let animated = !doc.timeline.keyframes.isEmpty
         var animatedDoc = doc
         if animated { for i in animatedDoc.objects.indices { animatedDoc.objects[i] = timelineState(animatedDoc.objects[i]) } }
+        sourceRouteEditor.worlds.removeAll(keepingCapacity: true)
         for (index, o) in animatedDoc.objects.enumerated() {
             let objectID = UInt32(index + 1)
             let world: float4x4
             do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances) }
             catch { status = "Source attachment: \(error)"; continue }
             guard doc.isVisible(o.id) else { continue }
+            if sourceRoutes[o.id] != nil { sourceRouteEditor.worlds[o.id] = world } // ST-T11: the route line's frame
             switch o.kind {
             case .character:
                 if let reference = o.sourceCharacter {
@@ -2931,12 +2929,8 @@ final class StudioModel: ViewportInputHandler {
             // A route the play state stops never gets a stepper until a
             // press: `frame` answers nothing before that, so `childRoot`
             // keeps its `Stop` pin through the continuous path.
-            clock = SourceStudioRouteClock(playing: state.playing, playStart: state.start) { world in
-                let point0 = world * (route.pointLocals.first ?? matrix_identity_float4x4)
-                return SourceStudioRoutePlayback.stepper(route: route.route, routeWorld: world,
-                    pointLocals: route.pointLocals, playRotation: point0.rotationQuaternion,
-                    playDeltaTime: Double(SourceStudioRouteClock.frameDelta)).stepper
-            }
+            clock = SourceStudioRouteClock(playing: state.playing, playStart: state.start,
+                                           stepper: Self.sourceRouteStepperBuilder(route))
             sourceRouteClocks[id] = clock
         }
         if clock.playing != state.playing || (state.playing && clock.playStart != state.start) {

@@ -43,6 +43,10 @@ import Scene
 ///   the caller keeps the continuous evaluator for this route until the next
 ///   rebuild re-arms it; a route whose builder refuses to play at all has no
 ///   frame ever, so `childRoot` keeps its `Stop` pin.
+/// - `retarget` moves points under the running stepper without a rebuild:
+///   the frame and mirrored clock stay, the stepper takes the new positions
+///   at its next segment start (`SourceStudioRouteStepper.retarget`), and
+///   the new builder serves every later `play`, jump or rebuild.
 public final class SourceStudioRouteClock {
     /// One frame the stepper produced: the `Time.deltaTime` it consumed and
     /// the placement it wrote (source-space position and `LookUpdate` Euler,
@@ -81,6 +85,7 @@ public final class SourceStudioRouteClock {
     /// CoW storage, so capture does not rebuild a route or copy its geometry.
     public struct Checkpoint {
         fileprivate let owner: SourceStudioRouteClock
+        fileprivate let buildStepper: (float4x4) -> SourceStudioRouteStepper?
         fileprivate let stepper: SourceStudioRouteStepper?
         fileprivate let builtWorld: float4x4?
         fileprivate let reached: Float
@@ -105,7 +110,7 @@ public final class SourceStudioRouteClock {
     /// world placement into the points and aids), or `nil` when the route
     /// cannot play at all — the original's `Play` refusal, leaving
     /// `childRoot` on its pin.
-    private let buildStepper: (float4x4) -> SourceStudioRouteStepper?
+    private var buildStepper: (float4x4) -> SourceStudioRouteStepper?
     private let maxRebuildSteps: Int
     private var stepper: SourceStudioRouteStepper?
     /// The route world the current stepper's points were composed from; a
@@ -147,7 +152,7 @@ public final class SourceStudioRouteClock {
     public private(set) var lastAction: Action = .stepped
 
     public func captureCheckpoint() -> Checkpoint {
-        .init(owner: self, stepper: stepper, builtWorld: builtWorld, reached: reached,
+        .init(owner: self, buildStepper: buildStepper, stepper: stepper, builtWorld: builtWorld, reached: reached,
               frame: lastFrame, playing: playing, playStart: playStart, action: lastAction)
     }
 
@@ -158,6 +163,7 @@ public final class SourceStudioRouteClock {
         guard checkpoint.owner === self else {
             throw RigError.invalid("Route checkpoint belongs to another clock instance.")
         }
+        buildStepper = checkpoint.buildStepper
         stepper = checkpoint.stepper
         builtWorld = checkpoint.builtWorld
         reached = checkpoint.reached
@@ -236,6 +242,26 @@ public final class SourceStudioRouteClock {
         lastFrame = nil
         lastAction = .stopped
         return lastAction
+    }
+
+    /// A point or aid moved while the route plays: `points` gives the moved
+    /// route's points at a route world (the one the running stepper was
+    /// built at), `stepper` the builder for the moved route. The running
+    /// stepper keeps its frame and segment in progress and takes the new
+    /// positions at its next segment start; the builder replaces the old one
+    /// for every later `play`, jump or rebuild. Returns `false`, changing
+    /// nothing, when the running stepper refuses the move (a queued setting
+    /// changed): the caller then drops the clock and the route plays the
+    /// moved record from its play start.
+    @discardableResult
+    public func retarget(points: (float4x4) throws -> [SourceStudioRoute.Point],
+                         stepper builder: @escaping (float4x4) -> SourceStudioRouteStepper?) -> Bool {
+        if var running = stepper, let world = builtWorld {
+            do { try running.retarget(points: points(world)) } catch { return false }
+            stepper = running
+        }
+        buildStepper = builder
+        return true
     }
 
     /// A live tick: advance the stepper by the same delta the clock advanced.

@@ -28,16 +28,16 @@ struct SourceRoutePointSelection: Equatable, Sendable {
 
 /// The route editor's runtime bookkeeping (never document state).
 struct SourceRouteEditorState {
-    /// The route whose point a guide drag is moving. Its playback clock keeps
-    /// the path it was built with until the drag ends, so a drag over a
-    /// playing route does not rebuild and fast-forward the tween on every
-    /// mouse event; `staleClocks` lists the routes to rebuild at mouseUp.
-    var dragging: UUID?
-    var staleClocks: Set<UUID> = []
     /// Each route's editor line in world space, rebuilt only when the route
     /// world or the playback record changes (a playing route redraws the
     /// frame every tick, the line does not move).
     var lines: [UUID: (world: float4x4, route: KoikatsuRouteRecord, batch: GizmoBatch)] = [:]
+    /// The drawn line batches, rebuilt only when `lines` changes, so an
+    /// unchanged frame hands the renderer the same array without allocating.
+    var lineList: [GizmoBatch] = []
+    /// The world matrix `refreshFrame` placed each visible route object at
+    /// this refresh (filled by its object walk, capacity kept).
+    var worlds: [UUID: float4x4] = [:]
 }
 
 /// A route point guide drag: a translate drag moves the point (route-local)
@@ -178,11 +178,15 @@ extension StudioModel {
     }
 
     /// Keeps each route runtime equal to its document edit state, after the
-    /// prune in `refreshFrame`. A change that moves the path (points, loop,
-    /// orientation) drops the route's playback clock, which the next
-    /// placement rebuilds from the route's play start; during a point drag
-    /// that rebuild waits for mouseUp. Nothing runs for an unchanged route
-    /// but one comparison.
+    /// prune in `refreshFrame`. A point, aid or start-rotation move under a
+    /// playing route retargets its clock the way CharaStudio's queue reads
+    /// moved transforms: the segment in progress keeps its targets, later
+    /// segments take the new positions (`SourceStudioRouteStepper.retarget`),
+    /// so a drag never jumps the playing character. Any other change that
+    /// moves the path (loop, orientation, points added or deleted, all
+    /// stopped-route edits) drops the clock, which the next placement
+    /// rebuilds from the route's play start. Nothing runs for an unchanged
+    /// route but one comparison.
     func applySourceRouteEdits() {
         for (id, runtime) in sourceRoutes {
             let state = doc.object(id)?.sourceRoute
@@ -191,12 +195,23 @@ extension StudioModel {
             let playback = updated.apply(state)
             sourceRoutes[id] = updated
             guard playback else { continue }
-            if sourceRouteEditor.dragging == id {
-                sourceRouteEditor.staleClocks.insert(id)
-            } else {
-                sourceRouteClocks[id] = nil
-                sourceRouteFallbackReported.remove(id)
-            }
+            if isSourceRoutePlaying(id), let clock = sourceRouteClocks[id], clock.retarget(points: { world in
+                try SourceStudioRoutePlayback.points(route: updated.route, routeWorld: world, pointLocals: updated.pointLocals)
+            }, stepper: Self.sourceRouteStepperBuilder(updated)) { continue }
+            sourceRouteClocks[id] = nil
+            sourceRouteFallbackReported.remove(id)
+        }
+    }
+
+    /// The `Play` stepper of `route` at a route world: the route world folded
+    /// into the points, seeded with point 0's world rotation and the
+    /// preview's `1/30` Play-frame delta (see `routeChildRootWorld`).
+    static func sourceRouteStepperBuilder(_ route: SourceRouteRuntime) -> (float4x4) -> SourceStudioRouteStepper? {
+        { world in
+            let point0 = world * (route.pointLocals.first ?? matrix_identity_float4x4)
+            return SourceStudioRoutePlayback.stepper(route: route.route, routeWorld: world,
+                pointLocals: route.pointLocals, playRotation: point0.rotationQuaternion,
+                playDeltaTime: Double(SourceStudioRouteClock.frameDelta)).stepper
         }
     }
 
@@ -237,23 +252,33 @@ extension StudioModel {
     /// handle's guide.
     func sourceRouteGuides() -> SourceRouteGuides {
         var guides = SourceRouteGuides()
-        if sourceRouteEditor.lines.count > sourceRoutes.count {
-            sourceRouteEditor.lines = sourceRouteEditor.lines.filter { sourceRoutes[$0.key] != nil }
+        // A route shows a line while its object is visible (`refreshFrame`
+        // recorded its world), its line is on and it has two points.
+        func shown(_ id: UUID) -> float4x4? {
+            guard let runtime = sourceRoutes[id], runtime.route.visibleLine, runtime.route.points.count > 1,
+                  runtime.sceneSHA256 == doc.sourceSceneSHA256 else { return nil }
+            return sourceRouteEditor.worlds[id]
         }
-        for (id, runtime) in sourceRoutes where runtime.route.visibleLine && runtime.route.points.count > 1 {
-            guard runtime.sceneSHA256 == doc.sourceSceneSHA256, doc.isVisible(id),
-                  let world = try? sourceObjectWorldMatrix(id) else { continue }
-            if let cached = sourceRouteEditor.lines[id], cached.world == world, cached.route == runtime.route {
-                guides.lines.append(cached.batch); continue
-            }
+        var changed = false, count = 0
+        for (id, runtime) in sourceRoutes {
+            guard let world = shown(id) else { continue }
+            count += 1
+            if let cached = sourceRouteEditor.lines[id], cached.world == world, cached.route == runtime.route { continue }
             let color = runtime.route.color
             let vertices = SourceStudioRoutePlayback.pathLines(route: runtime.route, routeWorld: world,
                                                                pointLocals: runtime.pointLocals)
                 .map { GizmoVertex(position: $0, color: color) }
-            let batch = GizmoBatch(primitive: .lines, vertices: vertices, depthTest: true)
-            sourceRouteEditor.lines[id] = (world, runtime.route, batch)
-            if !vertices.isEmpty { guides.lines.append(batch) }
+            sourceRouteEditor.lines[id] = (world, runtime.route, GizmoBatch(primitive: .lines, vertices: vertices, depthTest: true))
+            changed = true
         }
+        if count != sourceRouteEditor.lines.count {
+            sourceRouteEditor.lines = sourceRouteEditor.lines.filter { shown($0.key) != nil }
+            changed = true
+        }
+        if changed {
+            sourceRouteEditor.lineList = sourceRouteEditor.lines.values.map(\.batch).filter { !$0.vertices.isEmpty }
+        }
+        guides.lines = sourceRouteEditor.lineList
         guard let id = selection, let state = sourceRouteState(id), let routeWorld = try? sourceObjectWorldMatrix(id) else { return guides }
         let selected = selectedSourceRoutePoint
         for (index, point) in state.points.enumerated() {
@@ -314,7 +339,6 @@ extension StudioModel {
             let frame = try sourceRouteHandleFrame(route: id, point: point, state: state)
             guard let gizmo = GizmoDrag(mode: frame.mode, axis: axis, origin: frame.origin, orientation: frame.orientation,
                                         ray: ray, cameraForward: cameraForward) else { return nil }
-            sourceRouteEditor.dragging = id
             return SourceRoutePointDrag(gizmo: gizmo, route: id, point: point, startLocal: frame.startLocal,
                                         parentFrame: frame.parentFrame, startWorldRotation: frame.startWorldRotation,
                                         parentRotation: frame.parentRotation)
@@ -336,16 +360,6 @@ extension StudioModel {
         editSourceRoute(drag.route, .move, pushHistory: false) {
             if drag.point.aid { try $0.moveAid(drag.point.index, to: local) } else { try $0.movePoint(drag.point.index, to: local) }
         }
-    }
-
-    /// The drag ended (mouseUp, or a gesture that replaced it): a route whose
-    /// path moved during the drag rebuilds its playback clock now.
-    func endSourceRoutePointDrag(_ drag: SourceRoutePointDrag) {
-        sourceRouteEditor.dragging = nil
-        guard sourceRouteEditor.staleClocks.remove(drag.route) != nil else { return }
-        sourceRouteClocks[drag.route] = nil
-        sourceRouteFallbackReported.remove(drag.route)
-        refresh()
     }
 
     // MARK: Duplicate
