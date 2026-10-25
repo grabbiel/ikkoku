@@ -354,6 +354,16 @@
           "env": "IKKOKU_BODY_COMPOSITE_PROBE",
           "kind": "directory",
           "optional": true
+        },
+        {
+          "env": "IKKOKU_CHEEK_COMPOSITE_BASE_PROBE",
+          "kind": "directory",
+          "optional": true
+        },
+        {
+          "env": "IKKOKU_CHEEK_COMPOSITE_PROBE",
+          "kind": "directory",
+          "optional": true
         }
       ],
       "env": {},
