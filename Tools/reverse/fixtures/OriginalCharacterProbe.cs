@@ -63,6 +63,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         if(modelVariant=="female00") { modelSex=1;modelHead=0; }
         else if(modelVariant=="female00-bone1") { modelSex=1;modelHead=0;modelBone=1; }
         else if(modelVariant=="female200") { modelSex=1;modelHead=200; }
+        else if(modelVariant=="female200-bone1") { modelSex=1;modelHead=200;modelBone=1; }
         else if(modelVariant=="female201") { modelSex=1;modelHead=201; }
         else if(modelVariant=="female201-bone1") { modelSex=1;modelHead=201;modelBone=1; }
         else if(modelVariant=="male00") { modelSex=0;modelHead=0;modelBone=0; }

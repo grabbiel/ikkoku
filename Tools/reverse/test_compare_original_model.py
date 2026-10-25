@@ -71,9 +71,10 @@ class ModelComparisonTests(unittest.TestCase):
         self.native['identity']['headID']=201;self.write()
 
     def bone1(self, sex=1, head_id=0):
-        assert head_id in (0, 201) and sex in (0, 1)
-        variant = ('female' if sex else 'male') + ('201' if head_id == 201 else '00') + '-bone1'
-        catalog = model.HEAD201_CATALOG if head_id == 201 else model.HEAD00_CATALOG
+        assert head_id in (0, 200, 201) and sex in (0, 1)
+        assert head_id != 200 or sex == 1
+        variant = ('female' if sex else 'male') + (str(head_id) if head_id else '00') + '-bone1'
+        catalog = {0:model.HEAD00_CATALOG,200:model.HEAD200_CATALOG,201:model.HEAD201_CATALOG}[head_id]
         self.frame['neutralModel'].update(variant=variant, sex=sex,requestedSex=sex,boneType=1,requestedBoneType=1,
             headID=head_id,requestedHeadID=head_id,loadedHeadCatalogID=head_id,
             exType=0,requestedExType=0,loadedHeadName='ct_head',loadedHeadCatalog=copy.deepcopy(catalog))
@@ -92,6 +93,103 @@ class ModelComparisonTests(unittest.TestCase):
         self.native['nodeNames'].append('cf_hit_head');self.native['nodeParents'].append(0)
         self.native['nodeWorldMatrices'].append(local);self.native['nodeLocalMatrices']=[self.identity,local]
         self.write()
+
+    def test_corrected_head200_requires_table_and_non_skin_collider(self):
+        self.bone1(head_id=200);result=model.compare(self.folder,self.native)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['shapeCoercions'],[])
+        self.assertEqual(result['bodyCorrection']['sha256'],self.native['inputs']['bodyCorrectionSHA256'])
+        self.assertTrue(result['headColliderScale']['gatePassed'])
+        valid=copy.deepcopy(self.frame)
+        for field,index in [('actualBodyValues',0),('actualBodyValues',1),('actualFaceValues',0)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][field][index]=.6;self.write()
+            with self.subTest(field=field,index=index),self.assertRaisesRegex(ValueError,'shape'):
+                model.compare(self.folder,self.native)
+        self.frame=valid;self.write()
+        self.native['nodeLocalMatrices'][1][0]=1.2
+        result=model.compare(self.folder,self.native)
+        self.assertFalse(result['gatePassed']);self.assertEqual(result['parts'][0]['vertices']['maximum'],0)
+        self.native['nodeLocalMatrices'][1][0]=1.08
+        self.native['inputs']['bodyCorrectionSHA256']='0'*64
+        with self.assertRaisesRegex(ValueError,'table identity'):model.compare(self.folder,self.native)
+        self.native['inputs']['bodyCorrectionSHA256']=self.frame['neutralModel']['bodyCorrection']['sha256']
+        path=self.folder/'body-correction.bytes';original=path.read_bytes()
+        changed=bytearray(original);changed[-1]^=1;path.write_bytes(changed)
+        with self.assertRaisesRegex(ValueError,'Changed or malformed corrected body table'):
+            model.compare(self.folder,self.native)
+        path.write_bytes(original)
+        valid=copy.deepcopy(self.frame)
+        for key in ('sourceBodyType','sourceFaceType'):
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['bodyCorrection'][key]=0;self.write()
+            with self.subTest(controller=key),self.assertRaisesRegex(ValueError,'table metadata'):
+                model.compare(self.folder,self.native)
+        self.frame=valid;del self.frame['neutralModel']['bodyCorrection'];self.write()
+        with self.assertRaisesRegex(ValueError,'table metadata'):model.compare(self.folder,self.native)
+
+    def test_corrected_head200_rejects_typed_source_native_and_catalog_mismatches(self):
+        self.bone1(head_id=200);valid=copy.deepcopy(self.frame);native=copy.deepcopy(self.native)
+        for key,wrong in [('sex',0),('requestedSex',0),('headID',0),('requestedHeadID',0),
+                          ('boneType',0),('requestedBoneType',0),('exType',1),('requestedExType',1),
+                          ('loadedHeadCatalogID',0)]:
+            for value in (False,True,None,float(valid['neutralModel'][key]),wrong):
+                self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+                with self.subTest(source=key,value=value),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for key,value in [('variant','female200'),('variant','female00-bone1'),('variant','female201-bone1'),('variant','unknown'),
+                          ('loadedHeadName','p_cf_head_02'),('loadedHeadCatalog',None)]:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel'][key]=value;self.write()
+            with self.subTest(source=key),self.assertRaises(ValueError):model.compare(self.folder,self.native)
+        for field in model.HEAD200_CATALOG:
+            self.frame=copy.deepcopy(valid);self.frame['neutralModel']['loadedHeadCatalog'][field]='wrong';self.write()
+            with self.subTest(catalog=field),self.assertRaisesRegex(ValueError,'exact source prefab'):
+                model.compare(self.folder,self.native)
+        self.frame=valid;self.write()
+        for key,wrong in [('sex',0),('headID',0),('boneType',0),('exType',1)]:
+            for value in (False,True,None,float(native['identity'][key]),wrong):
+                self.native=copy.deepcopy(native);self.native['identity'][key]=value
+                with self.subTest(native=key,value=value),self.assertRaisesRegex(ValueError,'Native corrected model identity'):
+                    model.compare(self.folder,self.native)
+
+    def test_corrected_head200_repeat_requires_independent_run_and_exact_catalog_table(self):
+        self.bone1(head_id=200)
+        with self.assertRaises(ValueError):model.compare_repeat(self.folder,self.folder)
+        with tempfile.TemporaryDirectory() as tmp:
+            other=Path(tmp)
+            for path in self.folder.iterdir():(other/path.name).write_bytes(path.read_bytes())
+            with self.assertRaisesRegex(ValueError,'same producer'):model.compare_repeat(self.folder,other)
+            run=copy.deepcopy(self.run);run.update(processID=101,root='C:\\Temp\\IkkokuShaderProbe-'+'c'*32)
+            (other/'run.json').write_text(json.dumps(run))
+            self.assertTrue(model.compare_repeat(self.folder,other)['gatePassed'])
+            valid=copy.deepcopy(self.frame)
+            for variant in ('female200','male200-bone1','unknown'):
+                self.frame=copy.deepcopy(valid);self.frame['neutralModel']['variant']=variant;self.write()
+                (other/'frame.json').write_text(json.dumps(self.frame))
+                with self.subTest(variant=variant),self.assertRaisesRegex(ValueError,'variant differs'):
+                    model.compare_repeat(self.folder,other)
+            self.frame=copy.deepcopy(valid)
+            self.frame['neutralModel']['loadedHeadCatalog']['MainData']='p_cf_head_wrong';self.write()
+            (other/'frame.json').write_text(json.dumps(self.frame))
+            with self.assertRaisesRegex(ValueError,'exact source prefab'):model.compare_repeat(self.folder,other)
+            self.frame=valid;self.write();(other/'frame.json').write_text(json.dumps(valid))
+            data=bytearray((other/'body-correction.bytes').read_bytes());struct.pack_into('<f',data,4,-.5)
+            (other/'body-correction.bytes').write_bytes(data)
+            changed=copy.deepcopy(valid);changed['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(data).hexdigest()
+            (other/'frame.json').write_text(json.dumps(changed))
+            with self.assertRaisesRegex(ValueError,'Repeated corrected body table differs'):model.compare_repeat(self.folder,other)
+
+    def test_legacy_head200_without_catalog_retains_prior_compare_path(self):
+        valid,native=copy.deepcopy(self.frame),copy.deepcopy(self.native)
+        for sex in (1,0):
+            self.frame=copy.deepcopy(valid);self.native=copy.deepcopy(native)
+            mode=self.frame['neutralModel']
+            mode.update(variant='female200' if sex else 'male200',sex=sex,requestedSex=sex,
+                        headID=200,requestedHeadID=200,loadedHeadCatalogID=200)
+            self.native['identity'].update(sex=sex,headID=200)
+            self.assertNotIn('loadedHeadCatalog',mode);self.assertNotIn('exType',mode)
+            if sex==0:
+                mode['actualBodyValues'][0]=.6;self.native['bodyValues'][0]=.6
+            self.write();result=model.compare(self.folder,self.native)
+            with self.subTest(sex=sex):
+                self.assertTrue(result['gatePassed']);self.assertIsNone(result['bodyCorrection'])
+                self.assertIsNone(result['headColliderScale'])
 
     def test_corrected_head201_requires_table_and_non_skin_collider(self):
         self.bone1(head_id=201);result=model.compare(self.folder,self.native)

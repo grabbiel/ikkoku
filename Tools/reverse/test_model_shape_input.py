@@ -207,6 +207,42 @@ class ShapeCaptureTests(unittest.TestCase):
                 model.shape_request_gate(self.folder,self.frame,self.baseline)
             payload.assert_not_called()
 
+    def test_corrected_head200_baseline_requires_same_head_type_and_table_before_card_payload(self):
+        authored.ModelComparisonTests.bone1(self,head_id=200)
+        path=self.baseline/'frame.json';base=json.loads(path.read_text())
+        for key in ('variant','sex','requestedSex','headID','requestedHeadID','loadedHeadCatalogID',
+                    'boneType','requestedBoneType','exType','requestedExType','loadedHeadName',
+                    'loadedHeadCatalog','bodyCorrection'):
+            base['neutralModel'][key]=copy.deepcopy(self.frame['neutralModel'][key])
+        data=(self.folder/'body-correction.bytes').read_bytes()
+        (self.baseline/'body-correction.bytes').write_bytes(data);path.write_text(json.dumps(base))
+        result=model.compare(self.folder,self.native,shape_baseline=self.baseline)
+        self.assertTrue(result['gatePassed']);self.assertEqual(result['shapeRequest']['overrides'],self.rows)
+        self.assertEqual(result['shapeCoercions'],[])
+        # The valid shaped card still passes the independent full-token gate.
+        for other in (dict(variant='female200',boneType=0,requestedBoneType=0),
+                      dict(variant='female201-bone1',headID=201,requestedHeadID=201,loadedHeadCatalogID=201,
+                           loadedHeadCatalog=copy.deepcopy(model.HEAD201_CATALOG)),
+                      dict(variant='female00-bone1',headID=0,requestedHeadID=0,loadedHeadCatalogID=0,
+                           loadedHeadCatalog=copy.deepcopy(model.HEAD00_CATALOG))):
+            changed=copy.deepcopy(base);changed['neutralModel'].update(other);path.write_text(json.dumps(changed))
+            with patch.object(model,'shape_card_payload') as payload:
+                with self.subTest(other=other['variant']),self.assertRaisesRegex(ValueError,'context differs'):
+                    model.shape_request_gate(self.folder,self.frame,self.baseline)
+                payload.assert_not_called()
+        path.write_text(json.dumps(base));(self.baseline/'body-correction.bytes').unlink()
+        with patch.object(model,'shape_card_payload') as payload:
+            with self.assertRaisesRegex(ValueError,'Missing corrected body table'):
+                model.shape_request_gate(self.folder,self.frame,self.baseline)
+            payload.assert_not_called()
+        changed=bytearray(data);struct.pack_into('<f',changed,4,-.5)
+        (self.baseline/'body-correction.bytes').write_bytes(changed)
+        base['neutralModel']['bodyCorrection']['sha256']=hashlib.sha256(changed).hexdigest();path.write_text(json.dumps(base))
+        with patch.object(model,'shape_card_payload') as payload:
+            with self.assertRaisesRegex(ValueError,'Shape baseline corrected body table differs'):
+                model.shape_request_gate(self.folder,self.frame,self.baseline)
+            payload.assert_not_called()
+
     def test_corrected_head201_baseline_requires_same_head_type_and_table_before_card_payload(self):
         authored.ModelComparisonTests.bone1(self,head_id=201)
         path=self.baseline/'frame.json';base=json.loads(path.read_text())
