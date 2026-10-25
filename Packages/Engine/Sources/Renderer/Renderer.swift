@@ -186,17 +186,16 @@ public final class Renderer: @unchecked Sendable {
     private var lastCallback: CFTimeInterval?
     private var targets: RenderTargets?
     private var frameIndex = 0
-    /// What each deformation buffer holds, by buffer identity (R7 phase 2,
-    /// item 4): the inputs of the last dispatch into it, in queue order. An
+    /// What each deformation key's buffer holds (R7 phase 2, item 4): the
+    /// buffer and the inputs of the last dispatch into it, in queue order. An
     /// entry is removed when a dispatch into its buffer is encoded and set
     /// again when that command buffer commits (`commit(_:writes:)`); every
     /// command buffer that dispatches the deform pass commits while holding
-    /// renderLock, in the same hold that encoded it. See renderer.md, "Renderer
+    /// renderLock, in the same hold that encoded it. Preparing a frame drops
+    /// the entries of keys it does not use. See renderer.md, "Renderer
     /// threads". Protected by renderLock.
-    private var deformContent: [ObjectIdentifier: DeformBufferContent] = [:]
+    private var deformContent: [UInt64: DeformBufferRecord] = [:]
     private var deformWriteSerial: UInt64 = 0
-    /// Dead entries are dropped when the record reaches this size.
-    private var deformContentPruneAt = 32
     private var deformReuse = true
     private var skipUnchanged = true
     var liveEncoder: SourceShaderLiveEncoder?
@@ -980,6 +979,7 @@ public final class Renderer: @unchecked Sendable {
         var casters: [DrawRecord] = []
         var deforms: [DeformRecord] = []
         var deformSeen = Set<UInt64>()
+        var deformHeld = 0
         var liveCandidates: [DrawRecord] = []
 
         for item in frame.items where item.visible {
@@ -1012,8 +1012,10 @@ public final class Renderer: @unchecked Sendable {
                                                 morphs: entries)
                     // The buffer already holds these vertices when the last
                     // committed dispatch into it had the same inputs.
-                    let held = reuse ? deformContent[ObjectIdentifier(buf)] : nil
-                    let dispatch = !(held.map { $0.buffer === buf && $0.content.matches(content) } ?? false)
+                    let held = deformContent[key]
+                    if held != nil { deformHeld += 1 }
+                    var dispatch = true
+                    if reuse, let held, held.buffer === buf, held.content.matches(content) { dispatch = false }
                     deforms.append(DeformRecord(key: key, mesh: mesh, buffer: buf, skinBuffer: skin?.allocation.buffer,
                                                 skinOffset: skin?.allocation.offset ?? 0,
                                                 boneCount: skin?.count ?? 0, morphs: morphs, morphCount: entries.count,
@@ -1046,6 +1048,9 @@ public final class Renderer: @unchecked Sendable {
             else if item.material.transparent { transparent.append(rec) } else { opaque.append(rec) }
             if item.castsShadow && !item.material.transparent { casters.append(rec) }
         }
+        // Records of keys this frame does not use name buffers and meshes that
+        // may have been released: drop them, which also releases those.
+        if deformContent.count > deformHeld { deformContent = deformContent.filter { deformSeen.contains($0.key) } }
         var liveReport = SourceShaderLiveFrameReport()
         var live = liveCandidates.isEmpty ? [] : prepareLive(liveCandidates, deforms: deforms, report: &liveReport, opaque: &opaque, transparent: &transparent)
         var liveMainPass: LiveMainPass?
@@ -1127,7 +1132,7 @@ public final class Renderer: @unchecked Sendable {
         enc.setComputePipelineState(pipelines.deform)
         let dummy = resources.dummyBuffer
         for d in dispatched {
-            deformContent[ObjectIdentifier(d.buffer)] = nil
+            deformContent[d.key] = nil
             var params = DeformParams(vertexCount: UInt32(d.mesh.vertexCount), activeMorphCount: UInt32(d.morphCount),
                                       hasSkin: d.skinBuffer != nil ? 1 : 0, hasMorphNormals: d.mesh.morphNormals != nil ? 1 : 0,
                                       boneCount: UInt32(d.boneCount))
@@ -1144,7 +1149,7 @@ public final class Renderer: @unchecked Sendable {
             enc.dispatchThreads(MTLSize(width: d.mesh.vertexCount, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: w, height: 1, depth: 1))
         }
         enc.endEncoding()
-        return dispatched.map { DeformWrite(buffer: $0.buffer, content: $0.content) }
+        return dispatched.map { DeformWrite(key: $0.key, buffer: $0.buffer, content: $0.content) }
     }
 
     /// Commits `cb`, which dispatched `writes`, and records what their buffers
@@ -1159,26 +1164,21 @@ public final class Renderer: @unchecked Sendable {
     /// the cached interactive image, which may have read them.
     func commit(_ cb: any MTLCommandBuffer, writes: [DeformWrite]) {
         guard !writes.isEmpty else { cb.commit(); return }
-        var recorded: [(ObjectIdentifier, UInt64)] = []
+        var recorded: [(key: UInt64, serial: UInt64)] = []
         recorded.reserveCapacity(writes.count)
         for write in writes {
             deformWriteSerial &+= 1
-            let id = ObjectIdentifier(write.buffer)
-            deformContent[id] = DeformBufferContent(buffer: write.buffer, content: write.content, serial: deformWriteSerial)
-            recorded.append((id, deformWriteSerial))
+            deformContent[write.key] = DeformBufferRecord(buffer: write.buffer, content: write.content, serial: deformWriteSerial)
+            recorded.append((write.key, deformWriteSerial))
         }
         cb.addCompletedHandler { [weak self] c in
             guard c.status != .completed, let self else { return }
             self.renderLock.lock()
-            for (id, serial) in recorded where self.deformContent[id]?.serial == serial { self.deformContent[id] = nil }
+            for (key, serial) in recorded where self.deformContent[key]?.serial == serial { self.deformContent[key] = nil }
             self.drawnFrame = nil
             self.renderLock.unlock()
         }
         cb.commit()
-        if deformContent.count >= deformContentPruneAt {
-            deformContent = deformContent.filter { $0.value.buffer != nil }
-            deformContentPruneAt = max(32, 2 * deformContent.count)
-        }
     }
 
     func bindCommon(_ enc: any MTLRenderCommandEncoder, _ ctx: FrameContext) {

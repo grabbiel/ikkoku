@@ -441,6 +441,28 @@ extension InteractiveFrameTests {
         expectDispatched(try redraw(f), a.1, "transient again")
     }
 
+    /// The record holds its buffer strongly. A frame that does not use a key
+    /// drops the key's record, which releases a removed character's buffer,
+    /// and the key's next use dispatches again.
+    @Test func framesDropTheRecordsOfKeysTheyDoNotUse() throws {
+        let f = try InteractiveFixture()
+        let a = try f.draw()
+        #expect(a.0.statistics.deformDispatches == 1)
+        weak var released: (any MTLBuffer)?
+        autoreleasepool {
+            released = f.renderer.resources.deformBuffer(for: 42, vertexCount: 3)
+            f.renderer.resources.releaseDeformBuffers(keys: [42])
+        }
+        #expect(released != nil, "the record holds the released buffer")
+        let original = f.frame
+        f.frame.items = []
+        #expect(try submitAndDraw(f).0.statistics.deformDispatches == 0)
+        #expect(released == nil, "the frame without the key released it")
+        f.frame = original
+        expectDispatched(try submitAndDraw(f), a.1, "key used again")
+        expectReused(try redraw(f), a.1, "recorded again")
+    }
+
     /// Captures, benchmarks and picks write the same buffers. Every writer
     /// commits under the render lock, so a later draw reads what the last of
     /// them wrote, in queue order, even when the pick ran on the pick queue.

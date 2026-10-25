@@ -17,17 +17,15 @@ import ShaderTypes
 /// - the meaningful morph entries (`Renderer.activeMorphEntries`), in order.
 ///
 /// Matrices and entries compare by bit pattern: they hold no padding, and an
-/// entry's weight is finite and nonzero. The mesh is held weakly: an object
-/// that no longer exists matches nothing, and one that exists cannot share its
-/// identity with another.
+/// entry's weight is finite and nonzero. The mesh is held strongly, so while
+/// a record names it, no other mesh can take its address.
 struct DeformContent {
-    weak var mesh: GPUMesh?
+    let mesh: GPUMesh
     let palette: [float4x4]?
     let morphs: [MorphWeightEntry]
 
     func matches(_ o: DeformContent) -> Bool {
-        guard let mesh, mesh === o.mesh, (palette == nil) == (o.palette == nil),
-              Self.sameBits(morphs, o.morphs) else { return false }
+        guard mesh === o.mesh, (palette == nil) == (o.palette == nil), Self.sameBits(morphs, o.morphs) else { return false }
         guard let palette, let other = o.palette else { return true }
         return Self.sameBits(palette, other)
     }
@@ -44,18 +42,26 @@ struct DeformContent {
     }
 }
 
-/// What one deformation buffer holds after the last committed command buffer
-/// that wrote it: the content that dispatch was encoded from, and the write
-/// that recorded it (`Renderer.deformContent`).
-struct DeformBufferContent {
-    weak var buffer: (any MTLBuffer)?
+/// What one deformation key's buffer holds after the last committed command
+/// buffer that wrote it: that buffer, the content the dispatch was encoded
+/// from, and the write that recorded it (`Renderer.deformContent`). The
+/// buffer is held strongly, so it cannot be freed and another buffer take its
+/// address while the record names it. The renderer drops the records of keys
+/// that the frame it prepares does not use, which releases a removed
+/// character's buffers with its first frame.
+final class DeformBufferRecord {
+    let buffer: any MTLBuffer
     let content: DeformContent
     let serial: UInt64
+    init(buffer: any MTLBuffer, content: DeformContent, serial: UInt64) {
+        self.buffer = buffer; self.content = content; self.serial = serial
+    }
 }
 
 /// One deform dispatch encoded into a command buffer that has not been
 /// committed yet; recorded once it is (`Renderer.commit(_:writes:)`).
 struct DeformWrite {
+    let key: UInt64
     let buffer: any MTLBuffer
     let content: DeformContent
 }

@@ -796,8 +796,8 @@ the thread applies it to `preferredFrameRateRange`.
 **Idle keep-alive (R7 phase 2, item 4).** With G3 (#154) an idle viewport
 presented nothing, and after about 0.17 s without a present the first two to
 four presents of the next change never reached the screen: an orbit after a
-pause first showed 52–79 ms after the input instead of about 32 ms
-(performance.md, "Phase 2, item 4"). `draw(to:timestamp:refreshAfter:)` now
+1 s or 3.5 s pause first showed 50–71 ms after the input instead of about
+29 ms (performance.md, "Phase 2, item 4"). `draw(to:timestamp:refreshAfter:)` now
 takes a keep-alive interval, 1/15 s from the render thread
 (`DisplayLinkRatePolicy.keepAliveInterval`).
 
@@ -832,8 +832,9 @@ takes a keep-alive interval, 1/15 s from the render thread
 **Deformed-vertex reuse (R7 phase 2, item 4).** Each deformation key has a
 persistent buffer (`ResourceStore.deformBuffer`), and the deform pass used to
 rewrite it in every command buffer. The renderer now keeps, under
-`renderLock`, a record of what each buffer holds, by buffer identity: the
-inputs of the last committed dispatch into it (`DeformContent`).
+`renderLock`, a record per deformation key of what its buffer holds: the
+buffer and the inputs of the last committed dispatch into it
+(`DeformBufferRecord`, `DeformContent`).
 
 - The deform kernel is a pure function of the mesh (base vertices, skin data,
   morph deltas and normals, vertex count), the bound skin palette and the
@@ -846,13 +847,21 @@ inputs of the last committed dispatch into it (`DeformContent`).
   still binds the buffer, its palette and its morph entries, so live
   source-shader inputs read the same vertices. Captures, benchmarks and the
   live captures always dispatch (`.always`) and record what they wrote.
+- A deformation is reused only when its key's record names the same buffer
+  object as the frame's, and the same content.
 - `encodeDeform` removes the record of every buffer it writes;
   `commit(_:writes:)` sets it again in the same lock hold as the commit. A
   command buffer that is abandoned after encoding, or a path that commits
   without recording, can only cost a later frame a dispatch.
-- The record holds the buffer and the mesh weakly. A released, regrown or
-  transient buffer (a frame older than a completed retirement) is a new
-  object, which no record names, so it is always dispatched.
+- The record holds the buffer and the mesh strongly, so while a record names
+  them, no other buffer or mesh can take their address. A released, regrown
+  or transient buffer (a frame older than a completed retirement) is a
+  different object from the recorded one, so it is always dispatched.
+- Preparing a frame drops the records of keys it does not use. A removed
+  character's buffers and meshes are therefore released with the first frame
+  without it, and a key that returns later dispatches once. A first version
+  held them weakly instead, and its weak-reference bookkeeping cost CPU in
+  every drawn frame (performance.md, "R7 phase 2, item 4").
 - A command buffer that fails removes the records it set, unless a later
   write replaced them, and invalidates the cached interactive image, which
   may have read them.
