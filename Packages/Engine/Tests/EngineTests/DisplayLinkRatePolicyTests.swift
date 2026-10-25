@@ -187,4 +187,26 @@ struct DisplayLinkRatePolicyTests {
         let b = RenderPresentationSample.activeIntervals(samples, unchanged: uniform.map { .init(target: $0, allowance: period) })
         #expect(a == b && abs(a[0] - 6 * period) < 1e-12)
     }
+
+    /// R7 phase 2, live pacing: paced playback at a 30 Hz link renders on
+    /// every callback. Each draw skips the three targets after it on purpose,
+    /// so frames four periods apart have a one-period cadence; one more
+    /// period late still counts.
+    @Test func drawsAtALoweredRateAccountForTheirGapBeyondOnePeriod() {
+        let period = 1.0 / 120
+        #expect(RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: 4 * period, hz: nil) == nil)
+        #expect(RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: nil, hz: 30) == nil)
+        #expect(RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: period, hz: 30) == nil)
+        let skip = RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: 6 * period, hz: 30)
+        #expect(skip.map { abs($0.allowance - 3 * period) < 1e-12 && abs($0.target - period / 2) < 1e-12 } == true)
+        let targets = [0.0, 4, 8, 12].map { $0 * period }
+        let presented = [0.0, 4, 9, 13].map { $0 * period }
+        let samples = zip(targets, presented).map { RenderPresentationSample(target: $0, presented: $1) }
+        let skips = zip(targets, targets.dropFirst()).compactMap {
+            RenderPresentationSample.Skip.afterLoweredDraw(target: $0, period: period, gapToNext: $1 - $0, hz: 30)
+        }
+        let adjusted = RenderPresentationSample.activeIntervals(samples, unchanged: skips)
+        let expected = [1.0, 2, 1].map { $0 * period }
+        #expect(zip(adjusted, expected).allSatisfy { abs($0 - $1) < 1e-12 }, "\(adjusted)")
+    }
 }

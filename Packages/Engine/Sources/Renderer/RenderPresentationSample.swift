@@ -36,6 +36,19 @@ public struct RenderPresentationSample: Sendable {
             guard let hz, hz > 0 else { return period }
             return max(period, min(gapToNext ?? period, 1 / Double(hz)))
         }
+
+        /// The targets a drawing callback skips on purpose while the link runs
+        /// at a lowered rate (R7 phase 2, live pacing: paced playback asks for
+        /// the step rate, and every callback renders). The skip sits half a
+        /// period after the callback's `target` and accounts for the gap to the
+        /// next callback beyond one period, at most one lowered period. Nil at
+        /// full rate, for the last callback and for a gap of about one period.
+        public static func afterLoweredDraw(target: Double, period: Double, gapToNext: Double?, hz: Float?) -> Skip? {
+            guard let hz, hz > 0, let gapToNext else { return nil }
+            let extra = min(gapToNext, 1 / Double(hz)) - period
+            guard extra > period / 2 else { return nil }
+            return Skip(target: target + period / 2, allowance: extra)
+        }
     }
 
     /// `activeIntervals` with an explicit allowance per unchanged callback. With

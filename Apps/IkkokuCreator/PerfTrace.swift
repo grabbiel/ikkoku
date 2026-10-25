@@ -464,6 +464,8 @@ final class PerfTrace {
         // While a viewport's link runs at a lowered rate (R7 P2), an unchanged
         // callback accounts for the gap to the next one, up to that rate's
         // period; at full rate it accounts for one display period, as before.
+        // A callback that draws at a lowered rate (paced playback, R7 phase 2
+        // live pacing) accounts for the same gap beyond its own period.
         var skips: [RenderPresentationSample.Skip] = []
         var deliberateTargetSkips = 0
         for (index, frame) in frames.enumerated() {
@@ -472,6 +474,9 @@ final class PerfTrace {
             if frame.outcome == .unchanged || frame.outcome == .refreshed {
                 skips.append(.init(target: frame.targetPresentation,
                                    allowance: RenderPresentationSample.Skip.allowance(period: period, gapToNext: gap, hz: hz)))
+            } else if let skip = RenderPresentationSample.Skip.afterLoweredDraw(target: frame.targetPresentation, period: period,
+                                                                                gapToNext: gap, hz: hz) {
+                skips.append(skip)
             }
             if let gap, let hz {
                 deliberateTargetSkips += max(0, Int((min(gap, 1 / Double(hz)) / period).rounded()) - 1)
