@@ -10,8 +10,8 @@
     {"op": "reimport", "path": ".local/verification/scenario-exports/reload-load-duplicate.png"},
     {"op": "assert", "children": {"keys": [0, 1, 4]}, "activeCamera": 3},
     {"op": "assert", "children": {"parent": 1, "keys": [2, 3]}},
+    {"op": "assertRejected", "activeCamera": 2, "errorContains": "assert activeCamera"},
     {"op": "assert", "key": 3, "name": "IKKOKU-B"},
-    {"op": "assert", "position": {"key": 3, "from": "camera-2", "within": 0.0005, "rotationWithin": 0.05}},
-    {"op": "assertRejected", "activeCamera": 2, "errorContains": "assert activeCamera"}
+    {"op": "assert", "position": {"key": 3, "from": "camera-2", "within": 0.0005, "rotationWithin": 0.05}}
   ]
 }

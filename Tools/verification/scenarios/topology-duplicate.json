@@ -33,6 +33,8 @@
     {"op": "assert", "children": {"keys": [622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338]}},
     {"op": "assert", "children": {"parent": 113, "keys": [114, 331, 332, 333]}},
     {"op": "assert", "children": {"parent": 962, "keys": [963, 1127, 1128, 1129, 335]}},
+    {"op": "assertRejected", "position": {"key": 331, "from": "item-1540", "within": 0.0005}, "errorContains": "expected it held within"},
+    {"op": "assertRejected", "children": {"parent": 113, "keys": [114, 332, 331, 333]}, "errorContains": "assert children"},
     {"op": "assert", "key": 113, "name": "下　中"},
     {"op": "assert", "key": 336, "name": "New folder"},
     {"op": "assert", "key": 337, "name": "Camera 1"},
@@ -43,8 +45,6 @@
     {"op": "assert", "position": {"key": 334, "from": "item-1540", "within": 0.0005, "rotationWithin": 0.05}},
     {"op": "assert", "position": {"key": 336, "from": "folder-new", "within": 0.0005, "rotationWithin": 0.05}},
     {"op": "assert", "position": {"key": 337, "from": "camera-new", "within": 0.0005, "rotationWithin": 0.05}},
-    {"op": "assert", "position": {"key": 338, "from": "light-new", "within": 0.0005, "rotationWithin": 0.05}},
-    {"op": "assertRejected", "position": {"key": 331, "from": "item-1540", "within": 0.0005}, "errorContains": "expected it held within"},
-    {"op": "assertRejected", "children": {"parent": 113, "keys": [114, 332, 331, 333]}, "errorContains": "assert children"}
+    {"op": "assert", "position": {"key": 338, "from": "light-new", "within": 0.0005, "rotationWithin": 0.05}}
   ]
 }
