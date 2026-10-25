@@ -12,6 +12,7 @@ private final class Policy {
     func wake(at time: Double) -> Bool { value.wake(at: time) }
     func setVisible(_ visible: Bool, at time: Double) -> Bool { value.setVisible(visible, at: time) }
     func refreshAfter(_ interval: Double?) -> Double? { value.refreshAfter(interval) }
+    func setPaced(_ hz: Float?, at time: Double) -> Bool { value.setPaced(hz, at: time) }
 }
 
 /// R7 phase 2, item 4, P2: the adaptive display-link rate, the keep-alive's
@@ -54,6 +55,61 @@ struct DisplayLinkRatePolicyTests {
         let fixed = Policy(DisplayLinkRatePolicy(tiers: []))
         _ = fixed.callback(at: 0, outcome: .unchanged)
         #expect(!fixed.callback(at: 100, outcome: .unchanged) && fixed.hz == nil)
+    }
+
+    /// R7 phase 2, live pacing: while paced steps change the frames, rendered
+    /// frames are not activity and the tiers do not apply. After `pacedIdle`
+    /// without a wake the link asks for the step rate; a wake (input, a resize,
+    /// an edit's submit) or a failed callback returns full rate at once.
+    @Test func pacedPlaybackLowersToTheStepRateUntilAWake() {
+        let policy = Policy()
+        // Starting paced playback from full rate changes nothing yet.
+        #expect(!policy.setPaced(30, at: 10))
+        #expect(!policy.callback(at: 10.2, outcome: .rendered))
+        #expect(!policy.callback(at: 10.49, outcome: .unchanged))
+        #expect(policy.callback(at: 10.5, outcome: .rendered))
+        #expect(policy.hz == 30)
+        // Neither unchanged nor rendered callbacks reach a tier while paced.
+        #expect(!policy.callback(at: 20, outcome: .unchanged))
+        #expect(!policy.callback(at: 20.1, outcome: .rendered))
+        #expect(policy.hz == 30)
+        // Input returns full rate at once; the wait starts again from it.
+        #expect(policy.wake(at: 20.2))
+        #expect(policy.hz == nil)
+        #expect(!policy.callback(at: 20.6, outcome: .rendered))
+        #expect(policy.callback(at: 20.75, outcome: .rendered) && policy.hz == 30)
+        // A failure is activity: the next callback retries at full rate.
+        #expect(policy.callback(at: 21, outcome: .failed) && policy.hz == nil)
+        // Paced playback ends: full rate, and the tiers count from then on.
+        #expect(policy.callback(at: 21.5, outcome: .rendered) && policy.hz == 30)
+        #expect(policy.setPaced(nil, at: 22))
+        #expect(policy.hz == nil)
+        #expect(!policy.callback(at: 22.2, outcome: .unchanged))
+        #expect(policy.callback(at: 22.5, outcome: .unchanged) && policy.hz == 30)
+        // Starting paced playback from a lowered tier returns full rate first.
+        #expect(policy.callback(at: 26, outcome: .unchanged) && policy.hz == 15)
+        #expect(policy.setPaced(30, at: 26.1) && policy.hz == nil)
+    }
+
+    /// Hidden while paced: the slowest tier, as for any hidden window, and no
+    /// paced lowering. Visible again, paced playback lowers after `pacedIdle`.
+    @Test func aHiddenWindowOverridesPacedPlayback() {
+        let policy = Policy()
+        _ = policy.setPaced(30, at: 0)
+        _ = policy.callback(at: 1, outcome: .rendered)
+        #expect(policy.hz == 30)
+        #expect(policy.setVisible(false, at: 2))
+        #expect(policy.hz == 15)
+        #expect(!policy.callback(at: 5, outcome: .rendered))
+        #expect(!policy.wake(at: 5.1))
+        #expect(policy.hz == 15)
+        // Paced playback ends while hidden: still the slowest tier.
+        #expect(!policy.setPaced(nil, at: 6))
+        #expect(policy.hz == 15)
+        // Visible and paced again: full rate, then the step rate.
+        #expect(!policy.setVisible(true, at: 7))
+        #expect(policy.setPaced(30, at: 7.1) && policy.hz == nil)
+        #expect(policy.callback(at: 7.7, outcome: .rendered) && policy.hz == 30)
     }
 
     /// The keep-alive needs a callback once per interval at every rate.

@@ -40,13 +40,27 @@ import Renderer
 /// keeps the full rate and `IKKOKU_PERF_KEEPALIVE_MS` overrides the interval
 /// (0 turns it off), measurement controls.
 ///
+/// Live pacing (R7 phase 2): with a `pacedStep`, the callbacks also start the
+/// model's fixed-rate step. A render-thread callback that `LiveStepPacer`
+/// says is due asks the main thread for one step (`pacedStep`, in the main
+/// run loop's default mode, like the timer it replaces), before it draws; the
+/// answer goes back to the pacer. One request is in flight at a time. While
+/// steps run, their submits (`Renderer.submit(_:timeDriven:)`) are not
+/// activity, and after `DisplayLinkRatePolicy.pacedIdle` without input the
+/// link asks for the step rate, when the display's rate is a multiple of it
+/// and the frame does not draw continuously. `IKKOKU_PERF_LIVE_PACING=timer`
+/// (no `pacedStep`) and `IKKOKU_PERF_PACED_LINK=off` (full rate while paced)
+/// are measurement controls. See docs/reference/renderer.md, "Live pacing".
+///
 /// Sendable invariant: `renderer`, `log`, `link`, `fullRate`, `adaptive`,
-/// `keepAlive`, `finished` and `control` are set in `init` and never reassigned;
-/// `renderer`, `log`, `finished` and `control` are thread-safe. `link` is
-/// configured on the main thread before the thread starts and afterwards used
-/// only on the render thread (added to its run loop, called, its rate set,
-/// invalidated). `started`, `stopRequested`, `runLoop`, `policy` and
-/// `submitObserver` are only read or written while holding `control`.
+/// `keepAlive`, `pacedStep`, `pacedLink`, `finished` and `control` are set in
+/// `init` and never reassigned; `renderer`, `log`, `finished` and `control`
+/// are thread-safe, and `pacedStep` is only called on the main thread. `link`
+/// is configured on the main thread before the thread starts and afterwards
+/// used only on the render thread (added to its run loop, called, its rate
+/// set, invalidated). `started`, `stopRequested`, `runLoop`, `policy`,
+/// `pacer`, `displayHz` and `submitObserver` are only read or written while
+/// holding `control`.
 nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelegate, @unchecked Sendable {
     /// How long app termination waits for a render thread to finish its draw.
     static let terminationWait: TimeInterval = 0.5
@@ -64,6 +78,14 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     /// No tiers under `IKKOKU_PERF_LINK_RATE=fixed`.
     private var policy: DisplayLinkRatePolicy
     private var submitObserver: UInt64?
+    /// The model's paced step, called on the main thread; nil when the
+    /// viewport's model has none (the Maker) or under `IKKOKU_PERF_LIVE_PACING=timer`.
+    private let pacedStep: (@MainActor () -> LiveStepPacer.Result)?
+    /// False under `IKKOKU_PERF_PACED_LINK=off`: paced playback keeps full rate.
+    private let pacedLink: Bool
+    private var pacer = LiveStepPacer()
+    /// The display's maximum refresh rate (`NSScreen.maximumFramesPerSecond`), 0 if unknown.
+    private var displayHz = 0
     /// Signalled when the thread has invalidated the link and is exiting.
     private let finished = DispatchSemaphore(value: 0)
     private let control = NSLock()
@@ -73,13 +95,15 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     private var started = false
 
     @MainActor
-    init(layer: CAMetalLayer, renderer: Renderer, log: PerfDrawLog?) {
+    init(layer: CAMetalLayer, renderer: Renderer, log: PerfDrawLog?, pacedStep: (@MainActor () -> LiveStepPacer.Result)? = nil) {
         self.renderer = renderer
         self.log = log
+        self.pacedStep = pacedStep
         link = CAMetalDisplayLink(metalLayer: layer)
         link.preferredFrameLatency = 2
         fullRate = link.preferredFrameRateRange
         adaptive = PerfTrace.active?.configuration.linkRate != "fixed"
+        pacedLink = PerfTrace.active?.configuration.pacedLink != false
         policy = DisplayLinkRatePolicy(tiers: adaptive ? DisplayLinkRatePolicy.standardTiers : [])
         keepAlive = PerfTrace.active?.configuration.keepAliveMilliseconds.map { $0 > 0 ? Double($0) / 1000 : nil }
             ?? DisplayLinkRatePolicy.keepAliveInterval
@@ -97,7 +121,7 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
         let thread = Thread { [self] in run() }
         renderer.invalidateInteractiveFrame()
         if adaptive {
-            let token = renderer.addSubmitObserver { [weak self] in self?.wake() }
+            let token = renderer.addSubmitObserver(timeDriven: { [weak self] timeDriven in self?.wake(timeDriven: timeDriven) })
             control.lock()
             let stopped = stopRequested
             if !stopped { submitObserver = token }
@@ -166,22 +190,78 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     }
 
     func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
+        let target = update.targetPresentationTimestamp
+        // Only render-thread callbacks pace the step (see the type's notes).
+        let paces = pacedStep != nil && pthread_main_np() == 0
         control.lock()
         let refreshAfter = policy.refreshAfter(keepAlive)
+        let step = paces && pacer.callback(target: target)
         control.unlock()
+        // Asked before the draw, so the step runs beside it.
+        if step { requestStep(target: target) }
         autoreleasepool {
             ViewportFrame.draw(update, renderer: renderer, log: log, refreshAfter: refreshAfter) { self.afterDraw($0) }
         }
+    }
+
+    // MARK: Live pacing (R7 phase 2)
+
+    /// Asks the main thread for one paced step for the callback targeting
+    /// `target`, in the main run loop's default mode: like the 30 Hz timer
+    /// this replaces, a step never runs during AppKit event tracking.
+    private func requestStep(target: CFTimeInterval) {
+        let asked = CACurrentMediaTime()
+        let main = CFRunLoopGetMain()
+        CFRunLoopPerformBlock(main, CFRunLoopMode.defaultMode.rawValue) { [self] in
+            let started = CACurrentMediaTime()
+            // A thread stopped since it asked (its view left the window, or a
+            // new thread replaced it) starts no step.
+            let result = isStopRequested ? .idle : MainActor.assumeIsolated { pacedStep?() } ?? .idle
+            log?.didPace(target: target, asked: asked, started: started, result: result)
+            finishStep(result, target: target)
+        }
+        CFRunLoopWakeUp(main)
+    }
+
+    /// The model answered the request made for `target` (main thread).
+    private func finishStep(_ result: LiveStepPacer.Result, target: CFTimeInterval) {
+        let continuous = renderer.drawsContinuously
+        control.lock()
+        pacer.finished(result, target: target)
+        let changed = updatePaced(continuous: continuous, at: CACurrentMediaTime())
+        let loop = changed ? runLoop : nil
+        control.unlock()
+        if let loop { scheduleRate(on: loop) }
+    }
+
+    /// Caller holds `control`. Paced playback for the rate policy: while the
+    /// pacer's steps run, the display's rate is a multiple of the step rate
+    /// and the frame does not draw continuously. Returns whether the
+    /// requested rate changed.
+    private func updatePaced(continuous: Bool, at time: CFTimeInterval) -> Bool {
+        let stepHz = (1 / pacer.interval).rounded()
+        let fits = displayHz > 0 && Double(displayHz).truncatingRemainder(dividingBy: stepHz) == 0
+        let hz: Float? = adaptive && pacedLink && pacer.playing && fits && !continuous ? Float(stepHz) : nil
+        return policy.setPaced(hz, at: time)
+    }
+
+    /// The window moved to a screen whose maximum refresh rate is `hz` (0 if unknown).
+    func setDisplayRate(_ hz: Int) {
+        control.lock()
+        displayHz = hz
+        control.unlock()
     }
 
     // MARK: Adaptive link rate (R7 phase 2, item 4, P2)
 
     /// Returns the link to full rate at once after input, a resize or a
     /// submit. Thread-safe and cheap while the rate is already full: one lock.
-    func wake() {
+    /// A time-driven submit (`Renderer.submit(_:timeDriven:)`) is not
+    /// activity while the policy is in paced playback.
+    func wake(timeDriven: Bool = false) {
         guard adaptive else { return }
         control.lock()
-        let restore = policy.wake(at: CACurrentMediaTime())
+        let restore = timeDriven && policy.pacedHz != nil ? false : policy.wake(at: CACurrentMediaTime())
         let loop = restore ? runLoop : nil
         control.unlock()
         if let loop { scheduleRate(on: loop) }
@@ -195,7 +275,11 @@ nonisolated final class ViewportRenderThread: NSObject, CAMetalDisplayLinkDelega
     func setVisible(_ visible: Bool) {
         control.lock()
         let returned = visible && !policy.visible
-        let changed = policy.setVisible(visible, at: CACurrentMediaTime())
+        let now = CACurrentMediaTime()
+        // Hidden: no step runs, and paced playback ends.
+        pacer.setVisible(visible)
+        var changed = policy.setVisible(visible, at: now)
+        if !pacer.playing { changed = policy.setPaced(nil, at: now) || changed }
         let loop = changed ? runLoop : nil
         control.unlock()
         if returned { renderer.invalidateInteractiveFrame() }

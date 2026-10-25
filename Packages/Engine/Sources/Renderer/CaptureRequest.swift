@@ -439,6 +439,9 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_KEEPALIVE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_BURST_IDLE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_DEFORM_REUSE", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_LIVE_PACING", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_PACED_LINK", [.perfTrace]),
+        ScopedOption("IKKOKU_PERF_BURST_LIVE", [.perfTrace]),
     ]
 
     /// Options read only by the window capture.
@@ -557,13 +560,19 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_KEEPALIVE_MS", .integer(0...10000)),
         ValueRule("IKKOKU_PERF_BURST_IDLE_MS", .integer(10...10000)),
         ValueRule("IKKOKU_PERF_DEFORM_REUSE", .oneOf(["on", "off"])),
+        // R7 phase 2, live pacing: the Studio's step started by its 30 Hz
+        // timer as before ("timer"), the display link at full rate during
+        // paced playback, and `studio-orbit-bursts` with live animation on.
+        ValueRule("IKKOKU_PERF_LIVE_PACING", .oneOf(["display", "timer"])),
+        ValueRule("IKKOKU_PERF_PACED_LINK", .oneOf(["on", "off"])),
+        ValueRule("IKKOKU_PERF_BURST_LIVE", .oneOf(["on", "off"])),
     ]
 
     /// `IKKOKU_PERF_WORKLOAD` values, in the order `docs/reference/performance.md` lists them.
     public static let perfWorkloads: [String] = [
         "studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover", "maker-slider", "maker-idle",
         "studio-native", "viewport-lifecycle", "startup", "studio-static", "studio-orbit-bursts",
-        "studio-duplicate", "studio-undo-delete",
+        "studio-duplicate", "studio-undo-delete", "studio-timeline",
     ]
 }
 

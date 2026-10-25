@@ -83,6 +83,14 @@ public struct RenderDrawResult: Sendable {
 public struct RenderDrawCompletion: Sendable {
     public let succeeded: Bool
     public let gpuTime: Double
+    /// The command buffer's `gpuStartTime` and `gpuEndTime` (seconds, the
+    /// host clock `CACurrentMediaTime` reads); 0 when it did not run.
+    public let gpuStart: Double
+    public let gpuEnd: Double
+
+    init(succeeded: Bool, gpuTime: Double, gpuStart: Double = 0, gpuEnd: Double = 0) {
+        self.succeeded = succeeded; self.gpuTime = gpuTime; self.gpuStart = gpuStart; self.gpuEnd = gpuEnd
+    }
 }
 
 /// Debounced status-line text for renderer problems an editor should show: a
@@ -219,7 +227,7 @@ public final class Renderer: @unchecked Sendable {
 
     /// Guards `submitObservers` only; never held while taking another lock.
     private let observerLock = NSLock()
-    private var submitObservers: [UInt64: @Sendable () -> Void] = [:]
+    private var submitObservers: [UInt64: @Sendable (Bool) -> Void] = [:]
     private var nextObserver: UInt64 = 0
 
     private let statusLock = NSLock()
@@ -292,7 +300,14 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: - Frame hand-off
 
-    public func submit(_ frame: RenderFrame) {
+    public func submit(_ frame: RenderFrame) { submit(frame, timeDriven: false) }
+
+    /// `submit(_:)`, saying whether the frame is a time-driven step's (a live
+    /// animation, timeline or plugin step) rather than an edit's or input's.
+    /// The frame is drawn the same either way; the flag only reaches the
+    /// submit observers, so a viewport whose display link paces those steps
+    /// need not treat them as activity (R7 phase 2, live pacing).
+    public func submit(_ frame: RenderFrame, timeDriven: Bool) {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
         snapshot.submitted = true
@@ -305,7 +320,7 @@ public final class Renderer: @unchecked Sendable {
         observerLock.lock()
         let observers = submitObservers.isEmpty ? [] : Array(submitObservers.values)
         observerLock.unlock()
-        for observer in observers { observer() }
+        for observer in observers { observer(timeDriven) }
     }
 
     /// Calls `observer` after every `submit`, on the submitting thread and
@@ -313,6 +328,16 @@ public final class Renderer: @unchecked Sendable {
     /// to full rate at once (R7 phase 2, item 4, P2). Returns a token for
     /// `removeSubmitObserver`. Safe from any thread.
     public func addSubmitObserver(_ observer: @escaping @Sendable () -> Void) -> UInt64 {
+        insertSubmitObserver { _ in observer() }
+    }
+
+    /// `addSubmitObserver(_:)` whose observer also gets the submit's
+    /// `timeDriven` flag.
+    public func addSubmitObserver(timeDriven observer: @escaping @Sendable (Bool) -> Void) -> UInt64 {
+        insertSubmitObserver(observer)
+    }
+
+    private func insertSubmitObserver(_ observer: @escaping @Sendable (Bool) -> Void) -> UInt64 {
         observerLock.lock(); defer { observerLock.unlock() }
         nextObserver &+= 1
         submitObservers[nextObserver] = observer
@@ -325,6 +350,9 @@ public final class Renderer: @unchecked Sendable {
         observerLock.lock(); submitObservers[token] = nil; observerLock.unlock()
     }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
+    /// Whether the pending frame draws at every callback (a visible live
+    /// source-shader material, which may read `_Time`). Safe from any thread.
+    public var drawsContinuously: Bool { frameLock.lock(); defer { frameLock.unlock() }; return pendingContinuous }
 
     // MARK: - Drawing to the swapchain
 
@@ -434,7 +462,7 @@ public final class Renderer: @unchecked Sendable {
                 if self.drawSerial == serial { self.drawnFrame = nil }
                 self.renderLock.unlock()
             }
-            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: seconds))
+            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: seconds, gpuStart: c.gpuStartTime, gpuEnd: c.gpuEndTime))
         }
         gpu.releaseFrameSlot(onCompletionOf: cb)
         // Commit/present in draw order, before exposing this reusable image to a
@@ -489,7 +517,8 @@ public final class Renderer: @unchecked Sendable {
                 if self.drawSerial == serial { self.drawnFrame = nil }
                 self.renderLock.unlock()
             }
-            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: max(0, c.gpuEndTime - c.gpuStartTime)))
+            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: max(0, c.gpuEndTime - c.gpuStartTime),
+                                             gpuStart: c.gpuStartTime, gpuEnd: c.gpuEndTime))
         }
         gpu.releaseFrameSlot(onCompletionOf: cb)
         cb.present(drawable)

@@ -45,7 +45,7 @@ enum FKGroup: String, CaseIterable, Identifiable {
 
 /// CharaStudio-like scene editor: object tree, gizmos, FK/IK posing, lights, camera slots, captures.
 @MainActor @Observable
-final class StudioModel: ViewportInputHandler {
+final class StudioModel: ViewportInputHandler, LivePacedHandler {
     let host: EngineHost
     @ObservationIgnored private var documentStorage = StudioDocument()
     /// The scene document. Every write prunes voices and rebuilds the frame,
@@ -539,38 +539,82 @@ final class StudioModel: ViewportInputHandler {
         if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
     }
 
+    /// The 30 Hz timer: the status line, and the step when no display link
+    /// paces it. While a viewport's display link paces the step
+    /// (`attachLivePacing`, R7 phase 2, live pacing), the timer only polls the
+    /// status line; the link starts each step through `displayStep`.
     private func tick() {
         guard isActiveMode else { return }
         if let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
                                           statistics: host.renderer.lastFrameStatistics, now: CFAbsoluteTimeGetCurrent()) {
             status = text
         }
-        guard drag == nil else { return }
-        PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
+        guard livePacer == nil, drag == nil else { return }
+        PerfTrace.measure(.studioTick, "StudioTick") { _ = timeDriven { stepLive() } }
     }
 
-    /// The timer's step outside a drag: the timeline, the plugin session or
-    /// the live source animation.
-    private func stepLive() {
+    // MARK: Live pacing (R7 phase 2)
+
+    /// The viewport whose display link starts the live step, if any. While
+    /// one is attached, the timer does not step; while its window is hidden
+    /// the link asks for no step, so none runs. Weak, so a viewport released
+    /// without detaching hands the step back to the timer.
+    @ObservationIgnored private weak var livePacer: AnyObject?
+    /// Set by `stopBenchmarkTimer`: neither the timer nor a display link steps.
+    @ObservationIgnored private var liveStepsStopped = false
+    /// True while a time-driven step refreshes: its submit tells the viewport
+    /// it is a step's frame, not an edit's (`Renderer.submit(_:timeDriven:)`).
+    @ObservationIgnored private var timeDrivenRefresh = false
+
+    /// A viewport's display link starts paced steps from now on (`owner`
+    /// identifies it); the timer stops stepping.
+    func attachLivePacing(_ owner: AnyObject) { livePacer = owner }
+
+    /// The viewport `owner` no longer paces the step; unless another one took
+    /// over, the timer steps again.
+    func detachLivePacing(_ owner: AnyObject) { if livePacer === owner { livePacer = nil } }
+
+    /// One step asked for by the display link of the viewport that paces it:
+    /// what the timer's tick did, minus the status line. `.ran` when a
+    /// timeline, plugin or live step started, `.busy` when the previous live
+    /// step is still running or not yet refreshed, `.idle` when there is
+    /// nothing to step.
+    func displayStep() -> LiveStepPacer.Result {
+        guard livePacer != nil, !liveStepsStopped, isActiveMode, drag == nil else { return .idle }
+        return PerfTrace.measure(.studioTick, "StudioTick") { timeDriven { stepLive() } }
+    }
+
+    /// Runs `body` with this model's refreshes marked time-driven.
+    private func timeDriven<T>(_ body: () throws -> T) rethrows -> T {
+        let outer = timeDrivenRefresh
+        timeDrivenRefresh = true
+        defer { timeDrivenRefresh = outer }
+        return try body()
+    }
+
+    /// The step outside a drag: the timeline, the plugin session or the live
+    /// source animation.
+    private func stepLive() -> LiveStepPacer.Result {
         if timelinePlaying {
             var t = timelineTime + 1.0 / 30.0
             if t > doc.timeline.duration { t = doc.timeline.loop ? 0 : doc.timeline.duration; if !doc.timeline.loop { timelinePlaying = false } }
             timelineTime = t          // triggers refresh
-            return
+            return .ran
         }
         if sourcePluginsRunning, sourcePluginSession != nil {
             do { try stepSourcePlugins(deltaTime: 1 / 30, advanceAnimation: liveAnimation) }
             catch { status = "Plugin execution: \(error)" }
-            return
+            return .ran
         }
-        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return }
+        guard liveAnimation, doc.objects.contains(where: { $0.kind == .character }) else { return .idle }
         // A live step still running, or settled but not yet refreshed, when
-        // the timer fires is not overlapped: this fire is skipped and the
-        // clock does not move, as when a main-thread step longer than the
-        // period made the timer skip fires. Every step that runs advances the
-        // clock by exactly 1/30 s.
-        guard liveTick == nil, liveRefreshPending == nil else { PerfTrace.event(.studioLiveTickSkipped); return }
+        // the timer fires (or the display link asks) is not overlapped: this
+        // step is skipped and the clock does not move, as when a main-thread
+        // step longer than the period made the timer skip fires. Every step
+        // that runs advances the clock by exactly 1/30 s.
+        guard liveTick == nil, liveRefreshPending == nil else { PerfTrace.event(.studioLiveTickSkipped); return .busy }
         beginLiveFrame(deltaTime: 1 / 30)
+        return .ran
     }
 
     /// One live step of the source animation: blink clocks, TARGET/AWAY neck
@@ -658,7 +702,8 @@ final class StudioModel: ViewportInputHandler {
     /// already did.
     private func liveTickFinished(_ job: SourceStudioLiveTickJob) {
         guard liveTick?.job === job || liveRefreshPending === job else { return }
-        completeLiveTick()
+        // The step's own refresh; one an edit makes first is not time-driven.
+        timeDriven { completeLiveTick() }
     }
 
     /// Completes the live step in flight, if any: waits for its workers,
@@ -1200,7 +1245,7 @@ final class StudioModel: ViewportInputHandler {
         sourceRouteClocks = checkpoints.routes.mapValues(\.clock)
         sourceRouteFallbackReported = checkpoints.routeFallbackReported
     }
-    func stopBenchmarkTimer() { timer?.invalidate(); timer = nil }
+    func stopBenchmarkTimer() { timer?.invalidate(); timer = nil; liveStepsStopped = true }
 
     /// Installed accessory-name adapter consumes the resolved source selections;
     /// source slots, UAR identities and card bytes are never written by labels.
@@ -3045,7 +3090,7 @@ final class StudioModel: ViewportInputHandler {
         var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
         frame = f
-        host.renderer.submit(f)
+        host.renderer.submit(f, timeDriven: timeDrivenRefresh)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
         publishActiveSourceCameraView()
         if reusable, statusWrites == statusWritesBefore {
