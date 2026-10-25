@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**931 files indexed; 931 assigned; 0 unassigned.**
+**939 files indexed; 939 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,14 +31,14 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 125 |
 | [Studio / IK / animation](studio.md) | 189 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 178 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 186 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
-| Build / repository configuration | 8 |
-| Conversion / recovery / verification tool | 209 |
-| Documentation / historical evidence | 58 |
+| Build / repository configuration | 9 |
+| Conversion / recovery / verification tool | 210 |
+| Documentation / historical evidence | 64 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 30 |
 | Runtime / shared shader declaration | 213 |
@@ -1020,3 +1020,19 @@ inventory. Its deliverables are `README.md`, `app-gameplay-and-plugins.md`,
 When source files are added or removed, update the owning feature table and this
 index together. Historical documents are indexed as evidence to reconcile, not
 as current completion claims. See T-T05 for the diagnostic/documentation cleanup.
+
+### Public component status website — 2026-10-24
+
+These eight files belong to the toolchain/documentation report. Website status is
+a dated summary of the owning references, not a new application acceptance run.
+
+| File | Role |
+| --- | --- |
+| [site/.openai/hosting.json](../../site/.openai/hosting.json) | Build / repository configuration |
+| [site/README.md](../../site/README.md) | Documentation / historical evidence |
+| [site/status.json](../../site/status.json) | Documentation / historical evidence |
+| [site/template.html](../../site/template.html) | Documentation / historical evidence |
+| [site/dist/index.html](../../site/dist/index.html) | Documentation / historical evidence |
+| [site/dist/style.css](../../site/dist/style.css) | Documentation / historical evidence |
+| [site/dist/app.js](../../site/dist/app.js) | Documentation / historical evidence |
+| [site/build.py](../../site/build.py) | Conversion / recovery / verification tool |

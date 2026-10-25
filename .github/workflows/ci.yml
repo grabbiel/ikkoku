@@ -38,6 +38,8 @@ jobs:
       # capabilities are reported but cannot fail this step.
       - name: Prerequisite check (public)
         run: python3 Tools/verification/doctor.py --require public --verbose
+      - name: Component status website (generated output and documentation links)
+        run: python3 site/build.py --check
       # A cold Engine build can exceed the lane's 600 s check timeout on a
       # hosted runner, so build the tests first; the lane's `swift test`
       # then reuses the build.
