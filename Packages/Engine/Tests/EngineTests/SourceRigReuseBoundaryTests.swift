@@ -41,7 +41,8 @@ private func reuseEncodedRig(_ name: String = "fixture") throws -> Data {
 }
 
 /// Only the worker waits. Arrival resumes the test without blocking MainActor.
-/// The timeout is a deadlock guard, not a performance assertion.
+/// Hold until explicit release: a wall-clock timeout could drain the worker while
+/// the full suite delays MainActor. The test process watchdog bounds deadlocks.
 private final class RigReuseBarrier: Sendable {
     private struct State: Sendable {
         var arrived = false
@@ -49,14 +50,14 @@ private final class RigReuseBarrier: Sendable {
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let gate = DispatchSemaphore(value: 0)
-    func waitOnWorker() throws {
+    func waitOnWorker() {
         let waiter = state.withLock { value in
             value.arrived = true
             let waiter = value.waiter; value.waiter = nil
             return waiter
         }
         waiter?.resume()
-        guard gate.wait(timeout: .now() + 30) == .success else { throw BarrierError.timeout }
+        gate.wait()
     }
     func arrival() async {
         await withCheckedContinuation { continuation in
@@ -68,7 +69,6 @@ private final class RigReuseBarrier: Sendable {
         }
     }
     func release() { gate.signal() }
-    private enum BarrierError: Error { case timeout }
 }
 
 @Test func sourceRigLogicalChargeCountsNativeLayoutStringsAndDenseMorphs() throws {
@@ -240,7 +240,7 @@ private final class RigReuseBarrier: Sendable {
     }()
     weak var observed = input
     let running = Task { [snapshot = input!] in
-        try await queue.prepare { try barrier.waitOnWorker(); return snapshot }
+        try await queue.prepare { barrier.waitOnWorker(); return snapshot }
     }
     await barrier.arrival()
     input = nil
