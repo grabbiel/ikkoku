@@ -7,7 +7,7 @@ bounded selected-model comparison, not whole-character or whole-game parity.
 
 ## Reference and capture context
 
-`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female201|female201-bone1|male00|male00-bone1|male200|male201|male201-bone1`
+`Tools/reverse/original_character_probe.py --model-variant female00|female00-bone1|female200|female200-bone1|female201|female201-bone1|male00|male00-bone1|male200|male201|male201-bone1`
 creates a new fully clothed card in an isolated CharaStudio player. It waits for
 the Studio scene, loads the requested normal model, drives exactly one original
 `Studio.HandAnimeCtrl` per side with `Init(actualSex)` and pattern 0, disables
@@ -727,3 +727,52 @@ and native cases passed on their first invocation. Other corrected heads/types,
 arbitrary shapes, complete local hierarchy, animation and appearance remain
 open. This establishes neither a performance improvement nor full-character
 source parity.
+
+
+## Corrected female head200 skeleton (#260)
+
+The explicit `female200-bone1` probe covers normal sex 1, head 200, bone type 1
+and exType 0. Requested, loaded, saved-card and native identities are checked
+separately, including integer types. The exact category-100 row is `add50`,
+`chara/bo_head_50.unity3d`, `p_cf_head_02`, `cf_anmShapeHead_02` and `ct_head`.
+Legacy uncorrected head200 captures retain their prior comparison path.
+This adds validation tooling and evidence without changing native pose formulas.
+
+Three independent original-player/native cases pass the existing `2e-5`
+world-matrix/vertex and `1e-4` morph gates, across 19 selected parts,
+**38,594 vertices, 976 skin bindings and 224 unique joints**:
+
+| State | Max world matrix error | Max native/source vertex error |
+| --- | ---: | ---: |
+| Neutral, two independent runs | 7.36e-7 | 8.35e-7 |
+| Canonical eleven-row coupled body/face input | 7.09e-7 | 7.16e-7 |
+
+Morph error is zero, and there are no female shape coercions. The mixed case
+preserves unrelated saved-card tokens, blocks, framing and trailing payload
+against the independent neutral baseline (thumbnails excluded). Neutral repeats
+have exact saved cards, 814 bone records and all 20 source mesh topologies,
+direct/BakeMesh positions and morph weights; native neutral JSON is byte-identical.
+The existing inactive-canine and exact shadow-only exclusions remain in force.
+CPU silhouette IoU 1.0 measures diagnostic geometry, not Metal shading.
+
+Both source controllers select the independently saved 32-entry correction table,
+SHA-256 `a4c048d96181991c3696ab508ed176a751af0447fb5cbeeacdaef2b3191c1ace`,
+matching the native input. The unique `cf_hit_head` local scale differs from 1.08
+by at most `4.29e-8`; the existing Float32 head-correction gate also passes.
+
+Tested source `1e568059` uses original probe SHA-256
+`42dceae6bdc970c6f2599a056f1529268507f17bcd4170f89af4be8706e472dc`
+against Studio assembly `902b9a…`. The accepted inspector `b2b9a74b…` is reused
+after verifying all 178 compiled-source files. Its 103-file converted-input
+closure totals 66,087,129 bytes and never consumes source-evaluated geometry.
+All 74 focused Python tests, 28 retained comparisons and nine retained repeats
+pass; 4,681 historical input files and 501 new manifested capture files are
+verified. Integration with the accepted cheek tooling passes 84 related Python
+tests. Every owned source/compiler/native process is released.
+
+Private evidence under `rolling/models-female200-bone1/` retains all inputs,
+raw outputs, lifecycle receipts and helper dispositions, including an unexecuted
+test-runner count correction and an unexecuted native-plan prose correction.
+The reused inspector's earlier product-path failure remains preserved separately.
+No new build, performance improvement, arbitrary-shape, complete-hierarchy,
+animation, appearance or full-character parity is claimed.
