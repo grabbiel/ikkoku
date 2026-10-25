@@ -74,7 +74,7 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         try{File.WriteAllText(Path.Combine(folder,"reload-trace.json"),J(K("schemaVersion",1,"framesPerPhase",Frames,"cases",cases)));}catch(Exception e){if(error==null)error="trace write: "+e;}
         File.WriteAllText(Path.Combine(folder,"status.json"),J(K("error",error,"unity",Application.unityVersion,"device",SystemInfo.graphicsDeviceName,"mode",mode,
             "voiceRepair",voiceRepair,"authorScenes",authored,
-            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent and world position, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees) and scene-mirrored-camera.png (camera objects under a scalable item with scale (-1, 1, 1) and under an unmirrored copy, the render camera recorded while each is active, after toggling off and after re-activating the mirrored one); this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
+            "scope","Our exported scene records reloaded in the original player: per-object name, objectInfo and tree-node visibility, per-camera active flag and the load view-camera winner, per-route playing state and childRoot position, per-object parent, world position and rotation, lossy scale, authored change amount and saved child lists, the root dictionary order and sun caster, and per-character FK state, active FK groups, saved and live bone transforms and look patterns with the neck/head the look controllers drive; the fixture-card author mode saves scene-char.png from one female in the default pose with FK disabled, and with author-scenes.txt also scene-route-children.png (a playing route whose children are a folder and the female) and scene-neck-target.png (two females, neck TARGET and AWAY, eyes TARGET, traced under the saved camera and orbited +/-"+LookYaw+" degrees) and scene-mirrored-camera.png (camera objects under a scalable item with scale (-1, 1, 1) and under an unmirrored copy, the render camera recorded while each is active, after toggling off and after re-activating the mirrored one); this player copy boots with a Manager.Voice whose Awake threw, and the voiceRepair field records replacing its null voice table with an empty one so the load range check (voice numbers only, never FK or bone data) can run; no installed cards, saves or media")));
         Application.Quit();
         for(int i=0;i<3600;i++){yield return null;if(i%30==29)Application.Quit();} // repeat until the player exits
     }
@@ -393,14 +393,60 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
                 "routePlaying",route!=null?(object)route.isPlay:null,
                 "parentKey",ctrl.parentInfo==null?null:(object)ctrl.parentInfo.objectInfo.dicKey,
                 "worldPosition",ctrl.guideObject==null||ctrl.guideObject.transformTarget==null?null:(object)V(ctrl.guideObject.transformTarget.position),
+                // ST-T03 topology: the world pose, the authored local placement and the record's own child lists in order.
+                "worldRotation",ctrl.guideObject==null||ctrl.guideObject.transformTarget==null?null:(object)Q(ctrl.guideObject.transformTarget.rotation),
+                "lossyScale",ctrl.guideObject==null||ctrl.guideObject.transformTarget==null?null:(object)V(ctrl.guideObject.transformTarget.lossyScale),
+                "changePosition",info.changeAmount==null?null:(object)V(info.changeAmount.pos),
+                "changeRotation",info.changeAmount==null?null:(object)V(info.changeAmount.rot),
+                "changeScale",info.changeAmount==null?null:(object)V(info.changeAmount.scale),
+                "childKeys",ChildKeys(info),
                 "routeChildRootPosition",route==null||route.childRoot==null?null:(object)V(route.childRoot.position),
-                "character",chr==null?null:CharRecord(chr,(OICharInfo)info)));
+                "character",chr==null?null:CharRecord(chr,(OICharInfo)info),
+                "content",Content(ctrl)));
         }
-        return K("objectCount",studio.dicObjectCtrl.Count,
+        var rootKeys=new List<object>(); // sceneInfo.dicObject in enumeration order: the order SceneInfo.Save writes the roots
+        foreach(var root in studio.sceneInfo.dicObject)rootKeys.Add(K("key",root.Key,"dicKey",root.Value.dicKey));
+        return K("objectCount",studio.dicObjectCtrl.Count,"rootKeys",rootKeys,"sunCaster",studio.sceneInfo.sunCaster,
             "viewCameraKey",studio.ociCamera==null?null:(object)studio.ociCamera.cameraInfo.dicKey,
             "viewCameraName",studio.ociCamera==null?null:studio.ociCamera.cameraInfo.name,
             "cameraCtrlEnabled",studio.cameraCtrl==null?null:(object)studio.cameraCtrl.enabled,
+            "indexKeys",IndexKeys(studio.sceneInfo),
             "objects",objects);
+    }
+    // ST-T03 duplicate/insert: every key SceneInfo's index holds after the load (object records and their
+    // bone, IK, look-at and route point keys; Studio.SetNewIndex hands a key already taken a fresh one),
+    // and what each loaded object shows of its catalog content: an item's catalog IDs, whether its prefab
+    // loaded and the renderers and mesh vertices under it; a light's loaded values and the Light they drive;
+    // a character's card name, sex and the renderers and mesh vertices under it.
+    static readonly System.Reflection.FieldInfo HashIndex=typeof(SceneInfo).GetField("hashIndex",
+        System.Reflection.BindingFlags.NonPublic|System.Reflection.BindingFlags.Instance);
+    static object IndexKeys(SceneInfo info) {
+        var set=HashIndex==null||info==null?null:HashIndex.GetValue(info) as HashSet<int>;
+        if(set==null)return null;var keys=new List<int>(set);keys.Sort();return keys;
+    }
+    static Dictionary<string,object> Content(ObjectCtrlInfo ctrl) {
+        var item=ctrl as OCIItem;var light=ctrl as OCILight;var chr=ctrl as OCIChar;
+        if(item!=null){var ii=item.itemInfo;
+            return K("group",ii.group,"category",ii.category,"no",ii.no,"loaded",item.objectItem!=null,"meshes",Meshes(item.objectItem));}
+        if(light!=null){var li=light.lightInfo;var l=light.light;
+            return K("no",li.no,"color",new[]{li.color.r,li.color.g,li.color.b,li.color.a},"intensity",li.intensity,"range",li.range,
+                "spotAngle",li.spotAngle,"shadow",li.shadow,"enable",li.enable,"drawTarget",li.drawTarget,
+                "lightType",l==null?null:l.type.ToString(),"lightEnabled",l==null?null:(object)l.enabled,
+                "lightIntensity",l==null?null:(object)l.intensity,"lightRange",l==null?null:(object)l.range,
+                "lightSpotAngle",l==null?null:(object)l.spotAngle);}
+        if(chr!=null){var cha=chr.charInfo;
+            return K("fullname",cha==null?null:cha.fileParam.fullname,"sex",cha==null?null:(object)cha.fileParam.sex,
+                "meshes",Meshes(cha==null?null:cha.gameObject));}
+        return null;
+    }
+    static object Meshes(GameObject root) {
+        if(root==null)return null;int renderers=0,vertices=0;
+        foreach(var r in root.GetComponentsInChildren<Renderer>(true)) {
+            renderers++;Mesh mesh=null;var skinned=r as SkinnedMeshRenderer;
+            if(skinned!=null)mesh=skinned.sharedMesh;else{var filter=r.GetComponent<MeshFilter>();if(filter!=null)mesh=filter.sharedMesh;}
+            if(mesh!=null)vertices+=mesh.vertexCount;
+        }
+        return K("renderers",renderers,"vertices",vertices);
     }
     // The character's FK bookkeeping plus the acceptance bones: the bone's saved (loaded) rotation and
     // world placement, live from guideObject.transformTarget — what the player's own views would show.
@@ -457,6 +503,17 @@ public sealed class OriginalSceneReloadProbe:BaseUnityPlugin {
         for(int i=0;i<t.childCount;i++){var found=Find(t.GetChild(i),name);if(found!=null)return found;}
         return null;
     }
+    // A record's own child list(s) as saved: folder, item and route children in List order, and a character's
+    // non-empty accessory groups (OICharInfo.child, point -> list) in dictionary order.
+    static object ChildKeys(ObjectInfo info) {
+        var fold=info as OIFolderInfo;if(fold!=null)return Keys(fold.child);
+        var item=info as OIItemInfo;if(item!=null)return Keys(item.child);
+        var route=info as OIRouteInfo;if(route!=null)return Keys(route.child);
+        var chr=info as OICharInfo;
+        if(chr!=null){var groups=new List<object>();if(chr.child!=null)foreach(var group in chr.child)if(group.Value!=null&&group.Value.Count>0)groups.Add(K("point",group.Key,"keys",Keys(group.Value)));return groups;}
+        return null;
+    }
+    static List<object> Keys(List<ObjectInfo> list){var keys=new List<object>();if(list!=null)foreach(var child in list)keys.Add(child.dicKey);return keys;}
     static string Name(ObjectInfo info) { // names live on the concrete info types, not on ObjectInfo
         var cam=info as OICameraInfo;if(cam!=null)return cam.name;
         var fold=info as OIFolderInfo;if(fold!=null)return fold.name;

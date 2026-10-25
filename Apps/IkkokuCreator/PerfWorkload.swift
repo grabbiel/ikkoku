@@ -6,6 +6,7 @@ import Character
 import GPU
 import Scene
 import Studio
+import Renderer
 
 /// Drives one `IKKOKU_PERF_WORKLOAD` in the real editor window and writes the
 /// `PerfTrace` report (R7). Every action calls the method the UI calls: the
@@ -36,6 +37,7 @@ final class PerfWorkloadDriver {
     private var lifecycle: [(seconds: Double, name: String, action: () -> Void)] = []
     private var lifecycleLog: [[String: Any]] = []
     private var restoredAt: CFTimeInterval?
+    private var minimizedAt: CFTimeInterval?
     private var recordingStart: CFTimeInterval = 0
     /// Called once per injected input tick with the seconds since recording began.
     private var inject: ((Double) -> Void)?
@@ -43,6 +45,13 @@ final class PerfWorkloadDriver {
     private var finishGesture: (() -> Void)?
     /// Keeps App Nap off for the measurement (see `configureWindow`).
     private var activity: (any NSObjectProtocol)?
+    /// `studio-duplicate` and `studio-undo-delete` (R7 phase 2, item 6): the
+    /// actions repeated in order while recording, the one waiting for its
+    /// character builds, and the finished ones.
+    private var actionSteps: [(name: String, measured: Bool, run: () -> Void)] = []
+    private var actionIndex = 0
+    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
+    private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval)] = []
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -68,9 +77,23 @@ final class PerfWorkloadDriver {
 
     private func begin() {
         trace.device = app.host?.gpu.device
+        // R7 phase 2, item 4 measurement control (default on).
+        app.host?.renderer.reusesDeformedVertices = configuration.deformReuse
+        app.host?.renderer.skipsUnchangedFrames = configuration.frameSkip
         configureWindow()
-        do { try prepare() } catch { fail("\(configuration.workload): \(error)") }
-        DispatchQueue.main.asyncAfter(deadline: .now() + configuration.warmupSeconds) { self.record() }
+        whenSourceSceneReady {
+            do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.configuration.warmupSeconds) { self.record() }
+        }
+    }
+
+    /// Runs `body` once the Studio's source scene import has installed its
+    /// characters (R7 phase 2, item 6): the window may appear while the
+    /// import still builds them. Polls every 10 ms; the launch's own timeout
+    /// bounds the wait.
+    private func whenSourceSceneReady(_ body: @escaping () -> Void) {
+        guard app.studio?.isLoadingSourceScene == true else { body(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { self.whenSourceSceneReady(body) }
     }
 
     private func configureWindow() {
@@ -127,6 +150,7 @@ final class PerfWorkloadDriver {
         for step in lifecycle {
             DispatchQueue.main.asyncAfter(deadline: .now() + step.seconds) { self.runLifecycleStep(step.name, step.action) }
         }
+        if !actionSteps.isEmpty { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.runNextAction() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.seconds) { self.stop() }
     }
 
@@ -140,6 +164,7 @@ final class PerfWorkloadDriver {
         inputTimer?.invalidate(); inputTimer = nil
         loadTimer?.invalidate(); loadTimer = nil
         if !lifecycle.isEmpty { finishLifecycle() }
+        if !actionSteps.isEmpty { finishActions() }
         trace.endRecording()
         finishGesture?()
         // Presented handlers of the last frames arrive after their vsync.
@@ -169,8 +194,11 @@ final class PerfWorkloadDriver {
         case "maker-slider": try prepareMakerSlider()
         case "maker-idle": try prepareMaker()
         case "studio-native": try prepareStudioNative()
+        case "studio-static": try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        case "studio-orbit-bursts": try prepareStudioOrbitBursts()
         case "viewport-lifecycle": try prepareViewportLifecycle()
         case "startup": break
+        case "studio-duplicate", "studio-undo-delete": try prepareStudioHistory(workload)
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -182,15 +210,16 @@ final class PerfWorkloadDriver {
 
     private func viewportCenter(_ studio: StudioModel) -> SIMD2<Float> { studio.viewportSize * 0.5 }
 
-    /// The source scene from `IKKOKU_SOURCE_SCENE`, live animation on, a fixed
-    /// selection, recorded with the scene file's SHA-256.
+    /// The source scene from `IKKOKU_SOURCE_SCENE`, live animation on (off for
+    /// the static workloads), a fixed selection, recorded with the scene file's SHA-256.
     @discardableResult
-    private func prepareStudioSource(selectKey: Int32?) throws -> StudioModel {
+    private func prepareStudioSource(selectKey: Int32?, liveAnimation: Bool = true) throws -> StudioModel {
         let studio = try studio()
         let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
         guard !characters.isEmpty else { throw RigError.invalid("needs IKKOKU_SOURCE_SCENE with converted source characters") }
         app.mode = .studio
-        studio.liveAnimation = true
+        studio.liveAnimation = liveAnimation
+        trace.details["liveAnimation"] = liveAnimation
         studio.selection = selectKey.flatMap { key in studio.doc.objects.first { $0.sourceObjectKey == key }?.id }
         trace.details["sourceCharacters"] = characters.count
         trace.details["documentObjects"] = studio.doc.objects.count
@@ -221,6 +250,49 @@ final class PerfWorkloadDriver {
         }
         finishGesture = { PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) } }
         trace.details["gesture"] = "right-button orbit drag, one mouseDragged per input tick"
+    }
+
+    /// The source scene with live animation off, so nothing changes between
+    /// gestures: `IKKOKU_PERF_BURST_IDLE_MS` (default 1000) without input, then a 0.5 s right-button
+    /// orbit drag (mouseDown, one horizontal mouseDragged per input tick,
+    /// mouseUp), alternating direction. The quiet second lets an adaptive
+    /// display link slow down (R7 phase 2, item 4, P2), so each burst's first
+    /// drag measures how quickly it returns to full rate. `details.burstInputEnds`
+    /// lists when each burst's first mouseDragged handler returned, in seconds
+    /// since recording began.
+    private func prepareStudioOrbitBursts() throws {
+        let studio = try prepareStudioSource(selectKey: nil, liveAnimation: false)
+        let trace = self.trace
+        var last = viewportCenter(studio)
+        var dragging = false
+        var bursts = 0
+        var inputEnds: [Double] = []
+        let start = { [unowned self] in self.recordingStart }
+        let idle = Double(configuration.burstIdleMilliseconds) / 1000
+        inject = { t in
+            guard t.truncatingRemainder(dividingBy: idle + 0.5) >= idle else {
+                if dragging {
+                    dragging = false
+                    PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) }
+                }
+                return
+            }
+            let first = !dragging
+            if first {
+                dragging = true; bursts += 1
+                PerfTrace.input("mouseDown") { studio.mouseDown(at: last, button: 1, modifiers: []) }
+            }
+            let delta = SIMD2<Float>(bursts.isMultiple(of: 2) ? -4 : 4, 0)
+            let point = last + delta
+            PerfTrace.input("mouseDragged") { studio.mouseDragged(to: point, delta: delta, button: 1, modifiers: []) }
+            last = point
+            if first {
+                inputEnds.append(PerfTrace.round(CACurrentMediaTime() - start()))
+                trace.details["burstInputEnds"] = inputEnds
+            }
+        }
+        finishGesture = { if dragging { PerfTrace.input("mouseUp") { studio.mouseUp(at: last, button: 1, modifiers: []) } } }
+        trace.details["gesture"] = "repeated: \(configuration.burstIdleMilliseconds) ms without input, then a 0.5 s right-button orbit drag, live animation off"
     }
 
     /// The `fk-mouse-drag` scenario's grab (source key 65, bone 19, z ring),
@@ -270,7 +342,7 @@ final class PerfWorkloadDriver {
 
     @discardableResult
     private func prepareMaker() throws -> MakerModel {
-        guard let maker = app.maker else { throw RigError.invalid("the Maker is unavailable") }
+        guard let maker = app.ensureMaker() else { throw RigError.invalid("the Maker is unavailable") }
         app.mode = .maker
         maker.liveAnimation = true
         trace.details["makerSourcePreview"] = maker.sourceRigPreview != nil
@@ -319,6 +391,82 @@ final class PerfWorkloadDriver {
         trace.details["documentObjects"] = studio.doc.objects.count
     }
 
+    /// `studio-duplicate`: the workspace Duplicate button's call on one source
+    /// character, then Undo, repeated. `studio-undo-delete`: Delete, then Undo
+    /// (which restores the character), repeated. Live animation stays on.
+    /// The character is source key 963 (the one the ST-T03 duplicate timing
+    /// used), or the first source character when the scene has no key 963.
+    /// It is selected before each cycle, outside the timed actions. Each
+    /// action is timed from its call until no character build is pending
+    /// and every preview it started is installed; `finishActions` adds the
+    /// main-thread busy time and longest busy period in that span.
+    private func prepareStudioHistory(_ workload: String) throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
+        guard let target = characters.first(where: { $0.sourceObjectKey == 963 }) ?? characters.first else {
+            throw RigError.invalid("needs a source character")
+        }
+        let id = target.id
+        let select = ("select", false, { studio.selection = id })
+        if workload == "studio-duplicate" {
+            actionSteps = [select, ("duplicate", true, { studio.duplicateSelection() }), ("undo", true, { studio.undo() })]
+        } else {
+            actionSteps = [select, ("delete", true, { studio.deleteSelection() }), ("undo", true, { studio.undo() })]
+        }
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["gesture"] = workload == "studio-duplicate"
+            ? "select, Duplicate, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+            : "select, Delete, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+    }
+
+    private func runNextAction() {
+        guard trace.recording, pendingAction == nil else { return }
+        let step = actionSteps[actionIndex % actionSteps.count]
+        actionIndex += 1
+        let start = CACurrentMediaTime()
+        step.run()
+        pendingAction = (step.name, step.measured, start, CACurrentMediaTime())
+        waitForAction()
+    }
+
+    /// Polls every millisecond until the pending action's builds are installed,
+    /// then starts the next action half a second later.
+    private func waitForAction() {
+        guard let action = pendingAction else { return }
+        guard trace.recording else { pendingAction = nil; return }
+        if (app.studio?.pendingSourceCharacterBuilds ?? 0) > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
+            return
+        }
+        let installed = PerfTrace.lastCharacterInstall
+        let ready = installed >= action.start ? max(action.end, installed) : action.end
+        finishedActions.append((action.name, action.measured, action.start, action.end, ready))
+        pendingAction = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
+    }
+
+    /// `details.actions`: per finished action, its name, start (seconds since
+    /// recording began), the call's own duration, the time until its builds
+    /// were installed, and the main thread's busy time and longest busy
+    /// period (a stall) from the call until then. A busy period that began
+    /// before the call counts from the call; one that is still running when
+    /// the action is ready counts whole.
+    private func finishActions() {
+        // The period still running (the stop timer may fire in the same
+        // run-loop pass as a long action) counts until now.
+        let busy = trace.busyIntervals + (trace.openBusyStart.map { [($0, CACurrentMediaTime())] } ?? [])
+        trace.details["actions"] = finishedActions.map { action -> [String: Any] in
+            let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
+            let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
+            return ["name": action.name, "measured": action.measured,
+                    "startSeconds": PerfTrace.round(action.start - recordingStart),
+                    "callMs": PerfTrace.round((action.end - action.start) * 1000),
+                    "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
+                    "busyMs": PerfTrace.round(lengths.reduce(0, +)),
+                    "longestStallMs": PerfTrace.round(lengths.max() ?? 0)]
+        }
+    }
+
     /// Tears the viewport down and builds it again (Maker and Studio each own
     /// one, so a mode switch replaces it), resizes the window, minimizes and
     /// restores it, all while the display link draws, then quits through
@@ -326,7 +474,7 @@ final class PerfWorkloadDriver {
     /// viewport render threads alive before each step and at the end, and the
     /// frames drawn and presented after the restore.
     private func prepareViewportLifecycle() throws {
-        guard app.maker != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
+        guard app.ensureMaker() != nil, app.studio != nil else { throw RigError.invalid("needs the Maker and the Studio") }
         app.mode = .maker
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.contentView != nil }) else {
             throw RigError.invalid("no visible editor window")
@@ -342,7 +490,7 @@ final class PerfWorkloadDriver {
         }
         add("resize-small") { window.setContentSize(NSSize(width: max(800, size.width * 0.7), height: max(560, size.height * 0.7))) }
         add("resize-back") { window.setContentSize(size) }
-        add("miniaturize", settle: 1.5) { window.miniaturize(nil) }
+        add("miniaturize", settle: 1.5) { window.miniaturize(nil); self.minimizedAt = CACurrentMediaTime() }
         add("deminiaturize", settle: 1.5) { window.deminiaturize(nil); self.restoredAt = CACurrentMediaTime() }
         add("studio") { self.app.mode = .studio }
         add("maker") { self.app.mode = .maker }
@@ -374,6 +522,14 @@ final class PerfWorkloadDriver {
             let presented = trace.drawLog.presentLog.snapshot()
             result["presentedAfterRestore"] = presented.filter { $0 > restoredAt + 0.5 }.count
             result["drawsAfterRestore"] = trace.drawLog.snapshot().samples.filter { $0.callback > restoredAt + 0.5 }.count
+            if let minimizedAt {
+                // From half a second after minimizing (the occlusion change
+                // has arrived) to the restore: the viewport shows nothing, so
+                // no keep-alive refresh may present (R7 phase 2, item 4).
+                let hidden = trace.drawLog.snapshot().samples.filter { $0.callback > minimizedAt + 0.5 && $0.callback < restoredAt }
+                result["callbacksWhileMinimized"] = hidden.count
+                result["refreshesWhileMinimized"] = hidden.filter { $0.outcome == .refreshed }.count
+            }
         }
         trace.details["lifecycle"] = result
     }

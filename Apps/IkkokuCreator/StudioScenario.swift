@@ -26,9 +26,21 @@ struct StudioScenario: Decodable {
         /// `"setFK"`, `"setPoseMode"`, `"selectBone"`, `"dragGizmo"`, `"hoverGizmo"`,
         /// `"captureBone"`, `"captureObject"`, `"captureRender"`, `"advance"`, `"orbit"`,
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
-        /// `"captureIKPose"`, `"editDuringAdvance"`, `"export"`, `"reimport"`, `"assert"`, `"assertRejected"`.
+        /// `"captureIKPose"`, `"editDuringAdvance"`, `"backgroundBuild"`, `"delete"`, `"setParent"`, `"duplicate"`,
+        /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
+        /// `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
+        /// ST-T03: with `key`, address the n-th copy (document order) of that
+        /// source record instead of the record itself; a copy has no source
+        /// key until an export and reimport give it one.
+        let copy: Int?
+        /// ST-T03: address the added native object with this name instead of
+        /// a source key (a new folder, camera or light before export).
+        let added: String?
+        /// assert only: the looked-through camera must be a copy of this
+        /// source camera (`Studio.Duplicate` hands the view to the copy).
+        let activeCopyOf: Int32?
         let visible: Bool?
         let name: String?
         let index: Int?
@@ -115,6 +127,12 @@ struct StudioScenario: Decodable {
         /// the main thread: `"none"`, `"move"` (the character `key` 0.25 m
         /// along x), `"setFK"` (`key`, `bone`, `rotation`), `"undo"` or `"redo"`.
         let edit: String?
+        /// backgroundBuild: the operation run both with synchronous and with
+        /// background source character builds (R7 phase 2, item 6):
+        /// `"import"`, `"importTwice"` (a second import replaces the first in
+        /// flight), `"importThenNewScene"` (New Scene cancels the import) or
+        /// `"duplicate"` (`key`, then undo).
+        let build: String?
         /// advance: how many seconds of live animation to run. The op walks
         /// `StudioModel.advanceLiveFrame` in its own 1/30 s steps, so the
         /// scenario exercises the app's live tick, not a re-implementation.
@@ -156,6 +174,26 @@ struct StudioScenario: Decodable {
         let accessoryLabels: AccessoryLabelsValue?
         /// Exact resident metadata consumed by the plugin panel, not AX evidence.
         let pluginMount: [PluginMountSummary.Section]?
+        /// setParent only (ST-T03): the new parent's source key, `null` for
+        /// the root — `.some(nil)` — and `nil` when the key is absent, which
+        /// the op refuses, like the hand-decoded `activeCamera` check.
+        let parent: Int32??
+        /// assert only: one parent's children in tree order, by source key.
+        let children: ChildrenValue?
+        /// assert only: source keys no document object may carry (deleted).
+        let absent: [Int32]?
+
+        struct ChildrenValue: Decodable {
+            /// the parent's source key; absent or null is the root.
+            let parent: Int32?
+            /// the parent's copy index (with `parent`, like a step's `copy`).
+            let parentCopy: Int?
+            /// the children's source keys, or `labels`: "622" for a source
+            /// record, "copy:962" for a copy, "native:Folder" for an added
+            /// object (one of the two is required).
+            let keys: [Int32]?
+            let labels: [String]?
+        }
 
         struct AccessoryLabelsValue: Decodable {
             let key: Int32
@@ -361,11 +399,17 @@ struct StudioScenario: Decodable {
         }
         struct PositionValue: Decodable {
             let key: Int32
+            /// the n-th copy of `key` instead of the record itself.
+            let copy: Int?
             /// the `captureObject` label to measure against: by default the
             /// object must have moved beyond the numeric tolerance; `within`
             /// flips the check to "it is still within that bound", like `fk`.
             let from: String
             let within: Float?
+            /// with `within`: the world rotation must also be held within this
+            /// many degrees of the capture (the angle between the two
+            /// rotations), so a reparent proves the whole world pose stayed.
+            let rotationWithin: Float?
         }
         struct SourceRuntimeValue: Decodable {
             let cameras: Int?
@@ -382,13 +426,14 @@ struct StudioScenario: Decodable {
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
-                 sex, character, chain, delta, ik, edit
+                 sex, character, chain, delta, ik, edit, build, parent, children, absent, copy, added, activeCopyOf
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             op = try c.decode(String.self, forKey: .op)
             edit = try c.decodeIfPresent(String.self, forKey: .edit)
+            build = try c.decodeIfPresent(String.self, forKey: .build)
             key = try c.decodeIfPresent(Int32.self, forKey: .key)
             visible = try c.decodeIfPresent(Bool.self, forKey: .visible)
             name = try c.decodeIfPresent(String.self, forKey: .name)
@@ -477,6 +522,16 @@ struct StudioScenario: Decodable {
             } else {
                 activeCamera = nil
             }
+            if c.contains(.parent) {
+                parent = try c.decodeIfPresent(Int32.self, forKey: .parent)
+            } else {
+                parent = nil
+            }
+            children = try c.decodeIfPresent(ChildrenValue.self, forKey: .children)
+            absent = try c.decodeIfPresent([Int32].self, forKey: .absent)
+            copy = try c.decodeIfPresent(Int.self, forKey: .copy)
+            added = try c.decodeIfPresent(String.self, forKey: .added)
+            activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
         }
     }
 
@@ -532,8 +587,28 @@ struct StudioScenario: Decodable {
             return ok
         }
         func object(_ step: Step) -> UUID? {
+            if let name = step.added {
+                return studio.doc.objects.first { $0.sourceRecordKey == nil && $0.name == name }?.id
+            }
             guard let key = step.key else { return nil }
-            return studio.doc.objects.first { $0.sourceObjectKey == key }?.id
+            return objectID(key: key, copy: step.copy)
+        }
+        func objectID(key: Int32, copy: Int?) -> UUID? {
+            guard let copy else { return studio.doc.objects.first { $0.sourceObjectKey == key }?.id }
+            let copies = studio.doc.objects.filter { $0.sourceObjectKey == nil && $0.sourceDuplicateOf == key }
+            return copies.indices.contains(copy) ? copies[copy].id : nil
+        }
+        /// The object a step names, for messages.
+        func describe(_ step: Step) -> String {
+            if let name = step.added { return "added \"\(name)\"" }
+            guard let key = step.key else { return "<no key>" }
+            return step.copy.map { "copy \($0) of source key \(key)" } ?? "source key \(key)"
+        }
+        /// The label `children` compares: the source key, `copy:<key>` or `native:<name>`.
+        func treeLabel(_ object: StudioObject) -> String {
+            if let key = object.sourceObjectKey { return String(key) }
+            if let key = object.sourceDuplicateOf { return "copy:\(key)" }
+            return "native:\(object.name)"
         }
         func insideLocal(_ path: String) -> URL? {
             let fm = FileManager.default
@@ -597,6 +672,8 @@ struct StudioScenario: Decodable {
         var capturedIKPoses: [String: IKPoseCapture] = [:]
         /// World positions recorded by `captureObject` steps, keyed by step name.
         var capturedObjectPositions: [String: Float3] = [:]
+        /// World rotations recorded by the same `captureObject` steps.
+        var capturedObjectRotations: [String: simd_quatf] = [:]
         /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
         var capturedRenders: [String: (width: Int, height: Int, bytes: [UInt8])] = [:]
         /// The single headless render size every `captureRender` uses, so a
@@ -918,20 +995,33 @@ struct StudioScenario: Decodable {
         /// `refresh()` renders with), so it measures what the view shows.
         func assertPosition(_ step: Step) -> String? {
             guard let check = step.position else { return nil }
-            guard let id = studio.doc.objects.first(where: { $0.sourceObjectKey == check.key })?.id else {
-                return "assert position: no object with source key \(check.key)"
+            guard let id = objectID(key: check.key, copy: check.copy) else {
+                return "assert position: no object with source key \(check.key)\(check.copy.map { " copy \($0)" } ?? "")"
             }
             guard let base = capturedObjectPositions[check.from] else {
                 return "assert position: no captureObject position recorded under \"\(check.from)\""
             }
-            let now: Float3
-            do { now = try studio.sourceObjectWorldMatrix(id).translation }
+            let now: Float3, world: float4x4
+            do { world = try studio.sourceObjectWorldMatrix(id); now = world.translation }
             catch { return "assert position: object \(check.key) world position unavailable: \(error)" }
             let dx = now.x - base.x, dy = now.y - base.y, dz = now.z - base.z
             let moved = (dx * dx + dy * dy + dz * dz).squareRoot()
             if let bound = check.within {
                 guard moved <= bound else {
                     return "assert position: object \(check.key) sits \(moved) from \"\(check.from)\" at (\(now.x), \(now.y), \(now.z)), expected it held within \(bound)"
+                }
+                if let degrees = check.rotationWithin {
+                    guard let base = capturedObjectRotations[check.from] else {
+                        return "assert position: no captureObject rotation recorded under \"\(check.from)\""
+                    }
+                    // The angle of the difference rotation from atan2, which
+                    // stays exact near zero where acos of a float dot product
+                    // rounds one ulp below 1 to about 0.06 degrees.
+                    let delta = simd_normalize(base).inverse * simd_normalize(world.rotationQuaternion)
+                    let angle = 2 * atan2(simd_length(delta.imag), abs(delta.real)) * 180 / .pi
+                    guard angle <= degrees else {
+                        return "assert position: object \(check.key) turned \(angle)° from \"\(check.from)\", expected it held within \(degrees)°"
+                    }
                 }
             } else {
                 guard moved > tolerance else {
@@ -1769,14 +1859,15 @@ struct StudioScenario: Decodable {
                     record(step, true, "captured bone \(boneID) at (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureBone: \(error)") }
             case "captureObject":
-                guard let id = object(step) else { record(step, false, "captureObject: no object with source key \(step.key ?? -1)"); continue }
+                guard let id = object(step) else { record(step, false, "captureObject: no object \(describe(step))"); continue }
                 guard let label = step.name, !label.isEmpty else {
                     record(step, false, "captureObject: name (the capture label) is required"); continue
                 }
                 do {
-                    let position = try studio.sourceObjectWorldMatrix(id).translation
+                    let world = try studio.sourceObjectWorldMatrix(id), position = world.translation
                     capturedObjectPositions[label] = position
-                    record(step, true, "captured object \(step.key!) world position (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
+                    capturedObjectRotations[label] = world.rotationQuaternion
+                    record(step, true, "captured object \(describe(step)) world position (\(position.x), \(position.y), \(position.z)) as \"\(label)\"")
                 } catch { record(step, false, "captureObject: \(error)") }
             case "captureRender":
                 guard let label = step.name, !label.isEmpty else {
@@ -1888,6 +1979,166 @@ struct StudioScenario: Decodable {
                 record(step, problems.isEmpty, problems.isEmpty
                     ? "edit \(edit) landed while the live step ran off the main thread; clock \(clock) -> \(studio.sourceAnimationTime); the presenting refresh reused \(reused) of \(requested) step frames; its \(renderSide)x\(renderSide) render is byte-identical to a main-thread rebuild"
                     : "editDuringAdvance (\(edit)): " + problems.joined(separator: "; "))
+            case "backgroundBuild":
+                // R7 phase 2, item 6: interactive runs build source characters
+                // in the background, while captures and scenarios build them
+                // synchronously. This op runs one operation synchronously
+                // first, then with background builds through the app's own
+                // methods, waits on the main run loop until every build is
+                // installed, and compares the document summary and a 512²
+                // render, which must be byte-identical. Live animation is
+                // paused for the op, so the timer fires while it waits move
+                // no clock. The `WhileHidden` builds hide the Studio as a
+                // switch to the Maker does, with a stand-in for the Maker's
+                // frame on the shared renderer, which the builds landing
+                // meanwhile must leave in place; showing the Studio again
+                // refreshes it, as the mode switch does.
+                let build = step.build ?? ""
+                let builds = ["import", "importTwice", "importThenNewScene", "importWhileHidden", "duplicate", "duplicateWhileHidden"]
+                guard builds.contains(build) else {
+                    record(step, false, "backgroundBuild: build must be one of \(builds.joined(separator: ", "))"); continue
+                }
+                guard let scenePath = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_SCENE"] else {
+                    record(step, false, "backgroundBuild: needs the IKKOKU_SOURCE_SCENE startup import"); continue
+                }
+                let wasLive = studio.liveAnimation
+                studio.liveAnimation = false
+                defer { studio.liveAnimation = wasLive; studio.asyncSourceBuilds = false }
+                func summary() -> [String] {
+                    let position = Dictionary(uniqueKeysWithValues: studio.doc.objects.enumerated().map { ($1.id, $0) })
+                    var lines = studio.doc.objects.map { o in
+                        "\(treeLabel(o)) \(o.kind) \"\(o.name)\" parent \(o.parent.flatMap { position[$0] }.map { String($0) } ?? "-") visible \(studio.doc.isVisible(o.id))"
+                    }
+                    lines += (studio.doc.sourcePreviewDiagnostics ?? []).map { "diagnostic: \($0)" }
+                    let outcome = studio.sourcePreviewCharacterOutcome(), counts = studio.sourceRuntimeCounts()
+                    lines.append("status: \(studio.status)")
+                    lines.append("characters built \(outcome.built), retained \(outcome.retained.count); cameras \(counts.cameras), items \(counts.items), routes \(counts.routes), scene light \(counts.sceneLight)")
+                    return lines
+                }
+                func state() -> (summary: [String], pixels: [UInt8]?) { (summary(), captureStudioRender().flatMap(renderBytes)) }
+                /// Runs the main run loop until no background build is left.
+                func settle() -> Bool {
+                    let deadline = Date().addingTimeInterval(300)
+                    while studio.isLoadingSourceScene || studio.pendingSourceCharacterBuilds > 0 {
+                        if Date() > deadline { return false }
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.005))
+                    }
+                    return true
+                }
+                var problems: [String] = []
+                let hidden = build.hasSuffix("WhileHidden")
+                /// What `AppState.mode` does for the Maker, with an empty
+                /// frame standing in for the Maker's.
+                func hide() {
+                    studio.isActiveMode = false
+                    var stand = studio.host.renderer.currentFrame()
+                    stand.items = []; stand.skinSets = [:]; stand.gizmos = []
+                    studio.host.renderer.submit(stand)
+                }
+                func show(_ label: String) {
+                    if !studio.host.renderer.currentFrame().items.isEmpty {
+                        problems.append("\(label): a build replaced the frame shown while the Studio was hidden")
+                    }
+                    studio.isActiveMode = true
+                    studio.refresh()
+                }
+                func compare(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?), _ actual: (summary: [String], pixels: [UInt8]?)) {
+                    if expected.summary != actual.summary {
+                        let first = zip(expected.summary, actual.summary).first { $0 != $1 }
+                        problems.append("\(label): the document differs from the synchronous build: "
+                            + (first.map { "\"\($0.0)\" against \"\($0.1)\"" } ?? "\(expected.summary.count) against \(actual.summary.count) lines"))
+                    }
+                    guard let a = expected.pixels, let b = actual.pixels else { problems.append("\(label): a frame did not render"); return }
+                    let difference = pixelDifference(a, b)
+                    if difference.exactChanged != 0 {
+                        problems.append("\(label): \(difference.exactChanged) pixels differ from the synchronous build (max channel delta \(difference.maximum))")
+                    }
+                }
+                var detail = ""
+                do {
+                    guard let rig = try EngineHost.locateSourceAvatar() else {
+                        throw RigError.invalid("Export the original clothed avatar before previewing source scenes.")
+                    }
+                    let catalog = EngineHost.studioPoseContract(forRig: rig), url = URL(fileURLWithPath: scenePath)
+                    if build.hasPrefix("duplicate") {
+                        guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
+                        studio.selection = id
+                        studio.duplicateSelection()
+                        let syncCopy = state()
+                        studio.undo()
+                        let syncUndo = state()
+                        studio.asyncSourceBuilds = true
+                        studio.selection = id
+                        studio.duplicateSelection()
+                        let copies = studio.pendingSourceCharacterBuilds
+                        if hidden { hide() }
+                        guard settle() else { record(step, false, "backgroundBuild: the duplicate's builds did not finish in 300 s"); continue }
+                        if hidden { show("duplicate") }
+                        compare("duplicate", syncCopy, state())
+                        studio.undo()
+                        let rebuilds = studio.pendingSourceCharacterBuilds
+                        if hidden { hide() }
+                        guard settle() else { record(step, false, "backgroundBuild: the undo's rebuilds did not finish in 300 s"); continue }
+                        if hidden { show("undo") }
+                        compare("undo", syncUndo, state())
+                        if copies == 0 { problems.append("the duplicate built no character in the background") }
+                        if rebuilds == 0 { problems.append("the undo rebuilt no character in the background") }
+                        detail = "the duplicate built \(copies) and the undo rebuilt \(rebuilds) characters in the background"
+                    } else {
+                        try studio.importSourceScenePreview(sceneURL: url, rigURL: rig, boneCatalogURL: catalog)
+                        let reference = state()
+                        studio.asyncSourceBuilds = true
+                        var outcomes: [String] = []
+                        var committed: (summary: [String], pixels: [UInt8]?)?
+                        func begin(_ label: String) throws {
+                            try studio.beginSourceSceneImport(sceneURL: url, rigURL: rig, boneCatalogURL: catalog) { result in
+                                switch result {
+                                case .success:
+                                    outcomes.append("\(label) committed")
+                                    // At once, before any later timer fire.
+                                    committed = state()
+                                case .failure(let error): outcomes.append("\(label) failed: \(error)")
+                                }
+                            }
+                        }
+                        try begin("first")
+                        if !studio.isLoadingSourceScene { problems.append("the import did not run in the background") }
+                        if summary() != reference.summary { problems.append("the document changed before the commit") }
+                        if hidden { hide() }
+                        if build == "importThenNewScene" {
+                            studio.newScene()
+                            if studio.isLoadingSourceScene { problems.append("New Scene left the import running") }
+                        } else if build == "importTwice" {
+                            try begin("second")
+                        }
+                        guard settle() else { record(step, false, "backgroundBuild: the import did not finish in 300 s"); continue }
+                        // A callback the cancel failed to stop would be queued by now.
+                        _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.5))
+                        if hidden {
+                            show("import")
+                            committed = state()
+                        }
+                        let expected = build == "importThenNewScene" ? [] : [build == "importTwice" ? "second committed" : "first committed"]
+                        if outcomes != expected { problems.append("completions \(outcomes), expected \(expected)") }
+                        if build == "importThenNewScene" {
+                            if !studio.doc.objects.isEmpty { problems.append("the cancelled import reached the document: \(studio.doc.objects.count) objects") }
+                        } else if let committed {
+                            compare("import", reference, committed)
+                        }
+                        detail = "completions \(outcomes.isEmpty ? "none" : outcomes.joined(separator: ", ")); \(studio.doc.objects.count) objects"
+                    }
+                    if studio.sourceBuildProgress != nil { problems.append("the progress line stayed after the builds") }
+                } catch {
+                    record(step, false, "backgroundBuild (\(build)) failed, stopping: \(error)")
+                    break scenarioLoop
+                }
+                let claim = build == "importThenNewScene"
+                    ? "New Scene cancelled the background import and nothing reached the document"
+                    : "\(build) with background builds matches the synchronous build (document summary and \(renderSide)x\(renderSide) render byte-identical)"
+                        + (hidden ? ", and the frame shown while the Studio was hidden stayed" : "")
+                record(step, problems.isEmpty, problems.isEmpty
+                    ? "\(claim); \(detail)"
+                    : "backgroundBuild (\(build)): " + problems.joined(separator: "; "))
             case "orbit":
                 guard let dx = step.dx, let dy = step.dy, dx.isFinite, dy.isFinite else {
                     record(step, false, "orbit: dx and dy (radian drag deltas) are required"); continue
@@ -1906,6 +2157,96 @@ struct StudioScenario: Decodable {
                 // every rendered character's preview.
                 studio.sourceAutomaticBlink = on
                 record(step, true, "source automatic blink \(on)")
+            case "delete":
+                // The workspace's Delete button / key: select, then delete
+                // the selection with its subtree.
+                guard let id = object(step) else { record(step, false, "delete: no object with source key \(step.key ?? -1)"); continue }
+                studio.selection = id
+                studio.deleteSelection()
+                let gone = studio.doc.object(id) == nil
+                record(step, gone, gone ? "deleted source key \(step.key!) and its subtree (\(studio.doc.objects.count) objects left)"
+                                        : "delete: source key \(step.key!) is still in the document")
+            case "setParent":
+                // The inspector's Parent picker (`StudioModel.setParent`).
+                guard let id = object(step) else { record(step, false, "setParent: no object \(describe(step))"); continue }
+                guard let target = step.parent else { record(step, false, "setParent: parent (a source key or null for the root) is required"); continue }
+                var parentID: UUID?
+                if let target {
+                    guard let found = studio.doc.objects.first(where: { $0.sourceObjectKey == target })?.id else {
+                        record(step, false, "setParent: no parent with source key \(target)"); continue
+                    }
+                    parentID = found
+                }
+                studio.setParent(id, to: parentID)
+                let placed = studio.doc.object(id)?.parent == parentID
+                record(step, placed, placed ? "\(describe(step)) now under \(target.map { "source key \($0)" } ?? "the root"): \(studio.status)"
+                                            : "setParent: \(describe(step)) was not moved: \(studio.status)")
+            case "duplicate":
+                // The workspace's Duplicate button: select, then duplicate the
+                // selection (a source object duplicates with its subtree).
+                guard let id = object(step) else { record(step, false, "duplicate: no object \(describe(step))"); continue }
+                studio.selection = id
+                let before = studio.doc.objects.count
+                studio.duplicateSelection()
+                let added = studio.doc.objects.count - before
+                record(step, added > 0, added > 0 ? "duplicated \(describe(step)): \(added) objects added; \(studio.status)"
+                                                  : "duplicate: nothing was added: \(studio.status)")
+            case "timeDuplicate":
+                // Release timing probe (not a lane check): `index` rounds of
+                // Duplicate then Undo on one object. Each round times the
+                // whole command on the main thread, the document refreshes
+                // and a copied character's preview build included; GPU
+                // uploads on the render thread are not in it.
+                guard let id = object(step) else { record(step, false, "timeDuplicate: no object \(describe(step))"); continue }
+                let rounds = max(1, min(step.index ?? 20, 200))
+                var samples: [Double] = [], added = 0
+                for _ in 0..<rounds {
+                    studio.selection = id
+                    let before = studio.doc.objects.count
+                    let start = ProcessInfo.processInfo.systemUptime
+                    studio.duplicateSelection()
+                    samples.append((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+                    added = studio.doc.objects.count - before
+                    studio.undo()
+                }
+                let sorted = samples.sorted()
+                let summary = String(format: "median %.2f ms, p90 %.2f ms, max %.2f ms", sorted[sorted.count / 2],
+                                     sorted[min(sorted.count - 1, sorted.count * 9 / 10)], sorted.last!)
+                record(step, added > 0, "timeDuplicate \(describe(step)): \(rounds) rounds, \(added) objects per copy; \(summary)")
+            case "addFolder", "addCamera", "addLight":
+                // The workspace's add menu; `name` renames the new object.
+                let before = studio.doc.objects.count
+                switch step.op {
+                case "addFolder": studio.addFolder()
+                case "addCamera": studio.addCamera()
+                default:
+                    guard let kind = step.mode.flatMap(LightKind.init(rawValue:)) else {
+                        record(step, false, "addLight: mode must be directional, point or spot"); continue
+                    }
+                    studio.addLight(kind)
+                }
+                guard studio.doc.objects.count == before + 1, let id = studio.doc.objects.last?.id else {
+                    record(step, false, "\(step.op): nothing was added"); continue
+                }
+                if let name = step.name, !name.isEmpty { studio.update(id) { $0.name = name } }
+                record(step, true, "\(step.op): added \"\(studio.doc.object(id)!.name)\" under \(studio.doc.object(id)!.parent == nil ? "the root" : "a folder")")
+            case "exportRejected":
+                // Export must refuse with this fragment and write no file.
+                guard let path = step.path, let url = insideLocal(path), !isSourcePath(url) else {
+                    record(step, false, "exportRejected: path must stay under .local/ and differ from the source: \(step.path ?? "<missing>")"); continue
+                }
+                guard let expected = step.errorContains, !expected.isEmpty else {
+                    record(step, false, "exportRejected: errorContains must be nonempty"); continue
+                }
+                if FileManager.default.fileExists(atPath: url.path) { try? FileManager.default.removeItem(at: url) }
+                do {
+                    try studio.exportSourceScene(to: url)
+                    record(step, false, "exportRejected: export succeeded, expected a refusal containing \"\(expected)\"")
+                } catch {
+                    let text = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    let refused = text.contains(expected) && !FileManager.default.fileExists(atPath: url.path)
+                    record(step, refused, refused ? "export refused as expected: \(text)" : "exportRejected: expected \"\(expected)\" and no file; received \(text)")
+                }
             case "export":
                 guard let path = step.path, let url = insideLocal(path) else {
                     record(step, false, "export: path must stay under .local/: \(step.path ?? "<missing>")")
@@ -1985,6 +2326,14 @@ struct StudioScenario: Decodable {
                     if problems.isEmpty, let problem = assertShape(step, id: id, face: false) { problems.append(problem) }
                     if problems.isEmpty, let problem = assertColor(step, id: id) { problems.append(problem) }
                 }
+                if let key = step.activeCopyOf {
+                    let active = studio.activeSourceCamera.flatMap { studio.doc.object($0) }
+                    if active?.sourceObjectKey != nil || active?.sourceDuplicateOf != key {
+                        problems.append("assert activeCopyOf: active is \(active.map(treeLabel) ?? "none"), expected a copy of \(key)")
+                    } else {
+                        details.append("looking through a copy of camera \(key)")
+                    }
+                }
                 if let expectedKey = step.activeCamera {
                     let active = studio.activeSourceCamera.flatMap { studio.doc.object($0)?.sourceObjectKey }
                     if active != expectedKey {
@@ -2042,6 +2391,30 @@ struct StudioScenario: Decodable {
                 // own character by the source key inside the check value,
                 // like `animation`/`fk`.
                 if let problem = assertPosition(step) { problems.append(problem) }
+                if let check = step.children {
+                    var parentID: UUID?, found = true
+                    if let key = check.parent {
+                        parentID = objectID(key: key, copy: check.parentCopy)
+                        found = parentID != nil
+                    }
+                    let keys = studio.doc.children(of: parentID).map(treeLabel)
+                    let label = check.parent.map { "source key \($0)\(check.parentCopy.map { " copy \($0)" } ?? "")" } ?? "the root"
+                    let expected = check.labels ?? check.keys?.map(String.init)
+                    if !found {
+                        problems.append("assert children: no parent with source key \(check.parent!)")
+                    } else if let expected, keys != expected {
+                        problems.append("assert children: \(label) holds [\(keys.joined(separator: ", "))], expected [\(expected.joined(separator: ", "))]")
+                    } else if expected == nil {
+                        problems.append("assert children: keys or labels is required")
+                    } else {
+                        details.append("\(label) holds [\(keys.joined(separator: ", "))]")
+                    }
+                }
+                if let keys = step.absent {
+                    let present = keys.filter { key in studio.doc.objects.contains { $0.sourceObjectKey == key } }
+                    if !present.isEmpty { problems.append("assert absent: source keys \(present) are still in the document") }
+                    else { details.append("source keys \(keys) absent") }
+                }
                 if let problem = assertEyeLook(step) { problems.append(problem) }
                 if let problem = assertBlink(step) { problems.append(problem) }
                 if let problem = assertHandPattern(step) { problems.append(problem) }

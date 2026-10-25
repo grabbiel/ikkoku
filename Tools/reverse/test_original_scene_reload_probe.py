@@ -212,6 +212,53 @@ class CollectTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'hide-rename: boom'):probe.collect('vm',self.output)
         self.assertEqual(json.loads((self.output/'status.json').read_text())['error'],'hide-rename: boom')
 
+class OnceTests(unittest.TestCase):
+    UPLOADS=['reload-topology-delete.png','reload-topology-delete-source.png']
+
+    def test_once_script_fetches_source_and_scenes_and_always_cleans_up(self):
+        script=probe.once_script(ROOT_A,'http://10.211.55.2:1/t/',60,self.UPLOADS)
+        self.assertIn("$root='"+ROOT_A+"'",script)
+        self.assertIn("Fetch 'SceneReloadProbe.cs'",script)
+        self.assertIn("@('reload-topology-delete.png','reload-topology-delete-source.png')",script)
+        self.assertIn('WaitForExit(60000)',script)
+        self.assertIn("throw 'A game process already runs'",script) # refuses to start beside a running game
+        cleanup=script[script.index('finally{'):]
+        self.assertIn('rmdir',cleanup);self.assertIn('Remove-Item -LiteralPath $root -Recurse -Force',cleanup)
+        self.assertIn('remainingGameProcesses',cleanup)
+        self.assertNotIn('Remove-Item -LiteralPath $original',script);self.assertNotIn('Copy-Item -LiteralPath $p',script)
+
+    def test_once_script_refuses_unknown_roots_and_upload_names(self):
+        with self.assertRaisesRegex(ValueError,'Unknown private player root'):
+            probe.once_script(r'C:\Illusion\Koikatsu','http://h/t/',60,self.UPLOADS)
+        for bad in ([],['reload-../x.png'],["reload-a.png';rm"]):
+            with self.assertRaisesRegex(ValueError,'Unexpected scene upload names'):
+                probe.once_script(ROOT_A,'http://h/t/',60,bad)
+
+    def test_once_refuses_an_output_that_already_holds_a_run_before_any_vm_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            record=Path(tmp)/'delete.png';record.write_bytes(b'png');(Path(tmp)/'run.json').write_text('{}')
+            with patch('original_scene_reload_probe.guarded') as guard,patch('original_scene_reload_probe.subprocess.run') as vm,\
+                 self.assertRaisesRegex(RuntimeError,'run.json exists'):
+                probe.run_once('vm',Path(tmp),{'topology-delete':record},0)
+            guard.assert_not_called();vm.assert_not_called()
+
+    def test_topology_labels_upload_under_their_own_names(self):
+        items=probe.upload_items({label:Path(label) for label in probe.TOPOLOGY_LABELS})
+        self.assertEqual(items,[(label,'reload-'+label+'.png') for label in probe.TOPOLOGY_LABELS])
+
+    def test_topology_records_need_once_and_once_needs_a_baseline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            record=Path(tmp)/'delete.png';record.write_bytes(b'png')
+            with patch.object(sys,'argv',['original_scene_reload_probe.py','--topology-delete',str(record)]),\
+                 self.assertRaisesRegex(ValueError,'topology records run with --once only'):probe.main()
+            with patch.object(sys,'argv',['original_scene_reload_probe.py','--once','--topology-delete',str(record)]),\
+                 self.assertRaisesRegex(ValueError,'--once needs --errno-baseline'):probe.main()
+            with patch.object(sys,'argv',['original_scene_reload_probe.py','--once','--errno-baseline','0','--topology-delete',str(Path(tmp)/'absent.png')]),\
+                 self.assertRaisesRegex(ValueError,'--topology-delete requires an existing'):probe.main()
+            with patch.object(sys,'argv',['original_scene_reload_probe.py','--once','--errno-baseline','3','--topology-delete',str(record)]),\
+                 patch('original_scene_reload_probe.run_once',return_value={}) as once,contextlib.redirect_stdout(io.StringIO()):probe.main()
+            self.assertEqual(once.call_args.args[2],{'topology-delete':record});self.assertEqual(once.call_args.args[3],3)
+
 class ArgumentTests(unittest.TestCase):
     def run_main(self,argv):
         with patch.object(sys,'argv',['original_scene_reload_probe.py',*argv]),patch('original_scene_reload_probe.start') as start,patch('original_scene_reload_probe.collect') as collect:

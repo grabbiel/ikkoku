@@ -99,6 +99,7 @@ final class StudioModel: ViewportInputHandler {
         if documentStorage.sourceSceneFile != sourceSceneFile { withMutation(keyPath: \.documentSourceSceneFile) {} }
         PerfTrace.event(.studioDocChange)
         pruneSourceVoices()
+        sourcePreviewsChecked = false
         refresh()
     }
     var selection: UUID? { didSet { if selection != oldValue { selectedBone = nil; selectedSourceIK = nil; refresh() } } }
@@ -152,8 +153,44 @@ final class StudioModel: ViewportInputHandler {
     /// actor again (`settleLiveTick`).
     private var sourceInstances: [UUID: SourceStudioCharacterPreview] {
         get { settleLiveTick(keepFrames: false); return sourceInstanceStorage }
-        set { settleLiveTick(keepFrames: false); sourceInstanceStorage = newValue }
+        set { settleLiveTick(keepFrames: false); sourceInstanceStorage = newValue; sourcePreviewsChecked = false }
     }
+    /// False once the document or the previews change, until a refresh has
+    /// looked for missing previews (`startMissingSourceBuilds`), so a frame
+    /// whose characters are all built does not scan the document again.
+    @ObservationIgnored private var sourcePreviewsChecked = false
+    /// R7 phase 2 item 6 (S1): whether source character builds run off the
+    /// main thread — a scene import (`beginSourceSceneImport`, chosen by the
+    /// caller) and the previews `refresh()` finds missing after an undo or
+    /// redo, a duplicate or a scene load. The app sets it for interactive
+    /// and performance-trace runs. Captures and scenarios keep it off: they
+    /// build synchronously where the frame needs each character, so their
+    /// output is exactly the sequential build's.
+    @ObservationIgnored var asyncSourceBuilds = false
+    /// The second halves of character builds, one at a time in order.
+    @ObservationIgnored let sourceBuildQueue = DispatchQueue(label: "com.grabbiel.Ikkoku.source-builds", qos: .userInitiated)
+    /// The background import in flight.
+    @ObservationIgnored private var sourceImportJob: SourceSceneImportJob?
+    /// A background build of a missing preview, by object: what it builds
+    /// and the batch it belongs to.
+    private struct PendingSourceBuild {
+        let reference: SourceStudioCharacterReference, outfit: Int?
+        let batch: SourceStudioCharacterBatch
+    }
+    @ObservationIgnored private var pendingSourceBuilds: [UUID: PendingSourceBuild] = [:]
+    /// A background build that failed, kept so `refresh()` reports it like
+    /// the synchronous build's error instead of building it every frame.
+    @ObservationIgnored private var failedSourceBuilds: [UUID: (reference: SourceStudioCharacterReference, outfit: Int?, error: String)] = [:]
+    /// What the previews the last undo or redo dropped can lend their
+    /// rebuilds (`SourceStudioCharacterPreview.Donation`); the next refresh's
+    /// builds take them and drop them.
+    @ObservationIgnored private var sourceDonations: [SourceStudioCharacterPreview.Donation] = []
+    /// Background character builds, for the status line.
+    struct SourceBuildProgress: Equatable {
+        let label: String
+        let built: Int, total: Int
+    }
+    private(set) var sourceBuildProgress: SourceBuildProgress?
     /// Imported route objects with their authored point transforms, so each
     /// frame's world-matrix walks replace a route parent's authored transform
     /// with `childRoot` — the node route children hang under
@@ -318,6 +355,10 @@ final class StudioModel: ViewportInputHandler {
     /// draws `keyDetail` ("camera 2") under the name.
     func workspaceLabel(of object: StudioObject, sceneSHA256: String?) -> (title: String, keyDetail: String?, sourceCamera: Bool) {
         guard let entry = sourceCameras[object.id], entry.sceneSHA256 == sceneSHA256 else { return (object.name, nil, false) }
+        // A copy has no record key until export; it names the camera it copies.
+        if object.sourceObjectKey == nil, object.sourceDuplicateOf != nil {
+            return ("\(object.name) (copy of camera \(entry.objectKey))", "copy of camera \(entry.objectKey)", true)
+        }
         return (SourceStudioCameraLabel.title(name: object.name, key: entry.objectKey),
                 SourceStudioCameraLabel.keyDetail(name: object.name, key: entry.objectKey), true)
     }
@@ -375,7 +416,7 @@ final class StudioModel: ViewportInputHandler {
     private func solvedSourceCamera(_ id: UUID, previews: [UUID: SourceStudioCharacterPreview]) throws -> OrbitCamera {
         let (object, parentFrame) = try sourceParentFrame(of: id, document: doc, previews: previews, visited: [])
         // Same composition as `sourceWorldMatrix`, whose native branch has no Studio rule.
-        return try object.sourceObjectKey == nil
+        return try object.sourceRecordKey == nil
             ? SourceStudioCameraObjects.viewCamera(world: parentFrame * object.transform.matrix, base: doc.camera)
             : SourceStudioCameraObjects.viewCamera(parentFrame: parentFrame, localPosition: object.transform.position,
                                                    localRotation: object.transform.quaternion, base: doc.camera)
@@ -1481,8 +1522,18 @@ final class StudioModel: ViewportInputHandler {
     }
     private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins,
                                       resources: StudioResourceResolution?) {
+        // The rebuilds borrow the dropped previews' converted assemblies
+        // (R7 phase 2 item 6); their meshes are released now.
+        sourceDonations = sourceInstances.values.map(\.donation)
         sourceInstances.removeAll(); lastSourceRouteDiagnostic = nil
-        if let id = activeSourceCamera, next.object(id) == nil { activeSourceCamera = nil }
+        if let id = activeSourceCamera, next.object(id) == nil {
+            // A copy that took the view from its original (Studio.Duplicate
+            // of the looked-through camera) gives it back when it is undone.
+            let original = doc.object(id)?.sourceDuplicateOf.flatMap { key in
+                next.objects.first { $0.sourceObjectKey == key && sourceCameras[$0.id] != nil }?.id
+            }
+            activeSourceCamera = original
+        }
         if let resources { applyResourceCheck(resources) }
         plugins.restoredAttachments?.commit(document: next)
         doc = next; rehydrateSourceRuntime()
@@ -1492,7 +1543,10 @@ final class StudioModel: ViewportInputHandler {
     func add(_ object: StudioObject, select: Bool = true) {
         pushUndo(force: true)
         var o = object
-        if let sel = selectedObject, sel.kind == .folder { o.parent = sel.id }
+        // CharaStudio adds every new object at the root (AddObjectFolder.Add
+        // and friends load with no parent); an imported scene follows it, so
+        // the new record's transform is its world placement.
+        if doc.sourceSceneSHA256 == nil, let sel = selectedObject, sel.kind == .folder { o.parent = sel.id }
         doc.objects.append(o)
         if select { selection = o.id }
         status = "Added \(o.name)"
@@ -1527,6 +1581,16 @@ final class StudioModel: ViewportInputHandler {
         var o = StudioObject(name: "Camera \(doc.objects.filter { $0.kind == .camera }.count + 1)", kind: .camera)
         o.savedCamera = doc.camera
         o.transform.position = doc.camera.position
+        if doc.sourceSceneSHA256 != nil {
+            // A CharaStudio camera object looks through its own transform, so
+            // in an imported scene the new camera also takes the view's
+            // orientation: the record it exports shows this view.
+            let camera = doc.camera
+            let view = camera.orientationOverride.map { simd_quatf(vector: $0) }
+                ?? simd_quatf(angle: camera.yaw, axis: Float3(0, 1, 0)) * simd_quatf(angle: -camera.pitch, axis: Float3(1, 0, 0))
+            o.transform.rotation = view.eulerXYZ.radiansToDegrees
+            o.transform.rotationOverride = view.vector
+        }
         add(o)
     }
 
@@ -1542,6 +1606,7 @@ final class StudioModel: ViewportInputHandler {
 
     func duplicateSelection() {
         guard var o = selectedObject else { return }
+        if o.sourceRecordKey != nil, doc.sourceSceneSHA256 != nil { duplicateSourceSubtree(o.id); return }
         pushUndo(force: true)
         o.id = UUID()
         o.name += " copy"
@@ -1550,11 +1615,68 @@ final class StudioModel: ViewportInputHandler {
         selection = o.id
     }
 
+    /// ST-T03 / ST-S09: CharaStudio's Duplicate (`Studio.Duplicate`) of a
+    /// source object: the object and its whole subtree are copied with their
+    /// names, local placements, attachment points and edits, and the copy is
+    /// appended after its original's last sibling (`OnLoadAttach`). Each copy
+    /// records the source record it shows (`sourceDuplicateOf`) and never
+    /// reuses its `sourceObjectKey`; export writes it as a new record under a
+    /// key CharaStudio's `GetNewIndex` would allocate. A copy of the camera
+    /// the view looks through takes the view, as the copied `active` flag
+    /// does in CharaStudio. Routes and route children are not duplicated yet.
+    func duplicateSourceSubtree(_ id: UUID) {
+        guard let top = doc.object(id) else { return }
+        var ancestor: UUID? = top.parent, steps = 0
+        while let current = ancestor, steps <= doc.objects.count {
+            if doc.object(current)?.sourceRecordKind == .route || sourceRouteRuntime(id: current, document: doc) != nil {
+                status = "Duplicating route children is not supported yet."
+                return
+            }
+            ancestor = doc.object(current)?.parent; steps += 1
+        }
+        let children = Dictionary(grouping: doc.objects, by: \.parent)
+        var subtree: [StudioObject] = [], stack = [top]
+        while let object = stack.popLast() {
+            subtree.append(object)
+            stack += (children[object.id] ?? []).reversed()
+        }
+        if subtree.contains(where: { $0.sourceRecordKind == .route || sourceRouteRuntime(id: $0.id, document: doc) != nil }) {
+            status = "Duplicating routes is not supported yet."
+            return
+        }
+        pushUndo(force: true)
+        var remap: [UUID: UUID] = [:]
+        for object in subtree { remap[object.id] = UUID() }
+        var copies: [StudioObject] = []
+        copies.reserveCapacity(subtree.count)
+        for object in subtree {
+            var copy = object
+            copy.id = remap[object.id]!
+            if object.id != id { copy.parent = object.parent.flatMap { remap[$0] } }
+            if let key = object.sourceRecordKey { copy.sourceObjectKey = nil; copy.sourceDuplicateOf = key }
+            copies.append(copy)
+            // The runtime entries the copy renders from are its original's.
+            if let entry = sourceCameras[object.id] { sourceCameras[copy.id] = entry }
+            if let entry = sourceItemAssets[object.id] { sourceItemAssets[copy.id] = entry }
+            if resourceBlockedObjects.contains(object.id) { resourceBlockedObjects.insert(copy.id) }
+        }
+        if var coverage = sourceRuntimeCoverage, coverage.sceneSHA256 == doc.sourceSceneSHA256 {
+            coverage.objectIDs.formUnion(copies.filter { $0.sourceRecordKey != nil }.map(\.id))
+            sourceRuntimeCoverage = coverage
+        }
+        doc.objects += copies
+        if let active = activeSourceCamera, let copy = remap[active] { activeSourceCamera = copy }
+        selection = remap[id]
+        status = subtree.count == 1 ? "Duplicated \(top.name)" : "Duplicated \(top.name) with \(subtree.count - 1) child objects"
+    }
+
     func setParent(_ id: UUID, to parent: UUID?) {
-        guard let i = doc.index(of: id) else { return }
+        guard let i = doc.index(of: id), doc.objects[i].parent != parent else { return }
         if let p = parent, p == id || doc.isDescendant(p, of: id) { return }
         let object = doc.objects[i]
-        if object.sourceObjectKey != nil {
+        // Source records and copies, and in an imported scene every object,
+        // place through the Studio walk, so the move keeps that placement.
+        if object.sourceRecordKey != nil || doc.sourceSceneSHA256 != nil {
             // Source records place through the Studio rule, so world
             // placement must be kept with the exact inverse of that rule
             // (`SourceStudioWorldTransform.reparented`), not the native walk:
@@ -1577,10 +1699,17 @@ final class StudioModel: ViewportInputHandler {
                 // childRoot replacement a route's children get never applies.
                 let parentFrame = try parent.map { try sourceWorldMatrix(of: $0, document: doc,
                     previews: sourceInstances) } ?? matrix_identity_float4x4
-                pushUndo(force: true)
-                doc.objects[i] = try SourceStudioWorldTransform.reparented(object, world: world,
+                var moved = try SourceStudioWorldTransform.reparented(object, world: world,
                     parentFrame: parentFrame)
-                doc.objects[i].parent = parent
+                moved.parent = parent
+                pushUndo(force: true)
+                // CharaStudio appends a moved node after its new siblings
+                // (`OCIFolder.OnAttach` -> `List.Add`, `Studio.AddInfo` for
+                // the root), and sibling order is the document's object
+                // order, so the record moves to the end in one write.
+                var objects = doc.objects
+                objects.remove(at: i); objects.append(moved)
+                doc.objects = objects
             } catch {
                 status = "Reparent failed: \(error)"
             }
@@ -1608,7 +1737,62 @@ final class StudioModel: ViewportInputHandler {
 
     /// Explicit preview: unsupported original records remain named tree nodes
     /// and are retained in the hash-verified source file, never guessed assets.
+    /// The characters build together (R7 phase 2 item 6): their decodes run
+    /// concurrently on worker threads and share rig files, and each one
+    /// registers its resources where the walk reaches it, so the result is
+    /// the one the sequential import produced. This call blocks until the
+    /// scene is committed; `beginSourceSceneImport` is the background form.
     func importSourceScenePreview(sceneURL: URL, rigURL: URL, boneCatalogURL: URL) throws {
+        let job = try prepareSourceSceneImport(sceneURL: sceneURL, rigURL: rigURL, boneCatalogURL: boneCatalogURL)
+        // A second import replaces one still running.
+        cancelSourceBuilds()
+        try commitSourceSceneImport(job)
+    }
+
+    /// R7 phase 2 item 6 (S1): the import with its character builds off the
+    /// main thread. The scene is read, decoded and planned here; the
+    /// characters then build on worker threads (the first halves together,
+    /// the second halves in import order on `sourceBuildQueue`) and the item
+    /// assets load on the main thread in the same order. The current
+    /// document stays as it is and stays editable, `sourceBuildProgress`
+    /// reports the characters built, and the commit replaces the document in
+    /// one main-thread step that runs the import's own walk, so the
+    /// document, names, diagnostics and registration order equal the
+    /// synchronous import's. `completion` runs on the main thread after the
+    /// commit (or its error). Another import, New Scene or a scene load
+    /// first cancels this one (`cancelSourceBuilds`): no completion runs,
+    /// nothing reaches the document, and the previews already built release
+    /// their resources when dropped. Item assets loaded before the cancel
+    /// stay in the library's cache, as after a failed import.
+    func beginSourceSceneImport(sceneURL: URL, rigURL: URL, boneCatalogURL: URL,
+                                completion: @escaping (Result<Void, Error>) -> Void) throws {
+        let job = try prepareSourceSceneImport(sceneURL: sceneURL, rigURL: rigURL, boneCatalogURL: boneCatalogURL)
+        cancelSourceBuilds()
+        sourceImportJob = job
+        updateSourceBuildProgress()
+        let library = library
+        job.batch.run(job.steps, on: sourceBuildQueue, main: { [weak self] index in
+            guard let self, self.sourceImportJob === job else { return }
+            _ = try? job.item(index, library: library)
+        }, built: { [weak self] delivery in
+            guard let self, self.sourceImportJob === job else { return }
+            job.deliver(delivery)
+            if case .success = delivery.result { PerfTrace.characterInstalled() }
+            self.updateSourceBuildProgress()
+        }, finished: { [weak self] in
+            guard let self, self.sourceImportJob === job else { return }
+            self.sourceImportJob = nil
+            self.holdsRefreshWhileHidden = true
+            let result = Result { try self.commitSourceSceneImport(job) }
+            self.holdsRefreshWhileHidden = false
+            self.updateSourceBuildProgress()
+            completion(result)
+        })
+    }
+
+    /// Reads, decodes and plans an import without touching the model, and
+    /// starts its characters' first halves.
+    private func prepareSourceSceneImport(sceneURL: URL, rigURL: URL, boneCatalogURL: URL) throws -> SourceSceneImportJob {
         let handle = try FileHandle(forReadingFrom: sceneURL); defer { try? handle.close() }
         let bytes = try handle.read(upToCount: 256 * 1024 * 1024 + 1) ?? Data()
         guard bytes.count <= 256 * 1024 * 1024 else { throw RigError.invalid("Source scene exceeds 256 MiB.") }
@@ -1622,7 +1806,7 @@ final class StudioModel: ViewportInputHandler {
             throw RigError.invalid("The \(ResourceCompanion.studioPoseContract.label) is missing at \(boneCatalogURL.path): source scene characters need \(ResourceCompanion.studioPoseContract.conventionalPath) in the converted library, next to the original base's rigs/ folder.")
         }
         let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-        var imported = StudioDocument(), previews: [UUID: SourceStudioCharacterPreview] = [:]
+        var imported = StudioDocument()
         imported.sourceNativePlugins = doc.sourceNativePlugins
         imported.name = sceneURL.deletingPathExtension().lastPathComponent + " — source preview"
         imported.sourceSceneFile = sceneURL.path; imported.sourceSceneSHA256 = hash
@@ -1642,17 +1826,14 @@ final class StudioModel: ViewportInputHandler {
             ?? boneCatalogURL.deletingLastPathComponent().appendingPathComponent("attachments.json")
         let attachmentPath = FileManager.default.fileExists(atPath: attachmentURL.path) ? attachmentURL.path : nil
         let animationPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ANIMATION_CATALOG"]
+        // Installed on the model by the commit.
+        var animationCatalog: SourceStudioAnimationCatalog?, animationCatalogError: String?
         if let animationPath {
             do {
-                sourceAnimationCatalog = try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: animationPath))
-                sourceAnimationCatalogError = nil
+                animationCatalog = try SourceStudioAnimationCatalog.load(url: URL(fileURLWithPath: animationPath))
             } catch {
-                sourceAnimationCatalog = nil
-                sourceAnimationCatalogError = String(describing: error)
+                animationCatalogError = String(describing: error)
             }
-        } else {
-            sourceAnimationCatalog = nil
-            sourceAnimationCatalogError = nil
         }
         let handPatternsPath = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"]
         // The converted item catalog is opt-in; a broken catalog is one
@@ -1673,12 +1854,56 @@ final class StudioModel: ViewportInputHandler {
                 diagnostics.append("Item catalog \(itemCatalogPath) not loaded: \(error)")
             }
         }
+        // The walk below in its own order, collecting what it builds: every
+        // character with the reference it gets, and every item it loads.
+        var references: [SourceStudioCharacterReference] = [], itemRecords: [KoikatsuItemRecord] = []
+        var steps: [SourceStudioCharacterBatch.Step] = []
+        var plan = Array(source.snapshot.roots.reversed())
+        while let record = plan.popLast() {
+            if let character = record.character {
+                let selectedRig = character.sex == 0
+                    ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
+                references.append(SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
+                    rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
+                    makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath, animationCatalogFile: animationPath,
+                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
+                    handPatternsFile: handPatternsPath,
+                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"]))
+                steps.append(.character(references.count - 1))
+            } else if record.kind == .camera {
+            } else if record.kind == .item, let item = record.item, itemResolver != nil {
+                itemRecords.append(item)
+                steps.append(.main(itemRecords.count - 1))
+            }
+            plan += record.children.reversed()
+            if let character = record.character {
+                for key in character.accessoryChildren.keys.sorted().reversed() {
+                    plan += (character.accessoryChildren[key] ?? []).reversed()
+                }
+            }
+        }
+        // A re-import of a loaded character borrows its converted assembly.
+        let batch = sourceCharacterBatch(references.map { ($0, nil) })
+        return SourceSceneImportJob(sceneURL: sceneURL, rigURL: rigURL, boneCatalogURL: boneCatalogURL, hash: hash,
+            source: source, imported: imported, diagnostics: diagnostics, sceneLightOverride: sceneLightOverride,
+            animationCatalog: animationCatalog, animationCatalogError: animationCatalogError,
+            itemResolver: itemResolver, itemNames: itemNames, references: references, itemRecords: itemRecords,
+            steps: steps, batch: batch)
+    }
+
+    /// The import's walk and commit: the original scene walk, taking each
+    /// character and item from `job` in the order it reaches them.
+    private func commitSourceSceneImport(_ job: SourceSceneImportJob) throws {
+        let sceneURL = job.sceneURL, hash = job.hash, source = job.source
+        var imported = job.imported, diagnostics = job.diagnostics
+        let sceneLightOverride = job.sceneLightOverride, itemResolver = job.itemResolver, itemNames = job.itemNames
+        var previews: [UUID: SourceStudioCharacterPreview] = [:]
+        var characterIndex = 0, itemIndex = 0
         var bounds = AABB.empty, stack = source.snapshot.roots.reversed().map { ($0, Optional<UUID>.none, false, Optional<Int32>.none) }
         var routes: [UUID: SourceRouteRuntime] = [:]
         var routeCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
         var cameras: [UUID: (sceneSHA256: String, objectKey: Int32, name: String)] = [:]
         var itemAssets: [UUID: (sceneSHA256: String, key: String, path: String, colors: [SIMD4<Float>], alpha: Float)] = [:]
-        var loadedItemAssets: [String: LoadedAsset] = [:]
         var unmappedItemKeys: [String: Int] = [:]
         while let (record, parent, routeChild, attachmentPoint) = stack.popLast() {
             var object = StudioObject(name: record.name ?? "Source object \(record.sourceKey)", kind: .folder)
@@ -1690,17 +1915,12 @@ final class StudioModel: ViewportInputHandler {
             let rotation = UnityCoordinates.eulerDegrees(record.transform.rotationDegrees)
             object.transform.rotation = rotation.eulerXYZ.radiansToDegrees
             object.transform.rotationOverride = rotation.vector
-            if let character = record.character {
-                let selectedRig = character.sex == 0
-                    ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
-                let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
-                    rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
-                    makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath, animationCatalogFile: animationPath,
-                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
-                    handPatternsFile: handPatternsPath,
-                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
+            if record.character != nil {
+                let index = characterIndex
+                characterIndex += 1
+                let reference = job.references[index]
                 do {
-                    let preview = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources)
+                    let preview = try job.character(index)
                     preview.automaticBlink = sourceAutomaticBlink
                     if routeChild {
                         // The world walk moves this character with `childRoot`,
@@ -1730,17 +1950,15 @@ final class StudioModel: ViewportInputHandler {
                 object.name = record.name ?? "Source camera \(record.sourceKey)"
                 cameras[object.id] = (sceneSHA256: hash, objectKey: record.sourceKey, name: object.name)
                 diagnostics.append("Camera \(record.sourceKey) (\"\(object.name)\") available for look-through.")
-            } else if record.kind == .item, let item = record.item, let resolver = itemResolver {
+            } else if record.kind == .item, let item = record.item, itemResolver != nil {
                 // The placeholder stays a `.folder` with no `assetFile`/`itemID`
                 // (original export requires it); the frame builder draws the
                 // converted parts from the runtime-only `sourceItemAssets` map.
                 let itemKey = KoikatsuAssetResolver.key(group: item.group, category: item.category, no: item.no)
+                let index = itemIndex
+                itemIndex += 1
                 do {
-                    let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
-                    if loadedItemAssets[asset.url.path] == nil {
-                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
-                            packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
-                    }
+                    let asset = try job.item(index, library: library)
                     object.name = "\(asset.name) (source item \(record.sourceKey))"
                     itemAssets[object.id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
                         colors: item.colors, alpha: item.alpha)
@@ -1814,10 +2032,149 @@ final class StudioModel: ViewportInputHandler {
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
         pushUndo(force: true)
+        sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
         stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
+    }
+
+
+    /// Whether a background source scene import is still building its characters.
+    var isLoadingSourceScene: Bool { sourceImportJob != nil }
+    /// Background builds of missing previews not installed yet.
+    var pendingSourceCharacterBuilds: Int { pendingSourceBuilds.count }
+
+    /// Stops every background character build: the import in flight and the
+    /// rebuilds of missing previews (another import, New Scene, a scene
+    /// load). Nothing they built reaches the model; the previews already
+    /// built release their meshes and buffers when dropped.
+    func cancelSourceBuilds() {
+        sourceImportJob?.batch.cancel()
+        sourceImportJob = nil
+        for build in pendingSourceBuilds.values { build.batch.cancel() }
+        pendingSourceBuilds.removeAll()
+        failedSourceBuilds.removeAll()
+        sourceDonations.removeAll()
+        updateSourceBuildProgress()
+    }
+
+    private func updateSourceBuildProgress() {
+        var progress: SourceBuildProgress?
+        if let job = sourceImportJob {
+            progress = .init(label: "Importing \(job.sceneURL.deletingPathExtension().lastPathComponent)",
+                             built: job.builtCount, total: job.references.count)
+        } else if !pendingSourceBuilds.isEmpty {
+            progress = .init(label: "Building \(pendingSourceBuilds.count) source character\(pendingSourceBuilds.count == 1 ? "" : "s")",
+                             built: 0, total: pendingSourceBuilds.count)
+        }
+        if sourceBuildProgress != progress { sourceBuildProgress = progress }
+    }
+
+    /// A loaded preview's donation for a build of `reference` in `outfit`
+    /// (nil: the card's saved outfit): a preview in the scene or on a route,
+    /// or one the last undo or redo dropped. Reads the previews, so the live
+    /// step is settled first.
+    private func sourceDonation(for reference: SourceStudioCharacterReference, outfit: Int?) -> SourceStudioCharacterPreview.Donation? {
+        func matches(_ donation: SourceStudioCharacterPreview.Donation) -> Bool {
+            donation.reference == reference && donation.coordinate == (outfit ?? donation.savedCoordinate)
+        }
+        for preview in Array(sourceInstances.values) + Array(sourceRouteCharacterPreviews.values) where preview.reference == reference {
+            let donation = preview.donation
+            if matches(donation) { return donation }
+        }
+        return sourceDonations.first(where: matches)
+    }
+
+    /// Starts the first halves of these source character builds together
+    /// (R7 phase 2 item 6): concurrent, sharing rig decodes, each borrowing
+    /// a loaded preview's converted assembly when one matches. The caller
+    /// runs the second halves in its own order (`build(_:)` or `run`).
+    func sourceCharacterBatch(_ wanted: [(reference: SourceStudioCharacterReference, outfit: Int?)]) -> SourceStudioCharacterBatch {
+        SourceStudioCharacterBatch(requests: wanted.map {
+            .init(reference: $0.reference, coordinate: $0.outfit, donation: sourceDonation(for: $0.reference, outfit: $0.outfit))
+        }, resources: host.renderer.resources)
+    }
+
+    /// One source character preview built now on the calling (main) thread,
+    /// borrowing a loaded preview's converted assembly when one matches
+    /// (R7 phase 2 item 6), such as a copy of a route character.
+    func makeSourceCharacterPreview(reference: SourceStudioCharacterReference, outfit: Int? = nil) throws -> SourceStudioCharacterPreview {
+        let donation = sourceDonation(for: reference, outfit: outfit)
+        let assembly = try SourceStudioCharacterPreview.assemble(reference: reference, resources: host.renderer.resources,
+                                                                 coordinate: outfit, sharing: donation)
+        return try SourceStudioCharacterPreview(assembly: assembly, resources: host.renderer.resources)
+    }
+
+    /// R7 phase 2 item 6: the document's drawn source characters without a
+    /// preview (after an undo or redo, a duplicate, a scene load, an outfit
+    /// the document restored) start their builds here together, in document
+    /// order: concurrent first halves that share rig decodes and borrow a
+    /// loaded preview's converted assembly. With `asyncSourceBuilds` their
+    /// second halves then run on `sourceBuildQueue` in that order and each
+    /// installs itself (`installSourceBuild`); the frame leaves the
+    /// character out until then. Otherwise the returned batch is built by
+    /// `refreshFrame` where it would have built each preview, so a
+    /// synchronous refresh registers in the same order as before.
+    private func startMissingSourceBuilds(sourceCharacters: Int) -> (batch: SourceStudioCharacterBatch, index: [UUID: Int])? {
+        defer { sourceDonations.removeAll() }
+        guard sourceInstances.count < sourceCharacters else { return nil }
+        var wanted: [(reference: SourceStudioCharacterReference, outfit: Int?)] = [], ids: [UUID] = []
+        for o in doc.objects where o.kind == .character {
+            guard let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id), doc.isVisible(o.id) else { continue }
+            if let cached = sourceInstances[o.id], cached.reference == reference,
+               cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { continue }
+            if let pending = pendingSourceBuilds[o.id], pending.reference == reference, pending.outfit == o.sourceOutfit { continue }
+            if let failed = failedSourceBuilds[o.id], failed.reference == reference, failed.outfit == o.sourceOutfit { continue }
+            wanted.append((reference, o.sourceOutfit))
+            ids.append(o.id)
+        }
+        guard !wanted.isEmpty else { return nil }
+        let batch = sourceCharacterBatch(wanted)
+        guard asyncSourceBuilds else { return (batch, Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })) }
+        for (index, id) in ids.enumerated() {
+            pendingSourceBuilds[id]?.batch.cancel()
+            pendingSourceBuilds[id] = PendingSourceBuild(reference: wanted[index].reference, outfit: wanted[index].outfit, batch: batch)
+            failedSourceBuilds[id] = nil
+        }
+        updateSourceBuildProgress()
+        batch.run(ids.indices.map { .character($0) }, on: sourceBuildQueue, main: { _ in }, built: { [weak self] delivery in
+            self?.installSourceBuild(delivery, id: ids[delivery.index], batch: batch)
+        }, finished: {})
+        return nil
+    }
+
+    /// Whether `id` or one of its ancestors is a character whose background
+    /// build has not installed yet.
+    private func awaitsSourceBuild(_ id: UUID) -> Bool {
+        guard !pendingSourceBuilds.isEmpty else { return false }
+        var current: UUID? = id, steps = 0
+        while let candidate = current, steps <= doc.objects.count {
+            if pendingSourceBuilds[candidate] != nil { return true }
+            current = doc.object(candidate)?.parent; steps += 1
+        }
+        return false
+    }
+
+    /// A background build arrived: installs it if its object still shows
+    /// the same character and outfit, exactly as the synchronous build
+    /// installs it in `refreshFrame`, and refreshes.
+    private func installSourceBuild(_ delivery: SourceStudioCharacterBatch.Delivery, id: UUID, batch: SourceStudioCharacterBatch) {
+        guard let pending = pendingSourceBuilds[id], pending.batch === batch else { return }
+        pendingSourceBuilds[id] = nil
+        defer { updateSourceBuildProgress() }
+        guard let o = doc.object(id), o.sourceCharacter == pending.reference, o.sourceOutfit == pending.outfit else { return }
+        switch delivery.result {
+        case .success(let fresh):
+            fresh.automaticBlink = sourceAutomaticBlink
+            if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
+            sourceInstances[id] = fresh
+            PerfTrace.characterInstalled()
+        case .failure(let error):
+            failedSourceBuilds[id] = (pending.reference, pending.outfit, String(describing: error))
+        }
+        // With the Maker shown, its frame stays; switching back refreshes.
+        if isActiveMode { refresh() }
     }
 
     /// Whether any record of the tree, an accessory child included, is a character.
@@ -1864,6 +2221,7 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func newScene() {
+        cancelSourceBuilds()
         pushUndo(force: true); sourcePluginSession = nil; sourcePluginsRunning = false; stopSourceVoices()
         sourceHideStudioUI?.reveal()
         // The SHA-gated camera/item/light caches survive a New Scene as they
@@ -1923,29 +2281,35 @@ final class StudioModel: ViewportInputHandler {
             throw RigError.invalid("The original scene changed; reimport before exporting edits.")
         }
         let source = try KoikatsuSceneReader.decodeDocument(bytes)
-        try SourceSceneExportValidation.validate(doc, against: source.snapshot)
+        // ST-T03 / ST-S09 / ST-D03: copies and new folders, cameras and
+        // lights are written first under the keys CharaStudio would allocate
+        // (`SourceSceneExportValidation.stage`); every edit below addresses
+        // the staged scene, where a copy's record is its original's bytes.
+        let staged = try SourceSceneExportValidation.stage(doc, source: source)
+        let stage = staged.stage.document
+        try SourceSceneExportValidation.validate(doc, against: stage.snapshot, keys: staged.keys)
         guard doc.effects == SceneEffects(), doc.mainLight == MainLight(), doc.timeline.keyframes.isEmpty else {
             throw RigError.invalid("Original-scene export does not yet serialize native lighting, effects or timeline edits.")
         }
-        var records: [Int32: (KoikatsuObjectRecord, Int32?, Int32?)] = [:]
-        func index(_ record: KoikatsuObjectRecord, parent: Int32?, attachment: Int32? = nil) {
-            records[record.sourceKey] = (record, parent, attachment)
-            for child in record.children { index(child, parent: record.sourceKey) }
-            for (point, children) in record.character?.accessoryChildren ?? [:] {
-                for child in children { index(child, parent: record.sourceKey, attachment: point) }
-            }
+        var records: [Int32: KoikatsuObjectRecord] = [:]
+        func index(_ record: KoikatsuObjectRecord) {
+            records[record.sourceKey] = record
+            for child in record.children { index(child) }
+            for children in (record.character?.accessoryChildren ?? [:]).values { for child in children { index(child) } }
         }
-        for root in source.snapshot.roots { index(root, parent: nil) }
-        guard doc.objects.count == records.count, Set(doc.objects.compactMap(\.sourceObjectKey)).count == records.count else {
-            throw RigError.invalid("Original-scene export does not yet support adding, duplicating or deleting objects.")
-        }
-        var edits = SourceSceneEdits()
+        for root in stage.snapshot.roots { index(root) }
+        // ST-T03: records missing from the document are deleted with their
+        // subtree and records under another parent (or re-appended after a
+        // sibling) are moved; each moved record's re-authored local
+        // placement is written by the transform edit below.
+        let topology = try SourceSceneExportValidation.topologyEdits(doc, against: stage.snapshot, keys: staged.keys)
+        var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
         for object in doc.objects {
-            guard let key = object.sourceObjectKey, let (original, parent, attachment) = records[key],
-                  object.parent.flatMap({ doc.object($0)?.sourceObjectKey }) == parent,
-                  object.sourceAttachmentPoint == attachment else {
-                throw RigError.invalid("Original-scene export does not yet support reparenting.")
+            guard let key = staged.keys[object.id], let original = records[key] else {
+                throw RigError.invalid("Original-scene export contains an unknown source object.")
             }
+            // A new folder, camera or light was written whole from the object.
+            guard object.sourceRecordKey != nil else { continue }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
             // Only folder, camera and route records serialize a name; the
             // validator already rejects renames for every other kind. The
@@ -2099,12 +2463,12 @@ final class StudioModel: ViewportInputHandler {
             guard i < source.settings.cameraSlots.count, let camera else { throw RigError.invalid("Original scene export cannot remove a camera slot.") }
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
-        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
+        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty || !staged.stage.keys.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)
         }
-        try source.editedData(edits).write(to: url, options: .atomic)
+        try staged.stage.editedData(edits).write(to: url, options: .atomic)
         status = "Exported edited original scene to \(url.lastPathComponent)"
     }
 
@@ -2209,6 +2573,7 @@ final class StudioModel: ViewportInputHandler {
             attachmentRestore: .init(blockedObjects: resources.blockedObjects, animationElapsed: 0))
         defer { preparedPlugins.abort() }
         for line in resources.diagnostics { print("[ikkoku] \(url.lastPathComponent): \(line)") }
+        cancelSourceBuilds()
         pushUndo(force: true)
         stopSourceVoices()
         releaseInstances { _ in true }
@@ -2301,7 +2666,14 @@ final class StudioModel: ViewportInputHandler {
         return inst
     }
 
+    /// Set while a background import commits (R7 phase 2, item 6). A commit
+    /// or a background build's install lands whenever its builds finish,
+    /// possibly while the Maker is shown; the Maker's frame on the shared
+    /// renderer must stay, and switching back to the Studio refreshes it.
+    @ObservationIgnored private var holdsRefreshWhileHidden = false
+
     func refresh() {
+        if holdsRefreshWhileHidden && !isActiveMode { return }
         // A live step in flight settles first; its frames go to this refresh.
         settleLiveTick(keepFrames: true)
         PerfTrace.measure(.studioRefresh, "StudioRefresh") { refreshFrame() }
@@ -2384,7 +2756,15 @@ final class StudioModel: ViewportInputHandler {
         var selectionGuide: (origin: Float3, orientation: simd_quatf)?
         cameraReuse = nil
         let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
-        sourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
+        let keptSourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
+        if keptSourceInstances.count != sourceInstances.count { sourceInstances = keptSourceInstances }
+        // R7 phase 2 item 6: the source characters this frame lacks start
+        // building together; see `startMissingSourceBuilds`.
+        let missingSourceBuilds = sourcePreviewsChecked ? nil : startMissingSourceBuilds(sourceCharacters: currentIDs.count)
+        sourcePreviewsChecked = true
+        // A request the walk below never reaches (an object it skips) stops
+        // assembling with this frame.
+        defer { missingSourceBuilds?.batch.cancel() }
         // Native characters that left the document (delete, a deleted parent,
         // undo/redo) release their GPU buffers before this frame is built (R6).
         let nativeIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter == nil }.map(\.id))
@@ -2398,7 +2778,7 @@ final class StudioModel: ViewportInputHandler {
         let routeIDsBeforePrune = Set(sourceRoutes.keys)
         sourceRoutes = sourceRoutes.filter { id, runtime in
             doc.sourceSceneSHA256 == runtime.sceneSHA256
-                && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == runtime.objectKey })
+                && doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == runtime.objectKey })
         }
         sourceRouteClocks = sourceRouteClocks.filter { sourceRoutes[$0.key] != nil }
         sourceRoutePlayState = sourceRoutePlayState.filter { sourceRoutes[$0.key] != nil }
@@ -2408,7 +2788,7 @@ final class StudioModel: ViewportInputHandler {
         let previewIDsBeforePrune = Set(sourceRouteCharacterPreviews.keys)
         sourceRouteCharacterPreviews = sourceRouteCharacterPreviews.filter { id, preview in
             doc.sourceSceneSHA256 == preview.reference.sceneSHA256
-                && doc.objects.contains(where: { $0.id == id && $0.sourceObjectKey == preview.reference.objectKey })
+                && doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == preview.reference.objectKey })
         }
         if var coverage = sourceRuntimeCoverage {
             coverage.objectIDs.subtract(routeIDsBeforePrune.subtracting(sourceRoutes.keys))
@@ -2432,7 +2812,12 @@ final class StudioModel: ViewportInputHandler {
             let objectID = UInt32(index + 1)
             let world: float4x4
             do { world = try sourceWorldMatrix(of: o.id, document: animatedDoc, previews: sourceInstances) }
-            catch { status = "Source attachment: \(error)"; continue }
+            catch {
+                // An object attached to a character still building in the
+                // background waits for it without a message.
+                if !awaitsSourceBuild(o.id) { status = "Source attachment: \(error)" }
+                continue
+            }
             guard doc.isVisible(o.id) else { continue }
             switch o.kind {
             case .character:
@@ -2444,9 +2829,19 @@ final class StudioModel: ViewportInputHandler {
                         if let cached = sourceInstances[o.id], cached.reference == reference,
                            cached.coordinate == (o.sourceOutfit ?? cached.savedCoordinate) { preview = cached }
                         else {
+                            // A background build in flight leaves the
+                            // character out of the frame until it installs.
+                            if asyncSourceBuilds, let pending = pendingSourceBuilds[o.id],
+                               pending.reference == reference, pending.outfit == o.sourceOutfit { continue }
+                            if asyncSourceBuilds, let failed = failedSourceBuilds[o.id], failed.reference == reference, failed.outfit == o.sourceOutfit {
+                                status = "Source character \(o.sourceObjectKey ?? 0): \(failed.error)"
+                                continue
+                            }
                             // The document's outfit selection (scene reload,
-                            // undo/redo) rebuilds the assembly for that outfit.
-                            let fresh = try SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: o.sourceOutfit)
+                            // undo/redo) rebuilds the assembly for that outfit;
+                            // the frame's batch already ran the first half.
+                            let fresh = try missingSourceBuilds.flatMap { built in try built.index[o.id].map { try built.batch.build($0) } }
+                                ?? SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources, coordinate: o.sourceOutfit)
                             fresh.automaticBlink = sourceAutomaticBlink
                             // Document color edits (scene reload, undo/redo)
                             // rebuild the new preview's appearance the way the
@@ -2454,6 +2849,7 @@ final class StudioModel: ViewportInputHandler {
                             // card's saved colors rendering.
                             if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
                             sourceInstances[o.id] = fresh; preview = fresh
+                            PerfTrace.characterInstalled()
                         }
                         var rendered: RenderFrame
                         if let ready = prepared?.output(for: o.id, preview: preview, elapsed: sourceAnimationTime, request: {
@@ -2683,7 +3079,7 @@ final class StudioModel: ViewportInputHandler {
         // Native objects (no source key) keep the native full-TRS composition
         // of `StudioDocument.worldMatrix(of:)`, which setParent and native
         // gizmo edits also use; only source records follow the Studio rule.
-        guard object.sourceObjectKey != nil else { return parentFrame * object.transform.matrix }
+        guard object.sourceRecordKey != nil else { return parentFrame * object.transform.matrix }
         // Documents saved before `sourceRecordKind` was recorded carry no
         // record kind; their import made every non-character placeholder a
         // `.folder`, so those fall back to the non-scalable rule (an item's
@@ -2964,7 +3360,7 @@ final class StudioModel: ViewportInputHandler {
     func sourceCacheNeedsRehydration() -> Bool {
         guard let hash = doc.sourceSceneSHA256 else { return false }
         guard let coverage = sourceRuntimeCoverage, coverage.sceneSHA256 == hash else { return true }
-        return doc.objects.contains { $0.sourceObjectKey != nil && !coverage.objectIDs.contains($0.id) }
+        return doc.objects.contains { $0.sourceRecordKey != nil && !coverage.objectIDs.contains($0.id) }
     }
 
     /// The scene identity and source object ids the runtime caches were last
@@ -2981,7 +3377,7 @@ final class StudioModel: ViewportInputHandler {
 
     func coverSourceRuntime(_ document: StudioDocument) {
         sourceRuntimeCoverage = document.sourceSceneSHA256.map { hash in
-            (hash, Set(document.objects.filter { $0.sourceObjectKey != nil }.map(\.id)))
+            (hash, Set(document.objects.filter { $0.sourceRecordKey != nil }.map(\.id)))
         }
     }
 

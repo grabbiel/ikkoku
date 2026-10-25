@@ -94,6 +94,16 @@ public struct StudioObject: Codable, Sendable, Equatable, Identifiable {
     /// Local converted glTF/GLB path. Kept separate from catalog IDs and persisted in scene cards.
     public var assetFile: String?
     public var sourceObjectKey: Int32?
+    /// ST-T03: the source record this object copies (`Studio.Duplicate`),
+    /// set on a duplicate of a source object or of another copy instead of
+    /// `sourceObjectKey`, which only ever names the record an object IS. The
+    /// copy renders and edits like its source record and exports as a new
+    /// record built from that record's bytes. Documents saved before this
+    /// field existed decode it as nil.
+    public var sourceDuplicateOf: Int32?
+    /// The source record whose data this object shows: its own record, or
+    /// the record it was duplicated from.
+    public var sourceRecordKey: Int32? { sourceObjectKey ?? sourceDuplicateOf }
     /// The source record's kind, which selects the Studio scale rule; nil in
     /// documents saved before it was recorded, whose placeholders are folders.
     public var sourceRecordKind: KoikatsuObjectKind?

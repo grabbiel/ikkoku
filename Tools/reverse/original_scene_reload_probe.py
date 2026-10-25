@@ -17,6 +17,13 @@ scalable item with scale (-1, 1, 1), saved active, and a control camera under an
 copy of that item) uses no card, so --author-scenes listing only card-free scenes runs
 without --author-character and uploads author-scenes.txt alone. No installed cards, saves or
 third-party plug-ins are read or copied.
+
+--once (ST-T03 topology and later runs) does the whole phase in ONE `prlctl exec`, the
+original_wear_probe.py transport: run.ps1 is served from a host-only HTTP endpoint, sets up a
+fresh private player root, downloads the probe source and the scene records, compiles, runs the
+player until the probe quits it (bounded by --wait-seconds), zips the probe folder with the logs,
+PUTs it back, and always removes its junctions and the root. The Parallels errno-24 count must
+equal --errno-baseline before the exec. Nothing in C:\\Illusion\\Koikatsu is written.
 """
 from __future__ import annotations
 import argparse, json
@@ -24,10 +31,18 @@ from pathlib import Path
 from original_character_probe import retry, player_root
 from original_shader_probe import write_small, stop_probe, fetch, dump, digest
 from vm_source import powershell, ps_quote
+import re, subprocess
+from original_character_probe import PLAYER_SETUP, PLAYER_ROOT
+from original_wear_probe import Endpoint, bootstrap, extract, errno_count, guarded, fresh_root
 ROOT=Path(__file__).resolve().parents[2]
 LABELS=('hide-rename','camera-switch','route-stop','route-rename')
 EXPRESSION_LABELS=('expression-edit','expression-source') # ST-C04 face-state export and its source
 FK_LABELS=('charastudio-fk-edit','charastudio-fk-source') # ST-T01: our FK export and the unedited load of its source scene
+# ST-T03 topology: our deletion, reparenting, duplicate and insert exports, and the unedited loads of their
+# source scenes (topology-duplicate edits the topology-reparent source, topology-camera-copy the item one).
+TOPOLOGY_LABELS=('topology-delete','topology-moved','topology-reparent','topology-item-delete',
+                 'topology-duplicate','topology-camera-copy',
+                 'topology-delete-source','topology-reparent-source','topology-item-source')
 SOURCE=Path(__file__).with_name('fixtures')/'OriginalSceneReloadProbe.cs'
 AUTHORED={'char':'scene-char.png','route-children':'scene-route-children.png','neck-target':'scene-neck-target.png',
           'mirrored-camera':'scene-mirrored-camera.png'} # author scene -> the file the probe saves in its folder
@@ -61,7 +76,91 @@ def start(vm,output,source=None,scenes=None,card=None,author_scenes=None):
 def upload_items(scenes):
     """(trace label, uploaded file name) per given scene. The FK source scene loads under
     its own label, so one run can compare our FK edit against the unedited load."""
-    return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS if label in (scenes or {})]
+    return [(label,'reload-'+label+'.png') for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS if label in (scenes or {})]
+
+
+def once_script(root,base,wait_seconds,uploads):
+    """The whole --once phase as run.ps1. `base` is the endpoint URL ending in the token and '/'."""
+    if not re.fullmatch(PLAYER_ROOT,root):raise ValueError('Unknown private player root')
+    if not uploads or any(not re.fullmatch(r'reload-[a-z0-9-]+\.png',name) for name in uploads):raise ValueError('Unexpected scene upload names')
+    names=','.join("'"+name+"'" for name in uploads)
+    return ("$ErrorActionPreference='Stop';$root='"+root+"';$base='"+base+"';$r=[ordered]@{root=$root}\n"
+            +r"""if(@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue).Count){throw 'A game process already runs'}
+if(Test-Path -LiteralPath $root){throw "Root exists: $root"}
+[Net.ServicePointManager]::Expect100Continue=$false
+function Fetch($name,$path){Invoke-WebRequest -UseBasicParsing -Uri ($base+$name) -OutFile $path;(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLower()}
+function Own{@(Get-Process -ErrorAction SilentlyContinue|Where-Object{$_.Path -and $_.Path.StartsWith($root+'\')})}
+try{
+"""+PLAYER_SETUP+r"""
+$p="$root\BepInEx\plugins";$r.source=Fetch 'SceneReloadProbe.cs' "$root\SceneReloadProbe.cs"
+$refs=@("$root\BepInEx\core\BepInEx.dll")+(Get-ChildItem "$root\CharaStudio_Data\Managed" -Filter '*.dll'|ForEach-Object{$_.FullName})
+$c=& C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /nologo /noconfig /nostdlib+ /target:library /out:"$p\IkkokuSceneReloadProbe.dll" /reference:$($refs -join ',') "$root\SceneReloadProbe.cs" 2>&1|Out-String
+if($LASTEXITCODE -ne 0){throw "Compile failed:$c"}
+$r.scenes=[ordered]@{};foreach($n in @("""+names+r""")){$r.scenes[$n]=Fetch $n "$p\$n"}
+$x=Start-Process -FilePath "$root\CharaStudio.exe" -WorkingDirectory $root -ArgumentList @('-force-d3d11','-screen-fullscreen','0','-screen-width','640','-screen-height','480','-logFile',"$root\unity.log") -PassThru
+$r.processID=$x.Id;$r.exited=$x.WaitForExit("""+str(int(wait_seconds)*1000)+r""")
+$left=Own;$left|Stop-Process -Force;$r.stopped=@($left|ForEach-Object{$_.Id});Start-Sleep -Seconds 2
+New-Item -ItemType Directory "$p\reload" -Force|Out-Null
+foreach($n in @('unity.log','BepInEx\LogOutput.log')){if(Test-Path -LiteralPath "$root\$n"){Copy-Item -LiteralPath "$root\$n" "$p\reload\$(Split-Path $n -Leaf)"}}
+Add-Type -AssemblyName System.IO.Compression.FileSystem;$z="$root\reload.zip"
+[IO.Compression.ZipFile]::CreateFromDirectory("$p\reload",$z);$r.zipSHA256=(Get-FileHash -LiteralPath $z -Algorithm SHA256).Hash.ToLower();$r.zipBytes=(Get-Item -LiteralPath $z).Length
+Invoke-WebRequest -UseBasicParsing -Method Put -InFile $z -ContentType 'application/zip' -Uri ($base+'reload.zip')|Out-Null
+}catch{$r.error=$_.ToString()}
+finally{
+$left=Own;$left|Stop-Process -Force -ErrorAction SilentlyContinue;$r.stoppedAtCleanup=@($left|ForEach-Object{$_.Id});Start-Sleep -Seconds 1
+$kept=@()
+foreach($j in @("$root\abdata","$root\CharaStudio_Data")){if(Test-Path -LiteralPath $j){if((Get-Item -LiteralPath $j -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){cmd /c rmdir "$j"|Out-Null}if(Test-Path -LiteralPath $j){$kept+=$j}}}
+if($kept.Count){$r.cleanupError='junctions not removed: '+($kept -join ', ')}elseif(Test-Path -LiteralPath $root){Remove-Item -LiteralPath $root -Recurse -Force}
+$r.removed=-not(Test-Path -LiteralPath $root);$r.remainingGameProcesses=@(Get-Process CharaStudio,Koikatu -ErrorAction SilentlyContinue|ForEach-Object{$_.Id})
+}
+[PSCustomObject]$r|ConvertTo-Json -Compress -Depth 4
+""")
+
+
+def run_once(vm,output,scenes,errno_baseline,host_address='10.211.55.2',wait_seconds=900,source=None):
+    """One-exec reload run into a new output folder with the collect layout (run.json, status.json,
+    reload-trace.json, the uploaded reload-*.png records, unity.log, LogOutput.log, manifest.json)."""
+    if (output/'run.json').exists():raise RuntimeError(str(output)+'/run.json exists: run the probe into a new output folder')
+    source=(source or SOURCE).read_bytes()
+    uploads=dict((uploaded,scenes[label].read_bytes()) for label,uploaded in upload_items(scenes))
+    if not uploads:raise ValueError('--once needs at least one scene record')
+    root=fresh_root()
+    record=dict(vm=vm,root=root,processID=0,sourceSHA256=digest(source),currentUser=True,stopped=False,
+                sceneSHA256={label:digest(scenes[label].read_bytes()) for label,_ in upload_items(scenes)},
+                errnoBaseline=errno_baseline,errnoBefore=guarded(errno_baseline),
+                transport='one prlctl exec; run.ps1 over a host-only HTTP endpoint')
+    dump(output/'run.json',record)
+    files={'SceneReloadProbe.cs':source,**uploads}
+    with Endpoint(host_address,files,upload='reload.zip') as endpoint:
+        script=once_script(root,endpoint.base,wait_seconds,list(uploads))
+        files['run.ps1']=script.encode()
+        (output/'run.ps1').write_text(script.replace(endpoint.base,'<endpoint>/'))
+        result=subprocess.run(['prlctl','exec',vm,'--current-user','powershell.exe','-NoProfile','-NonInteractive',
+                               '-Command',bootstrap(endpoint.base)],text=True,capture_output=True,timeout=wait_seconds+900)
+        upload=endpoint.upload
+    record['errnoAfter']=errno_count()
+    if result.returncode:
+        record['execError']=(result.stderr or result.stdout)[-4000:];dump(output/'run.json',record)
+        raise RuntimeError('VM exec failed: '+record['execError'])
+    guest=json.loads(result.stdout.lstrip('\ufeff').strip())
+    record.update(processID=int(guest.get('processID') or 0),stopped=True,guest=guest)
+    if guest.get('source') not in (None,digest(source)):raise ValueError('Guest probe source hash differs')
+    for name,data in uploads.items():
+        if (guest.get('scenes') or {}).get(name) not in (None,digest(data)):raise ValueError('Guest scene hash differs: '+name)
+    names=[]
+    if upload is not None:
+        if digest(upload)!=guest.get('zipSHA256') or len(upload)!=guest.get('zipBytes'):raise ValueError('Upload differs from the guest zip')
+        names=extract(upload,output)
+    for name,data in uploads.items():(output/name).write_bytes(data) # the exact records the player loaded, for the comparison
+    (output/'probe-source.cs').write_bytes(source)
+    dump(output/'run.json',record)
+    provenance=[dict(file=p.name,sha256=digest(p.read_bytes()),bytes=p.stat().st_size)
+                for p in sorted(output/n for n in set(names+list(uploads)+['run.json','probe-source.cs'])) if p.is_file()]
+    dump(output/'manifest.json',dict(schemaVersion=1,files=provenance))
+    status=json.loads((output/'status.json').read_text()) if (output/'status.json').is_file() else None
+    return dict(root=root,processID=record['processID'],exited=guest.get('exited'),error=guest.get('error'),
+                cleanupError=guest.get('cleanupError'),removed=guest.get('removed'),remainingGameProcesses=guest.get('remainingGameProcesses'),
+                errno=[record['errnoBefore'],record['errnoAfter']],files=len(provenance),status=status)
 
 
 def collect(vm,output):
@@ -96,12 +195,27 @@ def main():
     for label in LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the "%s" acceptance case'%label)
     for label in FK_LABELS:p.add_argument('--'+label,type=Path,help='Scene record exported by our app for the ST-T01 "%s" acceptance case'%label)
     for label in EXPRESSION_LABELS:p.add_argument('--'+label,type=Path,help='ST-C04 edited face state or its unedited source scene')
+    for label in TOPOLOGY_LABELS:p.add_argument('--'+label,type=Path,help='ST-T03 topology export or its unedited source scene (--once only)')
+    p.add_argument('--once',action='store_true',help='run the whole phase in one prlctl exec (needs --errno-baseline)')
+    p.add_argument('--errno-baseline',type=int,help='Parallels errno-24 count that must hold before the --once exec')
+    p.add_argument('--host-address',default='10.211.55.2',help="the Mac's address on the VM's host-only network (--once)")
+    p.add_argument('--wait-seconds',type=int,default=900,help='bound on the --once player run')
     p.add_argument('--author-character',type=Path,help='Synthetic fixture card the probe authors scene-char.png from (FK disabled, default pose)')
     p.add_argument('--author-scenes',help='Comma-separated fixture scenes to author from --author-character instead of scene-char.png alone: '+', '.join(AUTHORED)+' ('+', '.join(sorted(CARD_FREE))+' needs no card)')
     p.add_argument('--collect',action='store_true');p.add_argument('--stop',action='store_true');a=p.parse_args()
     if not a.output.resolve().is_relative_to((ROOT/'.local').resolve()):raise ValueError('Outputs must remain in .local')
     a.output.mkdir(parents=True,exist_ok=True)
     if a.stop:stop_probe(a.vm,json.loads((a.output/'run.json').read_text()));return
+    topology={label:getattr(a,label.replace('-','_')) for label in TOPOLOGY_LABELS if getattr(a,label.replace('-','_')) is not None}
+    if a.once:
+        if a.errno_baseline is None:raise ValueError('--once needs --errno-baseline')
+        if a.collect or a.author_character is not None or a.author_scenes is not None:raise ValueError('--once takes scene records only')
+        scenes={label:getattr(a,label.replace('-','_')) for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS
+                if getattr(a,label.replace('-','_')) is not None}
+        for label,path in scenes.items():
+            if not path.is_file():raise ValueError('--'+label+' requires an existing exported scene record: '+str(path))
+        print(json.dumps(run_once(a.vm,a.output,scenes,a.errno_baseline,a.host_address,a.wait_seconds,a.source),indent=2));return
+    if topology:raise ValueError('topology records run with --once only')
     if a.collect:
         for label in LABELS+FK_LABELS+EXPRESSION_LABELS:
             if getattr(a,label.replace('-','_'))is not None:raise ValueError('--collect does not take scene inputs')

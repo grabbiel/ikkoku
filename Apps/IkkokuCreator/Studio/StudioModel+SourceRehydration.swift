@@ -33,7 +33,8 @@ extension StudioModel {
     /// entry, which `sourceCacheNeedsRehydration()` reports cheaply.
     ///
     /// The document is the input, never the output: every entry is keyed to
-    /// the ids already in `doc` (records are mapped by `sourceObjectKey`),
+    /// the ids already in `doc` (records are mapped by `sourceRecordKey`, so
+    /// a copy gets its original's camera and item entries),
     /// and on success nothing in the document is written, so a
     /// save→load→save round trip stays byte-identical. On failure — the file
     /// is missing or its bytes no longer hash to the document's recorded
@@ -115,7 +116,8 @@ extension StudioModel {
     /// The cache-building half of `importSourceScenePreview`, aimed at an
     /// EXISTING document instead of a fresh one: the import's DFS decides
     /// which entries exist and how they look; this maps them by
-    /// `sourceObjectKey` onto `document`'s UUIDs. Entries whose object is not
+    /// `sourceRecordKey` onto `document`'s UUIDs (an original and each of its
+    /// copies get the same entry). Entries whose object is not
     /// in the document (deleted, or a scene the document never showed) are
     /// skipped, and the document is only ever read. The conversion
     /// environment (`IKKOKU_STUDIO_ITEM_CATALOG` and friends) is re-read the
@@ -123,8 +125,11 @@ extension StudioModel {
     /// the items unrendered, as at import.
     private func buildSourceRuntimeBundle(source: KoikatsuSceneDocument, sceneURL: URL,
         hash: String, rigURL: URL, boneCatalogURL: URL, document: StudioDocument) throws -> StudioSourceRuntimeBundle {
-        var byKey: [Int32: UUID] = [:]
-        for object in document.objects { if let key = object.sourceObjectKey { byKey[key] = object.id } }
+        var byKey: [Int32: [UUID]] = [:], originals: [Int32: UUID] = [:]
+        for object in document.objects {
+            if let key = object.sourceRecordKey { byKey[key, default: []].append(object.id) }
+            if let key = object.sourceObjectKey { originals[key] = object.id }
+        }
         var bundle = StudioSourceRuntimeBundle()
         let makerLibrary = try EngineHost.locateMakerLibrary()
         let attachmentURL = ProcessInfo.processInfo.environment["IKKOKU_STUDIO_ATTACHMENT_CATALOG"].map { URL(fileURLWithPath: $0) }
@@ -139,6 +144,38 @@ extension StudioModel {
             }
         }
         var loadedItemAssets: [String: LoadedAsset] = [:]
+        // The route characters' preview reference, as the import gives it.
+        func routeCharacterReference(_ record: KoikatsuObjectRecord, _ character: KoikatsuCharacterRecord) throws -> SourceStudioCharacterReference {
+            let selectedRig = character.sex == 0
+                ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
+            return SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
+                rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
+                makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath,
+                animationCatalogFile: animationPath,
+                dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
+                handPatternsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"],
+                lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
+        }
+        // R7 phase 2 item 6: every route character's first half starts now,
+        // together (`sourceCharacterBatch`); the walk below builds each one
+        // where it reaches it, so registration keeps the walk's order.
+        var routeCharacters: [SourceStudioCharacterReference] = []
+        var plan = source.snapshot.roots.reversed().map { ($0, false) }
+        while let (record, routeChild) = plan.popLast() {
+            plan += record.children.reversed().map { ($0, routeChild || record.kind == .route) }
+            if let character = record.character {
+                for key in character.accessoryChildren.keys.sorted().reversed() {
+                    plan += (character.accessoryChildren[key] ?? []).reversed().map { ($0, routeChild) }
+                }
+                if routeChild, let ids = byKey[record.sourceKey] {
+                    let reference = try routeCharacterReference(record, character)
+                    routeCharacters += ids.map { _ in reference }
+                }
+            }
+        }
+        let routeBatch = sourceCharacterBatch(routeCharacters.map { ($0, nil) })
+        defer { routeBatch.cancel() }
+        var routeIndex = 0
         var stack = source.snapshot.roots.reversed().map { ($0, false) }
         while let (record, routeChild) = stack.popLast() {
             defer {
@@ -149,53 +186,49 @@ extension StudioModel {
                     }
                 }
             }
-            guard let id = byKey[record.sourceKey] else { continue }
-            if let character = record.character {
-                // Only route children live here; an ordinary character's
-                // preview belongs to `sourceInstances`, which `refresh()`
-                // rebuilds lazily from the document's own reference.
-                guard routeChild else { continue }
-                let selectedRig = character.sex == 0
-                    ? (try EngineHost.locateSourceAvatar(sex: .male) ?? rigURL) : rigURL
-                let reference = SourceStudioCharacterReference(sceneFile: sceneURL.path, sceneSHA256: hash,
-                    rigFile: selectedRig.path, boneCatalogFile: boneCatalogURL.path, objectKey: record.sourceKey,
-                    makerLibraryFile: makerLibrary?.sourceURL.path, attachmentCatalogFile: attachmentPath,
-                    animationCatalogFile: animationPath,
-                    dynamicsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_DYNAMICS"],
-                    handPatternsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_HAND_PATTERNS"],
-                    lookSettingsFile: ProcessInfo.processInfo.environment["IKKOKU_STUDIO_LOOK_SETTINGS"])
-                if let preview = try? SourceStudioCharacterPreview(reference: reference, resources: host.renderer.resources) {
-                    preview.automaticBlink = sourceAutomaticBlink
-                    bundle.routeCharacterPreviews[id] = preview
-                }
-            } else if record.kind == .camera {
-                bundle.cameras[id] = (sceneSHA256: hash, objectKey: record.sourceKey,
-                    name: record.name ?? "Source camera \(record.sourceKey)")
-            } else if record.kind == .item, let item = record.item, let resolver = itemResolver {
-                let itemKey = KoikatsuAssetResolver.key(group: item.group, category: item.category, no: item.no)
-                do {
-                    let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
-                    if loadedItemAssets[asset.url.path] == nil {
-                        loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
-                            packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
+            guard let ids = byKey[record.sourceKey] else { continue }
+            for id in ids {
+                if record.character != nil {
+                    // Only route children live here; an ordinary character's
+                    // preview belongs to `sourceInstances`, which `refresh()`
+                    // rebuilds lazily from the document's own reference.
+                    guard routeChild else { continue }
+                    let index = routeIndex
+                    routeIndex += 1
+                    if let preview = try? routeBatch.build(index) {
+                        preview.automaticBlink = sourceAutomaticBlink
+                        bundle.routeCharacterPreviews[id] = preview
                     }
-                    bundle.itemAssets[id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
-                        colors: item.colors, alpha: item.alpha)
-                } catch {
-                    // Unmapped or unreadable item: the placeholder renders
-                    // nothing, exactly as the import's retained node.
+                } else if record.kind == .camera {
+                    bundle.cameras[id] = (sceneSHA256: hash, objectKey: record.sourceKey,
+                        name: record.name ?? "Source camera \(record.sourceKey)")
+                } else if record.kind == .item, let item = record.item, let resolver = itemResolver {
+                    let itemKey = KoikatsuAssetResolver.key(group: item.group, category: item.category, no: item.no)
+                    do {
+                        let asset = try resolver.resolve(group: item.group, category: item.category, no: item.no)
+                        if loadedItemAssets[asset.url.path] == nil {
+                            loadedItemAssets[asset.url.path] = try library.importStaticAsset(url: asset.url,
+                                packageRoot: KoikatsuAssetResolver.packageRoot(of: asset.url))
+                        }
+                        bundle.itemAssets[id] = (sceneSHA256: hash, key: itemKey, path: asset.url.path,
+                            colors: item.colors, alpha: item.alpha)
+                    } catch {
+                        // Unmapped or unreadable item: the placeholder renders
+                        // nothing, exactly as the import's retained node.
+                    }
                 }
-            }
-            if record.kind == .route, let route = record.route {
-                bundle.routes[id] = SourceRouteRuntime(sceneFile: sceneURL.path, sceneSHA256: hash,
-                    objectKey: record.sourceKey, route: route,
-                    pointLocals: SourceStudioRoutePlayback.pointLocals(from: route))
+                if record.kind == .route, let route = record.route {
+                    bundle.routes[id] = SourceRouteRuntime(sceneFile: sceneURL.path, sceneSHA256: hash,
+                        objectKey: record.sourceKey, route: route,
+                        pointLocals: SourceStudioRoutePlayback.pointLocals(from: route))
+                }
             }
         }
         // The file's saved active flags pick the load winner again; the
         // import's `ChangeCamera(camera, record.active)` rule verbatim.
+        // Only the original record can be that winner, never a copy of it.
         if let key = SourceStudioCameraObjects.activeAtLoad(source.snapshot),
-           let cameraID = bundle.cameras.keys.first(where: { bundle.cameras[$0]?.objectKey == key }) {
+           let cameraID = originals[key], bundle.cameras[cameraID] != nil {
             bundle.activeCameraAtLoad = cameraID
         }
         bundle.sceneLight = try? SourceStudioSceneLight.mainLight(from: source.settings.characterLight)

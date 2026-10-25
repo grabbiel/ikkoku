@@ -392,8 +392,15 @@ public struct SourceMakerLibrary: Sendable {
     public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false, timings: SourceMakerPreparationTimings? = nil) throws -> Prepared {
         try prepare(card: card, coordinate: coordinate, baseURL: baseURL, wear: wear, timings: timings, rigReuse: nil)
     }
+    /// The same preparation with every converted rig file decoded through
+    /// `rigs` (R7 phase 2 item 6): a Studio batch decodes each distinct file
+    /// once across its characters. The result equals the unshared `prepare`.
+    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool,
+                        sharing rigs: SourceRigDecodeShare) throws -> Prepared {
+        try prepare(card: card, coordinate: coordinate, baseURL: baseURL, wear: wear, timings: nil, rigReuse: rigs)
+    }
     func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool,
-                 timings: SourceMakerPreparationTimings?, rigReuse: SourceRigReuseWorker?) throws -> Prepared {
+                 timings: SourceMakerPreparationTimings?, rigReuse: (any SourceRigDecoding)?) throws -> Prepared {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
         try Self.validateAssemblyIdentity(card: card)
         let manifestBytes = try SourceMakerPreparationTimings.read(timings, .libraryManifestRead) { try Data(contentsOf: baseURL) }

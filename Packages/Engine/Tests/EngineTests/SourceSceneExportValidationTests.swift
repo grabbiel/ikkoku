@@ -97,8 +97,18 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(placeholder, against: source.snapshot) }
     placeholder = baseline; placeholder.objects[1].sourceFKRotations = [1: .zero]
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(placeholder, against: source.snapshot) }
+    // ST-T03: a deleted route child is a supported deletion; an accessory
+    // child deleted on its own, an added object and a move under the route
+    // are not.
     var missing = baseline; missing.objects.removeLast()
-    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(missing, against: source.snapshot) }
+    try SourceSceneExportValidation.validate(missing, against: source.snapshot)
+    #expect(try SourceSceneExportValidation.topologyEdits(missing, against: source.snapshot).deletions == Set<Int32>([21]))
+    var detached = baseline; detached.objects.removeAll { $0.sourceObjectKey == 11 }
+    #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.validate(detached, against: source.snapshot) }
+    var added = baseline; added.objects.append(StudioObject(name: "Folder", kind: .folder))
+    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(added, against: source.snapshot) }
+    var moved = baseline; moved.objects[0].parent = moved.objects[2].id
+    #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.validate(moved, against: source.snapshot) }
     var duplicate = baseline; duplicate.objects[1].sourceObjectKey = duplicate.objects[0].sourceObjectKey
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(duplicate, against: source.snapshot) }
     // Swift's canonical String equality must not hide a changed name payload.
@@ -265,4 +275,71 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     json["objects"] = objects
     let legacy = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: json))
     #expect(legacy.objects.allSatisfy { $0.sourceClothesState == nil && $0.sourceShowAccessory == nil })
+}
+
+@Test func sourceSceneExportValidationStagesCopiesAndNewObjects() throws {
+    // ST-T03 / ST-D03: the app's duplicate of character 10 with its
+    // accessory child 11, and a new folder holding a spot light, and a new
+    // camera. The scene without its plug-in trailer, since a duplicate in a
+    // scene with plug-in data is refused.
+    let bytes = SceneDocumentBytes.scene()
+    let plain = try KoikatsuSceneReader.decodeDocument(Data(bytes.data.prefix(bytes.baseEnd)))
+    var document = exportValidationDocument(plain)
+    let character = try #require(document.objects.first { $0.sourceObjectKey == 10 })
+    let child = try #require(document.objects.first { $0.sourceObjectKey == 11 })
+    var copy = character; copy.id = UUID(); copy.sourceObjectKey = nil; copy.sourceDuplicateOf = 10
+    var childCopy = child; childCopy.id = UUID(); childCopy.parent = copy.id; childCopy.sourceObjectKey = nil; childCopy.sourceDuplicateOf = 11
+    let folder = StudioObject(name: "Folder", kind: .folder)
+    var camera = StudioObject(name: "Camera 1", kind: .camera); camera.savedCamera = OrbitCamera(); camera.transform.position = SIMD3(1, 2, 3)
+    var light = StudioObject.light(.spot); light.parent = folder.id
+    // The child copy is listed before its parent: insertions are parents first.
+    document.objects += [childCopy, copy, folder, camera, light]
+    let (insertions, objects) = try SourceSceneExportValidation.insertions(document)
+    #expect(objects == [copy.id, childCopy.id, folder.id, light.id, camera.id])
+    #expect(insertions.map(\.parent) == [.root, .inserted(0), .root, .inserted(2), .root])
+    #expect(insertions[0].record == .duplicate(of: 10) && insertions[1].record == .duplicate(of: 11) && insertions[1].attachment == 7)
+    guard case let .light(written, header) = insertions[3].record, case let .camera(name, cameraHeader) = insertions[4].record else {
+        Issue.record("unexpected insertion records \(insertions)"); return
+    }
+    #expect(written == SourceSceneNewLight(no: 2, color: SIMD4(1, 1, 1, 1), intensity: 0.7, range: 6, spotAngle: 45))
+    #expect(header.transform.position == SIMD3(0, 2.4, -1.2) && header.visible && header.treeState == 1)
+    #expect(name == "Camera 1" && cameraHeader.transform.position == SIMD3(1, 2, -3))
+    // Keys: used 10, 11, 20, 21 and sub-infos 101-104, 201-212, so the copy
+    // is 0, its FK bones 1 and 2, IK 3, the child copy 4, look-at 5; then
+    // folder 6, light 7, camera 8.
+    let staged = try SourceSceneExportValidation.stage(document, source: plain)
+    #expect(staged.stage.keys == [0, 4, 6, 7, 8])
+    #expect(staged.keys[copy.id] == 0 && staged.keys[childCopy.id] == 4 && staged.keys[character.id] == 10)
+    try SourceSceneExportValidation.validate(document, against: staged.stage.document.snapshot, keys: staged.keys)
+    let topology = try SourceSceneExportValidation.topologyEdits(document, against: staged.stage.document.snapshot, keys: staged.keys)
+    #expect(topology.deletions.isEmpty && topology.reparents.isEmpty)
+    let final = try KoikatsuSceneReader.decodeDocument(staged.stage.editedData(.init())).snapshot
+    #expect(final.roots.map(\.sourceKey) == [Int32(10), 20, 0, 6, 8])
+    #expect(final.roots[2].character?.accessoryChildren[7]?.map(\.sourceKey) == [Int32(4)])
+    // Without the staged keys an added object has no record.
+    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(document, against: plain.snapshot) }
+    // Refusals, each with its reason.
+    func refusal(_ change: (inout StudioDocument) -> Void) -> String {
+        var edited = document; change(&edited)
+        do {
+            let staged = try SourceSceneExportValidation.stage(edited, source: plain)
+            try SourceSceneExportValidation.validate(edited, against: staged.stage.document.snapshot, keys: staged.keys)
+            return "accepted"
+        } catch { return (error as? LocalizedError)?.errorDescription ?? "\(error)" }
+    }
+    func index(_ id: UUID) -> Int { document.objects.firstIndex { $0.id == id }! }
+    #expect(refusal { $0.objects[index(folder.id)].transform.scale = SIMD3(2, 2, 2) }.contains("unit scale"))
+    let blended = refusal { $0.objects[index(light.id)].light?.spotBlend = 0.2 }
+    #expect(blended.contains("spot blend"))
+    #expect(refusal { $0.objects[index(camera.id)].fov = 40 }.contains("field of view"))
+    #expect(refusal { $0.objects.append(.character(CharacterCard())) }.contains("does not add new characters or items"))
+    #expect(refusal { $0.objects.append(.item(id: "chair", name: "Chair")) }.contains("does not add new characters or items"))
+    #expect(refusal { $0.objects[index(copy.id)].sourceCharacter = nil }.contains("reference no longer matches"))
+    #expect(refusal { $0.objects[index(folder.id)].parent = character.id }.contains("accessory points"))
+    // The plug-in scene: the duplicate is refused, a new folder is written.
+    let plugins = try KoikatsuSceneReader.decodeDocument(bytes.data)
+    #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.stage(document, source: plugins) }
+    var onlyNew = exportValidationDocument(plugins); onlyNew.objects.append(folder)
+    let kept = try SourceSceneExportValidation.stage(onlyNew, source: plugins)
+    #expect(kept.stage.document.trailingData == plugins.trailingData && kept.stage.keys == [0])
 }

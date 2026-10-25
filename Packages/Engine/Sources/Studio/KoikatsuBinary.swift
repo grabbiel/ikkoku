@@ -182,6 +182,8 @@ struct KoikatsuBinaryReader {
     var objectCount = 0
     var sourceKeys = Set<Int32>()
     var editSpans = SourceSceneEditSpans()
+    /// The offset of the `dicKey` Int32 the last `bone()` read.
+    var lastBoneKeyOffset = 0
     static let maximumCount = 100_000
     static let maximumStringBytes = 1_048_576
 
@@ -313,12 +315,15 @@ struct KoikatsuBinaryReader {
         let alpha = try float(), lineColor = try jsonVector(["r", "g", "b", "a"]), lineWidth = try float()
         let emissionColor = try jsonVector(["r", "g", "b", "a"]), emissionPower = try float(), lightCancel = try float()
         let panel = try pattern(), enableFK = try bool(), boneCount = try count()
-        var bones: [String: KoikatsuBoneRecord] = [:]
+        var bones: [String: KoikatsuBoneRecord] = [:], subKeys: [Int] = []
         for _ in 0..<boneCount {
             let name = try string()
             guard bones[name] == nil else { throw invalid("duplicate bone name") }
             bones[name] = try bone(destination: .itemFK(object: objectKey, bone: name))
+            subKeys.append(lastBoneKeyOffset)
         }
+        // OIItemInfo.Load allocates the FK bones before the child list.
+        editSpans.topology.subKeys[objectKey] = .init(before: subKeys, after: [])
         return KoikatsuItemRecord(group: group, category: category, no: no, animationSpeed: speed,
                                  colors: colors, patterns: patterns, alpha: alpha, lineColor: lineColor,
                                  lineWidth: lineWidth, emissionColor: emissionColor, emissionPower: emissionPower,
@@ -330,7 +335,7 @@ struct KoikatsuBinaryReader {
         guard depth <= 64 else { throw KoikatsuReadError.limitExceeded("hierarchy depth exceeds 64") }
         objectCount += 1
         guard objectCount <= Self.maximumCount else { throw KoikatsuReadError.limitExceeded("scene exceeds \(Self.maximumCount) objects") }
-        let rawKind = try int32()
+        let recordStart = offset, rawKind = try int32()
         guard let kind = KoikatsuObjectKind(rawValue: rawKind) else { throw KoikatsuReadError.unsupportedObjectKind(rawKind) }
         let key = try int32()
         guard sourceKeys.insert(key).inserted else { throw invalid("duplicate object key") }
@@ -350,7 +355,9 @@ struct KoikatsuBinaryReader {
         case .character: characterRecord = try character(depth: depth, objectKey: key)
         case .route:
             name = try nameString(objectKey: key)
+            let countStart = offset
             for _ in 0..<(try count()) { children.append(try object(depth: depth + 1, rootKey: nil)) }
+            editSpans.topology.slots[key] = [.init(count: countStart, end: offset, children: children.map(\.sourceKey), point: nil)]
             routeRecord = try route(objectKey: key)
         case .item: itemRecord = try item(objectKey: key)
         case .light:
@@ -359,9 +366,11 @@ struct KoikatsuBinaryReader {
                                                enable: try bool(), drawTarget: try bool())
         }
         if kind == .folder || kind == .item {
-            let count = try count()
+            let countStart = offset, count = try count()
             for _ in 0..<count { children.append(try object(depth: depth + 1, rootKey: nil)) }
+            editSpans.topology.slots[key] = [.init(count: countStart, end: offset, children: children.map(\.sourceKey), point: nil)]
         }
+        editSpans.topology.records[key] = recordStart..<offset
         return KoikatsuObjectRecord(kind: kind, rootDictionaryKey: rootKey, sourceKey: key,
                                     transform: transform, treeState: treeState, visible: visible,
                                     name: name, cameraActive: active, item: itemRecord, light: lightRecord, children: children,

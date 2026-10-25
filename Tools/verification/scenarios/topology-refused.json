@@ -1,0 +1,16 @@
+{
+  "steps": [
+    {"op": "setParent", "key": 2, "parent": null},
+    {"op": "exportRejected", "path": ".local/verification/scenario-exports/topology-refused.png", "errorContains": "does not move item children"},
+    {"op": "undo"},
+    {"op": "setParent", "key": 1, "parent": 0},
+    {"op": "exportRejected", "path": ".local/verification/scenario-exports/topology-refused.png", "errorContains": "under items"},
+    {"op": "undo"},
+    {"op": "assert", "children": {"keys": [0, 1]}},
+    {"op": "delete", "key": 3},
+    {"op": "export", "path": ".local/verification/scenario-exports/topology-refused.png"},
+    {"op": "reimport", "path": ".local/verification/scenario-exports/topology-refused.png"},
+    {"op": "assert", "children": {"parent": 1, "keys": []}, "absent": [3], "activeCamera": 2},
+    {"op": "assert", "children": {"parent": 0, "keys": [2]}}
+  ]
+}

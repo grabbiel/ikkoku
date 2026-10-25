@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**939 files indexed; 939 assigned; 0 unassigned.**
+**965 files indexed; 965 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
-| [Character / Maker / mods](character-and-mods.md) | 125 |
-| [Studio / IK / animation](studio.md) | 189 |
-| [Renderer / foundation / assets](renderer-and-foundation.md) | 329 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 186 |
+| [Character / Maker / mods](character-and-mods.md) | 128 |
+| [Studio / IK / animation](studio.md) | 197 |
+| [Renderer / foundation / assets](renderer-and-foundation.md) | 332 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 188 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 210 |
+| Conversion / recovery / verification tool | 220 |
 | Documentation / historical evidence | 64 |
 | Generated asset / catalog / fixture | 205 |
-| Reference host / controlled fixture | 30 |
-| Runtime / shared shader declaration | 213 |
-| Test / validation | 192 |
+| Reference host / controlled fixture | 29 |
+| Runtime / shared shader declaration | 214 |
+| Test / validation | 195 |
 
 ## App / gameplay / plugins
 
@@ -209,6 +209,7 @@ Feature assessment: [character-and-mods.md](character-and-mods.md).
 | [Packages/Engine/Sources/Character/SourceMakerAssemblyOptions.swift](../../Packages/Engine/Sources/Character/SourceMakerAssemblyOptions.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerHeadPreparation.swift](../../Packages/Engine/Sources/Character/SourceMakerHeadPreparation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceRigReuseBoundary.swift](../../Packages/Engine/Sources/Character/SourceRigReuseBoundary.swift) | Runtime / bounded immutable decoded-rig retention, admission and holder lifetimes |
+| [Packages/Engine/Sources/Character/SourceRigDecodeShare.swift](../../Packages/Engine/Sources/Character/SourceRigDecodeShare.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerLibrary.swift](../../Packages/Engine/Sources/Character/SourceMakerLibrary.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMakerPreparationQueue.swift](../../Packages/Engine/Sources/Character/SourceMakerPreparationQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Character/SourceMaterialCompositor.swift](../../Packages/Engine/Sources/Character/SourceMaterialCompositor.swift) | Runtime / shared shader declaration |
@@ -308,6 +309,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift](../../Apps/IkkokuCreator/Studio/SourceExpressionInspector.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift](../../Apps/IkkokuCreator/Studio/SourceSceneImportJob.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioView.swift](../../Apps/IkkokuCreator/Studio/StudioView.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/StudioScenario.swift](../../Apps/IkkokuCreator/StudioScenario.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Scene/IK.swift](../../Packages/Engine/Sources/Scene/IK.swift) | Runtime / shared shader declaration |
@@ -321,6 +323,8 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceFullBodyBiped.swift](../../Packages/Engine/Sources/Studio/SourceFullBodyBiped.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneEditing.swift](../../Packages/Engine/Sources/Studio/SourceSceneEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift](../../Packages/Engine/Sources/Studio/SourceSceneExportValidation.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceSceneInsertion.swift](../../Packages/Engine/Sources/Studio/SourceSceneInsertion.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceSceneTopology.swift](../../Packages/Engine/Sources/Studio/SourceSceneTopology.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAccessoryNamesPlugin.swift](../../Packages/Engine/Sources/Studio/SourceStudioAccessoryNamesPlugin.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAnimation.swift](../../Packages/Engine/Sources/Studio/SourceStudioAnimation.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioAttachments.swift](../../Packages/Engine/Sources/Studio/SourceStudioAttachments.swift) | Runtime / shared shader declaration |
@@ -329,6 +333,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioCamera.swift](../../Packages/Engine/Sources/Studio/SourceStudioCamera.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift](../../Packages/Engine/Sources/Studio/SourceStudioCameraObjects.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterPreview.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioCharacterBatch.swift](../../Packages/Engine/Sources/Studio/SourceStudioCharacterBatch.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioDynamics.swift](../../Packages/Engine/Sources/Studio/SourceStudioDynamics.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioExpression.swift](../../Packages/Engine/Sources/Studio/SourceStudioExpression.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift](../../Packages/Engine/Sources/Studio/SourceStudioEyeLook.swift) | Runtime / shared shader declaration |
@@ -373,11 +378,15 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceOriginalAnimatorTests.swift](../../Packages/Engine/Tests/EngineTests/SourceOriginalAnimatorTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioAccessoryNamesTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioAccessoryNamesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioAnimationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioAnimationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioBlinkTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioBlinkTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCameraObjectsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterPreviewTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioCharacterBatchTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioDynamicsTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookRuntimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioEyeLookTests.swift) | Test / validation |
@@ -714,6 +723,8 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Sources/GPU/EngineBuild.swift](../../Packages/Engine/Sources/GPU/EngineBuild.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/GPU/FrameRing.swift](../../Packages/Engine/Sources/GPU/FrameRing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/GPU/GPUContext.swift](../../Packages/Engine/Sources/GPU/GPUContext.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/DeformContent.swift](../../Packages/Engine/Sources/Renderer/DeformContent.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift](../../Packages/Engine/Sources/Renderer/DisplayLinkRatePolicy.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/LatestPickQueue.swift](../../Packages/Engine/Sources/Renderer/LatestPickQueue.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift](../../Packages/Engine/Sources/Renderer/OriginalFrameDiagnostics.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Renderer/OriginalFrameProbe.swift](../../Packages/Engine/Sources/Renderer/OriginalFrameProbe.swift) | Runtime / shared shader declaration |
@@ -749,6 +760,7 @@ Feature assessment: [renderer-and-foundation.md](renderer-and-foundation.md).
 | [Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift](../../Packages/Engine/Tests/CoreMathTests/UnityCoordinatesTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift](../../Packages/Engine/Tests/EngineTests/CharacterLifetimeTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift](../../Packages/Engine/Tests/EngineTests/DeformationSafetyTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift](../../Packages/Engine/Tests/EngineTests/DisplayLinkRatePolicyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFImportTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFImportTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFPackageContainmentTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/GLTFTests.swift](../../Packages/Engine/Tests/EngineTests/GLTFTests.swift) | Test / validation |
@@ -888,6 +900,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/accessory-labels-missing.json](../../Tools/verification/scenarios/accessory-labels-missing.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/accessory-toggle.json](../../Tools/verification/scenarios/accessory-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/animation-select.json](../../Tools/verification/scenarios/animation-select.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/background-build.json](../../Tools/verification/scenarios/background-build.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/blink-toggle.json](../../Tools/verification/scenarios/blink-toggle.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-deactivate.json](../../Tools/verification/scenarios/camera-deactivate.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/camera-load-winner.json](../../Tools/verification/scenarios/camera-load-winner.json) | Conversion / recovery / verification tool |
@@ -1009,6 +1022,15 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/maker-head-female-reload.json](../../Tools/verification/scenarios/maker-head-female-reload.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-head-male-selection.json](../../Tools/verification/scenarios/maker-head-male-selection.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/maker-head-male-reload.json](../../Tools/verification/scenarios/maker-head-male-reload.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-topology.json](../../Tools/verification/scenarios/reload-load-topology.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-topology.json](../../Tools/verification/scenarios/reload-save-topology.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/topology-delete.json](../../Tools/verification/scenarios/topology-delete.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/topology-refused.json](../../Tools/verification/scenarios/topology-refused.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/topology-reparent.json](../../Tools/verification/scenarios/topology-reparent.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-duplicate.json](../../Tools/verification/scenarios/reload-load-duplicate.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-duplicate.json](../../Tools/verification/scenarios/reload-save-duplicate.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/topology-duplicate.json](../../Tools/verification/scenarios/topology-duplicate.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/topology-insert-refused.json](../../Tools/verification/scenarios/topology-insert-refused.json) | Conversion / recovery / verification tool |
 | [Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift](../../Packages/Engine/Sources/IkkokuInspect/SourceCardModelInspection.swift) | Runtime / shared shader declaration |
 | [docs/reference/character/neutral-model-parity.md](../../docs/reference/character/neutral-model-parity.md) | Documentation / historical evidence |
 

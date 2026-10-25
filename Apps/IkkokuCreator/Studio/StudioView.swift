@@ -171,7 +171,7 @@ struct StudioAddMenu: View {
             Menu("Character") {
                 Button("Female") { model.addCharacter(sex: .female) }
                 Button("Male") { model.addCharacter(sex: .male) }
-                Button("From Maker") { if let c = app.maker?.card { model.addCharacter(c) } }
+                Button("From Maker") { if let c = app.ensureMaker()?.card { model.addCharacter(c) } }
                 Button("From card…") { app.openCard() }
             }
             Menu("Item") {
@@ -473,6 +473,17 @@ struct StudioStatusLine: View {
         let _ = PerfTrace.body(.studioStatus)
         VStack(alignment: .leading, spacing: 2) {
             Text(model.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            // R7 phase 2 item 6: source characters building off the main
+            // thread (a background scene import, an undo or redo rebuild, a
+            // duplicate).
+            if let progress = model.sourceBuildProgress {
+                HStack(spacing: 6) {
+                    ProgressView(value: Double(progress.built), total: Double(max(progress.total, 1)))
+                        .progressViewStyle(.linear).frame(maxWidth: 120)
+                    Text("\(progress.label): \(progress.built) of \(progress.total)")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
             // Which view is shown: the camera looked through, or the saved
             // camera and why (`SourceStudioCameraLabel.indicator`).
             if let indicator = model.activeSourceCameraView?.indicator {
@@ -641,8 +652,8 @@ struct ObjectInspectorContent: View, Equatable {
                     Text(o.cardName).font(.callout)
                     if !o.isSourceCharacter {
                         HStack {
-                            Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.maker?.load(card: c); app.mode = .maker } }
-                            Button("Replace from Maker") { if let c = app.maker?.card { model.update(id) { $0.card = c; $0.name = c.profile.name } } }
+                            Button("Edit in Maker") { if let c = model.doc.object(id)?.card { app.ensureMaker()?.load(card: c); app.mode = .maker } }
+                            Button("Replace from Maker") { if let c = app.ensureMaker()?.card { model.update(id) { $0.card = c; $0.name = c.profile.name } } }
                         }
                         Toggle("Show clothing", isOn: Binding(get: { o.clothingVisible }, set: { v in model.update(id) { $0.clothingVisible = v } }))
                         Toggle("Show accessories", isOn: Binding(get: { o.accessoriesVisible }, set: { v in model.update(id) { $0.accessoriesVisible = v } }))

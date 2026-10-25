@@ -17,7 +17,7 @@ Supported edits are:
 - Current camera and ten saved camera slots, preserving position, all three Euler angles, all three distance components and field of view. Only the 40-byte version-2 payload changes.
 - A replacement scene PNG only when explicitly supplied. It must be one complete CRC-valid PNG; an embedded card cannot acquire a PNG prefix.
 
-Transforms are expressed in the original Unity coordinate basis and Euler degrees. The native app must convert edited transforms back before export. Duplicate or unavailable destinations, invalid group counts, nonfinite values, invalid camera FOV and invalid PNGs reject the entire edit. Object IDs, root dictionary keys, ordering, unedited catalog choices/settings and trailing plug-in bytes are preserved. Changing hierarchy, object type, item identity or plug-in behavior is outside this writer.
+Transforms are expressed in the original Unity coordinate basis and Euler degrees. The native app must convert edited transforms back before export. Duplicate or unavailable destinations, invalid group counts, nonfinite values, invalid camera FOV and invalid PNGs reject the entire edit. Object IDs, root dictionary keys, unedited catalog choices/settings and trailing plug-in bytes are preserved, and so is record order except where a [topology edit](#topology-edits-deletion-and-reparenting-st-t03-st-s09) deletes or moves a record. Deleting records and moving them between the root and folders follow that section, and duplicating records and adding folders, cameras and lights follow [duplicates and added records](#duplicates-and-added-records-st-t03-st-s09-st-d03); adding characters or items, other moves, object type, item identity and plug-in behavior are outside this writer.
 
 The writer validates complete output framing after applying patches in source byte order. Variable-length embedded card, voice-list and thumbnail edits therefore shift following records without reconstructing their bytes. Tests cover modifications both before and after a resized card, nested objects, ordinal Unicode bone identities, unknown trailers and source `Data` slices with nonzero start indices. Reversing transform, visibility, name, camera- and route-active, flag and camera edits restores every original byte.
 
@@ -57,11 +57,287 @@ remains separate.
 
 ## App boundary and remaining work
 
-The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected.
+The app exports supported existing transforms, per-object visibility, folder/camera/route renames, camera active flags (only after the user switches the looked-through camera, then for every camera record), route play-state `active` flags, FK/IK and activation flags, animation, voice and cameras to a **new file** after checking the source SHA. It renders an explicit edited thumbnail. The app populates `edits.cards` with source face/body shape values and edited card colors that differ from the embedded card's saved values (ST-T06); shape and color edits on one character merge into a single `Edits`, and a value edited back to the saved rate or rgba writes nothing and the file stays byte-identical. Only colors that actually bound a material on the assembled character are exported; an edited color whose ID binds nothing still renders as saved. Its inspector diagnostic says it remains in the native document but is skipped by original-scene export. A selected outfit other than the card's saved one is merged into the same `Edits` as `coordinateType` (ST-C03); choosing the saved outfit again writes nothing. Clothes states, accessory flags and the shoes type that differ from the card's saved `Status` are merged the same way; a state edited back to the saved bytes writes nothing. Thumbnail and other card destinations remain unpopulated, and a native `object.card` override is rejected. Deleted objects and objects moved between the root and folders are exported as [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09), and copies of source records and new folders, cameras and lights as [inserted records](#duplicates-and-added-records-st-t03-st-s09-st-d03).
 
-The export validator rejects added/deleted/duplicated objects, reparenting, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
+The export validator rejects new characters and items, the topology and insertion cases those sections list as refused, type changes, and name edits for any record kind other than folder, camera or route (a renamed character keeps its name in its card), plus native assets/materials/cards/hand/appearance overrides, light/effect/timeline changes and live typed plugin state. A retained source file is not serialization for those edits.
 
-Implement missing field/topology writers and source-key remapping under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
+Implement the missing field writers, new characters and items, route duplication and the refused topology cases under `ST-T03`, a real source-card edit workflow under `ST-T06`, and GUID-specific plugin serialization under `ST-T13`. Each writer must preserve unknown siblings, verify a no-op byte match, reverse supported changes exactly where possible, and validate an edited file in the original loader before widening its compatibility claim.
+
+## Topology edits: deletion and reparenting (ST-T03, ST-S09)
+
+Reviewed 2026-10-25. `SourceSceneEdits.deletions` deletes source records with their whole subtree, and `SourceSceneEdits.reparents` moves records between the root and folders. `SourceSceneTopology` (`Packages/Engine/Sources/Studio/SourceSceneTopology.swift`) plans both edits, and `editedData` writes them. Every case the writer cannot reproduce the way CharaStudio would is refused before any byte is written, and the reason is shown in the app.
+
+### Recovered rules
+
+The rules come from the recovered CharaStudio `Assembly-CSharp.dll` (SHA-256 `902b9a23…`). Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/77473a43…/project/Studio/`. The on-disk tree and key rules are in [Object tree and keys](scene-records.md#object-tree-and-keys).
+
+- **Delete.** `TreeNodeCtrl.DeleteNode` (TreeNodeCtrl.cs:132) needs the node's `enableDelete`. It detaches the node, then runs `onDelete` for the node and for every node below it (`DeleteNodeLoop`, :320). Studio registers `OnDeleteNode` (Studio.cs:655), which runs the object's `OCI*.OnDelete`. That calls:
+  - `parentInfo.OnDetachChild`, a `List.Remove` from the parent's child list. A character removes the child from the first accessory group that holds it (OCIChar.cs:577).
+  - `Studio.DeleteInfo` (Studio.cs:714). It removes `_info.dicKey` from `sceneInfo.dicObject`, deletes the key, and calls `SetSunCaster(-1)` when the sun caster was that key. Only a root whose dictionary key equals its `dicKey` is removed this way.
+
+  `Studio.DeleteCamera` (Studio.cs:386) clears the looked-through camera when the deleted object was that camera, so the next save writes no active camera. No other record changes. Keys live in a `HashSet` (SceneInfo.cs:99), so gaps are legal and nothing is renumbered.
+- **Reparent.** `TreeNodeCtrl.SetParent` (:173) needs `enableChangeParent`. `Studio.OnParentage` (Studio.cs:669) finds both controllers (`FindLoop`, :946) and calls the new parent's `OnAttach`, or the child's `OnDetach` for a move to the root.
+  - `OCIFolder.OnAttach` (OCIFolder.cs:38) takes a root child out of the root dictionary with `DeleteInfo(_delKey: false)`, which keeps the key. It takes any other child out of its list with `OnDetachChild`. It then appends the child with `folderInfo.child.Add` and parents its transform under the folder's child root. Finally it sets `changeAmount.pos`/`rot` from the new `localPosition`/`localEulerAngles`, so the world pose is kept and `changeAmount.scale` is not touched.
+  - `OnDetach` (OCIFolder.cs:83 and the same method on the other kinds) moves the record to the root with `Studio.AddInfo` (Studio.cs:705), under its own `dicKey`, and re-authors the local placement the same way.
+- **Restrictions.**
+  - Cameras and lights cannot hold children: `enableAddChild = false` (AddObjectCamera.cs:61, AddObjectLight.cs:75).
+  - Routes cannot be reparented: `enableChangeParent = false` (AddObjectRoute.cs:55).
+  - A route's child root and its points can be neither moved nor deleted (AddObjectRoute.cs:66–67, :139–141).
+  - A character's accessory point nodes can be neither moved nor deleted (AddObjectAssist.cs:173–191).
+- **Root order.** `SceneInfo.Save` (SceneInfo.cs:299) writes `sceneInfo.dicObject` in enumeration order. In the Mono `Dictionary`, `Remove` frees a slot and the next `Add` reuses the most recently freed one. So after an interactive delete and move, the original's root order depends on that history. Our writer appends a record moved to the root after the remaining roots. The original player loads our order unchanged (VM run below).
+- **Camera at load.** `AddObjectCamera.Load` calls `ChangeCamera(ocic, _info.active)` (AddObjectCamera.cs:82) in file load order (depth-first pre-order), so the last saved active camera wins.
+
+### Writer behavior
+
+- **Deletion** drops the record's bytes, subtree included, from the list that owns it. It rewrites that list's Int32 count: the root count, a folder, item or route child count, or a character's accessory group count. All other records keep their bytes and keys.
+- **A move** cuts the record's bytes, subtree unchanged, and appends them to the end of the new parent's list: a folder's child list, or the root dictionary under the record's own key. A record that was already a root keeps its original root-key bytes. Both affected counts are rewritten.
+
+  The caller pairs each move with an ordinary `.object` transform edit holding the re-authored local placement (`SourceStudioWorldTransform.reparented`: world position and rotation kept, scale unchanged), matching what `OnAttach`/`OnDetach` author. A record moved out of a folder that the same export deletes survives, like moving it out and then deleting the folder in CharaStudio. Records inside that moved subtree can still be deleted on their own: moving folder B out of folder A, deleting B's child C, then deleting A is the deletions {A, C} plus the move of B, and C is not "already deleted" with A.
+- **Sun caster.** `sunCaster` is written as −1 when its record was deleted.
+- **Looked-through camera.** If an export has topology edits and no explicit camera-active edit, the saved winner must stay the camera that was active at import. If that camera was deleted, there must be no winner, as `Studio.DeleteCamera` leaves it. When the edited file's load-order winner differs, the writer flips exactly the camera flags that differ.
+- **Other edits.** All other destinations still apply, and their byte patches travel with the moved bytes. An edit to a deleted record is refused.
+- **Verification.** The result is decoded again and checked against the planned tree (records, child order and root keys) before it is returned. An export without deletions or moves takes the previous patch path unchanged.
+
+**Supported:**
+
+- Deleting any record, with its subtree, that is not attached to a character's accessory point. This includes roots, and characters together with their accessory children.
+- Moving any non-route record whose current parent is the root or a folder, either to the root or to a folder that is not being deleted.
+
+**Refused.** Each of these rejects the whole export, with the stated reason:
+
+| Case | Reason |
+| --- | --- |
+| Deleting an object attached to a character's accessory point on its own | CharaStudio allows it (OCIChar.cs:577 removes it from the group), but no such file has been reloaded in the original player yet. Deleting the character removes it with its subtree. |
+| Listing a record whose ancestor is also deleted | Only the top of a deleted subtree is listed. The ancestor walk stops at the first moved ancestor, which takes the record out of the deleted subtree. |
+| Deleting, or moving off the root, a root whose dictionary key differs from its `dicKey` | `DeleteInfo` removes roots by `dicKey`. |
+| Any deletion when the scene carries plug-in (ExtendedSave) data | Plug-ins key their data by `dicKey` and rewrite it from live objects when CharaStudio saves. Deletion is allowed only with no trailer, or with one KKEx block holding a nil or empty map. |
+| A scene edit targeting a deleted record | The record is gone. |
+| Moving a route | `enableChangeParent = false`. |
+| Moving a route child | Its saved local placement depends on the route's playback position at the moment of the move. |
+| Moving an item child, or moving anything under an item | An item's child root may be a named transform inside its prefab (`ItemLoadInfo.childRoot`) that the converted catalog does not record. |
+| Moving an accessory child, or moving onto a character's accessory points | The attachment transform is a character bone that the writer does not re-author against. |
+| Moving under a camera or light | `enableAddChild = false`. |
+| Cycles, a record moved twice, a record both deleted and moved, a move under a deleted or unknown record | Invalid edit. |
+| A record moving to the root whose key another root already uses | Root dictionary keys must stay unique. |
+| Adding or duplicating objects | Now written by the insertion writer; its own refusals are listed in [duplicates and added records](#duplicates-and-added-records-st-t03-st-s09-st-d03). |
+
+### App translation
+
+`StudioModel.exportSourceScene` asks `SourceSceneExportValidation.topologyEdits(document, against: snapshot)` for the edits. Every document object must be a distinct source record.
+
+- Records missing from the document become deletions, listed by the top of each missing subtree.
+- The document's object order is the sibling order. In each parent's list, the longest prefix still in original order stays in place, and every other record becomes a move, in document order, because CharaStudio can only append.
+
+The app's Delete and Set Parent commands (`deleteSelection`, `setParent`) are undoable. `setParent` puts the moved object at the end of the document, so the new parent's children read in the order CharaStudio would append them. The exported thumbnail is re-rendered when objects are deleted, so deleted objects do not stay in it. Native save and reload keep the edited tree, and an export after the reload carries it.
+
+### Evidence
+
+- **Engine.** `SourceSceneTopologyTests` (9 tests) builds scenes with an independent spec builder whose bytes must match the reader. The tests then assert each destination's bytes:
+  - a no-op returns identical bytes, and edit-then-revert restores every byte;
+  - subtree deletion, including the sun caster and camera rules;
+  - root, character and nested deletions;
+  - moves to a folder, to the root, root to folder, and a chain;
+  - the looked-through camera after a move, with and without an explicit camera edit;
+  - moving out of a folder and then deleting it;
+  - the app derivation;
+  - the plug-in trailer rule;
+  - every refusal, including the root-key collision.
+
+  Disabling the sun-caster and camera rules fails 4 of these tests (negative control). `SourceSceneExportValidationTests` covers the app boundary: deleting a route child is accepted; a detached accessory child, an added object, and a character moved under a route are refused.
+
+  The full Engine suite with the shared fixture map ran 917 tests, and 915 passed. One failure is `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested`: it reads `.local/reverse` relative to the checkout and passes once the worktree links it. The other is `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose 6 expectations fail identically on main `aee4287` (a store-manifest fixture mismatch, not part of this slice).
+- **Lanes.** Five `studio-scenarios` checks call the same `StudioModel` methods the UI uses. Each includes negative controls (`assertRejected`) or an export that is meant to fail (`exportRejected`):
+  - `topology-delete.json` (scene-x): delete folder 1, undo and redo, export and reimport. Expects root `[0]`, keys 1 and 2 absent, and no active camera.
+  - `topology-reparent.json` (koikatu_cs0002591): item 623 moves from folder 622 to folder 962, character 65 from the root to folder 626, and item 1129 from folder 962 to the root; folder 1298 is deleted with its character and items. Asserts the child lists and that world pose holds within 1e-4 m and 0.01°, through 4 undos and 4 redos. After export and reimport it holds within 5e-4 m and 0.05°.
+  - `reload-save-topology.json` and `reload-load-topology.json` (scene-x): camera 2 moves to the root and folder 1 is deleted, then native save, a fresh process, load, export and reimport. Expects root `[0, 2]` with camera 2 still looked through.
+  - `topology-refused.json` (mirrored-camera scene): moving item children and moving under items is refused with its reason and writes no file; deleting camera 3 then exports and reimports.
+
+  The full `studio-scenarios` lane ran `--strict` on 2026-10-25 against the Debug build of this branch: passed=61 failed=3 skipped=0. All five topology checks passed, with 13/13, 38/38, 5/5, 7/7 and 12/12 steps. The three failures are the accessory-label checks: the shared fixture map has no `IKKOKU_ACCESSORY_NAMES_MANIFEST`. With that one key added in a private copy of the map, they pass 3/3. A rerun of the reparent scenario re-renders the thumbnail from a live animated scene, so the PNG prefix differs between runs, while the scene bytes after it stay identical (457,815 bytes).
+- **Original player.** One `prlctl exec` (`original_scene_reload_probe.py --once`) loaded the four exports and their three unedited source scenes in an isolated player copy (Unity 5.6.2f1, probe source SHA-256 `3bc5e2ca…`). The probe recorded each object's parent, child lists, world position and rotation, change amounts, the root dictionary order and keys, the sun caster and the looked-through camera. `compare_scene_reload.py` then checked each load against the tree an independent reader takes from the loaded file, and against the scenario's intended tree. All 7 cases passed; the report is `.local/stt03g-topology/scene-reload-comparison.json`.
+
+  | Case | Original player after load |
+  | --- | --- |
+  | topology-delete | 1 object, root `[0]`, keys 1 and 2 absent, no looked-through camera, sun caster −1 |
+  | topology-moved | Root `[0, 2]`, camera 2 looked through, folder 1 absent, camera 2's world pose kept within 6.8e-8 m and 4.9e-6° |
+  | topology-reparent | 27 of 32 objects. Root `[622, 962, 626, 1130, 794, 1540, 1129]`, folder 962 `[963, 1127, 1128, 623]`, folder 626 `[627, 791, 792, 793, 65]`, folder 622 `[0, 624, 625]`. 1298 and its subtree are absent. Every kept object's world pose is within 3.0e-8 m and 2.9e-6° of the unedited load. |
+  | topology-item-delete | Item 0 `[2]`, item 1 `[]`, camera 3 absent, camera 2 looked through |
+
+  In every case, root dictionary keys equal `dicKey`, loaded change amounts equal the record at float32 precision, and the unedited sources load as their files say. The probe prints floats as their shortest round-trip text, so the comparison reads both sides as float32; a decimal readback alone differs from the widened float32 by up to half a float32 step. The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left.
+- **Performance.** Release `swift test -c release -Xswiftc -enable-testing` timing probe (`SourceSceneTopologyPerformanceTests`, opt-in with `IKKOKU_TOPOLOGY_PERF=1` and `IKKOKU_STUDIO_SCENARIO_SCENE`), on the 612 KB, 32-record scenario scene, median of 60 calls after 10 warmups. Each process ran the same test alone, during a quiet window:
+
+  | Call | main `aee4287` | This branch |
+  | --- | --- | --- |
+  | `decodeDocument` | 2.592 / 2.653 ms | 2.608 / 2.654 ms |
+  | `editedData`, one transform | 5.237 / 5.353 ms | 5.247 / 5.321 ms |
+  | `editedData`, reparent scenario (3 moves, 1 subtree deletion) | — | 5.65 / 5.84 / 5.89 ms |
+
+  A no-op edit returns the input bytes. The topology path costs about the same as one transform edit, because both are dominated by re-decoding the output. Recording the topology spans adds no measurable read cost. Nothing runs per frame.
+
+Reproduce the VM run from the repository root (`.local/verification/scenario-exports/` is where the lanes write their exports):
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_scene_reload_probe.py --once --errno-baseline "$(grep -c 'errno: 24' /Library/Logs/parallels.log)" \
+  --output .local/stt03g-topology/probe \
+  --topology-delete .local/verification/scenario-exports/topology-delete.png \
+  --topology-delete-source .local/reverse/original-camera-object-probe/scene-x.png \
+  --topology-moved .local/verification/scenario-exports/reload-load-topology.png \
+  --topology-reparent .local/verification/scenario-exports/topology-reparent.png \
+  --topology-reparent-source "$IKKOKU_STUDIO_SCENARIO_SCENE" \
+  --topology-item-delete .local/verification/scenario-exports/topology-refused.png \
+  --topology-item-source .local/vm-mirrored-camera/probe/scene-mirrored-camera.png
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_scene_reload.py \
+  --probe .local/stt03g-topology/probe --output .local/stt03g-topology/scene-reload-comparison.json
+```
+
+**Not verified:**
+
+- Deleting an accessory child alone and the other refused cases (none of them is written).
+- Scenes carrying plug-in data, for deletion.
+- How the original orders the roots after an interactive remove and add (history-dependent; our order is documented above and loads as written).
+- Rendering the edited scenes in the original player. The capture records state, not pixels.
+
+## Duplicates and added records (ST-T03, ST-S09, ST-D03)
+
+Reviewed 2026-10-25. `SourceSceneEdits.insertions` writes copies of source records and new folder, camera and light records into the exported scene. `SourceSceneInsertion` (`Packages/Engine/Sources/Studio/SourceSceneInsertion.swift`) plans, writes and verifies them. They combine with the [topology edits](#topology-edits-deletion-and-reparenting-st-t03-st-s09) and every leaf edit in one export. As with deletions and moves, every case the writer cannot reproduce the way CharaStudio would is refused before any byte is written, and the app shows the reason.
+
+### Recovered rules
+
+Citations are `file:line` under `.local/reverse/managed-recovery/902b9a23…/77473a43…/project/Studio/`, the same assembly as the topology rules.
+
+- **Duplicate is save, then import.** `Studio.Duplicate` (Studio.cs:440) runs `SavePreprocessingLoop` on each selected node, writes the selected records with `SceneInfo.Save(writer, selection)`, and reads those bytes straight back with `SceneInfo.Import` (SceneInfo.cs:463). So a copy is the original's saved record: the same name, change amount, tree state, visibility, card, pose, catalog IDs and light values, and the same subtree, because every record saves its own children.
+- **New keys.** `Import` builds each root with a fresh key, `Studio.GetNewIndex()` (SceneInfo.cs:470–489). `GetNewIndex` (SceneInfo.cs:194) returns the smallest key not in `hashIndex` and adds it. With `_import` true, `ObjectInfo.Load` reads the saved key and discards it (ObjectInfo.cs:43–50). Every sub-info is built the same way while its record loads, so keys are taken in byte order:
+  - a character: the record, then each FK bone, each IK target, the accessory children group by group in file order, then the look-at target (OICharInfo.cs:246–288);
+  - an item: the record, its FK bones, then its children (OIItemInfo.cs:117–173);
+  - a route: the record, its children, then for each point the point's key and its aid's key. Points load with `_import: false` (OIRouteInfo.cs:73–83), so `SetNewIndex` (Studio.cs:807) finds the original's key taken and hands out a fresh one (OIRoutePointInfo.cs:57–82).
+
+  Only these numbers change in the copied bytes. Gaps are filled first, and a key freed by a deletion earlier in the session can be reused.
+- **Placement.** `Duplicate` then loads each copy with `AddObjectAssist.LoadChild(info, parent, node)` when the original had a parent, else at the root (Studio.cs:472–484). The parent's `OnLoadAttach` appends the copy to its child list: a folder (OCIFolder.cs:61), an item (OCIItem.cs:234), a route (OCIRoute.cs:111), or the same accessory group of a character (OCIChar.cs:516). The copy is parented with `worldPositionStays: false` and keeps its saved local change amount, so it lands exactly on its original. A root copy is added to `dicObject` under its new key.
+- **Cameras.** A camera record's load calls `ChangeCamera(ocic, active)` (AddObjectCamera.cs:82). The looked-through camera saves `active = true` (`OCICamera.SetActive`, OCICamera.cs:32), so its copy takes the view.
+- **Lights.** The `OILightInfo` constructor calls `Studio.AddLight()` (OILightInfo.cs:27–39), and `isLightCheck` is `lightCount < 2` (SceneInfo.cs:109). `Import` and the nested child load read that check before they build a light and drop the light when two already exist (SceneInfo.cs:483, ObjectInfoAssist.cs:32). The Add Light menu refuses a third light the same way (Studio.cs:297).
+- **Add.** `AddObjectFolder.Add` (AddObjectFolder.cs:8–10), `AddObjectCamera.Add` and `AddObjectLight.Add` build the record with `GetNewIndex()` and add it at the root. The `ObjectInfo` constructor's defaults are a zero position and rotation, unit scale, `TreeState.Close` and visible (ObjectInfo.cs:20–30). With the default option `initialPosition = 0` (OptionSystem.cs:85), the position stays zero; option 1 moves it to the camera target.
+  - A folder is named `フォルダー` (OIFolderInfo.cs:18).
+  - A camera is named `カメラ` plus the session's camera count, and it is inactive (OICameraInfo.cs:17).
+  - The `OILightInfo` constructor makes a light white with intensity 1, range 10, spot angle 30, and shadow, enable and draw-target on (OILightInfo.cs:27–39). Its number is the `Light_00` catalog entry: 0 directional, 1 point, 2 spot.
+- **Plug-in data.** ExtendedSave and the plug-ins it serves key scene data by `dicKey`. What they do on a duplicate is their own code, which is not in the recovered assembly.
+
+### Writer behavior
+
+The writer works in two phases. `KoikatsuSceneDocument.inserting(_:)` writes the insertions into a staged scene and decodes it. Then the staged scene's `editedData` applies the deletions, moves and leaf edits, keyed by the staged keys, with the topology writer above.
+
+- **Keys.** Allocation follows `Import`: the smallest key that no record or sub-info of the source file uses, deleted records included, taken in the copy's byte order. So a deleted record's key is never reused within one export. After an interactive delete, CharaStudio may hand out other numbers; keys only need to be unique.
+- **A copy** is its template's own bytes: the header, name, card, pose, and the item and light data. The writer patches the record key and every sub-info key in place, and forces a camera copy's `active` byte to 0. The template's children are not copied with it. A copied subtree is one insertion per record, each under the copy of its parent, so a copy whose child was deleted or moved is written as the document shows it.
+- **Parents.** An insertion goes at the root (under its own key), into a source or inserted folder, or, for a copy, into its template's own list: an item's child list or the same character accessory group, either the original owner or that owner's copy.
+- **New records** are serialized like the `ObjectInfo` defaults, closed, with the app's name, transform (Unity basis, Euler degrees) and visibility. A new camera is written inactive. A new light writes the app light's number, color, intensity, range, spot angle, shadow and enable flags, with draw-target on.
+- **Changed lists.** Every list that gains a record gets its Int32 count rewritten. Insertions are appended after the list's original records, in insertion order. All other bytes are copied unchanged.
+- **Cameras.** A camera copy is written inactive. When the user looks through a different camera than the one the file loads with (a copy included), the app writes every camera's `active` flag, so the saved winner is the camera the user looks through. Without a switch, the original keeps its flag and still wins.
+- **Verification.** The staged scene is decoded and must match the plan: settings and trailer equal, every source record unchanged and in place, every changed list equal to its original list plus the planned insertions, each inserted record of the planned kind, parent, accessory point, name, header and light values, and no key used twice. An export without insertions takes the previous path unchanged, and a no-op stays byte-identical.
+
+**Supported:**
+
+- Duplicating any folder, item, light, camera or character record that is not a route and not inside a route's subtree, with its subtree, including a character with its accessory children and an item with its child items.
+- Adding folders, cameras and lights at the root or in a folder (the app adds them at the root, and Set Parent moves them). Copies and new records can be moved, renamed, hidden and edited like source records, and the deletions and moves above apply to them in the same export.
+
+**Refused.** Each of these rejects the whole export, with the stated reason:
+
+| Case | Reason |
+| --- | --- |
+| Duplicating a route, or anything inside a route's subtree | A copied route's point and aid keys and its child placement depend on playback; no such file has been reloaded in the original player yet. The app refuses the command ("Duplicating routes is not supported yet."). |
+| Any duplicate when the scene carries plug-in (ExtendedSave) data | Plug-ins key that data by object, and what they do on a duplicate is not recovered. The rule matches deletion: a trailer with no data, or one KKEx block holding a nil or empty map, does not block. New records with no duplicate are allowed and keep the trailer bytes. |
+| Adding characters or items | A new character needs a card and an item needs catalog identity this writer does not author. Duplicating a source one is supported. |
+| More than two lights after the export | `isLightCheck` drops a third light at load. |
+| Adding under an item, onto accessory points, under a route, a camera or a light | The same rules as moves, except a copy beside its original. |
+| A new record with non-unit scale, a camera field of view other than 30, a light spot blend, or native card, asset, material or pose data | CharaStudio's records have no field for these, or the app has no writer for them. |
+| A new light number outside 0–2, a nonfinite value, a negative intensity, a range that is not positive, or a spot angle outside 0–180° | Invalid record. |
+
+### App translation
+
+`StudioModel.duplicateSelection` calls `duplicateSourceSubtree` for a source record or a copy in an imported scene. It copies the subtree with new IDs, the same names, transforms and list position, and sets each copy's `sourceDuplicateOf` to the record it shows (`sourceRecordKey`). A copy never takes `sourceObjectKey`. The copy renders from its original's camera and item caches, and a copy of the looked-through camera takes the view. Native save keeps `sourceDuplicateOf`, and source rehydration after a native reload restores each copy from its source record. Undo and redo restore the whole duplicate. Native objects still duplicate as before.
+
+In an imported scene, Add Folder, Add Camera and Add Light add at the root, as CharaStudio does. A new camera is placed at the view position and takes the view's orientation, because a CharaStudio camera object looks through its own transform.
+
+`SourceSceneExportValidation.stage(document, source:)` turns the document into insertions: each forest root in document order, then each added object's children depth first. Leaf edits, deletions and moves are then validated against the staged snapshot with the staged keys.
+
+### Evidence
+
+- **Engine.** `SourceSceneInsertionTests` (10 tests) build the expected scene with the independent `TopologyScene` spec builder from the topology tests, extended with copies, names, FK, IK, look-at and item bone keys, lights, tree states and visibility, and compare every byte:
+  - a folder subtree, an item with its bones and a child, and a character with its FK, IK and look-at keys and an accessory child, each under the expected keys;
+  - a camera copy written inactive, and the view handed to it only through an explicit `cameraActive` edit;
+  - new folders, cameras and lights;
+  - insertions combined with leaf edits, deletions and moves in one export, including edits addressed to the copy and its sub-infos;
+  - edit-then-revert: deleting what was added restores the original bytes, and an empty insertion list is a no-op;
+  - smallest-free-key allocation across sub-info keys, and a deleted key not reused;
+  - the plug-in trailer rule;
+  - every refusal, each with its reason.
+
+  `SourceSceneExportValidationTests` adds the app translation: a document with a copy subtree, a new folder and a moved copy stages keys `[0, 4, 6, 7, 8]` and exports roots `[10, 20, 0, 6, 8]`. The full Engine suite (`swift test --package-path Packages/Engine` with every fixture of the shared map, after merging main at 872d2ec) ran 942 tests. 12 were skipped: opt-in timing probes and fixtures that are not present. 1 failed, the pre-existing `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose local store fixture has 52 entries where the test expects 62.
+- **Lanes.** Four new `studio-scenarios` checks drive the same `StudioModel` methods the UI uses, with negative controls:
+  - `topology-duplicate.json` (koikatu_cs0002591): Duplicate folder 962 (a character and three items), item 1540 and item 1127, then Add Folder, Add Camera and Add Light (point). It asserts the tree labels, each copy's world position against its original within 1e-4 m and 0.01°, and six undos and redos. After export and reimport the roots are `[622, 65, 962, 626, 1130, 794, 1298, 1540, 113, 334, 336, 337, 338]`, copy 113 holds `[114, 331, 332, 333]` and folder 962 holds `[963, 1127, 1128, 1129, 335]`, the keys an independent Python allocation over the source file predicts. Every copy and new record is within 5e-4 m and 0.05° of its pre-export capture. Two `assertRejected` controls (a wrong position source and a wrong child order) must fail.
+  - `topology-insert-refused.json` (mirrored-camera scene): a new character, and a new folder moved under an item, are each refused with their reason and write no file. Duplicating camera 2 inside item 0 hands it the view, and the reimport has item 0 `[2, 4]` with camera 4 looked through.
+  - `reload-save-duplicate.json` and `reload-load-duplicate.json` (scene-x): duplicate camera 2, undo and redo, add a folder and save natively. A fresh process loads it with three camera cache entries after one rehydration, switches to the copy, exports and reimports root `[0, 1, 4]`, folder 1 `[2, 3]`, camera 3 looked through at camera 2's world position.
+
+  The full `studio-scenarios` lane passed 68/68 with `--strict`, and `maker-scenarios` passed 10/10. After the negative controls moved ahead of the final asserts, and again after the merge of main at 872d2ec, the four new checks passed: topology-duplicate (56 steps), topology-insert-refused (16), reload-save-duplicate (11) and reload-load-duplicate (13). The reports are in `.local/stt03h-duplicate-insert/lanes/`.
+- **Original player.** One `prlctl exec` (`original_scene_reload_probe.py --once`) loaded `topology-duplicate` and the camera copy (`topology-camera-copy`, the `topology-insert-refused` export), plus their two unedited source scenes, in an isolated player copy (Unity 5.6.2f1). The probe now also records the key index after the load (`SceneInfo.hashIndex`) and each object's content: an item's catalog IDs, whether its prefab loaded and its renderer and vertex counts, a light's values and the `Light` they drive, a character's card name, sex and renderer and vertex counts. `compare_scene_reload.py` checks each load against the tree the independent Python reader takes from the loaded file and against the scenario's intended tree. All 4 cases passed; the report is `.local/stt03h-duplicate-insert/scene-reload-comparison.json`.
+
+  | Case | Original player after load |
+  | --- | --- |
+  | topology-duplicate | 42 objects (32 + 10). Roots, child lists, accessory groups, dicKeys and change amounts as written. 1,122 index keys, exactly the record's key list (977 in the source load), so no key was remapped. Every source object at its source-load world pose, and every copy at its original's: 0 m and under 1e-14°. Copies show their original's name and content: character 114 `春野 千佳` with 46 renderers and 50,224 vertices like 963, items 331–335 catalog `0/0/1` loaded like theirs. New folder, camera and light at their record placement within 3.4e-8 m and 6.7e-6°; the light loads as the point light written (intensity 0.5, range 3, spot angle 40). Names, tree states and visibility as written. |
+  | topology-camera-copy | 5 objects. Item 0 `[2, 4]`, camera 4 `IKKOKU-MIRROR` looked through, cameras 2 and 3 inactive, copy 4 at camera 2's source-load world pose. |
+
+  The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left.
+- **Performance.** Export costs did not change. Duplicating a character in the app stalls the main thread for about 0.6 s per character. An item copy costs about 1.6 ms.
+
+  The export was timed with `SourceSceneTopologyPerformanceTests`, in Release (`swift test -c release`) on koikatu_cs0002591, with one test per process and 60 calls each:
+
+  | Call (median / p90 ms) | main d6b61a2 | this branch |
+  | --- | --- | --- |
+  | `decodeDocument` | 2.870 / 3.014 | 2.875 / 3.040 |
+  | `editedData`, one transform | 5.791 / 6.037 | 5.823 / 5.966 |
+  | `editedData`, reparent scenario (3 moves, 1 subtree deletion) | 5.676 / 5.844 | 5.508 / 5.656 |
+  | `editedData`, duplicate scenario (7 copies, 3 new records) | — | 6.642 / 6.835 |
+  | the same plus one transform on a copy | — | 13.535 / 13.822 |
+
+  An export without insertions takes the unchanged path, so its cost is the same as on main. With a leaf edit, the leaf writer walks the staged scene a second time, the same walk any edited export makes (5.8 ms on main). Reusing the stage's decoded spans would touch every leaf destination, so this change leaves that walk in place.
+
+  The app was timed with the Release build and the scenario op `timeDuplicate` (select, then `duplicateSelection()` timed, then undo; 20 rounds):
+
+  | Duplicated object | Median | p90 |
+  | --- | --- | --- |
+  | item 1127 | 1.62 ms | 1.78 ms |
+  | character 963 | 611 ms | 616 ms |
+  | folder 962 (a character and three items) | 610 ms | 612 ms |
+  | folder 962 holding 25 objects with 5 characters | 3.03 s | 3.05 s |
+
+  An unmeasured Time Profiler run (10 duplicates of character 963) attributes the stall:
+  - About 590 ms of each duplicate is `SourceStudioCharacterPreview.init`. `refresh()` calls it synchronously for the copy, which has no cached preview.
+  - 522 ms of that re-parses the converted Maker rig JSON in `SourceMakerLibrary.prepare` (`SourceRig.decode`). The base body and head components take 336 ms, and the card's converted clothes, hair and accessories about 190 ms.
+  - The rest is small:
+    - the shape contract decode, 24 ms;
+    - the `SourceRigPreview` init with mesh registration, 11 ms;
+    - appearance, 11 ms;
+    - the scene decode, 3 ms;
+    - the first frame, 2 ms.
+
+  The duplicate itself, the subtree copy and the copy's export add nothing per frame. `refresh()` and `Renderer.prepare` gain only the `sourceRecordKey` read. Reusing the decoded rigs (they are immutable for the same bytes) or building the preview off the main thread is the follow-up. It is [R7](../performance.md) phase 2, item 6, which owns source character preview construction at import, undo restore and duplicate.
+
+Reproduce the VM run from the repository root:
+
+```sh
+.local/reverse/unitypy-venv/bin/python Tools/reverse/original_scene_reload_probe.py --once --errno-baseline "$(grep -c 'errno: 24' /Library/Logs/parallels.log)" \
+  --output .local/stt03h-duplicate-insert/probe \
+  --topology-duplicate .local/verification/scenario-exports/topology-duplicate.png \
+  --topology-reparent-source "$IKKOKU_STUDIO_SCENARIO_SCENE" \
+  --topology-camera-copy .local/verification/scenario-exports/topology-insert-refused.png \
+  --topology-item-source .local/vm-mirrored-camera/probe/scene-mirrored-camera.png
+.local/reverse/unitypy-venv/bin/python Tools/reverse/compare_scene_reload.py \
+  --probe .local/stt03h-duplicate-insert/probe --output .local/stt03h-duplicate-insert/scene-reload-comparison.json
+```
+
+**Not verified:**
+
+- Duplicates in scenes that carry plug-in data, route duplicates, and new characters or items (all refused).
+- Lights: the reloaded scenes had one light, the new one. The two-light limit follows the recovered code and was not reloaded.
+- A new record inside a folder, and a copy inside a character's accessory group, are covered by the Engine tests only, without a reload in the original player.
+- Rendering in the original player. The capture records state and mesh counts, not pixels.
 
 ## Shape and color reset contract
 

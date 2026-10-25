@@ -633,9 +633,10 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "setClothesState", "setAccessoryVisible", "setShoesType", "setExpression", "resetExpression", "setAnimation", "setAnimationSpeed",
                 "setForceLoop", "setFKEnabled", "setFK", "setPoseMode", "selectBone",
                 "dragGizmo", "hoverGizmo", "captureBone", "captureObject", "captureRender",
-                "advance", "orbit", "setAutomaticBlink", "editDuringAdvance",
+                "advance", "orbit", "setAutomaticBlink", "editDuringAdvance", "backgroundBuild",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
-                "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels"}
+                "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
+                "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight"}
 
 IK_CHAINS = ("hand_L", "hand_R", "foot_L", "foot_R")
 
@@ -815,7 +816,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 59)
+        self.assertEqual(len(self.checks), 69)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -864,6 +865,11 @@ class StudioScenarioLaneTests(unittest.TestCase):
             for step in steps:
                 op = step["op"]
                 self.assertIn(op, SCENARIO_OPS, "unknown op in %s" % path)
+                if op == "backgroundBuild":
+                    self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "importWhileHidden",
+                                                  "duplicate", "duplicateWhileHidden"))
+                    if step["build"].startswith("duplicate"):
+                        self.assertIs(type(step["key"]), int)
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)
                     self.assertIn(step["index"], range(100, 2001))
@@ -963,11 +969,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertTrue(step["name"],
                                     "a captured bone needs a label to compare against: %s" % path)
                 if op == "captureObject":
-                    self.assertIsInstance(step["key"], int)
+                    # A source key (with `copy` for a copy), or `added` for
+                    # an object the scenario added.
+                    self.assertTrue(isinstance(step.get("key"), int) or step.get("added"))
                     self.assertTrue(step["name"],
                                     "a captured object needs a label to compare against: %s" % path)
                 if op == "addCharacter":
                     self.assertIn(step["sex"], ("female", "male"))
+                if op == "duplicate":
+                    self.assertIsInstance(step["key"], int)
+                if op == "addLight":
+                    self.assertIn(step["mode"], ("directional", "point", "spot"))
                 if op in ("setIKEnabled", "setIKTarget", "captureIKPose"):
                     self.assertTrue(step["character"], "native IK ops name the character: %s" % path)
                     self.assertIn(step["chain"], IK_CHAINS)
@@ -983,7 +995,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 if op == "captureIKPose":
                     self.assertTrue(step["name"],
                                     "a captured IK pose needs a label to compare against: %s" % path)
-                if op in ("export", "reimport", "saveDocument", "loadDocument"):
+                if op == "delete":
+                    self.assertIs(type(step["key"]), int)
+                if op == "setParent":
+                    # parent null is the root; the object (a source key, or
+                    # `added` for one the scenario added) must be named either way
+                    self.assertTrue(type(step.get("key")) is int or step.get("added"))
+                    self.assertIn("parent", step, "setParent names its new parent (null for the root): %s" % path)
+                    self.assertIn(type(step["parent"]), (int, type(None)))
+                if op == "exportRejected":
+                    self.assertTrue(step["errorContains"], "a refused export needs a specific diagnostic")
+                if op in ("export", "reimport", "saveDocument", "loadDocument", "exportRejected"):
                     self.assertTrue(step["path"].startswith(".local/"),
                                     "scene writes must stay under .local/: %s" % step["path"])
                 if op in ("assert", "assertRejected"):
@@ -993,7 +1015,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "eyeLook", "blink", "handPattern",
                                             "diagnosticContains", "statusContains", "indicatorContains",
                                             "treeLabel", "view", "render",
-                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount") if k in step]
+                                            "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
+                                            "children", "absent", "activeCopyOf") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
@@ -1026,6 +1049,30 @@ class StudioScenarioLaneTests(unittest.TestCase):
                         for index in ("coordinate", "saved"):
                             if index in outfit:
                                 self.assertIn(outfit[index], range(7))
+                    if "children" in step:
+                        children = step["children"]
+                        self.assertIn(type(children.get("parent")), (int, type(None)))
+                        # Exactly one list: source keys, or tree labels
+                        # ("622", "copy:962", "native:Name") once copies exist.
+                        self.assertEqual(len({"keys", "labels"} & set(children)), 1,
+                                         "a children assert names keys or labels: %s" % path)
+                        self.assertTrue(all(type(key) is int for key in children.get("keys", [])))
+                        self.assertTrue(all(isinstance(label, str) and label for label in children.get("labels", [])))
+                        if "parentCopy" in children:
+                            self.assertIs(type(children["parent"]), int, "parentCopy needs a parent key: %s" % path)
+                            self.assertIs(type(children["parentCopy"]), int)
+                    if "copy" in step or "added" in step:
+                        # A copy is addressed by its source key and index; an
+                        # added object by its name, never both.
+                        self.assertFalse("copy" in step and "added" in step)
+                        if "copy" in step:
+                            self.assertIs(type(step["copy"]), int)
+                            self.assertIsInstance(step.get("key"), int)
+                        else:
+                            self.assertTrue(step["added"])
+                            self.assertNotIn("key", step)
+                    if "absent" in step:
+                        self.assertTrue(step["absent"] and all(type(key) is int for key in step["absent"]))
                     if "position" in step:
                         self.assertIsInstance(step["position"]["key"], int)
                         self.assertTrue(step["position"]["from"])
@@ -1107,6 +1154,17 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 self.assertEqual(steps[exported]["path"], steps[imported]["path"])
                 self.assertEqual(steps[0]["path"], steps[reloaded]["path"])
                 self.assertNotIn("setVisible", ops[:exported])
+            elif check["id"] in ("studio-scenario-reload-load-topology", "studio-scenario-reload-load-duplicate"):
+                # ST-T03 topology: the fresh-process load of the saved native
+                # document must still export its deletions and moves (or its
+                # copies), so this load-first check also round-trips the
+                # original format once.
+                self.assertEqual(ops[0], "loadDocument")
+                self.assertNotIn("saveDocument", ops)
+                self.assertEqual((ops.count("export"), ops.count("reimport")), (1, 1))
+                exported, imported = ops.index("export"), ops.index("reimport")
+                self.assertLess(exported, imported)
+                self.assertEqual(steps[exported]["path"], steps[imported]["path"])
             elif "saveDocument" in ops or "loadDocument" in ops:
                 self.assertNotIn("export", ops,
                                  "a save/load scenario must not mix in the "
@@ -1120,7 +1178,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics", "accessory-labels")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics", "accessory-labels", "topology", "duplicate")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]
