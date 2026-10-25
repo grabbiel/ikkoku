@@ -4413,3 +4413,86 @@ The fixture had zero attached source DynamicBone components and an unrendered
 route. RSS 379,125,760 bytes and Metal allocations 415,907,840 bytes can overlap in
 unified memory; do not sum them or infer full-game throughput. See R7 for a
 representative displayed-scene benchmark and the full evidence inventory.
+
+
+## Native stock cheek ID1 composite (R1/CMT-04, #243, 2026-10-25)
+
+The ordinary female/head0/exType0/high-detail face compositor now accepts exact
+stock cheek category 402/ID1 (`chara/mt_cheek_00.unity3d`, `cw_t_cheek_000`).
+The existing creator program and `_tex4uv`, alpha, null-layer and active-makeup
+selection rules remain unchanged. Base or coordinate makeup supplies the active
+color; editing the inactive record preserves the recipe and texture. ID0 remains
+available. Other nonzero cheek IDs, lipline/face-paint/mole layers, other heads
+and resolver-backed replacements remain outside this gate. Generic head-contract
+metadata behavior is unchanged; the new metadata validation applies only to this
+exact cheek input and rejects conflicting supplied values.
+
+Two independent original players provide base and distinct active-color targets.
+The source cards retain exact requested color bits, bound values remain exact
+before/after an inactive-record rebuild, and unrelated inputs/vectors remain
+unchanged. Card-to-bound colors use the existing 1e-6 cross-API observation
+threshold. The base/distinct targets differ at 74,916 pixels / 212,124 channels;
+initial, inactive-rebuilt and post-cleanup targets are identical within each case.
+The stronger cross-API bit-equality assertion and its failed audit are retained.
+
+Conversion adds one 832×312 RGBA32 sRGB input with one authored mip and
+Bilinear/Clamp/aniso1. Its bundle SHA-256 is
+`d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7`;
+the retained 63-asset/five-program store manifest is
+`def1dfb18a7bcc5ed8036c358918e160fe42b97e969458b6bfabb08a4fe0a5e0`.
+All 62 prior asset records, five programs and 396 prior level/program files
+remain byte-identical. Decoded RGB matches the independent bound-input readback;
+49,136 alpha components differ by at most 0.00048828125. No decoder or tolerance
+changed to absorb that observation. Level-zero target comparisons are independent
+source oracles; higher generated mips are not independently verified.
+
+At source `e62c67c`, Release test binary `145b9287…` passes the strict cheek gate:
+base/distinct target errors are at most one output byte (2,080 / 2,816 affected
+channels), with alpha 255 throughout. No-op and inactive edits reuse the same
+key/texture without more uploads or auxiliary allocations. Fifteen recolors
+release transient targets; retained inputs stay at four uploaded assets, one
+black default and three effective samplers. Reverting returns the original
+retained target, and each target allocation is 5,652,480 bytes. The first test
+attempt incorrectly expected two samplers under ForceEnable; the retained
+failure was corrected only in the test expectation. Asset Clamp/linear-mip/aniso9,
+paint Repeat/linear-mip/aniso9 and default Repeat/nearest-mip/aniso1 are distinct.
+Nine prior strict GPU gates also pass on the accepted 62-asset store, without
+skips. Earlier focused checks pass 14 CPU Engine cases and 27 Python tests.
+
+Final integration `9aad4393` preserves all eleven cheek feature files from the
+native-test producer. Its fresh inspected Release app, SHA-256
+`b027d0b740b714cbf06f218b0411364f0a0db2efd2cbbc8db46b4cea579d7d3e`, passes six
+default-OFF source/native/Maker captures, each byte-identical to its historical
+accepted baseline. The old test binary retains its own producer identity;
+accepted-main preview/plugin changes are covered by the fresh app.
+
+Seven further functional processes use the same final app, fresh cheek card,
+frame and time, in old/new/new/old/old/new/capture order:
+
+| Provider | Live slots / fallbacks | Unique composite keys / events | Registered textures |
+| --- | ---: | ---: | ---: |
+| Old 62-asset store, three runs | 19 / 1 | 6 / 8 | 95 |
+| New 63-asset store, three runs | 20 / 0 | 7 / 9 | 100 |
+| Captured-pixel control | 20 / 0 | 0 / 0 | 72 |
+
+The old fallback names the missing cheek input. New runs add one face-creator
+miss with key `2df3fa4f28706ade77783d1914698ace4823faec97c65486ebff37159f271711`
+and 5,652,480 target bytes; the six unrelated keys/eight events agree across
+providers. Each provider repeats its attachment and resource records exactly:
+41 meshes, 20 deform buffers and zero retiring resources. These registration
+counts differ from the isolated input budget above. Toon, depth-normal and
+geometry PNGs are byte-identical across all seven processes. All owned app,
+compiler and original-player processes are released.
+
+Comparative costs are deferred: these were functional runs with concurrent work
+permitted. Printed timing samples do not establish a speedup or quiet-cost
+result. The live native rig uses captured globals; passing composite targets
+and control images does not establish whole-frame source shading, generated-mip
+parity or resolution of translated-draw repeatability issue #188.
+
+Private evidence is retained under
+`.local/codex-continue-2026-10-24/rolling/materials-cheek/`: original audit v3 and
+superseded failures, conversion/input reviews, `native-attempt-2/`, archived
+producer sources, and `final-acceptance/`. The latter pins 5,822 inputs in
+checkpoint `97a9e316…`; the seven-provider summary is `80ea9e36…`. Root reviews
+record exact target, cache, resource, process and final-app controls separately.
