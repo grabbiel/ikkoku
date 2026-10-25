@@ -461,7 +461,7 @@ which the "per second" column shows.
 | 4 | SwiftUI update and layout per orbit event | 7.4 | 89% / 44% | 733 ms/s at 100 events/s | same as rank 2 | `orbit` writes `doc.camera`; the view graph work is as in rank 2. Of 997 ms/s busy, Ikkoku's own `body` code is ~25 ms/s; the rest is framework diffing (`ViewBodyAccessor.updateBody` 194 ms/s), `NSHostingView.layout` (148 ms/s) and AppKit control layout (`NSSegmentedCell` 87 ms/s, the toolbar and inspector segmented pickers) | M3 (camera outside `doc`), then M2; **done** in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: no view body and no sampled SwiftUI pass per orbit event (8.9 ms before); 41.0 → 119.4 presented FPS | medium |
 | 5 | Studio `refresh()` in an FK drag | 4.12 per refresh, 2 per drag event | 99% / 49% per event | 235 ms/s | `StudioModel.refresh` → character frames | each frame rebuild re-runs the pose pipeline (C1–C3) | quick wins 1–3; C2, C3, C5 in [phase 2, item 3](#phase-2-item-3-live-tick-off-the-main-thread) | 4.12 → 1.64 ms per refresh (quick wins 1 and 2, measured); 1.83–1.97 → 1.27–1.29 ms with C2, C3 and C5 | low |
 | 6 | Hover pick, synchronous GPU round trip | 2.02 | 24% / 12% | 93 ms/s at 46 events/s | `StudioModel.mouseMoved` → `Renderer.pick` | `waitUntilCompleted` on the main thread for every mouse move. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) it no longer delays presentation; at 120 moves/s it takes 2.6 ms each (316 ms/s), the largest main-thread cost in hover after the tick | M5; **done** in [phase 2, item 5](#phase-2-item-5-asynchronous-hover-pick) | measured: 2.29–2.41 → 0.01 ms per move on the main thread; the pick (0.47 ms CPU, 0.94 ms GPU) runs on the renderer's pick queue | low; renderer file |
-| 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) the draw runs on the render thread, so this costs no main-thread time, and G4 cut its CPU encode from 0.74 to 0.44 ms per frame (offscreen) | G3 + P2; **done** in [phase 2, item 4](#phase-2-item-4-unchanged-interactive-frames-g3) and its [second part](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) | G3: Studio idle draw CPU 117.7–143.1 → 42.4–46.4 ms/s, about 30 rendered frames/s instead of 120. AFTER-RANK7 | low |
+| 7 | Full redraw of unchanged frames | 0.7 CPU + 2.1 GPU | 8% / 4% CPU; 25% of a 120 Hz frame on the GPU | 107 ms/s draw CPU in `studio-native`; 101 ms/s GPU in `studio-idle` at 49 frames/s | `ViewportNSView` display link → `Renderer.draw` | every display-link callback re-encodes and re-renders the frame, shadow map and deform pass included, even when nothing changed. Since [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) the draw runs on the render thread, so this costs no main-thread time, and G4 cut its CPU encode from 0.74 to 0.44 ms per frame (offscreen) | G3 + P2; **done** in [phase 2, item 4](#phase-2-item-4-unchanged-interactive-frames-g3) and its [second part](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) | G3: Studio idle draw CPU 117.7–143.1 → 42.4–46.4 ms/s, about 30 rendered frames/s instead of 120. Item 4: a static scene idles at 15 callbacks/s with a 1/15 s keep-alive (2.05 ms/s CPU, 0.72 ms/s GPU), and Studio idle GPU fell 57.9 → 36.5 ms/s with deformed-vertex reuse | low |
 | 8 | Studio `refresh()` per orbit event | 0.89 | 11% / 5% | 68 ms/s | `StudioModel.refresh` | a camera-only change rebuilds every item (C6) | M3; **done** for orbit and pan drags in [phase 2, item 1](#phase-2-item-1-narrow-swiftui-invalidation) | measured: 1.00 ms full refresh → 0.04 ms camera rebuild per drag event | medium |
 | 9 | Source scene load at startup | 4,710 (once) | — | — | `AppState.importSourceScenePreview` | synchronous on the main thread; in the probe, 74% of the load is rig JSON decoding, repeated per character (C8) | S1, S2 | ~3 s of 4.7 s (hypothesis from the probe split) | low to medium |
 | 10 | Engine compiled `-Onone` in Debug | 1,753 per tick | — | 0 presented frames | `Packages/Engine` build settings | an unoptimized generic-heavy Engine | B1 | Debug idle tick 1,753 → ~43 ms (measured with Engine -O) | see B1 |
@@ -746,7 +746,7 @@ loaded machine, so only the shares are used).
 | G3 | Unchanged frames were fully re-rendered at the display rate, including deform and the 2048² shadow map | `Renderer.draw`, `ViewportRenderThread` | measured; **done** for interactive frames without visible live source materials | fresh Release source idle: about 120 → 30 actual draws/s; draw CPU 117.7–143.1 → 42.4–46.4 ms/s | skip complete interactive submissions using frame/resource/layer/size identity. [G3 evidence and limits](#phase-2-item-4-unchanged-interactive-frames-g3). Live source programs remain continuous. P2 is done and G5 dropped in the [rest of item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) | Low |
 | G4 | Skin matrices are copied into a new `MTLBuffer` per skin set per frame and validated element by element | `Renderer.buildContext` | measured; **done** | 0.70 ms per draw in orbit, 122 buffers per draw in the source scene ([phase 2, item 1](#what-remains-on-the-main-thread)) | write skin matrices into the frame ring. **Done** in [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes): no palette buffer is created once the ring is warm, and the offscreen CPU encode fell from 0.74 to 0.44 ms per frame | Low; renderer file |
 | G5 | Shadow map re-rendered every frame | `Renderer` shadow pass | measured; **dropped** | Metal System Trace of `studio-orbit` (base `aee4287`): shadow 17 ms/s, 0.14 ms per frame, against deform 102 ms/s, 0.85 ms per frame. The main light follows the camera's yaw (`MainLight.direction(camera:)`), so a yaw orbit changes the shadow, and FK drags and Maker edits move the casters | at most 0.14 ms per rendered frame, only for pan, zoom, hover or selection on a static pose. Dropped in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse) for deformed-vertex reuse (G9) | Low |
-| G9 | Every frame and pick re-dispatched the deform pass, even when the vertices were unchanged | `Renderer.encodeDeform` | measured; **done** | deform 102 ms/s in orbit (0.85 ms per frame), the largest GPU pass | skip a deformation whose buffer already holds the frame's inputs; **done** in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse). AFTER-G9 | Medium: buffers are read across command buffers; the [renderer contract](renderer.md#renderer-threads-r7-phase-2-item-2) orders them |
+| G9 | Every frame and pick re-dispatched the deform pass, even when the vertices were unchanged | `Renderer.encodeDeform` | measured; **done** | deform 102 ms/s in orbit (0.85 ms per frame), the largest GPU pass | skip a deformation whose buffer already holds the frame's inputs; **done** in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse). Orbit GPU 1.40–1.52 → 0.65–0.66 ms per frame (0 dispatches), FK drag 1.95–1.99 → 1.19, Studio idle 1.98 → 1.21, hover pick 0.90–0.99 → 0.08 ms | Medium: buffers are read across command buffers; the [renderer contract](renderer.md#renderer-threads-r7-phase-2-item-2) orders them |
 | G6 | No pipeline binary archive | `Pipelines` | hypothesis | pipeline creation happens during startup | `MTLBinaryArchive` for the production pipelines; measure first-launch versus warm | Low |
 | G7 | Textures are uncompressed RGBA with runtime mip generation | `ResourceStore` (`MTKTextureLoader`, `.generateMipmaps`) | hypothesis | Metal allocation 470 MB peak for 6 characters | ASTC/BC compression at conversion time, cached mips; mostly memory and bandwidth (M1) | Medium: image quality must be checked |
 | G8 | Argument buffers / Metal 4 argument tables, indirect command buffers, residency sets, heaps, parallel encoding | renderer | hypothesis | draw encoding is ≤ 0.9 ms CPU per frame | low value until item counts grow (many-prop scenes) | — |
@@ -756,7 +756,7 @@ loaded machine, so only the shares are used).
 | # | Item | Where | Status | Evidence | Fix and expected gain | Risk |
 | --- | --- | --- | --- | --- | --- | --- |
 | P1 | The display link runs on the main run loop, so every model or SwiftUI hitch is a presentation hitch | `ViewportNSView.viewDidMoveToWindow` | measured; **done** | idle baseline: 44.7 presented FPS, 150 hitches in 10 s while GPU and draw take < 3 ms | run the display link on a dedicated render thread; `Renderer` already snapshots the frame under `frameLock`. **Done** in [phase 2, item 2](#phase-2-item-2-render-thread-and-frame-ring-skin-palettes) (`ViewportRenderThread`) | Medium: renderer state touched from two threads (errors, statistics, pick); the [threading contract](renderer.md#renderer-threads-r7-phase-2-item-2) covers it |
-| P2 | No `preferredFrameRateRange`; the link runs at 120 Hz while content changes at 30 Hz | `ViewportNSView` | measured; **done** | 120 callbacks/s when the main thread is free (`studio-native`, `maker-idle`) | 30 Hz after 0.5 s without change, 15 Hz after 3 s, full rate at once on input, a resize or a submit; with an idle keep-alive that fixes G3's drag-start drops. **Done** in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse). AFTER-P2 | Low |
+| P2 | No `preferredFrameRateRange`; the link runs at 120 Hz while content changes at 30 Hz | `ViewportNSView` | measured; **done** | 120 callbacks/s when the main thread is free (`studio-native`, `maker-idle`) | 30 Hz after 0.5 s without change, 15 Hz after 3 s, full rate at once on input, a resize or a submit; with an idle keep-alive that fixes G3's drag-start drops. **Done** in [item 4](#phase-2-item-4-adaptive-link-rate-idle-keep-alive-and-deformed-vertex-reuse). Static idle: 15 callbacks/s, 2.05 ms/s CPU and 0.72 ms/s GPU (main: 120, 1.61 and 0); drag starts after 1 s and 3.5 s pauses drop nothing and show in 29.5 ms (main: 3–4 dropped, 56.3 and 63.1 ms) | Low |
 | P3 | Drawable size is the full backing size (1996×1824 here; ~3.8 K × 2.1 K full-screen on a 4K display) | `ViewportNSView.updateDrawableSize` | hypothesis | — | an opt-in render scale for low-end machines | Quality trade-off, opt-in only |
 | P4 | Three frame slots with `preferredFrameLatency = 2` | `GPUContext`, `ViewportNSView` | measured (code) | no frame-slot waits in the draw timings | — | — |
 
@@ -1973,14 +1973,149 @@ slowest tier was then 10 Hz. One drag start per recording:
 | 200 ms | 163 | 1 | 45.6 |
 | off | 2,970 | 4 | 63.0 |
 
-The interval is 1/15 s. A refresh is sometimes not shown either (AFTER-REFRESHDROP).
+The interval is 1/15 s. A refresh is sometimes not shown either. In the second window's burst runs,
+6 of 225 and 8 of 313 refreshes were not presented. 10 of those 14 came 8 ms
+before the first rendered frame of a drag, which replaced them. All 151
+refreshes of each static run were presented.
 After one of those, the gap is 133 ms, still under the threshold. The slowest
 tier became 15 Hz, so a callback comes once per interval at every rate (a
 test pins this).
 
 ### Before and after
 
-AFTER-TABLES
+The machine was reserved for each window, and every launch held the app lock.
+All builds were Release, with the fixtures, warmup and recording length of the
+`before` set: 10 s after 3 s, or 24 s for the burst runs.
+
+- **Base** is `aee4287` (executable SHA-256 `e1e21fd4…`). The `before` set
+  was recorded in its own window, and the later windows ran base again as a
+  control.
+- **Second window** (06:59–07:11) measured `6e28cb6` (`abce3eae…`), the keyed,
+  strongly held tracker. It ran the standard set twice, the burst and static
+  runs, and reuse off in the same binary. It also had controls of base and of
+  the first, weakly held tracker (`2e84b52a…`).
+- **Third window** (07:55–07:57) measured the final change `d940390`, with
+  `main` `d6b61a2` merged (`5f302118…`). It ran against base in ABBA order on
+  Maker slider and FK drag.
+
+#### Idle cost
+
+`studio-static` is the source scene with live animation off, so nothing
+changes. Second window:
+
+| Policy | Callbacks/s | Render-thread CPU ms/s | GPU ms/s | Keep-alive refreshes/s |
+| --- | ---: | ---: | --- | --- |
+| This change: adaptive link and keep-alive | 15.1 | 2.05 | 0.72 (refreshes only) | 15.0, all 151 presented |
+| `main`: 120 Hz, no keep-alive | 120.0 | 1.61 | 0 | 0 |
+| Adaptive link without the keep-alive | 15.2 | 0.20 | 0 | 0 |
+| Every callback drawn, as before G3 | 120.0 | 200.52 | 242.13 | 0 |
+
+- **CPU.** The new idle costs 0.44 ms/s more render-thread CPU than `main`.
+  A refresh takes 0.125 ms of CPU at p50, against 0.012 ms for an unchanged
+  callback, and there are 15 a second instead of 120.
+- **GPU.** A refresh's blit costs 0.035 ms of GPU at p50, 0.72 ms/s in all.
+  `main` used none.
+- **First window.** It measured the same idle at 2.52 ms/s CPU and 0.84 ms/s
+  GPU, against 1.94 ms/s and 0 for `main`.
+- **Not visible.** While the window is occluded or minimized, the keep-alive
+  is off and the link stays at 15 Hz. That idle is the
+  without-keep-alive row: 0.20 ms/s.
+
+#### Drag starts after a pause
+
+`studio-orbit-bursts` in the second window, leaving out the first drag of each
+recording:
+
+| Policy | Pause | Drag starts | Dropped frames per start | First presented frame, ms: median (range) | Time since the last present, ms | Render-thread CPU ms/s | GPU ms/s, rendered + refresh |
+| --- | ---: | ---: | --- | --- | --- | ---: | --- |
+| This change | 1 s | 15 | 0 | 29.5 (28.8–37.9) | 61–63 | 70.5 | 33.2 + 0.40 |
+| `main` | 1 s | 15 | 3–4 (49 in all) | 56.3 (51.3–74.4) | 968–984 | 57.9 | 67.2 |
+| Every callback drawn | 1 s | 15 | 0 | 29.0 (27.8–37.5) | 3–6 | 191.3 | 206.2 |
+| This change | 3.5 s | 5 | 0 | 29.5 (28.6–30.1) | 54–63 | 26.5 | 12.2 + 0.72 |
+| `main` | 3.5 s | 5 | 4 (20 in all) | 63.1 (62.5–72.7) | 3,469–3,479 | 25.4 | 25.8 |
+| Every callback drawn | 3.5 s | 5 | 0 | 30.0 (29.5–37.7) | 3–5 | 211.1 | 208.9 |
+
+- No drag start dropped a frame. The first image of a drag now shows about
+  29 ms after the input, as when every callback was drawn. With `main`'s
+  behavior it showed 51–74 ms after the input.
+- The first window gave the same result: 0 drops, with the first image at
+  29.4 ms (1 s pauses) and 29.2 ms (3.5 s pauses). With `main`'s behavior it
+  dropped 50 and 20 frames, and the first image came at 55.2 and 62.9 ms.
+- **Render-thread CPU per rendered frame was higher in the 1 s bursts.** It
+  was 70.5 against 57.9 ms/s for about the same number of frames.
+  - The difference lies in the first 15 frames of each drag. Their median
+    draw times, position by position, were 1.3–2.8 ms, against 1.4–1.7 ms
+    with `main`'s behavior. Later frames of the same
+    drags took 1.46–1.53 ms, against 1.42–1.43 ms.
+  - Steady drags show no such cost: in the standard set, orbit frames take
+    the same time as base, below.
+  - The likely cause is the CPU clock after a pause at 30 or 15 callbacks a
+    second instead of 120. The harness infers clocks and does not read them,
+    so this is not established.
+  - Presentation did not suffer: the first image came at the same time as
+    with every callback drawn, and the presented interval p95 stayed
+    8.33 ms.
+
+#### Standard set
+
+`before` window against the second window, two runs each:
+
+| Workload | Rendered frames/s | Render-thread CPU ms/s, before → after | GPU ms/s, before → after | GPU ms per frame, p50 | Deform dispatches/s, after (before: 115 or 20 per rendered frame) |
+| --- | ---: | --- | --- | --- | ---: |
+| Studio idle | 30 | 59.3–61.9 → 54.5–57.7 | 57.9 → 36.5–36.6 | 1.98–1.99 → 1.21 | 70 |
+| Studio hover | 30 | 45.3–51.5 → 44.6–45.8 | 54.4–56.5 → 34.4–35.3 | 1.82–1.83 → 1.14–1.19 | 1–52 |
+| Studio orbit | 120 | see below | 173.5–186.8 → 86.1–87.5 | 1.40–1.52 → 0.65–0.66 | 0 |
+| Studio FK drag | 120 | 96.9–97.5 → 94.2–95.7 | 235.8–237.2 → 143.2–143.8 | 1.95–1.99 → 1.19 | 481 |
+| Native Studio idle | 30 | 36.4–37.1 → 35.1–36.0 | 36.8–37.1 → 38.1 | 1.26 → 1.27 | 1,889 |
+| Maker idle | 30 | 25.8–26.3 → 25.8–26.4 | 18.5–18.6 → 18.8–19.1 | 0.62 → 0.62–0.63 | 600 |
+| Maker slider | 120 | see below | 70.0–71.4 → 70.7–70.9 | 0.58–0.60 → 0.59 | 2,398 |
+
+- **Callbacks and frame rate.** Every workload still called back 120 times a
+  second and rendered at the same rate. Its frames change at least every
+  33 ms, so the link stayed at full rate.
+- **Studio idle and hover.** Their frames reuse 113 of 115 deformations,
+  because the live tick moves few of them. Their GPU time fell by 37–38%.
+- **Hover picks.** The pick's GPU time fell from 0.90–0.99 ms to
+  0.075–0.079 ms at p50 (126–150 picks a second). It used to be nearly all
+  deform pass.
+- **Native Studio, Maker idle and the slider.** These change every
+  deformation in every frame, so they reuse nothing and are unchanged.
+- **Deform passes.** AFTER-PASSES
+
+#### Render-thread CPU per frame, in one window
+
+The coordinator required the per-frame CPU result to come from one window.
+
+Second window, with the first, weakly held tracker as a control. Each cell
+gives render-thread CPU in ms/s, draw ms at p50 and GPU ms per frame at p50:
+
+| Workload | Base `aee4287` | Weak tracker | Keyed tracker `6e28cb6` | `6e28cb6`, reuse off |
+| --- | --- | --- | --- | --- |
+| Studio orbit | 191.8 / 1.40 / 1.49 | 221.5 / 1.74 / 0.70 | 190.0–190.8 / 1.36–1.41 / 0.65–0.66 | 224.1 / 1.63 / 1.52 |
+| Studio FK drag | 98.1 / 0.81 / 1.92 | 109.6 / 0.93 / 1.18 | 94.2–95.7 / 0.79 / 1.19 | 102.3 / 0.85 / 1.89 |
+| Maker slider | 25.9 / 0.211 / 0.59 | 29.6 / 0.242 / 0.58 | 27.2–28.1 / 0.223–0.227 / 0.59 | 26.9 / 0.220 / 0.60 |
+
+Third window, final change against base, in ABBA order. Each cell gives
+render-thread CPU in ms/s, draw ms at p50 and GPU ms/s:
+
+| Workload | Base | Final | Final | Base |
+| --- | --- | --- | --- | --- |
+| Maker slider | 30.0 / 0.243 / 71.9 | 30.2 / 0.247 / 71.5 | 28.8 / 0.236 / 72.2 | 28.5 / 0.234 / 71.7 |
+| Studio FK drag | 99.5 / 0.834 / 236.5 | 95.2 / 0.798 / 145.4 | 98.5 / 0.817 / 145.7 | 96.0 / 0.792 / 237.9 |
+
+- **Weak tracker.** It cost 0.03–0.34 ms of CPU per frame: weak-reference
+  side tables, record copies and their retains.
+- **Keyed tracker.** It brought orbit and FK drag back to base or below,
+  since every reused deformation also saves its encoding. The slider reuses
+  nothing, and still paid 0.012–0.016 ms per frame.
+- **Final change.** It records values in place and stops tracking while
+  every deformation changes. 90% of the slider's dispatches were untracked.
+  - Slider means: 29.5 against 29.25 ms/s, and 0.242 against 0.239 ms at
+    p50. That is within the 0.009 ms between the two base runs, and its p95
+    (0.285 and 0.282 ms) was not higher than base's (0.305 and 0.273 ms).
+  - FK drag: CPU unchanged, GPU down 39%.
+- **Absolute numbers.** The third window's are higher than the second's
+  for both builds alike: 0.234–0.243 against 0.211 ms for the base slider.
 
 ### How the harness counts keep-alive refreshes
 
@@ -2037,6 +2172,12 @@ AFTER-CORRECTNESS
   Ultra, 120 Hz). The keep-alive interval leaves room for one dropped
   refresh, not for a different threshold elsewhere.
 - The keep-alive keeps a small GPU cost while a visible viewport is idle.
+- The standard set, burst and static runs measured `6e28cb6`. The final
+  change (`d940390`, values in place and the bypass) was measured only for
+  the slider and FK drag. It changes CPU work only. The exception is up to
+  29 draws after a run of draws that changed every deformation: those
+  dispatch even where they could reuse, unless a 0.1 s pause comes first.
+- The bypass thresholds (2 draws, 30 draws, 0.1 s) were chosen, not swept.
 - The harness calls the input handlers, not the view, so its drags wake the
   link through the frame they submit. A real event wakes it before its
   handler runs, slightly earlier.

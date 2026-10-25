@@ -842,17 +842,30 @@ buffer and the inputs of the last committed dispatch into it
   registered mesh's buffers are never written again, so the mesh's identity
   stands for them. Palettes and entries compare by bit pattern; neither has
   padding, and entries carry finite nonzero weights.
-- Interactive draws and both picks (`DeformMode.reuse`) skip the dispatch of
-  a deformation whose buffer's record matches the frame's inputs. The frame
-  still binds the buffer, its palette and its morph entries, so live
-  source-shader inputs read the same vertices. Captures, benchmarks and the
-  live captures always dispatch (`.always`) and record what they wrote.
+- Interactive draws (`DeformMode.interactive`) and both picks (`.reuse`)
+  skip the dispatch of a deformation whose buffer's record matches the
+  frame's inputs. The frame still binds the buffer, its palette and its morph
+  entries, so live source-shader inputs read the same vertices. Captures,
+  benchmarks and the live captures always dispatch (`.always`) and record
+  what they wrote.
 - A deformation is reused only when its key's record names the same buffer
   object as the frame's, and the same content.
 - `encodeDeform` removes the record of every buffer it writes;
-  `commit(_:writes:)` sets it again in the same lock hold as the commit. A
-  command buffer that is abandoned after encoding, or a path that commits
-  without recording, can only cost a later frame a dispatch.
+  `commit(_:writes:)` sets it again in the same lock hold as the commit, if
+  the frame tracked its content. A command buffer that is abandoned after
+  encoding, or a path that commits without recording, can only cost a later
+  frame a dispatch.
+- Records are values stored in place, the skin matrices travel with their
+  frame-ring allocation, and the writes handed to `commit` share the frame's
+  deformation array, so tracking allocates nothing per deformation.
+- While every deformation changes from draw to draw, as in a Maker slider
+  drag, the comparisons only cost CPU. After two tracked interactive draws
+  that compared records and reused none, the next 29 draws neither compare
+  nor record (`RenderFrameStatistics.deformUntracked`), and the 30th tracks
+  again. A pause of 0.1 s between interactive draws ends this at once.
+  Untracked draws still remove the records of the buffers they write, so no
+  record they leave behind is stale, including one a pick set. Picks,
+  captures and benchmarks always track.
 - The record holds the buffer and the mesh strongly, so while a record names
   them, no other buffer or mesh can take their address. A released, regrown
   or transient buffer (a frame older than a completed retirement) is a
