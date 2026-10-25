@@ -866,8 +866,9 @@ class StudioScenarioLaneTests(unittest.TestCase):
                 op = step["op"]
                 self.assertIn(op, SCENARIO_OPS, "unknown op in %s" % path)
                 if op == "backgroundBuild":
-                    self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "duplicate"))
-                    if step["build"] == "duplicate":
+                    self.assertIn(step["build"], ("import", "importTwice", "importThenNewScene", "importWhileHidden",
+                                                  "duplicate", "duplicateWhileHidden"))
+                    if step["build"].startswith("duplicate"):
                         self.assertIs(type(step["key"]), int)
                 if op == "measureAccessoryLabels":
                     self.assertIs(type(step["index"]), int)

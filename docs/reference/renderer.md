@@ -1418,8 +1418,9 @@ single route character.
    main actor and takes each character and item from the job, in the same
    order. It builds the document, names, diagnostics and runtime caches, and
    installs them in one step, as the synchronous import does. The
-   completion then runs: the app's startup marks `sourceSceneReady` there,
-   and a menu import reports a failure there.
+   completion then runs: the app's startup marks `sourceSceneReady` there.
+   On a failure, the app returns to the mode it showed before the import
+   (a failed synchronous import never left it) and reports the error.
 
 Until the commit, the Studio shows the current document and stays
 editable. `isLoadingSourceScene` is true. Nothing the import built reaches
@@ -1470,6 +1471,10 @@ commit, and builds write nothing to disk.
   never sees a preview under construction: a preview enters
   `sourceInstances` only on the main actor, through the setter that settles
   the step first.
+- The Maker and the Studio share one renderer. A commit or an install can
+  land while the Maker is shown, so neither refreshes the Studio then (the
+  Studio's `refresh` was always run while it was shown); the Maker's frame
+  stays, and switching back to the Studio refreshes it.
 
 **Draw order.** Captures and scenarios register every mesh in the same
 order as before, so their mesh IDs and the renderer's sort tie-breaks are
@@ -1515,7 +1520,9 @@ check runs `Tools/verification/scenarios/background-build.json`. Its
 `backgroundBuild` op repeats an import, two overlapping imports, an import
 cancelled by New Scene, and a duplicate with its undo, first synchronously and
 then with background builds. It requires the same document summary and a
-byte-identical render, the right completions, and no build left pending. The
+byte-identical render, the right completions, and no build left pending. An
+import and a duplicate also run with the Studio hidden while their builds
+land, and the frame standing in for the Maker's must stay current. The
 op is described in `Tools/verification/README.md`. When the op skipped its
 wait for the builds, three of its four steps failed.
 

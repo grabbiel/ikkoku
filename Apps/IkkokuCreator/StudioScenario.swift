@@ -1988,10 +1988,15 @@ struct StudioScenario: Decodable {
                 // installed, and compares the document summary and a 512²
                 // render, which must be byte-identical. Live animation is
                 // paused for the op, so the timer fires while it waits move
-                // no clock.
+                // no clock. The `WhileHidden` builds hide the Studio as a
+                // switch to the Maker does, with a stand-in for the Maker's
+                // frame on the shared renderer, which the builds landing
+                // meanwhile must leave in place; showing the Studio again
+                // refreshes it, as the mode switch does.
                 let build = step.build ?? ""
-                guard ["import", "importTwice", "importThenNewScene", "duplicate"].contains(build) else {
-                    record(step, false, "backgroundBuild: build must be import, importTwice, importThenNewScene or duplicate"); continue
+                let builds = ["import", "importTwice", "importThenNewScene", "importWhileHidden", "duplicate", "duplicateWhileHidden"]
+                guard builds.contains(build) else {
+                    record(step, false, "backgroundBuild: build must be one of \(builds.joined(separator: ", "))"); continue
                 }
                 guard let scenePath = ProcessInfo.processInfo.environment["IKKOKU_SOURCE_SCENE"] else {
                     record(step, false, "backgroundBuild: needs the IKKOKU_SOURCE_SCENE startup import"); continue
@@ -2021,6 +2026,22 @@ struct StudioScenario: Decodable {
                     return true
                 }
                 var problems: [String] = []
+                let hidden = build.hasSuffix("WhileHidden")
+                /// What `AppState.mode` does for the Maker, with an empty
+                /// frame standing in for the Maker's.
+                func hide() {
+                    studio.isActiveMode = false
+                    var stand = studio.host.renderer.currentFrame()
+                    stand.items = []; stand.skinSets = [:]; stand.gizmos = []
+                    studio.host.renderer.submit(stand)
+                }
+                func show(_ label: String) {
+                    if !studio.host.renderer.currentFrame().items.isEmpty {
+                        problems.append("\(label): a build replaced the frame shown while the Studio was hidden")
+                    }
+                    studio.isActiveMode = true
+                    studio.refresh()
+                }
                 func compare(_ label: String, _ expected: (summary: [String], pixels: [UInt8]?), _ actual: (summary: [String], pixels: [UInt8]?)) {
                     if expected.summary != actual.summary {
                         let first = zip(expected.summary, actual.summary).first { $0 != $1 }
@@ -2039,7 +2060,7 @@ struct StudioScenario: Decodable {
                         throw RigError.invalid("Export the original clothed avatar before previewing source scenes.")
                     }
                     let catalog = EngineHost.studioPoseContract(forRig: rig), url = URL(fileURLWithPath: scenePath)
-                    if build == "duplicate" {
+                    if build.hasPrefix("duplicate") {
                         guard let id = object(step) else { record(step, false, "backgroundBuild: no object \(describe(step))"); continue }
                         studio.selection = id
                         studio.duplicateSelection()
@@ -2050,11 +2071,15 @@ struct StudioScenario: Decodable {
                         studio.selection = id
                         studio.duplicateSelection()
                         let copies = studio.pendingSourceCharacterBuilds
+                        if hidden { hide() }
                         guard settle() else { record(step, false, "backgroundBuild: the duplicate's builds did not finish in 300 s"); continue }
+                        if hidden { show("duplicate") }
                         compare("duplicate", syncCopy, state())
                         studio.undo()
                         let rebuilds = studio.pendingSourceCharacterBuilds
+                        if hidden { hide() }
                         guard settle() else { record(step, false, "backgroundBuild: the undo's rebuilds did not finish in 300 s"); continue }
+                        if hidden { show("undo") }
                         compare("undo", syncUndo, state())
                         if copies == 0 { problems.append("the duplicate built no character in the background") }
                         if rebuilds == 0 { problems.append("the undo rebuilt no character in the background") }
@@ -2079,6 +2104,7 @@ struct StudioScenario: Decodable {
                         try begin("first")
                         if !studio.isLoadingSourceScene { problems.append("the import did not run in the background") }
                         if summary() != reference.summary { problems.append("the document changed before the commit") }
+                        if hidden { hide() }
                         if build == "importThenNewScene" {
                             studio.newScene()
                             if studio.isLoadingSourceScene { problems.append("New Scene left the import running") }
@@ -2088,6 +2114,10 @@ struct StudioScenario: Decodable {
                         guard settle() else { record(step, false, "backgroundBuild: the import did not finish in 300 s"); continue }
                         // A callback the cancel failed to stop would be queued by now.
                         _ = RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.5))
+                        if hidden {
+                            show("import")
+                            committed = state()
+                        }
                         let expected = build == "importThenNewScene" ? [] : [build == "importTwice" ? "second committed" : "first committed"]
                         if outcomes != expected { problems.append("completions \(outcomes), expected \(expected)") }
                         if build == "importThenNewScene" {
@@ -2105,6 +2135,7 @@ struct StudioScenario: Decodable {
                 let claim = build == "importThenNewScene"
                     ? "New Scene cancelled the background import and nothing reached the document"
                     : "\(build) with background builds matches the synchronous build (document summary and \(renderSide)x\(renderSide) render byte-identical)"
+                        + (hidden ? ", and the frame shown while the Studio was hidden stayed" : "")
                 record(step, problems.isEmpty, problems.isEmpty
                     ? "\(claim); \(detail)"
                     : "backgroundBuild (\(build)): " + problems.joined(separator: "; "))

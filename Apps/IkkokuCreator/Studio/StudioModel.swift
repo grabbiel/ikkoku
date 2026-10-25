@@ -1782,7 +1782,9 @@ final class StudioModel: ViewportInputHandler {
         }, finished: { [weak self] in
             guard let self, self.sourceImportJob === job else { return }
             self.sourceImportJob = nil
+            self.holdsRefreshWhileHidden = true
             let result = Result { try self.commitSourceSceneImport(job) }
+            self.holdsRefreshWhileHidden = false
             self.updateSourceBuildProgress()
             completion(result)
         })
@@ -2171,7 +2173,8 @@ final class StudioModel: ViewportInputHandler {
         case .failure(let error):
             failedSourceBuilds[id] = (pending.reference, pending.outfit, String(describing: error))
         }
-        refresh()
+        // With the Maker shown, its frame stays; switching back refreshes.
+        if isActiveMode { refresh() }
     }
 
     /// Whether any record of the tree, an accessory child included, is a character.
@@ -2663,7 +2666,14 @@ final class StudioModel: ViewportInputHandler {
         return inst
     }
 
+    /// Set while a background import commits (R7 phase 2, item 6). A commit
+    /// or a background build's install lands whenever its builds finish,
+    /// possibly while the Maker is shown; the Maker's frame on the shared
+    /// renderer must stay, and switching back to the Studio refreshes it.
+    @ObservationIgnored private var holdsRefreshWhileHidden = false
+
     func refresh() {
+        if holdsRefreshWhileHidden && !isActiveMode { return }
         // A live step in flight settles first; its frames go to this refresh.
         settleLiveTick(keepFrames: true)
         PerfTrace.measure(.studioRefresh, "StudioRefresh") { refreshFrame() }
