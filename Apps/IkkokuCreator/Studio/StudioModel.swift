@@ -2341,8 +2341,37 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         case .failure(let error):
             status = "Route character copy: \(error)"
         }
-        // With the Maker shown, its frame stays; switching back refreshes.
-        if isActiveMode { refresh() }
+        refreshAfterInstall()
+    }
+
+    /// Set while an installed build's frame waits for the next live step
+    /// (`refreshAfterInstall`); every refresh clears it.
+    @ObservationIgnored private var installRefreshPending = false
+    /// `IKKOKU_PERF_INSTALL_REFRESH=each` refreshes at every install, as before
+    /// (measurement control).
+    @ObservationIgnored private let installRefreshWaitsForStep = PerfTrace.active?.configuration.installRefresh != "each"
+
+    /// The frame after a background build installed (R7 phase 2 item 6
+    /// follow-up). While the live step runs (live animation, a playing
+    /// timeline or plugins) and no drag holds the frame, the next step's
+    /// refresh draws the new character within one 30 Hz period, with its pose
+    /// evaluated on the step's workers alongside the others; an undo that
+    /// rebuilds seven characters then no longer refreshes the whole frame
+    /// seven times on the main thread. Otherwise it refreshes now. If no
+    /// refresh came within 0.1 s, it refreshes then. With the Maker shown, its
+    /// frame stays; switching back refreshes.
+    private func refreshAfterInstall() {
+        guard isActiveMode else { return }
+        guard installRefreshWaitsForStep, drag == nil, hasLiveStepWork else { refresh(); return }
+        guard !installRefreshPending else { return }
+        installRefreshPending = true
+        PerfTrace.event(.studioInstallRefreshDeferred)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.installRefreshPending, self.isActiveMode else { return }
+                self.refresh()
+            }
+        }
     }
 
     /// A background build arrived: installs it if its object still shows
@@ -2362,8 +2391,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         case .failure(let error):
             failedSourceBuilds[id] = (pending.reference, pending.outfit, String(describing: error))
         }
-        // With the Maker shown, its frame stays; switching back refreshes.
-        if isActiveMode { refresh() }
+        refreshAfterInstall()
     }
 
     /// Whether any record of the tree, an accessory child included, is a character.
@@ -2940,6 +2968,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     }
 
     private func refreshFrame() {
+        installRefreshPending = false
         // The settled live step's frames, taken before anything here reaches
         // the previews (an access drops them); every later refresh evaluates
         // on the main actor.

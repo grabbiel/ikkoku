@@ -102,6 +102,9 @@ final class PerfTrace {
         case hoverPickStarted
         /// A mouse move that waited because a hover pick was in flight.
         case hoverPickCoalesced
+        /// A Studio character build installed and left its frame to the next
+        /// live step's refresh (R7 phase 2 item 6 follow-up).
+        case studioInstallRefreshDeferred
     }
 
     /// SwiftUI bodies counted per recording. A count is one evaluation of that
@@ -165,6 +168,10 @@ final class PerfTrace {
         /// donation of a character preview the Studio dropped, such as a
         /// deleted character (measurement control).
         let donations: Bool
+        /// `IKKOKU_PERF_INSTALL_REFRESH`: "step" (default), an installed
+        /// Studio build's frame waits for the next live step; "each" refreshes
+        /// at every install, as before (measurement control).
+        let installRefresh: String
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -189,7 +196,8 @@ final class PerfTrace {
                 livePacing: env["IKKOKU_PERF_LIVE_PACING"] ?? "display",
                 actionKey: env["IKKOKU_PERF_ACTION_KEY"].flatMap { Int32($0) },
                 rigPrefetch: env["IKKOKU_PERF_RIG_PREFETCH"] != "off",
-                donations: env["IKKOKU_PERF_DONATIONS"] != "off")
+                donations: env["IKKOKU_PERF_DONATIONS"] != "off",
+                installRefresh: env["IKKOKU_PERF_INSTALL_REFRESH"] ?? "step")
         }
     }
 
@@ -699,6 +707,7 @@ final class PerfTrace {
                 "burstLive": configuration.burstLive,
                 "livePacing": configuration.livePacing,
                 "rigPrefetch": configuration.rigPrefetch, "donations": configuration.donations,
+                "installRefresh": configuration.installRefresh,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
