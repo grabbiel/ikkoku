@@ -7,7 +7,7 @@ import Character
 /// An original 1.0.4.2 scene tree written field by field from a spec, without
 /// the reader's spans: each expected export is built from its final tree, so
 /// a writer result is checked against an independent serialization.
-private indirect enum TopologyNode {
+indirect enum TopologyNode {
     case folder(Int32, [TopologyNode])
     case item(Int32, [TopologyNode])
     case camera(Int32, active: Bool)
@@ -23,7 +23,7 @@ private indirect enum TopologyNode {
     }
 }
 
-private struct TopologyScene {
+struct TopologyScene {
     static let card = OriginalCardFixture.card()
     var roots: [TopologyNode]
     var transforms: [Int32: [Float]] = [:]
@@ -32,6 +32,23 @@ private struct TopologyScene {
     var trailer = Data()
     /// Root dictionary keys that differ from the record's own key.
     var rootKeys: [Int32: Int32] = [:]
+    /// A copy's template: the record whose name, transform and item number
+    /// the copy carries under its own key (ST-T03 duplicates).
+    var copies: [Int32: Int32] = [:]
+    /// Names that differ from the "Folder 1" / "Camera 2" pattern.
+    var names: [Int32: String] = [:]
+    /// Character FK bones and IK targets (ID, dicKey) in byte order, and the
+    /// look-at target's dicKey (104 when absent).
+    var fk: [Int32: [(id: Int32, key: Int32)]] = [:]
+    var ik: [Int32: [(id: Int32, key: Int32)]] = [:]
+    var lookAt: [Int32: Int32] = [:]
+    /// Item FK bones (name, dicKey) in byte order.
+    var itemBones: [Int32: [(name: String, key: Int32)]] = [:]
+    /// Light records written with these fields instead of the fixed ones.
+    var lights: [Int32: SourceSceneNewLight] = [:]
+    /// Headers that are not closed (tree state 1) and visible.
+    var treeStates: [Int32: Int32] = [:]
+    var hidden: Set<Int32> = []
 
     static func transform(_ key: Int32) -> [Float] {
         [Float(key), Float(key) + 0.5, -Float(key), 0, Float(key) * 3, 0, 1, 1, 1]
@@ -48,9 +65,10 @@ private struct TopologyScene {
 
     private func header(_ kind: Int32, _ key: Int32, _ out: inout SceneDocumentBytes) {
         out.i(kind); out.i(key)
-        for value in transforms[key] ?? Self.transform(key) { out.f(value) }
-        out.i(1); out.b(true)
+        for value in transforms[key] ?? Self.transform(copies[key] ?? key) { out.f(value) }
+        out.i(treeStates[key] ?? 1); out.b(!hidden.contains(key))
     }
+    private func name(_ prefix: String, _ key: Int32) -> String { names[key] ?? "\(prefix) \(copies[key] ?? key)" }
     private func list(_ children: [TopologyNode], _ out: inout SceneDocumentBytes) {
         out.i(Int32(children.count)); for child in children { write(child, &out) }
     }
@@ -60,29 +78,40 @@ private struct TopologyScene {
     private func write(_ node: TopologyNode, _ out: inout SceneDocumentBytes) {
         switch node {
         case let .folder(key, children):
-            header(3, key, &out); out.s("Folder \(key)"); list(children, &out)
+            header(3, key, &out); out.s(name("Folder", key)); list(children, &out)
         case let .camera(key, active):
-            header(5, key, &out); out.s("Camera \(key)"); out.b(cameraActive[key] ?? active)
+            header(5, key, &out); out.s(name("Camera", key)); out.b(cameraActive[key] ?? active)
         case let .light(key):
-            header(2, key, &out); out.i(0); for _ in 0..<4 { out.f(1) }
-            out.f(1); out.f(10); out.f(30); out.b(true); out.b(true); out.b(false)
+            if let light = lights[key] {
+                header(2, key, &out); out.i(light.no); for index in 0..<4 { out.f(light.color[index]) }
+                out.f(light.intensity); out.f(light.range); out.f(light.spotAngle)
+                out.b(light.shadow); out.b(light.enable); out.b(light.drawTarget)
+            } else {
+                header(2, key, &out); out.i(0); for _ in 0..<4 { out.f(1) }
+                out.f(1); out.f(10); out.f(30); out.b(true); out.b(true); out.b(false)
+            }
         case let .item(key, children):
-            header(1, key, &out); out.i(0); out.i(1); out.i(key); out.f(1)
+            header(1, key, &out); out.i(0); out.i(1); out.i(copies[key] ?? key); out.f(1)
             for _ in 0..<8 { out.color() }
             for _ in 0..<3 { pattern(&out) }
             out.f(1); out.color(); out.f(1); out.color(); out.f(0.5); out.f(0)
-            pattern(&out); out.b(false); out.i(0); out.b(false); out.f(0)
+            pattern(&out); out.b(false)
+            let bones = itemBones[key] ?? []
+            out.i(Int32(bones.count)); for bone in bones { out.s(bone.name); out.bone(bone.key) }
+            out.b(false); out.f(0)
             list(children, &out)
         case let .route(key, children):
             header(4, key, &out); out.s("Route \(key)"); list(children, &out)
             out.i(0); out.b(false); out.b(true); out.b(true); out.i(0); out.color()
         case let .character(key, groups):
             header(0, key, &out); out.i(1); out.data += Self.card
-            out.i(0); out.i(0)
+            for bones in [fk[key] ?? [], ik[key] ?? []] {
+                out.i(Int32(bones.count)); for bone in bones { out.i(bone.id); out.bone(bone.key) }
+            }
             out.i(Int32(groups.count))
             for group in groups { out.i(group.point); list(group.children, &out) }
             for v: Int32 in [1, 2, 3, 4, 5, 6] { out.i(v) }
-            out.f(0.125); out.data += Data([0, 1, 2, 3, 4]); out.f(0.25); out.b(true); out.bone(104)
+            out.f(0.125); out.data += Data([0, 1, 2, 3, 4]); out.f(0.25); out.b(true); out.bone(lookAt[key] ?? 104)
             out.b(false); for v in [true, false, true, false, true] { out.b(v) }
             out.b(true); for v in [false, true, false, false, false, false, false] { out.b(v) }
             for v in [true, false, true, false, true, false, true, false] { out.b(v) }
