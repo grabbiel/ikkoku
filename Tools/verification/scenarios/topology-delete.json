@@ -10,8 +10,8 @@
     {"op": "assert", "absent": [1, 2], "children": {"keys": [0]}},
     {"op": "export", "path": ".local/verification/scenario-exports/topology-delete.png"},
     {"op": "reimport", "path": ".local/verification/scenario-exports/topology-delete.png"},
-    {"op": "assert", "absent": [1, 2], "children": {"keys": [0]}, "activeCamera": null},
     {"op": "assertRejected", "activeCamera": 0, "errorContains": "active is none, expected 0"},
-    {"op": "assertRejected", "children": {"keys": [0, 1]}, "errorContains": "the root holds [0], expected [0, 1]"}
+    {"op": "assertRejected", "children": {"keys": [0, 1]}, "errorContains": "the root holds [0], expected [0, 1]"},
+    {"op": "assert", "absent": [1, 2], "children": {"keys": [0]}, "activeCamera": null}
   ]
 }

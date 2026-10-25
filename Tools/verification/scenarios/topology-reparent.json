@@ -29,8 +29,8 @@
     {"op": "assert", "position": {"key": 623, "from": "item-623", "within": 0.0005, "rotationWithin": 0.05}},
     {"op": "assert", "position": {"key": 65, "from": "char-65", "within": 0.0005, "rotationWithin": 0.05}},
     {"op": "assert", "position": {"key": 1129, "from": "item-1129", "within": 0.0005, "rotationWithin": 0.05}},
-    {"op": "assert", "position": {"key": 1127, "from": "item-1127", "within": 0.0005, "rotationWithin": 0.05}},
     {"op": "assertRejected", "position": {"key": 623, "from": "item-623"}, "errorContains": "it did not move"},
-    {"op": "assertRejected", "position": {"key": 623, "from": "item-1127", "within": 0.0005}, "errorContains": "expected it held within"}
+    {"op": "assertRejected", "position": {"key": 623, "from": "item-1127", "within": 0.0005}, "errorContains": "expected it held within"},
+    {"op": "assert", "position": {"key": 1127, "from": "item-1127", "within": 0.0005, "rotationWithin": 0.05}}
   ]
 }
