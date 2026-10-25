@@ -35,7 +35,9 @@ import Foundation
 ///   callback asks again, and the step after a retried one is due an interval
 ///   after the retry.
 /// - `.idle`: there was nothing to step (live animation off, a drag, another
-///   mode, steps stopped). The pacer asks again an interval later.
+///   mode, steps stopped). The pacer asks again an interval later, so
+///   playback that starts (live animation on, the timeline's Play) waits at
+///   most one interval for its first step, as with the timer.
 ///
 /// While the viewport's window is not visible, no callback asks; when it is
 /// visible again the next callback asks at once. A gap of more than
@@ -62,9 +64,6 @@ public struct LiveStepPacer: Sendable, Equatable {
     public private(set) var due: Double?
     /// The target of the callback whose request is still unanswered.
     public private(set) var pending: Double?
-    /// Whether the last answered request ran a step or found one running:
-    /// time-driven content is playing.
-    public private(set) var playing = false
     public private(set) var visible = true
     private var lastTarget: Double?
     /// The request in flight follows a `.busy` answer.
@@ -96,14 +95,11 @@ public struct LiveStepPacer: Sendable, Equatable {
         switch result {
         case .busy:
             // Ask again at the next callback.
-            playing = true
             retrying = true
         case .idle:
-            playing = false
             retrying = false
             due = target + interval
         case .ran:
-            playing = true
             if !retrying, let due, abs(target - due) <= Self.snapTolerance {
                 // On the vsync grid: count from this callback.
                 self.due = target + interval
@@ -125,7 +121,6 @@ public struct LiveStepPacer: Sendable, Equatable {
         self.visible = visible
         due = nil
         retrying = false
-        if !visible { playing = false }
     }
 
     /// Forgets the schedule and any unanswered request; the next callback asks.
@@ -133,7 +128,6 @@ public struct LiveStepPacer: Sendable, Equatable {
         due = nil
         pending = nil
         retrying = false
-        playing = false
         lastTarget = nil
     }
 }

@@ -550,7 +550,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
             status = text
         }
         guard livePacer == nil, drag == nil else { return }
-        PerfTrace.measure(.studioTick, "StudioTick") { _ = timeDriven { stepLive() } }
+        PerfTrace.measure(.studioTick, "StudioTick") { _ = stepLive() }
     }
 
     // MARK: Live pacing (R7 phase 2)
@@ -562,9 +562,6 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     @ObservationIgnored private weak var livePacer: AnyObject?
     /// Set by `stopBenchmarkTimer`: neither the timer nor a display link steps.
     @ObservationIgnored private var liveStepsStopped = false
-    /// True while a time-driven step refreshes: its submit tells the viewport
-    /// it is a step's frame, not an edit's (`Renderer.submit(_:timeDriven:)`).
-    @ObservationIgnored private var timeDrivenRefresh = false
 
     /// A viewport's display link starts paced steps from now on (`owner`
     /// identifies it); the timer stops stepping.
@@ -581,15 +578,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// nothing to step.
     func displayStep() -> LiveStepPacer.Result {
         guard livePacer != nil, !liveStepsStopped, isActiveMode, drag == nil else { return .idle }
-        return PerfTrace.measure(.studioTick, "StudioTick") { timeDriven { stepLive() } }
-    }
-
-    /// Runs `body` with this model's refreshes marked time-driven.
-    private func timeDriven<T>(_ body: () throws -> T) rethrows -> T {
-        let outer = timeDrivenRefresh
-        timeDrivenRefresh = true
-        defer { timeDrivenRefresh = outer }
-        return try body()
+        return PerfTrace.measure(.studioTick, "StudioTick") { stepLive() }
     }
 
     /// The step outside a drag: the timeline, the plugin session or the live
@@ -702,8 +691,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
     /// already did.
     private func liveTickFinished(_ job: SourceStudioLiveTickJob) {
         guard liveTick?.job === job || liveRefreshPending === job else { return }
-        // The step's own refresh; one an edit makes first is not time-driven.
-        timeDriven { completeLiveTick() }
+        completeLiveTick()
     }
 
     /// Completes the live step in flight, if any: waits for its workers,
@@ -3090,7 +3078,7 @@ final class StudioModel: ViewportInputHandler, LivePacedHandler {
         var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
         frame = f
-        host.renderer.submit(f, timeDriven: timeDrivenRefresh)
+        host.renderer.submit(f)
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
         publishActiveSourceCameraView()
         if reusable, statusWrites == statusWritesBefore {

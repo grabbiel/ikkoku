@@ -302,13 +302,12 @@ class PerfTraceTests(unittest.TestCase):
                                cadence={"presentedIntervalPeriods": {"4": 230, "3": 2, "5": 2, "9": 1},
                                         "targetIntervalPeriods": {"4": 235},
                                         "latenessPeriods": {"2": 230, "3": 5}},
-                               pacing={"policy": "display", "pacedLink": True, "requests": 240, "ran": 236, "busy": 1,
-                                       "idle": 3, "requestToStartMs": {"p50": 0.2, "p95": 1.5},
-                                       "submits": 250, "timeDrivenSubmits": 236})
+                               pacing={"policy": "display", "requests": 240, "ran": 236, "busy": 1,
+                                       "idle": 3, "requestToStartMs": {"p50": 0.2, "p95": 1.5}})
         text = perf_trace.cadence_line("new", data)
-        self.assertIn("pacing display (paced link on); presented interval periods 3:2 4:230 5:2 >6:1; "
+        self.assertIn("pacing display; presented interval periods 3:2 4:230 5:2 >6:1; "
                       "target interval periods 4:235; lateness periods 2:230 3:5; hitches 0.50/s", text)
-        self.assertIn("requests 240 (ran 236, busy 1, idle 3; request to start ms p50 0.2 p95 1.5); submits 250 (236 time-driven)", text)
+        self.assertIn("requests 240 (ran 236, busy 1, idle 3; request to start ms p50 0.2 p95 1.5)", text)
 
     def test_burst_line_reports_drag_start_latency_drops_and_the_preceding_present_gap(self):
         def row(callback, presented, outcome):

@@ -80,12 +80,6 @@ final class PerfWorkloadDriver {
         // R7 phase 2, item 4 measurement control (default on).
         app.host?.renderer.reusesDeformedVertices = configuration.deformReuse
         app.host?.renderer.skipsUnchangedFrames = configuration.frameSkip
-        // R7 phase 2, live pacing: every submit, and whether a time-driven
-        // step made it, for the report's `pacing` block.
-        if let renderer = app.host?.renderer {
-            let log = trace.drawLog
-            _ = renderer.addSubmitObserver(timeDriven: { log.didSubmit(timeDriven: $0) })
-        }
         configureWindow()
         whenSourceSceneReady {
             do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }

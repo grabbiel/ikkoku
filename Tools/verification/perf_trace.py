@@ -453,8 +453,9 @@ def histogram_text(counts, limit=6):
 def cadence_line(label, report):
     """Schema 7 (R7 phase 2, live pacing): rendered frames' presented and
     target intervals and their lateness, in display periods; hitches per
-    second; and the paced step requests (ran, busy, idle) with the submits
-    they made. None for an older report."""
+    second; and the paced step requests (ran, busy, idle). None for an older
+    report. A 30 Hz step shows as 4 periods at 120 Hz; 3 and 5 are uneven
+    frames, which the hitch count does not see."""
     summary = report["summary"]
     cadence, pacing = summary.get("cadence"), summary.get("pacing")
     if cadence is None or pacing is None:
@@ -462,15 +463,12 @@ def cadence_line(label, report):
     seconds = summary.get("recordedSeconds", 0)
     hitches = summary.get("hitches", 0)
     start = pacing.get("requestToStartMs", {})
-    return ("[perf] %s: pacing %s (paced link %s); presented interval periods %s; target interval periods %s; "
-            "lateness periods %s; hitches %.2f/s; requests %d (ran %d, busy %d, idle %d; request to start ms p50 %s p95 %s); "
-            "submits %d (%d time-driven)" % (
-                label, pacing.get("policy", "?"), "on" if pacing.get("pacedLink") else "off",
-                histogram_text(cadence.get("presentedIntervalPeriods", {})),
+    return ("[perf] %s: pacing %s; presented interval periods %s; target interval periods %s; "
+            "lateness periods %s; hitches %.2f/s; requests %d (ran %d, busy %d, idle %d; request to start ms p50 %s p95 %s)" % (
+                label, pacing.get("policy", "?"), histogram_text(cadence.get("presentedIntervalPeriods", {})),
                 histogram_text(cadence.get("targetIntervalPeriods", {})), histogram_text(cadence.get("latenessPeriods", {})),
                 hitches / seconds if seconds else 0, pacing.get("requests", 0), pacing.get("ran", 0), pacing.get("busy", 0),
-                pacing.get("idle", 0), start.get("p50", "-"), start.get("p95", "-"), pacing.get("submits", 0),
-                pacing.get("timeDrivenSubmits", 0)))
+                pacing.get("idle", 0), start.get("p50", "-"), start.get("p95", "-")))
 
 
 def link_line(label, report):

@@ -21,16 +21,6 @@ import Foundation
 /// so the keep-alive keeps its interval at every rate (a test pins it). See
 /// docs/reference/renderer.md, "Renderer threads".
 ///
-/// Paced playback (R7 phase 2, live pacing): while the viewport's display
-/// link paces a fixed-rate model step (`LiveStepPacer`) and the frames change
-/// only through those steps, the owner sets `pacedHz` (`setPaced`). Rendered
-/// frames then come from the steps, not from activity, and the tiers would
-/// slow the steps down, so they do not apply. After `pacedIdle` seconds
-/// without a wake the policy asks for `pacedHz`, the step rate, so callbacks
-/// that would find nothing new are not made. A wake (input, a resize, a
-/// submit that is not a step's) or a failed callback returns it to full rate
-/// at once, as outside paced playback.
-///
 /// The policy is plain data. Its owner calls it from the thread that runs the
 /// link, or under its own lock, and applies `hz` to the link.
 public struct DisplayLinkRatePolicy: Sendable, Equatable {
@@ -52,18 +42,9 @@ public struct DisplayLinkRatePolicy: Sendable, Equatable {
     /// keep-alive interval) after three seconds.
     public static let standardTiers = [Tier(idle: 0.5, hz: 30), Tier(idle: 3, hz: 15)]
 
-    /// How long paced playback runs without a wake before the link asks for
-    /// the step rate (`pacedHz`): the first tier's wait.
-    public static let pacedIdle = 0.5
-
     public let tiers: [Tier]
     /// Index of the tier in force; nil at the display's full rate.
     public private(set) var tier: Int?
-    /// The paced step rate while paced playback runs (`setPaced`); nil otherwise.
-    public private(set) var pacedHz: Float?
-    /// Whether paced playback has gone `pacedIdle` without a wake, so the link
-    /// asks for `pacedHz`.
-    public private(set) var pacedLowered = false
     /// Whether the viewport's window is visible (in the app: its occlusion
     /// state, and not minimizing or minimized).
     public private(set) var visible = true
@@ -77,10 +58,7 @@ public struct DisplayLinkRatePolicy: Sendable, Equatable {
     }
 
     /// The requested rate in Hz; nil for the display's full rate.
-    public var hz: Float? {
-        if pacedHz != nil { return pacedLowered && visible ? pacedHz : tier.map { tiers[$0].hz } }
-        return tier.map { tiers[$0].hz }
-    }
+    public var hz: Float? { tier.map { tiers[$0].hz } }
 
     /// The keep-alive interval for the next callback: `interval` while the
     /// window is visible, nil (no refresh) while it is not.
@@ -90,16 +68,6 @@ public struct DisplayLinkRatePolicy: Sendable, Equatable {
     /// clock shared with `wake`). Returns true when the requested rate changed.
     public mutating func callback(at time: Double, outcome: RenderDrawResult.Outcome) -> Bool {
         guard visible else { return false }
-        if pacedHz != nil {
-            // The steps change the frames; only a failure is activity here.
-            guard outcome != .failed else { return activity(at: time) }
-            guard !pacedLowered, time - (lastActivity ?? time) >= Self.pacedIdle else {
-                if lastActivity == nil { lastActivity = time }
-                return false
-            }
-            pacedLowered = true
-            return true
-        }
         guard outcome == .unchanged || outcome == .refreshed else { return activity(at: time) }
         guard let since = lastActivity else { lastActivity = time; return false }
         let idle = time - since
@@ -120,37 +88,22 @@ public struct DisplayLinkRatePolicy: Sendable, Equatable {
     /// true when the requested rate changed.
     public mutating func setVisible(_ visible: Bool, at time: Double) -> Bool {
         guard visible != self.visible else { return false }
-        let before = hz
         self.visible = visible
-        pacedLowered = false
         if visible {
             // The idle clock restarts; the rate stays low until activity.
             lastActivity = time
-            return hz != before
+            return false
         }
-        tier = tiers.isEmpty ? nil : tiers.count - 1
-        return hz != before
-    }
-
-    /// Paced playback started (`hz`, the step rate) or ended (nil) at `time`.
-    /// Either way the link returns to full rate and the idle clock restarts:
-    /// starting, the steps run at full rate for `pacedIdle` first; ending, the
-    /// tiers count from here. Returns true when the requested rate changed.
-    public mutating func setPaced(_ hz: Float?, at time: Double) -> Bool {
-        guard hz != pacedHz else { return false }
-        let before = self.hz
-        pacedHz = hz
-        pacedLowered = false
-        if visible { tier = nil }
-        lastActivity = time
-        return self.hz != before
+        let slowest = tiers.isEmpty ? nil : tiers.count - 1
+        guard slowest != tier else { return false }
+        tier = slowest
+        return true
     }
 
     private mutating func activity(at time: Double) -> Bool {
         lastActivity = max(lastActivity ?? time, time)
-        guard tier != nil || pacedLowered else { return false }
+        guard tier != nil else { return false }
         tier = nil
-        pacedLowered = false
         return true
     }
 }

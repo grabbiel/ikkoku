@@ -440,7 +440,6 @@ extension CaptureRequest {
         ScopedOption("IKKOKU_PERF_BURST_IDLE_MS", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_DEFORM_REUSE", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_LIVE_PACING", [.perfTrace]),
-        ScopedOption("IKKOKU_PERF_PACED_LINK", [.perfTrace]),
         ScopedOption("IKKOKU_PERF_BURST_LIVE", [.perfTrace]),
     ]
 
@@ -561,10 +560,9 @@ extension CaptureRequest {
         ValueRule("IKKOKU_PERF_BURST_IDLE_MS", .integer(10...10000)),
         ValueRule("IKKOKU_PERF_DEFORM_REUSE", .oneOf(["on", "off"])),
         // R7 phase 2, live pacing: the Studio's step started by its 30 Hz
-        // timer as before ("timer"), the display link at full rate during
-        // paced playback, and `studio-orbit-bursts` with live animation on.
+        // timer as before ("timer") instead of the display link, and
+        // `studio-orbit-bursts` with live animation on.
         ValueRule("IKKOKU_PERF_LIVE_PACING", .oneOf(["display", "timer"])),
-        ValueRule("IKKOKU_PERF_PACED_LINK", .oneOf(["on", "off"])),
         ValueRule("IKKOKU_PERF_BURST_LIVE", .oneOf(["on", "off"])),
     ]
 

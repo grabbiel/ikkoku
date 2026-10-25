@@ -100,19 +100,16 @@ struct LiveStepPacerTests {
         let pacer = Pacer()
         let asked = pacer.run(period: 1.0 / 120, count: 40) { $0 == 8 ? .busy : .ran }
         #expect(asked == [0, 4, 8, 9, 13, 17, 21, 25, 29, 33, 37])
-        #expect(pacer.value.playing)
     }
 
     /// Nothing to step (live animation off, a drag, another mode): asked again
-    /// an interval later, and not playing, so the link may slow down.
+    /// an interval later; the first step that runs then counts from its own
+    /// callback.
     @Test func anIdleAnswerAsksAgainAnIntervalLater() {
         let pacer = Pacer()
-        let asked = pacer.run(period: 1.0 / 120, count: 24) { _ in .idle }
-        #expect(asked == [0, 4, 8, 12, 16, 20])
-        #expect(!pacer.value.playing)
-        // Playing starts with the first step that runs.
-        _ = pacer.run(period: 1.0 / 120, count: 8, start: 2000)
-        #expect(pacer.value.playing)
+        var answers: [LiveStepPacer.Result] = Array(repeating: .idle, count: 3) + Array(repeating: .ran, count: 10)
+        let asked = pacer.run(period: 1.0 / 120, count: 40) { _ in answers.removeFirst() }
+        #expect(asked == Array(stride(from: 0, to: 40, by: 4)))
     }
 
     /// One request at a time: while one is unanswered no callback asks, and
@@ -126,7 +123,7 @@ struct LiveStepPacerTests {
         #expect(pacer.value.pending == 10)
         pacer.value.reset()
         pacer.finished(.ran, target: 10)
-        #expect(pacer.value.pending == nil && pacer.value.due == nil && !pacer.value.playing)
+        #expect(pacer.value.pending == nil && pacer.value.due == nil)
         #expect(pacer.callback(target: 10.3))
         // A request answered after the following callbacks went by: the next
         // step is due an interval after its own target.
@@ -135,13 +132,11 @@ struct LiveStepPacerTests {
         #expect(pacer.value.due == 10.3 + LiveStepPacer.standardInterval)
     }
 
-    /// Hidden: no callback asks and playback stops. Visible again: the next
-    /// callback asks at once.
+    /// Hidden: no callback asks. Visible again: the next callback asks at once.
     @Test func aHiddenWindowAsksForNoStep() {
         let pacer = Pacer()
         _ = pacer.run(period: 1.0 / 120, count: 6)
         pacer.setVisible(false)
-        #expect(!pacer.value.playing)
         #expect(pacer.run(period: 1.0 / 15, count: 30, start: 1001).isEmpty)
         pacer.setVisible(true)
         #expect(pacer.run(period: 1.0 / 120, count: 5, start: 1003) == [0, 4])

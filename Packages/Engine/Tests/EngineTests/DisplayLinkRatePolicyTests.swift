@@ -12,7 +12,6 @@ private final class Policy {
     func wake(at time: Double) -> Bool { value.wake(at: time) }
     func setVisible(_ visible: Bool, at time: Double) -> Bool { value.setVisible(visible, at: time) }
     func refreshAfter(_ interval: Double?) -> Double? { value.refreshAfter(interval) }
-    func setPaced(_ hz: Float?, at time: Double) -> Bool { value.setPaced(hz, at: time) }
 }
 
 /// R7 phase 2, item 4, P2: the adaptive display-link rate, the keep-alive's
@@ -55,61 +54,6 @@ struct DisplayLinkRatePolicyTests {
         let fixed = Policy(DisplayLinkRatePolicy(tiers: []))
         _ = fixed.callback(at: 0, outcome: .unchanged)
         #expect(!fixed.callback(at: 100, outcome: .unchanged) && fixed.hz == nil)
-    }
-
-    /// R7 phase 2, live pacing: while paced steps change the frames, rendered
-    /// frames are not activity and the tiers do not apply. After `pacedIdle`
-    /// without a wake the link asks for the step rate; a wake (input, a resize,
-    /// an edit's submit) or a failed callback returns full rate at once.
-    @Test func pacedPlaybackLowersToTheStepRateUntilAWake() {
-        let policy = Policy()
-        // Starting paced playback from full rate changes nothing yet.
-        #expect(!policy.setPaced(30, at: 10))
-        #expect(!policy.callback(at: 10.2, outcome: .rendered))
-        #expect(!policy.callback(at: 10.49, outcome: .unchanged))
-        #expect(policy.callback(at: 10.5, outcome: .rendered))
-        #expect(policy.hz == 30)
-        // Neither unchanged nor rendered callbacks reach a tier while paced.
-        #expect(!policy.callback(at: 20, outcome: .unchanged))
-        #expect(!policy.callback(at: 20.1, outcome: .rendered))
-        #expect(policy.hz == 30)
-        // Input returns full rate at once; the wait starts again from it.
-        #expect(policy.wake(at: 20.2))
-        #expect(policy.hz == nil)
-        #expect(!policy.callback(at: 20.6, outcome: .rendered))
-        #expect(policy.callback(at: 20.75, outcome: .rendered) && policy.hz == 30)
-        // A failure is activity: the next callback retries at full rate.
-        #expect(policy.callback(at: 21, outcome: .failed) && policy.hz == nil)
-        // Paced playback ends: full rate, and the tiers count from then on.
-        #expect(policy.callback(at: 21.5, outcome: .rendered) && policy.hz == 30)
-        #expect(policy.setPaced(nil, at: 22))
-        #expect(policy.hz == nil)
-        #expect(!policy.callback(at: 22.2, outcome: .unchanged))
-        #expect(policy.callback(at: 22.5, outcome: .unchanged) && policy.hz == 30)
-        // Starting paced playback from a lowered tier returns full rate first.
-        #expect(policy.callback(at: 26, outcome: .unchanged) && policy.hz == 15)
-        #expect(policy.setPaced(30, at: 26.1) && policy.hz == nil)
-    }
-
-    /// Hidden while paced: the slowest tier, as for any hidden window, and no
-    /// paced lowering. Visible again, paced playback lowers after `pacedIdle`.
-    @Test func aHiddenWindowOverridesPacedPlayback() {
-        let policy = Policy()
-        _ = policy.setPaced(30, at: 0)
-        _ = policy.callback(at: 1, outcome: .rendered)
-        #expect(policy.hz == 30)
-        #expect(policy.setVisible(false, at: 2))
-        #expect(policy.hz == 15)
-        #expect(!policy.callback(at: 5, outcome: .rendered))
-        #expect(!policy.wake(at: 5.1))
-        #expect(policy.hz == 15)
-        // Paced playback ends while hidden: still the slowest tier.
-        #expect(!policy.setPaced(nil, at: 6))
-        #expect(policy.hz == 15)
-        // Visible and paced again: full rate, then the step rate.
-        #expect(!policy.setVisible(true, at: 7))
-        #expect(policy.setPaced(30, at: 7.1) && policy.hz == nil)
-        #expect(policy.callback(at: 7.7, outcome: .rendered) && policy.hz == 30)
     }
 
     /// The keep-alive needs a callback once per interval at every rate.
@@ -186,27 +130,5 @@ struct DisplayLinkRatePolicyTests {
         let a = RenderPresentationSample.activeIntervals(samples, unchangedTargets: uniform, period: period)
         let b = RenderPresentationSample.activeIntervals(samples, unchanged: uniform.map { .init(target: $0, allowance: period) })
         #expect(a == b && abs(a[0] - 6 * period) < 1e-12)
-    }
-
-    /// R7 phase 2, live pacing: paced playback at a 30 Hz link renders on
-    /// every callback. Each draw skips the three targets after it on purpose,
-    /// so frames four periods apart have a one-period cadence; one more
-    /// period late still counts.
-    @Test func drawsAtALoweredRateAccountForTheirGapBeyondOnePeriod() {
-        let period = 1.0 / 120
-        #expect(RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: 4 * period, hz: nil) == nil)
-        #expect(RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: nil, hz: 30) == nil)
-        #expect(RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: period, hz: 30) == nil)
-        let skip = RenderPresentationSample.Skip.afterLoweredDraw(target: 0, period: period, gapToNext: 6 * period, hz: 30)
-        #expect(skip.map { abs($0.allowance - 3 * period) < 1e-12 && abs($0.target - period / 2) < 1e-12 } == true)
-        let targets = [0.0, 4, 8, 12].map { $0 * period }
-        let presented = [0.0, 4, 9, 13].map { $0 * period }
-        let samples = zip(targets, presented).map { RenderPresentationSample(target: $0, presented: $1) }
-        let skips = zip(targets, targets.dropFirst()).compactMap {
-            RenderPresentationSample.Skip.afterLoweredDraw(target: $0, period: period, gapToNext: $1 - $0, hz: 30)
-        }
-        let adjusted = RenderPresentationSample.activeIntervals(samples, unchanged: skips)
-        let expected = [1.0, 2, 1].map { $0 * period }
-        #expect(zip(adjusted, expected).allSatisfy { abs($0 - $1) < 1e-12 }, "\(adjusted)")
     }
 }

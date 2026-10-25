@@ -227,7 +227,7 @@ public final class Renderer: @unchecked Sendable {
 
     /// Guards `submitObservers` only; never held while taking another lock.
     private let observerLock = NSLock()
-    private var submitObservers: [UInt64: @Sendable (Bool) -> Void] = [:]
+    private var submitObservers: [UInt64: @Sendable () -> Void] = [:]
     private var nextObserver: UInt64 = 0
 
     private let statusLock = NSLock()
@@ -300,14 +300,7 @@ public final class Renderer: @unchecked Sendable {
 
     // MARK: - Frame hand-off
 
-    public func submit(_ frame: RenderFrame) { submit(frame, timeDriven: false) }
-
-    /// `submit(_:)`, saying whether the frame is a time-driven step's (a live
-    /// animation, timeline or plugin step) rather than an edit's or input's.
-    /// The frame is drawn the same either way; the flag only reaches the
-    /// submit observers, so a viewport whose display link paces those steps
-    /// need not treat them as activity (R7 phase 2, live pacing).
-    public func submit(_ frame: RenderFrame, timeDriven: Bool) {
+    public func submit(_ frame: RenderFrame) {
         var snapshot = frame
         snapshot.retainTextures(from: resources)
         snapshot.submitted = true
@@ -320,7 +313,7 @@ public final class Renderer: @unchecked Sendable {
         observerLock.lock()
         let observers = submitObservers.isEmpty ? [] : Array(submitObservers.values)
         observerLock.unlock()
-        for observer in observers { observer(timeDriven) }
+        for observer in observers { observer() }
     }
 
     /// Calls `observer` after every `submit`, on the submitting thread and
@@ -328,16 +321,6 @@ public final class Renderer: @unchecked Sendable {
     /// to full rate at once (R7 phase 2, item 4, P2). Returns a token for
     /// `removeSubmitObserver`. Safe from any thread.
     public func addSubmitObserver(_ observer: @escaping @Sendable () -> Void) -> UInt64 {
-        insertSubmitObserver { _ in observer() }
-    }
-
-    /// `addSubmitObserver(_:)` whose observer also gets the submit's
-    /// `timeDriven` flag.
-    public func addSubmitObserver(timeDriven observer: @escaping @Sendable (Bool) -> Void) -> UInt64 {
-        insertSubmitObserver(observer)
-    }
-
-    private func insertSubmitObserver(_ observer: @escaping @Sendable (Bool) -> Void) -> UInt64 {
         observerLock.lock(); defer { observerLock.unlock() }
         nextObserver &+= 1
         submitObservers[nextObserver] = observer
@@ -350,9 +333,6 @@ public final class Renderer: @unchecked Sendable {
         observerLock.lock(); submitObservers[token] = nil; observerLock.unlock()
     }
     public func currentFrame() -> RenderFrame { frameLock.lock(); defer { frameLock.unlock() }; return pendingFrame }
-    /// Whether the pending frame draws at every callback (a visible live
-    /// source-shader material, which may read `_Time`). Safe from any thread.
-    public var drawsContinuously: Bool { frameLock.lock(); defer { frameLock.unlock() }; return pendingContinuous }
 
     // MARK: - Drawing to the swapchain
 

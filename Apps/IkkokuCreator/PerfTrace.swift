@@ -153,9 +153,6 @@ final class PerfTrace {
         /// display link starts the Studio's step; "timer", its 30 Hz timer does,
         /// as before (R7 phase 2, live pacing; measurement control).
         let livePacing: String
-        /// `IKKOKU_PERF_PACED_LINK`: "on" (default) lets paced playback lower the
-        /// link to the step rate; "off" keeps it at full rate (measurement control).
-        let pacedLink: Bool
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -177,8 +174,7 @@ final class PerfTrace {
                 keepAliveMilliseconds: env["IKKOKU_PERF_KEEPALIVE_MS"].flatMap { Int($0) },
                 burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000),
                 burstLive: env["IKKOKU_PERF_BURST_LIVE"] == "on",
-                livePacing: env["IKKOKU_PERF_LIVE_PACING"] ?? "display",
-                pacedLink: env["IKKOKU_PERF_PACED_LINK"] != "off")
+                livePacing: env["IKKOKU_PERF_LIVE_PACING"] ?? "display")
         }
     }
 
@@ -464,8 +460,6 @@ final class PerfTrace {
         // While a viewport's link runs at a lowered rate (R7 P2), an unchanged
         // callback accounts for the gap to the next one, up to that rate's
         // period; at full rate it accounts for one display period, as before.
-        // A callback that draws at a lowered rate (paced playback, R7 phase 2
-        // live pacing) accounts for the same gap beyond its own period.
         var skips: [RenderPresentationSample.Skip] = []
         var deliberateTargetSkips = 0
         for (index, frame) in frames.enumerated() {
@@ -474,9 +468,6 @@ final class PerfTrace {
             if frame.outcome == .unchanged || frame.outcome == .refreshed {
                 skips.append(.init(target: frame.targetPresentation,
                                    allowance: RenderPresentationSample.Skip.allowance(period: period, gapToNext: gap, hz: hz)))
-            } else if let skip = RenderPresentationSample.Skip.afterLoweredDraw(target: frame.targetPresentation, period: period,
-                                                                                gapToNext: gap, hz: hz) {
-                skips.append(skip)
             }
             if let gap, let hz {
                 deliberateTargetSkips += max(0, Int((min(gap, 1 / Double(hz)) / period).rounded()) - 1)
@@ -494,7 +485,6 @@ final class PerfTrace {
         // ran at one, each at most that rate's period.
         let cadence = PerfTrace.cadence(rendered: rendered, presented: presented, period: period)
         let paces = drawn.paces
-        let submits = drawn.submits
         let reducedSeconds = zip(frames, frames.dropFirst()).reduce(0.0) { total, pair in
             pair.0.linkHz > 0 ? total + min(pair.1.targetPresentation - pair.0.targetPresentation, 1 / Double(pair.0.linkHz)) : total
         }
@@ -577,18 +567,15 @@ final class PerfTrace {
             // R7 phase 2, live pacing: rendered frames' presented and target
             // intervals and their target-to-present lateness, in display
             // periods; the steps the display link asked for and how each
-            // ended; submits, and how many were a time-driven step's.
+            // ended.
             "cadence": cadence,
             "pacing": [
                 "policy": configuration.livePacing,
-                "pacedLink": configuration.pacedLink,
                 "requests": paces.count,
                 "ran": paces.filter { $0.result == .ran }.count,
                 "busy": paces.filter { $0.result == .busy }.count,
                 "idle": paces.filter { $0.result == .idle }.count,
                 "requestToStartMs": PerfTrace.statistics(paces.map { ($0.started - $0.asked) * 1000 }),
-                "submits": submits.count,
-                "timeDrivenSubmits": submits.filter(\.timeDriven).count,
             ] as [String: Any],
             "presentedFrames": presentedTimes.count,
             "presentedFPS": Double(max(presentedTimes.count - 1, 0)) / max((presentedTimes.last ?? 0) - (presentedTimes.first ?? 0), 1e-9),
@@ -670,12 +657,10 @@ final class PerfTrace {
                                                              "deadlineSeconds", "gpuStartSeconds", "gpuEndSeconds"], "rows": frameRows]]
         // R7 phase 2, live pacing: every paced request (when the callback
         // asked, when the main thread started it, the callback's target and
-        // the answer: 1 ran, 0 busy, -1 idle) and every submit (1 time-driven).
+        // the answer: 1 ran, 0 busy, -1 idle).
         samples["paces"] = ["columns": ["askedSeconds", "startedSeconds", "targetSeconds", "result"],
                             "rows": paces.map { [PerfTrace.round($0.asked - recordStart), PerfTrace.round($0.started - recordStart),
                                                  PerfTrace.round($0.target - recordStart), $0.result == .ran ? 1 : ($0.result == .busy ? 0 : -1)] }]
-        samples["submits"] = ["columns": ["seconds", "timeDriven"],
-                              "rows": submits.map { [PerfTrace.round($0.time - recordStart), $0.timeDriven ? 1 : 0] }]
         for phase in Phase.allCases where phase != .draw {
             guard let list = intervals[phase], !list.isEmpty else { continue }
             samples[phase.rawValue] = list.map { [PerfTrace.round($0.start - recordStart), PerfTrace.round(($0.end - $0.start) * 1000)] }
@@ -697,7 +682,7 @@ final class PerfTrace {
                 "keepAliveMs": configuration.keepAliveMilliseconds.map { $0 as Any } ?? NSNull(),
                 "burstIdleMs": configuration.burstIdleMilliseconds,
                 "burstLive": configuration.burstLive,
-                "livePacing": configuration.livePacing, "pacedLink": configuration.pacedLink,
+                "livePacing": configuration.livePacing,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
@@ -973,8 +958,6 @@ nonisolated final class PerfDrawLog: Sendable {
         var samples: [Sample] = []
         /// Paced step requests answered while recording.
         var paces: [Pace] = []
-        /// Renderer submits while recording: when, and whether time-driven.
-        var submits: [(time: CFTimeInterval, timeDriven: Bool)] = []
         /// Media time of the end of the first draw of the process.
         var firstDraw: CFTimeInterval?
         /// The current image when recording starts, not any earlier viewport.
@@ -1021,21 +1004,12 @@ nonisolated final class PerfDrawLog: Sendable {
         }
     }
 
-    /// One `Renderer.submit`, from its submit observer.
-    func didSubmit(timeDriven: Bool) {
-        let now = CACurrentMediaTime()
-        state.withLock { state in
-            if state.recording { state.snapshot.submits.append((now, timeDriven)) }
-        }
-    }
-
     /// Starts (clearing earlier samples) or stops keeping samples.
     func setRecording(_ on: Bool) {
         state.withLock { state in
             if on {
                 state.snapshot.samples = []
                 state.snapshot.paces = []
-                state.snapshot.submits = []
                 state.snapshot.lastRenderedBeforeRecordingIndex = state.lastRenderedIndex
             }
             state.recording = on

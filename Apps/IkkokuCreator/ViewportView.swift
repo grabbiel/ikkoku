@@ -97,7 +97,6 @@ final class ViewportNSView: NSView {
             if paces { step = { [weak self] in self?.displayStep() ?? .idle } }
             let thread = ViewportRenderThread(layer: metalLayer, renderer: renderer, log: PerfTrace.active?.drawLog, pacedStep: step)
             thread.setVisible(isVisible(window))
-            thread.setDisplayRate(window.screen?.maximumFramesPerSecond ?? 0)
             thread.start()
             renderThread = thread
             threadPaces = paces
@@ -112,12 +111,10 @@ final class ViewportNSView: NSView {
         return model.displayStep()
     }
 
-    /// The notifications that can change whether the window shows the
-    /// viewport, and its screen (whose refresh rate the step pacing reads).
+    /// The notifications that can change whether the window shows the viewport.
     private static let visibilityNotifications = [NSWindow.didChangeOcclusionStateNotification,
                                                   NSWindow.willMiniaturizeNotification,
-                                                  NSWindow.didDeminiaturizeNotification,
-                                                  NSWindow.didChangeScreenNotification]
+                                                  NSWindow.didDeminiaturizeNotification]
 
     /// An occluded, minimizing or minimized window shows nothing the viewport
     /// presents: its render thread idles without the keep-alive until the
@@ -149,9 +146,6 @@ final class ViewportNSView: NSView {
         guard let window = notification.object as? NSWindow, window === self.window else { return }
         if notification.name == NSWindow.willMiniaturizeNotification { minimizing = true }
         if notification.name == NSWindow.didDeminiaturizeNotification { minimizing = false }
-        if notification.name == NSWindow.didChangeScreenNotification {
-            renderThread?.setDisplayRate(window.screen?.maximumFramesPerSecond ?? 0)
-        }
         renderThread?.setVisible(isVisible(window))
     }
 
