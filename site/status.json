@@ -1,6 +1,6 @@
 {
   "reviewed": "2026-10-24",
-  "revision": "4457bd40acc9f8298d39366d577097257bda07ea",
+  "revision": "244606a7509ed79dc34d603a30b8f8a421d50577",
   "components": [
     {
       "id": "character-maker",
@@ -10,7 +10,7 @@
       "summary": "The core editing path works for selected normal characters.",
       "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports.",
       "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining selection stalls. Rig reuse is under development; no speedup is accepted yet.",
-      "evidence": "Worker diagnostics attribute 88–90% of the selected preparation operation to rig decoding, validation and conversion. This is a measured scope, not a whole-app benchmark.",
+      "evidence": "Worker diagnostics attribute 88\u201390% of the selected preparation operation to rig decoding, validation and conversion. This is a measured scope, not a whole-app benchmark.",
       "docs": [
         [
           "Maker contract",
@@ -96,13 +96,13 @@
       "group": "Priority",
       "stage": "Mid-stage",
       "summary": "Selected native composites pass independent image gates.",
-      "available": "The controlled inner-shoe fixture reaches 18 of 20 live material slots. Selected native GPU composites have strict source/native image comparisons.",
-      "remaining": "Body and face are explicit fallbacks in that fixture. Broader layers, patterns, states and whole-character shading remain open. Face-composite work is not accepted coverage yet.",
-      "evidence": "18/20 describes one controlled fixture, not the material catalog. More live slots can increase GPU work and memory.",
+      "available": "The controlled fixture reaches 19 of 20 live material slots, including the verified female head-0 face composite with null selected layers. Independent base/distinct face targets pass the one-byte gate.",
+      "remaining": "Body remains an explicit fallback. Other heads, makeup layers, patterns, states and whole-character shading remain open.",
+      "evidence": "19/20 describes one controlled fixture. Added face coverage raises GPU work and memory; six default-OFF captures match the accepted controls. Full source-color parity is not established.",
       "docs": [
         [
           "Composite gates and costs",
-          "docs/reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24"
+          "docs/reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24"
         ],
         [
           "Appearance recipes",
@@ -110,7 +110,7 @@
         ]
       ],
       "issue": [
-        "Native face composite",
+        "Face composition scope",
         "219"
       ]
     },

@@ -98,7 +98,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   selected preparation operation to rig decoding, validation and conversion.
   These measurements identify remaining work without claiming a speedup.
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
-  reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
+  reaches 19 live slots with one explicit body fallback after the bounded female
+  head-0 face composite. Independent base/distinct targets stay within one byte;
+  added coverage increases measured GPU work and memory. See the
+  [face gate and costs](../reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24). Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
