@@ -92,6 +92,23 @@ class DriverWiringTests(unittest.TestCase):
                 self.assertNotIn("IkkokuShaderProbe-'+uuid",text)
 
 class ArgumentTests(unittest.TestCase):
+    def test_lipline_oracle_accepts_only_one_fixed_case_without_changing_bytes(self):
+        for value in (b'liplineCompositeCase\tbase\n',b'liplineCompositeCase\tdistinct\r\n'):
+            with tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'settings.tsv';path.write_bytes(value)
+                self.assertEqual(probe.character_settings_bytes(path),value)
+
+    def test_lipline_oracle_rejects_mixed_unknown_or_duplicate_rows_before_guest_access(self):
+        for value in (b'liplineCompositeCase\tcoordinate\n',b'liplineCompositeCase\n',
+                      b'liplineCompositeCase\tbase\nliplineCompositeCase\tbase\n',
+                      b'liplineCompositeCase\tdistinct\nskinMainColor\t1,1,1,1\n',
+                      b'liplineCompositeCase\tbase\ncheekCompositeCase\tbase\n',
+                      b'liplineCompositeCase\tbase\n\n'):
+            with self.subTest(value=value),tempfile.TemporaryDirectory() as tmp:
+                path=Path(tmp)/'settings.tsv';path.write_bytes(value)
+                with patch.object(probe,'retry',side_effect=AssertionError('guest accessed')):
+                    with self.assertRaisesRegex(ValueError,'CompositeCase'):probe.start('vm',Path(tmp),settings=path)
+
     def test_cheek_oracle_accepts_only_one_fixed_case_without_changing_bytes(self):
         for value in (b'cheekCompositeCase\tbase\n',b'cheekCompositeCase\tcoordinate\r\n'):
             with tempfile.TemporaryDirectory() as tmp:
