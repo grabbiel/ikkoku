@@ -76,8 +76,11 @@ have not been established. Current catalog counts state their actual denominator
 
 Overview reconciled **2026-10-24**; the task entries below name their acceptance
 scope and distinguish local checkpoints from merged work. The
-[README's eight-component table](../../README.md#current-scope) is the concise
-support summary. The dated handoffs below retain each producer, fixture and
+[README's eight-component table](../../README.md#current-scope) and
+[public component status website](https://ikkoku-status.felipearceo.chatgpt.site)
+provide concise support summaries. The website also covers the remaining app
+areas and links back to these references; its review date and accepted source
+commit identify the snapshot. The dated handoffs below retain each producer, fixture and
 acceptance boundary; their old “next” steps are historical, not a live queue.
 
 - **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
@@ -93,9 +96,16 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   diagnostics attribute most cold base-appearance time to MetalKit texture
   loading. A separately validated worker diagnostic attributes 88–90% of the
   selected preparation operation to rig decoding, validation and conversion.
-  These measurements identify remaining work without claiming a speedup.
+  Bounded decoded-rig reuse now skips repeated decoding while retaining actual
+  reads and byte hashes. In the small Release pair, median warm normal-head
+  selection falls from 667–701 ms to 159–161 ms; the first selection costs
+  16–25 ms more, retains about 39 MB of logical rig payload and leaves owner
+  stalls. See the [reuse evidence and limits](../reference/character/maker-assets.md#bounded-decoded-rig-reuse-192).
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
-  reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
+  reaches 19 live slots with one explicit body fallback after the bounded female
+  head-0 face composite. Independent base/distinct targets stay within one byte;
+  added coverage increases measured GPU work and memory. See the
+  [face gate and costs](../reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24). Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
   The [sampling investigation](../reference/renderer.md#translated-sampling-repeatability-investigation-188)
   distinguishes diagnostic controls from production behavior; reductions are
@@ -113,8 +123,19 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   retains its separate attachment-read gate.
   Saved profile and library restoration also reject initialization that changes
   object topology, identities or clone state before committing the candidate.
-  Locally validated pending-destruction persistence carries queued roots across
+  Pending-destruction persistence carries queued roots across
   native save/reopen; older snapshots cannot recover requests they never stored.
+  A retained 44-check Release regression verifies repeated frame failures and
+  clean retries with real warm and cloned character previews, exact poses and
+  resources. Exact route checkpoints now also preserve irregular-step history
+  after rejected frames ([#226](https://github.com/grabbiel/ikkoku/issues/226)).
+  A separate quiet probe bounds checkpoint cost for one route with no ordinary
+  character checkpoints; it supplies no evidence for a new optimization. See the
+  [scope and raw timing distinctions](../reference/mods/plugin-execution.md#deterministic-verification).
+  Eleven Engine tests and 88 Release app checks pass, including independent
+  retry and lazy-clock ownership. Mute acceptance also checks the requested
+  configuration against an independent original-reader oracle across six fresh
+  run/reload/continue processes; this adds no runtime work or adapter coverage.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

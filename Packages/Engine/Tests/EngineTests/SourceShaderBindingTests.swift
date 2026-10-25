@@ -354,6 +354,233 @@ private enum DerivationFixture {
         .material.textures["_MainTex"]?.identity?.width == 512)
 }
 
+// Real BinaryWriter/MessagePack framing with synthetic catalog and material
+// metadata. No original texture bytes or translated program are embedded.
+private enum FaceCompositeFixture {
+    typealias F = OriginalCardFixture
+    typealias Row = [String: Any]
+    typealias Fields = [(String, F.Value)]
+    static let baseSHA = "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e"
+    static let headSHA = "e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e"
+    static let programHash = "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c"
+    static func vector(_ values: [Double]) -> F.Value { .array(values.map(F.Value.float)) }
+    static func record(_ defaults: Fields, _ overrides: Fields) -> F.Value {
+        let keys = Set(overrides.map(\.0))
+        return F.map(defaults.filter { !keys.contains($0.0) } + overrides)
+    }
+    static func makeup(coordinate: Bool, overrides: Fields = []) -> F.Value {
+        let colors: [F.Value] = coordinate
+            ? [vector([0.8, 0.7, 0.6, 0.5]), vector([0.6, 0.5, 0.4, 0.3])]
+            : [vector([0.1, 0.2, 0.3, 0.4]), vector([0.2, 0.3, 0.4, 0.5])]
+        let layouts: [F.Value] = coordinate
+            ? [vector([0.5, 0.5, 0.5, 0]), vector([0, 0, 0, 1])]
+            : [vector([-1, 2, 0, 0.5]), vector([0.75, 0.25, 1, 1])]
+        let fields: Fields = [("version", .string("0.0.0")), ("paintId", .array([.integer(0), .integer(0)])),
+            ("paintColor", .array(colors)), ("paintLayout", .array(layouts)),
+            ("cheekId", .integer(0)), ("cheekColor", vector(coordinate ? [0.9, 0.8, 0.7, 0.6] : [0.3, 0.4, 0.5, 0.6]))]
+        return record(fields, overrides)
+    }
+    static func card(coordinate: Bool = false, baseOverrides: Fields = [], coordinateOverrides: Fields = [],
+                     faceOverrides: Fields = [], bodyOverrides: Fields = [], sex: Int64 = 1, exType: Int64 = 0, modProperty: String? = nil) throws -> SourceCharacterCard {
+        let faceFields: Fields = [("version", .string("0.0.2")), ("headId", .integer(0)),
+            ("shapeValueFace", .array(F.faceValues)), ("baseMakeup", makeup(coordinate: false, overrides: baseOverrides)),
+            ("lipLineId", .integer(0)), ("lipLineColor", vector([0.4, 0.5, 0.6, 0.7])),
+            ("moleId", .integer(0)), ("moleColor", vector([0.5, 0.6, 0.7, 0.8])), ("moleLayout", vector([0.25, 0.75, 0.9, 0.5]))]
+        let bodyFields: Fields = [("version", .string("0.0.2")), ("shapeValueBody", .array(F.bodyValues)),
+            ("skinMainColor", vector([0.25, 0.5, 0.75, 1])), ("skinSubColor", vector([0.75, 0.5, 0.25, 1]))]
+        let hair = F.pack(F.map([("version", .string("0.0.4")), ("parts", .array([]))]))
+        let custom = F.lengthData(F.pack(record(faceFields, faceOverrides)))
+            + F.lengthData(F.pack(record(bodyFields, bodyOverrides))) + F.lengthData(hair)
+        let clothes = F.pack(F.map([("version", .string("0.0.1")), ("parts", .array([]))]))
+        let accessory = F.pack(F.map([("version", .string("0.0.2")), ("parts", .array([]))]))
+        let outfit = F.lengthData(clothes) + F.lengthData(accessory) + Data([coordinate ? 1 : 0])
+            + F.lengthData(F.pack(makeup(coordinate: true, overrides: coordinateOverrides)))
+        var blocks = F.blocks(custom: custom, sex: .integer(sex))
+        let parameter = F.map([("version", .string("0.0.5")), ("sex", .integer(sex)), ("exType", .integer(exType))])
+        blocks[1].data = F.pack(parameter)
+        blocks.append(.init(name: "Coordinate", version: "0.0.0", data: F.pack(.array([.binary(outfit)]))))
+        if let modProperty {
+            let info = F.pack(F.map([("ModID", .string("synthetic.mod")), ("Property", .string(modProperty)), ("Slot", .integer(0))]))
+            let plugin = F.plugin(0, data: F.map([("info", .array([.binary(info)]))]))
+            blocks.append(F.extended(F.map([("com.bepis.sideloader.universalautoresolver", plugin)])))
+        }
+        return try SourceCharacterCard.decode(F.card(blocks: blocks))
+    }
+    static func head() -> Row {
+        let bundle = "chara/bo_head_00.unity3d", base = "chara/mm_base.unity3d"
+        let headRow: [String: String] = ["MainManifest": "abdata", "MainAB": bundle, "MainData": "p_cf_head_00",
+            "MatManifest": "abdata", "MatAB": bundle, "MatData": "cf_m_face_00", "MainTexAB": bundle, "MainTex": "cf_face_00_t", "ColorMaskAB": bundle, "ColorMaskTex": "cf_face_00_mc"]
+        var rows: [Row] = [["table": "bo_head", "category": 100, "selectedID": 0, "row": headRow]]
+        for (category, table, key) in [(405, "mt_face_paint", "PaintTex"), (402, "mt_cheek", "CheekTex"),
+                                       (404, "mt_lipline", "LiplineTex"), (415, "mt_mole", "MoleTex")] {
+            rows.append(["table": table, "category": category, "selectedID": 0, "row": ["MainAB": "0", key: "0"]])
+        }
+        let draw: Row = ["name": "cf_m_face_00", "shader": "Shader Forge/main_skin", "serializedFile": "CAB-b45f3dc6094104fda1eb384293a73f74", "pathID": "10",
+                         "renderQueue": -1, "passes": [], "floats": [:], "colors": [:], "textures": [:]]
+        let paint: Row = ["serializedFile": "CAB-0d1f3d8317188244dde38c81a889d1d4", "pathID": "4688923211121552405", "name": "cf_face_00_mp"]
+        var environments: Row = [:]
+        for name in ["_MainTex", "_ColorMask", "_Texture3", "_Texture4", "_Texture5", "_Texture6", "_Texture7", "_paintmask"] {
+            environments[name] = ["texture": name == "_paintmask" ? paint : NSNull(), "scale": [2, 3], "offset": [0.125, 0.25]] as Row
+        }
+        var creator = draw
+        creator["name"] = "cf_m_face_create"; creator["shader"] = "Shader Forge/create_head"
+        creator["serializedFile"] = "CAB-0d1f3d8317188244dde38c81a889d1d4"; creator["pathID"] = "4119387422725910578"; creator["textures"] = environments
+        creator["colors"] = ["_Color": [1, 1, 1, 1], "_UnusedAuthored": [0.1, 0.2, 0.3, 0.4]]
+        let textures: [Row] = [("cf_face_00_t", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "4156981771398184683"), ("cf_face_00_mc", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "5632470389437020241"),
+                               ("cf_face_00_mp", base, "CAB-0d1f3d8317188244dde38c81a889d1d4", "4688923211121552405")].map { name, bundle, file, id in
+            ["name": name, "bundle": bundle, "serializedFile": file, "pathID": id, "width": 1024, "height": 1024]
+        }
+        let renderer: Row = ["nodeName": "cf_O_face", "activeSelf": true, "enabled": true,
+            "materialSlots": [["name": "cf_m_face_00", "pathID": "10"]], "draws": [["materialSlot": 0, "submesh": 0]]]
+        return ["sources": [["path": "/abdata/" + bundle, "sha256": headSHA], ["path": "/abdata/" + base, "sha256": baseSHA]],
+            "catalogRows": rows, "textures": textures, "drawMaterials": [draw], "renderers": [renderer], "createMaterials": [creator],
+            "verifiedCreateShaders": [["shader": "Shader Forge/create_head", "programSHA256": programHash]]]
+    }
+    static func derive(directory: URL, card: SourceCharacterCard? = nil, head: Row? = nil, hiPoly: Bool = true) throws -> SourceShaderBindingSet.TextureIdentity? {
+        let url = directory.appendingPathComponent("empty-library.json")
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "entries": []]).write(to: url)
+        let descriptor = try ShaderBindingFixture.program(shader: "Shader Forge/main_skin", pass: "FORWARD",
+            properties: [ShaderBindingFixture.property("_MainTex", type: 4)], vertex: [], fragment: [], textures: ["_MainTex"])
+        let contract = try SourceShaderProgramContract.decode(descriptor, program: "main_skin")
+        let bindings = try SourceShaderBindingDerivation.derive(card: card ?? self.card(), library: .load(url: url),
+            headContract: JSONSerialization.data(withJSONObject: head ?? self.head()),
+            catalog: .init(programs: ["Shader Forge/main_skin": [contract]]), hiPoly: hiPoly)
+        return bindings.renderers.first { $0.mesh == "cf_O_face" }?.material.textures["_MainTex"]?.identity
+    }
+}
+
+@Test func sourceShaderFaceCompositePreservesIdentityDefaultsAndLiteralSetters() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let identity = try #require(try F.derive(directory: directory)), recipe = try #require(identity.composite)
+    #expect(identity.kind == .runtimeComposite && identity.width == 1024 && identity.height == 1024 && identity.mipLevels == 11)
+    #expect(identity.filter == "Bilinear" && identity.wrap == "Clamp" && identity.aniso == 1)
+    #expect(recipe.unresolved == nil && recipe.programSHA256 == F.programHash && recipe.pathID == "4119387422725910578" && recipe.bundleSHA256 == F.baseSHA)
+    for (property, name, id, file, hash) in [("_MainTex", "cf_face_00_t", "4156981771398184683", "CAB-b45f3dc6094104fda1eb384293a73f74", F.headSHA),
+        ("_ColorMask", "cf_face_00_mc", "5632470389437020241", "CAB-b45f3dc6094104fda1eb384293a73f74", F.headSHA), ("_paintmask", "cf_face_00_mp", "4688923211121552405", "CAB-0d1f3d8317188244dde38c81a889d1d4", F.baseSHA)] {
+        let input = try #require(recipe.textures[property]?.identity)
+        #expect(input.name == name && input.pathID == id && input.serializedFile == file && input.bundleSHA256 == hash)
+    }
+    for property in ["_MainTex", "_ColorMask", "_paintmask", "_Texture3", "_Texture4", "_Texture5", "_Texture6", "_Texture7"] {
+        #expect(recipe.textures[property]?.scale == [2, 3] && recipe.textures[property]?.offset == [0.125, 0.25])
+    }
+    for property in ["_Texture3", "_Texture4", "_Texture5", "_Texture6", "_Texture7"] {
+        #expect(recipe.textures[property]?.identity == nil && recipe.textures[property]?.identityUnresolved == nil)
+        #expect(recipe.textures[property]?.identitySource.contains("Unity default") == true)
+    }
+    let expected: [String: [Float]] = ["_Color": [0.25, 0.5, 0.75, 1], "_Color2": [0.75, 0.5, 0.25, 1],
+        "_Color3": [0.1, 0.2, 0.3, 0.4], "_Color7": [0.2, 0.3, 0.4, 0.5], "_Color4": [0.3, 0.4, 0.5, 0.6],
+        "_Color5": [0.4, 0.5, 0.6, 0.7], "_Color6": [0.5, 0.6, 0.7, 0.8], "_UnusedAuthored": [0.1, 0.2, 0.3, 0.4]]
+    for (property, values) in expected { #expect(recipe.vectors[property]?.values == values) }
+    // Literal source-transform expectations, including clamp endpoints. The
+    // unused mole rotation must be zero even though its saved value is 0.9.
+    for (property, values): (String, [Float]) in [("_paint1", [0.25, -0.3, 1, -3.65]), ("_paint2", [-0.125, 0.15, -1, 0.7]), ("_hokuro", [0.125, -0.15, 0, 0.35])] {
+        let actual = try #require(recipe.vectors[property]?.values)
+        #expect(zip(actual, values).allSatisfy { abs($0 - $1) < 0.000002 })
+    }
+}
+
+@Test func sourceShaderFaceCompositeUsesTheRawCoordinateFlagAndOnlyTheSelectedRecord() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let base = try #require(try F.derive(directory: directory, card: F.card(coordinateOverrides: [("version", .string("99"))]))?.composite)
+    #expect(base.unresolved == nil && base.vectors["_Color3"]?.values == [0.1, 0.2, 0.3, 0.4])
+    let coordinate = try #require(try F.derive(directory: directory, card: F.card(coordinate: true, baseOverrides: [("paintId", .array([.integer(42), .integer(43)]))]))?.composite)
+    #expect(coordinate.unresolved == nil && coordinate.vectors["_Color3"]?.values == [0.8, 0.7, 0.6, 0.5])
+    #expect(coordinate.vectors["_Color7"]?.values == [0.6, 0.5, 0.4, 0.3] && coordinate.vectors["_Color4"]?.values == [0.9, 0.8, 0.7, 0.6])
+    #expect(coordinate.vectors["_paint1"]?.values == [0, 0, 0, -8])
+    #expect(coordinate.vectors["_Color3"]?.source.contains("coordinate makeup") == true)
+    for selected in [false, true] {
+        let missing: F.Fields = [("paintColor", .array([]))]
+        let card = try F.card(coordinate: selected, baseOverrides: selected ? [] : missing, coordinateOverrides: selected ? missing : [])
+        let recipe = try #require(try F.derive(directory: directory, card: card)?.composite)
+        #expect(recipe.vectors["_Color3"]?.values == nil && recipe.vectors["_Color3"]?.unresolved?.contains("makeup.paintColor.0") == true)
+    }
+}
+
+@Test func sourceShaderFaceCompositeRejectsUnsupportedSelectionsAndInvalidValues() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    for fields: F.Fields in [[("paintId", .array([.integer(1), .integer(0)]))], [("paintId", .array([.integer(0), .integer(2)]))], [("cheekId", .integer(3))], [("version", .string("99"))]] {
+        let recipe = try #require(try F.derive(directory: directory, card: F.card(baseOverrides: fields))?.composite)
+        #expect(recipe.unresolved != nil)
+    }
+    for fields: F.Fields in [[("lipLineId", .integer(4))], [("moleId", .integer(5))]] {
+        #expect(try F.derive(directory: directory, card: F.card(faceOverrides: fields))?.composite?.unresolved != nil)
+    }
+    #expect(try F.derive(directory: directory, card: F.card(sex: 0))?.composite?.unresolved != nil)
+    #expect(try F.derive(directory: directory, card: F.card(exType: 1))?.composite?.unresolved != nil)
+    #expect(try F.derive(directory: directory, hiPoly: false)?.composite?.unresolved != nil)
+    #expect(try F.derive(directory: directory, card: F.card(faceOverrides: [("headId", .integer(1))])) == nil)
+    for invalid in [F.vector([0, .nan, 0, 1]), F.vector([0, .infinity, 0, 1]), F.vector([0, 0, 0])] {
+        let card = try F.card(baseOverrides: [("paintLayout", .array([invalid, F.vector([0, 0, 0, 1])]))], bodyOverrides: [("skinMainColor", invalid)])
+        let recipe = try #require(try F.derive(directory: directory, card: card)?.composite)
+        #expect(recipe.vectors["_Color"]?.values == nil && recipe.vectors["_Color"]?.unresolved != nil)
+        #expect(recipe.vectors["_paint1"]?.values == nil && recipe.vectors["_paint1"]?.unresolved != nil)
+    }
+}
+
+@Test func sourceShaderFaceCompositeRequiresVerifiedCatalogProgramAndAuthoredPaintmask() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    var cases: [F.Row] = []
+    var head = F.head(); head["verifiedCreateShaders"] = []; cases.append(head)
+    head = F.head(); head["verifiedCreateShaders"] = [["shader": "Shader Forge/create_head", "programSHA256": String(repeating: "a", count: 64)]]; cases.append(head)
+    head = F.head(); head["createMaterials"] = []; cases.append(head)
+    for field in ["serializedFile", "pathID"] {
+        head = F.head()
+        var creators = try #require(head["createMaterials"] as? [F.Row])
+        creators[0][field] = "unverified-but-same-name"; head["createMaterials"] = creators; cases.append(head)
+    }
+    for index in 0..<2 {
+        head = F.head()
+        var sources = try #require(head["sources"] as? [F.Row])
+        sources[index]["sha256"] = String(repeating: "a", count: 64); head["sources"] = sources; cases.append(head)
+    }
+    for index in 0..<3 {
+        head = F.head()
+        var textures = try #require(head["textures"] as? [F.Row])
+        textures[index]["pathID"] = "100"; head["textures"] = textures
+        if index == 2 {
+            // Keep the altered reference internally consistent so a missing
+            // reference cannot conceal failure to enforce the accepted ID.
+            var creators = try #require(head["createMaterials"] as? [F.Row])
+            var environments = try #require(creators[0]["textures"] as? F.Row)
+            var environment = try #require(environments["_paintmask"] as? F.Row)
+            var reference = try #require(environment["texture"] as? F.Row)
+            reference["pathID"] = "100"; environment["texture"] = reference
+            environments["_paintmask"] = environment; creators[0]["textures"] = environments; head["createMaterials"] = creators
+        }
+        cases.append(head)
+    }
+    for category in [100, 405, 402, 404, 415] {
+        head = F.head()
+        var rows = try #require(head["catalogRows"] as? [F.Row])
+        rows.removeAll { ($0["category"] as? Int) == category }; head["catalogRows"] = rows; cases.append(head)
+    }
+    head = F.head()
+    var creators = try #require(head["createMaterials"] as? [F.Row])
+    var textures = try #require(creators[0]["textures"] as? F.Row); textures.removeValue(forKey: "_paintmask")
+    creators[0]["textures"] = textures; head["createMaterials"] = creators; cases.append(head)
+    for head in cases { #expect(try F.derive(directory: directory, head: head)?.composite?.unresolved != nil) }
+    // A more specific clone/program failure survives later scope rejection.
+    head = F.head(); head["createMaterials"] = []
+    let reason = try F.derive(directory: directory, head: head, hiPoly: false)?.composite?.unresolved
+    #expect(reason?.contains("create material cf_m_face_create is not in") == true)
+}
+
+@Test func sourceShaderFaceCompositeDoesNotAliasResolverBackedInputsToVanillaZero() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    for property in ["ChaFileFace.headId", "ChaFileFace.lipLineId", "ChaFileFace.moleId", "ChaFileMakeup.PaintID1", "ChaFileMakeup.PaintID2", "ChaFileMakeup.cheekId"] {
+        let recipe = try #require(try F.derive(directory: directory, card: F.card(modProperty: property))?.composite)
+        #expect(recipe.unresolved?.contains("resolver-backed") == true)
+    }
+    // UAR's ChaFileMakeup destinations address baseMakeup, not coordinate makeup.
+    let recipe = try #require(try F.derive(directory: directory, card: F.card(coordinate: true, modProperty: "ChaFileMakeup.PaintID1"))?.composite)
+    #expect(recipe.unresolved == nil)
+}
+
 // Normal clothes are deliberately synthetic: a non-square source texture,
 // non-default TexEnv and three distinct colours expose size/identity/setter
 // mixups without depending on the private converted library.

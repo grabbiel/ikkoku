@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Ikkoku development status: what works, what remains, and the evidence behind each component of the native Swift and Metal reconstruction.">
+  <meta name="theme-color" content="#172c30">
+  <title>Ikkoku — Component status</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#components">Skip to component status</a>
+  <header class="topbar"><a class="brand" href="#top" aria-label="Ikkoku home"><span class="mark" aria-hidden="true">一</span> Ikkoku <span class="brand-note">Development atlas</span></a><nav aria-label="Project"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/README.md">Documentation ↗</a><a href="https://github.com/grabbiel/ikkoku">Repository ↗</a></nav></header>
+  <main id="top">
+    <section class="hero" aria-labelledby="title">
+      <div><p class="eyebrow">Native Swift + Metal · Apple Silicon</p><h1 id="title">A clearer picture<br>of the work ahead.</h1><p class="intro">A character maker, posing studio and renderer, rebuilding selected Koikatsu and CharaStudio behavior. Explore what works today, what remains, and the evidence behind it.</p><a class="hero-link" href="#components">Explore component status <span aria-hidden="true">↓</span></a></div>
+      <aside class="review-note"><span class="small-label">Project state</span><p class="state-title">In development<span class="state-dot" aria-hidden="true"></span></p><p>The original-game port is incomplete. Verified slices of a component do not make the entire component complete.</p><dl><div><dt>Reviewed</dt><dd><time datetime="2026-10-24">2026-10-24</time></dd></div><div><dt>Accepted source</dt><dd><a href="https://github.com/grabbiel/ikkoku/commit/b9c50604e4cb7a7b3f019654d6d853d9c7ad94d9">b9c5060 ↗</a></dd></div></dl></aside>
+    </section>
+    <div class="metrics" aria-label="Coverage of this overview"><p><strong>16</strong> component areas</p><p><strong>8</strong> current priorities</p><p><span class="metric-label">Evidence before estimates</span><span>No whole-game completion percentage</span></p></div>
+    <div class="workspace">
+      <aside class="sidebar"><p class="eyebrow">Browse the application</p><nav aria-label="Components"><a href="#character-maker"><span>01</span>Character Maker</a>
+<a href="#base-models"><span>02</span>Base Models</a>
+<a href="#base-shapes"><span>03</span>Base Shapes</a>
+<a href="#renderer"><span>04</span>Renderer</a>
+<a href="#materials"><span>05</span>Materials</a>
+<a href="#visual-fidelity"><span>06</span>Visual Fidelity</a>
+<a href="#mods"><span>07</span>Mods</a>
+<a href="#plugins"><span>08</span>Plugins</a>
+<a href="#studio"><span>09</span>Studio &amp; Scenes</a>
+<a href="#animation"><span>10</span>Animation &amp; Dynamics</a>
+<a href="#ik"><span>11</span>IK &amp; Guides</a>
+<a href="#audio"><span>12</span>Voice &amp; Audio</a>
+<a href="#gameplay"><span>13</span>Gameplay</a>
+<a href="#app-shell"><span>14</span>App &amp; Documents</a>
+<a href="#scene-foundation"><span>15</span>Math &amp; Scene Foundation</a>
+<a href="#toolchain"><span>16</span>Recovery &amp; Verification</a></nav><a class="audit-link" href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/README.md">Read the full audit ↗</a></aside>
+      <section class="component-list" id="components" aria-labelledby="components-title">
+        <div class="section-heading"><div><p class="eyebrow">Implementation ledger</p><h2 id="components-title">Component status</h2></div><p>Bounded support.<br>Explicit remaining work.</p></div>
+        <div class="filters" hidden><label class="search"><span class="visually-hidden">Search components</span><input id="search" type="search" placeholder="Search components or capabilities…" autocomplete="off"></label><div class="filter-row"><label>Area <select id="group"><option value="all">All areas</option><option>Priority</option><option>Application</option><option>Foundation</option></select></label><label>Stage <select id="stage"><option value="all">All stages</option><option>Mid-stage</option><option>Infancy</option></select></label><button type="button" id="reset">Clear filters</button></div><p id="result-count" role="status" aria-live="polite"></p></div>
+        <div id="results"><article class="component" id="character-maker" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">01</span><div><p class="eyebrow">Priority</p><h3>Character Maker</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">The core editing path works for selected normal characters.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification.</p></div><div><h4>Still to complete</h4><p>Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and now pay hashing/accounting costs.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>In a small Release pair, median warm normal-head selection fell from 667–701 ms to 159–161 ms. First selections cost 16–25 ms more. Logical retained rig payload reached about 39 MB; this is not total RAM or a whole-app benchmark.</p></details>
+  <nav class="references" aria-label="Character Maker documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/maker-assets.md">Maker contract <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/cards.md">Card preservation <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/maker-assets.md#bounded-decoded-rig-reuse-192">Selection reuse evidence <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/issues/192">Selection responsiveness #192 <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="base-models" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">02</span><div><p class="eyebrow">Priority</p><h3>Base Models</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Six normal assemblies have bounded original-player comparisons.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Head 0 also has bounded bone-type-1 checks for both sexes.</p></div><div><h4>Still to complete</h4><p>Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. Passing selected vertex and binding checks does not establish full-character parity.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>The owning reference records exact model identities, tolerances, original/native hashes and independent neutral repeats.</p></details>
+  <nav class="references" aria-label="Base Models documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/neutral-model-parity.md">Model comparison evidence <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/head-rig.md">Head and assembly contract <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="base-shapes" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">03</span><div><p class="eyebrow">Priority</p><h3>Base Shapes</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Recovered shape rules drive a bounded set of native controls.</p>
+  <div class="scope"><div><h4>Available today</h4><p>52 face and 44 body controls with recovered destination and ordering rules, numerical gates, and the source fixed-height rule for normal male Maker models.</p></div><div><h4>Still to complete</h4><p>Broader model/shape combinations and unsupported transform cases. The control count is not a universal parity claim.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Independent model gates cover selected coupled edits; individual kernel results and complete assembled-model results remain distinct.</p></details>
+  <nav class="references" aria-label="Base Shapes documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/contracts.md">Shape contracts <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/face-shape.md">Face destinations <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/body-shape.md">Body destinations <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="renderer" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">04</span><div><p class="eyebrow">Priority</p><h3>Renderer</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Native toon rendering and an opt-in source-shader path are usable.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Metal rendering, explicit toon fallbacks, resource ownership and caching, and live translated source shaders in selected Studio scenes.</p></div><div><h4>Still to complete</h4><p>Remaining material dispatch, original scene effects, resource limits, and representative displayed-scene performance acceptance.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Allocation reductions and functional passes are recorded separately from timing. Source-shader rendering remains opt-in.</p></details>
+  <nav class="references" aria-label="Renderer documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/renderer.md">Renderer contract and evidence <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/performance.md">Performance contract <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="materials" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">05</span><div><p class="eyebrow">Priority</p><h3>Materials</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Selected native composites pass independent image gates.</p>
+  <div class="scope"><div><h4>Available today</h4><p>The controlled fixture reaches 19 of 20 live material slots, including the verified female head-0 face composite with null selected layers. Independent base/distinct face targets pass the one-byte gate.</p></div><div><h4>Still to complete</h4><p>Body remains an explicit fallback. Other heads, makeup layers, patterns, states and whole-character shading remain open.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>19/20 describes one controlled fixture. Added face coverage raises GPU work and memory; six default-OFF captures match the accepted controls. Full source-color parity is not established.</p></details>
+  <nav class="references" aria-label="Materials documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24">Composite gates and costs <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/card-appearance.md">Appearance recipes <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/issues/219">Face composition scope #219 <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="visual-fidelity" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">06</span><div><p class="eyebrow">Priority</p><h3>Visual Fidelity</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Selected geometry and image checks pass; full-scene parity is open.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Bounded geometry, pose, material and matched-frame gates, plus independently evaluated live comparisons and sampling diagnostics.</p></div><div><h4>Still to complete</h4><p>Full-character silhouette and color parity, and repeatable same-input live sampling. Discard and explicit-gradient experiments are diagnostic evidence, not production fixes.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Frozen geometry, recovered-code oracles and original-player comparisons prove different things; each gate names its reference.</p></details>
+  <nav class="references" aria-label="Visual Fidelity documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/renderer-and-foundation.md">Fidelity audit <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/renderer.md#translated-sampling-repeatability-investigation-188">Sampling investigation <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/issues/188">Sampling repeatability #188 <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="mods" data-group="Priority" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">07</span><div><p class="eyebrow">Priority</p><h3>Mods</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Immutable indexing and selected asset resolution preserve identity.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Incremental archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation.</p></div><div><h4>Still to complete</h4><p>General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. Preserved data does not imply executable support.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Resolved catalog identity and byte-preserving round trips are bounded to the documented input formats and versions.</p></details>
+  <nav class="references" aria-label="Mods documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/guides/mod-library.md">Mod library guide <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/mods/catalog.md">Resolver contract <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/mods/abmx.md">ABMX subset <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="plugins" data-group="Priority" data-stage="Infancy">
+  <div class="component-head"><span class="number">08</span><div><p class="eyebrow">Priority</p><h3>Plugins</h3></div><span class="stage early">Infancy</span></div>
+  <p class="summary">A useful bounded execution subset exists; general compatibility is early.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership.</p></div><div><h4>Still to complete</h4><p>General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Saved-profile restoration permits candidate-owned attachment reads only when initialization leaves the candidate scene unchanged. Metadata inventory does not establish loadability. The queued-destruction change passed 34 Engine tests and 222 app checks in its recorded acceptance. Exact route rollback passes 11 Engine tests and 88 Release app checks; checkpoint timing cost remains unmeasured.</p></details>
+  <nav class="references" aria-label="Plugins documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/mods/plugin-execution.md">Execution and persistence <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/mods/native-adapters.md">Native adapters <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/mods/plugin-inventory.md">DLL inventory limits <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="studio" data-group="Application" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">09</span><div><p class="eyebrow">Application</p><h3>Studio &amp; Scenes</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Selected source scenes can be viewed and edited.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Original characters, cameras, FK/IK, animation, expression/shape/outfit/accessory edits, reachable Pose/Face/Clothes inspectors, and bounded scene export.</p></div><div><h4>Still to complete</h4><p>Broader interactive acceptance, mixed scene objects, maps, lights, routes, effects, source timeline tracks and edit topology.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Parsing and preserving an object record do not establish a rendered or editable native consumer.</p></details>
+  <nav class="references" aria-label="Studio &amp; Scenes documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/studio.md">Studio audit <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/studio/scene-editing.md">Scene editing <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/studio/scene-records.md">Scene records <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="animation" data-group="Application" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">10</span><div><p class="eyebrow">Application</p><h3>Animation &amp; Dynamics</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Selected source animation and hair-chain behaviors are implemented.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Generic clip playback, selected normal Animator states, temporal expressions, look-at behavior and bounded original hair dynamics.</p></div><div><h4>Still to complete</h4><p>Remaining controllers, loop correction, cloth, broader expression/animation combinations and full sequence parity.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Kernel checks, selected frame matches and original-player sequence acceptance remain separate scopes.</p></details>
+  <nav class="references" aria-label="Animation &amp; Dynamics documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/animation/animator.md">Animator contract <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/animation/dynamics-parity.md">Dynamics parity <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/animation/expression-playback.md">Expression playback <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="ik" data-group="Application" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">11</span><div><p class="eyebrow">Application</p><h3>IK &amp; Guides</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Native solving and selected source guide editing are reachable.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Recovered solver tests, source guide editing, native handle re-solving, and explicit unsolved-target diagnostics that preserve the pre-IK pose.</p></div><div><h4>Still to complete</h4><p>Broad GUI acceptance and actual original-player full-body comparisons across supported guide and solver states.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>A stable native handle round trip does not by itself prove original full-body solver parity.</p></details>
+  <nav class="references" aria-label="IK &amp; Guides documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/studio/full-body-ik.md">Full-body IK contract <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/animation/trigonometric-ik.md">Trigonometric kernel <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="audio" data-group="Application" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">12</span><div><p class="eyebrow">Application</p><h3>Voice &amp; Audio</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">A bounded scheduler and mixer subset is available.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Selected source voice scheduling, playback and native mixing behavior with documented timing contracts.</p></div><div><h4>Still to complete</h4><p>Broader original waveform coverage, spatial audio, lip-sync integration and scene sound consumers.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Scheduler correctness and matched audible output are different acceptance gates.</p></details>
+  <nav class="references" aria-label="Voice &amp; Audio documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/studio/voice.md">Voice playback contract <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/studio.md">Studio coverage <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="gameplay" data-group="Application" data-stage="Infancy">
+  <div class="component-head"><span class="number">13</span><div><p class="eyebrow">Application</p><h3>Gameplay</h3></div><span class="stage early">Infancy</span></div>
+  <p class="summary">Headless kernels exist; a complete playable mode does not.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Bounded cycle, event and ADV execution plus a native headless host that runs a fixed event across save/reload.</p></div><div><h4>Still to complete</h4><p>Interactive gameplay, NPC and scene bindings, navigation, presentation commands and complete original save state.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>A completed headless event is not a completed gameplay loop. The gameplay audit records the executable prefix and remaining command families.</p></details>
+  <nav class="references" aria-label="Gameplay documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/app-gameplay-and-plugins.md">Gameplay audit <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/gameplay/cycle.md">Cycle and session state <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/gameplay/adv.md">ADV execution <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="app-shell" data-group="Foundation" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">14</span><div><p class="eyebrow">Foundation</p><h3>App &amp; Documents</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Maker, Studio and document commands form a working native shell.</p>
+  <div class="scope"><div><h4>Available today</h4><p>SwiftUI app workflows, native document persistence, converted-library selection and identity-checked resource relocation.</p></div><div><h4>Still to complete</h4><p>Lifecycle hardening, portable data setup, source-aware controls and wider interactive UI regression coverage.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Public CI builds the app but does not launch it; private app acceptance and manual UI checks are recorded separately.</p></details>
+  <nav class="references" aria-label="App &amp; Documents documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/guides/using-the-app.md">Using the app <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/app-gameplay-and-plugins.md">App audit <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="scene-foundation" data-group="Foundation" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">15</span><div><p class="eyebrow">Foundation</p><h3>Math &amp; Scene Foundation</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Native basis, rig and scene kernels support the application.</p>
+  <div class="scope"><div><h4>Available today</h4><p>CoreMath/Scene types, coordinate conversion, rig evaluation and bounded geometry/deformation contracts with targeted numerical verification.</p></div><div><h4>Still to complete</h4><p>Broader deformation coverage and degenerate-input contracts across original assemblies and scene transforms.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>A verified kernel does not establish every consumer, model or imported scene behavior.</p></details>
+  <nav class="references" aria-label="Math &amp; Scene Foundation documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/architecture.md">Architecture <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/component-audit/renderer-and-foundation.md">Foundation audit <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/character/rigs.md">Rig recovery <span aria-hidden="true">↗</span></a></nav>
+</article>
+<article class="component" id="toolchain" data-group="Foundation" data-stage="Mid-stage">
+  <div class="component-head"><span class="number">16</span><div><p class="eyebrow">Foundation</p><h3>Recovery &amp; Verification</h3></div><span class="stage ">Mid-stage</span></div>
+  <p class="summary">Public checks and local source probes have explicit evidence boundaries.</p>
+  <div class="scope"><div><h4>Available today</h4><p>Managed recovery, converters, verification lanes, prerequisite checks, Release bundle inspection and recorded private original-player/app/GPU evidence.</p></div><div><h4>Still to complete</h4><p>Broader reproducibility, deployment-matrix acceptance, conversion orchestration and complete release gating.</p></div></div>
+  <details><summary>Evidence &amp; limitations</summary><p>Public CI cannot access original assets. Named fixture skips are not passing source checks. Recovered source, game files and captured evidence remain local.</p></details>
+  <nav class="references" aria-label="Recovery &amp; Verification documentation"><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/guides/build-and-test.md">Build and test <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/Tools/verification/README.md">Verification lanes <span aria-hidden="true">↗</span></a><a href="https://github.com/grabbiel/ikkoku/blob/main/docs/reference/managed-recovery.md">Recovery reference <span aria-hidden="true">↗</span></a></nav>
+</article></div>
+        <p id="empty" hidden>No components match these filters. Try another term or clear the filters.</p>
+      </section>
+    </div>
+    <section class="method" id="how-to-read" aria-labelledby="method-title"><div><p class="eyebrow">How to read this page</p><h2 id="method-title">Progress needs context.</h2><p>This is a reviewed snapshot of accepted work, not a live test dashboard. Linked issues may advance after the review date. Detailed references retain their own measured commits, inputs and exclusions.</p></div><div class="definitions"><div><h3>Mid-stage</h3><p>A useful implementation exists, with meaningful gaps in coverage, integration, source semantics or verification.</p></div><div><h3>Infancy</h3><p>A scaffold or bounded executable subset exists; most original behavior or application integration is still missing.</p></div><div><h3>Performance &amp; fidelity</h3><p>Responsiveness, total latency, memory and GPU work are assessed separately. Public CI cannot certify private original-player or GPU comparisons.</p></div></div></section>
+  </main>
+  <footer><a class="brand" href="#top">Ikkoku</a><p>Small, continuous updates. Traceable evidence.</p><a href="https://github.com/grabbiel/ikkoku/blob/main/site/README.md">How this page is maintained ↗</a></footer>
+</body>
+</html>

@@ -206,7 +206,9 @@ The source animation clock was held at 0 throughout; this does not establish
 general animation-clock persistence. The override was reapplied in every phase;
 saved package references still point to the original disabled configuration.
 
-This closes the requested-setting checker gap noted during PR #2 review. Raw
+Root independently verified 38 retained artifact hashes, all six raw adapter
+reports and both byte-identical reload PNG pairs. This closes the requested-setting
+checker gap noted during PR #2 review. Raw
 logs, pinned inputs, six-process cleanup, reports and old/new checker controls
 remain private under `mute-config-oracle/python-1` and `mute-config-oracle/app-1`.
 No GUI interaction, physical audio output, new adapter behavior or comparative

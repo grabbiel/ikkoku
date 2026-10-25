@@ -1,0 +1,374 @@
+{
+  "reviewed": "2026-10-24",
+  "revision": "b9c50604e4cb7a7b3f019654d6d853d9c7ad94d9",
+  "components": [
+    {
+      "id": "character-maker",
+      "name": "Character Maker",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "The core editing path works for selected normal characters.",
+      "available": "Normal male/female cards, asynchronous head 0/200/201 and converted asset selection, shape and color edits, static ABMX, and identity-preserving edited exports. Bounded decoded-rig reuse accelerates repeated normal-head selections while retaining actual byte verification.",
+      "remaining": "Wider catalogs, special and modded assemblies, complete original editing workflows, and remaining owner-thread stalls. First selections still decode and now pay hashing/accounting costs.",
+      "evidence": "In a small Release pair, median warm normal-head selection fell from 667\u2013701 ms to 159\u2013161 ms. First selections cost 16\u201325 ms more. Logical retained rig payload reached about 39 MB; this is not total RAM or a whole-app benchmark.",
+      "docs": [
+        [
+          "Maker contract",
+          "docs/reference/character/maker-assets.md"
+        ],
+        [
+          "Card preservation",
+          "docs/reference/character/cards.md"
+        ],
+        [
+          "Selection reuse evidence",
+          "docs/reference/character/maker-assets.md#bounded-decoded-rig-reuse-192"
+        ]
+      ],
+      "issue": [
+        "Selection responsiveness",
+        "192"
+      ]
+    },
+    {
+      "id": "base-models",
+      "name": "Base Models",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "Six normal assemblies have bounded original-player comparisons.",
+      "available": "Female and male heads 0/200/201 have independent neutral and one coupled-shape gates. Head 0 also has bounded bone-type-1 checks for both sexes.",
+      "remaining": "Other corrected types, arbitrary shapes, complete hierarchy, animation and appearance parity. Passing selected vertex and binding checks does not establish full-character parity.",
+      "evidence": "The owning reference records exact model identities, tolerances, original/native hashes and independent neutral repeats.",
+      "docs": [
+        [
+          "Model comparison evidence",
+          "docs/reference/character/neutral-model-parity.md"
+        ],
+        [
+          "Head and assembly contract",
+          "docs/reference/character/head-rig.md"
+        ]
+      ]
+    },
+    {
+      "id": "base-shapes",
+      "name": "Base Shapes",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "Recovered shape rules drive a bounded set of native controls.",
+      "available": "52 face and 44 body controls with recovered destination and ordering rules, numerical gates, and the source fixed-height rule for normal male Maker models.",
+      "remaining": "Broader model/shape combinations and unsupported transform cases. The control count is not a universal parity claim.",
+      "evidence": "Independent model gates cover selected coupled edits; individual kernel results and complete assembled-model results remain distinct.",
+      "docs": [
+        [
+          "Shape contracts",
+          "docs/reference/character/contracts.md"
+        ],
+        [
+          "Face destinations",
+          "docs/reference/character/face-shape.md"
+        ],
+        [
+          "Body destinations",
+          "docs/reference/character/body-shape.md"
+        ]
+      ]
+    },
+    {
+      "id": "renderer",
+      "name": "Renderer",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "Native toon rendering and an opt-in source-shader path are usable.",
+      "available": "Metal rendering, explicit toon fallbacks, resource ownership and caching, and live translated source shaders in selected Studio scenes.",
+      "remaining": "Remaining material dispatch, original scene effects, resource limits, and representative displayed-scene performance acceptance.",
+      "evidence": "Allocation reductions and functional passes are recorded separately from timing. Source-shader rendering remains opt-in.",
+      "docs": [
+        [
+          "Renderer contract and evidence",
+          "docs/reference/renderer.md"
+        ],
+        [
+          "Performance contract",
+          "docs/reference/performance.md"
+        ]
+      ]
+    },
+    {
+      "id": "materials",
+      "name": "Materials",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "Selected native composites pass independent image gates.",
+      "available": "The controlled fixture reaches 19 of 20 live material slots, including the verified female head-0 face composite with null selected layers. Independent base/distinct face targets pass the one-byte gate.",
+      "remaining": "Body remains an explicit fallback. Other heads, makeup layers, patterns, states and whole-character shading remain open.",
+      "evidence": "19/20 describes one controlled fixture. Added face coverage raises GPU work and memory; six default-OFF captures match the accepted controls. Full source-color parity is not established.",
+      "docs": [
+        [
+          "Composite gates and costs",
+          "docs/reference/renderer.md#native-female-head-0-face-composite-r1cmt-04-219-2026-10-24"
+        ],
+        [
+          "Appearance recipes",
+          "docs/reference/character/card-appearance.md"
+        ]
+      ],
+      "issue": [
+        "Face composition scope",
+        "219"
+      ]
+    },
+    {
+      "id": "visual-fidelity",
+      "name": "Visual Fidelity",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "Selected geometry and image checks pass; full-scene parity is open.",
+      "available": "Bounded geometry, pose, material and matched-frame gates, plus independently evaluated live comparisons and sampling diagnostics.",
+      "remaining": "Full-character silhouette and color parity, and repeatable same-input live sampling. Discard and explicit-gradient experiments are diagnostic evidence, not production fixes.",
+      "evidence": "Frozen geometry, recovered-code oracles and original-player comparisons prove different things; each gate names its reference.",
+      "docs": [
+        [
+          "Fidelity audit",
+          "docs/component-audit/renderer-and-foundation.md"
+        ],
+        [
+          "Sampling investigation",
+          "docs/reference/renderer.md#translated-sampling-repeatability-investigation-188"
+        ]
+      ],
+      "issue": [
+        "Sampling repeatability",
+        "188"
+      ]
+    },
+    {
+      "id": "mods",
+      "name": "Mods",
+      "group": "Priority",
+      "stage": "Mid-stage",
+      "summary": "Immutable indexing and selected asset resolution preserve identity.",
+      "available": "Incremental archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation.",
+      "remaining": "General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. Preserved data does not imply executable support.",
+      "evidence": "Resolved catalog identity and byte-preserving round trips are bounded to the documented input formats and versions.",
+      "docs": [
+        [
+          "Mod library guide",
+          "docs/guides/mod-library.md"
+        ],
+        [
+          "Resolver contract",
+          "docs/reference/mods/catalog.md"
+        ],
+        [
+          "ABMX subset",
+          "docs/reference/mods/abmx.md"
+        ]
+      ]
+    },
+    {
+      "id": "plugins",
+      "name": "Plugins",
+      "group": "Priority",
+      "stage": "Infancy",
+      "summary": "A useful bounded execution subset exists; general compatibility is early.",
+      "available": "Translated profiles and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Selected mount, cancellation, failure isolation and save/restore workflows are exercised. Native save/reopen now retains queued destruction roots without replaying Awake. Rejected frames restore exact route history, including irregular time steps and lazy-clock ownership.",
+      "remaining": "General DLL, Harmony, coroutine and Unity compatibility, original save adapters, and broader lifecycle coverage. Initialization that changes candidate topology is rejected; library installation retains a separate attachment-read boundary.",
+      "evidence": "Saved-profile restoration permits candidate-owned attachment reads only when initialization leaves the candidate scene unchanged. Metadata inventory does not establish loadability. The queued-destruction change passed 34 Engine tests and 222 app checks in its recorded acceptance. Exact route rollback passes 11 Engine tests and 88 Release app checks; checkpoint timing cost remains unmeasured.",
+      "docs": [
+        [
+          "Execution and persistence",
+          "docs/reference/mods/plugin-execution.md"
+        ],
+        [
+          "Native adapters",
+          "docs/reference/mods/native-adapters.md"
+        ],
+        [
+          "DLL inventory limits",
+          "docs/reference/mods/plugin-inventory.md"
+        ]
+      ]
+    },
+    {
+      "id": "studio",
+      "name": "Studio & Scenes",
+      "group": "Application",
+      "stage": "Mid-stage",
+      "summary": "Selected source scenes can be viewed and edited.",
+      "available": "Original characters, cameras, FK/IK, animation, expression/shape/outfit/accessory edits, reachable Pose/Face/Clothes inspectors, and bounded scene export.",
+      "remaining": "Broader interactive acceptance, mixed scene objects, maps, lights, routes, effects, source timeline tracks and edit topology.",
+      "evidence": "Parsing and preserving an object record do not establish a rendered or editable native consumer.",
+      "docs": [
+        [
+          "Studio audit",
+          "docs/component-audit/studio.md"
+        ],
+        [
+          "Scene editing",
+          "docs/reference/studio/scene-editing.md"
+        ],
+        [
+          "Scene records",
+          "docs/reference/studio/scene-records.md"
+        ]
+      ]
+    },
+    {
+      "id": "animation",
+      "name": "Animation & Dynamics",
+      "group": "Application",
+      "stage": "Mid-stage",
+      "summary": "Selected source animation and hair-chain behaviors are implemented.",
+      "available": "Generic clip playback, selected normal Animator states, temporal expressions, look-at behavior and bounded original hair dynamics.",
+      "remaining": "Remaining controllers, loop correction, cloth, broader expression/animation combinations and full sequence parity.",
+      "evidence": "Kernel checks, selected frame matches and original-player sequence acceptance remain separate scopes.",
+      "docs": [
+        [
+          "Animator contract",
+          "docs/reference/animation/animator.md"
+        ],
+        [
+          "Dynamics parity",
+          "docs/reference/animation/dynamics-parity.md"
+        ],
+        [
+          "Expression playback",
+          "docs/reference/animation/expression-playback.md"
+        ]
+      ]
+    },
+    {
+      "id": "ik",
+      "name": "IK & Guides",
+      "group": "Application",
+      "stage": "Mid-stage",
+      "summary": "Native solving and selected source guide editing are reachable.",
+      "available": "Recovered solver tests, source guide editing, native handle re-solving, and explicit unsolved-target diagnostics that preserve the pre-IK pose.",
+      "remaining": "Broad GUI acceptance and actual original-player full-body comparisons across supported guide and solver states.",
+      "evidence": "A stable native handle round trip does not by itself prove original full-body solver parity.",
+      "docs": [
+        [
+          "Full-body IK contract",
+          "docs/reference/studio/full-body-ik.md"
+        ],
+        [
+          "Trigonometric kernel",
+          "docs/reference/animation/trigonometric-ik.md"
+        ]
+      ]
+    },
+    {
+      "id": "audio",
+      "name": "Voice & Audio",
+      "group": "Application",
+      "stage": "Mid-stage",
+      "summary": "A bounded scheduler and mixer subset is available.",
+      "available": "Selected source voice scheduling, playback and native mixing behavior with documented timing contracts.",
+      "remaining": "Broader original waveform coverage, spatial audio, lip-sync integration and scene sound consumers.",
+      "evidence": "Scheduler correctness and matched audible output are different acceptance gates.",
+      "docs": [
+        [
+          "Voice playback contract",
+          "docs/reference/studio/voice.md"
+        ],
+        [
+          "Studio coverage",
+          "docs/component-audit/studio.md"
+        ]
+      ]
+    },
+    {
+      "id": "gameplay",
+      "name": "Gameplay",
+      "group": "Application",
+      "stage": "Infancy",
+      "summary": "Headless kernels exist; a complete playable mode does not.",
+      "available": "Bounded cycle, event and ADV execution plus a native headless host that runs a fixed event across save/reload.",
+      "remaining": "Interactive gameplay, NPC and scene bindings, navigation, presentation commands and complete original save state.",
+      "evidence": "A completed headless event is not a completed gameplay loop. The gameplay audit records the executable prefix and remaining command families.",
+      "docs": [
+        [
+          "Gameplay audit",
+          "docs/component-audit/app-gameplay-and-plugins.md"
+        ],
+        [
+          "Cycle and session state",
+          "docs/reference/gameplay/cycle.md"
+        ],
+        [
+          "ADV execution",
+          "docs/reference/gameplay/adv.md"
+        ]
+      ]
+    },
+    {
+      "id": "app-shell",
+      "name": "App & Documents",
+      "group": "Foundation",
+      "stage": "Mid-stage",
+      "summary": "Maker, Studio and document commands form a working native shell.",
+      "available": "SwiftUI app workflows, native document persistence, converted-library selection and identity-checked resource relocation.",
+      "remaining": "Lifecycle hardening, portable data setup, source-aware controls and wider interactive UI regression coverage.",
+      "evidence": "Public CI builds the app but does not launch it; private app acceptance and manual UI checks are recorded separately.",
+      "docs": [
+        [
+          "Using the app",
+          "docs/guides/using-the-app.md"
+        ],
+        [
+          "App audit",
+          "docs/component-audit/app-gameplay-and-plugins.md"
+        ]
+      ]
+    },
+    {
+      "id": "scene-foundation",
+      "name": "Math & Scene Foundation",
+      "group": "Foundation",
+      "stage": "Mid-stage",
+      "summary": "Native basis, rig and scene kernels support the application.",
+      "available": "CoreMath/Scene types, coordinate conversion, rig evaluation and bounded geometry/deformation contracts with targeted numerical verification.",
+      "remaining": "Broader deformation coverage and degenerate-input contracts across original assemblies and scene transforms.",
+      "evidence": "A verified kernel does not establish every consumer, model or imported scene behavior.",
+      "docs": [
+        [
+          "Architecture",
+          "docs/architecture.md"
+        ],
+        [
+          "Foundation audit",
+          "docs/component-audit/renderer-and-foundation.md"
+        ],
+        [
+          "Rig recovery",
+          "docs/reference/character/rigs.md"
+        ]
+      ]
+    },
+    {
+      "id": "toolchain",
+      "name": "Recovery & Verification",
+      "group": "Foundation",
+      "stage": "Mid-stage",
+      "summary": "Public checks and local source probes have explicit evidence boundaries.",
+      "available": "Managed recovery, converters, verification lanes, prerequisite checks, Release bundle inspection and recorded private original-player/app/GPU evidence.",
+      "remaining": "Broader reproducibility, deployment-matrix acceptance, conversion orchestration and complete release gating.",
+      "evidence": "Public CI cannot access original assets. Named fixture skips are not passing source checks. Recovered source, game files and captured evidence remain local.",
+      "docs": [
+        [
+          "Build and test",
+          "docs/guides/build-and-test.md"
+        ],
+        [
+          "Verification lanes",
+          "Tools/verification/README.md"
+        ],
+        [
+          "Recovery reference",
+          "docs/reference/managed-recovery.md"
+        ]
+      ]
+    }
+  ]
+}

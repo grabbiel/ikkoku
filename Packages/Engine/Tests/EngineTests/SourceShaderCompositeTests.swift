@@ -1058,6 +1058,155 @@ func liveSourceNormalInnerShoeCompositeMatchesBaseAndDistinctOriginalColours() t
     try verifyNormalGarmentComposite(slot: 7, colourProbe: "IKKOKU_INNER_SHOE_COMPOSITE_PROBE")
 }
 
+@Test(.enabled(if: SourceFixtureSupport.shouldRun(["IKKOKU_FACE_COMPOSITE_BASE_PROBE", "IKKOKU_FACE_COMPOSITE_PROBE",
+    "IKKOKU_SHADER_BINDING_PROBE", "IKKOKU_MAKER_LIBRARY", "IKKOKU_HEAD_MATERIAL_CONTRACT",
+    "IKKOKU_SHADER_BINDING_SUPPLEMENT", "IKKOKU_LIVE_SOURCE_TEXTURES"])))
+func liveSourceHeadZeroFaceCompositeMatchesBaseAndDistinctOriginalColours() throws {
+    let programs = URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_PROBE"), isDirectory: true)
+    let folders = try ["IKKOKU_FACE_COMPOSITE_BASE_PROBE", "IKKOKU_FACE_COMPOSITE_PROBE"].map {
+        URL(fileURLWithPath: try SourceFixtureSupport.require($0), isDirectory: true)
+    }
+    let inputs = SourceShaderLiveAssembly.Inputs(programs: programs.appendingPathComponent("shaders"),
+        makerLibrary: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_MAKER_LIBRARY")),
+        headContract: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_HEAD_MATERIAL_CONTRACT")),
+        supplement: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_SHADER_BINDING_SUPPLEMENT")))
+    let store = try SourceShaderTextureStore(url: URL(fileURLWithPath: try SourceFixtureSupport.require("IKKOKU_LIVE_SOURCE_TEXTURES")))
+    let device = try #require(MTLCreateSystemDefaultDevice()), resources = ResourceStore(device: device)
+    let frameHashes = ["09f49807a14fa5b3d18544cb0697211e78f976a4206cb621922bb9aeddd969ff", "08948c32097a299ad8d6ba660816b5f6063dc693385df3bcdecdd7fb0a05e6cf"]
+    let cardHashes = ["262f5968809031ff20dff4dcc58cbcaecf3dd9155b634d0491442b125acdc2ab", "8f773e48db03f96764a7ac169193850a56abad1d0715e5c5fd74ea69fdbe1a40"]
+    let targetHashes = ["ebe4df2229de60d7b8a0bb316088a2c22d7a690dd5d739c1a48c9b74ef57ecea", "efc3326e84348ca6d7df4c2b0df47b5bdb7f50399d05fb826293d36c24aa8501"]
+    let sourceInputs: [(property: String, name: String, path: String, hash: String)] = [
+        ("_MainTex", "cf_face_00_t", "4156981771398184683", "6d90eca1bcc0e4d1ade18243f6d048324bab66bd84c7ed030b69d9c9253e0ede"),
+        ("_ColorMask", "cf_face_00_mc", "5632470389437020241", "52eb32782972eaf85825e6f04ed6bb6da46001ff73d89bd1f16f1e3dbfe9d6c5"),
+        ("_paintmask", "cf_face_00_mp", "4688923211121552405", "40d0edd1aadaa783a74a23931b35cbd9949f297c897cb20a9258fc5dd9005858")]
+    let mainColours: [[Float]] = [[0.95, 0.75, 0.65, 1], [0.23, 0.61, 0.82, 1]]
+    let subColours: [[Float]] = [[0.8, 0.45, 0.4, 1], [0.72, 0.28, 0.16, 1]]
+    let baseSHA = "3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e"
+    let headSHA = "e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e"
+    var textures: [any MTLTexture] = [], images: [[UInt8]] = [], identities: [SourceShaderBindingSet.TextureIdentity] = []
+    for (index, folder) in folders.enumerated() {
+        let frameData = try Data(contentsOf: folder.appendingPathComponent("frame.json"))
+        #expect(hex(frameData) == frameHashes[index])
+        let frame = try #require(JSONSerialization.jsonObject(with: frameData) as? [String: Any])
+        let observed = try #require(frame["faceCompositeInputs"] as? [String: Any])
+        #expect(observed["sex"] as? Int == 1 && observed["exType"] as? Int == 0 && observed["hiPoly"] as? Bool == true)
+        #expect(observed["savedHeadID"] as? Int == 0 && observed["loadedHeadID"] as? Int == 0 && observed["componentHeadID"] as? Int == 0)
+        #expect(observed["renderer"] as? String == "cf_O_face" && observed["materialSlot"] as? Int == 0)
+        #expect(observed["active"] as? Bool == true && observed["enabled"] as? Bool == true)
+        let drawID = try #require(observed["drawMaterialInstanceID"] as? Int)
+        #expect(observed["rendererMaterialInstanceID"] as? Int == drawID)
+        #expect(observed["originalReleaseCustomInputTexture"] as? Bool == true && observed["observedReleaseCustomInputTexture"] as? Bool == false)
+        #expect(observed["restoredReleaseCustomInputTexture"] as? Bool == true)
+        let targetFile = try #require(observed["targetFile"] as? String)
+        let release = try #require(observed["releaseObservation"] as? [String: Any])
+        let afterFile = try #require(release["afterFile"] as? String)
+        #expect(release["sameTargetAndDraw"] as? Bool == true && afterFile != targetFile)
+        let originalData = try Data(contentsOf: folder.appendingPathComponent(targetFile))
+        #expect(hex(originalData) == targetHashes[index])
+        #expect(try Data(contentsOf: folder.appendingPathComponent(afterFile)) == originalData)
+        let cleared = try #require(release["cleared"] as? [String: Bool])
+        #expect(Set(cleared.keys) == Set(["_MainTex", "_ColorMask", "_Texture3", "_Texture4", "_Texture5", "_Texture6", "_Texture7"]))
+        #expect(cleared.values.allSatisfy { $0 })
+        let cardURL = folder.appendingPathComponent("fixture-card.png")
+        #expect(hex(try Data(contentsOf: cardURL)) == cardHashes[index])
+        let card = try SourceCharacterCard.load(url: cardURL)
+        let bindings = try inputs.derive(card: card, scene: .originalCharacterProbeHarness, sceneReason: "", eyeLook: nil)
+        let selected = try #require(bindings.renderers.first { $0.mesh == "cf_O_face" && $0.materialSlot == 0 && $0.visible == true })
+        let identity = try #require(selected.material.textures["_MainTex"]?.identity)
+        let recipe = try #require(identity.composite)
+        #expect(recipe.unresolved == nil && recipe.material == "cf_m_face_create" && recipe.shader == "Shader Forge/create_head")
+        #expect(recipe.bundleSHA256 == baseSHA && recipe.serializedFile == "CAB-0d1f3d8317188244dde38c81a889d1d4" && recipe.pathID == "4119387422725910578")
+        #expect(recipe.programSHA256 == "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c")
+        #expect(identity.width == 1024 && identity.height == 1024 && identity.mipLevels == 11)
+        #expect(recipe.vectors["_Color"]?.values == mainColours[index] && recipe.vectors["_Color2"]?.values == subColours[index])
+        let vectors = try #require(observed["vectors"] as? [String: [Double]])
+        for (name, values) in vectors {
+            let derived = try #require(recipe.vectors[name]?.values)
+            #expect(derived.count == values.count)
+            #expect(zip(derived, values).allSatisfy { abs(Double($0) - $1) <= 0.000002 })
+        }
+        let observedInputs = try #require(observed["inputs"] as? [String: [String: Any]])
+        for source in sourceInputs {
+            let asset = try #require(recipe.textures[source.property]?.identity)
+            let entry = try store.entry(for: asset).get()
+            let paint = source.property == "_paintmask"
+            #expect(entry.name == source.name && entry.pathID == source.path)
+            #expect(entry.bundleSHA256 == (paint ? baseSHA : headSHA))
+            #expect(entry.serializedFile == (paint ? "CAB-0d1f3d8317188244dde38c81a889d1d4" : "CAB-b45f3dc6094104fda1eb384293a73f74"))
+            #expect(entry.width == 1024 && entry.height == 1024 && entry.mipLevels == 11)
+            #expect(entry.textureFormat == (paint ? 10 : 25) && entry.colorSpace == "linear")
+            #expect(entry.filter == "Bilinear" && entry.wrap == (paint ? "Repeat" : "Clamp") && entry.aniso == 1)
+            let input = try #require(observedInputs[source.property]), file = try #require(input["file"] as? String)
+            let sourceID = try #require(input["sourceInstanceID"] as? Int)
+            #expect(input["sameSourceObject"] as? Bool == true && input["instanceID"] as? Int == sourceID)
+            let lookup = try #require(input["lookup"] as? [String: Any])
+            #expect(lookup["kind"] as? String == (paint ? "creator-material-dependency" : "catalog-texture"))
+            #expect(lookup["assetName"] as? String == (paint ? "cf_m_face_create" : source.name) && lookup["clone"] as? Bool == false)
+            #expect(hex(try Data(contentsOf: folder.appendingPathComponent(file))) == source.hash)
+        }
+        let nullLayers = try #require(observed["nullLayers"] as? [String: [String: Any]])
+        for name in ["_Texture3", "_Texture4", "_Texture5", "_Texture6", "_Texture7"] {
+            #expect(nullLayers[name]?["isNull"] as? Bool == true)
+            #expect(recipe.textures[name]?.identity == nil && recipe.textures[name]?.identityUnresolved == nil)
+        }
+        let request = SourceShaderLiveTextureRequest(identity: identity, property: "_MainTex", mesh: "cf_O_face", slot: 0)
+        let texture = try store.texture(request, resources: resources).get().texture
+        #expect(texture.width == 1024 && texture.height == 1024 && texture.mipmapLevelCount == 11 && texture.pixelFormat == .rgba8Unorm_srgb)
+        let uploads = resources.statistics().textures, auxiliaries = store.compositeInputStatistics(for: resources)
+        #expect(uploads == 3 && auxiliaries == .init(defaults: 1, samplers: 2))
+        #expect(try store.texture(request, resources: resources).get().texture === texture)
+        #expect(store.compositeEvents().last?.cacheHit == true && resources.statistics().textures == uploads)
+        #expect(store.compositeInputStatistics(for: resources) == auxiliaries)
+        let ours = try readback(texture, level: 0, device: device)
+        let original = originalData.withUnsafeBytes { Array($0.bindMemory(to: Float16.self)) }
+        try #require(original.count == 1024 * 1024 * 4)
+        var largest: Float = 0, total: Double = 0, errors: [Int: Int] = [:], examples: [String] = []
+        for row in 0..<1024 {
+            for column in 0..<1024 {
+                for lane in 0..<4 {
+                    let target = (row * 1024 + column) * 4 + lane, source = ((1023 - row) * 1024 + column) * 4 + lane
+                    let value = Float(original[source]), reference = lane == 3 ? (min(max(value, 0), 1) * 255).rounded() : srgbByte(value)
+                    let error = abs(Float(ours[target]) - reference)
+                    largest = max(largest, error); total += Double(error)
+                    if error > 0 { errors[Int(error), default: 0] += 1 }
+                    if error > 1 && examples.count < 8 { examples.append("(\(column),\(row)) lane\(lane) ours\(ours[target]) ref\(reference)") }
+                }
+            }
+        }
+        print("[head0 face composite] \(index == 0 ? "base" : "distinct colour"): max byte \(largest), mean byte \(total / Double(ours.count)); errors \(errors); examples \(examples)")
+        #expect(largest <= 1)
+        identities.append(identity); textures.append(texture); images.append(ours)
+    }
+    #expect(zip(images[0], images[1]).filter { $0 != $1 }.count > 1024 * 1024)
+    #expect(textures[0] !== textures[1])
+    var edits: [SourceShaderCompositor.Statistics] = [], hits: [Double] = []
+    for index in 0..<15 {
+        weak var released: (any MTLTexture)?
+        try autoreleasepool {
+            var edited = identities[1], colour = mainColours[1]; colour[1] = Float(index) / 32
+            edited.composite?.vectors["_Color"] = .init(colour, source: "face skin colour edit")
+            let request = SourceShaderLiveTextureRequest(identity: edited, property: "_MainTex", mesh: "cf_O_face", slot: 0)
+            let texture = try store.texture(request, resources: resources).get().texture; released = texture
+            let event = try #require(store.compositeEvents().last)
+            #expect(event.cacheHit == false && event.statistics?.pipelineCompiled == false)
+            edits.append(try #require(event.statistics))
+            let start = CACurrentMediaTime()
+            let cached = try store.texture(request, resources: resources).get().texture
+            hits.append((CACurrentMediaTime() - start) * 1000)
+            #expect(cached === texture && store.compositeEvents().last?.cacheHit == true)
+        }
+        #expect(released == nil && resources.statistics().textures == 3)
+        #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 2))
+    }
+    let reverted = try store.texture(.init(identity: identities[0], property: "_MainTex", mesh: "cf_O_face", slot: 0), resources: resources).get().texture
+    #expect(reverted === textures[0] && store.compositeEvents().last?.cacheHit == true)
+    #expect(try readback(reverted, level: 0, device: device) == images[0])
+    func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
+    print("[head0 face composite] first events \(store.compositeEvents().prefix(4))")
+    print(String(format: "[head0 face composite] 15 warm edits median cpu %.3f ms gpu %.3f ms total %.3f ms; unchanged hit %.3f ms; 3 uploaded textures",
+                 median(edits.map(\.cpuEncodeMilliseconds)), median(edits.map(\.gpuMilliseconds)), median(edits.map(\.totalMilliseconds)), median(hits)))
+}
+
 private func verifyNormalGarmentComposite(slot: Int, colourProbe: String) throws {
     let role: String, mesh: String, width: Int, height: Int, targetMips: Int, inputMips: Int
     let expectedColours: [[[Float]]], assetInputs: [(String, String, String)]

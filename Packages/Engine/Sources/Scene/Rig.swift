@@ -94,6 +94,22 @@ public struct RigDefinition: Sendable {
     }
 
     public func nodes(named name: String) -> [Int] { names[name] ?? [] }
+    /// SourceRig's inline stride already includes this struct's fields. Add only
+    /// retained element/string payloads; dictionary bucket capacity is excluded.
+    func addLogicalPayload(to charge: inout SourceRigLogicalCharge) -> Bool {
+        guard charge.array(nodes), charge.array(skins), charge.array(order), charge.array(activeNodes),
+              charge.product(names.count, MemoryLayout<(String, [Int])>.stride) else { return false }
+        for node in nodes {
+            guard charge.string(node.name), charge.string(node.sourceID) else { return false }
+        }
+        for skin in skins {
+            guard charge.string(skin.name), charge.array(skin.joints), charge.array(skin.inverseBindMatrices) else { return false }
+        }
+        for (name, indices) in names {
+            guard charge.string(name), charge.array(indices) else { return false }
+        }
+        return true
+    }
     public func uniqueNode(named name: String) throws -> Int {
         let matches = nodes(named: name)
         guard matches.count == 1 else { throw RigError.invalid("Expected one node named '\(name)', found \(matches.count).") }

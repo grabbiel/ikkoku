@@ -1249,6 +1249,26 @@ Only the base level has independent GPU readback evidence; ten generated
 output mips and the single authored mip of each input remain separate checks.
 Outer-shoe composition remains unsupported.
 
+`IKKOKU_FACE_COMPOSITE_BASE_PROBE` and `IKKOKU_FACE_COMPOSITE_PROBE`
+name a fresh original base/distinct skin-colour pair for female head 0,
+exType 0, high detail. Each folder contains `fixture-card.png`, `frame.json`,
+input readbacks and two independently read target files, before and after
+the original `ReleaseFaceCustomTexture`. The probe temporarily retains creator
+inputs before loading, checks catalog texture identity and the paint mask's
+exported-material dependency, then restores the original retention flag.
+This observation mode does not establish normal input lifetime or source cost.
+Only the two decoded body skin RGB triples may change; the shared values also
+affect body and eyeline shading. Other Custom fields, Coordinate and Status
+remain unchanged. The gated
+`liveSourceHeadZeroFaceCompositeMatchesBaseAndDistinctOriginalColours`
+requires both target base levels to match within one byte after colour-space
+conversion, exact program/input identity, unchanged hits, recolour/revert and
+released-target resource bounds. Its 11 authored input mips and 11 output
+levels are structural checks; independent original GPU readback covers level 0.
+The native store must include the three face inputs and `create_head` program;
+original readback pixels are comparison data only. Native live-slot coverage,
+Release costs and default-off output are separate acceptance checks.
+
 ### Selected skirt dynamics fixtures
 
 The private Engine suite additionally accepts `IKKOKU_SKIRT_DYNAMICS_FIXTURE`,
