@@ -3300,6 +3300,10 @@ Release captures from `74cee1c` and `ceccafa` (`.local/sta11a-maps/captures/{bas
 - **With the catalog,** the emptied map 33 scene draws the room, identically
   with the opt-in OFF and ON. The showoff scene without props draws the room
   behind the characters, with the opt-in ON as well.
+- **After the merge.** The same set was repeated on the merged head `c094f92`
+  against `main` at `6502803` (#275 live pacing,
+  `.local/sta11a-maps/captures-merged/`). Every no-map capture was again
+  byte-identical, and every branch capture matched its pre-merge hash.
 
 The Studio lane (77/77), the Maker lane (10/10), the Engine suite and the
 negative controls are listed in [maps](studio/maps.md#evidence).
@@ -3311,6 +3315,9 @@ negative controls are listed in [maps](studio/maps.md#evidence).
   in for the visible-room cost.
 - **The GPU reductions are not attributed;** no Metal System Trace was
   recorded.
+- **The runs predate the merge of #275 (live pacing).** The map's costs are
+  per `refresh()` and per draw. Live pacing changes when the 30 Hz step
+  starts, not those costs, so the runs were not repeated.
 - **No M1 run.**
 
 ## Validation of this change
