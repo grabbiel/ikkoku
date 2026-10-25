@@ -379,6 +379,53 @@ The first strict Engine attempt's missing HideUI fixture failure remains recorde
 the corrected run supplies the pinned original package. This is functional
 acceptance without a GUI, original-player parity or measured performance claim.
 
+Deferred lifecycle destruction has a separate native persistence boundary
+([#221](https://github.com/grabbiel/ikkoku/issues/221)). At `5447fc20`, a synthetic
+profile called Destroy from Awake and saved while paused before its first step.
+The save process passed 15 checks; fresh reopen passed 25 and retained four real
+failures: the pending request disappeared, the object survived the first step,
+its lifecycle state differed, and OnDestroy did not run. The original session's
+continuation removed the object and emitted OnDestroy at the same clock. No-op
+and constructor-Destroy controls passed. The original reports, snapshots and
+binary remain separate under private `pending-destruction-restore` evidence.
+
+Native plugin snapshots now include optional `pendingDestructionRoots`: exact
+root UUIDs in deterministic order, including independently queued descendants.
+They do not serialize expanded descendant handles. New snapshots write an
+explicit empty array when there are no requests. Missing/null state retains the
+legacy empty seed; it cannot recover a request that an older writer omitted and
+does not rerun completed Awake callbacks. Explicit empty also seeds no requests,
+while existing constructor callbacks can still schedule new destruction.
+
+The shared profile/library session constructor validates roots against the live,
+normalized candidate world before creating the runtime or components. Duplicate
+decoded UUIDs, unknown roots, identity tombstones and more than 10,000 roots
+reject before callbacks. Pending subtrees are therefore inactive when saved
+binding flags are restored. Destruction still occurs at the ordinary next frame
+barrier; save/open never forces a tick. Snapshotting only sorts the pending root
+set, with no scene/descendant traversal, file work or new tick scheduling.
+
+The topology/identity/clone guard remains unchanged. The candidate-owned
+attachment-read guard also remains unchanged: a restore that actually reads an
+attachment and has pending destruction rejects explicitly before commit, even
+when those roots came from saved state. This combination remains unsupported.
+Older readers that ignore the new field do not gain queue persistence.
+
+Release `e9e6198` (binary SHA-256
+`31fa829571ecc2eb18461e40f6777e6526725dcd62944f3495b7bac893fb1ff7`)
+passes all 222 checks across nine fresh processes: the unchanged 15+29 save/reopen
+assertions, 15 malformed-root native/undo/redo checks, the prior 18+26 topology
+controls and 119 attachment/fresh/library checks. The two new attachment-policy
+checks reach the exact unsupported error after a successful read and retain the
+prior scene, session, history, previews, frame and active resources. All 34
+focused Engine tests pass with zero skips, including four new parameterized tests
+through profile and immutable-library constructors. They cover exact overlapping
+roots/unbound identity normalization, missing/null/empty state, malformed roots
+and failed-step rollback/retry without duplicate destruction. The original red
+binary/reports remain separate; no assertions were relaxed and no corrective
+rerun was needed. These are native functional results, without a GUI,
+original-player parity or comparative performance claim.
+
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
 It cannot be combined with a legacy profile or separate adapter manifests. This
