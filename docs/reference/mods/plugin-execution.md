@@ -664,6 +664,51 @@ Remaining work:
   from private evidence.
 - A joint cross-language test. Each side's tests check the documented schema.
 
+### Candidate-owned library attachment restoration (#250)
+
+Native scene open and undo/redo now prepare attachment-reading immutable IR
+libraries from the candidate's resolved references, outfit, blocked-resource policy
+and animation clock, using the same isolated preparation as legacy profiles.
+A matching live UUID cannot supply the old scene's preview. Successful validation
+transfers candidate previews before refresh; failure drops only staged leases.
+Repeated reads reuse the candidate preview. Package/configuration identity and
+saved topology checks retain their existing precedence.
+
+The opt-in requires an explicit native/history restoration context. Initial
+library installation and detached restoration retain the named attachment-read
+gate. After an actual attachment read, initialization must leave the normalized
+candidate document, clone serial and pending destruction unchanged. Visibility
+changes, cloning and scheduled destruction are rejected before commit; saved
+fields and clocks retain their existing restoration order.
+
+The original diagnostic at `13a5c76` passed 19 save and 42 separate-process reopen
+checks, establishing the unsupported restoration policy before enabling it. The
+implementation at `e895dd0`, Release binary SHA-256
+`b76e2fd8ade59a858abf3efcec9b6ff477de9d0fd08a0658e4f6d65cedfe1e20`,
+passes **15 save and 90 fresh reopen/history checks**. Root review verifies 107
+artifact/fixture hashes, 19 saved-scene PNG payloads and 15 exact state/frame
+pairs; only the two expected history error-status strings are normalized.
+Seven focused Engine test functions (nine invocations, zero skips) remain
+byte-identical to their accepted run. The first Release compile failure from a
+missing `try` in an independent scenario oracle is retained separately.
+
+The app checks cover hidden zero-read/attachment-free controls, cold candidate
+versus warm same-UUID ownership, repeated reads, transfer and subsequent step,
+undo/redo, blocked references, changed identities, topology and pending destruction.
+Three independent constructor oracles establish two successful reads before a
+late arithmetic error, SetActive or Destroy. Rejected candidates preserve old
+sessions, adapters, histories, previews, resource vectors and frames. Failed open
+preserves an unrelated pending mount; cancellation clears only that request, and
+a discarded resolver completion cannot replace a successfully opened scene.
+
+Candidate resources return exactly to the original vector on abort. This is an
+event-path ownership check, with no per-frame I/O or additional sampling. Native
+open uses clock zero and history uses the held clock (0.7 in this fixture); the
+candidate matrices happen to match at both times, so this does not establish a
+phase-dependent pose difference. No allocation, GUI, original-player parity or
+comparative performance claim follows. Initial library installation remains a
+separate reproduction and acceptance task.
+
 ## Execution and persistence
 
 The runtime handles Awake, OnEnable, Start, FixedUpdate, Update, LateUpdate,
