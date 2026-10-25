@@ -508,20 +508,202 @@ def compare_topology(trace,trees,scene_hashes=None):
                       'no rendered-image claim')
 
 
+# ST-T11 route edits: our route-edit-export and route-children-edit exports, each traced after its load.
+ROUTE_LABELS=('route-edit','route-children-edit')
+# What the scenarios left (Tools/verification/scenarios/route-edit-export.json and route-children-edit.json):
+# per route key its name, point and aid keys (an added point takes the smallest free key, point then aid; a
+# duplicated route's points follow its children's keys), whether it plays after the load, and its children.
+ROUTE_INTENT={
+    'route-edit':{0:dict(name='IKKOKU-A',keys=[1,6,10,14,18],aidKeys=[2,7,11,15,19],playing=True,children=[]),
+                  3:dict(name='IKKOKU-B2',keys=[4,8,12],aidKeys=[5,9,13],playing=False,children=[])},
+    'route-children-edit':{0:dict(name='IKKOKU-RC',keys=[1,3,5,7],aidKeys=[2,4,6,8],playing=True,children=[9,10]),
+                           157:dict(name='IKKOKU-RC',keys=[306,308,310,312],aidKeys=[307,309,311,313],playing=True,children=[158,159])}}
+# The route point panel the app offers (SourceStudioRouteState.easeChoices, pointLimit, speedRange).
+APP_ROUTE_UI=dict(easeOptions=6,routePointLimit=True,speedMin=0.1,speedMax=10.0)
+ROUTE_SAMPLE_SECONDS=(0.5,1.0,1.5,2.0,3.0)
+ROUTE_MOVED_MIN=0.05 # metres a playing route's childRoot must travel over the trace: rejects "never moved", not a pose tolerance
+
+
+def _rotate(q,v):
+    """Unity quaternion [x, y, z, w] applied to a vector."""
+    x,y,z,w=q;vx,vy,vz=v
+    tx,ty,tz=2*(y*vz-z*vy),2*(z*vx-x*vz),2*(x*vy-y*vx)
+    return [vx+w*tx+(y*tz-z*ty),vy+w*ty+(z*tx-x*tz),vz+w*tz+(x*ty-y*tx)]
+
+
+def _route_record_claims(label,key,record,loaded):
+    """One route's loaded OIRouteInfo and point records against the record bytes (independent reader)."""
+    name='%s/route-%d/'%(label,key);route=(loaded or {}).get('route') or {}
+    want=[[p['bone']['key'],_float32(p['speed']),p['ease'],p['connection'],p['linked'],p['aid']['key'],p['initialized']] for p in record['points']]
+    got=[[p.get('dicKey'),None if p.get('speed') is None else _float32(p['speed']),p.get('easeType'),p.get('connection'),p.get('link'),
+          p.get('aidKey'),p.get('aidInitialized')] for p in route.get('points') or []]
+    change=dict(difference=0.0,point=None,missing=[]);rows=route.get('points') or []
+    for index,point in enumerate(record['points']):
+        row=rows[index] if index<len(rows) else None
+        if row is None:change['missing'].append(index);continue
+        pairs=[(row.get('changePosition'),point['bone']['transform']['position']),(row.get('changeRotation'),point['bone']['transform']['rotation']),
+               (row.get('changeScale'),point['bone']['transform']['scale']),(row.get('aidChangePosition'),point['aid']['transform']['position']),
+               (row.get('aidChangeRotation'),point['aid']['transform']['rotation'])]
+        if any(a is None for a,_ in pairs):change['missing'].append(index);continue
+        difference=max(abs(_float32(a)-_float32(b)) for got_value,want_value in pairs for a,b in zip(got_value,want_value))
+        if difference>change['difference']:change.update(difference=difference,point=index)
+    color=record['color'];settings_want=[record['name'],record['active'],record['loop'],record['visibleLine'],record['orientation'],
+                                          [_float32(color[c]) for c in 'rgba']]
+    settings_got=[route.get('name'),route.get('active'),route.get('loop'),route.get('visibleLine'),route.get('orient'),
+                  [_float32(v) for v in route.get('color') or []]]
+    intent=ROUTE_INTENT.get(label,{}).get(key)
+    claims=[(name+'points-match-record',_exact(json.dumps(want)),json.dumps(got)),
+            (name+'point-change-amounts-match-record',_within('difference',CHANGE_TOLERANCE),change),
+            (name+'settings-match-record',_exact(json.dumps(settings_want,ensure_ascii=False)),json.dumps(settings_got,ensure_ascii=False)),
+            # OCIRoute.UpdateLine builds the line for two or more points and shows it as visibleLine says (OnVisible, SetVisible).
+            (name+'line-shown-as-visible-line',_exact(json.dumps([True,record['visibleLine']])),json.dumps([route.get('lineExists'),route.get('lineActive')])),
+            (name+'line-points',None,route.get('linePoints'))]
+    if intent is not None:
+        actual=dict(name=(loaded or {}).get('name'),keys=[p.get('dicKey') for p in route.get('points') or []],
+                    aidKeys=[p.get('aidKey') for p in route.get('points') or []],playing=(loaded or {}).get('routePlaying'),
+                    children=(loaded or {}).get('childKeys'))
+        claims.append((name+'scenario-route',_exact(json.dumps(intent,sort_keys=True)),json.dumps(actual,sort_keys=True)))
+    return claims
+
+
+def _route_trace_claims(label,case,tree,payload):
+    """The original's per-frame childRoot and route-children placement after the load against our stepper
+    (`ikkoku-inspect route-steps` over the trace's own deltaTimes, compare_route_playback.compare_stepped's
+    pairing: row 0's delta is the load frame's and only seeds LookUpdate, capture row k is stepped frame k)."""
+    from compare_route_playback import angle_degrees,unity_from_euler_zxy
+    trace=case.get('routeTrace') or [];claims=[]
+    if len(trace)<2 or payload is None:
+        return [(label+'/route-trace','a route trace of at least two frames and a stepped run',dict(frames=len(trace),stepped=payload is not None))]
+    deltas=[row['deltaTime'] for row in trace];since=[0.0]
+    for delta in deltas[1:]:since.append(since[-1]+delta)
+    stepped={route['sourceKey']:route for route in payload.get('routes') or []}
+    for key in sorted(k for k,r in tree['records'].items() if r['kind']==4):
+        name='%s/route-%d/'%(label,key);run=stepped.get(key);record=tree['records'][key]
+        frames=(run or {}).get('frames') or []
+        if run is None or len(frames)!=len(deltas)-1:
+            claims.append((name+'stepped-frames',_exact(len(deltas)-1),len(frames)));continue
+        scale=record['transform']['scale']
+        if key not in tree['roots'] or max(scale)-min(scale)>1e-6:
+            claims.append((name+'root-route-with-uniform-scale',_exact(True),False));continue
+        root=dict(distance=0.0,degrees=0.0,frame=None,activeMismatch=0,missing=[]);children=dict(distance=0.0,frame=None,child=None,missing=[])
+        start=None;travel=0.0;samples=[]
+        for index,cell in enumerate(frames):
+            row=next((r for r in trace[index]['routes'] if r['dicKey']==key),None)
+            if row is None:root['missing'].append(index);continue
+            if start is None:start=row['position']
+            travel=max(travel,math.dist(row['position'],start))
+            rotation=unity_from_euler_zxy(cell['childRootWorldRotationEulerZXY'])
+            distance=math.dist(row['position'],cell['childRootWorldPosition']);degrees=angle_degrees(row['rotation'],rotation)
+            if distance>root['distance']:root.update(distance=distance,frame=index)
+            root['degrees']=max(root['degrees'],degrees)
+            if cell['active']!=row['active']:root['activeMismatch']+=1
+            for child in row['children']:
+                local=(tree['records'].get(child['dicKey']) or {}).get('transform')
+                if local is None or child.get('position') is None:children['missing'].append(child['dicKey']);continue
+                offset=_rotate(rotation,[component*scale[0] for component in local['position']])
+                world=[a+b for a,b in zip(cell['childRootWorldPosition'],offset)]
+                distance=math.dist(child['position'],world)
+                if distance>children['distance']:children.update(distance=distance,frame=index,child=child['dicKey'])
+        for seconds in ROUTE_SAMPLE_SECONDS:
+            index=min(range(len(frames)),key=lambda i:abs(since[i]-seconds))
+            if abs(since[index]-seconds)>0.05:continue # the trace ended before this time
+            row=next((r for r in trace[index]['routes'] if r['dicKey']==key),None)
+            if row is not None:samples.append(dict(seconds=round(since[index],4),original=row['position'],stepped=frames[index]['childRootWorldPosition'],
+                                                  children={str(c['dicKey']):c['position'] for c in row['children']}))
+        def placed(actual):return not actual['missing'] and actual['distance']<=POSITION_TOLERANCE and actual['degrees']<=ROTATION_TOLERANCE and actual['activeMismatch']==0
+        placed.claim='every traced frame\'s childRoot within %g m and %g degrees of the stepped frame, with the same active flag'%(POSITION_TOLERANCE,ROTATION_TOLERANCE)
+        claims.append((name+'childroot-matches-stepper',placed,root))
+        def followed(actual):return not actual['missing'] and actual['distance']<=POSITION_TOLERANCE
+        followed.claim='every route child within %g m of the stepped childRoot placement composed with its record\'s local position'%POSITION_TOLERANCE
+        if record.get('children'):claims.append((name+'children-follow-stepper',followed,children))
+        playing=bool(record['active'])
+        def moved(actual,playing=playing):return actual>=ROUTE_MOVED_MIN if playing else actual<=POSITION_TOLERANCE
+        moved.claim=('childRoot travels at least %g m over the trace (the route plays)'%ROUTE_MOVED_MIN if playing
+                     else 'childRoot stays within %g m of point 0 (the route is stopped)'%POSITION_TOLERANCE)
+        claims.append((name+'childroot-travel',moved,travel))
+        claims.append((name+'samples',None,samples))
+    claims.append((label+'/trace-seconds',None,dict(frames=len(trace),seconds=round(since[-1],4))))
+    return claims
+
+
+def compare_route_edit(trace,trees,steps,scene_hashes=None):
+    """Each route-edit export's loaded routes against its record's own bytes and the scenario's intent, the
+    traced playback against `steps(label, deltas, play_delta)` (our stepper over the trace's deltaTimes), and
+    the route point panel's prefab values against the panel the app offers."""
+    if trace.get('schemaVersion')!=1:raise ValueError('Unsupported reload trace schemaVersion')
+    cases=trace.get('cases') or {};reports={}
+    for label in ROUTE_LABELS:
+        if label not in trees:continue
+        case=cases.get(label)
+        if not isinstance(case,dict) or not isinstance(case.get('afterLoad'),dict):
+            claims=[dict(claim=label+'/capture',expected='a reload case with an after-load snapshot',actual='missing from the trace',passed=False)]
+        else:
+            tree=trees[label];snapshot=case['afterLoad'];objects=_objects(snapshot);raw=[]
+            raw.append((label+'/index-keys-match-record',_exact(json.dumps(tree['keys'])),json.dumps(snapshot.get('indexKeys'))))
+            raw.append((label+'/change-amounts-match-record',_within('difference',CHANGE_TOLERANCE),_change_amounts(loaded_tree(snapshot),tree)))
+            for key in sorted(k for k,r in tree['records'].items() if r['kind']==4):
+                raw.extend(_route_record_claims(label,key,tree['records'][key],objects.get(key)))
+            missing=sorted(set(ROUTE_INTENT.get(label,{}))-{k for k,r in tree['records'].items() if r['kind']==4})
+            raw.append((label+'/scenario-routes-present',_exact('[]'),json.dumps(missing)))
+            deltas=[row['deltaTime'] for row in case.get('routeTrace') or []]
+            payload=steps(label,deltas[1:],deltas[0]) if len(deltas)>=2 else None
+            raw.extend(_route_trace_claims(label,case,tree,payload))
+            ui=case.get('routeUi') or {}
+            raw.append((label+'/route-point-panel-matches-app',_exact(json.dumps(APP_ROUTE_UI,sort_keys=True)),
+                        json.dumps({field:ui.get(field) for field in APP_ROUTE_UI},sort_keys=True)))
+            raw.append((label+'/route-point-panel',None,ui))
+            claims=[]
+            for name,expected,actual in raw:
+                if expected is None:passed=None
+                elif isinstance(expected,str):passed=False # a diagnostic row: the expectation text itself
+                else:
+                    try:passed=bool(expected(actual))
+                    except(TypeError,ValueError,KeyError):passed=False
+                    expected=expected.claim
+                claims.append(dict(claim=name,expected=expected,actual=actual,passed=passed))
+        reports[label]=dict(claims=claims,passed=all(c['passed'] is not False for c in claims),sceneSHA256=(scene_hashes or {}).get(label))
+    return dict(schemaVersion=1,cases=reports,passed=bool(reports) and all(c['passed'] for c in reports.values()),
+                tolerances=dict(positionMetres=POSITION_TOLERANCE,rotationDegrees=ROTATION_TOLERANCE,changeAmount=CHANGE_TOLERANCE),
+                scope='ST-T11 route edits: the original CharaStudio player\'s loaded routes (every OIRoutePointInfo key, change amount, '
+                      'speed, ease, connection, link, aid key, aid change amount and aid flag; the route\'s name, active, loop, '
+                      'visibleLine, orientation and color; the line UpdateLine built) against each record\'s own bytes read by the '
+                      'independent Python reader and against the scenario\'s intended keys, play states and children; the key index; '
+                      'every traced frame\'s childRoot placement and active flag against ikkoku-inspect route-steps over the trace\'s '
+                      'own deltaTimes, and each route child\'s world position against that stepped childRoot composed with the '
+                      'child\'s record placement; the route point panel\'s ease list, point limit option and speed slider range '
+                      'against the app\'s; no rendered-image claim')
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--probe',type=Path,default=REPO/'.local/stt03e/probe')
     parser.add_argument('--output',type=Path,default=REPO/'.local/stt03e/scene-reload-comparison.json')
+    parser.add_argument('--cli',type=Path,default=REPO/'Packages/Engine/.build/debug/ikkoku-inspect',
+                        help='ikkoku-inspect for the route-edit labels\' route-steps runs')
     arguments=parser.parse_args()
     if not arguments.output.resolve().is_relative_to((REPO/'.local').resolve()):
         raise ValueError('Original-derived reports stay in .local')
     trace_path=arguments.probe/'reload-trace.json'
     trace=json.loads(trace_path.read_text())
     scene_hashes={}
-    for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS:
+    for label in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS+ROUTE_LABELS:
         path=arguments.probe/('reload-'+label+'.png') # the FK pair runs upload both records under these names
         if path.is_file():scene_hashes[label]=hashlib.sha256(path.read_bytes()).hexdigest()
-    if any(label in trace.get('cases',{}) for label in TOPOLOGY_LABELS):
+    if any(label in trace.get('cases',{}) for label in ROUTE_LABELS):
+        import subprocess
+        trees={label:file_tree((arguments.probe/('reload-'+label+'.png')).read_bytes()) for label in ROUTE_LABELS
+               if (arguments.probe/('reload-'+label+'.png')).is_file()}
+        def steps(label,deltas,play_delta):
+            path=arguments.output.parent/('route-steps-deltas-'+label+'.json')
+            if not path.resolve().is_relative_to((REPO/'.local').resolve()):raise ValueError('Original-derived reports stay in .local')
+            path.write_text(json.dumps(list(deltas))+'\n')
+            result=subprocess.run([str(arguments.cli),'route-steps',str(arguments.probe/('reload-'+label+'.png')),str(path),'%.9g'%play_delta],
+                                  capture_output=True,text=True)
+            if result.returncode:raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+            return json.loads(result.stdout)
+        arguments.output.parent.mkdir(parents=True,exist_ok=True)
+        report=compare_route_edit(trace,trees,steps,scene_hashes)
+    elif any(label in trace.get('cases',{}) for label in TOPOLOGY_LABELS):
         trees={label:file_tree((arguments.probe/('reload-'+label+'.png')).read_bytes()) for label in TOPOLOGY_LABELS
                if (arguments.probe/('reload-'+label+'.png')).is_file()}
         report=compare_topology(trace,trees,scene_hashes)
@@ -530,7 +712,7 @@ def main():
         report=compare_expression(trace,expected,scene_hashes)
     else:report=compare(trace,scene_hashes)
     evidence=[dict(path=str(p.resolve()),sha256=hashlib.sha256(p.read_bytes()).hexdigest())
-              for p in [trace_path,Path(__file__)]+[arguments.probe/('reload-%s.png'%l) for l in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS] if p.is_file()]
+              for p in [trace_path,Path(__file__)]+[arguments.probe/('reload-%s.png'%l) for l in LABELS+FK_LABELS+EXPRESSION_LABELS+TOPOLOGY_LABELS+ROUTE_LABELS] if p.is_file()]
     report['evidence']=evidence
     arguments.output.parent.mkdir(parents=True,exist_ok=True)
     arguments.output.write_text(json.dumps(report,indent=2)+'\n')
