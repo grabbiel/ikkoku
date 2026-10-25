@@ -766,7 +766,7 @@ against Studio assembly `902b9a…`. The accepted inspector `b2b9a74b…` is reu
 after verifying all 178 compiled-source files. Its 103-file converted-input
 closure totals 66,087,129 bytes and never consumes source-evaluated geometry.
 All 74 focused Python tests, 28 retained comparisons and nine retained repeats
-pass; 4,681 historical input files and 501 new manifested capture files are
+pass; 4,681 historical input files and 505 new manifested capture files are
 verified. Integration with the accepted cheek tooling passes 84 related Python
 tests. Every owned source/compiler/native process is released.
 
