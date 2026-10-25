@@ -809,6 +809,11 @@ resolution, raw RGBA reads, SHA comparisons and Data-to-array copies. The librar
 and appearance-input spans are inclusive; their leaf API intervals must not be
 added to those parents again. Untimed validation, namespacing, contextualization
 and instrumentation remain within the relevant parent.
+`verifiedFileRead` and `verifiedFileSHA` aggregate two call sites: assembly-registry
+verification before the top-level manifest read, and converted-component
+verification inside library preparation. Their whole aggregates are therefore
+not library children. SHA intervals include hex comparison and, on cached RGBA
+paths, materializing `Data` for the existing hash API.
 
 Each timed API counts attempts and throws with `defer`. Semantic validation after
 an API can reject its result even when that API succeeded; retained observations
@@ -822,3 +827,53 @@ copying. These are API byte volumes, separate from retained snapshot bytes, disk
 traffic, Metal allocations or RSS. No caches, image options, resource publication,
 leases, shader math or GPU completion behavior change. Attribution alone makes no
 latency or responsiveness claim.
+
+Local acceptance used clean `1ec2e04` and Release binary `01b64854`, compared with
+the retained PR #217 integration producer `bc32a083` / binary `55b5bf0d`. All 557
+tracked build-source inputs were checked; exactly five production files and
+three test files differ. Eighteen focused Engine checks passed with no skips:
+17 passed initially, and the remaining error-order regression passed after its
+test-only comparison stopped relying on unstable NSError descriptions and
+dictionary ordering. The original failed attempt remains retained. The test
+still checks typed decoding errors, file paths, error order and partial counts.
+
+Four functional processes passed 55 selection and 7 fresh-reload checks per sex.
+All four cards and all 12 observed before/after resource vectors match the
+accepted PR #217 counterparts. Eight no-op selections retained resources and
+emitted no successful selection sample. The separate quiet pair passed eight
+19-check processes in 55.212 seconds, with 48 selection records, four identical
+exports per sex, matching selected resource vectors across both arms, and 16
+resource-preserving no-ops. The two arms used the same held-clock scenarios in
+female A/B/B/A and male B/A/A/B order. All owned process groups exited.
+
+Across the 24 candidate selections, the measured wall-time ranges were:
+
+| Phase | Calls per selection | Range (ms) |
+| --- | ---: | ---: |
+| Queue operation | 1 | 582.031–712.206 |
+| Library preparation, inclusive | 1 | 525.197–648.608 |
+| Rig decode, validation and coordinate/data conversion | 10 | 514.134–634.981 |
+| Rig file reads | 10 | 3.519–5.369 |
+| Avatar assembly | 1 | 0.815–0.962 |
+| Shape contract decode | 1 | 21.943–24.924 |
+| Appearance-input preparation, inclusive | 1 | 31.551–37.110 |
+| RGBA SHA operations | 20 | 23.589–26.581 |
+
+Rig decode accounted for 87.994–89.674% of queue operation time; these observations
+do not separate Foundation JSON decoding from validation/conversion. Queue
+residence was 0.016–0.038 ms and delivery 0.015–0.046 ms. Each selection made 12
+RGBA reads/copies and eight successful repeated-path reuses: 32,506,112 logical
+bytes read/copied/retained and 62,914,816 bytes presented to SHA. Ten rig reads
+returned 32,145,659–39,374,025 bytes, depending on the assembly. These volumes
+are not physical disk traffic or memory measurements.
+
+There are only two samples per arm, sex, head and cycle. For head 201, candidate
+minus control mean API times were female cold +16.136 ms / warm −8.022 ms and
+male cold +6.731 ms / warm +2.086 ms. The comparison observes combined
+instrumentation and run variation; it cannot isolate overhead or establish a
+speedup. “Cold” and “warm” identify the first and second selection cycles, not
+eviction of filesystem caches. The result directs the next bounded investigation
+toward repeated rig decoding, while owner-side stalls remain separate work under
+#192. Private inputs, binary/source proofs, original failures, artifact hashes
+and phase analysis are retained under
+`.local/codex-continue-2026-10-24/rolling/maker-worker-attribution/`.
