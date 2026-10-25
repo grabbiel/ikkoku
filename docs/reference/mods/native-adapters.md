@@ -139,6 +139,8 @@ python3 Tools/translation/studio_execution_probe.py \
   --manifest /absolute/path/to/StudioMotionFixture/manifest.json \
   --native-manifest .local/plugins/mute-original/manifest.json \
   --native-manifest .local/plugins/accessory-names-original/manifest.json \
+  --mute-oracle .local/reverse/plugin-execution/mute-oracle/reference.json \
+  --mute-oracle-sha256 96f53bdc11af45619c32bbd25b4eececfd98d02154e3413015fbf337f2b8ab41 \
   --output .local/reverse/plugin-execution/native-adapter-capture-02
 ```
 
@@ -159,10 +161,30 @@ Add `--mute-config` with an enabled copy of the configuration to check audible
 muting through the app bus. The probe passes it as `IKKOKU_MUTE_BACKGROUND_CONFIG`,
 which remounts the adapter with that configuration after the package mounts.
 Saved package references keep the original configuration. `test_studio_execution_probe.py` tests these report rules without
-launching the app. The acceptance below closes ST-T02/A-T04 for this revision.
-The probe currently trusts the report's effective enabled setting; independently
-compare it with the requested config until the non-blocking expected-setting
-assertion from PR #2's review is implemented.
+launching the app. The acceptance below closes ST-T02/A-T04 for its recorded revision.
+
+Mute probe runs now require an independently reviewed config-reader oracle and
+its exact SHA-256 before launching any process. The effective configuration bytes
+come from `--mute-config`, otherwise the hash-verified package configuration,
+otherwise the absent-config default represented by empty bytes. An override in
+the environment map must instead be supplied explicitly through `--mute-config`.
+The bytes must match exactly one input/result pair in the pinned original
+BepInEx reader record. Missing/ambiguous inputs, reader errors, malformed results
+and changed hashes reject; the tool does not implement another config parser.
+The retained oracle above covers 23 original-reader cases. An enabled override
+must use an exact covered input, or a separately reviewed oracle must first be
+produced for its different bytes. Original binaries and input bytes stay private.
+
+Each phase's mount and final setting must equal that independent Boolean, and
+focus/gain expectations use it rather than the app's reported value. The final
+report records the expected setting, configuration origin/hash and oracle
+case/hash. Package references remain distinct from capture-only overrides.
+Manifest/config/oracle pins are checked around every process; this detects
+observed input changes but does not lock files against concurrent writers.
+IR-only and other-adapter probes need no Mute oracle. This closes the checker
+design gap noted during PR #2 review; focused Python and fresh app acceptance of
+the strengthened checker are pending. It adds no app or frame-path work, and
+does not extend live config watching, observer lifetime or Unity audio coverage.
 
 ## Verified Release acceptance
 
