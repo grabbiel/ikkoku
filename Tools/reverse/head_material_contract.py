@@ -4,7 +4,8 @@
 Only named nonsexual face texture inputs are decoded. Derived base-color previews
 use verified create_* equations with a documented color-space assumption. The
 contract also records the normal-clothes create material and no-pattern row;
-garment pixels are exported separately by source_texture_store.py.
+garment pixels are exported separately by source_texture_store.py. The optional
+ordinary-body extension records metadata only, without decoding body pixels.
 """
 from __future__ import annotations
 
@@ -43,11 +44,15 @@ TABLES = {
     "mt_pattern_00": [],
 }
 CREATORS = {"cf_m_face_create", "cf_m_eye_create", "cf_m_eyewhite_create", "cf_m_clothesN_create"}
+BODY_TABLES = {"mt_body_paint_00": [], "mt_sunburn_00": [], "bodypaint_layout_00": []}
+BODY_TEXTURES = {"chara/oo_base.unity3d": ["cf_body_00_t", "cf_body_00_mc"],
+                 "chara/mm_base.unity3d": ["cf_body_01_mp"]}
 VERIFIED_PROGRAMS = {
     "Shader Forge/create_head": "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c",
     "Shader Forge/create_eye": "c4bd7e1ec704b84075a666316519230ce163e1f4540be2af7ed25b9f3934fece",
     "Shader Forge/create_eyewhite": "4f4f69fd421ab35d9e380e418ae04b22ac88852cad0ecf6c63f75285c895b1f9",
     "Shader Forge/create_topN": "d709d6fc92ebecd4f8b579041c8a7abce3a13c20c18985812bde6bc42881f579",
+    "Shader Forge/create_body": "6dec09eabb8464f6b79b6a97e978631187ca77d992a99de1a6d0fd9ffc43e1c5",
 }
 # Extra masks and neutral mouth/tear inputs used by the head's authored materials.
 EXTRA_TEXTURES = {"chara/bo_head_00.unity3d": ["cf_face_00_md", "cf_face_00_md2", "cf_t_tooth_00",
@@ -94,6 +99,24 @@ def material(reader) -> dict:
                               "offset": [v.m_Offset.x, v.m_Offset.y]} for k, v in properties.m_TexEnvs}}
 
 
+def body_texture_metadata(by_bundle: dict, root: Path) -> list[dict]:
+    """Identity/format only. Body pixels and samplers use the isolated store producer."""
+    records = []
+    for bundle, names in BODY_TEXTURES.items():
+        for name in names:
+            matches = [obj for obj in by_bundle[root / bundle].objects
+                       if obj.type.name == "Texture2D" and obj.peek_name() == name]
+            if len(matches) != 1:
+                raise ValueError(f"Expected one {name} texture in {bundle}, found {len(matches)}")
+            reader = matches[0]
+            texture = reader.read()
+            records.append({"name": name, "bundle": bundle, **identity(reader),
+                            "width": texture.m_Width, "height": texture.m_Height,
+                            "format": int(texture.m_TextureFormat), "serializedColorSpace": texture.m_ColorSpace,
+                            "metadataOnly": True})
+    return records
+
+
 def verify_create_shader(reader, output: Path) -> dict:
     from UnityPy.export.ShaderConverter import ShaderProgram
     from UnityPy.helpers import CompressionHelper
@@ -118,6 +141,17 @@ def verify_create_shader(reader, output: Path) -> dict:
     sha = hashlib.sha256(code).hexdigest()
     if VERIFIED_PROGRAMS.get(name) != sha:
         raise ValueError(f"Unverified {name} program; recover equations before baking this source version")
+    if name == "Shader Forge/create_body":
+        # The body extension does not bake a CPU preview. It records the exact
+        # fragment program for separate translation and independent GPU gates.
+        for variant in forward.progFragment.m_SubPrograms:
+            other = bytes(program.m_SubPrograms[variant.m_BlobIndex].m_ProgramCode)
+            start = other.find(b"DXBC")
+            if start < 0 or start + 28 > len(other):
+                raise ValueError("Expected a complete body fragment DXBC header")
+            length = struct.unpack_from("<I", other, start + 24)[0]
+            if length < 32 or start + length > len(other) or other[start:start + length] != code:
+                raise ValueError("Body fragment variants differ from the recorded program")
     shader_dir = output / "shaders"; shader_dir.mkdir(exist_ok=True)
     filename = f"{name.split('/')[-1]}-forward-{index}.dxbc"
     (shader_dir / filename).write_bytes(code)
@@ -198,15 +232,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=REPO / ".local/reverse/rigs/source/abdata")
     parser.add_argument("--output", type=Path, default=REPO / ".local/reverse/rigs/head-materials")
+    parser.add_argument("--body-composite", action="store_true",
+                        help="Include ordinary female body creator/input/catalog metadata, without decoding body pixels")
     args = parser.parse_args()
     output, root = args.output.resolve(), args.source.resolve()
     if not output.is_relative_to((REPO / ".local").resolve()):
         parser.error("Extracted source material data and PNGs must remain under ignored .local")
     output.mkdir(parents=True, exist_ok=True)
     table_path = root / "list/characustom/00.unity3d"
+    tables = {**TABLES, **(BODY_TABLES if args.body_composite else {})}
     rows, inputs = [], []
     for obj in UnityPy.load(str(table_path)).objects:
-        if obj.type.name != "TextAsset" or obj.peek_name() not in TABLES:
+        if obj.type.name != "TextAsset" or obj.peek_name() not in tables:
             continue
         data = obj.read()
         raw = data.m_Script.encode("utf-8", "surrogateescape")
@@ -216,12 +253,14 @@ def main() -> None:
         row = dict(zip(table["lstKey"], table["dictList"][0], strict=True))
         rows.append({"table": data.m_Name, "category": table["categoryNo"], "selectedID": 0,
                      "row": row, **identity(obj)})
-        for role, bundle_key, asset_key in TABLES[data.m_Name]:
+        for role, bundle_key, asset_key in tables[data.m_Name]:
             inputs.append({"role": role, "category": table["categoryNo"], "id": 0,
                            "bundle": row[bundle_key], "asset": row[asset_key]})
-    if {row["table"] for row in rows} != set(TABLES):
+    if {row["table"] for row in rows} != set(tables):
         raise ValueError("A required ID0 catalog table is absent")
     bundles = {table_path, root / "chara/bo_head_00.unity3d", root / "chara/mm_base.unity3d"}
+    if args.body_composite:
+        bundles.update(root / bundle for bundle in BODY_TEXTURES)
     bundles.update(root / entry["bundle"] for entry in inputs if entry["bundle"] != "0")
     missing = sorted(str(path) for path in bundles if not path.is_file())
     if missing:
@@ -279,12 +318,14 @@ def main() -> None:
             visit(child.read().m_GameObject.read())
 
     visit(prefab)
-    creator_readers = [obj for obj in env.objects if obj.type.name == "Material" and obj.peek_name() in CREATORS]
+    creator_names = CREATORS | ({"cf_m_body_create"} if args.body_composite else set())
+    creator_readers = [obj for obj in env.objects if obj.type.name == "Material" and obj.peek_name() in creator_names]
     verified_shaders = [verify_create_shader(obj, output) for obj in creator_readers]
     creators = [material(obj) for obj in creator_readers]
     result = {"schemaVersion": 1, "scope": "Original head00 ID0 inputs and base previews; source shader lighting is not implemented",
               "sources": [{"path": str(path), "bytes": path.stat().st_size, "sha256": digest(path)} for path in sorted(bundles)],
-              "catalogRows": rows, "defaultInputs": inputs, "textures": list(exported.values()),
+              "catalogRows": rows, "defaultInputs": inputs,
+              "textures": list(exported.values()) + (body_texture_metadata(by_bundle, root) if args.body_composite else []),
               "drawMaterials": list(materials.values()), "createMaterials": creators, "renderers": renderers,
               "verifiedCreateShaders": verified_shaders,
               "derivedPreviews": previews(output, inputs, creators),

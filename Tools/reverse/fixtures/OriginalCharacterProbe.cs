@@ -48,7 +48,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     // (clothes, clothesState, shoesType). Null when none is given; then the
     // capture keeps every garment on as before.
     Dictionary<string,object> wearRequest;
-    bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs,captureFaceCompositeInputs;
+    bool captureTopCompositeInputs,captureBottomCompositeInputs,captureInnerShoeCompositeInputs,captureOuterShoeCompositeInputs,captureFaceCompositeInputs,captureBodyCompositeInputs;
     static int[] ParseBytes(string value,int count,int maximum) {
         var parts=value.Split(',');if(parts.Length!=count)throw new Exception("Expected "+count+" comma-separated values: "+value);
         var result=new int[count];
@@ -192,6 +192,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
     }
     void Finish(string error) {
         RestoreFaceInputRetention();
+        RestoreBodyInputRetention();
         File.WriteAllText(Path.Combine(folder,"status.json"),J(new Dictionary<string,object>{{"error",error},{"unity",Application.unityVersion},{"device",SystemInfo.graphicsDeviceName},{"graphicsAPI",SystemInfo.graphicsDeviceVersion},{"colorSpace",QualitySettings.activeColorSpace.ToString()}}));
         // ST-T07i: written only in look mode (also when a phase failed, so the
         // partial trace reaches --collect); absent otherwise.
@@ -270,8 +271,10 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
                 // Shared skin inputs affect face/body composition and eyeline
                 // shadow. These two setters preserve alpha and all other fields.
                 case "captureFaceCompositeInputs": captureFaceCompositeInputs=Boolean.Parse(fields[1]);break;
+                case "captureBodyCompositeInputs": captureBodyCompositeInputs=Boolean.Parse(fields[1]);break;
                 case "skinMainColor": body.skinMainColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "skinSubColor": body.skinSubColor=ParseOpaqueSkinColor(fields[1]);break;
+                case "nailColor": body.nailColor=ParseOpaqueSkinColor(fields[1]);break;
                 case "topBaseColor1": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[0].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor2": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[1].baseColor=ParseColor(fields[1]);break;
                 case "topBaseColor3": foreach(var coordinate in file.coordinate) coordinate.clothes.parts[0].colorInfo[2].baseColor=ParseColor(fields[1]);break;
@@ -317,6 +320,8 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             }
             modelRequestedBody=(float[])body.shapeValueBody.Clone();modelRequestedFace=(float[])face.shapeValueFace.Clone();
         }
+        if(captureFaceCompositeInputs && captureBodyCompositeInputs)
+            throw new Exception("Face and body input observations require separate captures");
         character=modelSex==0 ? Manager.Character.Instance.CreateMale(0,null,1,file,true)
             : Manager.Character.Instance.CreateFemale(null,1,file,true);
         if(captureFaceCompositeInputs) {
@@ -326,6 +331,14 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             // evidence of the default input lifetime or source runtime cost.
             faceOriginalReleaseCustomInputTexture=character.releaseCustomInputTexture;
             if(!faceOriginalReleaseCustomInputTexture.Value)throw new Exception("Unexpected original input-retention policy");
+            character.releaseCustomInputTexture=false;
+        }
+        if(captureBodyCompositeInputs) {
+            // The original body creator releases its inputs after composing.
+            // Retain only for observation, then call the original release and
+            // read the same RT again; this is not a default-lifetime benchmark.
+            bodyOriginalReleaseCustomInputTexture=character.releaseCustomInputTexture;
+            if(!bodyOriginalReleaseCustomInputTexture.Value)throw new Exception("Unexpected original input-retention policy");
             character.releaseCustomInputTexture=false;
         }
         // Moment (a): right after CreateFemale returns, before LoadAsync starts.
@@ -480,6 +493,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             report[slot==0?"topCompositeInputs":slot==1?"bottomCompositeInputs":slot==7?"innerShoeCompositeInputs":"outerShoeCompositeInputs"]=inputs;
         }
         if(captureFaceCompositeInputs)report["faceCompositeInputs"]=ExportFaceCompositeInputs();
+        if(captureBodyCompositeInputs)report["bodyCompositeInputs"]=ExportBodyCompositeInputs();
         File.WriteAllText(Path.Combine(folder,"frame.json"),J(report));
         File.WriteAllText(Path.Combine(folder,"fingers.json"),J(fingerRecords));
         if(handPatterns!=null)File.WriteAllText(Path.Combine(folder,"hand-anime.json"),J(handAnimeRecords));
@@ -715,6 +729,133 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             if(result!=null) {
                 result["restoredReleaseCustomInputTexture"]=character.releaseCustomInputTexture;
                 File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
+            }
+        }
+    }
+    bool? bodyOriginalReleaseCustomInputTexture;
+    void RestoreBodyInputRetention() {
+        if(character!=null && bodyOriginalReleaseCustomInputTexture.HasValue)
+            character.releaseCustomInputTexture=bodyOriginalReleaseCustomInputTexture.Value;
+    }
+    object ExportBodyCompositeInputs() {
+        Dictionary<string,object> result=null;
+        try {
+        if(!bodyOriginalReleaseCustomInputTexture.HasValue || !bodyOriginalReleaseCustomInputTexture.Value || character.releaseCustomInputTexture)
+            throw new Exception("Body input observation requires the explicitly retained source inputs");
+        var control=character.customTexCtrlBody;
+        var renderer=character.rendBody;
+        if(character.sex!=1 || character.exType!=0 || !character.hiPoly || character.objBody==null
+            || (character.objBody.name!="p_cf_body_00" && character.objBody.name!="p_cf_body_00(Clone)")
+            || control==null || !control.CreateInitEnd || !control.DrawInitEnd || renderer==null
+            || !renderer.enabled || !renderer.gameObject.activeInHierarchy || renderer.name!="o_body_a"
+            || !renderer.transform.IsChildOf(character.objBody.transform))
+            throw new Exception("Body composite requires the active ordinary high-detail female body identity");
+        var creator=Required(control,"matCreate") as Material;
+        var main=Required(control,"texMain") as Texture2D;
+        var target=control.GetCreateTexture() as RenderTexture;
+        var draw=control.matDraw;
+        if(creator==null || main==null || target==null || draw==null || creator.shader.name!="Shader Forge/create_body"
+            || (creator.name!="cf_m_body_create" && creator.name!="cf_m_body_create (Instance)")
+            || (draw.name!="cf_m_body" && draw.name!="cf_m_body (Instance)") || draw.shader.name!="Shader Forge/main_skin"
+            || renderer.sharedMaterials.Length==0 || renderer.sharedMaterials[0]!=draw
+            || draw.GetTexture("_MainTex")!=target || target.width!=2048 || target.height!=2048
+            || target.format!=RenderTextureFormat.ARGB32 || !target.useMipMap)
+            throw new Exception("Body composite creator/draw/target chain differs");
+        result=new Dictionary<string,object>{{"sex",character.sex},{"exType",character.exType},{"hiPoly",character.hiPoly},
+            {"originalReleaseCustomInputTexture",bodyOriginalReleaseCustomInputTexture.Value},{"observedReleaseCustomInputTexture",character.releaseCustomInputTexture},
+            {"observationScope","Creator inputs retained before LoadAsync; other creators temporarily retained too; no default-lifetime or runtime-cost claim"},
+            {"loadedBodyName",character.objBody.name},{"bodyBundle","chara/oo_base.unity3d"},{"bodyBundleSHA256",SourceBundleHash("chara/oo_base.unity3d")},
+            {"renderer",renderer.name},{"rendererPath",RelativePath(renderer.transform)},{"enabled",renderer.enabled},{"active",renderer.gameObject.activeInHierarchy},
+            {"materialSlot",0},{"drawMaterial",draw.name},{"drawShader",draw.shader.name},{"drawMaterialInstanceID",draw.GetInstanceID()},
+            {"rendererMaterialInstanceID",renderer.sharedMaterials[0].GetInstanceID()},
+            {"targetInstanceID",target.GetInstanceID()},{"targetFile",ExportTexture(target)},{"targetFormat",target.format.ToString()},
+            {"targetSRGB",target.sRGB},{"targetUseMipMap",target.useMipMap},
+            {"creatorMaterial",creator.name},{"creatorShader",creator.shader.name},{"creatorInstanceID",creator.GetInstanceID()},
+            {"creatorBundle","chara/mm_base.unity3d"},{"creatorBundleSHA256",SourceBundleHash("chara/mm_base.unity3d")},
+            {"assemblySHA256",Sha256File(typeof(ChaControl).Assembly.Location)}};
+        var inputs=new Dictionary<string,object>();result["inputs"]=inputs;
+        foreach(var property in new[]{"_MainTex","_ColorMask","_paintmask"}) {
+            var bound=property=="_MainTex"?(Texture)main:creator.GetTexture(property);
+            var texture=bound as Texture2D;
+            string bundle=property=="_paintmask"?"chara/mm_base.unity3d":"chara/oo_base.unity3d";
+            string name=property=="_paintmask"?"cf_body_01_mp":property=="_MainTex"?"cf_body_00_t":"cf_body_00_mc";
+            // Match actual Studio's empty manifest and the exact exported
+            // creator's paintmask dependency; do not assume a Texture2D export.
+            Material sourceMaterial=null;Texture2D loaded;
+            var lookup=new Dictionary<string,object>{{"kind",property=="_paintmask"?"creator-material-dependency":"hardcoded-texture"},
+                {"bundle",bundle},{"assetName",property=="_paintmask"?"cf_m_body_create":name},{"manifest",""},{"clone",false}};
+            if(property=="_paintmask") {
+                sourceMaterial=CommonLib.LoadAsset<Material>(bundle,"cf_m_body_create",false,string.Empty);
+                loaded=sourceMaterial==null?null:sourceMaterial.GetTexture(property) as Texture2D;
+                lookup["property"]=property;lookup["materialInstanceID"]=sourceMaterial==null?0:sourceMaterial.GetInstanceID();
+                lookup["materialName"]=sourceMaterial==null?null:sourceMaterial.name;
+                lookup["materialShader"]=sourceMaterial==null?null:sourceMaterial.shader.name;
+            } else loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,string.Empty);
+            inputs[property]=new Dictionary<string,object>{{"expectedBundle",bundle},{"expectedName",name},
+                {"actualNull",bound==null},{"actualName",bound==null?null:bound.name},{"actualType",bound==null?null:bound.GetType().Name},
+                {"actualInstanceID",bound==null?0:bound.GetInstanceID()},{"sourceInstanceID",loaded==null?0:loaded.GetInstanceID()},
+                {"sameSourceObject",texture!=null && loaded!=null && texture==loaded},{"lookup",lookup}};
+            File.WriteAllText(Path.Combine(folder,"body-input-observation.json"),J(result));
+            if(property=="_paintmask" && (sourceMaterial==null || sourceMaterial.name!="cf_m_body_create" || sourceMaterial.shader.name!="Shader Forge/create_body"))
+                throw new Exception("Body composite paintmask source material differs");
+            int size=property=="_MainTex"?2048:1024;
+            if(texture==null || loaded==null || texture!=loaded || texture.name!=name || texture.width!=size || texture.height!=size)
+                throw new Exception("Body composite bound input differs from source asset: "+property);
+            inputs[property]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",SourceBundleHash(bundle)},{"name",name},
+                {"instanceID",texture.GetInstanceID()},{"sourceInstanceID",loaded.GetInstanceID()},{"sameSourceObject",true},{"lookup",lookup},
+                {"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},{"mipLevels",texture.mipmapCount},
+                {"file",ExportTexture(texture)},{"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
+        }
+        var body=character.fileBody;
+        if(body.paintId.Length!=2 || body.paintLayoutId.Length!=2 || body.paintId[0]!=0 || body.paintId[1]!=0
+            || body.paintLayoutId[0]!=0 || body.paintLayoutId[1]!=0 || body.sunburnId!=0)
+            throw new Exception("Body composite requires ID0 paint/layout/sunburn selections");
+        var selectedCatalogs=new Dictionary<string,object>();
+        foreach(var category in new[]{ChaListDefine.CategoryNo.mt_body_paint,ChaListDefine.CategoryNo.mt_sunburn,ChaListDefine.CategoryNo.bodypaint_layout}) {
+            var info=character.lstCtrl.GetListInfo(category,0);
+            if(info==null || info.Id!=0)throw new Exception("Body composite selected catalog is absent: "+category);
+            var row=new Dictionary<string,object>{{"id",info.Id}};
+            var keys=category==ChaListDefine.CategoryNo.bodypaint_layout
+                ?new[]{ChaListDefine.KeyType.CenterX,ChaListDefine.KeyType.MoveX,ChaListDefine.KeyType.CenterY,ChaListDefine.KeyType.MoveY,ChaListDefine.KeyType.CenterScale,ChaListDefine.KeyType.AddScale}
+                :new[]{ChaListDefine.KeyType.MainAB,category==ChaListDefine.CategoryNo.mt_body_paint?ChaListDefine.KeyType.PaintTex:ChaListDefine.KeyType.SunburnTex};
+            foreach(var key in keys)row[key.ToString()]=info.GetInfo(key);
+            selectedCatalogs[category.ToString()]=row;
+        }
+        result["selectedCatalogs"]=selectedCatalogs;
+        var layers=new Dictionary<string,object>();
+        foreach(var property in new[]{"_Texture3","_Texture4","_Texture6"}) {
+            if(!creator.HasProperty(property) || creator.GetTexture(property)!=null)throw new Exception("Body composite requires null layer input "+property);
+            layers[property]=new Dictionary<string,object>{{"isNull",true},{"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
+        }
+        result["nullLayers"]=layers;
+        var vectors=new Dictionary<string,object>();
+        foreach(var property in new[]{"_Color","_Color2","_Color3","_Color4","_Color5","_Color6","_paint1","_paint2"})
+            vectors[property]=V(creator.GetVector(property));
+        result["vectors"]=vectors;
+        result["selection"]=new Dictionary<string,object>{{"coordinateType",character.fileStatus.coordinateType},
+            {"paintId",body.paintId},{"paintLayoutId",body.paintLayoutId},{"sunburnId",body.sunburnId},
+            {"skinMainColor",V(body.skinMainColor)},{"skinSubColor",V(body.skinSubColor)},{"nailColor",V(body.nailColor)}};
+        string before=(string)result["targetFile"];
+        if(!character.ReleaseBodyCustomTexture())throw new Exception("Original body input release failed");
+        var cleared=new Dictionary<string,object>();
+        foreach(var property in new[]{"_MainTex","_ColorMask","_Texture3","_Texture4","_Texture6"}) {
+            bool isNull=creator.GetTexture(property)==null;cleared[property]=isNull;
+            if(!isNull)throw new Exception("Original body input release did not clear "+property);
+        }
+        if(control.GetCreateTexture()!=target || control.matDraw!=draw || renderer.sharedMaterials[0]!=draw || draw.GetTexture("_MainTex")!=target)
+            throw new Exception("Body release changed the target/draw identity");
+        string after=ExportTextureAgain(target);
+        string beforeHash=Sha256File(Path.Combine(folder,before)),afterHash=Sha256File(Path.Combine(folder,after));
+        result["releaseObservation"]=new Dictionary<string,object>{{"method","ReleaseBodyCustomTexture"},{"cleared",cleared},
+            {"beforeFile",before},{"afterFile",after},{"beforeSHA256",beforeHash},{"afterSHA256",afterHash},
+            {"targetInstanceID",target.GetInstanceID()},{"drawMaterialInstanceID",draw.GetInstanceID()},{"sameTargetAndDraw",true}};
+        if(beforeHash!=afterHash)throw new Exception("Original body target changed after releasing input references");
+        return result;
+        } finally {
+            RestoreBodyInputRetention();
+            if(result!=null) {
+                result["restoredReleaseCustomInputTexture"]=character.releaseCustomInputTexture;
+                File.WriteAllText(Path.Combine(folder,"body-input-observation.json"),J(result));
             }
         }
     }

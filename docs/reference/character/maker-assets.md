@@ -979,3 +979,129 @@ across the twelve sex/head/cycle cells; owner differences range from −3.471 to
 cost, FPS or original-player fidelity claim. First-cycle labels include one
 empty rig-cache selection and two partial-hit selections. Full private evidence
 is retained under `.local/codex-continue-2026-10-24/rolling/maker-component-appearance-attribution/`.
+
+### Bounded Maker clothes composition groups (#234)
+
+Maker now explicitly groups consecutive clothing applications into one Metal
+completion. Base and hair applications keep their separate completions; default
+prepared-appearance callers, Studio and CPU composition remain sequential.
+Each group has separate 32 MiB logical uploaded-input and output limits, with
+checked arithmetic. Repeated uploads and each application's default textures
+count toward the input limit. An oversized application flushes the group and
+uses the existing standalone path and 128 MiB per-call limits; the grouping
+policy does not newly reject previously valid inputs.
+
+Each application retains its compositor, defaults and input leases. All output
+views validate in order before registration, and candidate resources stay private
+until the existing Maker commit. A later preparation failure first flushes prior
+staged work. A combined GPU failure rejects the entire group with ordered
+component identities and its underlying error; it cannot recover the former
+per-call GPU failure precedence. There is no execution retry or silent fallback.
+The previous preview and card survive failed candidate construction. Optional
+diagnostics use a disjoint `clothesCompositionGroup` scope, including standalone
+oversized work, and avoid labels and clock reads when collection is disabled.
+
+At `bc795c7` (Release binary `2773e233`), 19 distinct focused cases pass across
+two retained runs: 18 passed before a new fixture test attempted CPU readback
+from a private Metal texture and crashed; the corrected test uses an aligned
+shared blit buffer and passes for both sexes. Production code is identical
+between those runs. Cases cover caps, overflow, oversized admission, exact CPU
+pixels, leases, ordered failures, atomic GPU/view failures, unchanged default
+callers and actual prepared fixtures. The Release compiler succeeded, but its
+strict runner returned 126 for two lingering owned compiler daemons. Their
+exact identities were checked and released separately; the original failure
+record and supplemental product acceptance remain retained.
+
+Four fresh functional processes pass 124 checks with zero skips. Exported cards
+are byte-identical to the accepted sequential control, with identical selected
+resource/cache counts and eight unchanged or rejected selections. Work remains
+20 real uploads, eight fallback allocations, 316 fallback bindings, 16 dispatches
+and six pipelines; completions fall from six to four. The three-clothes group
+performs three dispatches and one completion. Changed aggregate call grouping
+makes per-call duration averages incomparable; scope deltas still partition the
+aggregate without adding nested costs twice.
+
+A separate quiet comparison uses control `015cd647` / binary `3ec9d665` and
+candidate `bc795c7` / `2773e233`. Eight fresh processes in female A/B/B/A and
+male B/A/A/B order pass 152 checks, with 27 retained artifact hashes, 48 raw
+observations, identical exports and 12 four-way resource/cache comparisons.
+There are two process repetitions per arm and sex; each cell below combines
+three correlated head transitions from each repetition. Cycle one includes
+mixed first-use behavior rather than uniformly cold selections.
+
+| Sex / cycle | Selection API, ms | Owner commit, ms | Clothes inclusive, ms |
+| --- | ---: | ---: | ---: |
+| Female / 1 | 539.305 → 519.156 | 103.321 → 84.686 | 29.373 → 11.395 |
+| Female / 2 | 164.438 → 149.238 | 80.237 → 64.620 | 29.694 → 12.109 |
+| Male / 1 | 559.179 → 538.105 | 106.797 → 88.283 | 29.608 → 11.325 |
+| Male / 2 | 162.648 → 144.794 | 77.977 → 60.809 | 28.615 → 11.485 |
+
+The observed API benefit is 15.2–21.1 ms and owner benefit 15.6–18.6 ms in
+these cells. Nested clothes wait/view time falls 15.4–16.5 ms. The existing
+unmanaged VM remained open (3.4% CPU at the prelaunch snapshot), with no owned
+probe; background activity is uncontrolled. The exact texture inventory estimates
+an additional 5,242,884 bytes of logical peak texture payload. This excludes
+metadata, CPU snapshots, the prior live preview, alignment and driver allocation;
+RSS was not measured. These results establish a bounded selection improvement,
+not FPS, universal latency, source appearance parity or elimination of owner
+stalls. Private evidence is retained under
+`.local/codex-continue-2026-10-24/rolling/maker-clothes-composition-groups/`.
+
+### Reader-local verified RGBA digest reuse (#192)
+
+The bounded appearance reader retains each digest computed from actual file
+bytes beside its existing immutable RGBA array. Later references check expected
+size first, then compare the expected hash exactly and case-sensitively with that
+verified digest. First-read failures still short-circuit before copying; input
+caps and typed error precedence remain unchanged. There is no cross-reader or
+cross-selection cache, extra pixel buffer, shader change or GPU/publication
+change. Retained metadata adds one 64-character digest per cached input plus
+Swift value/string overhead; heap/RSS was not measured. Optional diagnostics
+separate actual SHA work from `rgbaDigestComparison`; nil diagnostics skip clocks.
+
+Nine focused Engine tests pass at `3793e32`, including all 18 supported
+assembly/head preparation combinations, size/hash precedence, malformed and
+uppercase hashes, changed files between readers, copy-on-write snapshots and
+independent CPU/Metal color checks. The integrated measured source is `d3253535`
+on accepted main `99a6bfb0`. Candidate Release executable
+`bc24b33c8705688921f23e0e6d0c2ecb352ac783833d1f3230079ed1bbfa375c`
+is compared with the accepted clothes-group control `3ca1fac0` /
+`9c55a75dbabf628cb1e63c716b26b6248a38cf1f15c4def7c4418353138b2b2d`.
+Only the two intended production files differ between these producers.
+The compiler exited successfully, but its process watchdog recorded exit 126
+for two detached owned build helpers. Exact-identity cleanup and supplemental
+fresh-product/archive proof are retained alongside that original failure; the
+build was not rerun or relabeled.
+
+Four functional processes pass 124 checks, preserving all four exported cards,
+12 resource/rig-cache pairs and eight no-op/rejected-selection resource states.
+A separate quiet female ABBA / male BAAB pair passes 152 checks across eight
+fresh processes, retaining 48 observations, 16 no-ops and identical exports.
+Both arms keep 20 real and eight fallback input allocations, 316 fallback
+bindings, 16 dispatches and four completions. Reads and copies remain
+32,506,112 bytes in 12 calls per selection. Actual SHA input falls from
+62,914,816 bytes in 20 calls to 32,506,112 bytes in 12 calls, with eight cached
+digest comparisons: 29 MiB of repeated hashing removed, not disk traffic or
+memory-footprint savings. Comparisons take about 0.001 ms per selection here.
+
+The table reports mean milliseconds over three transitions per cycle from two
+processes per arm/sex. Transitions within each process are correlated; cycle 1
+contains different rig-cache miss counts and is not an all-cold measurement.
+
+| Sex / cycle | Selection API, control → candidate | Worker, control → candidate | Owner, control → candidate |
+| --- | ---: | ---: | ---: |
+| Female / 1 | 541.868 → 535.114 | 451.384 → 442.061 | 88.523 → 91.089 |
+| Female / 2 | 148.435 → 137.313 | 83.970 → 72.121 | 63.004 → 63.770 |
+| Male / 1 | 553.470 → 545.221 | 461.845 → 452.108 | 90.121 → 90.694 |
+| Male / 2 | 153.638 → 142.340 | 86.917 → 74.685 | 65.198 → 66.134 |
+
+Across these four cells, selection means fall 6.754–11.299 ms and appearance
+input preparation falls 11.011–12.394 ms. Owner means increase 0.573–2.566 ms;
+individual candidate owner calls still take 61.264–113.264 ms. Issue #192 stays
+open. The prelaunch snapshot records an unmanaged VM at 4.5% CPU and four old
+Cursor processes at 0–0.2%; active owners held heavy work, but this is not
+machine-wide isolation. There is no FPS, universal-latency or full appearance
+parity claim. Nested and inclusive timing intervals are not additive.
+Private evidence is retained in
+`.local/codex-continue-2026-10-24/rolling/maker-rgba-digest-reuse/`, including
+unchanged original failures, raw-first retention and the per-head/cycle analysis.

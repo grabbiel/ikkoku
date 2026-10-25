@@ -139,23 +139,13 @@ public extension SourcePreviewAppearance {
                   resources: ResourceStore, backend: SourceAppearanceCompositionBackend = .metal,
                   timings: SourceAppearanceTimings? = nil, preparedInputs: SourceAppearanceInputs? = nil,
                   metalMaximumLogicalInputBytes: Int = 128 * 1024 * 1024) throws -> CardApplication {
-        if backend == .metal { try SourceMaterialMetalInputBudget.validateMaximumBytes(metalMaximumLogicalInputBytes) }
+        if backend == .metal {
+            return try prepareMetalApplication(card, bindings: bindings, directory: directory, timings: timings,
+                preparedInputs: preparedInputs, maximumLogicalInputBytes: metalMaximumLogicalInputBytes)
+                .complete(resources: resources, timings: timings)
+        }
         var materials = self.materials, applied = Set<String>(), diagnostics = card.diagnostics + bindings.limitations
         var leases = textureOwner?.leases ?? [:]
-        struct PendingMetalRecipe {
-            let kind: SourceColorComposition.Kind
-            let width: Int, height: Int
-            let main: SourceMaterialImage?, mask: SourceMaterialImage?
-            let colors: [Float4], blend: Float, encodeSRGB: Bool
-            let patterns: [SourceMaterialPattern], layers: [SourceMaterialLayer]
-        }
-        struct PendingReplay {
-            let entry: SourceAppearanceBindings.Entry
-            let colors: [Float4], appliedFields: Set<String>
-            let metalRecipeIndex: Int?
-        }
-        var pendingMetal: [PendingMetalRecipe] = []
-        var pendingReplays: [PendingReplay] = []
         try SourceAppearanceInputs.validateOutputBudget(bindings)
         try preparedInputs?.validate(bindings: bindings, directory: directory)
         let reader = preparedInputs == nil ? SourceAppearanceInputReader(directory: directory) : nil
@@ -181,46 +171,10 @@ public extension SourcePreviewAppearance {
             let bottom = texel(x,y+1) + fraction.x * (texel(x+1,y+1) - texel(x,y+1))
             return top + fraction.y * (bottom - top)
         }
-        func materialImage(_ meta: SourceAppearanceBindings.Texture, _ bytes: [UInt8]) -> SourceMaterialImage {
-            SourceMaterialImage(width: meta.width, height: meta.height, repeating: meta.wrap == "repeat", bytes: bytes)
-        }
-        func applyMaterial(_ entry: SourceAppearanceBindings.Entry, colors: [Float4], texture: TextureHandle?) {
-            for part in entry.parts {
-                var material = materials[part]![entry.pass]
-                if let texture {
-                    material.base = texture; material.uniforms.baseColor = .one
-                    material.setFlag(MaterialFlagHasBaseTexture, true)
-                } else if entry.kind == "highlightUpper" { material.uniforms.overlayColor0 = sourceAppearanceLinear(colors[0]) }
-                else if entry.kind == "highlightLower" { material.uniforms.overlayColor1 = sourceAppearanceLinear(colors[0]) }
-                else { material.uniforms.baseColor = sourceAppearanceLinear(colors[0]) }
-                materials[part]![entry.pass] = material
-            }
-        }
         for entry in bindings.entries {
             guard let recipe = try SourceAppearanceRecipe.resolve(entry, card: card, materials: materials,
                 pixels: pixels, diagnostics: &diagnostics) else { continue }
             let colors = recipe.colors, sourceLinear = recipe.sourceLinear
-            if backend == .metal {
-                var metalRecipeIndex: Int?
-                if let kind = recipe.kind {
-                    let dimensions = (entry.main ?? entry.mask)!
-                    let main = recipe.main, mask = recipe.mask, blend = recipe.blend
-                    let patterns = recipe.patterns, layers = recipe.layers
-                    pendingMetal.append(PendingMetalRecipe(
-                        kind: kind, width: dimensions.width, height: dimensions.height,
-                        main: entry.main.map { materialImage($0, main!) }, mask: entry.mask.map { materialImage($0, mask!) },
-                        colors: colors, blend: blend, encodeSRGB: sourceLinear,
-                        patterns: patterns.map { SourceMaterialPattern(channel: $0.0, image: materialImage($0.1, $0.2), color: $0.3, tiling: $0.4) },
-                        layers: layers.map { layer, meta, bytes, color, layout, maskBytes in
-                            SourceMaterialLayer(kind: layer.kind, image: materialImage(meta, bytes), color: color, layout: layout,
-                                transform: layer.transform, mask: layer.mask.map { materialImage($0, maskBytes!) })
-                        }))
-                    metalRecipeIndex = pendingMetal.count - 1
-                }
-                pendingReplays.append(PendingReplay(entry: entry, colors: colors,
-                    appliedFields: recipe.appliedFields, metalRecipeIndex: metalRecipeIndex))
-                continue
-            }
             var texture: TextureHandle?
             if let kind = recipe.kind {
                 let dimensions = (entry.main ?? entry.mask)!
@@ -274,39 +228,135 @@ public extension SourcePreviewAppearance {
                 texture = handle
                 leases[handle] = SourceAppearanceTextureLease(resources: resources, handle: handle)
             }
-            applyMaterial(entry, colors: colors, texture: texture)
+            sourceAppearanceApplyMaterial(entry, colors: colors, texture: texture, materials: &materials)
             applied.formUnion(recipe.appliedFields)
-        }
-        if backend == .metal {
-            var metalHandles: [TextureHandle] = []
-            if !pendingMetal.isEmpty {
-                let compositor = try SourceAppearanceTimings.measure(timings, .pipelineCreation) {
-                    try SourceMaterialCompositor(device: resources.device)
-                }
-                let batch = try compositor.makeBatch(maximumLogicalInputBytes: metalMaximumLogicalInputBytes, timings: timings)
-                let views = try SourceAppearanceTimings.measure(timings, .composeEncodeWait) {
-                    for recipe in pendingMetal {
-                        try batch.prepare(kind: recipe.kind, width: recipe.width, height: recipe.height,
-                            main: recipe.main, mask: recipe.mask, colors: recipe.colors, blend: recipe.blend,
-                            encodeSRGB: recipe.encodeSRGB, patterns: recipe.patterns, layers: recipe.layers)
-                    }
-                    return try batch.complete()
-                }
-                for view in views {
-                    let handle = resources.register(texture: view)
-                    leases[handle] = SourceAppearanceTextureLease(resources: resources, handle: handle)
-                    metalHandles.append(handle)
-                }
-            }
-            for replay in pendingReplays {
-                let texture = replay.metalRecipeIndex.map { metalHandles[$0] }
-                applyMaterial(replay.entry, colors: replay.colors, texture: texture)
-                applied.formUnion(replay.appliedFields)
-            }
         }
         let usedHandles = Set(materials.values.flatMap { $0 }.flatMap(\.textureHandles))
         let owner = SourceAppearanceTextureOwner(leases: leases.filter { usedHandles.contains($0.key) })
         return CardApplication(appearance: Self(materials: materials, textureOwner: owner), appliedFields: applied, diagnostics: diagnostics)
+    }
+}
+
+/// Owner-local plan. No material with placeholder handles leaves this boundary.
+/// Resolution/validation order is shared with the existing applying wrapper;
+/// CPU application remains immediate and does not create this plan.
+struct SourcePreparedMetalCardApplication {
+    struct Replay {
+        let entry: SourceAppearanceBindings.Entry
+        let colors: [Float4], appliedFields: Set<String>
+        let recipeIndex: Int?
+    }
+    let source: SourcePreviewAppearance
+    let recipes: [SourceMaterialCompositionRecipe]
+    let replays: [Replay]
+    let diagnostics: [String]
+    let maximumLogicalInputBytes: Int
+
+    /// Advisory only: invalid/overflowing charge uses the original singleton
+    /// path, where the original pipeline/allocation validation order still runs.
+    var groupingCharge: SourceMaterialGroupCharge? { SourceMaterialGroupCharge(recipes: recipes) }
+
+    private func makeBatch(resources: ResourceStore, timings: SourceAppearanceTimings?) throws -> SourceMaterialMetalBatch? {
+        guard !recipes.isEmpty else { return nil }
+        let compositor = try SourceAppearanceTimings.measure(timings, .pipelineCreation) {
+            try SourceMaterialCompositor(device: resources.device)
+        }
+        return try compositor.makeBatch(maximumLogicalInputBytes: maximumLogicalInputBytes, timings: timings)
+    }
+
+    func prepare(resources: ResourceStore, timings: SourceAppearanceTimings?) throws -> SourceMaterialMetalBatch? {
+        guard let batch = try makeBatch(resources: resources, timings: timings) else { return nil }
+        try SourceAppearanceTimings.measure(timings, .composeEncodeWait) {
+            for recipe in recipes { try batch.prepare(recipe) }
+        }
+        return batch
+    }
+
+    func complete(resources: ResourceStore, timings: SourceAppearanceTimings?) throws -> SourcePreviewAppearance.CardApplication {
+        let views: [any MTLTexture]
+        if let batch = try makeBatch(resources: resources, timings: timings) {
+            views = try SourceAppearanceTimings.measure(timings, .composeEncodeWait) {
+                for recipe in recipes { try batch.prepare(recipe) }
+                return try batch.complete()
+            }
+        } else { views = [] }
+        return try materialize(views: views, resources: resources)
+    }
+
+    func materialize(views: [any MTLTexture], resources: ResourceStore) throws -> SourcePreviewAppearance.CardApplication {
+        guard views.count == recipes.count else { throw RigError.invalid("Incomplete appearance composition views.") }
+        var materials = source.materials, leases = source.textureOwner?.leases ?? [:], applied = Set<String>()
+        var handles: [TextureHandle] = []
+        for view in views {
+            let handle = resources.register(texture: view)
+            leases[handle] = SourceAppearanceTextureLease(resources: resources, handle: handle)
+            handles.append(handle)
+        }
+        for replay in replays {
+            sourceAppearanceApplyMaterial(replay.entry, colors: replay.colors,
+                texture: replay.recipeIndex.map { handles[$0] }, materials: &materials)
+            applied.formUnion(replay.appliedFields)
+        }
+        let used = Set(materials.values.flatMap { $0 }.flatMap(\.textureHandles))
+        return .init(appearance: SourcePreviewAppearance(materials: materials,
+            textureOwner: SourceAppearanceTextureOwner(leases: leases.filter { used.contains($0.key) })),
+            appliedFields: applied, diagnostics: diagnostics)
+    }
+}
+
+extension SourcePreviewAppearance {
+    func prepareMetalApplication(_ card: SourceCardAppearance, bindings: SourceAppearanceBindings, directory: URL,
+                                 timings: SourceAppearanceTimings? = nil, preparedInputs: SourceAppearanceInputs? = nil,
+                                 maximumLogicalInputBytes: Int = 128 * 1024 * 1024) throws -> SourcePreparedMetalCardApplication {
+        try SourceMaterialMetalInputBudget.validateMaximumBytes(maximumLogicalInputBytes)
+        try SourceAppearanceInputs.validateOutputBudget(bindings)
+        try preparedInputs?.validate(bindings: bindings, directory: directory)
+        let reader = preparedInputs == nil ? SourceAppearanceInputReader(directory: directory) : nil
+        var diagnostics = card.diagnostics + bindings.limitations
+        var recipes: [SourceMaterialCompositionRecipe] = [], replays: [SourcePreparedMetalCardApplication.Replay] = []
+        func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
+            try SourceAppearanceTimings.measure(timings, .pixelReadHash) {
+                if let preparedInputs { return try preparedInputs.pixels(input) }
+                return try reader!.pixels(input)
+            }
+        }
+        func image(_ meta: SourceAppearanceBindings.Texture, _ bytes: [UInt8]) -> SourceMaterialImage {
+            SourceMaterialImage(width: meta.width, height: meta.height, repeating: meta.wrap == "repeat", bytes: bytes)
+        }
+        for entry in bindings.entries {
+            guard let recipe = try SourceAppearanceRecipe.resolve(entry, card: card, materials: materials,
+                pixels: pixels, diagnostics: &diagnostics) else { continue }
+            var index: Int?
+            if let kind = recipe.kind {
+                let dimensions = (entry.main ?? entry.mask)!
+                recipes.append(.init(kind: kind, width: dimensions.width, height: dimensions.height,
+                    main: entry.main.map { image($0, recipe.main!) }, mask: entry.mask.map { image($0, recipe.mask!) },
+                    colors: recipe.colors, blend: recipe.blend, encodeSRGB: recipe.sourceLinear,
+                    patterns: recipe.patterns.map { .init(channel: $0.0, image: image($0.1, $0.2), color: $0.3, tiling: $0.4) },
+                    layers: recipe.layers.map { layer, meta, bytes, color, layout, maskBytes in
+                        .init(kind: layer.kind, image: image(meta, bytes), color: color, layout: layout,
+                            transform: layer.transform, mask: layer.mask.map { image($0, maskBytes!) })
+                    }))
+                index = recipes.count - 1
+            }
+            replays.append(.init(entry: entry, colors: recipe.colors, appliedFields: recipe.appliedFields, recipeIndex: index))
+        }
+        return .init(source: self, recipes: recipes, replays: replays, diagnostics: diagnostics,
+            maximumLogicalInputBytes: maximumLogicalInputBytes)
+    }
+}
+
+private func sourceAppearanceApplyMaterial(_ entry: SourceAppearanceBindings.Entry, colors: [Float4],
+                                          texture: TextureHandle?, materials: inout [String: [MaterialState]]) {
+    for part in entry.parts {
+        var material = materials[part]![entry.pass]
+        if let texture {
+            material.base = texture; material.uniforms.baseColor = .one
+            material.setFlag(MaterialFlagHasBaseTexture, true)
+        } else if entry.kind == "highlightUpper" { material.uniforms.overlayColor0 = sourceAppearanceLinear(colors[0]) }
+        else if entry.kind == "highlightLower" { material.uniforms.overlayColor1 = sourceAppearanceLinear(colors[0]) }
+        else { material.uniforms.baseColor = sourceAppearanceLinear(colors[0]) }
+        materials[part]![entry.pass] = material
     }
 }
 
@@ -433,16 +483,23 @@ private struct SourceAppearanceRecipe {
 private final class SourceAppearanceInputReader {
     let directory: URL
     let maximumBytes: Int
-    private var bytesByPath: [String: [UInt8]] = [:]
+    private struct VerifiedInput {
+        let bytes: [UInt8]
+        let sha256: String
+    }
+    // Reader-local values only: callers receive COW arrays, never mutable access
+    // to the bytes whose digest was verified. Later readers still read and hash.
+    private var bytesByPath: [String: VerifiedInput] = [:]
     private(set) var totalBytes = 0
     private let timings: SourceMakerPreparationTimings?
     init(directory: URL, maximumBytes: Int = 128 * 1024 * 1024, timings: SourceMakerPreparationTimings? = nil) {
         self.directory = directory.resolvingSymlinksInPath(); self.maximumBytes = maximumBytes; self.timings = timings
     }
-    private func matchesHash(_ data: Data, expected: String) -> Bool {
-        let matches = SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expected
+    private func verifiedDigest(_ data: Data, expected: String) -> String? {
+        let digest = SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined()
+        let matches = digest == expected
         timings?.hashed(data.count, phase: .rgbaSHA, matches: matches)
-        return matches
+        return matches ? digest : nil
     }
     func pixels(_ input: SourceAppearanceBindings.Texture) throws -> [UInt8] {
         guard (1...4096).contains(input.width), (1...4096).contains(input.height),
@@ -453,13 +510,15 @@ private final class SourceAppearanceInputReader {
         guard url.path.hasPrefix(directory.path + "/") else { throw RigError.invalid("Appearance texture escapes its directory.") }
         let expected = input.width * input.height * 4
         if let cached = bytesByPath[url.path] {
-            guard cached.count == expected, SourceMakerPreparationTimings.measure(timings, .rgbaSHA, {
-                matchesHash(Data(cached), expected: input.sha256)
+            guard cached.bytes.count == expected, SourceMakerPreparationTimings.measure(timings, .rgbaDigestComparison, {
+                let matches = cached.sha256 == input.sha256
+                timings?.comparedRGBADigest(matches: matches)
+                return matches
             }) else {
                 throw RigError.invalid("Conflicting appearance texture metadata.")
             }
             timings?.reusedRGBA()
-            return cached
+            return cached.bytes
         }
         guard expected <= maximumBytes - totalBytes else {
             throw RigError.invalid("Appearance inputs exceed their retained byte limit.")
@@ -470,12 +529,12 @@ private final class SourceAppearanceInputReader {
         }
         totalBytes += data.count
         guard totalBytes <= maximumBytes, data.count == expected,
-              SourceMakerPreparationTimings.measure(timings, .rgbaSHA, { matchesHash(data, expected: input.sha256) }) else {
+              let digest = SourceMakerPreparationTimings.measure(timings, .rgbaSHA, { verifiedDigest(data, expected: input.sha256) }) else {
             throw RigError.invalid("Appearance texture has changed or exceeds its size limit.")
         }
         let result = SourceMakerPreparationTimings.measure(timings, .rgbaCopy) { [UInt8](data) }
         timings?.copied(data.count)
-        bytesByPath[url.path] = result; return result
+        bytesByPath[url.path] = VerifiedInput(bytes: result, sha256: digest); return result
     }
 }
 
