@@ -745,6 +745,57 @@ The integration runtime is byte-identical to the tested source. Capture work is
 linear in resident routes and shares immutable path arrays; no comparative
 checkpoint-cost or original-player parity claim is made.
 
+The optional `PluginLibraryScenario.routeCheckpointCost` diagnostic uses the
+real moving-route fixture and an attachment-free successful callback. From one
+native seed it measures histories of 3 and 300 successful `0.02` steps. Capture
+and release batches call the production checkpoint method through a non-inlined
+wrapper; a separate reused-snapshot consumer control retains its own raw timings
+and observable checksums. Release call-site inspection is required before those
+timings are accepted. The diagnostic reports ordinary character checkpoints,
+route clocks, rendered source-character objects, draw items and route geometry
+separately; a route-child preview is not an ordinary character checkpoint.
+
+The same scenario measures at most 100 complete synchronous successful plugin
+steps per history, checks capture-only state/resource/owner invariance, and
+compares the resulting typed state and route matrices with an untimed replay
+from the same native seed. Timed steps include synchronous model refresh and
+submission; deferred SwiftUI layout/display and GPU completion are excluded.
+The outer frame-batch duration additionally includes sampling/array overhead.
+No allocation counts, whole-app responsiveness, or speedup over the former
+incorrect rollback are inferred; the diagnostic changes no normal plugin-frame
+behavior.
+
+The 2026-10-24 Release acceptance at `2a257b9` (executable SHA-256
+`a36b625b…`) passed 19/19 functional checks and then 57/57 checks across three
+fresh processes in a coordinated quiet window. The measured fixture contains
+**zero ordinary-character checkpoints**, one real route clock with four segments,
+one rendered route-character and 20 draw items. Each process retained both
+histories, 10 batches of 10,000 captures and 10 reused-consumer batches per
+history, plus 100 complete synchronous steps per history. Across all processes
+that is 60 capture batches, 60 control batches and 600 timed steps. Release
+disassembly confirms the production capture call and three collection-release
+calls occur inside the measured loop before its back edge.
+
+| Successful prefix steps | Capture, consumer and release (µs/call) | Reused consumer (µs/call) | Complete synchronous step (ms) |
+| --- | --- | --- | --- |
+| 3 | 0.271–0.298 | 0.112–0.123 | 0.171–0.187 |
+| 300 | 0.271–0.285 | 0.113–0.122 | 0.174–0.182 |
+
+Each range spans the three process medians. Capture/control medians are computed
+from batch-average per-call costs; full-step medians use individual step samples.
+The raw capture and control distributions remain separate. All capture-only
+state pairs and untimed successful continuations matched exactly after decoding
+the declared UUID-keyed identity dictionaries as maps; resources and original
+clock owners were retained. Full-step p95 values were 0.199–0.223 ms and the
+largest sample was 0.359 ms. The short and longer histories overlap within this
+observed spread, which does not establish general history scaling. These small
+bounded costs do not justify an optimization. Allocation traffic is unmeasured,
+and deferred UI/display and GPU completion remain outside the timing boundary.
+The existing VM was an unmanaged baseline condition during the quiet runs.
+Raw reports, state pairs, call-site inspection and process-release evidence are
+retained privately under `route-checkpoint-cost/quiet-1` and its sibling build,
+correctness and inspection directories.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone
