@@ -647,9 +647,11 @@ extension PluginLibraryScenario {
                     try check(prefix + "ReadOrder", calls == Array(repeating: ["child": child.id.uuidString, "parent": parent.id.uuidString], count: count))
                     let wantedError: String? = name == "plain" ? nil : origin == "gate" ? gate : name == "poison" ? arithmetic : nil
                     let fields = try session?.savedDocument().sourcePluginState?.bindings.first?.fields
-                    let value: SourceIRStoredValue = .vector(name == "plain" ? [0, 0, 0] : [marker.x.bitPattern, marker.y.bitPattern, marker.z.bitPattern])
-                    try check(prefix + "Outcome", error == wantedError && (wantedError != nil || (fields?["position"] == value && fields?["positionAgain"] == value)), error ?? "Success")
+                    // The resolver returns native-basis matrices; the public
+                    // source position API reflects Z back into Unity's basis.
+                    let value: SourceIRStoredValue = .vector(name == "plain" ? [0, 0, 0] : [Float(1.25).bitPattern, Float(2.5).bitPattern, Float(-3.75).bitPattern])
                     if let session { try persist(try session.savedDocument(), prefix + "-document") }
+                    try check(prefix + "Outcome", error == wantedError && (wantedError != nil || (fields?["position"] == value && fields?["positionAgain"] == value)), error ?? "Success")
                 }
             }
             try persist(requests.mapValues(\.selection), "exact-selections")
