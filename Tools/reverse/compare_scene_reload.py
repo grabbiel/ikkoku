@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import math
+import struct
 from pathlib import Path
 from dynamics_contract import REPO
 
@@ -315,6 +316,9 @@ def _pose_matcher():
     return matches
 
 
+def _float32(value):return struct.unpack('<f',struct.pack('<f',value))[0]
+
+
 def _change_amounts(loaded,expected):
     worst=dict(difference=0.0,key=None,missing=[])
     for key,record in expected['records'].items():
@@ -322,7 +326,9 @@ def _change_amounts(loaded,expected):
         if obj is None or obj.get('changePosition') is None:worst['missing'].append(key);continue
         transform=record['transform']
         for field,name in (('changePosition','position'),('changeRotation','rotation'),('changeScale','scale')):
-            difference=max(abs(a-b) for a,b in zip(obj[field],transform[name]))
+            # Both sides are float32 (the probe prints the player's floats with "R", the shortest round-trip
+            # text, so 345.6512 is float32 345.65121459...): compare them at that precision.
+            difference=max(abs(_float32(a)-_float32(b)) for a,b in zip(obj[field],transform[name]))
             if difference>worst['difference']:worst.update(difference=difference,key=key)
     return worst
 

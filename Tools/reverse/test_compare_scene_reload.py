@@ -331,6 +331,14 @@ class TopologyTests(unittest.TestCase):
         def renumbered(trace,trees):
             trace['cases']['topology-delete']['afterLoad']['rootKeys']=[dict(key=0,dicKey=5)]
         self.assertIn('topology-delete/root-dictionary-keys-are-dickeys',failed(renumbered))
+        def printed(trace,trees): # the probe's shortest round-trip text of a float32 is that float32 exactly
+            trees['topology-delete']['records'][0]['transform']['rotation']=[0.0,345.65121459960938,0.0]
+            trace['cases']['topology-delete']['afterLoad']['objects'][0]['changeRotation']=[0.0,345.6512,0.0]
+        self.assertEqual(failed(printed),[])
+        def rotated(trace,trees): # one float32 step (3.05e-5 at 345 degrees) further is a different value
+            trees['topology-delete']['records'][0]['transform']['rotation']=[0.0,345.65121459960938,0.0]
+            trace['cases']['topology-delete']['afterLoad']['objects'][0]['changeRotation']=[0.0,345.6513,0.0]
+        self.assertEqual(failed(rotated),['topology-delete/change-amounts-match-record'])
         def unsourced(trace,trees):del trace['cases']['topology-delete-source']
         self.assertIn('topology-delete/source-load',failed(unsourced))
 
