@@ -120,9 +120,11 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   native save/reopen; older snapshots cannot recover requests they never stored.
   A retained 44-check Release regression verifies repeated frame failures and
   clean retries with real warm and cloned character previews, exact poses and
-  resources. It changes no production behavior; route rollback and checkpoint
-  cost still need separate acceptance. General plugin compatibility remains
-  outside the supported subset.
+  resources. A later route regression found that a failed frame after irregular
+  time steps restores the clock but changes route placement and retry output
+  ([#226](https://github.com/grabbiel/ikkoku/issues/226)); regular-step and stopped
+  controls pass. The fix and checkpoint costs still need acceptance. General
+  plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks
