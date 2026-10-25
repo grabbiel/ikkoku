@@ -139,6 +139,8 @@ python3 Tools/translation/studio_execution_probe.py \
   --manifest /absolute/path/to/StudioMotionFixture/manifest.json \
   --native-manifest .local/plugins/mute-original/manifest.json \
   --native-manifest .local/plugins/accessory-names-original/manifest.json \
+  --mute-oracle .local/reverse/plugin-execution/mute-oracle/reference.json \
+  --mute-oracle-sha256 96f53bdc11af45619c32bbd25b4eececfd98d02154e3413015fbf337f2b8ab41 \
   --output .local/reverse/plugin-execution/native-adapter-capture-02
 ```
 
@@ -159,10 +161,58 @@ Add `--mute-config` with an enabled copy of the configuration to check audible
 muting through the app bus. The probe passes it as `IKKOKU_MUTE_BACKGROUND_CONFIG`,
 which remounts the adapter with that configuration after the package mounts.
 Saved package references keep the original configuration. `test_studio_execution_probe.py` tests these report rules without
-launching the app. The acceptance below closes ST-T02/A-T04 for this revision.
-The probe currently trusts the report's effective enabled setting; independently
-compare it with the requested config until the non-blocking expected-setting
-assertion from PR #2's review is implemented.
+launching the app. The acceptance below closes ST-T02/A-T04 for its recorded revision.
+
+Mute probe runs now require an independently reviewed config-reader oracle and
+its exact SHA-256 before launching any process. The effective configuration bytes
+come from `--mute-config`, otherwise the hash-verified package configuration,
+otherwise the absent-config default represented by empty bytes. An override in
+the environment map must instead be supplied explicitly through `--mute-config`.
+The bytes must match exactly one input/result pair in the pinned original
+BepInEx reader record. Missing/ambiguous inputs, reader errors, malformed results
+and changed hashes reject; the tool does not implement another config parser.
+The retained oracle above covers 23 original-reader cases. An enabled override
+must use an exact covered input, or a separately reviewed oracle must first be
+produced for its different bytes. Original binaries and input bytes stay private.
+
+Each phase's mount and final setting must equal that independent Boolean, and
+focus/gain expectations use it rather than the app's reported value. The final
+report records the expected setting, configuration origin/hash and oracle
+case/hash. Package references remain distinct from capture-only overrides.
+Manifest/config/oracle pins are checked around every process; this detects
+observed input changes but does not lock files against concurrent writers.
+IR-only and other-adapter probes need no Mute oracle. It adds no app or frame-path
+work, and does not extend live config watching, observer lifetime or Unity audio
+coverage.
+
+The 2026-10-24 acceptance at tool commit `a3533d5` passed 19/19 focused Python
+tests, with no skipped cases. Six separate controlled observations demonstrate
+that the prior checker accepted a self-consistent opposite setting and the new
+checker rejects it: both Boolean directions in run, reload and continue. Two
+additional offline checks match the exact installed and enabled input bytes to
+the retained original-reader results. No original code was re-executed for this
+acceptance.
+
+Two run/save/fresh-reload/continue sequences then passed on the unchanged Release
+executable `a36b625b…`, built from `2a257b9`. All six app processes exited zero.
+The installed package config (`12e0ef12…`, expected false) kept master volume at
+1 and tone RMS at 0.125052124 in every phase. The exact oracle `true` input
+(`bd633b07…`, capture override) produced master volume 1 → 0 → 1 and tone RMS
+0.125052124 → 0 → 0.125052124 in every phase. Voice gain stayed at 1; each phase
+retained one focus-observer pair. Both sequences preserved the original package
+references and source key/native UUID across save/reload, had identical reload
+pixels, kept Start at 1 and continued the IR clock to approximately 2 seconds.
+The source animation clock was held at 0 throughout; this does not establish
+general animation-clock persistence. The override was reapplied in every phase;
+saved package references still point to the original disabled configuration.
+
+Root independently verified 38 retained artifact hashes, all six raw adapter
+reports and both byte-identical reload PNG pairs. This closes the requested-setting
+checker gap noted during PR #2 review. Raw
+logs, pinned inputs, six-process cleanup, reports and old/new checker controls
+remain private under `mute-config-oracle/python-1` and `mute-config-oracle/app-1`.
+No GUI interaction, physical audio output, new adapter behavior or comparative
+performance claim is added.
 
 ## Verified Release acceptance
 

@@ -136,8 +136,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   character checkpoints; it supplies no evidence for a new optimization. See the
   [scope and raw timing distinctions](../reference/mods/plugin-execution.md#deterministic-verification).
   Eleven Engine tests and 88 Release app checks pass, including independent
-  retry and lazy-clock ownership. Checkpoint costs remain unmeasured; general
-  plugin compatibility remains outside the supported subset.
+  retry and lazy-clock ownership. Mute acceptance also checks the requested
+  configuration against an independent original-reader oracle across six fresh
+  run/reload/continue processes; this adds no runtime work or adapter coverage.
+  General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks
