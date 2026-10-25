@@ -115,6 +115,18 @@ pending sample, so a duplicate startup loss cannot store zero through the
 repeated-loss quirk. `sourceMuteFocusHostDefersInitialFocusOnceAndRestoresReplacedAdapter`
 covers this state machine.
 
+The optional `PluginLibraryScenario.focusObserverLifecycle` regression posts
+`didResignActive`/`didBecomeActive` through `NotificationCenter.default` on the
+main actor. It checks the current owner's registration across enabled/disabled
+replacement, rejected configuration/package loads and repeated interactive
+unload/remount. Removed token objects stay retained by the regression, and the
+source's repeated-loss quirk makes a single loss/gain round trip detect duplicate
+delivery. Focus events and rejected replacements must retain document/runtime
+snapshots, clocks, history, owners, resource counts and the compared public toon
+frame fields. Successful unload has its explicit metadata/history changes.
+This regression awaits app validation; it does not establish real OS focus
+delivery, model deinitialization, multiple-window ownership or physical audio.
+
 Headless captures exit before launch finishes, so two capture-only variables
 provide focus evidence. `IKKOKU_APPLICATION_FOCUS=0,1` delivers up to 64 focus
 losses (`0`) and gains (`1`) through the same method as the AppKit observers; it

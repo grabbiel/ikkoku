@@ -1,9 +1,11 @@
 import Foundation
+import AppKit
 import Gameplay
 import Character
 import Studio
 import Renderer
 import Scene
+import ShaderTypes
 import CryptoKit
 import simd
 
@@ -11,6 +13,8 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
+    /// Regression only: actual NotificationCenter registration/removal delivery.
+    let focusObserverLifecycle: FocusObserverLifecycle?
     /// Regression only: real preview/Animator rollback after a failed frame.
     let frameRollback: FrameRollback?
     /// Regression only: route-child placement across a rejected plugin frame.
@@ -55,6 +59,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let focusObserverLifecycle { return verifyFocusObserverLifecycle(focusObserverLifecycle, app: app, studio: studio) }
         if let routeCheckpointCost { return measureRouteCheckpointCost(routeCheckpointCost, app: app, studio: studio) }
         if let routeRollback { return await reproduceRouteRollback(routeRollback, app: app, studio: studio) }
         if let frameRollback { return await reproduceFrameRollback(frameRollback, app: app, studio: studio) }
@@ -1377,6 +1382,228 @@ extension PluginLibraryScenario {
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
             "packages": [["manifest": manifestURL.path, "bindings": [["type": type, "sourceObjectKey": 12]]]]]).write(to: profile)
         return profile
+    }
+}
+
+// Same-owner notification lifetime checks. These run only in the optional
+// scenario; ordinary mounts and frame processing have no new instrumentation.
+extension PluginLibraryScenario {
+    struct FocusObserverLifecycle: Decodable {
+        let directory: String, profileFile: String, nativeManifest: String
+        let enabledConfig: String, disabledConfig: String, invalidConfig: String, invalidManifest: String
+        let cycles: Int
+    }
+    private struct FocusObservation: Codable, Equatable {
+        let adapter: String?, enabled: Bool?, originalVolume: UInt32?
+        let masterVolume: UInt32, voiceVolume: UInt32
+        let observers: [String], launchObserver: String?, awaitingInitialFocus: Bool
+        let session: String?, running: Bool
+    }
+    private struct FocusEvent: Codable {
+        let name: String, focused: Bool?
+        let state: FocusObservation
+    }
+
+    @MainActor private func verifyFocusObserverLifecycle(_ configuration: FocusObserverLifecycle,
+                                                         app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = [], events: [FocusEvent] = []
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        // Keep removed tokens alive: replacement identity cannot pass because
+        // an allocator reused an address, and removal must work before deinit.
+        var retiredTokens: [NSObjectProtocol] = []
+        var retiredAdapters: [(SourceMuteInBackgroundPlugin, Bool)] = []
+        func require(_ name: String, _ ok: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: ok, detail: detail))
+            if !ok { throw SourcePluginError.runtime("Focus observer assertion failed: \(name)") }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: directory.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func identity(_ value: AnyObject?) -> String? { value.map { String(describing: ObjectIdentifier($0)) } }
+        func focus() -> FocusObservation {
+            .init(adapter: identity(studio.sourceFocus.adapter), enabled: studio.sourceFocus.adapter?.enabled,
+                originalVolume: studio.sourceFocus.adapter?.originalVolume?.bitPattern,
+                masterVolume: studio.sourceAudioBus.masterVolume.bitPattern, voiceVolume: studio.sourceAudioBus.voiceVolume.bitPattern,
+                observers: studio.sourceFocusObservers.map { identity($0 as AnyObject)! },
+                launchObserver: identity(studio.sourceLaunchObserver.map { $0 as AnyObject }), awaitingInitialFocus: studio.sourceFocus.awaitingInitialFocus,
+                session: identity(studio.sourcePluginSession), running: studio.sourcePluginsRunning)
+        }
+        func snapshot() throws -> InitializerObservation {
+            let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+            return .init(document: studio.doc, world: session?.world.document, runtimeDocument: try session?.savedDocument(),
+                pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+                callbacks: session?.runtime.callbackTrace ?? [], resources: [r.meshes, r.textures, r.deformBuffers,
+                    r.hiddenBuffers, r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+                blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && zip(a.gizmos, b.gizmos).allSatisfy { x, y in
+                    x.primitive == y.primitive && x.model == y.model && x.depthTest == y.depthTest && x.objectID == y.objectID
+                        && x.vertices.count == y.vertices.count
+                        && zip(x.vertices, y.vertices).allSatisfy { $0.position == $1.position && $0.color == $1.color }
+                }
+                && a.items.count == b.items.count && zip(a.items, b.items).allSatisfy { x, y in
+                    x.mesh == y.mesh && x.material == y.material && x.model == y.model && x.objectID == y.objectID
+                        && x.deformKey == y.deformKey && x.skinSet == y.skinSet && x.castsShadow == y.castsShadow
+                        && x.outline == y.outline && x.outlineScale == y.outlineScale && x.visible == y.visible
+                        && x.hiddenRegions == y.hiddenRegions && x.hiddenKey == y.hiddenKey && x.order == y.order
+                        && x.sourceShader == nil && y.sourceShader == nil && x.morphWeights.count == y.morphWeights.count
+                        && zip(x.morphWeights, y.morphWeights).allSatisfy { $0.index == $1.index && $0.weight == $1.weight }
+                }
+        }
+        let volume: Float = 0.75, voice: Float = 0.5
+        func post(_ name: String, _ focused: Bool, master: Float, original: Float?) throws {
+            let before = try snapshot(), owner = studio.sourceFocus.adapter, session = studio.sourcePluginSession
+            let tokens = studio.sourceFocusObservers, frame = studio.host.renderer.currentFrame()
+            NotificationCenter.default.post(name: focused ? NSApplication.didBecomeActiveNotification
+                : NSApplication.didResignActiveNotification, object: nil)
+            let after = try snapshot(), current = focus()
+            events.append(.init(name: name, focused: focused, state: current))
+            try require(name, before == after && studio.sourceFocus.adapter === owner && studio.sourcePluginSession === session
+                && tokens.count == studio.sourceFocusObservers.count
+                && zip(tokens, studio.sourceFocusObservers).allSatisfy { $0 === $1 }
+                && current.masterVolume == master.bitPattern && current.voiceVolume == voice.bitPattern
+                && current.originalVolume == original?.bitPattern && !current.awaitingInitialFocus && current.launchObserver == nil
+                && retiredAdapters.allSatisfy { $0.0.originalVolume == nil && $0.0.enabled == $0.1 }
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Actual AppKit notification post; exact document/runtime/history/clock/resources, owner/tokens and public toon-frame fields retained")
+        }
+        func replace(_ name: String, config: String, enabled: Bool) throws {
+            let before = try snapshot(), frame = studio.host.renderer.currentFrame()
+            guard let old = studio.sourceFocus.adapter else { throw SourcePluginError.invalid("Replacement needs a current focus owner.") }
+            let tokens = studio.sourceFocusObservers
+            try studio.configureSourceMutePlugin(configURL: URL(fileURLWithPath: config))
+            retiredAdapters.append((old, old.enabled)); retiredTokens += tokens
+            // Success may perform the legitimate initial focus sample immediately.
+            // Record it, then settle via actual gain without overwriting bus gain.
+            events.append(.init(name: name + "Mounted", focused: nil, state: focus()))
+            try post(name + "Settled", true, master: volume, original: nil)
+            // configure changes only the status outside focus/audio ownership.
+            let expected = InitializerObservation(document: before.document, world: before.world, runtimeDocument: before.runtimeDocument,
+                pending: before.pending, callbacks: before.callbacks, resources: before.resources,
+                undo: before.undo, redo: before.redo, status: "Loaded \(SourceMuteInBackgroundPlugin.guid) \(SourceMuteInBackgroundPlugin.version)",
+                sceneURL: before.sceneURL, generation: before.generation, animationTime: before.animationTime,
+                blocked: before.blocked, diagnostics: before.diagnostics)
+            let after = try snapshot()
+            try require(name + "Ownership", after == expected && studio.sourceFocus.adapter !== old
+                && studio.sourceFocus.adapter?.enabled == enabled && studio.sourceFocusObservers.count == 2
+                && studio.sourceFocusObservers.allSatisfy { token in !retiredTokens.contains { $0 === token } }
+                && old.originalVolume == nil && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Removed token objects retained by regression; new pair distinct; old adapter restored before replacement")
+        }
+        func reject(_ name: String, expectedError: String, operation: () throws -> Void) throws {
+            let before = try snapshot(), focusBefore = focus(), frame = studio.host.renderer.currentFrame()
+            // Retain the objects, not only their printable addresses.
+            let adapter = studio.sourceFocus.adapter, tokens = studio.sourceFocusObservers, launch = studio.sourceLaunchObserver
+            let session = studio.sourcePluginSession
+            try persist(before, name + "-before"); try persist(focusBefore, name + "-focus-before")
+            var rejection: String?
+            do { try operation() }
+            catch SourcePluginError.invalid(let reason) { rejection = reason }
+            catch { rejection = "UNEXPECTED: \(error)" }
+            let after = try snapshot(), focusAfter = focus()
+            try persist(after, name + "-after"); try persist(focusAfter, name + "-focus-after")
+            try require(name + "Error", rejection == expectedError, rejection ?? "No rejection")
+            try require(name + "Retained", before == after && focusBefore == focusAfter
+                && studio.sourceFocus.adapter === adapter && studio.sourcePluginSession === session
+                && studio.sourceLaunchObserver === launch && tokens.count == studio.sourceFocusObservers.count
+                && zip(tokens, studio.sourceFocusObservers).allSatisfy { $0 === $1 }
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Muted current owner, saved volume, token identities, session, full state and frame survive rejected replacement")
+        }
+        func unload(_ name: String) throws {
+            let before = try snapshot(), frame = studio.host.renderer.currentFrame()
+            guard let old = studio.sourceFocus.adapter else { throw SourcePluginError.invalid("Unload needs a current focus owner.") }
+            retiredAdapters.append((old, old.enabled)); retiredTokens += studio.sourceFocusObservers
+            var expectedDocument = before.document
+            expectedDocument.sourcePluginLibrary = nil; expectedDocument.sourcePluginLibraryConfiguration = nil
+            expectedDocument.sourcePluginState = nil; expectedDocument.sourceNativePlugins = nil
+            studio.unloadSourcePluginsInteractively()
+            let after = try snapshot(); events.append(.init(name: name, focused: nil, state: focus()))
+            try require(name, studio.doc == expectedDocument && studio.sourcePluginSession == nil && !studio.sourcePluginsRunning
+                && studio.sourceFocus.adapter == nil && studio.sourceFocusObservers.isEmpty && studio.sourceLaunchObserver == nil
+                && !studio.sourceFocus.awaitingInitialFocus && old.originalVolume == nil
+                && studio.sourceAudioBus.masterVolume == volume && studio.sourceAudioBus.voiceVolume == voice
+                && after.resources == before.resources && after.animationTime == before.animationTime
+                && after.undo == Array((before.undo + [before.document]).suffix(60)) && after.redo.isEmpty
+                && after.blocked == before.blocked && after.diagnostics == before.diagnostics
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Interactive unload clears only plugin metadata/session, records undo and restores the muted owner's gain")
+            try post(name + "InertLoss", false, master: volume, original: nil)
+            try post(name + "InertGain", true, master: volume, original: nil)
+        }
+        do {
+            guard (1...16).contains(configuration.cycles), !FileManager.default.fileExists(atPath: directory.path) else {
+                throw SourcePluginError.invalid("Focus lifecycle needs 1...16 cycles and a fresh output directory.")
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false
+            try require("focusFixture", studio.doc.objects.contains { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }
+                && !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil }
+                && studio.sourceFocus.adapter == nil && studio.sourceFocusObservers.isEmpty && studio.sourceLaunchObserver == nil)
+            try studio.loadSourcePluginProfileInteractively(profileURL: URL(fileURLWithPath: configuration.profileFile),
+                expectedGeneration: studio.sourcePluginMountGeneration)
+            try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.nativeManifest))
+            for _ in 0..<3 { try studio.stepSourcePlugins(deltaTime: 0.02) }
+            studio.sourcePluginsRunning = false
+            studio.sourceAudioBus.masterVolume = volume; studio.sourceAudioBus.voiceVolume = voice
+            try require("disabledPackageMounted", studio.sourcePluginSession != nil && studio.doc.sourcePluginState != nil
+                && studio.doc.sourceNativePlugins?.count == 1 && studio.sourceFocus.adapter?.enabled == false
+                && studio.sourceFocusObservers.count == 2, "Exact package's installed setting is independently pinned false")
+            try persist(snapshot(), "installed"); events.append(.init(name: "installed", focused: nil, state: focus()))
+            try post("disabledLoss", false, master: volume, original: nil)
+            try post("disabledGain", true, master: volume, original: nil)
+            try replace("enabled", config: configuration.enabledConfig, enabled: true)
+            try post("singleLoss", false, master: 0, original: volume)
+            try post("singleGain", true, master: volume, original: nil)
+            try post("repeatLossFirst", false, master: 0, original: volume)
+            try post("repeatLossSecond", false, master: 0, original: 0)
+            try post("repeatLossGain", true, master: 0, original: nil)
+            // Explicit source-quirk control ended at zero. Reset only this control's input.
+            studio.sourceAudioBus.masterVolume = volume
+            for cycle in 1...configuration.cycles {
+                try post("replace\(cycle)Loss", false, master: 0, original: volume)
+                try replace("replace\(cycle)", config: configuration.enabledConfig, enabled: true)
+                try post("replace\(cycle)CanaryLoss", false, master: 0, original: volume)
+                try post("replace\(cycle)CanaryGain", true, master: volume, original: nil)
+            }
+            try post("disableOldLoss", false, master: 0, original: volume)
+            try replace("disabled", config: configuration.disabledConfig, enabled: false)
+            try post("disabledReplacementLoss", false, master: volume, original: nil)
+            try post("disabledReplacementGain", true, master: volume, original: nil)
+            try replace("reenabled", config: configuration.enabledConfig, enabled: true)
+            try post("failureLoss", false, master: 0, original: volume)
+            try reject("invalidConfig", expectedError: "Invalid BepInEx configuration section or key.") {
+                try studio.configureSourceMutePlugin(configURL: URL(fileURLWithPath: configuration.invalidConfig))
+            }
+            try reject("invalidPackage", expectedError: "Native adapter source or configuration hash changed.") {
+                try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.invalidManifest))
+            }
+            try post("failedReplacementGain", true, master: volume, original: nil)
+            for cycle in 1...configuration.cycles {
+                try post("unload\(cycle)Loss", false, master: 0, original: volume)
+                try unload("unload\(cycle)")
+                try studio.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.nativeManifest))
+                try replace("remount\(cycle)", config: configuration.enabledConfig, enabled: true)
+                try post("remount\(cycle)CanaryLoss", false, master: 0, original: volume)
+                try post("remount\(cycle)CanaryGain", true, master: volume, original: nil)
+            }
+            try post("finalLoss", false, master: 0, original: volume)
+            try unload("finalUnload")
+            try persist(snapshot(), "finished")
+        } catch { rows.append(.init(op: "focusLifecycleFailure", ok: false, detail: String(describing: error))) }
+        if FileManager.default.fileExists(atPath: directory.path) {
+            do { try persist(events, "notification-events") }
+            catch { rows.append(.init(op: "focusEvidenceFailure", ok: false, detail: String(describing: error))) }
+        }
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
 
