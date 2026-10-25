@@ -272,6 +272,7 @@ func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() asy
         let resources = ResourceStore(device: device)
         let textureFields: [WritableKeyPath<MaterialState, TextureHandle?>] = [\.base, \.colorMask, \.detail, \.line,
             \.normal, \.overlay0, \.overlay1, \.overlay2, \.pattern, \.hairGloss, \.bodyMask]
+        guard let readbackQueue = device.makeCommandQueue() else { throw RigError.invalid("Fixture readback queue is unavailable.") }
         func digest(_ handle: TextureHandle) throws -> String {
             guard let texture = resources.texture(handle) else { throw RigError.invalid("Fixture texture is absent.") }
             let stride: Int
@@ -280,12 +281,32 @@ func sourceMakerClothesGroupOptInKeepsSelectedMaterialPixelsAndDefaultPath() asy
             case .rgba8Unorm, .rgba8Unorm_srgb, .bgra8Unorm, .bgra8Unorm_srgb: stride = 4
             default: throw RigError.invalid("Unexpected fixture texture readback format.")
             }
-            var bytes = [UInt8](repeating: 0, count: texture.width * texture.height * stride)
-            bytes.withUnsafeMutableBytes {
-                texture.getBytes($0.baseAddress!, bytesPerRow: texture.width * stride,
-                    from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+            // Loaded fixture images use private storage. Read both private and
+            // composed textures through a blit, preserving exact mip-zero bytes.
+            let activeRow = texture.width.multipliedReportingOverflow(by: stride)
+            let paddedRow = activeRow.partialValue.addingReportingOverflow(255)
+            guard texture.width > 0, texture.height > 0, !activeRow.overflow, !paddedRow.overflow else {
+                throw RigError.invalid("Fixture readback dimensions overflow.")
             }
-            return "\(texture.pixelFormat.rawValue):\(texture.width)x\(texture.height):\(texture.mipmapLevelCount):" + SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
+            let activeRowBytes = activeRow.partialValue
+            let rowBytes = (paddedRow.partialValue / 256) * 256
+            let storage = rowBytes.multipliedReportingOverflow(by: texture.height)
+            let activeBytes = activeRowBytes.multipliedReportingOverflow(by: texture.height)
+            guard !storage.overflow, !activeBytes.overflow else { throw RigError.invalid("Fixture readback byte count overflows.") }
+            guard let buffer = device.makeBuffer(length: storage.partialValue, options: .storageModeShared),
+                  let command = readbackQueue.makeCommandBuffer(),
+                  let encoder = command.makeBlitCommandEncoder() else { throw RigError.invalid("Fixture readback allocation failed.") }
+            encoder.copy(from: texture, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: texture.width, height: texture.height, depth: 1), to: buffer, destinationOffset: 0,
+                destinationBytesPerRow: rowBytes, destinationBytesPerImage: storage.partialValue)
+            encoder.endEncoding()
+            command.commit(); command.waitUntilCompleted()
+            guard command.status == .completed, command.error == nil else { throw RigError.invalid("Fixture readback failed: \(String(describing: command.error)).") }
+            var bytes = Data(capacity: activeBytes.partialValue)
+            for row in 0..<texture.height {
+                bytes.append(buffer.contents().advanced(by: row * rowBytes).assumingMemoryBound(to: UInt8.self), count: activeRowBytes)
+            }
+            return "\(texture.pixelFormat.rawValue):\(texture.width)x\(texture.height):\(texture.mipmapLevelCount):" + SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         }
         var checks: [(String, Bool)] = []
         for sex in ["female", "male"] {
