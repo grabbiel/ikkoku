@@ -346,6 +346,7 @@ private final class RigReuseBarrier: Sendable {
     #expect(value.sourcePrefab == "new") // capacity must never reject valid geometry
     let (clear, sample) = worker!.finish()
     #expect(sample.clearOnCommit && sample.capacityBypasses == 1 && sample.retainedEntries == 0)
+    #expect(sample.liveEntries == 1 && sample.liveSnapshots == 1 && sample.liveLogicalEntryBytes > 0)
     // Simulate a later appearance failure: simply do not commit its candidate.
     let oldCheck = SourceRigReuseWorker(session.input())
     _ = try oldCheck.decode(oldData, timings: nil)
@@ -422,6 +423,7 @@ private final class RigReuseBarrier: Sendable {
     _ = try worker!.decode(data, timings: nil)
     let (clear, sample) = worker!.finish()
     #expect(sample.admitted == 1 && sample.capacityBypasses == 0 && sample.clearOnCommit)
+    #expect(sample.retainedEntries == 0 && sample.liveEntries == 2 && sample.liveSnapshots == 1)
     #expect(ledger.counts.entries == 2 && ledger.counts.snapshots == 1)
     worker = nil
     #expect(ledger.counts.entries == 1 && ledger.counts.snapshots == 1)

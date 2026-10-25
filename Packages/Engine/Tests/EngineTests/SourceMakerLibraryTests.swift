@@ -266,6 +266,7 @@ private struct MakerSelectionCases: Decodable {
                 #expect(warmTimings.sample.intervals["rigRead"]?.calls == warmSample.hits)
                 #expect(warmTimings.sample.intervals["rigReuseSHA"]?.calls == warmSample.hits)
                 #expect(warmSample.retainedEntries <= 16 && warmSample.logicalEntryBytes <= 64 * 1024 * 1024)
+                #expect(warmSample.liveEntries <= 16 && warmSample.liveLogicalEntryBytes <= 64 * 1024 * 1024 && warmSample.liveSnapshots <= 4)
                 print("sourceMakerRigReuseFixture sex=\(sample.sex) bone=\(sample.boneType) entries=\(warmSample.retainedEntries) logicalBytes=\(warmSample.logicalEntryBytes) hits=\(warmSample.hits)")
             }
             #expect(card.preservedData == bytes)

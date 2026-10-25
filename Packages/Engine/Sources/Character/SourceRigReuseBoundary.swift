@@ -123,7 +123,11 @@ final class SourceRigReuseSnapshot: Sendable {
     }
     public struct Sample: Sendable, Encodable {
         public let hits: Int, misses: Int, admitted: Int, intrinsicBypasses: Int, capacityBypasses: Int
+        /// Candidate snapshot only; clear intent carries no candidate payload.
         public let clearOnCommit: Bool, retainedEntries: Int, logicalEntryBytes: Int, logicalReferenceBytes: Int
+        /// One instantaneous ledger observation at worker finish, including old
+        /// input/delivery holders. Excludes non-cache values and is not heap/RSS.
+        public let liveEntries: Int, liveLogicalEntryBytes: Int, liveSnapshots: Int
     }
     private let admission: SourceRigReuseAdmission
     private var epoch = SourceRigReuseEpoch()
@@ -190,11 +194,15 @@ final class SourceRigReuseWorker {
         // Clear intent needs no snapshot permit. It is published only by a
         // successful owner commit; failed/stale work cannot evict the old cache.
         let candidate = SourceMakerRigReuse.Candidate(admission: input.admission, epoch: input.epoch, snapshot: snapshot)
+        let live = input.admission.counts
         let sample = SourceMakerRigReuse.Sample(hits: hits, misses: misses, admitted: admitted,
             intrinsicBypasses: intrinsicBypasses, capacityBypasses: capacityBypasses,
             clearOnCommit: clearOnCommit, retainedEntries: snapshot?.entries.count ?? 0,
+            // Every referenced entry still owns its permit, so the sum is bounded
+            // by this ledger's 64 MiB maximum rather than arbitrary Int addition.
             logicalEntryBytes: snapshot?.entries.reduce(0, { $0 + $1.logicalCharge }) ?? 0,
-            logicalReferenceBytes: snapshot?.logicalReferenceBytes ?? 0)
+            logicalReferenceBytes: snapshot?.logicalReferenceBytes ?? 0,
+            liveEntries: live.entries, liveLogicalEntryBytes: live.logicalBytes, liveSnapshots: live.snapshots)
         return (candidate, sample)
     }
 }
