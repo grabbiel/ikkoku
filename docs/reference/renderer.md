@@ -1515,6 +1515,12 @@ its invariant written on the type:
     and an edit of the copy leaves the original's render unchanged. A
     donation is not used for another store or another outfit.
 
+  These three run one at a time, each on a thread of its own
+  (`liveTickOffPool`), and the test's task reports their checks. A build
+  blocks its thread in MetalKit's synchronous texture load. On the test
+  pool, they were among the tests holding all 24 pool threads blocked there
+  when a parallel suite hung.
+
 In the app, the strict Studio lane's `studio-scenario-background-build`
 check runs `Tools/verification/scenarios/background-build.json`. Its
 `backgroundBuild` op repeats an import, two overlapping imports, an import

@@ -132,10 +132,25 @@ private func batchFixtureReferences() throws -> [SourceStudioCharacterReference]
     }
 }
 
+/// A named check of a fixture test, made on the test's own thread and
+/// reported by the test's task.
+private typealias BatchCheck = (name: String, passed: Bool)
+
+/// `#require` for a fixture test's own thread: a failure throws
+/// `LiveTickFailure`, which the test reports.
+private func batchUnwrap<T>(_ value: T?, _ what: String) throws -> T {
+    guard let value else { throw LiveTickFailure(description: what) }
+    return value
+}
+
+private func batchRequire(_ condition: Bool, _ what: String) throws {
+    if !condition { throw LiveTickFailure(description: what) }
+}
+
 /// Raw 8-bit, four-channel bytes without row padding.
 private func batchPixels(_ image: CGImage) throws -> [UInt8] {
-    try #require(image.bitsPerComponent == 8 && image.bitsPerPixel == 32)
-    let data = try #require(image.dataProvider?.data) as Data
+    try batchRequire(image.bitsPerComponent == 8 && image.bitsPerPixel == 32, "the capture must be 8-bit RGBA")
+    let data = try batchUnwrap(image.dataProvider?.data, "the capture has no pixel data") as Data
     var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
     data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
         for row in 0..<image.height {
@@ -158,121 +173,147 @@ private func batchScene(_ previews: [SourceStudioCharacterPreview], renderer: Re
         combined!.skinSets.merge(frame.skinSets) { _, new in new }
         combined!.sceneBounds.expand(frame.sceneBounds)
     }
-    var frame = try #require(combined)
+    var frame = try batchUnwrap(combined, "no previews to draw")
     frame.retainTextures(from: renderer.resources)
-    return (try batchPixels(try #require(renderer.capture(frame: frame, width: 320, height: 320))), meshIDs)
+    return (try batchPixels(try batchUnwrap(renderer.capture(frame: frame, width: 320, height: 320), "the scene capture failed")), meshIDs)
 }
 
-/// The Studio import's path, concurrent first halves and ordered second
-/// halves on a worker thread, against the sequential builds of the same
-/// scene in a fresh store: the same diagnostics and selections, the same
-/// mesh IDs in the same order, and a byte-identical render of every
-/// character overlapping at the origin. Rig files shared across characters
-/// decode once.
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
-func sourceStudioCharacterBatchMatchesSequentialBuildsWhenSupplied() throws {
+/// The three fixture tests build previews, and a build blocks its thread in
+/// MetalKit's synchronous texture load. A parallel `swift test` hung with
+/// every test-pool thread blocked there, these tests among them. They run one
+/// at a time, each on a thread of its own (`liveTickOffPool`), so they hold no
+/// pool thread; the test's task reports their checks.
+@Suite(.serialized) struct SourceStudioCharacterBatchFixtureTests {
+    /// The Studio import's path, concurrent first halves and ordered second
+    /// halves on a worker thread, against the sequential builds of the same
+    /// scene in a fresh store: the same diagnostics and selections, the same
+    /// mesh IDs in the same order, and a byte-identical render of every
+    /// character overlapping at the origin. Rig files shared across
+    /// characters decode once.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioCharacterBatchMatchesSequentialBuildsWhenSupplied() async throws {
+        for check in try await liveTickOffPool(batchMatchesSequentialBuilds) { #expect(check.passed, "\(check.name)") }
+    }
+
+    /// Cancelling a batch: queued and finished first halves are dropped,
+    /// every later build throws `CancellationError`, and the store holds
+    /// exactly what it held before once the previews built before the cancel
+    /// are released.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioCharacterBatchCancellationLeavesNoBuildAndNoResourcesWhenSupplied() async throws {
+        for check in try await liveTickOffPool(batchCancellationLeavesNothing) { #expect(check.passed, "\(check.name)") }
+    }
+
+    /// A copy of a loaded character (Duplicate, or the undo of a delete)
+    /// takes its original's converted assembly through `Donation` and renders
+    /// byte-identical to a fresh build. Only the same record, outfit and
+    /// store share; editing the copy leaves the original's render.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioCharacterDonationRendersLikeAFreshBuildWhenSupplied() async throws {
+        for check in try await liveTickOffPool(batchDonationRendersLikeAFreshBuild) { #expect(check.passed, "\(check.name)") }
+    }
+}
+
+private func batchMatchesSequentialBuilds() throws -> [BatchCheck] {
     let references = try batchFixtureReferences()
-    try #require(references.count > 1)
+    try batchRequire(references.count > 1, "the scenario scene must hold more than one character")
     let sequentialRenderer = try makeSourceShaderRenderer(), batchRenderer = try makeSourceShaderRenderer()
     let sequential = try references.map { try SourceStudioCharacterPreview(reference: $0, resources: sequentialRenderer.resources) }
     let batch = SourceStudioCharacterBatch(requests: references.map { .init(reference: $0) }, resources: batchRenderer.resources)
     let built = try references.indices.map { try batch.build($0) }
     let counts = batch.rigs.counts
     print("[r7g-batch] \(references.count) characters, rig decodes \(counts.decodes), shared \(counts.hits + counts.waits)")
-    #expect(counts.decodes > 0 && counts.hits + counts.waits > 0 && counts.failures == 0)
-    for (a, b) in zip(sequential, built) {
-        #expect(a.diagnostics == b.diagnostics)
-        #expect(a.selections.count == b.selections.count && a.loadedClothesState == b.loadedClothesState)
-        #expect(sameRig(a.preview.source, b.preview.source))
-        #expect(!b.sharedAssembly)
+    var checks: [BatchCheck] = [("rig files decode and are shared without failures",
+                                 counts.decodes > 0 && counts.hits + counts.waits > 0 && counts.failures == 0)]
+    for (index, (a, b)) in zip(sequential, built).enumerated() {
+        checks.append(("character \(index): the same diagnostics", a.diagnostics == b.diagnostics))
+        checks.append(("character \(index): the same selections and clothes state",
+                       a.selections.count == b.selections.count && a.loadedClothesState == b.loadedClothesState))
+        checks.append(("character \(index): the same decoded rig", sameRig(a.preview.source, b.preview.source)))
+        checks.append(("character \(index): a batch build borrows no assembly", !b.sharedAssembly))
     }
     let expected = try batchScene(sequential, renderer: sequentialRenderer)
     let actual = try batchScene(built, renderer: batchRenderer)
-    #expect(actual.meshIDs == expected.meshIDs)
-    #expect(actual.pixels == expected.pixels)
+    checks.append(("the same mesh IDs in the same order", actual.meshIDs == expected.meshIDs))
+    checks.append(("a byte-identical render", actual.pixels == expected.pixels))
     let covered = stride(from: 0, to: expected.pixels.count, by: 4).filter { expected.pixels[$0 + 3] > 0 && expected.pixels[$0] > 8 }.count
-    #expect(covered > 2_000, "the characters must cover the capture")
+    checks.append(("the characters must cover the capture", covered > 2_000))
+    return checks
 }
 
-/// Cancelling a batch: queued and finished first halves are dropped, every
-/// later build throws `CancellationError`, and the store holds exactly what
-/// it held before once the previews built before the cancel are released.
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
-func sourceStudioCharacterBatchCancellationLeavesNoBuildAndNoResourcesWhenSupplied() throws {
+private func batchCancellationLeavesNothing() throws -> [BatchCheck] {
     // Three characters cover a cancel before, between and after builds.
     let references = Array(try batchFixtureReferences().prefix(3))
-    try #require(references.count > 2)
-    let resources = ResourceStore(device: try #require(MTLCreateSystemDefaultDevice()))
+    try batchRequire(references.count > 2, "the scenario scene must hold three characters")
+    let resources = ResourceStore(device: try batchUnwrap(MTLCreateSystemDefaultDevice(), "no Metal device"))
     // Warm the shared texture cache first: the import keeps base textures
     // cached across scenes, so only per-preview resources are compared.
     let warm = try references.map { try SourceStudioCharacterPreview(reference: $0, resources: resources) }
-    #expect(warm.count == references.count)
-    do {
-        var checks: [(String, Bool)] = []
-        let before = resources.statistics()
-        for cancelAfter in [0, 1] {
-            let batch = SourceStudioCharacterBatch(requests: references.map { .init(reference: $0) }, resources: resources, width: 2)
-            var built: [SourceStudioCharacterPreview] = []
-            for index in 0..<cancelAfter { built.append(try batch.build(index)) }
-            batch.cancel()
-            var cancelled = 0
-            for index in cancelAfter..<references.count {
-                do { _ = try batch.build(index) } catch is CancellationError { cancelled += 1 }
-            }
-            checks.append(("every build after cancel(\(cancelAfter)) throws CancellationError", cancelled == references.count - cancelAfter))
-            checks.append(("the batch reports the cancel (\(cancelAfter))", batch.isCancelled))
-            built.removeAll()
-            // In-flight first halves finish on their own; nothing they hold is a store resource.
-            let deadline = Date().addingTimeInterval(60)
-            while batch.runningCount > 0, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
-            checks.append(("no first half runs after cancel(\(cancelAfter))", batch.runningCount == 0))
-            let after = resources.statistics()
-            checks.append(("cancel(\(cancelAfter)) leaves the store as before", before.meshes == after.meshes && before.textures == after.textures
-                && before.deformBuffers == after.deformBuffers && before.meshBufferBytes == after.meshBufferBytes
-                && before.hiddenBuffers == after.hiddenBuffers && before.retiring == after.retiring))
+    var checks: [BatchCheck] = [("every character warms the store", warm.count == references.count)]
+    let before = resources.statistics()
+    for cancelAfter in [0, 1] {
+        let batch = SourceStudioCharacterBatch(requests: references.map { .init(reference: $0) }, resources: resources, width: 2)
+        var built: [SourceStudioCharacterPreview] = []
+        for index in 0..<cancelAfter { built.append(try batch.build(index)) }
+        batch.cancel()
+        var cancelled = 0
+        for index in cancelAfter..<references.count {
+            do { _ = try batch.build(index) } catch is CancellationError { cancelled += 1 }
         }
-        // A batch after a cancelled one builds normally.
-        let again = SourceStudioCharacterBatch(requests: [.init(reference: references[0])], resources: resources)
-        let preview = try again.build(0)
-        checks.append(("a later batch builds", preview.diagnostics == warm[0].diagnostics))
-        for (name, passed) in checks { #expect(passed, "\(name)") }
+        checks.append(("every build after cancel(\(cancelAfter)) throws CancellationError", cancelled == references.count - cancelAfter))
+        checks.append(("the batch reports the cancel (\(cancelAfter))", batch.isCancelled))
+        built.removeAll()
+        // In-flight first halves finish on their own; nothing they hold is a store resource.
+        let deadline = Date().addingTimeInterval(60)
+        while batch.runningCount > 0, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        checks.append(("no first half runs after cancel(\(cancelAfter))", batch.runningCount == 0))
+        let after = resources.statistics()
+        checks.append(("cancel(\(cancelAfter)) leaves the store as before", before.meshes == after.meshes && before.textures == after.textures
+            && before.deformBuffers == after.deformBuffers && before.meshBufferBytes == after.meshBufferBytes
+            && before.hiddenBuffers == after.hiddenBuffers && before.retiring == after.retiring))
     }
+    // A batch after a cancelled one builds normally.
+    let again = SourceStudioCharacterBatch(requests: [.init(reference: references[0])], resources: resources)
+    let preview = try again.build(0)
+    checks.append(("a later batch builds", preview.diagnostics == warm[0].diagnostics))
+    return checks
 }
 
-/// A copy of a loaded character (Duplicate, or the undo of a delete) takes
-/// its original's converted assembly through `Donation` and renders
-/// byte-identical to a fresh build. Only the same record, outfit and store
-/// share; editing the copy leaves the original's render.
-@Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
-               "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
-func sourceStudioCharacterDonationRendersLikeAFreshBuildWhenSupplied() throws {
-    let reference = try #require(try batchFixtureReferences().first)
+private func batchDonationRendersLikeAFreshBuild() throws -> [BatchCheck] {
+    let reference = try batchUnwrap(try batchFixtureReferences().first, "the scenario scene holds no character")
     let renderer = try makeSourceShaderRenderer(), resources = renderer.resources
     let original = try SourceStudioCharacterPreview(reference: reference, resources: resources)
     let copy = try SourceStudioCharacterPreview(reference: reference, resources: resources, sharing: original)
     let fresh = try SourceStudioCharacterPreview(reference: reference, resources: resources)
     let otherStore = try SourceStudioCharacterPreview(reference: reference, resources: ResourceStore(device: resources.device), sharing: original)
-    #expect(!original.sharedAssembly && copy.sharedAssembly && !fresh.sharedAssembly && !otherStore.sharedAssembly)
-    #expect(copy.diagnostics == fresh.diagnostics && copy.loadedClothesState == fresh.loadedClothesState)
-    #expect(sameRig(copy.preview.source, fresh.preview.source))
+    var checks: [BatchCheck] = [
+        ("only the copy in the same store borrows the assembly",
+         !original.sharedAssembly && copy.sharedAssembly && !fresh.sharedAssembly && !otherStore.sharedAssembly),
+        ("the copy has a fresh build's diagnostics and clothes state",
+         copy.diagnostics == fresh.diagnostics && copy.loadedClothesState == fresh.loadedClothesState),
+        ("the copy has a fresh build's decoded rig", sameRig(copy.preview.source, fresh.preview.source)),
+    ]
     if original.outfitCount > 1 {
         let outfit = (original.coordinate + 1) % original.outfitCount
         let other = try SourceStudioCharacterPreview(reference: reference, resources: resources, coordinate: outfit, sharing: original)
-        #expect(!other.sharedAssembly && other.coordinate == outfit)
+        checks.append(("another outfit borrows nothing", !other.sharedAssembly && other.coordinate == outfit))
     }
     func render(_ preview: SourceStudioCharacterPreview, fk: [Int: Float3] = [:]) throws -> [UInt8] {
         let frame = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
                                       world: matrix_identity_float4x4, objectID: 1, fkRotations: fk)
-        return try batchPixels(try #require(renderer.capture(frame: frame, width: 256, height: 256)))
+        return try batchPixels(try batchUnwrap(renderer.capture(frame: frame, width: 256, height: 256), "the capture failed"))
     }
     let base = try render(original)
-    #expect(try render(copy) == base)
-    #expect(try render(fresh) == base)
-    let bone = try #require(original.controller.targets.first { $0.hasGuide && $0.bone.fkGroup == .body }?.bone.id)
+    checks.append(("the copy renders like the original", try render(copy) == base))
+    checks.append(("a fresh build renders like the original", try render(fresh) == base))
+    let bone = try batchUnwrap(original.controller.targets.first { $0.hasGuide && $0.bone.fkGroup == .body }?.bone.id,
+                               "no body FK bone with a guide")
     let bent = try render(copy, fk: [bone: Float3(35, -20, 10)])
-    #expect(bent != base, "the edit must change the copy's render")
-    #expect(try render(fresh, fk: [bone: Float3(35, -20, 10)]) == bent)
-    #expect(try render(original) == base)
+    checks.append(("the edit must change the copy's render", bent != base))
+    checks.append(("the same edit renders the same on a fresh build", try render(fresh, fk: [bone: Float3(35, -20, 10)]) == bent))
+    checks.append(("editing the copy leaves the original's render", try render(original) == base))
+    return checks
 }
