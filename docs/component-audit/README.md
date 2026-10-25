@@ -120,13 +120,15 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   retains its separate attachment-read gate.
   Saved profile and library restoration also reject initialization that changes
   object topology, identities or clone state before committing the candidate.
-  Locally validated pending-destruction persistence carries queued roots across
+  Pending-destruction persistence carries queued roots across
   native save/reopen; older snapshots cannot recover requests they never stored.
   A retained 44-check Release regression verifies repeated frame failures and
   clean retries with real warm and cloned character previews, exact poses and
-  resources. It changes no production behavior; route rollback and checkpoint
-  cost still need separate acceptance. General plugin compatibility remains
-  outside the supported subset.
+  resources. Exact route checkpoints now also preserve irregular-step history
+  after rejected frames ([#226](https://github.com/grabbiel/ikkoku/issues/226)).
+  Eleven Engine tests and 88 Release app checks pass, including independent
+  retry and lazy-clock ownership. Checkpoint costs remain unmeasured; general
+  plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
 exact commands, commits, costs, failed attempts and exclusions. Public CI checks
