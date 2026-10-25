@@ -146,6 +146,13 @@ final class PerfTrace {
         let keepAliveMilliseconds: Int?
         /// `IKKOKU_PERF_BURST_IDLE_MS`: `studio-orbit-bursts`' quiet time between drags (default 1000).
         let burstIdleMilliseconds: Int
+        /// `IKKOKU_PERF_BURST_LIVE`: "on" plays the live animation between
+        /// `studio-orbit-bursts` drags (default "off").
+        let burstLive: Bool
+        /// `IKKOKU_PERF_LIVE_PACING`: "display" (default), the viewport's
+        /// display link starts the Studio's step; "timer", its 30 Hz timer does,
+        /// as before (R7 phase 2, live pacing; measurement control).
+        let livePacing: String
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -165,7 +172,9 @@ final class PerfTrace {
                 deformReuse: env["IKKOKU_PERF_DEFORM_REUSE"] != "off",
                 frameSkip: env["IKKOKU_PERF_FRAME_SKIP"] != "off",
                 keepAliveMilliseconds: env["IKKOKU_PERF_KEEPALIVE_MS"].flatMap { Int($0) },
-                burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000))
+                burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000),
+                burstLive: env["IKKOKU_PERF_BURST_LIVE"] == "on",
+                livePacing: env["IKKOKU_PERF_LIVE_PACING"] ?? "display")
         }
     }
 
@@ -474,6 +483,8 @@ final class PerfTrace {
         let targetSkips = max(0, rawTargetSkips - deliberateTargetSkips)
         // Time the link spent at a lowered rate: the gaps after callbacks that
         // ran at one, each at most that rate's period.
+        let cadence = PerfTrace.cadence(rendered: rendered, presented: presented, period: period)
+        let paces = drawn.paces
         let reducedSeconds = zip(frames, frames.dropFirst()).reduce(0.0) { total, pair in
             pair.0.linkHz > 0 ? total + min(pair.1.targetPresentation - pair.0.targetPresentation, 1 / Double(pair.0.linkHz)) : total
         }
@@ -553,6 +564,19 @@ final class PerfTrace {
                 "untracked": rendered.reduce(0) { $0 + $1.deformUntracked },
                 "passes": rendered.filter { $0.deformDispatches > 0 }.count,
             ] as [String: Any],
+            // R7 phase 2, live pacing: rendered frames' presented and target
+            // intervals and their target-to-present lateness, in display
+            // periods; the steps the display link asked for and how each
+            // ended.
+            "cadence": cadence,
+            "pacing": [
+                "policy": configuration.livePacing,
+                "requests": paces.count,
+                "ran": paces.filter { $0.result == .ran }.count,
+                "busy": paces.filter { $0.result == .busy }.count,
+                "idle": paces.filter { $0.result == .idle }.count,
+                "requestToStartMs": PerfTrace.statistics(paces.map { ($0.started - $0.asked) * 1000 }),
+            ] as [String: Any],
             "presentedFrames": presentedTimes.count,
             "presentedFPS": Double(max(presentedTimes.count - 1, 0)) / max((presentedTimes.last ?? 0) - (presentedTimes.first ?? 0), 1e-9),
             "presentedIntervalMs": PerfTrace.statistics(presentedIntervals),
@@ -619,12 +643,24 @@ final class PerfTrace {
         let frameRows = frames.map { frame -> [Double] in
             let presentedAt = presented.indices.contains(frame.presentLogIndex) ? presented[frame.presentLogIndex] : 0
             let gpuMs = completions[frame.presentLogIndex].map { $0.gpuTime * 1000 } ?? -1
+            let completion = completions[frame.presentLogIndex]
+            let gpuStart = completion?.gpuStart ?? 0, gpuEnd = completion?.gpuEnd ?? 0
             return [PerfTrace.round(frame.callback - recordStart), PerfTrace.round(frame.drawMilliseconds),
                     PerfTrace.round(gpuMs), presentedAt > 0 ? PerfTrace.round(presentedAt - recordStart) : -1,
                     frame.onMainThread ? 1 : 0, PerfTrace.outcomeCode(frame.outcome),
-                    PerfTrace.round(frame.targetPresentation - recordStart), Double(frame.linkHz)]
+                    PerfTrace.round(frame.targetPresentation - recordStart), Double(frame.linkHz),
+                    frame.deadline > 0 ? PerfTrace.round(frame.deadline - recordStart) : -1,
+                    gpuStart > 0 ? PerfTrace.round(gpuStart - recordStart) : -1,
+                    gpuEnd > 0 ? PerfTrace.round(gpuEnd - recordStart) : -1]
         }
-        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread", "rendered", "targetSeconds", "linkHz"], "rows": frameRows]]
+        var samples: [String: Any] = ["frames": ["columns": ["callbackSeconds", "drawMs", "gpuMs", "presentedSeconds", "onMainThread", "rendered", "targetSeconds", "linkHz",
+                                                             "deadlineSeconds", "gpuStartSeconds", "gpuEndSeconds"], "rows": frameRows]]
+        // R7 phase 2, live pacing: every paced request (when the callback
+        // asked, when the main thread started it, the callback's target and
+        // the answer: 1 ran, 0 busy, -1 idle).
+        samples["paces"] = ["columns": ["askedSeconds", "startedSeconds", "targetSeconds", "result"],
+                            "rows": paces.map { [PerfTrace.round($0.asked - recordStart), PerfTrace.round($0.started - recordStart),
+                                                 PerfTrace.round($0.target - recordStart), $0.result == .ran ? 1 : ($0.result == .busy ? 0 : -1)] }]
         for phase in Phase.allCases where phase != .draw {
             guard let list = intervals[phase], !list.isEmpty else { continue }
             samples[phase.rawValue] = list.map { [PerfTrace.round($0.start - recordStart), PerfTrace.round(($0.end - $0.start) * 1000)] }
@@ -635,7 +671,7 @@ final class PerfTrace {
         var startup = marks
         if let first = drawn.firstDraw { startup.append(("firstDraw", secondsSinceProcessStart(media: first))) }
         return [
-            "schemaVersion": 6,
+            "schemaVersion": 7,
             "workload": configuration.workload,
             "configuration": [
                 "seconds": configuration.seconds, "warmupSeconds": configuration.warmupSeconds,
@@ -645,6 +681,8 @@ final class PerfTrace {
                 "frameSkip": configuration.frameSkip,
                 "keepAliveMs": configuration.keepAliveMilliseconds.map { $0 as Any } ?? NSNull(),
                 "burstIdleMs": configuration.burstIdleMilliseconds,
+                "burstLive": configuration.burstLive,
+                "livePacing": configuration.livePacing,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),
@@ -685,6 +723,28 @@ final class PerfTrace {
     }
 
     // MARK: Helpers
+
+    /// Rendered frames' cadence in display periods (R7 phase 2, live
+    /// pacing): how many consecutive presented frames came 1, 2, 3, 4 … periods
+    /// apart, the same for their targets, and how many periods late each
+    /// presented frame was. Keys are period counts as strings.
+    static func cadence(rendered: [PerfDrawLog.Sample], presented: [Double], period: Double) -> [String: Any] {
+        func histogram(_ values: [Int]) -> [String: Int] {
+            Dictionary(grouping: values, by: { String($0) }).mapValues(\.count)
+        }
+        let shown = rendered.compactMap { frame -> (target: Double, presented: Double)? in
+            guard presented.indices.contains(frame.presentLogIndex), presented[frame.presentLogIndex] > 0 else { return nil }
+            return (frame.targetPresentation, presented[frame.presentLogIndex])
+        }
+        let byPresent = shown.map(\.presented).sorted()
+        let byTarget = rendered.map(\.targetPresentation).sorted()
+        func periods(_ seconds: Double) -> Int { Int((seconds / period).rounded()) }
+        return [
+            "presentedIntervalPeriods": histogram(zip(byPresent.dropFirst(), byPresent).map { periods($0 - $1) }),
+            "targetIntervalPeriods": histogram(zip(byTarget.dropFirst(), byTarget).map { periods($0 - $1) }),
+            "latenessPeriods": histogram(shown.map { periods($0.presented - $0.target) }),
+        ]
+    }
 
     static func statistics(_ values: [Double]) -> [String: Any] {
         guard !values.isEmpty else { return ["count": 0] }
@@ -876,13 +936,28 @@ nonisolated final class PerfDrawLog: Sendable {
         /// The display-link rate requested for the interval after this
         /// callback, in Hz; 0 for the display's full rate (R7 P2).
         var linkHz: Float = 0
+        /// The update's `targetTimestamp`: when the system expects the frame's
+        /// work to be finished (R7 phase 2, live pacing).
+        var deadline: CFTimeInterval = 0
         /// `Renderer.draw` plus the recorder's own bookkeeping, in ms.
         var drawMilliseconds: Double { (end - callback) * 1000 }
+    }
+
+    /// One paced step request (R7 phase 2, live pacing): when the callback
+    /// asked, when the main thread started it, the callback's target and how
+    /// it ended.
+    struct Pace: Sendable {
+        var asked: CFTimeInterval
+        var started: CFTimeInterval
+        var target: CFTimeInterval
+        var result: LiveStepPacer.Result
     }
 
     struct Snapshot: Sendable {
         /// Draws made while recording.
         var samples: [Sample] = []
+        /// Paced step requests answered while recording.
+        var paces: [Pace] = []
         /// Media time of the end of the first draw of the process.
         var firstDraw: CFTimeInterval?
         /// The current image when recording starts, not any earlier viewport.
@@ -904,14 +979,14 @@ nonisolated final class PerfDrawLog: Sendable {
     /// process's first draw, which the caller marks.
     @discardableResult
     func didDraw(callback: CFTimeInterval, end: CFTimeInterval, targetPresentation: CFTimeInterval,
-                 result: RenderDrawResult, presentIndex: Int, drawable: CGSize, linkHz: Float = 0) -> Bool {
+                 result: RenderDrawResult, presentIndex: Int, drawable: CGSize, linkHz: Float = 0, deadline: CFTimeInterval = 0) -> Bool {
         let statistics = result.statistics
         let sample = Sample(callback: callback, end: end, targetPresentation: targetPresentation,
                             outcome: result.outcome, presentLogIndex: presentIndex,
                             onMainThread: pthread_main_np() != 0, ring: statistics.uniforms,
                             skinPalettes: statistics.skinPalettes, deformDispatches: statistics.deformDispatches,
                             deformReuses: statistics.deformReuses, deformUntracked: statistics.deformUntracked,
-                            linkHz: linkHz)
+                            linkHz: linkHz, deadline: deadline)
         return state.withLock { state in
             let first = result.outcome == .rendered && state.snapshot.firstDraw == nil
             if first { state.snapshot.firstDraw = end }
@@ -922,11 +997,19 @@ nonisolated final class PerfDrawLog: Sendable {
         }
     }
 
+    /// One answered paced step request (main thread).
+    func didPace(target: CFTimeInterval, asked: CFTimeInterval, started: CFTimeInterval, result: LiveStepPacer.Result) {
+        state.withLock { state in
+            if state.recording { state.snapshot.paces.append(Pace(asked: asked, started: started, target: target, result: result)) }
+        }
+    }
+
     /// Starts (clearing earlier samples) or stops keeping samples.
     func setRecording(_ on: Bool) {
         state.withLock { state in
             if on {
                 state.snapshot.samples = []
+                state.snapshot.paces = []
                 state.snapshot.lastRenderedBeforeRecordingIndex = state.lastRenderedIndex
             }
             state.recording = on
@@ -973,7 +1056,8 @@ nonisolated enum ViewportFrame {
         let texture = drawable.texture
         if log.didDraw(callback: start, end: end, targetPresentation: update.targetPresentationTimestamp,
                        result: result, presentIndex: presentIndex,
-                       drawable: CGSize(width: texture.width, height: texture.height), linkHz: linkHz) {
+                       drawable: CGSize(width: texture.width, height: texture.height), linkHz: linkHz,
+                       deadline: update.targetTimestamp) {
             PerfSignpost.signposter.emitEvent("Mark", "firstDraw")
         }
     }

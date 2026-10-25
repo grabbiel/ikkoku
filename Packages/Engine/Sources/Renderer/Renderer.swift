@@ -83,6 +83,14 @@ public struct RenderDrawResult: Sendable {
 public struct RenderDrawCompletion: Sendable {
     public let succeeded: Bool
     public let gpuTime: Double
+    /// The command buffer's `gpuStartTime` and `gpuEndTime` (seconds, the
+    /// host clock `CACurrentMediaTime` reads); 0 when it did not run.
+    public let gpuStart: Double
+    public let gpuEnd: Double
+
+    init(succeeded: Bool, gpuTime: Double, gpuStart: Double = 0, gpuEnd: Double = 0) {
+        self.succeeded = succeeded; self.gpuTime = gpuTime; self.gpuStart = gpuStart; self.gpuEnd = gpuEnd
+    }
 }
 
 /// Debounced status-line text for renderer problems an editor should show: a
@@ -434,7 +442,7 @@ public final class Renderer: @unchecked Sendable {
                 if self.drawSerial == serial { self.drawnFrame = nil }
                 self.renderLock.unlock()
             }
-            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: seconds))
+            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: seconds, gpuStart: c.gpuStartTime, gpuEnd: c.gpuEndTime))
         }
         gpu.releaseFrameSlot(onCompletionOf: cb)
         // Commit/present in draw order, before exposing this reusable image to a
@@ -489,7 +497,8 @@ public final class Renderer: @unchecked Sendable {
                 if self.drawSerial == serial { self.drawnFrame = nil }
                 self.renderLock.unlock()
             }
-            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: max(0, c.gpuEndTime - c.gpuStartTime)))
+            completion?(RenderDrawCompletion(succeeded: succeeded, gpuTime: max(0, c.gpuEndTime - c.gpuStartTime),
+                                             gpuStart: c.gpuStartTime, gpuEnd: c.gpuEndTime))
         }
         gpu.releaseFrameSlot(onCompletionOf: cb)
         cb.present(drawable)
