@@ -68,9 +68,16 @@ struct SourceRigReuseKey: Hashable, Sendable {
 final class SourceRigReuseEntry: Sendable {
     let rig: SourceRig, key: SourceRigReuseKey, epoch: SourceRigReuseEpoch, logicalCharge: Int
     fileprivate let permit: SourceRigReuseAdmission.EntryPermit
-    init?(rig: SourceRig, key: SourceRigReuseKey, epoch: SourceRigReuseEpoch, admission: SourceRigReuseAdmission) {
-        guard let charge = Self.charge(rig: rig, key: key), let permit = admission.entryPermit(charge: charge) else { return nil }
-        self.rig = rig; self.key = key; self.epoch = epoch; self.logicalCharge = charge; self.permit = permit
+    convenience init?(rig: SourceRig, key: SourceRigReuseKey, epoch: SourceRigReuseEpoch, admission: SourceRigReuseAdmission) {
+        guard let charge = Self.charge(rig: rig, key: key) else { return nil }
+        self.init(rig: rig, key: key, epoch: epoch, admission: admission, measuredCharge: charge)
+    }
+    /// File-private callers have just measured this exact rig/key. Admission
+    /// still checks the live byte/entry limits; no second payload traversal.
+    fileprivate init?(rig: SourceRig, key: SourceRigReuseKey, epoch: SourceRigReuseEpoch,
+                      admission: SourceRigReuseAdmission, measuredCharge: Int) {
+        guard let permit = admission.entryPermit(charge: measuredCharge) else { return nil }
+        self.rig = rig; self.key = key; self.epoch = epoch; self.logicalCharge = measuredCharge; self.permit = permit
     }
     static func charge(rig: SourceRig, key: SourceRigReuseKey) -> Int? {
         guard let rigBytes = rig.decodedCacheLogicalByteCount else { return nil }
@@ -177,7 +184,8 @@ final class SourceRigReuseWorker {
             intrinsicBypasses += 1; return rig
         }
         guard !clearOnCommit, entries.count < input.admission.maximumEntries,
-              let entry = SourceRigReuseEntry(rig: rig, key: key, epoch: input.epoch, admission: input.admission) else {
+              let entry = SourceRigReuseEntry(rig: rig, key: key, epoch: input.epoch,
+                                              admission: input.admission, measuredCharge: charge) else {
             capacityBypasses += 1; clearOnCommit = true; return rig
         }
         entries.append(entry); index[key] = entry; admitted += 1
