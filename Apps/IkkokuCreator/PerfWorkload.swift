@@ -45,6 +45,13 @@ final class PerfWorkloadDriver {
     private var finishGesture: (() -> Void)?
     /// Keeps App Nap off for the measurement (see `configureWindow`).
     private var activity: (any NSObjectProtocol)?
+    /// `studio-duplicate` and `studio-undo-delete` (R7 phase 2, item 6): the
+    /// actions repeated in order while recording, the one waiting for its
+    /// character builds, and the finished ones.
+    private var actionSteps: [(name: String, measured: Bool, run: () -> Void)] = []
+    private var actionIndex = 0
+    private var pendingAction: (name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval)?
+    private var finishedActions: [(name: String, measured: Bool, start: CFTimeInterval, end: CFTimeInterval, ready: CFTimeInterval)] = []
 
     private init(app: AppState, trace: PerfTrace) {
         self.app = app
@@ -74,8 +81,19 @@ final class PerfWorkloadDriver {
         app.host?.renderer.reusesDeformedVertices = configuration.deformReuse
         app.host?.renderer.skipsUnchangedFrames = configuration.frameSkip
         configureWindow()
-        do { try prepare() } catch { fail("\(configuration.workload): \(error)") }
-        DispatchQueue.main.asyncAfter(deadline: .now() + configuration.warmupSeconds) { self.record() }
+        whenSourceSceneReady {
+            do { try self.prepare() } catch { self.fail("\(self.configuration.workload): \(error)") }
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.configuration.warmupSeconds) { self.record() }
+        }
+    }
+
+    /// Runs `body` once the Studio's source scene import has installed its
+    /// characters (R7 phase 2, item 6): the window may appear while the
+    /// import still builds them. Polls every 10 ms; the launch's own timeout
+    /// bounds the wait.
+    private func whenSourceSceneReady(_ body: @escaping () -> Void) {
+        guard app.studio?.isLoadingSourceScene == true else { body(); return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { self.whenSourceSceneReady(body) }
     }
 
     private func configureWindow() {
@@ -132,6 +150,7 @@ final class PerfWorkloadDriver {
         for step in lifecycle {
             DispatchQueue.main.asyncAfter(deadline: .now() + step.seconds) { self.runLifecycleStep(step.name, step.action) }
         }
+        if !actionSteps.isEmpty { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.runNextAction() } }
         DispatchQueue.main.asyncAfter(deadline: .now() + configuration.seconds) { self.stop() }
     }
 
@@ -145,6 +164,7 @@ final class PerfWorkloadDriver {
         inputTimer?.invalidate(); inputTimer = nil
         loadTimer?.invalidate(); loadTimer = nil
         if !lifecycle.isEmpty { finishLifecycle() }
+        if !actionSteps.isEmpty { finishActions() }
         trace.endRecording()
         finishGesture?()
         // Presented handlers of the last frames arrive after their vsync.
@@ -178,6 +198,7 @@ final class PerfWorkloadDriver {
         case "studio-orbit-bursts": try prepareStudioOrbitBursts()
         case "viewport-lifecycle": try prepareViewportLifecycle()
         case "startup": break
+        case "studio-duplicate", "studio-undo-delete": try prepareStudioHistory(workload)
         default: throw RigError.invalid("unknown workload \(workload)")
         }
     }
@@ -368,6 +389,80 @@ final class PerfWorkloadDriver {
         studio.resetCamera()
         trace.details["nativeCharacters"] = configuration.nativeCharacters
         trace.details["documentObjects"] = studio.doc.objects.count
+    }
+
+    /// `studio-duplicate`: the workspace Duplicate button's call on one source
+    /// character, then Undo, repeated. `studio-undo-delete`: Delete, then Undo
+    /// (which restores the character), repeated. Live animation stays on.
+    /// The character is source key 963 (the one the ST-T03 duplicate timing
+    /// used), or the first source character when the scene has no key 963.
+    /// It is selected before each cycle, outside the timed actions. Each
+    /// action is timed from its call until no character build is pending
+    /// and every preview it started is installed; `finishActions` adds the
+    /// main-thread busy time and longest busy period in that span.
+    private func prepareStudioHistory(_ workload: String) throws {
+        let studio = try prepareStudioSource(selectKey: nil)
+        let characters = studio.doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }
+        guard let target = characters.first(where: { $0.sourceObjectKey == 963 }) ?? characters.first else {
+            throw RigError.invalid("needs a source character")
+        }
+        let id = target.id
+        let select = ("select", false, { studio.selection = id })
+        if workload == "studio-duplicate" {
+            actionSteps = [select, ("duplicate", true, { studio.duplicateSelection() }), ("undo", true, { studio.undo() })]
+        } else {
+            actionSteps = [select, ("delete", true, { studio.deleteSelection() }), ("undo", true, { studio.undo() })]
+        }
+        trace.details["actionSourceKey"] = Int(target.sourceObjectKey ?? -1)
+        trace.details["gesture"] = workload == "studio-duplicate"
+            ? "select, Duplicate, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+            : "select, Delete, Undo on source key \(target.sourceObjectKey ?? -1), repeated; live animation on"
+    }
+
+    private func runNextAction() {
+        guard trace.recording, pendingAction == nil else { return }
+        let step = actionSteps[actionIndex % actionSteps.count]
+        actionIndex += 1
+        let start = CACurrentMediaTime()
+        step.run()
+        pendingAction = (step.name, step.measured, start, CACurrentMediaTime())
+        waitForAction()
+    }
+
+    /// Polls every millisecond until the pending action's builds are installed,
+    /// then starts the next action half a second later.
+    private func waitForAction() {
+        guard let action = pendingAction else { return }
+        guard trace.recording else { pendingAction = nil; return }
+        if (app.studio?.pendingSourceCharacterBuilds ?? 0) > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.001) { self.waitForAction() }
+            return
+        }
+        let installed = PerfTrace.lastCharacterInstall
+        let ready = installed >= action.start ? max(action.end, installed) : action.end
+        finishedActions.append((action.name, action.measured, action.start, action.end, ready))
+        pendingAction = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + (action.measured ? 0.5 : 0.2)) { self.runNextAction() }
+    }
+
+    /// `details.actions`: per finished action, its name, start (seconds since
+    /// recording began), the call's own duration, the time until its builds
+    /// were installed, and the main thread's busy time and longest busy
+    /// period (a stall) from the call until then. A busy period that began
+    /// before the call counts from the call; one that is still running when
+    /// the action is ready counts whole.
+    private func finishActions() {
+        let busy = trace.busyIntervals
+        trace.details["actions"] = finishedActions.map { action -> [String: Any] in
+            let overlapping = busy.filter { $0.end > action.start && $0.start <= action.ready }
+            let lengths = overlapping.map { ($0.end - max($0.start, action.start)) * 1000 }
+            return ["name": action.name, "measured": action.measured,
+                    "startSeconds": PerfTrace.round(action.start - recordingStart),
+                    "callMs": PerfTrace.round((action.end - action.start) * 1000),
+                    "readyMs": PerfTrace.round((action.ready - action.start) * 1000),
+                    "busyMs": PerfTrace.round(lengths.reduce(0, +)),
+                    "longestStallMs": PerfTrace.round(lengths.max() ?? 0)]
+        }
     }
 
     /// Tears the viewport down and builds it again (Maker and Studio each own

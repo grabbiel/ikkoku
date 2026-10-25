@@ -90,8 +90,10 @@ final class AppState {
             self.studio = StudioModel(host: host)
             PerfTrace.mark("studioReady")
             if let path = env["IKKOKU_SOURCE_SCENE"] {
-                do { try PerfTrace.step("sourceSceneImport") { try importSourceScenePreview(url: URL(fileURLWithPath: path)) } }
-                catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
+                do {
+                    try PerfTrace.step("sourceSceneImport") { try importSourceScenePreview(url: URL(fileURLWithPath: path)) }
+                    PerfTrace.sourceSceneReady()
+                } catch { startupInputFailed("IKKOKU_SOURCE_SCENE", path, "Could not preview source scene", error, automated: automated) }
                 // A-T02: an automated run must not capture or script a scene whose
                 // characters all failed to build (for example a converted library
                 // copied without its companion files).

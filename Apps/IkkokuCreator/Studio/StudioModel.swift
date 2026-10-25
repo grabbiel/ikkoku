@@ -1827,6 +1827,13 @@ final class StudioModel: ViewportInputHandler {
         status = "Source preview · \(previews.count) converted characters (\(routeCharacterPreviews.count) rendered on routes) · \(imported.objects.count - previews.count) retained tree nodes. See source compatibility details."
     }
 
+    /// Whether a source scene import is still building its characters. The
+    /// import runs synchronously, so never.
+    var isLoadingSourceScene: Bool { false }
+    /// Character preview builds started but not installed yet. Builds run
+    /// synchronously inside `refresh()`, so none.
+    var pendingSourceCharacterBuilds: Int { 0 }
+
     /// Whether any record of the tree, an accessory child included, is a character.
     private static func containsCharacter(_ records: [KoikatsuObjectRecord]) -> Bool {
         records.contains { record in
@@ -2459,6 +2466,7 @@ final class StudioModel: ViewportInputHandler {
                             // card's saved colors rendering.
                             if let edits = o.sourceColorEdits { try? fresh.setColorEdits(edits) }
                             sourceInstances[o.id] = fresh; preview = fresh
+                            PerfTrace.characterInstalled()
                         }
                         var rendered: RenderFrame
                         if let ready = prepared?.output(for: o.id, preview: preview, elapsed: sourceAnimationTime, request: {

@@ -49,7 +49,7 @@ import sys
 
 WORKLOADS = ["studio-idle", "studio-orbit", "studio-fk-drag", "studio-hover",
              "maker-slider", "maker-idle", "studio-native", "viewport-lifecycle", "startup",
-             "studio-static", "studio-orbit-bursts"]
+             "studio-static", "studio-orbit-bursts", "studio-duplicate", "studio-undo-delete"]
 
 # Fixture variables each workload family reads, by their environment.json
 # names. `IKKOKU_SOURCE_SCENE` comes from the scenario scene, the Maker card
@@ -307,7 +307,8 @@ def uncomposited(report):
 
 
 # Workloads that send no viewport input, so any input call came from a person.
-INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup", "studio-static"}
+INPUTLESS_WORKLOADS = {"studio-idle", "maker-idle", "studio-native", "viewport-lifecycle", "startup", "studio-static",
+                      "studio-duplicate", "studio-undo-delete"}
 
 # Workloads whose window is minimized on purpose: their drawables are not all
 # shown, so the composited check does not apply and their frame rates are not cited.
@@ -492,6 +493,57 @@ def burst_latencies(report):
     return result
 
 
+def startup_line(label, report):
+    """The startup source scene (R7 phase 2, item 6): when it was ready, the
+    import's marks, and the main thread from `appStateInit` until then (busy
+    time, longest busy period, periods over 50 and 100 ms); None for a report
+    without a ready startup scene."""
+    block = report.get("summary", {}).get("startupMainThread") or {}
+    if not block.get("ready"):
+        return None
+    marks = report.get("startupSeconds", {})
+
+    def mark(name):
+        return "%.2f" % marks[name] if name in marks else "-"
+
+    begin, end = marks.get("sourceSceneImport.begin"), marks.get("sourceSceneImport.end")
+    call = "%.0f ms" % ((end - begin) * 1000) if begin is not None and end is not None else "-"
+    return ("[perf] %s: startup scene ready at %.2f s (import call %s, makerReady %s, appStateReady %s, firstDraw %s); "
+            "main thread until ready: busy %.0f of %.0f ms, longest stall %.0f ms, %d periods over 50 ms, %d over 100 ms" % (
+                label, block["readySeconds"], call, mark("makerReady"), mark("appStateReady"), mark("firstDraw"),
+                block.get("busyMs", 0), block.get("windowMs", 0), block.get("longestStallMs", 0),
+                block.get("stallsOver50Ms", 0), block.get("stallsOver100Ms", 0)))
+
+
+def action_stats(report):
+    """`studio-duplicate`/`studio-undo-delete` (R7 phase 2, item 6): per
+    measured action name, the medians of its call, ready, busy and longest
+    stall times in ms, with the sample count; {} for other reports."""
+    actions = [a for a in report.get("details", {}).get("actions") or [] if a.get("measured")]
+    result = {}
+    for name in sorted({a["name"] for a in actions}):
+        rows = [a for a in actions if a["name"] == name]
+
+        def median(field):
+            values = sorted(a[field] for a in rows)
+            return values[len(values) // 2] if len(values) % 2 else (values[len(values) // 2 - 1] + values[len(values) // 2]) / 2
+
+        result[name] = {"count": len(rows), "callMs": median("callMs"), "readyMs": median("readyMs"),
+                        "busyMs": median("busyMs"), "longestStallMs": median("longestStallMs"),
+                        "maxStallMs": max(a["longestStallMs"] for a in rows)}
+    return result
+
+
+def actions_line(label, report):
+    stats = action_stats(report)
+    if not stats:
+        return None
+    parts = ["%s x%d call %.1f, ready %.1f, main busy %.1f, longest stall %.1f (max %.1f)" % (
+        name, entry["count"], entry["callMs"], entry["readyMs"], entry["busyMs"], entry["longestStallMs"], entry["maxStallMs"])
+        for name, entry in stats.items()]
+    return "[perf] %s: actions, medians in ms: %s" % (label, "; ".join(parts))
+
+
 def burst_line(label, report):
     latencies = burst_latencies(report)
     if not latencies:
@@ -538,7 +590,8 @@ def summarize(directories):
             hover = hover_line(label, report)
             if hover:
                 rings.append(hover)
-            for extra in (link_line(label, report), burst_line(label, report)):
+            for extra in (link_line(label, report), burst_line(label, report), startup_line(label, report),
+                          actions_line(label, report)):
                 if extra:
                     rings.append(extra)
             if report.get("workload") == "viewport-lifecycle" and "lifecycle" in report.get("details", {}):

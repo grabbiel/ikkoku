@@ -189,6 +189,24 @@ final class PerfTrace {
     private var bodyCounts = [Int](repeating: 0, count: ViewBody.allCases.count)
     private var busy: [(start: CFTimeInterval, end: CFTimeInterval)] = []
     private var busyStart: CFTimeInterval?
+    /// The main run-loop busy periods recorded so far (the action workloads
+    /// attribute them to their actions).
+    var busyIntervals: [(start: CFTimeInterval, end: CFTimeInterval)] { busy }
+    /// Startup main-thread accounting (R7 phase 2, item 6): every busy period
+    /// from `appStateInit` until the source scene is ready, recorded before
+    /// any recording window. The launch work before the main run loop first
+    /// waits counts as one period that starts at `appStateInit`.
+    private var startupBusy: [(start: CFTimeInterval, end: CFTimeInterval)] = []
+    private var sawFirstWait = false
+    /// When the startup source scene import committed its last character
+    /// (`sourceSceneReady`); nil while it runs, or without a startup scene.
+    private var startupReady: CFTimeInterval?
+    /// Set once recording begins: startup periods are no longer collected.
+    private var startupClosed = false
+    /// When a Studio character preview was last installed, on any path. The
+    /// action workloads take an action as finished once no build is pending
+    /// and every preview it started is installed (R7 phase 2, item 6).
+    static var lastCharacterInstall: CFTimeInterval = 0
     private var observers: [CFRunLoopObserver] = []
     private var memoryTimer: Timer?
     private var peakFootprint: UInt64 = 0
@@ -232,6 +250,21 @@ final class PerfTrace {
 
     private func secondsSinceProcessStart(media: CFTimeInterval) -> Double {
         originWall + (media - originMedia) - processStartWall
+    }
+
+    /// The startup source scene is ready: its import committed every
+    /// character (the `sourceSceneReady` mark). Only the first call counts;
+    /// later imports (File ▸ Open) do not move it.
+    static func sourceSceneReady() {
+        guard let trace = active, trace.startupReady == nil else { return }
+        mark("sourceSceneReady")
+        trace.startupReady = CACurrentMediaTime()
+    }
+
+    /// Records that a Studio character preview was installed now.
+    static func characterInstalled() {
+        guard active != nil else { return }
+        lastCharacterInstall = CACurrentMediaTime()
     }
 
     /// Times one startup step as a mark pair and a signpost interval.
@@ -307,6 +340,7 @@ final class PerfTrace {
         cpuAtStart = PerfTrace.cpuSeconds()
         recordStart = CACurrentMediaTime()
         recording = true
+        startupClosed = true
         // The static `mark` also emits the signpost xctrace windows on.
         PerfTrace.mark("recordingBegin")
         let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
@@ -341,9 +375,16 @@ final class PerfTrace {
         }
         let sleep = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) { _, _ in
             MainActor.assumeIsolated {
-                guard let trace = PerfTrace.active, let start = trace.busyStart else { return }
+                guard let trace = PerfTrace.active else { return }
+                // Before the run loop first waits, the main thread has been
+                // busy since `appStateInit` (the launch, including AppState.init).
+                let first = trace.sawFirstWait ? nil : trace.originMedia
+                trace.sawFirstWait = true
+                guard let start = trace.busyStart ?? first else { return }
                 trace.busyStart = nil
-                if trace.recording { trace.busy.append((start, CACurrentMediaTime())) }
+                let end = CACurrentMediaTime()
+                if trace.recording { trace.busy.append((start, end)) }
+                if !trace.startupClosed, trace.startupReady.map({ start <= $0 }) ?? true { trace.startupBusy.append((start, end)) }
             }
         }
         for observer in [wake, sleep].compactMap({ $0 }) {
@@ -564,6 +605,7 @@ final class PerfTrace {
             ] as [String: Any],
             "windowOccludedSamples": occludedSamples,
             "windowSamples": memorySamples,
+            "startupMainThread": startupMainThread(),
         ]
         let frameRows = frames.map { frame -> [Double] in
             let presentedAt = presented.indices.contains(frame.presentLogIndex) ? presented[frame.presentLogIndex] : 0
@@ -608,6 +650,26 @@ final class PerfTrace {
             "details": details,
             "summary": summary,
             "samples": samples,
+        ]
+    }
+
+    /// The main thread from `appStateInit` until the startup source scene was
+    /// ready (R7 phase 2, item 6): its busy periods that began by then, each
+    /// counted whole (the one that commits the scene ends after the mark,
+    /// with SwiftUI's update of the new document), the longest of them, and
+    /// how many exceeded 50 and 100 ms. `ready` is false without a startup scene.
+    private func startupMainThread() -> [String: Any] {
+        guard let ready = startupReady else { return ["ready": false] }
+        let lengths = startupBusy.filter { $0.start <= ready }.map { ($0.end - $0.start) * 1000 }
+        return [
+            "ready": true,
+            "readySeconds": PerfTrace.round(secondsSinceProcessStart(media: ready)),
+            "windowMs": PerfTrace.round((ready - originMedia) * 1000),
+            "busyMs": PerfTrace.round(lengths.reduce(0, +)),
+            "longestStallMs": PerfTrace.round(lengths.max() ?? 0),
+            "periods": lengths.count,
+            "stallsOver50Ms": lengths.filter { $0 > 50 }.count,
+            "stallsOver100Ms": lengths.filter { $0 > 100 }.count,
         ]
     }
 
