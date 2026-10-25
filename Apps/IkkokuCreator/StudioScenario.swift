@@ -28,7 +28,7 @@ struct StudioScenario: Decodable {
         /// `"setAutomaticBlink"`, `"addCharacter"`, `"setIKEnabled"`, `"setIKTarget"`,
         /// `"captureIKPose"`, `"editDuringAdvance"`, `"delete"`, `"setParent"`, `"duplicate"`,
         /// `"addFolder"`, `"addCamera"`, `"addLight"`, `"export"`, `"exportRejected"`, `"reimport"`,
-        /// `"assert"`, `"assertRejected"`.
+        /// `"focus"`, `"selectRoutePoint"`, `"dragRoutePoint"`, `"editRoute"`, `"captureRoute"`, `"assert"`, `"assertRejected"`.
         let op: String
         let key: Int32?
         /// ST-T03: with `key`, address the n-th copy (document order) of that
@@ -176,6 +176,77 @@ struct StudioScenario: Decodable {
         let children: ChildrenValue?
         /// assert only: source keys no document object may carry (deleted).
         let absent: [Int32]?
+        /// selectRoutePoint only (ST-T11): pick the point's aid handle
+        /// instead of the point's own.
+        let aid: Bool?
+        /// editRoute only (ST-T11): the route edit the inspector makes.
+        let routeEdit: RouteEditValue?
+        /// assert only (ST-T11): the route's edit state and playback record.
+        let route: RouteValue?
+        /// assert only (ST-T11): how many route lines the current frame
+        /// draws (the depth-tested line batches; light glyphs are not).
+        let routeLines: Int?
+
+        /// One route panel edit, applied through `StudioModel.editSourceRoute`
+        /// and the add/delete point calls the inspector buttons make.
+        /// `setting` is "add", "delete", "move" (`index`, `position`, `aid`),
+        /// "rotateStart" (`rotation`), "speed" (`index`, `value`), "ease"
+        /// (`index`, `ease`), "connection" (`index`, `curve`), "link"
+        /// (`index`, `on`), "loop", "line" (`on`), "orientation"
+        /// (`orientation`) or "color" (`rgb`). `refused` turns the step into
+        /// a negative control: the edit must be refused with a status
+        /// containing it and leave the document unchanged.
+        struct RouteEditValue: Decodable {
+            let setting: String
+            let index: Int?
+            let position: [Float]?
+            let aid: Bool?
+            let rotation: [Float]?
+            let value: Float?
+            let ease: Int32?
+            let curve: Bool?
+            let on: Bool?
+            let orientation: Int32?
+            let rgb: [Float]?
+            let refused: String?
+        }
+        /// The route state readback: every field is optional and only the
+        /// fields present are compared; the playback record is always checked
+        /// against the state (`SourceStudioRouteState.record(authored:)`).
+        struct RouteValue: Decodable {
+            struct Point: Decodable {
+                let index: Int
+                let position: [Float]?
+                let rotation: [Float]?
+                let aid: [Float]?
+                let aidInitialized: Bool?
+                let speed: Float?
+                let ease: Int32?
+                let curve: Bool?
+                let link: Bool?
+                /// whether the point came from the record (false: added).
+                let sourced: Bool?
+            }
+            let key: Int32
+            let copy: Int?
+            let points: Int?
+            /// whether the document holds a route edit (nil: the record's own).
+            let edited: Bool?
+            let loop: Bool?
+            let line: Bool?
+            let orientation: Int32?
+            let rgb: [Float]?
+            let point: [Point]?
+            /// position tolerance in metres (default 1e-5).
+            let within: Float?
+            /// a `captureRoute` label: every point and setting must equal the
+            /// captured state (positions within `within`), so an export and
+            /// reimport or a native reload proves the edits survived.
+            let from: String?
+            /// the playback record's point and aid keys, in point order.
+            let keys: [Int32]?
+            let aidKeys: [Int32]?
+        }
 
         struct ChildrenValue: Decodable {
             /// the parent's source key; absent or null is the root.
@@ -420,7 +491,8 @@ struct StudioScenario: Decodable {
                  group, category, no, speed, on, bone, rotation, animation, fk, position,
                  seconds, dx, dy, eyeLook, blink, handPattern, mode, axis, pixels,
                  render, exportIdenticalToSource, errorContains, outfit, accessoryLabels, pluginMount, state, clothes, expression,
-                 sex, character, chain, delta, ik, edit, parent, children, absent, copy, added, activeCopyOf
+                 sex, character, chain, delta, ik, edit, parent, children, absent, copy, added, activeCopyOf,
+                 aid, routeEdit, route, routeLines
         }
 
         init(from decoder: Decoder) throws {
@@ -525,6 +597,10 @@ struct StudioScenario: Decodable {
             copy = try c.decodeIfPresent(Int.self, forKey: .copy)
             added = try c.decodeIfPresent(String.self, forKey: .added)
             activeCopyOf = try c.decodeIfPresent(Int32.self, forKey: .activeCopyOf)
+            aid = try c.decodeIfPresent(Bool.self, forKey: .aid)
+            routeEdit = try c.decodeIfPresent(RouteEditValue.self, forKey: .routeEdit)
+            route = try c.decodeIfPresent(RouteValue.self, forKey: .route)
+            routeLines = try c.decodeIfPresent(Int.self, forKey: .routeLines)
         }
     }
 
@@ -665,6 +741,8 @@ struct StudioScenario: Decodable {
         var capturedIKPoses: [String: IKPoseCapture] = [:]
         /// World positions recorded by `captureObject` steps, keyed by step name.
         var capturedObjectPositions: [String: Float3] = [:]
+        /// ST-T11: `captureRoute` edit states by label.
+        var capturedRoutes: [String: SourceStudioRouteState] = [:]
         /// World rotations recorded by the same `captureObject` steps.
         var capturedObjectRotations: [String: simd_quatf] = [:]
         /// Pixels recorded by `captureRender` steps (raw RGBA8), keyed by label.
@@ -1022,6 +1100,77 @@ struct StudioScenario: Decodable {
                 }
             }
             return nil
+        }
+
+        /// ST-T11: a route's edit state readback (the document's edits, or the
+        /// record's own state) and its playback record, which must always be
+        /// the state's record: what the children follow is what is edited.
+        func assertRoute(_ step: Step, details: inout [String]) -> String? {
+            guard let check = step.route else { return nil }
+            guard let id = objectID(key: check.key, copy: check.copy), let state = studio.sourceRouteState(id),
+                  let runtime = studio.sourceRouteRuntime(id: id, document: studio.doc) else {
+                return "assert route: \(check.key)\(check.copy.map { " copy \($0)" } ?? "") is not an imported route"
+            }
+            var problems: [String] = []
+            if runtime.route != state.record(authored: runtime.authored) {
+                problems.append("the playback record differs from the edit state")
+            }
+            let tolerance = check.within ?? 0.00001
+            func near(_ a: SIMD3<Float>, _ b: [Float]?) -> Bool {
+                guard let b, b.count == 3 else { return false }
+                return simd_length(a - SIMD3(b[0], b[1], b[2])) <= tolerance
+            }
+            func text(_ v: SIMD3<Float>) -> String { "(\(v.x), \(v.y), \(v.z))" }
+            let edited = studio.doc.object(id)?.sourceRoute != nil
+            details.append("route \(check.key)\(check.copy.map { " copy \($0)" } ?? ""): \(state.points.count) points, edited \(edited), loop \(state.loop), line \(state.visibleLine), orientation \(state.orientation), colour \(state.color); "
+                + state.points.enumerated().map { i, p in
+                    "\(i)\(p.sourceIndex == nil ? "+" : ""): \(text(p.position)) rot \(text(p.rotationDegrees)) speed \(p.speed) ease \(p.easeType) \(p.isCurve ? "curve" : "line")\(p.linked ? " link" : "") aid \(text(p.aidPosition))\(p.aidInitialized ? "" : " (uninit)")"
+                }.joined(separator: "; "))
+            if let expected = check.points, state.points.count != expected { problems.append("\(state.points.count) points, expected \(expected)") }
+            if let expected = check.keys, runtime.route.points.map(\.bone.sourceKey) != expected {
+                problems.append("point keys \(runtime.route.points.map(\.bone.sourceKey)), expected \(expected)")
+            }
+            if let expected = check.aidKeys, runtime.route.points.map(\.aid.sourceKey) != expected {
+                problems.append("aid keys \(runtime.route.points.map(\.aid.sourceKey)), expected \(expected)")
+            }
+            if let label = check.from {
+                if let base = capturedRoutes[label] {
+                    func close(_ a: SIMD3<Float>, _ b: SIMD3<Float>) -> Bool { simd_length(a - b) <= tolerance }
+                    if base.points.count != state.points.count { problems.append("\(state.points.count) points, \"\(label)\" has \(base.points.count)") }
+                    for (i, (p, q)) in zip(state.points, base.points).enumerated() {
+                        let same = close(p.position, q.position) && close(p.rotationDegrees, q.rotationDegrees) && close(p.scale, q.scale)
+                            && close(p.aidPosition, q.aidPosition) && close(p.aidRotationDegrees, q.aidRotationDegrees) && close(p.aidScale, q.aidScale)
+                            && abs(p.speed - q.speed) <= 0.000001 && p.easeType == q.easeType && p.connection == q.connection
+                            && p.linked == q.linked && p.aidInitialized == q.aidInitialized
+                        if !same { problems.append("point \(i) differs from \"\(label)\": \(p) vs \(q)") }
+                    }
+                    if state.loop != base.loop || state.visibleLine != base.visibleLine || state.orientation != base.orientation
+                        || simd_length(state.color - base.color) > tolerance {
+                        problems.append("settings differ from \"\(label)\"")
+                    }
+                } else { problems.append("no captureRoute state recorded under \"\(label)\"") }
+            }
+            if let expected = check.edited, edited != expected { problems.append("document edit \(edited), expected \(expected)") }
+            if let expected = check.loop, state.loop != expected { problems.append("loop \(state.loop), expected \(expected)") }
+            if let expected = check.line, state.visibleLine != expected { problems.append("line \(state.visibleLine), expected \(expected)") }
+            if let expected = check.orientation, state.orientation != expected { problems.append("orientation \(state.orientation), expected \(expected)") }
+            if let expected = check.rgb, !near(SIMD3(state.color.x, state.color.y, state.color.z), expected) {
+                problems.append("colour \(state.color), expected \(expected)")
+            }
+            for expected in check.point ?? [] {
+                guard state.points.indices.contains(expected.index) else { problems.append("no point \(expected.index)"); continue }
+                let p = state.points[expected.index]
+                if expected.position != nil, !near(p.position, expected.position) { problems.append("point \(expected.index) at \(text(p.position)), expected \(expected.position!)") }
+                if expected.rotation != nil, !near(p.rotationDegrees, expected.rotation) { problems.append("point \(expected.index) rotation \(text(p.rotationDegrees)), expected \(expected.rotation!)") }
+                if expected.aid != nil, !near(p.aidPosition, expected.aid) { problems.append("point \(expected.index) aid \(text(p.aidPosition)), expected \(expected.aid!)") }
+                if let value = expected.aidInitialized, p.aidInitialized != value { problems.append("point \(expected.index) aid initialized \(p.aidInitialized), expected \(value)") }
+                if let value = expected.speed, abs(p.speed - value) > 0.000001 { problems.append("point \(expected.index) speed \(p.speed), expected \(value)") }
+                if let value = expected.ease, p.easeType != value { problems.append("point \(expected.index) ease \(p.easeType), expected \(value)") }
+                if let value = expected.curve, p.isCurve != value { problems.append("point \(expected.index) curve \(p.isCurve), expected \(value)") }
+                if let value = expected.link, p.linked != value { problems.append("point \(expected.index) link \(p.linked), expected \(value)") }
+                if let value = expected.sourced, (p.sourceIndex != nil) != value { problems.append("point \(expected.index) sourced \(p.sourceIndex != nil), expected \(value)") }
+            }
+            return problems.isEmpty ? nil : "assert route: route \(check.key) " + problems.joined(separator: "; ")
         }
 
         /// The camera the preview renders from, through `StudioModel.viewCamera`
@@ -2125,6 +2274,149 @@ struct StudioScenario: Decodable {
                     record(step, false, "reimport failed, stopping: \(error)")
                     break scenarioLoop
                 }
+            case "focus":
+                // The F key: select the object and frame the view on it;
+                // `dy`, if given, is then one scroll-wheel dolly of that delta.
+                guard let id = object(step) else { record(step, false, "focus: no object \(describe(step))"); continue }
+                studio.selection = id
+                studio.focusSelection()
+                if let dy = step.dy, dy.isFinite { studio.scrolled(delta: SIMD2<Float>(0, dy), modifiers: NSEvent.ModifierFlags()) }
+                record(step, true, "focused \(describe(step)): camera target (\(studio.doc.camera.target.x), \(studio.doc.camera.target.y), \(studio.doc.camera.target.z)), distance \(studio.doc.camera.distance)")
+            case "selectRoutePoint":
+                // ST-T11: a click on the route point (or aid) handle the
+                // selected route draws, through the view's mouseDown/mouseUp.
+                guard let id = object(step), studio.sourceRouteState(id) != nil else {
+                    record(step, false, "selectRoutePoint: \(describe(step)) is not an imported route"); continue
+                }
+                guard let index = step.index else { record(step, false, "selectRoutePoint: index is required"); continue }
+                studio.selection = id
+                let wanted = SourceRoutePointSelection(index: index, aid: step.aid ?? false)
+                guard let pixel = studio.sourceRouteHandlePixel(id, point: wanted) else {
+                    record(step, false, "selectRoutePoint: handle \(index)\(wanted.aid ? " aid" : "") does not project into the view"); continue
+                }
+                let picked = studio.pickID(at: pixel)
+                studio.mouseDown(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
+                studio.mouseUp(at: pixel, button: 0, modifiers: NSEvent.ModifierFlags())
+                let selected = studio.selectedSourceRoutePoint
+                record(step, selected == wanted, selected == wanted
+                    ? "clicked route \(describe(step)) handle \(index)\(wanted.aid ? " aid" : "") at pixel (\(pixel.x), \(pixel.y)), picked id \(String(picked, radix: 16)): \(studio.status)"
+                    : "selectRoutePoint: pixel (\(pixel.x), \(pixel.y)) picked id \(String(picked, radix: 16)); selected point reads \(String(describing: selected))")
+            case "dragRoutePoint":
+                // ST-T11: a drag of the selected handle's guide axis through
+                // the view's own mouseDown/mouseDragged/mouseUp.
+                guard let id = object(step), let before = studio.sourceRouteState(id), studio.selection == id,
+                      let point = studio.selectedSourceRoutePoint else {
+                    record(step, false, "dragRoutePoint: run selectRoutePoint on \(describe(step)) first"); continue
+                }
+                guard let axisName = step.axis, let axis = GizmoAxis(rawValue: ["x": 1, "y": 2, "z": 3][axisName] ?? -1),
+                      let pixels = step.pixels, pixels.count == 2, pixels.allSatisfy({ $0.isFinite }) else {
+                    record(step, false, "dragRoutePoint: axis (\"x\", \"y\" or \"z\") and pixels [dx, dy] are required"); continue
+                }
+                let candidates = studio.sourceRouteGuidePixels(axis: axis)
+                guard let start = candidates.first(where: { studio.pickID(at: $0) == PickIDs.gizmo(axis) }) else {
+                    record(step, false, "dragRoutePoint: none of \(candidates.count) pixels on the \(axisName) guide picks it"); continue
+                }
+                let noModifiers = NSEvent.ModifierFlags()
+                let undoDepth = studio.undoStack.count
+                studio.mouseDown(at: start, button: 0, modifiers: noModifiers)
+                guard studio.undoStack.count == undoDepth + 1 else {
+                    studio.mouseUp(at: start, button: 0, modifiers: noModifiers)
+                    record(step, false, "dragRoutePoint: mouseDown on the \(axisName) guide grabbed nothing"); continue
+                }
+                var previous = start, current = start
+                // Main-thread time of each drag event (the edit, the route
+                // runtime update and the frame rebuild it triggers) and of the
+                // mouseUp, which rebuilds a moved playing route's clock.
+                var eventMilliseconds: [Double] = []
+                for i in 1...8 {
+                    current = start + SIMD2<Float>(pixels[0], pixels[1]) * (Float(i) / 8)
+                    let begin = ProcessInfo.processInfo.systemUptime
+                    studio.mouseDragged(to: current, delta: current - previous, button: 0, modifiers: noModifiers)
+                    eventMilliseconds.append((ProcessInfo.processInfo.systemUptime - begin) * 1_000)
+                    previous = current
+                }
+                let upBegin = ProcessInfo.processInfo.systemUptime
+                studio.mouseUp(at: current, button: 0, modifiers: noModifiers)
+                let upMilliseconds = (ProcessInfo.processInfo.systemUptime - upBegin) * 1_000
+                let sortedEvents = eventMilliseconds.sorted()
+                let timing = String(format: "drag events median %.2f ms, max %.2f ms; mouseUp %.2f ms",
+                                    sortedEvents[sortedEvents.count / 2], sortedEvents.last!, upMilliseconds)
+                guard let after = studio.sourceRouteState(id) else { record(step, false, "dragRoutePoint: the route is gone"); continue }
+                let old = before.points[point.index], new = after.points[point.index]
+                let (from, to) = point.aid ? (old.aidPosition, new.aidPosition)
+                    : point.index == 0 ? (old.rotationDegrees, new.rotationDegrees) : (old.position, new.position)
+                let moved = from != to
+                record(step, moved, moved
+                    ? "dragged route \(describe(step)) \(point.index == 0 && !point.aid ? "start rotation" : point.aid ? "aid \(point.index)" : "point \(point.index)") along \(axisName) from pixel (\(start.x), \(start.y)) over \(pixels) px: (\(from.x), \(from.y), \(from.z)) -> (\(to.x), \(to.y), \(to.z)); \(timing)"
+                    : "dragRoutePoint: the drag left the handle at (\(to.x), \(to.y), \(to.z)): \(studio.status)")
+            case "captureRoute":
+                guard let id = object(step), let state = studio.sourceRouteState(id) else {
+                    record(step, false, "captureRoute: \(describe(step)) is not an imported route"); continue
+                }
+                guard let label = step.name, !label.isEmpty else { record(step, false, "captureRoute: name (the capture label) is required"); continue }
+                capturedRoutes[label] = state
+                record(step, true, "captured route \(describe(step)) (\(state.points.count) points) as \"\(label)\"")
+            case "editRoute":
+                // ST-T11: one route panel edit, through the model calls the
+                // inspector controls make.
+                guard let id = object(step), studio.sourceRouteState(id) != nil else {
+                    record(step, false, "editRoute: \(describe(step)) is not an imported route"); continue
+                }
+                guard let edit = step.routeEdit else { record(step, false, "editRoute: routeEdit is required"); continue }
+                func vector(_ values: [Float]?) -> SIMD3<Float>? {
+                    guard let values, values.count == 3, values.allSatisfy(\.isFinite) else { return nil }
+                    return SIMD3(values[0], values[1], values[2])
+                }
+                let documentBefore = studio.doc.object(id)?.sourceRoute
+                var accepted: Bool?
+                switch (edit.setting, edit.index) {
+                case ("add", _): accepted = studio.addSourceRoutePoint(id) != nil
+                case ("delete", let index?): accepted = studio.deleteSourceRoutePoint(id, index: index)
+                case ("move", let index?):
+                    if let position = vector(edit.position) {
+                        accepted = studio.editSourceRoute(id, .move) {
+                            if edit.aid == true { try $0.moveAid(index, to: position) } else { try $0.movePoint(index, to: position) }
+                        }
+                    }
+                case ("rotateStart", _):
+                    if let rotation = vector(edit.rotation) { accepted = studio.editSourceRoute(id, .move) { try $0.rotateStart(to: rotation) } }
+                case ("speed", let index?):
+                    if let value = edit.value { accepted = studio.editSourceRoute(id, .speed, point: index) { try $0.setSpeed(index, value) } }
+                case ("ease", let index?):
+                    if let ease = edit.ease.flatMap(SourceStudioRoute.EaseType.init(rawValue:)) {
+                        accepted = studio.editSourceRoute(id, .ease, point: index) { try $0.setEase(index, ease) }
+                    }
+                case ("connection", let index?):
+                    if let curve = edit.curve {
+                        accepted = studio.editSourceRoute(id, .connection) { try $0.setConnection(index, curve ? .curve : .line) }
+                    }
+                case ("link", let index?):
+                    if let on = edit.on { accepted = studio.editSourceRoute(id, .link) { try $0.setLink(index, on) } }
+                case ("loop", _):
+                    if let on = edit.on { accepted = studio.editSourceRoute(id, .loop) { $0.loop = on } }
+                case ("line", _):
+                    if let on = edit.on { accepted = studio.editSourceRoute(id, .visibleLine) { $0.visibleLine = on } }
+                case ("orientation", _):
+                    if let orientation = edit.orientation.flatMap(SourceStudioRoute.Orientation.init(rawValue:)) {
+                        accepted = studio.editSourceRoute(id, .orientation) { $0.setOrientation(orientation) }
+                    }
+                case ("color", _):
+                    if let rgb = vector(edit.rgb) { accepted = studio.editSourceRoute(id, .color) { try $0.setColor(red: rgb.x, green: rgb.y, blue: rgb.z) } }
+                default: break
+                }
+                guard let accepted else {
+                    record(step, false, "editRoute: setting \"\(edit.setting)\" is unknown or misses its index/value"); continue
+                }
+                if let refused = edit.refused {
+                    let unchanged = studio.doc.object(id)?.sourceRoute == documentBefore
+                    let ok = !accepted && studio.status.contains(refused) && unchanged
+                    record(step, ok, ok ? "route \(describe(step)) \(edit.setting) refused as expected: \(studio.status)"
+                        : "editRoute: expected a refusal containing \"\(refused)\" and no change; accepted \(accepted), document unchanged \(unchanged), status \(studio.status)")
+                } else {
+                    let points = studio.sourceRouteState(id)?.points.count ?? 0
+                    record(step, accepted, accepted ? "route \(describe(step)) \(edit.setting) applied (\(points) points): \(studio.status)"
+                        : "editRoute: \(edit.setting) refused: \(studio.status)")
+                }
             case "assert", "assertRejected":
                 var problems: [String] = []
                 var details: [String] = []
@@ -2224,6 +2516,12 @@ struct StudioScenario: Decodable {
                 // own character by the source key inside the check value,
                 // like `animation`/`fk`.
                 if let problem = assertPosition(step) { problems.append(problem) }
+                if let problem = assertRoute(step, details: &details) { problems.append(problem) }
+                if let expected = step.routeLines {
+                    let drawn = studio.frame.gizmos.filter { $0.primitive == .lines && $0.depthTest && !$0.vertices.isEmpty }.count
+                    if drawn != expected { problems.append("assert routeLines: the frame draws \(drawn) route lines, expected \(expected)") }
+                    else { details.append("\(drawn) route lines drawn") }
+                }
                 if let check = step.children {
                     var parentID: UUID?, found = true
                     if let key = check.parent {

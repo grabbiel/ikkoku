@@ -141,6 +141,22 @@ public enum SourceStudioRoutePlayback {
         return (try? evaluator.evaluate(at: time).finished) ?? false
     }
 
+    /// ST-T11: the route's line for the editor (`OCIRoute.UpdateLine`'s
+    /// path, drawn while `visibleLine` is on), as engine world-space segment
+    /// endpoint pairs: `SourceStudioRoute.polyline` over the same evaluator
+    /// points playback uses, so the line is the path `childRoot` follows.
+    /// Empty for a route that cannot build segments (fewer than two points,
+    /// a curve without its aid, an unknown enum value), which the original
+    /// leaves without a line too (`UpdateLine` deletes it below two points).
+    public static func pathLines(route: KoikatsuRouteRecord, routeWorld: float4x4,
+                                 pointLocals: [float4x4], samples: Int = 12) -> [SIMD3<Float>] {
+        let locals = pointLocals.count == route.points.count ? pointLocals : Self.pointLocals(from: route)
+        guard let evaluator = try? Self.makeEvaluator(route: route, routeWorld: routeWorld, locals: locals) else { return [] }
+        return evaluator.polyline(samples: samples).map {
+            UnityCoordinates.position(SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)))
+        }
+    }
+
     /// Per-frame stepping (`Play` plus one tween update per `deltaTime`) of
     /// `route`'s `childRoot`, in the same source world space as
     /// `childRootWorld`: route points and aids compose through `routeWorld`

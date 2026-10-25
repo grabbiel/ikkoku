@@ -16,7 +16,9 @@ enum PoseMode: String, CaseIterable, Identifiable { case object = "Object", fk =
 /// Runtime side entry for one imported route object, mirroring
 /// `SourceStudioCharacterReference`'s scene-identity fields so a stale entry
 /// can never apply to a replacement document. Carries the authored route
-/// record and its point locals; the world placement is recomputed per frame by
+/// record and the record playback uses, which is the authored one with the
+/// document's ST-T11 route edits applied (`apply`, run by `refresh()`), with
+/// its point locals; the world placement is recomputed per frame by
 /// `SourceStudioRoutePlayback.childRootWorld`, which never edits them.
 /// Internal (not `private` as the caches around it): a rehydrated document
 /// rebuilds these entries in `StudioModel+SourceRehydration.swift`, see
@@ -25,8 +27,18 @@ struct SourceRouteRuntime {
     let sceneFile: String
     let sceneSHA256: String
     let objectKey: Int32
-    let route: KoikatsuRouteRecord
-    let pointLocals: [float4x4]
+    /// The record as the scene file holds it (an original's, for a copy).
+    let authored: KoikatsuRouteRecord
+    /// The record playback, the line and the children use.
+    var route: KoikatsuRouteRecord
+    var pointLocals: [float4x4]
+    /// The document edit state `route` reflects; nil is `authored` itself.
+    var applied: SourceStudioRouteState?
+
+    init(sceneFile: String, sceneSHA256: String, objectKey: Int32, route: KoikatsuRouteRecord, pointLocals: [float4x4]) {
+        self.sceneFile = sceneFile; self.sceneSHA256 = sceneSHA256; self.objectKey = objectKey
+        authored = route; self.route = route; self.pointLocals = pointLocals; applied = nil
+    }
 }
 
 enum FKGroup: String, CaseIterable, Identifiable {
@@ -101,7 +113,7 @@ final class StudioModel: ViewportInputHandler {
         pruneSourceVoices()
         refresh()
     }
-    var selection: UUID? { didSet { if selection != oldValue { selectedBone = nil; selectedSourceIK = nil; refresh() } } }
+    var selection: UUID? { didSet { if selection != oldValue { selectedBone = nil; selectedSourceIK = nil; selectedRoutePoint = nil; refresh() } } }
     var gizmoMode: GizmoMode = .translate { didSet { refresh() } }
     var localSpace = true { didSet { refresh() } }
     var poseMode: PoseMode = .object { didSet { refresh() } }
@@ -109,6 +121,10 @@ final class StudioModel: ViewportInputHandler {
     var selectedBone: Int? { didSet { refresh() } }
     var selectedSourceIK: Int32? { didSet { refresh() } }
     var selectedIK: IKChain? { didSet { refresh() } }
+    /// ST-T11: the selected route's point or aid handle (reset with the
+    /// selection; `selectedSourceRoutePoint` validates it against the route).
+    var selectedRoutePoint: SourceRoutePointSelection? { didSet { if selectedRoutePoint != oldValue { refresh() } } }
+    @ObservationIgnored var sourceRouteEditor = SourceRouteEditorState()
     var showGizmos = true { didSet { refresh() } }
     /// R1/CMT-04 opt-in (View ▸ Live Source Shaders, `IKKOKU_LIVE_SOURCE_SHADERS=1`):
     /// converted source characters draw with the translated original shader
@@ -164,23 +180,24 @@ final class StudioModel: ViewportInputHandler {
     /// wholesale; every read is scene-identity gated, so it survives
     /// undo/redo (see `undo()`). New Scene's empty document is pruned away
     /// by `refresh()` and only an import reseeds routes.
-    @ObservationIgnored private var sourceRoutes: [UUID: SourceRouteRuntime] = [:]
+    @ObservationIgnored var sourceRoutes: [UUID: SourceRouteRuntime] = [:]
     /// Per-route stepper clock bookkeeping mirroring the hair-dynamics
     /// "step on tick, clear on jump" pattern: live ticks advance the stepper
     /// by the clock delta, jumps (scrub, checkpoint restore, import) rebuild
     /// `Play` and fast-forward, and `sourceWorldMatrix`/`sourceWorldRotation`
     /// place `childRoot` from the stepper's latest frame while it belongs to
     /// the current frame. Same lifecycle as `sourceRoutes`.
-    @ObservationIgnored private var sourceRouteClocks: [UUID: SourceStudioRouteClock] = [:]
+    @ObservationIgnored var sourceRouteClocks: [UUID: SourceStudioRouteClock] = [:]
     /// Runtime route play state, the counterpart of the original's
     /// `routeInfo.active` the `RouteControl` buttons toggle (`OnPlay` per
     /// route, `OnClickALL`/`OnClickReAll`/`Stop all` for the scene): seeded
     /// from each record's saved flag at import (play start 0), never written
-    /// to the document — the original export keeps the record's flag because
-    /// edited route serialization is unsupported (`SourceSceneExportValidation`).
+    /// to the document; the original export writes it as the record's
+    /// `active` flag where it differs (`SourceSceneEdits.routeActive`), as
+    /// CharaStudio saves the play state.
     /// `start` is the `sourceAnimationTime` the route's tween runs from;
     /// a stop pins `childRoot` to point 0 like `Stop`.
-    private(set) var sourceRoutePlayState: [UUID: (playing: Bool, start: Float)] = [:]
+    var sourceRoutePlayState: [UUID: (playing: Bool, start: Float)] = [:]
     /// Whether the imported scene brought route objects, so the route play
     /// controls appear only where they can do something.
     var hasSourceRoutes: Bool { !sourceRoutes.isEmpty }
@@ -196,7 +213,7 @@ final class StudioModel: ViewportInputHandler {
     }
     /// Routes whose rebuild exceeded the fast-forward budget, reported once
     /// while they stay on the continuous evaluator.
-    @ObservationIgnored private var sourceRouteFallbackReported: Set<UUID> = []
+    @ObservationIgnored var sourceRouteFallbackReported: Set<UUID> = []
     /// Characters under a route are rendered but stay uneditable for original
     /// export: their document entry keeps the unrendered placeholder baseline
     /// (folder kind, fallback name, no character reference) that
@@ -206,7 +223,7 @@ final class StudioModel: ViewportInputHandler {
     /// import (which replaces it wholesale) and, like the route cache,
     /// survives undo/redo through that gate (see `undo()`); New Scene's
     /// `refresh()` prunes it and only import reseeds.
-    @ObservationIgnored private var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
+    @ObservationIgnored var sourceRouteCharacterPreviews: [UUID: SourceStudioCharacterPreview] = [:]
     @ObservationIgnored private var lastSourceRouteDiagnostic: String?
     /// The imported scene record's `charaLight` as a scene-static native key
     /// light (PR #41's rot mapping). Runtime-only: original export requires
@@ -395,7 +412,11 @@ final class StudioModel: ViewportInputHandler {
     @ObservationIgnored var sourceVoicePlayers: [UUID: SourceStudioVoicePlayer] = [:]
     @ObservationIgnored private var nextInstanceID: UInt64 = 100
     /// A new drag, or none, drops the camera drag's reusable frame.
-    @ObservationIgnored private var drag: DragState? { didSet { cameraReuse = nil } }
+    /// A route point drag that ends (mouseUp, or a gesture replacing it)
+    /// rebuilds the route's playback clock if its path moved.
+    @ObservationIgnored private var drag: DragState? {
+        didSet { cameraReuse = nil; if case .routePoint(let ended)? = oldValue { endSourceRoutePointDrag(ended) } }
+    }
     /// The camera-independent part of the last full frame, kept only while an
     /// orbit or pan drag runs (see `refreshCamera`).
     @ObservationIgnored private var cameraReuse: CameraReuse?
@@ -485,6 +506,7 @@ final class StudioModel: ViewportInputHandler {
         case ik(GizmoDrag, chain: IKChain, start: Float3)
         case sourceBone(GizmoDrag, boneID: Int, startWorld: simd_quatf, parentWorld: simd_quatf)
         case sourceIK(GizmoDrag, target: Int32, start: SourceStudioIKEdit, characterWorld: float4x4, characterRotation: simd_quatf, startWorldRotation: simd_quatf)
+        case routePoint(SourceRoutePointDrag)
     }
 
     init(host: EngineHost) {
@@ -1556,6 +1578,12 @@ final class StudioModel: ViewportInputHandler {
 
     func deleteSelection() {
         guard let id = selection else { return }
+        // ST-T11: with a route point selected, Delete removes that point, as
+        // deleting its node does in CharaStudio's workspace.
+        if let point = selectedSourceRoutePoint {
+            if point.aid { status = "A route point's aid cannot be deleted." } else { deleteSourceRoutePoint(id, index: point.index) }
+            return
+        }
         pushUndo(force: true)
         doc.remove(id)
         // The document's refresh already released the instances of the object and
@@ -1583,26 +1611,17 @@ final class StudioModel: ViewportInputHandler {
     /// reuses its `sourceObjectKey`; export writes it as a new record under a
     /// key CharaStudio's `GetNewIndex` would allocate. A copy of the camera
     /// the view looks through takes the view, as the copied `active` flag
-    /// does in CharaStudio. Routes and route children are not duplicated yet.
+    /// does in CharaStudio. ST-T11: a route copies with its points, settings
+    /// and children (a playing route's copy plays from point 0, as the
+    /// copied `active` flag makes CharaStudio's import do), and a route
+    /// child's copy stays beside it under the route.
     func duplicateSourceSubtree(_ id: UUID) {
         guard let top = doc.object(id) else { return }
-        var ancestor: UUID? = top.parent, steps = 0
-        while let current = ancestor, steps <= doc.objects.count {
-            if doc.object(current)?.sourceRecordKind == .route || sourceRouteRuntime(id: current, document: doc) != nil {
-                status = "Duplicating route children is not supported yet."
-                return
-            }
-            ancestor = doc.object(current)?.parent; steps += 1
-        }
         let children = Dictionary(grouping: doc.objects, by: \.parent)
         var subtree: [StudioObject] = [], stack = [top]
         while let object = stack.popLast() {
             subtree.append(object)
             stack += (children[object.id] ?? []).reversed()
-        }
-        if subtree.contains(where: { $0.sourceRecordKind == .route || sourceRouteRuntime(id: $0.id, document: doc) != nil }) {
-            status = "Duplicating routes is not supported yet."
-            return
         }
         pushUndo(force: true)
         var remap: [UUID: UUID] = [:]
@@ -1618,6 +1637,7 @@ final class StudioModel: ViewportInputHandler {
             // The runtime entries the copy renders from are its original's.
             if let entry = sourceCameras[object.id] { sourceCameras[copy.id] = entry }
             if let entry = sourceItemAssets[object.id] { sourceItemAssets[copy.id] = entry }
+            copySourceRouteRuntime(from: object.id, to: copy.id)
             if resourceBlockedObjects.contains(object.id) { resourceBlockedObjects.insert(copy.id) }
         }
         if var coverage = sourceRuntimeCoverage, coverage.sceneSHA256 == doc.sourceSceneSHA256 {
@@ -2076,6 +2096,14 @@ final class StudioModel: ViewportInputHandler {
                 let playing = sourceRoutePlayState[object.id]?.playing ?? saved
                 if playing != saved { edits.routeActive[key] = playing }
             }
+            // ST-T11: points and settings that differ from the staged record
+            // (a copy's is its original's) are written into it; the writer
+            // allocates added points' keys and refuses what CharaStudio
+            // cannot do.
+            if original.kind == .route, let route = object.sourceRoute, let record = original.route,
+               route != SourceStudioRouteState(record: record) {
+                edits.routes[key] = route
+            }
             let originalRotation = UnityCoordinates.eulerDegrees(original.transform.rotationDegrees)
             let rotationChanged = object.transform.quaternion.vector != originalRotation.vector
                 && object.transform.quaternion.vector != -originalRotation.vector
@@ -2194,7 +2222,7 @@ final class StudioModel: ViewportInputHandler {
             guard i < source.settings.cameraSlots.count, let camera else { throw RigError.invalid("Original scene export cannot remove a camera slot.") }
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
-        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty || !staged.stage.keys.isEmpty {
+        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty || !staged.stage.keys.isEmpty || !edits.routes.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)
@@ -2418,6 +2446,8 @@ final class StudioModel: ViewportInputHandler {
         var lightGlyphs: GizmoBatch?
         /// The selection gizmo's origin and orientation.
         var selectionGuide: (origin: Float3, orientation: simd_quatf)?
+        /// ST-T11: the route lines and the selected route's handles.
+        var routeGuides: SourceRouteGuides?
     }
 
     private var isCameraDrag: Bool {
@@ -2448,6 +2478,9 @@ final class StudioModel: ViewportInputHandler {
             if let guide = reuse.selectionGuide {
                 let size = viewCamera.worldUnitsPerPixel(at: guide.origin, viewport: viewportSize) * 110
                 gizmos += GizmoBuilder.build(mode: gizmoMode, origin: guide.origin, orientation: guide.orientation, size: size, highlight: hoverAxis)
+            }
+            if let guides = reuse.routeGuides {
+                gizmos += guides.batches(camera: viewCamera, viewport: viewportSize, highlight: hoverAxis)
             }
             var f = reuse.frame
             f.camera = viewCamera
@@ -2484,10 +2517,11 @@ final class StudioModel: ViewportInputHandler {
         // undo/redo) release their GPU buffers before this frame is built (R6).
         let nativeIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter == nil }.map(\.id))
         releaseInstances { !nativeIDs.contains($0) }
-        // Route runtimes are authored data: nothing edits them, so the prune
-        // only drops entries whose object is gone or whose scene identity no
-        // longer matches (a route object's own transform edits flow through
-        // the live walk below, not through the entry).
+        // Route runtimes carry the authored record; the prune drops entries
+        // whose object is gone or whose scene identity no longer matches (a
+        // route object's own transform edits flow through the live walk
+        // below, not through the entry), then ST-T11 point and setting edits
+        // are applied from the document (`applySourceRouteEdits`).
         // A pruned route (New Scene's empty document, a deleted route object)
         // is no longer covered, so undoing back to it rehydrates its runtime.
         let routeIDsBeforePrune = Set(sourceRoutes.keys)
@@ -2498,6 +2532,7 @@ final class StudioModel: ViewportInputHandler {
         sourceRouteClocks = sourceRouteClocks.filter { sourceRoutes[$0.key] != nil }
         sourceRoutePlayState = sourceRoutePlayState.filter { sourceRoutes[$0.key] != nil }
         sourceRouteFallbackReported = sourceRouteFallbackReported.filter { sourceRoutes[$0] != nil }
+        applySourceRouteEdits()
         // Route-character previews are likewise authored data with no document
         // counterpart to edit; the prune only drops gone objects.
         let previewIDsBeforePrune = Set(sourceRouteCharacterPreviews.keys)
@@ -2740,6 +2775,13 @@ final class StudioModel: ViewportInputHandler {
                 selectionGuide = (origin, orient)
             } catch { status = "Source object guide: \(error)" }
         }
+        // ST-T11: route lines, the selected route's point handles and guide.
+        var routeGuides: SourceRouteGuides?
+        if effectiveShowGizmos, !sourceRoutes.isEmpty {
+            let guides = sourceRouteGuides()
+            gizmos += guides.batches(camera: viewCamera, viewport: viewportSize, highlight: hoverAxis)
+            routeGuides = guides
+        }
         if bounds.isEmpty { bounds = AABB(min: Float3(-1, 0, -1), max: Float3(1, 2, 1)) }
         var f = RenderFrame(camera: viewCamera, mainLight: effectiveMainLight, lights: lights, items: items, gizmos: gizmos, effects: doc.effects, sceneBounds: bounds)
         f.skinSets = skinSets
@@ -2748,7 +2790,8 @@ final class StudioModel: ViewportInputHandler {
         if liveSourceShaders { publishLiveSourceShaderStatus(liveLines) }
         publishActiveSourceCameraView()
         if reusable, statusWrites == statusWritesBefore {
-            cameraReuse = CameraReuse(frame: f, characterGuides: characterGuides, lightGlyphs: lightGlyphBatch, selectionGuide: selectionGuide)
+            cameraReuse = CameraReuse(frame: f, characterGuides: characterGuides, lightGlyphs: lightGlyphBatch, selectionGuide: selectionGuide,
+                                      routeGuides: routeGuides)
         }
     }
 
@@ -2834,7 +2877,7 @@ final class StudioModel: ViewportInputHandler {
     /// identifies the scene file it was read from. After undo/redo the cache is
     /// empty and route children fall back to the route object's authored
     /// transform; nothing guesses a placement from edited document data.
-    private func sourceRouteRuntime(id: UUID, document: StudioDocument) -> SourceRouteRuntime? {
+    func sourceRouteRuntime(id: UUID, document: StudioDocument) -> SourceRouteRuntime? {
         guard let route = sourceRoutes[id], document.sourceSceneFile == route.sceneFile,
               document.sourceSceneSHA256 == route.sceneSHA256 else { return nil }
         return route
@@ -3458,6 +3501,13 @@ final class StudioModel: ViewportInputHandler {
                     pushUndo(force: true)
                     drag = .ik(gd, chain: chain, start: t.position)
                 }
+            } else if selectedSourceRoutePoint != nil {
+                // ST-T11: the selected route point's guide (a route object
+                // itself has no object gizmo: its placeholder is a folder).
+                if let routeDrag = beginSourceRoutePointDrag(axis: axis, ray: r, cameraForward: camF) {
+                    pushUndo(force: true)
+                    drag = .routePoint(routeDrag)
+                }
             } else if let sel = selectedObject {
                 do {
                     let m = try sourceWorldMatrix(of: sel.id, document: doc, previews: sourceInstances)
@@ -3474,6 +3524,11 @@ final class StudioModel: ViewportInputHandler {
             selectedBone = bi
             let sourceName = selection.flatMap { sourceInstances[$0] }?.controller.targets.first { $0.node == bi }?.bone.name
             status = "Bone: \(sourceName ?? selectedInstance?.skeleton?.bones[bi].name ?? "")"; return
+        }
+        if let point = SourceRoutePointSelection(pick: id), let route = selection, sourceRouteRuntime(id: route, document: doc) != nil {
+            selectedRoutePoint = point
+            status = point.index == 0 && !point.aid ? "Route start point" : "Route point \(point.index)\(point.aid ? " aid" : "")"
+            return
         }
         if let target = SourceStudioIKEditing.targetID(fromPick: id), let object = selectedObject, sourceInstances[object.id] != nil {
             selectedSourceIK = target; if let group = try? SourceStudioIKEditing.groupIndex(target: target) { setSourceIKGroup(group, enabled: true) }
@@ -3507,6 +3562,8 @@ final class StudioModel: ViewportInputHandler {
                 let edit = try SourceStudioIKEditing.fromWorld(target: target, position: position, rotation: rotation, characterWorld: characterWorld, characterRotation: characterRotation, preserving: start)
                 setSourceIKValue(target, edit: edit, pushHistory: false)
             } catch { status = "Source IK guide: \(error)" }
+        case .routePoint(let routeDrag):
+            dragSourceRoutePoint(routeDrag, ray: r)
         case .sourceBone(let gd, let boneID, let startWorld, let parentWorld):
             guard let id = selection, let rotation = gd.rotation(for: r) else { return }
             let local = (parentWorld.inverse * rotation * startWorld).normalized
