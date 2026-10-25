@@ -144,13 +144,15 @@ The app's Delete and Set Parent commands (`deleteSelection`, `setParent`) are un
   - every refusal, including the root-key collision.
 
   Disabling the sun-caster and camera rules fails 4 of these tests (negative control). `SourceSceneExportValidationTests` covers the app boundary: deleting a route child is accepted; a detached accessory child, an added object, and a character moved under a route are refused.
+
+  The full Engine suite with the shared fixture map ran 917 tests, and 915 passed. One failure is `sourceDynamicsOriginalHairMatchesIndependentOracleWhenRequested`: it reads `.local/reverse` relative to the checkout and passes once the worktree links it. The other is `liveSourceShadersMeetTheControlledOriginalFrameGates`, whose 6 expectations fail identically on main `aee4287` (a store-manifest fixture mismatch, not part of this slice).
 - **Lanes.** Five `studio-scenarios` checks call the same `StudioModel` methods the UI uses. Each includes negative controls (`assertRejected`) or an export that is meant to fail (`exportRejected`):
   - `topology-delete.json` (scene-x): delete folder 1, undo and redo, export and reimport. Expects root `[0]`, keys 1 and 2 absent, and no active camera.
   - `topology-reparent.json` (koikatu_cs0002591): item 623 moves from folder 622 to folder 962, character 65 from the root to folder 626, and item 1129 from folder 962 to the root; folder 1298 is deleted with its character and items. Asserts the child lists and that world pose holds within 1e-4 m and 0.01°, through 4 undos and 4 redos. After export and reimport it holds within 5e-4 m and 0.05°.
   - `reload-save-topology.json` and `reload-load-topology.json` (scene-x): camera 2 moves to the root and folder 1 is deleted, then native save, a fresh process, load, export and reimport. Expects root `[0, 2]` with camera 2 still looked through.
   - `topology-refused.json` (mirrored-camera scene): moving item children and moving under items is refused with its reason and writes no file; deleting camera 3 then exports and reimports.
 
-  {{LANES}}
+  The full `studio-scenarios` lane ran `--strict` on 2026-10-25 against the Debug build of this branch: passed=61 failed=3 skipped=0. All five topology checks passed, with 13/13, 38/38, 5/5, 7/7 and 12/12 steps. The three failures are the accessory-label checks: the shared fixture map has no `IKKOKU_ACCESSORY_NAMES_MANIFEST`. With that one key added in a private copy of the map, they pass 3/3. A rerun of the reparent scenario re-renders the thumbnail from a live animated scene, so the PNG prefix differs between runs, while the scene bytes after it stay identical (457,815 bytes).
 - **Original player.** One `prlctl exec` (`original_scene_reload_probe.py --once`) loaded the four exports and their three unedited source scenes in an isolated player copy (Unity 5.6.2f1, probe source SHA-256 `3bc5e2ca…`). The probe recorded each object's parent, child lists, world position and rotation, change amounts, the root dictionary order and keys, the sun caster and the looked-through camera. `compare_scene_reload.py` then checked each load against the tree an independent reader takes from the loaded file, and against the scenario's intended tree. All 7 cases passed; the report is `.local/stt03g-topology/scene-reload-comparison.json`.
 
   | Case | Original player after load |
@@ -161,7 +163,15 @@ The app's Delete and Set Parent commands (`deleteSelection`, `setParent`) are un
   | topology-item-delete | Item 0 `[2]`, item 1 `[]`, camera 3 absent, camera 2 looked through |
 
   In every case, root dictionary keys equal `dicKey`, loaded change amounts equal the record at float32 precision, and the unedited sources load as their files say. The probe prints floats as their shortest round-trip text, so the comparison reads both sides as float32; a decimal readback alone differs from the widened float32 by up to half a float32 step. The parallels.log errno-24 count was 0 before and after the run. The private root was removed, and no game process was left.
-- **Performance.** {{PERF}}
+- **Performance.** Release `swift test -c release -Xswiftc -enable-testing` timing probe (`SourceSceneTopologyPerformanceTests`, opt-in with `IKKOKU_TOPOLOGY_PERF=1` and `IKKOKU_STUDIO_SCENARIO_SCENE`), on the 612 KB, 32-record scenario scene, median of 60 calls after 10 warmups. Each process ran the same test alone, during a quiet window:
+
+  | Call | main `aee4287` | This branch |
+  | --- | --- | --- |
+  | `decodeDocument` | 2.592 / 2.653 ms | 2.608 / 2.654 ms |
+  | `editedData`, one transform | 5.237 / 5.353 ms | 5.247 / 5.321 ms |
+  | `editedData`, reparent scenario (3 moves, 1 subtree deletion) | — | 5.65 / 5.84 / 5.89 ms |
+
+  A no-op edit returns the input bytes. The topology path costs about the same as one transform edit, because both are dominated by re-decoding the output. Recording the topology spans adds no measurable read cost. Nothing runs per frame.
 
 Reproduce the VM run from the repository root (`.local/verification/scenario-exports/` is where the lanes write their exports):
 
