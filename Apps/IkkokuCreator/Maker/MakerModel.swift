@@ -67,6 +67,8 @@ final class MakerModel: ViewportInputHandler {
     struct SourceSelectionTiming: Encodable {
         let snapshotMilliseconds: Double, preparationMilliseconds: Double, commitMilliseconds: Double
         var headOwnerStages: HeadOwnerStages? = nil
+        var headWorkerStages: SourceMakerPreparationTimings.Sample? = nil
+        var headQueueStages: SourceMakerPreparationQueueTiming? = nil
         var baseAppearanceStages: SourceBaseAppearanceTimings.Sample? = nil
         var cardAppearanceStages: SourceAppearanceTimings.Sample? = nil
         var preparedAppearanceBytes: Int? = nil
@@ -893,15 +895,16 @@ final class MakerModel: ViewportInputHandler {
         status = sourceSelectionPending!
         defer { if generation == sourceSelectionGeneration { sourceSelectionPending = nil } }
         let snapshotFinished = ProcessInfo.processInfo.systemUptime
-        let head: SourceMakerHeadPreparation
+        let head: SourceMakerHeadPreparation, queueTiming: SourceMakerPreparationQueueTiming
         do {
-            let result = try await sourcePreparation.prepare {
+            let result = try await sourcePreparation.prepareWithTiming {
                 beforePreparation?()
+                let timings = SourceMakerPreparationTimings()
                 return .head(try SourceMakerHeadPreparation.prepare(card: candidate, library: library,
-                    coordinate: coordinate, baseURL: baseURL))
+                    coordinate: coordinate, baseURL: baseURL, timings: timings))
             }
-            guard case .head(let value) = result else { throw RigError.invalid("Unexpected Maker preparation result.") }
-            head = value
+            guard case .head(let value) = result.value else { throw RigError.invalid("Unexpected Maker preparation result.") }
+            head = value; queueTiming = result.timing
         } catch {
             if generation != sourceSelectionGeneration || Task.isCancelled { throw CancellationError() }
             throw error
@@ -967,6 +970,7 @@ final class MakerModel: ViewportInputHandler {
                     previewMilliseconds: (previewFinished - cardAppearanceFinished) * 1000,
                     poseFrameMilliseconds: (poseFrameFinished - previewFinished) * 1000,
                     commitRefreshMilliseconds: (commitFinished - poseFrameFinished) * 1000),
+                headWorkerStages: head.workerStages, headQueueStages: queueTiming,
                 baseAppearanceStages: baseAppearanceTimings.sample,
                 cardAppearanceStages: appearanceTimings.sample, preparedAppearanceBytes: head.appearanceInputs.byteCount,
                 preparedAppearanceBytesByCall: head.appearanceInputs.perCallByteCounts)

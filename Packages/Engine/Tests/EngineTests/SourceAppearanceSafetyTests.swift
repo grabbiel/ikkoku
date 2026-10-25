@@ -175,3 +175,64 @@ func sourcePreparedAppearanceSnapshotKeepsLatestColorsWithoutOwnerReadsAndReject
     #expect(throws: (any Error).self) { try preview.applying(newlySelected, bindings: gatedBindings, directory: directory, resources: resources, preparedInputs: empty) }
     #expect(resources.statistics().textures == before)
 }
+
+@Test func sourcePreparedAppearanceDiagnosticsCountReadsRechecksAndCopiesSeparately() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let texture = try AppearanceTestFixture.texture([128,64,255,255], directory: directory)
+    var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+    entry["main"] = texture; entry["mask"] = texture
+    let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
+    let timings = SourceMakerPreparationTimings()
+    let plain = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory)
+    let measured = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: timings)
+    #expect(measured.byteCount == plain.byteCount && measured.byteCount == 4)
+    let sample = timings.sample
+    #expect(sample.intervals["rgbaRead"]?.calls == 1 && sample.bytesRead["rgbaRead"] == 4)
+    #expect(sample.intervals["rgbaSHA"]?.calls == 2 && sample.bytesHashed["rgbaSHA"] == 8)
+    #expect(sample.intervals["rgbaCopy"]?.calls == 1 && sample.rgbaBytesCopied == 4)
+    #expect(sample.rgbaCacheReuses == 1 && sample.hashMismatches == 0)
+    #expect(sample.intervals.values.allSatisfy { $0.failures == 0 })
+    // A later operation can update only the local collector, not the returned snapshot.
+    _ = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: timings)
+    #expect(sample.bytesRead["rgbaRead"] == 4 && timings.sample.bytesRead["rgbaRead"] == 8)
+}
+
+@Test func sourcePreparedAppearanceDiagnosticsKeepSizeBeforeHashAndFailureBoundaries() throws {
+    let directory = try AppearanceTestFixture.directory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try SourceCardAppearance(card: AppearanceTestFixture.card())
+    let texture = try AppearanceTestFixture.texture([128,64,255,255], directory: directory)
+    var entry = AppearanceTestFixture.entry(kind: "head", colors: ["body.skinMainColor", "body.skinSubColor"])
+    entry["main"] = texture
+    for (replacement, shaCalls, mismatch) in [
+        (["width": 2] as [String: Any], 1, 0),
+        (["sha256": String(repeating: "0", count: 64)] as [String: Any], 2, 1)
+    ] {
+        entry["mask"] = texture.merging(replacement) { _, value in value }
+        let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
+        let timings = SourceMakerPreparationTimings()
+        do {
+            _ = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: timings)
+            Issue.record("Conflicting cached metadata was accepted")
+        } catch { #expect(String(describing: error).contains("Conflicting appearance texture metadata")) }
+        #expect(timings.sample.intervals["rgbaRead"]?.calls == 1)
+        #expect(timings.sample.intervals["rgbaSHA"]?.calls == shaCalls)
+        #expect(timings.sample.hashMismatches == mismatch && timings.sample.rgbaCacheReuses == 0)
+        #expect(timings.sample.rgbaBytesCopied == 4) // first input only
+    }
+    entry.removeValue(forKey: "mask")
+    let bindings = try AppearanceTestFixture.bindings([entry], directory: directory)
+    let file = directory.appendingPathComponent(try #require(texture["file"] as? String))
+    try Data([128,64,255]).write(to: file)
+    let short = SourceMakerPreparationTimings()
+    #expect(throws: (any Error).self) { try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: short) }
+    #expect(short.sample.bytesRead["rgbaRead"] == 3 && short.sample.intervals["rgbaRead"]?.failures == 0)
+    #expect(short.sample.intervals["rgbaSHA"] == nil && short.sample.rgbaBytesCopied == 0)
+    try FileManager.default.removeItem(at: file)
+    let missing = SourceMakerPreparationTimings()
+    #expect(throws: (any Error).self) { try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: directory, timings: missing) }
+    #expect(missing.sample.intervals["rgbaRead"]?.calls == 1 && missing.sample.intervals["rgbaRead"]?.failures == 1)
+    #expect(missing.sample.bytesRead["rgbaRead"] == nil && missing.sample.intervals["rgbaSHA"] == nil)
+}

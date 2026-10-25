@@ -93,9 +93,9 @@ public struct SourceMakerLibrary: Sendable {
         }
         return result
     }
-    public func assemblyURL(for identity: SourceCharacterCard.Customization) throws -> URL? {
+    public func assemblyURL(for identity: SourceCharacterCard.Customization, timings: SourceMakerPreparationTimings? = nil) throws -> URL? {
         guard let entry = assemblies.first(where: { $0.sex == identity.sex && $0.headID == identity.headID && $0.exType == identity.exType }) else { return nil }
-        return try verified(entry.manifest, maximumBytes: 1024 * 1024)
+        return try verified(entry.manifest, maximumBytes: 1024 * 1024, timings: timings)
     }
     /// Until the assembly registry carries mod GUIDs, a resolver-backed head must
     /// never alias a numerically equal vanilla head. Imported bytes stay intact.
@@ -111,10 +111,18 @@ public struct SourceMakerLibrary: Sendable {
               ref.sha256.count == 64, ref.sha256.allSatisfy({ $0.isHexDigit }) else { throw RigError.invalid("Invalid Maker library file reference.") }
         return url
     }
-    private func verified(_ ref: File, maximumBytes: Int = 128 * 1024 * 1024) throws -> URL {
-        let url = try contained(ref), input = try FileHandle(forReadingFrom: url); defer { try? input.close() }
-        let bytes = try input.read(upToCount: maximumBytes + 1) ?? Data()
-        guard bytes.count <= maximumBytes, SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == ref.sha256.lowercased() else { throw RigError.invalid("Changed or oversized converted Maker asset: \(ref.file).") }
+    private func verified(_ ref: File, maximumBytes: Int = 128 * 1024 * 1024,
+                          timings: SourceMakerPreparationTimings? = nil) throws -> URL {
+        let url = try contained(ref)
+        let bytes = try SourceMakerPreparationTimings.read(timings, .verifiedFileRead) {
+            let input = try FileHandle(forReadingFrom: url); defer { try? input.close() }
+            return try input.read(upToCount: maximumBytes + 1) ?? Data()
+        }
+        guard bytes.count <= maximumBytes, SourceMakerPreparationTimings.measure(timings, .verifiedFileSHA, {
+            let matches = SHA256.hash(data: bytes).map({ String(format: "%02x", $0) }).joined() == ref.sha256.lowercased()
+            timings?.hashed(bytes.count, phase: .verifiedFileSHA, matches: matches)
+            return matches
+        }) else { throw RigError.invalid("Changed or oversized converted Maker asset: \(ref.file).") }
         return url
     }
     /// Verified bytes of an entry's converted material evidence, or `nil`
@@ -260,15 +268,15 @@ public struct SourceMakerLibrary: Sendable {
         }
 
         public func prepareAppearanceInputs(card: SourceCardAppearance, baseURL: URL,
-                                            maximumBytes: Int = 128 * 1024 * 1024) throws -> AppearanceInputs {
+                                            maximumBytes: Int = 128 * 1024 * 1024, timings: SourceMakerPreparationTimings? = nil) throws -> AppearanceInputs {
             guard (0...128 * 1024 * 1024).contains(maximumBytes) else {
                 throw RigError.invalid("Invalid prepared appearance candidate byte limit.")
             }
             var totalBytes = 0
             func prepare(_ url: URL, transform: (SourceAppearanceBindings) throws -> SourceAppearanceBindings) throws -> AppearanceInputs.Binding {
-                let bindings = try transform(SourceAppearanceBindings.load(url: url))
+                let bindings = try transform(SourceAppearanceBindings.load(url: url, timings: timings))
                 let pixels = try SourceAppearanceInputs.prepare(card: card, bindings: bindings, directory: url.deletingLastPathComponent(),
-                    maximumBytes: maximumBytes - totalBytes)
+                    maximumBytes: maximumBytes - totalBytes, timings: timings)
                 totalBytes += pixels.byteCount
                 guard totalBytes <= maximumBytes else {
                     throw RigError.invalid("Prepared appearance inputs exceed their candidate byte limit.")
@@ -341,10 +349,13 @@ public struct SourceMakerLibrary: Sendable {
     /// shoes as clothing kind 7; UpdateVisible then selects among them per
     /// clothes state and shoesType. The Maker assembly (`wear` false) keeps
     /// only the fully dressed meshes and the outdoor shoes.
-    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false) throws -> Prepared {
+    public func prepare(card: SourceCharacterCard, coordinate: Int, baseURL: URL, wear: Bool = false, timings: SourceMakerPreparationTimings? = nil) throws -> Prepared {
         guard (0..<7).contains(coordinate) else { throw RigError.invalid("Invalid Maker outfit index.") }
         try Self.validateAssemblyIdentity(card: card)
-        let manifest = try JSONDecoder().decode(SourceAvatarManifest.self, from: Data(contentsOf: baseURL))
+        let manifestBytes = try SourceMakerPreparationTimings.read(timings, .libraryManifestRead) { try Data(contentsOf: baseURL) }
+        let manifest = try SourceMakerPreparationTimings.measure(timings, .libraryManifestDecode) {
+            try JSONDecoder().decode(SourceAvatarManifest.self, from: manifestBytes)
+        }
         let identity = try card.customization()
         guard identity.sex == (manifest.sex ?? (manifest.kind == "koikatsu-male-avatar" ? 0 : 1)),
               identity.headID == (manifest.headID ?? 0), identity.exType == 0 else {
@@ -356,7 +367,13 @@ public struct SourceMakerLibrary: Sendable {
             guard !path.hasPrefix("/"), url.path.hasPrefix(folder.path + "/") else { throw RigError.invalid("Base component escapes its folder.") }
             return url
         }
-        func base(_ path: String) throws -> SourceRig { try SourceRig.load(url: componentURL(path)) }
+        // Identical to SourceRig.load: Data(contentsOf:) then decode (which also
+        // validates and converts the rig). Resolve each URL before its read.
+        func loadRig(_ url: URL) throws -> SourceRig {
+            let bytes = try SourceMakerPreparationTimings.read(timings, .rigRead) { try Data(contentsOf: url) }
+            return try SourceMakerPreparationTimings.measure(timings, .rigDecode) { try SourceRig.decode(bytes) }
+        }
+        func base(_ path: String) throws -> SourceRig { try loadRig(componentURL(path)) }
         let references = try card.modReferences()
         var selections: [Selection] = [], diagnostics: [String] = [], materials: [MaterialComponent] = []
         var bodyMask: URL?, clearBodyMask = false
@@ -392,16 +409,16 @@ public struct SourceMakerLibrary: Sendable {
             }
             guard entry.empty != true else { return nil }
             // The indoor shoes never replace the top's body cut-out.
-            if !indoorShoes, let mask = entry.bodyMask { bodyMask = try verified(mask, maximumBytes: 32 * 1024 * 1024) }
+            if !indoorShoes, let mask = entry.bodyMask { bodyMask = try verified(mask, maximumBytes: 32 * 1024 * 1024, timings: timings) }
             guard let rigFile = entry.rig else { throw RigError.invalid("Converted Maker geometry is absent.") }
-            let rig = try SourceRig.load(url: verified(rigFile))
+            let rig = try loadRig(verified(rigFile, timings: timings))
             // Half-state meshes join only with their wear appearance (or when
             // the whole garment is neutral), never as unmaterialed parts.
             let halfStates = wear && entry.alternates != nil && (entry.appearance == nil || entry.wearAppearance != nil)
             if let file = halfStates ? entry.wearAppearance ?? entry.appearance : entry.appearance {
                 let bindings = halfStates ? entry.wearCardBindings ?? entry.cardBindings : entry.cardBindings
-                materials.append(.init(appearance: try verified(file, maximumBytes: 1024 * 1024),
-                    bindings: try bindings.map { try verified($0, maximumBytes: 1024 * 1024) },
+                materials.append(.init(appearance: try verified(file, maximumBytes: 1024 * 1024, timings: timings),
+                    bindings: try bindings.map { try verified($0, maximumBytes: 1024 * 1024, timings: timings) },
                     meshNames: Set(rig.parts.map { $0.mesh.name }), prefix: prefix, accessorySlot: accessorySlot, indoorShoes: indoorShoes))
             } else { diagnostics.append("\(property): converted geometry has a neutral material; shader conversion is missing.") }
             return (rig.namespacingMeshes(prefix), halfStates ? entry.meshNames.map { $0 + entry.alternates!.map(\.meshName) } : entry.meshNames)
@@ -446,20 +463,25 @@ public struct SourceMakerLibrary: Sendable {
         }
         for slot in referenceHair.keys.sorted() {
             let (url, meshes) = referenceHair[slot]!
-            hairBySlot[slot] = (try SourceRig.load(url: url), meshes)
+            hairBySlot[slot] = (try loadRig(url), meshes)
         }
         for slot in referenceClothes.keys.sorted() {
             let (url, meshes) = referenceClothes[slot]!
-            clothesBySlot[slot] = (try SourceRig.load(url: url), meshes)
+            clothesBySlot[slot] = (try loadRig(url), meshes)
         }
         let hair = hairBySlot.keys.sorted().compactMap { hairBySlot[$0] }, clothes = clothesBySlot.keys.sorted().compactMap { clothesBySlot[$0] }
         let convertedSlots = Set(selections.filter { $0.entry != nil && $0.property.contains(".ChaFileClothes.Clothes") }.compactMap { selection in
             ["Top", "Bot", "Bra", "Shorts", "Gloves", "Pants", "Socks", "ShoesInner", "ShoesOuter"].firstIndex { selection.property.hasSuffix(".ChaFileClothes.Clothes" + $0) }
         })
-        let source = try SourceAvatar.assemble(name: manifest.name, bodySkeleton: base(manifest.bodySkeleton), headSkeleton: base(manifest.headSkeleton),
-            body: base(manifest.body.file), head: base(manifest.head.file), clothes: clothes.map(\.0), hair: hair.map(\.0),
-            bodyMeshNames: manifest.body.meshNames, headMeshNames: manifest.head.meshNames,
-            clothingMeshNames: clothes.map(\.1), hairMeshNames: hair.map(\.1), accessories: accessories)
+        // Preserve the original argument-evaluation order; assembly excludes reads/decode.
+        let bodySkeleton = try base(manifest.bodySkeleton), headSkeleton = try base(manifest.headSkeleton)
+        let body = try base(manifest.body.file), head = try base(manifest.head.file)
+        let source = try SourceMakerPreparationTimings.measure(timings, .assembly) {
+            try SourceAvatar.assemble(name: manifest.name, bodySkeleton: bodySkeleton, headSkeleton: headSkeleton,
+                body: body, head: head, clothes: clothes.map(\.0), hair: hair.map(\.0),
+                bodyMeshNames: manifest.body.meshNames, headMeshNames: manifest.head.meshNames,
+                clothingMeshNames: clothes.map(\.1), hairMeshNames: hair.map(\.1), accessories: accessories)
+        }
         return Prepared(source: source, selections: selections, diagnostics: diagnostics,
             clothingSlots: clothesBySlot.keys.sorted(), referenceClothingSlots: Set(clothesBySlot.keys).subtracting(convertedSlots),
             indoorShoes: indoorShoes, components: materials, bodyMask: bodyMask, clearBodyMask: clearBodyMask)
