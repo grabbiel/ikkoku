@@ -643,16 +643,36 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             var texture=bound as Texture2D;
             string bundle=property=="_paintmask"?"chara/mm_base.unity3d":info.GetInfo(property=="_MainTex"?ChaListDefine.KeyType.MainTexAB:ChaListDefine.KeyType.ColorMaskAB);
             string name=property=="_paintmask"?"cf_face_00_mp":info.GetInfo(property=="_MainTex"?ChaListDefine.KeyType.MainTex:ChaListDefine.KeyType.ColorMaskTex);
-            var loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,property=="_paintmask"?"abdata":info.GetInfo(ChaListDefine.KeyType.MainManifest));
+            // The paint mask is a serialized dependency of the exported create
+            // material, not a directly exported Texture2D asset in mm_base.
+            // Compare the exact original material's dependency object rather
+            // than assuming LoadAsset can address that dependency by its name.
+            Material sourceMaterial=null;
+            Texture2D loaded;
+            var lookup=new Dictionary<string,object>{{"kind",property=="_paintmask"?"creator-material-dependency":"catalog-texture"},
+                {"bundle",bundle},{"assetName",property=="_paintmask"?"cf_m_face_create":name},
+                {"manifest",property=="_paintmask"?"abdata":info.GetInfo(ChaListDefine.KeyType.MainManifest)},{"clone",false}};
+            if(property=="_paintmask") {
+                sourceMaterial=CommonLib.LoadAsset<Material>(bundle,"cf_m_face_create",false,"abdata");
+                loaded=sourceMaterial==null?null:sourceMaterial.GetTexture(property) as Texture2D;
+                lookup["property"]=property;
+                lookup["materialInstanceID"]=sourceMaterial==null?0:sourceMaterial.GetInstanceID();
+                lookup["materialName"]=sourceMaterial==null?null:sourceMaterial.name;
+                lookup["materialShader"]=sourceMaterial==null?null:sourceMaterial.shader.name;
+            } else {
+                loaded=CommonLib.LoadAsset<Texture2D>(bundle,name,false,info.GetInfo(ChaListDefine.KeyType.MainManifest));
+            }
             // Persist actual metadata even when a strict identity check fails.
             inputs[property]=new Dictionary<string,object>{{"expectedBundle",bundle},{"expectedName",name},
                 {"actualNull",bound==null},{"actualName",bound==null?null:bound.name},{"actualType",bound==null?null:bound.GetType().Name},
-                {"actualInstanceID",bound==null?0:bound.GetInstanceID()},{"catalogInstanceID",loaded==null?0:loaded.GetInstanceID()},
-                {"sameCatalogObject",texture!=null && loaded!=null && texture==loaded}};
+                {"actualInstanceID",bound==null?0:bound.GetInstanceID()},{"sourceInstanceID",loaded==null?0:loaded.GetInstanceID()},
+                {"sameSourceObject",texture!=null && loaded!=null && texture==loaded},{"lookup",lookup}};
             File.WriteAllText(Path.Combine(folder,"face-input-observation.json"),J(result));
-            if(texture==null || loaded==null || texture!=loaded)throw new Exception("Face composite bound input differs from source asset: "+property);
+            if(property=="_paintmask" && (sourceMaterial==null || sourceMaterial.name!="cf_m_face_create" || sourceMaterial.shader.name!="Shader Forge/create_head"))
+                throw new Exception("Face composite paintmask source material differs");
+            if(texture==null || loaded==null || texture!=loaded || texture.name!=name)throw new Exception("Face composite bound input differs from source asset: "+property);
             inputs[property]=new Dictionary<string,object>{{"bundle",bundle},{"bundleSHA256",SourceBundleHash(bundle)},{"name",name},
-                {"instanceID",texture.GetInstanceID()},{"catalogInstanceID",loaded.GetInstanceID()},{"sameCatalogObject",true},
+                {"instanceID",texture.GetInstanceID()},{"sourceInstanceID",loaded.GetInstanceID()},{"sameSourceObject",true},{"lookup",lookup},
                 {"width",texture.width},{"height",texture.height},{"format",texture.format.ToString()},
                 {"mipLevels",texture.mipmapCount},{"file",ExportTexture(texture)},
                 {"scale",V(creator.GetTextureScale(property))},{"offset",V(creator.GetTextureOffset(property))}};
