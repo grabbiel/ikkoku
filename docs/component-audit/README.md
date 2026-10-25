@@ -136,6 +136,10 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   retry and lazy-clock ownership. Mute acceptance also checks the requested
   configuration against an independent original-reader oracle across six fresh
   run/reload/continue processes; this adds no runtime work or adapter coverage.
+  A separate 132-check Release regression exercises actual focus notifications
+  across replacement, rejected loads and repeated unload/remount, with exact
+  state/resource retention and explicit unload changes. Real OS focus and
+  multiple-window ownership still need separate acceptance.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for

@@ -124,8 +124,30 @@ source's repeated-loss quirk makes a single loss/gain round trip detect duplicat
 delivery. Focus events and rejected replacements must retain document/runtime
 snapshots, clocks, history, owners, resource counts and the compared public toon
 frame fields. Successful unload has its explicit metadata/history changes.
-This regression awaits app validation; it does not establish real OS focus
+At `5fe6879` (2026-10-24), a fresh Release build (`ffd2d581` binary SHA-256
+prefix) passes all 132 ordered checks in one app process, with 127 recorded
+mount/event states. Eight enabled replacements and eight unload/remount cycles
+preserve the expected single delivery; disabled and repeated-loss controls
+retain their distinct source behavior. Twenty observed adapter identities use
+40 distinct retained observer tokens. Invalid configuration and changed-package
+replacements each preserve both full-state and focus snapshots byte-for-byte.
+The real source-character toon frame, resource vector and held source clock
+0.25 remain unchanged by focus delivery; three prior IR steps supply nonempty
+runtime state. Interactive unload deliberately clears that session and its saved
+metadata, restores gain and records undo; later events correctly expect no IR
+session. The app exits successfully and releases its process group.
+
+The independent review checks every raw event's gain, saved volume, owner/token
+identity and session boundary, plus all artifact and input hashes. Private
+evidence is retained under
+`.local/codex-continue-2026-10-24/wave-three/plugins/focus-observer-lifecycle/`
+(`launch-plan.json`, `build-1/build.json`, `run-1/report.json`,
+`run-1/artifacts/notification-events.json` and `root-app-review.json`). The runner
+uses the shared app lock and a 60-second limit; this is a functional check with
+no timing claim. Launch had already finished in this process. Deferred startup
+keeps its separate acceptance above; this run does not establish real OS focus
 delivery, model deinitialization, multiple-window ownership or physical audio.
+Ordinary mounts and frame processing gain no instrumentation.
 
 Headless captures exit before launch finishes, so two capture-only variables
 provide focus evidence. `IKKOKU_APPLICATION_FOCUS=0,1` delivers up to 64 focus
