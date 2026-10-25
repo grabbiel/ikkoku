@@ -1,6 +1,6 @@
 """Synthetic CharaStudio reload records exercise the acceptance comparison; no VM data is read."""
 import math, unittest
-from compare_scene_reload import compare, compare_expression, compare_topology, file_tree
+from compare_scene_reload import compare, compare_expression, compare_route_edit, compare_topology, file_tree
 
 
 def obj(key,kind,**over):
@@ -369,6 +369,120 @@ def topo_case(label,tree,world,view=None):
     after=dict(objectCount=len(objects),viewCameraKey=view,viewCameraName=None,cameraCtrlEnabled=True,objects=objects,
                rootKeys=[dict(key=k,dicKey=k) for k in tree['roots']],sunCaster=tree['sunCaster'])
     return dict(label=label,scene='reload-'+label+'.png',afterLoad=after,settled=after)
+
+
+def route_tree():
+    """A file_tree of one playing route 0 (points 2 and 4 with aids 3 and 5) holding folder 1 at (0, 0.5, 0)."""
+    def transform(position):return dict(position=position,rotation=[0.0,0.0,0.0],scale=[1.0,1.0,1.0])
+    def point(key,position,speed):
+        return dict(bone=dict(key=key,transform=transform(position)),speed=speed,ease=21,connection=0,
+                    aid=dict(key=key+1,transform=transform([1.0,1.0,1.0])),initialized=False,linked=False)
+    route=dict(key=0,kind=4,name='IKKOKU-A',transform=transform([0.0,0.0,0.0]),children=[dict(key=1)],
+               points=[point(2,[0.0,0.0,0.0],2.0),point(4,[1.0,0.0,0.0],3.5)],
+               active=True,loop=True,visibleLine=True,orientation=0,color=dict(r=0.2,g=0.8,b=0.4,a=1.0))
+    folder=dict(key=1,kind=3,name='F',transform=transform([0.0,0.5,0.0]))
+    return dict(roots=[0],rootKeys=[0],children={0:[1]},groups={},records={0:route,1:folder},viewCamera=None,sunCaster=-1,keys=[0,1,2,3,4,5])
+
+
+def route_case(tree,frames=4):
+    route=tree['records'][0]
+    points=[dict(dicKey=p['bone']['key'],changePosition=p['bone']['transform']['position'],changeRotation=[0.0,0.0,0.0],changeScale=[1.0,1.0,1.0],
+                 speed=p['speed'],easeType=p['ease'],connection=p['connection'],link=p['linked'],aidKey=p['aid']['key'],
+                 aidChangePosition=[1.0,1.0,1.0],aidChangeRotation=[0.0,0.0,0.0],aidInitialized=p['initialized']) for p in route['points']]
+    record=dict(name='IKKOKU-A',active=True,loop=True,visibleLine=True,orient=0,color=[0.2,0.8,0.4,1.0],points=points,
+                lineExists=True,lineActive=True,linePoints=320)
+    objects=[obj(0,4,name='IKKOKU-A',routePlaying=True,childKeys=[1],route=record,changePosition=[0.0,0.0,0.0],changeRotation=[0.0,0.0,0.0],changeScale=[1.0,1.0,1.0]),
+             obj(1,3,name='F',childKeys=[],changePosition=[0.0,0.5,0.0],changeRotation=[0.0,0.0,0.0],changeScale=[1.0,1.0,1.0])]
+    after=dict(objectCount=2,viewCameraKey=None,viewCameraName=None,cameraCtrlEnabled=True,rootKeys=[dict(key=0,dicKey=0)],
+               indexKeys=[0,1,2,3,4,5],objects=objects)
+    # Row k shows childRoot at x = 0.3 k, turned 90 degrees about Y, so the folder's (0, 0.5, 0) stays straight above it.
+    turned=[0.0,math.sin(math.radians(45)),0.0,math.cos(math.radians(45))]
+    trace=[dict(frameCount=10+k,deltaTime=0.5,cumulativeTime=0.5*(k+1),
+                routes=[dict(dicKey=0,position=[0.3*k,0.0,0.0],rotation=turned,active=True,
+                             children=[dict(dicKey=1,position=[0.3*k,0.5,0.0],rotation=turned)])]) for k in range(frames)]
+    ui=dict(panels=1,speedMin=0.1,speedMax=30,speedWholeNumbers=False,easeOptions=6,routePointLimit=True) # the probe prints 30, not 30.0
+    return dict(label='route-edit',scene='reload-route-edit.png',afterLoad=after,settled=after,routeTrace=trace,routeUi=ui)
+
+
+def route_steps(trace):
+    """Stub of `ikkoku-inspect route-steps`: stepped frame k reproduces capture row k."""
+    def steps(label,deltas,play_delta):
+        rows=trace['cases'][label]['routeTrace']
+        frames=[dict(childRootWorldPosition=list(rows[k]['routes'][0]['position']),childRootWorldRotationEulerZXY=[0.0,90.0,0.0],
+                     active=rows[k]['routes'][0]['active']) for k in range(len(deltas))]
+        return dict(routes=[dict(sourceKey=0,name='IKKOKU-A',frames=frames,diagnostics=[])])
+    return steps
+
+
+class RouteEditTests(unittest.TestCase):
+    INTENT={'route-edit':{0:dict(name='IKKOKU-A',keys=[2,4],aidKeys=[3,5],playing=True,children=[1])}}
+
+    def failed(self,mutate=lambda trace,tree:None,steps=None,follow=False):
+        import compare_scene_reload as module
+        from unittest.mock import patch
+        import copy
+        tree=route_tree();trace=dict(schemaVersion=1,framesPerPhase=4,cases={'route-edit':route_case(tree)})
+        steps=steps or route_steps(trace if follow else copy.deepcopy(trace)) # the stepper sees the unmutated capture unless it follows
+        mutate(trace,tree)
+        with patch.dict(module.ROUTE_INTENT,self.INTENT,clear=True):
+            report=compare_route_edit(trace,{'route-edit':tree},steps)
+        return sorted(c['claim'] for case in report['cases'].values() for c in case['claims'] if c['passed'] is False),report
+
+    def test_matching_load_and_trace_pass_every_claim(self):
+        failed,report=self.failed()
+        self.assertEqual(failed,[])
+        claims={c['claim']:c for c in report['cases']['route-edit']['claims']}
+        for name in ('points-match-record','point-change-amounts-match-record','settings-match-record','line-shown-as-visible-line',
+                     'scenario-route','childroot-matches-stepper','children-follow-stepper','childroot-travel'):
+            self.assertIn('route-edit/route-0/'+name,claims)
+        self.assertIsNone(claims['route-edit/route-0/samples']['passed'])
+        self.assertEqual(claims['route-edit/route-0/childroot-matches-stepper']['actual']['distance'],0.0)
+
+    def test_record_values_the_player_did_not_load_fail(self):
+        def speed(trace,tree):trace['cases']['route-edit']['afterLoad']['objects'][0]['route']['points'][1]['speed']=2.0
+        self.assertEqual(self.failed(speed)[0],['route-edit/route-0/points-match-record'])
+        def moved(trace,tree):trace['cases']['route-edit']['afterLoad']['objects'][0]['route']['points'][1]['changePosition']=[1.0,0.0,0.001]
+        self.assertEqual(self.failed(moved)[0],['route-edit/route-0/point-change-amounts-match-record'])
+        def looped(trace,tree):trace['cases']['route-edit']['afterLoad']['objects'][0]['route']['loop']=False
+        self.assertEqual(self.failed(looped)[0],['route-edit/route-0/settings-match-record'])
+        def hidden(trace,tree):trace['cases']['route-edit']['afterLoad']['objects'][0]['route']['lineActive']=False
+        self.assertEqual(self.failed(hidden)[0],['route-edit/route-0/line-shown-as-visible-line'])
+        def rekeyed(trace,tree): # the record and the load agree, but not on the keys the scenario left
+            trace['cases']['route-edit']['afterLoad']['objects'][0]['routePlaying']=False
+        self.assertEqual(self.failed(rekeyed)[0],['route-edit/route-0/scenario-route'])
+
+    def test_placement_off_the_stepper_fails(self):
+        def drift(trace,tree):trace['cases']['route-edit']['routeTrace'][2]['routes'][0]['position']=[0.6,0.0,0.002]
+        self.assertEqual(self.failed(drift)[0],['route-edit/route-0/childroot-matches-stepper']) # the child is checked against the stepper, not the drifted root
+        def child(trace,tree):trace['cases']['route-edit']['routeTrace'][1]['routes'][0]['children'][0]['position']=[0.3,0.5,0.002]
+        self.assertEqual(self.failed(child)[0],['route-edit/route-0/children-follow-stepper'])
+        def stopped(trace,tree):trace['cases']['route-edit']['routeTrace'][1]['routes'][0]['active']=False
+        self.assertIn('route-edit/route-0/childroot-matches-stepper',self.failed(stopped)[0])
+        def parked(trace,tree): # a playing route that never left point 0
+            for row in trace['cases']['route-edit']['routeTrace']:
+                row['routes'][0]['position']=[0.0,0.0,0.0];row['routes'][0]['children'][0]['position']=[0.0,0.5,0.0]
+        self.assertEqual(self.failed(parked,follow=True)[0],['route-edit/route-0/childroot-travel']) # stepper and capture agree on standing still
+
+    def test_drift_is_measured_against_the_stepper_not_the_capture(self):
+        tree=route_tree();trace=dict(schemaVersion=1,cases={'route-edit':route_case(tree)})
+        honest=route_steps(trace)
+        def late(label,deltas,play_delta): # a stepper one frame behind the capture
+            payload=honest(label,deltas,play_delta)
+            frames=payload['routes'][0]['frames'];payload['routes'][0]['frames']=[frames[0]]+frames[:-1];return payload
+        failed,report=self.failed(steps=late)
+        self.assertIn('route-edit/route-0/childroot-matches-stepper',failed)
+        claim=next(c for c in report['cases']['route-edit']['claims'] if c['claim']=='route-edit/route-0/childroot-matches-stepper')
+        self.assertAlmostEqual(claim['actual']['distance'],0.3)
+
+    def test_panel_values_and_missing_traces_fail(self):
+        def ranged(trace,tree):trace['cases']['route-edit']['routeUi']['speedMax']=5.0
+        self.assertEqual(self.failed(ranged)[0],['route-edit/route-point-panel-matches-app'])
+        def untraced(trace,tree):trace['cases']['route-edit']['routeTrace']=None
+        self.assertEqual(self.failed(untraced,steps=lambda label,deltas,play_delta:None)[0],['route-edit/route-trace'])
+        def unstepped(label,deltas,play_delta):return dict(routes=[])
+        self.assertEqual(self.failed(steps=unstepped)[0],['route-edit/route-0/stepped-frames'])
+        def gone(trace,tree):del trace['cases']['route-edit']
+        self.assertEqual(self.failed(gone)[0],['route-edit/capture'])
 
 
 class TopologyTests(unittest.TestCase):

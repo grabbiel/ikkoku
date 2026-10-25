@@ -108,6 +108,7 @@ extension KoikatsuBinaryReader {
     }
     mutating func route(objectKey: Int32? = nil) throws -> KoikatsuRouteRecord {
         var points: [KoikatsuRoutePointRecord] = [], subKeys: [Int] = []
+        let pointsStart = offset
         for _ in 0..<(try count()) {
             let point = try bone(); subKeys.append(lastBoneKeyOffset)
             let speed = try float(), easeType = try int32(), connection = try int32()
@@ -121,8 +122,15 @@ extension KoikatsuBinaryReader {
         // recorded; the remaining fields still read in initializer order.
         let activeStart = offset, active = try bool()
         if let objectKey { editSpans.routeActive[objectKey] = activeStart..<offset }
-        return KoikatsuRouteRecord(points: points, active: active, loop: try bool(), visibleLine: try bool(),
-                                  orientation: try int32(), color: try jsonVector(["r", "g", "b", "a"]))
+        let flagsStart = offset, loop = try bool(), visibleLine = try bool()
+        let orientationStart = offset, orientation = try int32()
+        let colorStart = offset, color = try jsonVector(["r", "g", "b", "a"])
+        if let objectKey {
+            editSpans.routes[objectKey] = .init(points: pointsStart..<activeStart, flags: flagsStart..<orientationStart,
+                                                orientation: orientationStart..<colorStart, color: colorStart..<offset)
+        }
+        return KoikatsuRouteRecord(points: points, active: active, loop: loop, visibleLine: visibleLine,
+                                  orientation: orientation, color: color)
     }
     mutating func camera(slot: Int? = nil) throws -> KoikatsuCameraRecord {
         let version = try int32()

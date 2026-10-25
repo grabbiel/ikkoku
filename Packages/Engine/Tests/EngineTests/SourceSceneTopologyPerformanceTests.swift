@@ -91,3 +91,44 @@ func sourceSceneTopologyPerformanceDuplicate() throws {
     try topologyPerfMedian("editedData duplicate scenario (7 copies, 3 new records)") { _ = try document.editedData(SourceSceneEdits(insertions: insertions)) }
     try topologyPerfMedian("editedData duplicate scenario plus one transform on a copy") { _ = try document.editedData(moved) }
 }
+
+/// ST-T11 route slice on scene-route-children.png (IKKOKU_ROUTE_CHILDREN_SCENE
+/// with IKKOKU_TOPOLOGY_PERF=1): the read, a no-op and a one-transform export
+/// as the baseline, then the `route-edit-export` kinds of route edit (a point
+/// moved, one added and moved, a speed, ease and curve connection) and the
+/// `route-children-edit` copy (route 0 duplicated with its folder and
+/// character, one copy point moved).
+private let routePerfScene = ProcessInfo.processInfo.environment["IKKOKU_ROUTE_CHILDREN_SCENE"] ?? ""
+
+@Test(.enabled(if: (ProcessInfo.processInfo.environment["IKKOKU_TOPOLOGY_PERF"] ?? "") == "1" && !routePerfScene.isEmpty,
+               "Opt-in timing probe: IKKOKU_TOPOLOGY_PERF=1 plus IKKOKU_ROUTE_CHILDREN_SCENE"))
+func sourceSceneRoutePerformance() throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: routePerfScene))
+    let document = try KoikatsuSceneReader.decodeDocument(data)
+    let route = try #require(document.snapshot.roots.first { $0.sourceKey == 0 })
+    let moved = SourceSceneEdits(transforms: [.init(.object(0), transform: topologyPerfMoved(route.transform))])
+    try topologyPerfMedian("route scene decodeDocument") { _ = try KoikatsuSceneReader.decodeDocument(data) }
+    try topologyPerfMedian("route scene editedData no-op") { _ = try document.editedData(SourceSceneEdits()) }
+    try topologyPerfMedian("route scene editedData one transform (route 0)") { _ = try document.editedData(moved) }
+
+    var edit = SourceStudioRouteState(record: try #require(route.route))
+    try edit.movePoint(1, to: SIMD3(1.2, 0.3, -0.2))
+    let added = try edit.addPoint()
+    try edit.movePoint(added, to: SIMD3(0.3, 0.6, -0.5))
+    try edit.setSpeed(1, 3.5); try edit.setEase(1, .easeOutQuad); try edit.setConnection(3, .curve)
+    let edits = SourceSceneEdits(routes: [0: edit])
+    _ = try KoikatsuSceneReader.decode(try document.editedData(edits))
+    try topologyPerfMedian("route scene editedData route edit (2 moves, 1 add, speed, ease, curve)") { _ = try document.editedData(edits) }
+
+    let insertions: [SourceSceneInsertion] = [.init(.duplicate(of: 0)), .init(.duplicate(of: 9), parent: .inserted(0)),
+                                              .init(.duplicate(of: 10), parent: .inserted(0))]
+    let stage = try document.inserting(insertions)
+    let copyKey = try #require(stage.keys.first)
+    var copyEdit = SourceStudioRouteState(record: try #require(stage.document.snapshot.roots.first { $0.sourceKey == copyKey }?.route))
+    try copyEdit.movePoint(1, to: SIMD3(1.0, 0.6, 0.1))
+    let copies = SourceSceneEdits(insertions: insertions, routes: [0: edit, copyKey: copyEdit])
+    _ = try KoikatsuSceneReader.decode(try document.editedData(copies))
+    try topologyPerfMedian("route scene editedData route copy (route 0 with folder and character, both routes edited)") {
+        _ = try document.editedData(copies)
+    }
+}

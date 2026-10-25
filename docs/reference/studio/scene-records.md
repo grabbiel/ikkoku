@@ -461,9 +461,10 @@ position. Since the tenth slice the Studio editor exposes the recovered
 `Play`/`Stop` presses as runtime controls (a selected route's Play/Stop button
 plus a Play-all/Replay-all/Stop-all menu; see the preview-wiring paragraph at
 the end of this section), and a route whose authored record is inactive can
-be played from the editor through that state. Still missing: route-point
-guide callbacks, edited route serialization, rendered non-character route
-descendants and editable route characters.
+be played from the editor through that state. Route points and settings are
+edited and written since the ST-T11 route-edit slice ([route editing](#route-editing)).
+Still missing: rendered non-character route descendants and editable route
+characters.
 
 An original capture now exists. `Tools/reverse/original_route_probe.py` runs
 `Tools/reverse/fixtures/OriginalRouteProbe.cs` inside the isolated VM player
@@ -758,6 +759,44 @@ stepped 13 times; a jump to 1/30 past the press sees one tween frame, not 91),
 the before-press instant, and replay-then-stop (`swift test --package-path
 Packages/Engine --filter RouteClockTests`, 2026-09-28; eight tests).
 
+### Route editing
+
+Since the ST-T11 route-edit slice, `SourceStudioRouteState`
+(`Packages/Engine/Sources/Studio/SourceStudioRouteEditing.swift`) holds an
+imported route's editable points and settings. `SourceSceneEdits.routes`
+writes them into the record above. The operations follow the recovered
+CharaStudio 1.0.4.2 code:
+
+- A point record is 94 bytes (`OIRoutePointInfo.Save`, OIRoutePointInfo.cs:46–55):
+  - the point's key and change amount, the speed float, and the ease and connection Int32s;
+  - the aid's key, change amount (Point-local, see above) and `isInit` flag;
+  - the `link` flag.
+
+  `OIRouteInfo.Save` (OIRouteInfo.cs:50–71) follows the points with
+  `active`, `loop`, `visibleLine`, the `orient` Int32 and the
+  `JsonUtility` colour string.
+- `OCIRoute.AddPoint` appends a point after the last one, never after the
+  selected one, and holds a route at 11 points while `routePointLimit` is on.
+  The new point sits at the last point's position with speed 2, linear,
+  Line and no link. Its point and aid keys come from `GetNewIndex`, and its
+  aid stays uninitialised at the prefab position until the point becomes
+  Curve (`InitAidPos`).
+- `OCIRoute.DeletePoint` stops the route first. The start point has no
+  delete and no move, only a rotation. The other points only move, and an
+  aid only moves, for a Curve point.
+- The point panel offers speed 0.1–30, six eases, connection and link. The
+  route panel offers loop, line, orient and an RGB colour. Both panels grey
+  out every setting that changes the playback queue while the route plays.
+- A point moved while the route plays changes the segments that start
+  later. The segment in progress keeps the targets `StudioTween` read when
+  it started.
+- A copied route's point and aid keys are allocated after its children's
+  (`SetNewIndex`, points loaded with `_import: false`).
+
+The citations, writer behavior, refusals, app translation and the
+original-player reload are in
+[route points and settings](scene-editing.md#route-points-and-settings-st-t11-st-t03).
+
 ## Camera objects (original capture)
 
 Ground truth for `ST-A06`. The source contract comes from the recovered
@@ -1046,10 +1085,10 @@ structure. It does not display thumbnails or instantiate scene content.
 - Extend full-body original-player evidence, dynamics topologies/world inertia and
   Animator controller coverage; existing adapters are mid-stage, not absent
   (`ST-T05`, `ST-T08`, `ST-T10`).
-- Build route-point guide callbacks and an edited route writer on top of the
-  `SourceStudioRoute` evaluator and the
-  `SourceStudioRoutePlayback` `childRoot` placement, then source
-  scene effects, camera-object behavior and sound (`ST-T11`, `ST-T12`).
+- Route-point guides, the route panels and the edited route writer are built
+  on the `SourceStudioRoute` evaluator and the `SourceStudioRoutePlayback`
+  `childRoot` placement ([route editing](#route-editing)). Source scene
+  effects, camera-object behavior and sound remain (`ST-T11`, `ST-T12`).
   Stateful `LookUpdate` smoothing is ported in `SourceStudioRouteStepper`
   (per-frame stepping above) and reaches `ikkoku-inspect route-steps` and,
   through the `SourceStudioRouteClock`-mirrored stepper, the Studio preview's
@@ -1061,8 +1100,10 @@ structure. It does not display thumbnails or instantiate scene content.
   comparison of the wired preview against the original player is still open.
 - Deletion and reparenting between the root and folders are written
   ([topology edits](scene-editing.md#topology-edits-deletion-and-reparenting-st-t03-st-s09)).
-  Still missing:
-  - object addition and duplication with new keys;
+  Duplicates, new folders, cameras and lights, route copies and route point
+  edits are written too ([duplicates](scene-editing.md#duplicates-and-added-records-st-t03-st-s09-st-d03),
+  [route editing](#route-editing)). Still missing:
+  - new characters and items;
   - the refused topology cases (item, route and accessory attachment, and
     deletion in scenes that carry plug-in data);
   - GUID-specific plugin callbacks and save adapters that preserve source

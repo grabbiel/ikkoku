@@ -153,6 +153,12 @@ public enum SourceSceneExportValidation {
             // from the object (`insertions`), so only values that record
             // cannot carry are refused.
             guard let recordKey = object.sourceRecordKey else { try validateNew(object); continue }
+            if let route = object.sourceRoute {
+                guard let record = original.route else {
+                    throw RigError.invalid("Original-scene export writes route edits on route records only (\(object.name)).")
+                }
+                try route.validate(against: record)
+            }
             let importedKind = object.sourcePreviewKind ?? (object.sourceCharacter == nil ? .folder : .character)
             guard object.kind == importedKind, importedKind == .folder || importedKind == .character else {
                 throw RigError.invalid("Original-scene export does not yet support changing an object's type.")
@@ -207,7 +213,7 @@ public enum SourceSceneExportValidation {
     /// A native object the export writes as a new record: only a folder, a
     /// camera or a light, with nothing a CharaStudio record cannot hold.
     private static func validateNew(_ object: StudioObject) throws {
-        guard object.sourceCharacter == nil, object.sourceRecordKind == nil, object.sourceAttachmentPoint == nil,
+        guard object.sourceCharacter == nil, object.sourceRecordKind == nil, object.sourceAttachmentPoint == nil, object.sourceRoute == nil,
               object.sourceFKRotations?.isEmpty != false, object.sourceIKOverrides?.isEmpty != false, object.sourceFaceValues == nil,
               object.sourceBodyValues == nil, object.sourceColorEdits == nil, object.sourceOutfit == nil, object.sourceClothesState == nil,
               object.sourceShowAccessory == nil, object.sourceShoesType == nil, object.sourceExpression == nil,

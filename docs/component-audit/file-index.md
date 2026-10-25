@@ -23,26 +23,26 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**965 files indexed; 965 assigned; 0 unassigned.**
+**972 files indexed; 972 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
 | [App / gameplay / plugins](app-gameplay-and-plugins.md) | 110 |
 | [Character / Maker / mods](character-and-mods.md) | 128 |
-| [Studio / IK / animation](studio.md) | 197 |
+| [Studio / IK / animation](studio.md) | 200 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 332 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 188 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 192 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 220 |
+| Conversion / recovery / verification tool | 224 |
 | Documentation / historical evidence | 64 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 29 |
-| Runtime / shared shader declaration | 214 |
-| Test / validation | 195 |
+| Runtime / shared shader declaration | 216 |
+| Test / validation | 196 |
 
 ## App / gameplay / plugins
 
@@ -305,6 +305,7 @@ Feature assessment: [studio.md](studio.md).
 | [Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Benchmark.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Plugins.swift) | Runtime / plugin session staging, adapters and guarded interactive commands |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRehydration.swift) | Runtime / shared shader declaration |
+| [Apps/IkkokuCreator/Studio/StudioModel+SourceRoutes.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceRoutes.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift](../../Apps/IkkokuCreator/Studio/StudioModel+SourceShaderLive.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel+Voice.swift](../../Apps/IkkokuCreator/Studio/StudioModel+Voice.swift) | Runtime / shared shader declaration |
 | [Apps/IkkokuCreator/Studio/StudioModel.swift](../../Apps/IkkokuCreator/Studio/StudioModel.swift) | Runtime / shared shader declaration |
@@ -354,6 +355,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Sources/Studio/SourceStudioPose.swift](../../Packages/Engine/Sources/Studio/SourceStudioPose.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRoute.swift](../../Packages/Engine/Sources/Studio/SourceStudioRoute.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRouteClock.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteClock.swift) | Runtime / shared shader declaration |
+| [Packages/Engine/Sources/Studio/SourceStudioRouteEditing.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteEditing.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRoutePlayback.swift](../../Packages/Engine/Sources/Studio/SourceStudioRoutePlayback.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift](../../Packages/Engine/Sources/Studio/SourceStudioRouteStepper.swift) | Runtime / shared shader declaration |
 | [Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift](../../Packages/Engine/Sources/Studio/SourceStudioSceneLight.swift) | Runtime / shared shader declaration |
@@ -379,6 +381,7 @@ Feature assessment: [studio.md](studio.md).
 | [Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneEditingTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneExportValidationTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneInsertionTests.swift) | Test / validation |
+| [Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneRouteEditTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyPerformanceTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift](../../Packages/Engine/Tests/EngineTests/SourceSceneTopologyTests.swift) | Test / validation |
 | [Packages/Engine/Tests/EngineTests/SourceStudioAccessoryNamesTests.swift](../../Packages/Engine/Tests/EngineTests/SourceStudioAccessoryNamesTests.swift) | Test / validation |
@@ -953,6 +956,10 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-children-motion.json](../../Tools/verification/scenarios/route-children-motion.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/route-children-edit.json](../../Tools/verification/scenarios/route-children-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/route-children-edit-load.json](../../Tools/verification/scenarios/route-children-edit-load.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/route-edit-export.json](../../Tools/verification/scenarios/route-edit-export.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/route-move-playing.json](../../Tools/verification/scenarios/route-move-playing.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-play-state.json](../../Tools/verification/scenarios/route-play-state.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/shape-visual-reset.json](../../Tools/verification/scenarios/shape-visual-reset.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-skirt-dynamics.json](../../Tools/verification/scenarios/reload-save-skirt-dynamics.json) | Conversion / recovery / verification tool |
