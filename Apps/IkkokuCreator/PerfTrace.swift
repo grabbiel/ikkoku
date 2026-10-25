@@ -150,6 +150,14 @@ final class PerfTrace {
         /// workloads (`studio-duplicate`, `studio-undo-delete`) act on, such
         /// as a route; nil keeps their default character.
         let actionKey: Int32?
+        /// `IKKOKU_PERF_RIG_PREFETCH`: "on" (default) or "off", which leaves a
+        /// Studio character build's rig decodes where its preparation asks for
+        /// them (R7 phase 2 item 6 follow-up measurement control).
+        let rigPrefetch: Bool
+        /// `IKKOKU_PERF_DONATIONS`: "on" (default) or "off", which keeps no
+        /// donation of a character preview the Studio dropped, such as a
+        /// deleted character (measurement control).
+        let donations: Bool
 
         /// Reads `IKKOKU_PERF_*`; `CaptureRequest.validate` already checked the values.
         static func from(_ env: [String: String]) -> Configuration? {
@@ -170,7 +178,9 @@ final class PerfTrace {
                 frameSkip: env["IKKOKU_PERF_FRAME_SKIP"] != "off",
                 keepAliveMilliseconds: env["IKKOKU_PERF_KEEPALIVE_MS"].flatMap { Int($0) },
                 burstIdleMilliseconds: int("IKKOKU_PERF_BURST_IDLE_MS", 1000),
-                actionKey: env["IKKOKU_PERF_ACTION_KEY"].flatMap { Int32($0) })
+                actionKey: env["IKKOKU_PERF_ACTION_KEY"].flatMap { Int32($0) },
+                rigPrefetch: env["IKKOKU_PERF_RIG_PREFETCH"] != "off",
+                donations: env["IKKOKU_PERF_DONATIONS"] != "off")
         }
     }
 
@@ -650,6 +660,7 @@ final class PerfTrace {
                 "frameSkip": configuration.frameSkip,
                 "keepAliveMs": configuration.keepAliveMilliseconds.map { $0 as Any } ?? NSNull(),
                 "burstIdleMs": configuration.burstIdleMilliseconds,
+                "rigPrefetch": configuration.rigPrefetch, "donations": configuration.donations,
             ] as [String: Any],
             "build": PerfTrace.buildDescription(),
             "machine": PerfTrace.machineDescription(device: device),

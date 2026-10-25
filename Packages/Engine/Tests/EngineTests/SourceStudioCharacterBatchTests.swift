@@ -84,6 +84,38 @@ private func sameRig(_ a: SourceRig, _ b: SourceRig) -> Bool {
     #expect(counts.decodes == 1 && counts.hits + counts.waits == 15 && counts.failures == 0)
 }
 
+/// R7 phase 2 item 6 follow-up: a prefetch reads and decodes each named file
+/// once, keyed by its bytes like every other request, so the preparation's
+/// own request answers from it. Missing files are skipped, files with equal
+/// bytes decode once, and a stopped share starts nothing.
+@Test func sourceRigDecodeSharePrefetchDecodesEachFileOnceForTheLaterRequest() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("r7i-prefetch-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let a = try batchEncodedRig("a"), b = try batchEncodedRig("b", offset: 0.5)
+    let fileA = folder.appendingPathComponent("a.json"), fileB = folder.appendingPathComponent("b.json")
+    let copyA = folder.appendingPathComponent("copy-of-a.json"), missing = folder.appendingPathComponent("missing.json")
+    try a.write(to: fileA); try b.write(to: fileB); try a.write(to: copyA)
+    let share = SourceRigDecodeShare()
+    share.prefetch([fileA, fileB, copyA, missing, fileA])
+    share.waitForPrefetches()
+    // The copy's equal bytes find a's decode finished or in flight.
+    let prefetched = share.counts
+    #expect(prefetched.decodes == 2 && prefetched.hits + prefetched.waits == 1 && prefetched.prefetches == 4 && prefetched.failures == 0)
+    let sharedA = try share.decode(a), sharedB = try share.decode(b)
+    #expect(try sameRig(sharedA, SourceRig.decode(a)) && sameRig(sharedB, SourceRig.decode(b)))
+    #expect(share.counts.decodes == 2 && share.counts.hits == prefetched.hits + 2)
+    // A file named again is not read again.
+    share.prefetch([fileA, fileB])
+    share.waitForPrefetches()
+    #expect(share.counts.prefetches == 4 && share.counts.hits == prefetched.hits + 2)
+    let stopped = SourceRigDecodeShare(), off = SourceRigDecodeShare(prefetches: false)
+    stopped.stopPrefetching()
+    stopped.prefetch([fileA]); off.prefetch([fileA])
+    stopped.waitForPrefetches(); off.waitForPrefetches()
+    #expect(stopped.counts == .init() && off.counts == .init())
+}
+
 /// Results written from concurrent iterations.
 private final class OSAllocatedResults: @unchecked Sendable {
     private let lock = NSLock()
@@ -238,6 +270,16 @@ private func batchMatchesSequentialBuilds() throws -> [BatchCheck] {
     print("[r7g-batch] \(references.count) characters, rig decodes \(counts.decodes), shared \(counts.hits + counts.waits)")
     var checks: [BatchCheck] = [("rig files decode and are shared without failures",
                                  counts.decodes > 0 && counts.hits + counts.waits > 0 && counts.failures == 0)]
+    // The prefetch (on by default) starts no decode the preparations do not
+    // need: the same distinct decodes as first halves without it.
+    batch.rigs.waitForPrefetches()
+    let plain = SourceRigDecodeShare(prefetches: false)
+    for reference in references {
+        _ = try SourceStudioCharacterPreview.assemble(reference: reference, resources: batchRenderer.resources, rigs: plain)
+    }
+    print("[r7i-prefetch] prefetched files \(batch.rigs.counts.prefetches), decodes \(batch.rigs.counts.decodes), without prefetch \(plain.counts.decodes)")
+    checks.append(("the prefetch adds no decode", batch.rigs.counts.prefetches > 0 && plain.counts.prefetches == 0
+        && batch.rigs.counts.decodes == plain.counts.decodes && batch.rigs.counts.failures == 0))
     for (index, (a, b)) in zip(sequential, built).enumerated() {
         checks.append(("character \(index): the same diagnostics", a.diagnostics == b.diagnostics))
         checks.append(("character \(index): the same selections and clothes state",

@@ -210,7 +210,8 @@ final class StudioModel: ViewportInputHandler {
     /// an import or New Scene replaced) can lend the build that brings them
     /// back, such as the undo of a delete. Bounded by its byte and entry
     /// budget, and emptied on memory pressure (`keepSourceDonations`).
-    @ObservationIgnored let sourceDonationCache = SourceStudioDonationCache()
+    @ObservationIgnored let sourceDonationCache = SourceStudioDonationCache(
+        maximumEntries: PerfTrace.active?.configuration.donations == false ? 0 : SourceStudioDonationCache.defaultMaximumEntries)
     @ObservationIgnored private var sourceDonationPressure: (any DispatchSourceMemoryPressure)?
     /// Background character builds, for the status line.
     struct SourceBuildProgress: Equatable {
@@ -2171,7 +2172,7 @@ final class StudioModel: ViewportInputHandler {
     func sourceCharacterBatch(_ wanted: [(reference: SourceStudioCharacterReference, outfit: Int?)]) -> SourceStudioCharacterBatch {
         SourceStudioCharacterBatch(requests: wanted.map {
             .init(reference: $0.reference, coordinate: $0.outfit, donation: sourceDonation(for: $0.reference, outfit: $0.outfit))
-        }, resources: host.renderer.resources)
+        }, resources: host.renderer.resources, rigs: SourceRigDecodeShare(prefetches: PerfTrace.active?.configuration.rigPrefetch ?? true))
     }
 
     /// One source character preview built now on the calling (main) thread,
