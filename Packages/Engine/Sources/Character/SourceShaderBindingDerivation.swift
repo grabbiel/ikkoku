@@ -162,7 +162,6 @@ public enum SourceShaderBindingDerivation {
             var result = Set_.TextureIdentity(kind: .asset, name: name, bundle: bundle, bundleSHA256: bundleSHA[bundle])
             if let known = head.first(where: { $0.name == name && $0.bundle == bundle }) {
                 result.serializedFile = known.serializedFile; result.pathID = known.pathID; result.width = known.width; result.height = known.height
-                result.mipLevels = known.mipLevels; result.filter = known.filter; result.wrap = known.wrap; result.aniso = known.aniso
             }
             if let rows = byBundleName[bundle + "/" + name], rows.count == 1 { enrich(&result, rows[0]) }
             return result
@@ -389,8 +388,7 @@ public enum SourceShaderBindingDerivation {
         for texture in head.textures {
             headIndex.byReference[texture.serializedFile + ":" + texture.pathID] = Set_.TextureIdentity(kind: .asset, name: texture.name,
                 bundle: texture.bundle, bundleSHA256: bundleSHA[texture.bundle], serializedFile: texture.serializedFile, pathID: texture.pathID,
-                width: texture.width, height: texture.height, mipLevels: texture.mipLevels,
-                filter: texture.filter, wrap: texture.wrap, aniso: texture.aniso)
+                width: texture.width, height: texture.height)
             headIndex.bundleByFile[texture.serializedFile] = (texture.bundle, bundleSHA[texture.bundle])
         }
         for row in supplement?.textures ?? [] {
@@ -643,19 +641,31 @@ public enum SourceShaderBindingDerivation {
                           bundleSHA["list/characustom/00.unity3d"] == "5fe4e6811dc6d2e6edd0153cd73f989991c18573c654e1cbeafec821744a0ded",
                           selected.row["MainAB"] == "chara/mt_cheek_00.unity3d", selected.row["CheekTex"] == "cw_t_cheek_000",
                           let metadata = head.textures.first(where: { $0.bundle == "chara/mt_cheek_00.unity3d" && $0.name == "cw_t_cheek_000" }),
-                          metadata.format == 4, metadata.serializedColorSpace == 1, metadata.mipLevels == 1 else {
+                          metadata.format == 4, metadata.serializedColorSpace == 1, metadata.mipLevels == 1,
+                          metadata.filter == "Bilinear", metadata.wrap == "Clamp", metadata.aniso == 1 else {
                         return unsupported("face composite cheek ID1 catalog or texture metadata is not verified")
                     }
                     setCreateTexture(&recipe, layer.property, main: false,
                         catalogTexture(402, table: "mt_cheek", id: 1, key: "CheekTex"),
                         source: "mt_cheek[1] MainAB/CheekTex via CreateFaceTexture → SetTexture(_Texture4)")
-                    guard let input = recipe.textures[layer.property]?.identity,
-                          input.bundleSHA256 == "d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7",
+                    guard var input = recipe.textures[layer.property]?.identity else {
+                        return unsupported("face composite cheek ID1 source texture is not converted")
+                    }
+                    // Only this verified additive input adopts head-contract
+                    // sampler metadata. Older inputs retain their existing
+                    // supplement/default behavior and therefore their keys.
+                    // A conflicting supplement must fail, not be overwritten.
+                    input.mipLevels = input.mipLevels ?? metadata.mipLevels
+                    input.filter = input.filter ?? metadata.filter
+                    input.wrap = input.wrap ?? metadata.wrap
+                    input.aniso = input.aniso ?? metadata.aniso
+                    guard input.bundleSHA256 == "d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7",
                           input.serializedFile == "CAB-649019955dc8e0979dde865205c4d875", input.pathID == "163309903755191522",
                           input.width == 832, input.height == 312, input.mipLevels == 1,
                           input.filter == "Bilinear", input.wrap == "Clamp", input.aniso == 1 else {
                         return unsupported("face composite cheek ID1 source texture identity or sampler is not verified")
                     }
+                    recipe.textures[layer.property]?.identity = input
                     continue
                 }
                 guard card.number(layer.path) == 0, let row = catalogRow(layer.category, 0),

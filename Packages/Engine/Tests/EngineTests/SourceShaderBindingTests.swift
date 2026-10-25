@@ -459,7 +459,8 @@ private enum FaceCompositeFixture {
         result["sources"] = sources
         return result
     }
-    static func derive(directory: URL, card: SourceCharacterCard? = nil, head: Row? = nil, hiPoly: Bool = true) throws -> SourceShaderBindingSet.TextureIdentity? {
+    static func derive(directory: URL, card: SourceCharacterCard? = nil, head: Row? = nil, hiPoly: Bool = true,
+                       supplement: Row? = nil) throws -> SourceShaderBindingSet.TextureIdentity? {
         let url = directory.appendingPathComponent("empty-library.json")
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "entries": []]).write(to: url)
         let descriptor = try ShaderBindingFixture.program(shader: "Shader Forge/main_skin", pass: "FORWARD",
@@ -467,7 +468,8 @@ private enum FaceCompositeFixture {
         let contract = try SourceShaderProgramContract.decode(descriptor, program: "main_skin")
         let bindings = try SourceShaderBindingDerivation.derive(card: card ?? self.card(), library: .load(url: url),
             headContract: JSONSerialization.data(withJSONObject: head ?? self.head()),
-            catalog: .init(programs: ["Shader Forge/main_skin": [contract]]), hiPoly: hiPoly)
+            catalog: .init(programs: ["Shader Forge/main_skin": [contract]]),
+            supplement: try supplement.map { try JSONSerialization.data(withJSONObject: $0) }, hiPoly: hiPoly)
         return bindings.renderers.first { $0.mesh == "cf_O_face" }?.material.textures["_MainTex"]?.identity
     }
 }
@@ -682,6 +684,39 @@ private enum FaceCompositeFixture {
         sources[index]["sha256"] = String(repeating: "a", count: 64); head["sources"] = sources; cases.append(head)
     }
     for head in cases { #expect(try F.derive(directory: directory, card: card, head: head)?.composite?.unresolved != nil) }
+}
+
+@Test func sourceShaderCheekMetadataDoesNotChangeOlderInputsOrOverrideSupplement() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    var head = F.cheekHead(), textures = try #require(head["textures"] as? [F.Row])
+    for index in 0..<3 {
+        textures[index]["mipLevels"] = 8; textures[index]["filter"] = "Point"
+        textures[index]["wrap"] = "Mirror"; textures[index]["aniso"] = 3
+    }
+    head["textures"] = textures
+    let oldInput = try #require(textures.first)
+    let oldRow: F.Row = ["bundle": oldInput["bundle"]!, "bundleSHA256": F.headSHA,
+        "serializedFile": oldInput["serializedFile"]!, "pathID": oldInput["pathID"]!, "name": oldInput["name"]!,
+        "width": 1024, "height": 1024, "filter": "Bilinear", "wrap": "Clamp", "aniso": 1, "mipLevels": 11]
+    let partial: F.Row = ["materials": [], "textures": [oldRow], "drawMaterials": [], "catalogRows": []]
+    for supplement: F.Row? in [nil, partial] {
+        // Neither direct authored _paintmask nor catalog main/mask identities
+        // adopt newly decoded optional metadata outside the cheek branch.
+        let expected = try F.derive(directory: directory, head: F.cheekHead(), supplement: supplement)
+        #expect(try F.derive(directory: directory, head: head, supplement: supplement) == expected)
+    }
+    let card = try F.card(baseOverrides: [("cheekId", .integer(1))])
+    let expected = try F.derive(directory: directory, card: card, head: F.cheekHead())
+    let cheekInput = try #require(textures.last)
+    var cheekRow = cheekInput
+    cheekRow["bundleSHA256"] = F.cheekSHA
+    var supplement: F.Row = ["materials": [], "textures": [cheekRow], "drawMaterials": [], "catalogRows": []]
+    #expect(try F.derive(directory: directory, card: card, head: F.cheekHead(), supplement: supplement) == expected)
+    for (key, value): (String, Any) in [("filter", "Point"), ("wrap", "Repeat"), ("aniso", 2), ("mipLevels", 2)] {
+        var conflicting = cheekRow; conflicting[key] = value; supplement["textures"] = [conflicting]
+        #expect(try F.derive(directory: directory, card: card, head: F.cheekHead(), supplement: supplement)?.composite?.unresolved != nil)
+    }
 }
 
 // Synthetic card/material metadata. The source identity constants gate one
