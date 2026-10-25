@@ -677,6 +677,19 @@ compiled locally. The suite covers:
 IEEE results such as infinity remain bit-exact field values. Float literals
 outside Float range and nonfinite transform writes are rejected.
 
+The `PluginLibraryScenario.frameRollback` reproduction extends this boundary to
+the app's real source previews. Its independent control process writes successful
+warm and subtree-clone continuations; separate warm and cold processes inject a
+named `LateUpdate` failure after `advanceAnimation: true`, repeat it, then retry.
+The cloned child's initializer reads its new parent's attachment through the
+ordinary resolver. Failed-step comparisons retain exact documents, runtime state,
+clocks, preview ownership, resources and current frame. Successful cross-process
+comparisons remap only UUIDs through validated source identities and retain all
+typed document/state fields, callback order and bit-exact pose matrices. This is
+a regression-only checkpoint pending app execution, not a rollback defect finding
+or a production behavior change. Functional step timings are diagnostics; they
+do not establish checkpoint cost, source parity or a performance improvement.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone
