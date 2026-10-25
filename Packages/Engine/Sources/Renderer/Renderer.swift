@@ -134,9 +134,10 @@ public struct RenderStatusReporter: Sendable {
 /// `submit`, `pick`, `capture` and `benchmark` from the main thread. The
 /// asynchronous `pick` prepares and encodes on `pickQueue` (R7 phase 2, item 5).
 /// - `submit` and `currentFrame` exchange the pending frame under `frameLock`.
-/// - Every frame is prepared and encoded under `renderLock`, which also guards
-///   the render targets, `frameIndex`, the frame ring's open frame and the
-///   live encoder. `draw` takes the pending frame only once it holds
+/// - Every frame is prepared, encoded and committed under `renderLock`, which
+///   also guards the render targets, `frameIndex`, the frame ring's open frame,
+///   the deformation buffers' content record and the live encoder. Committing
+///   in the same hold keeps the queue in the order that record changed. `draw` takes the pending frame only once it holds
 ///   `renderLock`, so it always prepares the newest submitted frame, as when it
 ///   ran on the main thread (resource retirement, R6). Lock order: a frame
 ///   slot, then `renderLock`, then `frameLock` or `statusLock`.
@@ -327,9 +328,9 @@ public final class Renderer: @unchecked Sendable {
     /// phase 2, item 4). An unchanged callback whose target is at least that
     /// long after the viewport's last present copies the last presented image
     /// into its drawable and presents it, instead of presenting nothing. After
-    /// about a second without a present, the first few presents never reach
-    /// the screen (performance.md, "Phase 2, item 4"); the keep-alive keeps the
-    /// presentation path warm for the next change at the cost of one blit.
+    /// about 0.17 s without a present, the first few presents of the next
+    /// change never reach the screen (performance.md, "Phase 2, item 4"); the
+    /// keep-alive keeps presenting at the cost of one blit.
     @discardableResult
     public func draw(to drawable: any CAMetalDrawable, timestamp: CFTimeInterval, refreshAfter: CFTimeInterval? = nil,
                      completion: (@Sendable (RenderDrawCompletion) -> Void)? = nil) -> RenderDrawResult {
