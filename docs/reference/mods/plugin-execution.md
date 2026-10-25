@@ -63,6 +63,45 @@ adapters share. It also validates every declared version on its own; see
 [dependency policy](#selection-and-dependency-policy). The fixed step is explicit:
 the controlled original Unity player measured 0.02 s.
 
+## Direct profile and native coexistence (#236)
+
+Direct translated-profile and native-adapter loads validate their combined
+selected package graph before installing callbacks or changing host adapters.
+Previously, the two direct entry points could admit a pair that the immutable
+library graph rejected. Profile loading now prepares the recorded native packages
+once and checks them before constructing the plugin world. Native loading verifies
+the new package once, reuses the retained packages for preparation and validates
+against the resident translated library before committing adapters, document
+references or status.
+
+Profile-only dependency checks and execution order remain authoritative: a
+separately mounted adapter cannot satisfy a missing profile dependency. Combined
+validation uses the existing ordinal GUID, version, process and incompatibility
+rules, including selected disabled native references. It adds no hashing, file
+reads or graph traversal to frame ticks. Load-time validation cost was not timed.
+Saved-scene open and undo/redo use separate restoration entry points; this change
+does not establish mixed-graph rejection on those paths.
+
+The retained regression uses the exact registered HideAllUI package and two
+explicitly synthetic, empty-Awake translated packages: the conflicting
+`HideStudioUI` GUID and a compatible control. Its scene contains original source
+character 10 and a nonempty toon frame. Before the fix, the compatible control
+passed 16 checks, while profile-first passed 9/11 and native-first passed 8/11.
+The independent graph oracle rejected the conflicting pair in both orders.
+
+At `9bcea00`, all 13 focused Engine checks and all 38 checks across three fresh
+Release app processes pass without skips. Both rejection orders retain the exact
+projected document, runtime, callbacks, history, clocks, host state and resource
+counts, with byte-identical named public frame fields; raw material padding and
+private GPU retirement stamps are excluded. The compatible control matches its
+pre-fix report. Public tests additionally cover constructor/attachment isolation,
+profile dependency and changed-package error precedence, and preserved execution
+order. The fixed executable SHA-256 is
+`81422d4705049da49ffb03a72f259b040b4aad2d73289a30c04fdf040da827d9`.
+This is app-model acceptance, not an OS-menu, audio, arbitrary-plugin or timing
+claim. Original red runs and the corrected diagnostic import failure are retained
+separately from the successful run.
+
 ## Plugin library
 
 Added 2026-10-23 as the P-T02 first slice and tested with synthetic fixtures

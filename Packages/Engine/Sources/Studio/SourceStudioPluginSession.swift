@@ -44,6 +44,7 @@ public final class SourceStudioPluginSession {
     private let packageIdentities: [SourceStudioPluginState.PackageIdentity]
 
     public convenience init(profileURL: URL, document: StudioDocument, restoring saved: SourceStudioPluginState? = nil,
+                nativeContext: [SourceNativePluginPackage] = [],
                 attachment: SourceStudioPluginWorld.AttachmentResolver? = nil) throws {
         let handle = try FileHandle(forReadingFrom: profileURL); defer { try? handle.close() }
         let data = try handle.read(upToCount: 1024 * 1024 + 1) ?? Data()
@@ -59,8 +60,13 @@ public final class SourceStudioPluginSession {
             guard requested.updateValue(package, forKey: value.ordinalGUID) == nil else { throw SourcePluginError.invalid("Duplicate plugin package identity.") }
             requested[value.ordinalGUID] = package; loaded.append(value)
         }
+        // Preserve profile-only dependency validation and order. The immutable
+        // context checks coexistence before any world or component is created.
+        let library = try SourcePluginLibrary(packages: loaded)
+        do { try library.validate(nativeAdapters: nativeContext) }
+        catch let error as SourcePluginLibraryError { throw SourcePluginError.invalid(error.description) }
         try self.init(profileURL: profileURL, profileSHA256: Self.hash(data), libraryConfigurationSHA256: nil,
-            library: SourcePluginLibrary(packages: loaded), fixedDeltaTime: profile.fixedDeltaTime,
+            library: library, fixedDeltaTime: profile.fixedDeltaTime,
             requested: requested.mapValues { $0.bindings }, document: document, restoring: saved, attachment: attachment)
     }
 
