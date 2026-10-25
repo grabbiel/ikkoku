@@ -1155,3 +1155,113 @@ private enum LibraryAttachmentRestoreFixture {
     #expect(reads == 0)
     #expect(try fresh.savedDocument() == saved)
 }
+
+// #267: the public session accepts genuine saved pending roots and repeated
+// attachment reads together. The app diagnostic observes its narrower policy.
+private struct PendingAttachmentFixture {
+    let profile: URL, selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution
+    let configuration: SourceStudioPluginConfiguration
+    let document: StudioDocument
+    let parent: UUID, child: UUID, target: UUID, descendant: UUID
+
+    init(root: URL, variant: String) throws {
+        let readerGUID = "Ikkoku.Validation.Pending.Reader", targetGUID = "Ikkoku.Validation.Pending.Target"
+        var records: [[String: Any]] = []
+        for (guid, reader) in [(readerGUID, true), (targetGUID, false)] {
+            var program = try #require(JSONSerialization.jsonObject(with: PluginLibraryFixture.program(guid: guid, salt: variant + guid)) as? [String: Any])
+            let read: [String: Any] = ["kind": "api", "type": "Vector3", "name": "position", "children": [
+                ["kind": "api", "type": "Transform", "name": "transform", "children": []]]]
+            let zero: [String: Any] = ["kind": "api", "type": "Vector3", "name": "vector.zero", "children": []]
+            program["fields"] = reader ? ["position", "positionAgain"].map {
+                ["name": $0, "type": "Vector3", "serialized": $0 == "position", "initializer": variant == "plainPending" ? zero : read] as [String: Any]
+            } : []
+            let methods: [[String: Any]] = ["Awake", "OnEnable", "Start", "OnDisable", "OnDestroy"].map { event in
+                let destroy: [String: Any] = ["kind": "expression", "children": [["kind": "api", "type": "Void", "name": "world.Destroy", "children": [
+                    ["kind": "api", "type": "Object", "name": "gameObject", "children": []]]]]]
+                return ["name": event, "symbol": "M:Fixture.\(event)", "static": false, "returnType": "Void", "parameters": [],
+                    "body": ["kind": "block", "children": !reader && variant != "readerNoPending" && event == "Awake" ? [destroy] : []], "lifecycle": event]
+            }
+            program["methods"] = methods
+            var identity = program["identity"] as! [String: Any]; identity["symbols"] = methods.map { $0["symbol"]! }; program["identity"] = identity
+            let bytes = try JSONSerialization.data(withJSONObject: program, options: [.sortedKeys])
+            _ = try SourceIRProgram.decode(bytes)
+            records.append(try PluginLibraryFixture.translated(root, guid: guid, programData: bytes))
+        }
+        try PluginLibraryFixture.publish(root, revisions: records)
+        let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+        selection = try index.select(guids: [readerGUID, targetGUID]); resolution = try selection.resolve()
+        var p = StudioObject(name: "Hidden attachment parent", kind: .folder); p.visible = false
+        var c = StudioObject(name: "Reader", kind: .folder); c.parent = p.id; c.sourceAttachmentPoint = 17; c.sourceObjectKey = 12
+        var t = StudioObject(name: "Unrelated Awake target", kind: .folder); t.sourceObjectKey = 11
+        var d = StudioObject(name: "Unbound descendant", kind: .folder); d.parent = t.id
+        parent = p.id; child = c.id; target = t.id; descendant = d.id
+        configuration = .init(bindings: [.init(guid: readerGUID, type: "Fixture", sourceObjectKey: 12),
+            .init(guid: targetGUID, type: "Fixture", sourceObjectKey: 11)])
+        var input = StudioDocument(); input.objects = [p, c, t, d]; input.sourceSceneSHA256 = PluginLibraryFixture.hash
+        document = input; profile = root.appendingPathComponent("profile.json")
+        let packages: [[String: Any]] = try [readerGUID, targetGUID].enumerated().map { offset, guid in
+            let revision = try #require(index.revisions.first { $0.guid == guid })
+            return ["manifest": index.manifestURL(revision).path, "bindings": [["type": "Fixture", "sourceObjectKey": offset == 0 ? 12 : 11]]]
+        }
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02, "packages": packages]).write(to: profile)
+    }
+    func session(_ document: StudioDocument, library: Bool, restoring state: SourceStudioPluginState? = nil,
+                 attachment: @escaping SourceStudioPluginWorld.AttachmentResolver) throws -> SourceStudioPluginSession {
+        if library { return try .init(selection: selection, resolution: resolution, configuration: configuration,
+            document: document, restoring: state, attachment: attachment) }
+        return try .init(profileURL: profile, document: document, restoring: state, attachment: attachment)
+    }
+}
+
+@Test(arguments: [false, true], ["readerPending", "plainPending", "readerNoPending"])
+func sourcePluginPendingAttachmentSavedRootsAndContinuation(library: Bool, variant: String) throws {
+    let root = try PluginLibraryFixture.directory("pending-attachment-" + variant)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let f = try PendingAttachmentFixture(root: root, variant: variant)
+    var calls: [[UUID]] = []
+    let resolver: SourceStudioPluginWorld.AttachmentResolver = { child, parent in
+        calls.append([child.id, parent.id])
+        var matrix = matrix_identity_float4x4; matrix.columns.3 = SIMD4<Float>(7, 11, 13, 1)
+        return (matrix, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+    }
+    let fresh = try f.session(f.document, library: library, attachment: resolver)
+    let saved = try JSONDecoder().decode(StudioDocument.self, from: JSONEncoder().encode(fresh.savedDocument()))
+    let state = try #require(saved.sourcePluginState), pending = variant != "readerNoPending", reads = variant == "plainPending" ? 0 : 2
+    let expectedCalls = Array(repeating: [f.child, f.parent], count: reads)
+    #expect(calls == expectedCalls)
+    let readerIdentity = try #require(state.objectIdentities[f.child])
+    let reader = try #require(state.bindings.first { $0.objectIdentity == readerIdentity })
+    let vector: SourceIRStoredValue = .vector(variant == "plainPending" ? [0, 0, 0]
+        : [Float(7).bitPattern, Float(11).bitPattern, Float(-13).bitPattern])
+    #expect(reader.fields["position"] == vector && reader.fields["positionAgain"] == vector)
+    #expect(state.pendingDestructionRoots == (pending ? [f.target] : []))
+    #expect(state.objectIdentities.count == 4 && state.clock.elapsedTime == 0 && state.clock.deltaTime == 0)
+    let targetIdentity = try #require(state.objectIdentities[f.target])
+    let binding = try #require(state.bindings.first { $0.objectIdentity == targetIdentity })
+    #expect(binding.awake && !binding.started && binding.destroyed == false)
+    let beforeTrace = fresh.runtime.callbackTrace
+    #expect(beforeTrace.map { $0.components(separatedBy: ":").last! } == (pending ? ["Awake"] : ["Awake", "OnEnable"]))
+    calls.removeAll()
+    let restored = try f.session(saved, library: library, restoring: state, attachment: resolver)
+    #expect(calls == expectedCalls)
+    #expect(try restored.savedDocument() == saved)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    #expect(restored.world.pendingSourceDestructionRoots() == state.pendingDestructionRoots)
+    let expanded = pending ? Set([f.target, f.descendant].compactMap { state.objectIdentities[$0] }) : Set<String>()
+    #expect(Set(restored.world.pendingSourceDestruction().map(\.sourceIdentity)) == expanded)
+    #expect(!restored.world.isSourceActive(try restored.world.object(id: f.child)))
+    // A failed first frame cannot consume roots, clocks, fields or callbacks.
+    #expect(throws: SourcePluginError.self) {
+        _ = try restored.step(document: saved, deltaTime: 0.02, afterUpdate: { throw SourcePluginError.runtime("Intentional pending attachment frame failure") })
+    }
+    #expect(try restored.savedDocument() == saved)
+    #expect(restored.runtime.callbackTrace.isEmpty)
+    let expected = try fresh.step(document: saved, deltaTime: 0.02)
+    let actual = try restored.step(document: saved, deltaTime: 0.02)
+    #expect(actual == expected && actual.sourcePluginState?.pendingDestructionRoots == [])
+    #expect((actual.object(f.target) == nil) == pending && (actual.object(f.descendant) == nil) == pending)
+    #expect(actual.sourcePluginState?.objectIdentities == state.objectIdentities)
+    #expect(restored.runtime.callbackTrace == Array(fresh.runtime.callbackTrace.dropFirst(beforeTrace.count)))
+    #expect(restored.runtime.callbackTrace.map { $0.components(separatedBy: ":").last! } == (pending ? ["OnDestroy"] : ["Start"]))
+    #expect(calls == expectedCalls) // No attachment read is added by these frames.
+}
