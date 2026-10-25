@@ -1181,10 +1181,10 @@ SourceStudioLiveTick`, and the app check on a Debug build with
 **Who starts a step.** The Studio viewport's display link starts the
 Studio's 1/30 s step: the live animation, a playing timeline, playing routes
 and the plugin session. Before, a 30 Hz `Timer` on the main run loop started
-it, at a phase that drifted against the display. A step submitted just after
-a callback waited for the next one, so frames 4 vsyncs apart at 120 Hz came
-3 and 5 apart, 6–13 times a second ([performance](performance.md#phase-2-live-pacing)).
-The parts:
+it, at whatever phase it had against the display. A step whose frame was
+submitted near a callback went to that callback or the next, so frames due
+4 vsyncs apart at 120 Hz came 3 and 5 apart, 0–15 times a second depending
+on that phase ([attribution](performance.md#attribution)). The parts:
 
 - `LiveStepPacer` (Renderer, plain data) decides which callbacks ask for a
   step. A step is due 1/30 s after the previous one, in target-presentation
