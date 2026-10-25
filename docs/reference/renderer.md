@@ -3692,6 +3692,153 @@ and exact commands/hashes are under
 fixture keys are `IKKOKU_FACE_COMPOSITE_BASE_PROBE` and
 `IKKOKU_FACE_COMPOSITE_PROBE`.
 
+### Native ordinary female body composite (R1/CMT-04 #231, 2026-10-24)
+
+The opt-in live source path derives the ordinary female body creator recipe for
+sex 1, `exType == 0`, high detail, body record `0.0.2`, and visible material slot
+0 of `o_body_a`. It requires the exact `cf_m_body` draw material,
+`cf_m_body_create` creator, `create_body` program and three input asset
+identities. Unsupported body identities, low detail, resolver-backed selections,
+nonzero body paint/layout and sunburn remain unresolved. The body skin-main,
+skin-sub and nail colors come from the body record; conflicting face or garment
+values cannot replace them. The absent sunburn layer keeps the source white
+texture default, while the two absent paint layers keep black defaults. Alpha
+is 1. Composition uses the existing GPU compositor during material assembly;
+asset decoding stays offline and unchanged recipes reuse cached targets. No
+sampling, alpha-test, language, decoder or tolerance changes are included.
+
+The creator is `cf_m_body_create`, path ID `-8385327033008235336`, in
+`chara/mm_base.unity3d` (SHA-256
+`3944a1d7a9e446f15714bcca0b2faebd7b760fdc010139fad677ce24c422175e`),
+serialized file `CAB-0d1f3d8317188244dde38c81a889d1d4`. Its recovered program is
+`6dec09eabb8464f6b79b6a97e978631187ca77d992a99de1a6d0fd9ffc43e1c5`.
+The main `cf_body_00_t` (`5340205562146712601`, 2048×2048 RGBA32) and mask
+`cf_body_00_mc` (`-3685019629691781346`, 1024×1024 RGB24) are linear and each
+has one authored mip, from `chara/oo_base.unity3d` (SHA-256
+`2bb9017d29b12352a859f54623728e4dea587392d3677a0a7158a7f9784fba67`),
+serialized file `CAB-e7b38e3d86248bd1d2c54a91cd5fca51`. The 1024×1024 sRGB
+DXT1 paint mask `cf_body_01_mp` (`7680453631034146393`) is a dependency of
+the exported creator material in `mm_base`, with eleven authored mips. All
+three authored samplers are Bilinear/Repeat/aniso 1; the source frame's
+`ForceEnable` policy is retained. The target is 2048×2048 sRGB with twelve
+generated mip levels.
+
+Two fresh independent original-player captures verify the active ordinary body,
+renderer/material/creator/target object chain, and each input object identity.
+The original normally releases main/mask and three layer bindings after
+composition. The diagnostic temporarily retains these inputs before load, then
+calls the original `ReleaseBodyCustomTexture`, reads the same target again and
+requires byte-identical output and unchanged draw identity with all five
+bindings cleared. It restores the release flag afterward. Other creators also
+temporarily retain inputs; this does not establish default input lifetime or
+original runtime cost. The actual Studio assembly is `902b9a23…`; the fixed
+probe producer is `5ce751ad…`. Static lifecycle evidence and an independently
+disassembled original fragment are retained separately from native compilation.
+
+Exactly nine decoded RGB components change: skin-main `[0.95, 0.75, 0.65]` to
+`[0.23, 0.61, 0.82]`, skin-sub `[0.8, 0.45, 0.4]` to `[0.72, 0.28, 0.16]`,
+and nail `[1, 1, 1]` to `[0.17, 0.76, 0.31]`; alpha remains 1. Shared skin
+values also affect face composition and eyeline shadow. Other decoded Custom
+values and raw face/hair Custom blocks remain unchanged; Coordinate, Parameter
+and Status blocks are byte-identical. All three input readbacks match across
+cases, while base/distinct targets `5e3590f0…` / `745c4638…` differ. The frame
+hashes are `d2adfb99…` / `57c55d57…`, and cards `cab05f69…` / `0bce8c9d…`.
+Only base-level input/output source pixels were read back; authored/generated
+higher mip structure is not independent original-GPU mip parity.
+
+The isolated store adds three assets and one creator to the accepted face store:
+62 assets, five creator programs and no unavailable entries. All 59 old asset
+records and four creator records retain identical metadata and file bytes. The
+manifest is `1b89b908…`; canonical content fingerprint is
+`b9ae136b9d4537bb8809f9f6207fb4ebdafbfa66ba0a4d4466b20ac83b4eadce`.
+The 442-file primary evidence copy preserves every byte and relative dependency;
+absolute conversion provenance remains unchanged. No shared fixture environment
+was promoted. Native decoded input comparisons retain maximum absolute errors
+0.00048828125 for main alpha and mask, and 0.00634765625 for the sRGB paint
+mask; main RGB and paint-mask alpha are exact. No decoder or final-target
+threshold was adjusted to fit these differences.
+
+Five CPU derivation regressions pass at `f5fdb817`. The updated contract/probe
+Python suites pass 21/21 at `90ad9945`. Release test binary `fac99f9f…`, built
+at `90ad9945`, passes the new body gate and all eight existing eye/garment/face/live
+checks. Both body targets differ from the independent references by at most one
+byte in every channel: 5,619 and 859 differing channels of 16,777,216, all error
+1, with alpha 255. Fifteen distinct recolors release their targets and retain
+three registered asset inputs, two default textures and two sampler states.
+Unchanged recipes reuse the same target without uploads; reverting reuses the
+held base with identical pixels. Seventeen distinct content keys are observed.
+Each composed target reports 22,560,768 Metal allocated bytes. Existing source
+quality thresholds and absent-COLOR convention warnings remain unchanged.
+
+After merging accepted Models/Plugins main `99a6bfb0`, the final clean app source
+is `69702e54`; the twelve body-owned files and earlier test archives remain
+byte-identical. Its Release binary `5d8b4b75…` passes bundle inspection. Six
+960×880 default-OFF launches compare source Studio, native Studio and Maker
+against the retained face control `d4457c6f` / `f8fa8b97…`. Each pair is
+byte-identical and each baseline matches its historical PNG. The two app
+producers also differ in accepted Models/Plugins changes; this is an integrated
+output check, not a claim that the face control differs only in this recipe.
+
+Seven same-final-binary launches use old59/new62/new62/old59/old59/new62/capture.
+The old store resolves 19/20 with the exact missing-body-program diagnostic;
+the new store resolves 20/20, with zero fallbacks or unmatched slots. The six
+prior composite keys are unchanged, and the body adds one miss: seven unique
+keys and nine events. Its observed live key `4f6ed847…` matches the isolated
+base key even though the card files differ; this equality was measured rather
+than assumed. The captured-pixel control resolves 20/20 without native
+composition events. Original captured geometry is not drawn: this is the live
+native rig under held original camera/light/time, 768×1024, three warmup and
+twenty measured synchronous offscreen frames with reused targets/no readback.
+Median run-p50 costs (range of three run p50s), in milliseconds, are:
+
+| Work | Old 59-entry store, 19 live slots | New 62-entry store, 20 live slots |
+| --- | ---: | ---: |
+| CPU encode | 0.332 (0.326–0.368) | 0.389 (0.363–0.413) |
+| GPU | 0.855 (0.838–0.903) | 0.889 (0.878–0.916) |
+| Completion | 1.619 (1.580–1.629) | 1.618 (1.612–1.655) |
+
+Registered textures rise from 91 to 99 and Metal allocated bytes from
+622,706,688 to 725,204,992, stable within each condition's three runs. These are
+added coverage costs, not equal-work speedup or interactive FPS evidence. The
+three new-provider body preparation events take 140.685/2.324/1.930 ms total,
+including reported first pipeline creation in each process; CPU encode is
+139.056/0.321/0.330 ms and GPU 0.210/0.209/0.208 ms. The first-process spread
+is retained without assigning a cause or claiming a cold driver-cache control.
+Other owners held heavy work during the bounded quiet batch. The prelaunch
+snapshot still contained an unmanaged VM at 3.1% CPU and four old Cursor
+processes at 0.1% each; this was not machine-wide isolation.
+
+Three isolated quiet processes use the archived `90ad9945` / `fac99f9f…`
+Release bundle. The compositor, dependencies, derivation/test/config and library
+lookup prefix used by this test are byte-identical to final source. The merged
+Maker appearance grouping/lease code is outside this call path and measured
+regions; the whole Character module and process setup are not claimed equivalent.
+First compositions including pipeline creation take 16.194/13.092/13.073 ms
+(CPU 4.052/2.273/2.291, GPU 9.221/8.307/8.457). Fifteen warm recolors per
+process have median total 1.137/1.091/1.126 ms, CPU 0.057/0.053/0.063 and
+GPU 0.196/0.198/0.193 ms; unchanged hits take 0.117/0.109/0.122 ms. Driver
+and filesystem caches may already be warm. The pixel, fixed-input/sampler,
+no-op/revert and released-target checks pass in all three processes. No archived
+binary is relabeled as a build of final main.
+
+All seven app runs retain exact toon, geometry and depth-normal control PNGs.
+Duplicate same-provider opaque draws still vary: old runs 16/21/17 pixels
+(maximum channel delta 8/22/8), new 40/18/15 (8/7/6), and captured provider 22
+(maximum 27), in the existing shoe-region bounds. Both images are translated
+draws of the same frame/provider; they are not an un-translated control. This
+retains the separate #188 limitation, without changing source gates or claiming
+full-frame repeat equality or source-color parity.
+
+The private compiler-reference-argument failure, rejected outside-checkout
+conversion output, source-only copy/schema preflight corrections and their
+successful follow-ups remain recorded. The successful original producer and
+native recipe did not change during those corrections. Private evidence is
+under `.local/codex-continue-2026-10-24/rolling/materials-body/`; source keys are
+`IKKOKU_BODY_COMPOSITE_BASE_PROBE` and `IKKOKU_BODY_COMPOSITE_PROBE`. This bounded
+20/20 fixture result does not imply support for other body identities, low detail,
+paint/sunburn or recovered Studio scene globals, and does not resolve the
+separate draw-fidelity limitations.
+
 ### Translated sampling repeatability investigation (#188)
 
 [Issue #188](https://github.com/grabbiel/ikkoku/issues/188) tracks the separate
