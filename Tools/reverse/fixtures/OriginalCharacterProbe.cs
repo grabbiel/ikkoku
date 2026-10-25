@@ -807,6 +807,11 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             throw new Exception("Lipline oracle initial face/makeup selection differs");
         for(int lane=0;lane<4;lane++)if(V(face.lipLineColor)[lane]!=V(expected)[lane] || V(makeup.cheekColor)[lane]!=1)
             throw new Exception("Lipline oracle requested color differs");
+        // CustomTextureCreate owns texMain separately from matCreate._MainTex.
+        // Observe the actual source object, not a copied input metadata record.
+        var mainBefore=Required(character.customTexCtrlFace,"texMain") as Texture2D;
+        if(mainBefore==null || mainBefore.GetInstanceID()!=(int)((Dictionary<string,object>)((Dictionary<string,object>)result["inputs"])["_MainTex"])["instanceID"])
+            throw new Exception("Lipline interaction initial main source identity differs");
         var names=new[]{"_MainTex","_ColorMask","_paintmask","_Texture3","_Texture4","_Texture5","_Texture6","_Texture7"};
         var bound=new Dictionary<string,Texture>();var beforeIDs=new Dictionary<string,object>();
         foreach(string name in names){bound[name]=creator.GetTexture(name);beforeIDs[name]=bound[name]==null?0:bound[name].GetInstanceID();}
@@ -815,6 +820,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         File.WriteAllBytes(Path.Combine(folder,beforeCoordinate),character.nowCoordinate.SaveBytes());
         var observation=new Dictionary<string,object>{{"case",liplineCompositeCase},{"faceOwned",true},{"lipLineId",face.lipLineId},
             {"requestedLiplineColor",V(face.lipLineColor)},{"requestedLiplineColorBits",FloatBits(V(face.lipLineColor))},
+            {"mainInputBeforeID",mainBefore.GetInstanceID()},
             {"boundLiplineColorBits",FloatBits(V(creator.GetVector("_Color5")))},{"cheekBeforeId",makeup.cheekId},{"cheekBeforeColor",V(makeup.cheekColor)},
             {"beforeFile",result["targetFile"]},{"beforeCoordinateFile",beforeCoordinate},{"inputIDsBefore",beforeIDs}};
         result["liplineControl"]=observation;
@@ -828,6 +834,9 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
         var afterVectors=new Dictionary<string,object>();foreach(string name in vectors.Keys)afterVectors[name]=V(creator.GetVector(name));
         observation["inputIDsAfter"]=afterIDs;observation["vectorsAfter"]=afterVectors;
         observation["boundLiplineColorBitsAfter"]=FloatBits(V(creator.GetVector("_Color5")));
+        var mainAfter=Required(character.customTexCtrlFace,"texMain") as Texture2D;
+        observation["mainInputAfterID"]=mainAfter==null?0:mainAfter.GetInstanceID();
+        if(mainAfter!=mainBefore)throw new Exception("Lipline interaction changed actual main source object");
         if(!rebuilt || character.releaseCustomInputTexture || character.nowCoordinate.enableMakeup
             || character.customTexCtrlFace.GetCreateTexture()!=target || character.customTexCtrlFace.matDraw!=draw
             || character.rendFace.sharedMaterials[0]!=draw || draw.GetTexture("_MainTex")!=target)
@@ -843,7 +852,7 @@ public sealed class OriginalCharacterProbe : BaseUnityPlugin
             var scale=V(creator.GetTextureScale(pair.Key));var offset=V(creator.GetTextureOffset(pair.Key));
             for(int lane=0;lane<2;lane++)if(scale[lane]!=((float[])previous["scale"])[lane] || offset[lane]!=((float[])previous["offset"])[lane])
                 throw new Exception("Lipline interaction changed texture transform "+pair.Key);
-            string fresh=ExportTextureAgain(pair.Key=="_MainTex"?(Texture)(Required(character.customTexCtrlFace,"texMain") as Texture2D):creator.GetTexture(pair.Key));
+            string fresh=ExportTextureAgain(pair.Key=="_MainTex"?(Texture)mainAfter:creator.GetTexture(pair.Key));
             current["file"]=fresh;afterInputs[pair.Key]=current;
             if(Sha256File(Path.Combine(folder,fresh))!=Sha256File(Path.Combine(folder,(string)previous["file"])))
                 throw new Exception("Lipline interaction changed bound input pixels "+pair.Key);
