@@ -16,6 +16,8 @@ struct PluginLibraryScenario: Decodable {
     let requestFile: String
     /// Reproduction only: real library save/reopen across the attachment-read gate.
     let libraryAttachmentRestore: LibraryAttachmentRestore?
+    /// Separate supported-path matrix; preserves the original policy reproduction.
+    let libraryAttachmentAcceptance: LibraryAttachmentAcceptance?
     /// Reproduction only: direct profile/native loads versus the mixed graph.
     let directPluginGraph: DirectPluginGraph?
     /// Regression only: saved mixed graph identity across native open/history.
@@ -68,6 +70,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let libraryAttachmentAcceptance { return await verifyLibraryAttachmentRestore(libraryAttachmentAcceptance, app: app, studio: studio) }
         if let libraryAttachmentRestore { return await reproduceLibraryAttachmentRestore(libraryAttachmentRestore, app: app, studio: studio) }
         if let nativeGraphRestore { return reproduceNativeGraphRestore(nativeGraphRestore, app: app, studio: studio) }
         if let directPluginGraph { return reproduceDirectPluginGraph(directPluginGraph, app: app, studio: studio) }
@@ -3414,6 +3417,367 @@ extension PluginLibraryScenario {
         } catch {
             rows.append(.init(op: "libraryAttachmentReproductionFailure", ok: false, detail: String(describing: error)))
         }
+        studio.sourcePluginPreparationHook = nil; studio.cancelSourcePluginLibraryMount()
+        await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+}
+
+extension PluginLibraryScenario {
+    struct LibraryAttachmentAcceptance: Decodable {
+        let phase: NativeProfileRestore.Phase
+        let originalDirectory: String
+        let directory: String
+        let outputDirectory: String
+        let requests: [String: String]
+    }
+
+    @MainActor private func verifyLibraryAttachmentRestore(_ configuration: LibraryAttachmentAcceptance,
+                                                            app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        let original = URL(fileURLWithPath: configuration.originalDirectory)
+        let directory = URL(fileURLWithPath: configuration.directory)
+        let output = URL(fileURLWithPath: configuration.outputDirectory)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let gate = "Source-character attachment reads during plugin installation are unsupported; no live preview was changed."
+        let arithmetic = "Unsupported arithmetic operator or Int32 arithmetic."
+        let readOnly = "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."
+        let topology = "Restoring plugin initialization changed scene object topology, identities, or clone state."
+        let identity = "Saved plugin profile or library bindings changed; explicit reinstallation is required."
+        var rows: [StudioScenario.Report.StepResult] = []
+        func check(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+            if !okay { throw SourcePluginError.runtime("Library restoration acceptance failed: " + name) }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func read(_ name: String, at root: URL) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword,
+                from: Data(contentsOf: root.appendingPathComponent(name + ".png")))
+        }
+        func write(_ document: StudioDocument, _ name: String) throws -> URL {
+            let url = output.appendingPathComponent(name + ".png")
+            try CardIO.encode(document, keyword: CardIO.sceneKeyword, thumbnail: nil).write(to: url, options: .withoutOverwriting)
+            return url
+        }
+        func snapshot(status: String? = nil) throws -> NativeGraphObservation {
+            .init(graph: try directGraphSnapshot(studio: studio, expectedStatus: status),
+                previewOwners: studio.renderedSourceCharacterPreviews.map { String(describing: ObjectIdentifier($0)) }.sorted())
+        }
+        func frame(_ name: String) throws -> Data {
+            let bytes = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try bytes.write(to: output.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return bytes
+        }
+        func rejection(_ name: String, expected: String, history: Bool = false, operation: () throws -> Void) throws {
+            let before = try snapshot(), beforeFrame = try frame(name + "-before")
+            try persist(before, name + "-before")
+            var error: String?
+            do { try operation() }
+            catch SourcePluginError.invalid(let reason) { error = reason }
+            catch SourcePluginError.runtime(let reason) { error = reason }
+            catch RigError.invalid(let reason) { error = reason }
+            catch let unexpected { error = "UNEXPECTED: \(unexpected)" }
+            if history { error = studio.status }
+            try persist(try snapshot(), name + "-after")
+            let afterFrame = try frame(name + "-after")
+            let wanted = history ? "Plugin restore: \(SourcePluginError.runtime(expected))" : expected
+            try check(name + "Error", error == wanted, error ?? "No rejection")
+            try check(name + "State", try snapshot(status: history ? before.graph.state.status : nil) == before)
+            try check(name + "Frame", afterFrame == beforeFrame)
+        }
+        func resourceCounts() -> [Int] {
+            let s = studio.host.renderer.resources.statistics()
+            return [s.meshes, s.textures, s.deformBuffers, s.hiddenBuffers, s.meshBufferBytes, s.deformBufferBytes, s.hiddenBufferBytes, s.retiring]
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else { throw SourcePluginError.invalid("Acceptance requires a fresh output directory.") }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            studio.stopBenchmarkTimer(); studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            let names = ["attachment", "plain", "poison", "topology", "setActive", "destroy", "unconditional"]
+            guard Set(configuration.requests.keys) == Set(names) else { throw SourcePluginError.invalid("Acceptance requests differ.") }
+            var requests: [String: StudioPluginLibraryRequest] = [:]
+            var resolutions: [String: SourcePluginLibraryResolution] = [:]
+            for name in names {
+                let request = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: configuration.requests[name]!))
+                let resolution = try request.selection.resolve()
+                guard resolution.translated.count == 1, resolution.nativeAdapters.isEmpty else { throw SourcePluginError.invalid("Expected one IR revision.") }
+                requests[name] = request; resolutions[name] = resolution
+            }
+            try persist(requests.mapValues(\.selection), "exact-selections")
+            let attached = try read("attachment", at: original)
+            let parentIndex = attached.objects.firstIndex { $0.sourceCharacter != nil }!
+            let parent = attached.objects[parentIndex], parentID = parent.id, reference = parent.sourceCharacter!
+            let child = attached.objects.first { $0.sourceObjectKey == 12 }!
+            try check("oldSteppedScene", attached.sourcePluginLibrary == requests["attachment"]!.selection
+                && attached.sourcePluginState?.clock.deltaTime == Float(0.04) && child.sourceAttachmentPoint == 17 && !parent.visible)
+            try check("sourceFixture", !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil })
+            switch configuration.phase {
+            case .save:
+                guard !FileManager.default.fileExists(atPath: directory.path) else { throw SourcePluginError.invalid("Mutation scenes require a fresh directory.") }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                for name in ["setActive", "destroy"] {
+                    studio.newScene()
+                    var document = attached
+                    document.sourcePluginState = nil; document.sourcePluginLibrary = nil
+                    document.sourcePluginLibraryConfiguration = nil; document.sourceNativePlugins = nil
+                    studio.doc = document
+                    let request = requests[name]!
+                    try await studio.mountSourcePluginLibrary(selection: request.selection, configuration: request.configuration)
+                    studio.sourcePluginsRunning = false
+                    try check(name + "Mount", studio.doc.sourcePluginState?.clock.elapsedTime == 0
+                        && studio.sourceShapePreview(for: parentID) == nil && studio.doc.object(child.id)?.visible == true)
+                    try studio.stepSourcePlugins(deltaTime: 0.04)
+                    let state = try studio.sourcePluginSession!.savedDocument().sourcePluginState
+                    try check(name + "Step", state?.clock.deltaTime == Float(0.04) && state?.pendingDestructionRoots == [])
+                    try studio.saveScene(to: directory.appendingPathComponent(name + ".png"))
+                    let saved = try read(name, at: directory)
+                    try persist(saved, name + "-saved")
+                    try check(name + "Save", saved.sourcePluginState == state && saved.sourcePluginLibrary == request.selection)
+                }
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("save-pid.txt"), atomically: true, encoding: .utf8)
+            case .reopen:
+                let savePID = try String(contentsOf: directory.appendingPathComponent("save-pid.txt"), encoding: .utf8)
+                let oldPID = try String(contentsOf: original.appendingPathComponent("save-pid.txt"), encoding: .utf8)
+                let currentPID = String(ProcessInfo.processInfo.processIdentifier)
+                try check("freshProcesses", savePID != currentPID && oldPID != currentPID)
+                // A separate public-session resolver records actual initializer
+                // order. Saved fields cannot expose these reads after restore.
+                for name in ["poison", "setActive", "destroy"] {
+                    let saved = try read(name, at: name == "poison" ? original : directory)
+                    let request = requests[name]!
+                    var calls: [[String: String]] = [], error: String?
+                    var observed: SourceStudioPluginSession?
+                    do {
+                        observed = try SourceStudioPluginSession(selection: request.selection, resolution: resolutions[name]!,
+                            configuration: request.configuration, document: saved, restoring: saved.sourcePluginState,
+                            attachment: { child, parent in
+                                calls.append(["child": child.id.uuidString, "parent": parent.id.uuidString])
+                                return (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0)))
+                            })
+                    } catch SourcePluginError.runtime(let reason) { error = reason }
+                    try persist(calls, name + "-oracle-calls")
+                    try check(name + "TwoReadOracle", calls == Array(repeating: ["child": child.id.uuidString, "parent": parentID.uuidString], count: 2))
+                    let expectedEffect: Bool
+                    if name == "poison" { expectedEffect = error == arithmetic }
+                    else if name == "setActive" { expectedEffect = error == nil && observed?.world.document.object(child.id)?.visible == false }
+                    else { expectedEffect = error == nil && observed?.world.pendingSourceDestructionRoots() == [child.id] }
+                    try check(name + "PostReadEffectOracle", expectedEffect, error ?? name)
+                    if let observed { try persist(try observed.savedDocument(), name + "-oracle-document") }
+                }
+                for name in ["zero", "plain", "attachment"] {
+                    let saved = try read(name, at: original)
+                    try studio.loadScene(from: original.appendingPathComponent(name + ".png"))
+                    let actual = try studio.sourcePluginSession!.savedDocument()
+                    try check(name + "OldSceneOpen", studio.doc.sourcePluginState == saved.sourcePluginState
+                        && actual.sourcePluginState == saved.sourcePluginState && studio.doc.sourcePluginLibrary == saved.sourcePluginLibrary
+                        && !studio.sourcePluginsRunning && studio.sourceAnimationTime == 0)
+                    let preview = studio.sourceShapePreview(for: parentID)
+                    try check(name + "PreviewPolicy", name == "attachment" ? preview?.reference == reference : preview == nil)
+                    if name == "attachment" {
+                        try studio.stepSourcePlugins(deltaTime: 0.02)
+                        try check("nextStepKeepsTransferredPreview", studio.sourceShapePreview(for: parentID) === preview
+                            && studio.doc.sourcePluginState?.bindings == saved.sourcePluginState?.bindings)
+                    }
+                }
+                // Nil and empty saved native arrays denote the same empty pinned
+                // selection, but the read-only check uses the normalized input.
+                var nilNative = attached; nilNative.sourceNativePlugins = nil
+                try studio.loadScene(from: write(nilNative, "nil-native"))
+                try check("nilNativeNormalization", studio.doc.sourceNativePlugins == nil
+                    && studio.sourcePluginSession?.world.document.sourceNativePlugins == []
+                    && studio.doc.sourcePluginState == attached.sourcePluginState && studio.sourceShapePreview(for: parentID) != nil)
+
+                let baseline = studio.sourceShapePreview(for: parentID)!
+                try check("multipleOutfits", baseline.outfitCount > 1)
+                let alternate = output.appendingPathComponent("same-bytes-attachments.json")
+                try Data(contentsOf: URL(fileURLWithPath: reference.attachmentCatalogFile!)).write(to: alternate, options: .withoutOverwriting)
+                func changedReference(attachment: String) -> SourceStudioCharacterReference {
+                    .init(sceneFile: reference.sceneFile, sceneSHA256: reference.sceneSHA256, rigFile: reference.rigFile,
+                        boneCatalogFile: reference.boneCatalogFile, objectKey: reference.objectKey, makerLibraryFile: reference.makerLibraryFile,
+                        attachmentCatalogFile: attachment, animationCatalogFile: reference.animationCatalogFile,
+                        dynamicsFile: reference.dynamicsFile, handPatternsFile: reference.handPatternsFile, lookSettingsFile: reference.lookSettingsFile)
+                }
+                var candidate = attached, old = attached
+                var candidateBody = baseline.savedBodyValues; candidateBody[0] = 0.85
+                var oldBody = baseline.savedBodyValues; oldBody[0] = 0.15
+                candidate.objects[parentIndex].sourceBodyValues = candidateBody
+                old.objects[parentIndex].sourceCharacter = changedReference(attachment: alternate.path)
+                old.objects[parentIndex].sourceOutfit = (baseline.coordinate + 1) % baseline.outfitCount
+                old.objects[parentIndex].sourceBodyValues = oldBody; old.objects[parentIndex].visible = true
+                old.sourcePluginState = nil; old.sourcePluginLibrary = nil; old.sourcePluginLibraryConfiguration = nil; old.sourceNativePlugins = nil
+                studio.newScene(); studio.doc = old
+                let retained = try StudioPluginLibraryRequest.load(url: URL(fileURLWithPath: requestFile))
+                guard let binding = retained.configuration.bindings.first, retained.configuration.bindings.count == 1,
+                      let target = old.objects.first(where: { $0.sourceObjectKey == 13 }) else { throw SourcePluginError.invalid("Missing retained binding.") }
+                try await studio.mountSourcePluginLibrary(selection: retained.selection, configuration: .init(fixedDeltaTime: retained.configuration.fixedDeltaTime,
+                    bindings: [.init(guid: binding.guid, type: binding.type, objectID: target.id)]))
+                studio.sourcePluginsRunning = false; studio.receiveSourceApplicationFocus(true)
+                try studio.stepSourcePlugins(deltaTime: 0.06); try studio.setSourceAnimationTime(0.7); studio.refresh()
+                let warm = studio.sourceShapePreview(for: parentID)!
+                let warmPose = try warm.editedPose(bodyValues: oldBody, animationElapsed: 0.7)
+                try check("retainedWarmOwner", studio.sourceFocus.adapter != nil && !studio.host.renderer.currentFrame().items.isEmpty
+                    && warm.reference != reference && warm.coordinate != baseline.coordinate)
+                let oracle = try SourceStudioCharacterPreview(reference: reference, resources: studio.host.renderer.resources, coordinate: parent.sourceOutfit)
+                func attachment(_ preview: SourceStudioCharacterPreview, _ object: StudioObject, _ time: Float) throws -> SourceStudioPluginWorld.AttachmentFrame {
+                    (try preview.attachmentMatrix(pointID: 17, fkRotations: object.sourceFKRotations ?? [:],
+                        faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
+                        kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: time),
+                     preview.attachmentRotation(pointID: 17, fkRotations: object.sourceFKRotations ?? [:],
+                        faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues, ikTargets: object.sourceIKOverrides ?? [:],
+                        kinematics: object.sourceKinematics, animationState: object.sourceAnimation, animationElapsed: time))
+                }
+                func matrixValues(_ m: float4x4) -> [Float] { (0..<4).flatMap { i in (0..<4).map { j in m[i][j] } } }
+                let candidateParent = candidate.objects[parentIndex]
+                let expected = try attachment(oracle, candidateParent, 0), oldFrame = try attachment(warm, studio.doc.objects[parentIndex], 0.7)
+                try persist(matrixValues(expected.matrix), "candidate-matrix"); try persist(matrixValues(oldFrame.matrix), "warm-matrix")
+                try check("sameUUIDInputsDiffer", zip(matrixValues(expected.matrix), matrixValues(oldFrame.matrix)).contains { abs($0 - $1) > 0.0001 })
+                let beforePreparation = try snapshot(), beforePreparationFrame = try frame("candidate-prepare-before")
+                try persist(beforePreparation, "candidate-prepare-before")
+                let prepared = try studio.prepareSourcePlugins(document: candidate, attachmentRestore: .init(blockedObjects: [], animationElapsed: 0))
+                defer { prepared.abort() }
+                guard let context = prepared.restoredAttachments else { throw SourcePluginError.runtime("No library candidate context.") }
+                let afterPreparation = resourceCounts()
+                let actual = try context.frame(child: child, parent: candidateParent), again = try context.frame(child: child, parent: candidateParent)
+                try persist(matrixValues(actual.matrix), "prepared-matrix")
+                try check("candidateReadsSharePrivatePreview", actual.matrix == expected.matrix && actual.rotation.vector == expected.rotation.vector
+                    && again.matrix == actual.matrix && resourceCounts() == afterPreparation && studio.sourceShapePreview(for: parentID) === warm)
+                try check("preparedSavedStateExact", prepared.session?.world.document.sourcePluginLibrary == candidate.sourcePluginLibrary
+                    && prepared.document.sourcePluginState == candidate.sourcePluginState && context.didReadAttachment)
+                var alteredParent = candidateParent; alteredParent.sourceOutfit = warm.coordinate
+                var mismatch = ""
+                do { _ = try context.frame(child: child, parent: alteredParent) }
+                catch SourcePluginError.invalid(let reason) { mismatch = reason }
+                try check("candidateCoordinateGuard", mismatch == "Plugin attachment parent differs from the candidate reference or outfit."
+                    && resourceCounts() == afterPreparation)
+                prepared.abort()
+                let afterAbort = try snapshot(), afterAbortFrame = try frame("candidate-prepare-after")
+                let afterWarmPose = try warm.editedPose(bodyValues: oldBody, animationElapsed: 0.7)
+                try persist(afterAbort, "candidate-prepare-after")
+                try check("candidateAbortRetainsWarm", afterAbort == beforePreparation && afterAbortFrame == beforePreparationFrame
+                    && afterWarmPose.localMatrices == warmPose.localMatrices)
+
+                try rejection("detachedRestore", expected: gate) { let value = try studio.prepareSourcePlugins(document: candidate); value.abort() }
+                let install = requests["unconditional"]!
+                try rejection("initialInstall", expected: gate) {
+                    let value = try studio.prepareSourcePluginLibrary(selection: install.selection, resolution: resolutions["unconditional"]!,
+                        configuration: install.configuration, document: candidate,
+                        attachmentRestore: .init(blockedObjects: [], animationElapsed: 0))
+                    value.abort()
+                }
+                var blocked = candidate
+                blocked.objects[parentIndex].sourceCharacter = changedReference(attachment: output.appendingPathComponent("absent-attachment.json").path)
+                let blockedError = "Character '\(parent.name)' has an unresolved resource reference; see the source compatibility details."
+                var changedIdentity = blocked
+                changedIdentity.sourcePluginLibraryConfiguration = .init(fixedDeltaTime: 0.03, bindings: candidate.sourcePluginLibraryConfiguration!.bindings)
+                var packageJSON = try JSONSerialization.jsonObject(with: encoder.encode(blocked)) as! [String: Any]
+                var packageState = packageJSON["sourcePluginState"] as! [String: Any]
+                var packagePins = packageState["packages"] as! [[String: Any]]
+                packagePins[0]["manifestSHA256"] = String(repeating: "0", count: 64)
+                packageState["packages"] = packagePins; packageJSON["sourcePluginState"] = packageState
+                let changedPackage = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: packageJSON))
+                var queuedJSON = try JSONSerialization.jsonObject(with: encoder.encode(candidate)) as! [String: Any]
+                var queuedState = queuedJSON["sourcePluginState"] as! [String: Any]
+                queuedState["pendingDestructionRoots"] = [child.id.uuidString]; queuedJSON["sourcePluginState"] = queuedState
+                let queued = try JSONDecoder().decode(StudioDocument.self, from: JSONSerialization.data(withJSONObject: queuedJSON))
+                let poison = try read("poison", at: original)
+                let failures: [(String, StudioDocument, String)] = [
+                    ("latePoison", poison, arithmetic), ("latePoisonRepeat", poison, arithmetic),
+                    ("setActive", try read("setActive", at: directory), readOnly),
+                    ("destroy", try read("destroy", at: directory), readOnly), ("savedPending", queued, readOnly),
+                    ("topology", try read("topology", at: original), topology),
+                    ("blockedCandidate", blocked, blockedError), ("identityBeforeBlockedRead", changedIdentity, identity),
+                    ("packageBeforeBlockedRead", changedPackage, "Saved plugin package identity or version changed.")]
+                for (name, rejected, error) in failures {
+                    let url = try write(rejected, "reject-" + name)
+                    try rejection(name, expected: error) { try studio.loadScene(from: url) }
+                }
+                let retainedDocument = studio.doc
+                studio.doc = poison; studio.pushUndo(force: true); studio.doc = retainedDocument
+                try rejection("undoPoison", expected: arithmetic, history: true) { studio.undo() }
+                studio.pushUndo(force: true); studio.doc = poison; studio.undo()
+                guard studio.doc.objects == retainedDocument.objects, studio.redoStack.last == poison else { throw SourcePluginError.runtime("Unable to seed redo poison.") }
+                try rejection("redoPoison", expected: arithmetic, history: true) { studio.redo() }
+                for name in ["zero", "plain", "attachment"] {
+                    let saved = name == "attachment" ? candidate : try read(name, at: original)
+                    let prior = studio.doc
+                    studio.doc = saved; studio.pushUndo(force: true); studio.doc = prior
+                    studio.undo()
+                    let stateMatches = studio.doc.sourcePluginState == saved.sourcePluginState && studio.doc.sourcePluginLibrary == saved.sourcePluginLibrary
+                    try check(name + "HistoryUndo", studio.doc.objects == saved.objects && stateMatches && studio.sourceAnimationTime == 0.7, studio.status)
+                    if name != "attachment" {
+                        try check(name + "HistoryPreviewPolicy", studio.sourceShapePreview(for: parentID) == nil)
+                    }
+                    if name == "attachment" {
+                        let preview = studio.sourceShapePreview(for: parentID)!
+                        let expectedHistory = try attachment(oracle, candidateParent, 0.7), actualHistory = try attachment(preview, candidateParent, 0.7)
+                        try persist(matrixValues(actualHistory.matrix), "history-matrix")
+                        try check("historyCandidateClockAndOwner", preview !== warm && preview.reference == reference
+                            && actualHistory.matrix == expectedHistory.matrix && actualHistory.rotation.vector == expectedHistory.rotation.vector)
+                    }
+                    studio.redo()
+                    try check(name + "HistoryRedo", studio.doc.objects == prior.objects && studio.doc.sourcePluginState == prior.sourcePluginState
+                        && studio.doc.sourcePluginLibrary == prior.sourcePluginLibrary && studio.sourceAnimationTime == 0.7, studio.status)
+                }
+
+                let barrier = Barrier(); studio.sourcePluginPreparationHook = { barrier.hold() }
+                defer { barrier.finish(); studio.sourcePluginPreparationHook = nil }
+                let pending = Task { try await studio.mountSourcePluginLibrary(selection: requests["plain"]!.selection, configuration: requests["plain"]!.configuration) }
+                await barrier.wait()
+                try check("pendingEntered", studio.sourcePluginLibraryPending && studio.sourcePluginMountRequest != nil)
+                try rejection("pendingLatePoison", expected: arithmetic) { try studio.loadScene(from: original.appendingPathComponent("poison.png")) }
+                let held = try snapshot(), heldFrame = try frame("pending-held")
+                pending.cancel(); var cancelled = false
+                do { try await pending.value } catch is CancellationError { cancelled = true }
+                let cancelledState = try snapshot(), h = held.graph
+                let expectedCancelled = DirectGraphObservation(state: h.state, focus: h.focus, hideAdapterVisible: h.hideAdapterVisible,
+                    interfaceVisible: h.interfaceVisible, accessoryNames: h.accessoryNames, showGizmos: h.showGizmos,
+                    effectiveShowGizmos: h.effectiveShowGizmos, showTimeline: h.showTimeline, pending: false, request: nil)
+                try persist(held, "pending-held"); try persist(cancelledState, "pending-cancelled")
+                try check("callerCancelsBeforeRelease", cancelled && cancelledState.graph == expectedCancelled
+                    && cancelledState.previewOwners == held.previewOwners && frame("pending-cancelled") == heldFrame)
+                barrier.finish(); studio.sourcePluginPreparationHook = nil
+                await studio.sourcePluginLibraryPreparationQueue.drain()
+                try persist(try snapshot(), "pending-drained")
+                try check("cancelledDrainExact", try snapshot() == cancelledState && frame("pending-drained") == heldFrame)
+
+                let replacement = Barrier(); studio.sourcePluginPreparationHook = { replacement.hold() }
+                defer { replacement.finish(); studio.sourcePluginPreparationHook = nil }
+                let superseded = Task { try await studio.mountSourcePluginLibrary(selection: requests["plain"]!.selection, configuration: requests["plain"]!.configuration) }
+                await replacement.wait()
+                let candidateURL = try write(candidate, "valid-candidate")
+                try studio.loadScene(from: candidateURL)
+                var invalidated = false
+                do { try await superseded.value } catch is CancellationError { invalidated = true }
+                let committed = studio.sourceShapePreview(for: parentID)
+                let accepted = try snapshot(), acceptedFrame = try frame("replacement-accepted")
+                try persist(accepted, "replacement-accepted")
+                try check("nativeOpenInvalidatesPending", invalidated && !studio.sourcePluginLibraryPending && studio.sourcePluginMountRequest == nil
+                    && studio.doc.sourcePluginState == candidate.sourcePluginState && committed?.reference == reference && studio.sourceAnimationTime == 0)
+                replacement.finish(); studio.sourcePluginPreparationHook = nil
+                await studio.sourcePluginLibraryPreparationQueue.drain()
+                try persist(try snapshot(), "replacement-drained")
+                try check("supersededDrainExact", try snapshot() == accepted && frame("replacement-drained") == acceptedFrame)
+                var blockedOld = blocked
+                blockedOld.sourcePluginState = nil; blockedOld.sourcePluginLibrary = nil
+                blockedOld.sourcePluginLibraryConfiguration = nil; blockedOld.sourceNativePlugins = nil
+                try studio.loadScene(from: write(blockedOld, "blocked-old"))
+                try check("oldBlockedPrecondition", studio.resourceBlockedObjects.contains(parentID))
+                try studio.loadScene(from: candidateURL)
+                let transferred = studio.sourceShapePreview(for: parentID)
+                try check("candidateOverridesOldBlock", !studio.resourceBlockedObjects.contains(parentID) && transferred?.reference == reference)
+                studio.update(parentID) { $0.visible = true }
+                try studio.stepSourcePlugins(deltaTime: 0.02)
+                try check("showAndStepReuse", studio.sourceShapePreview(for: parentID) === transferred
+                    && studio.doc.sourcePluginState?.bindings.first?.awake == true && studio.doc.sourcePluginState?.bindings.first?.started == true)
+            }
+            for name in names {
+                let again = try requests[name]!.selection.resolve()
+                try check(name + "RevisionUnchanged", again.translated.map(\.manifestData) == resolutions[name]!.translated.map(\.manifestData))
+            }
+        } catch { rows.append(.init(op: "libraryAttachmentAcceptanceFailure", ok: false, detail: String(describing: error))) }
         studio.sourcePluginPreparationHook = nil; studio.cancelSourcePluginLibraryMount()
         await studio.sourcePluginLibraryPreparationQueue.drain()
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)

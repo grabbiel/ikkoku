@@ -1471,11 +1471,11 @@ final class StudioModel: ViewportInputHandler {
             status = "Redo"
         } catch { status = "Plugin restore: \(error)" }
     }
-    /// Legacy profile callbacks can touch hidden source objects while restoring.
+    /// Profile and library callbacks can touch hidden source objects while restoring.
     /// Resolve this target's references before its stacks or live policy change;
     /// an old document's same UUID is not its resource authorization.
     private func historyPluginResources(_ target: StudioDocument) -> StudioResourceResolution? {
-        guard target.sourcePluginState != nil, target.sourcePluginLibrary == nil else { return nil }
+        guard target.sourcePluginState != nil else { return nil }
         return target.resolvingResources(current: host.libraryLocation(), catalog: library.catalog)
     }
     private func applyHistoryDocument(_ next: StudioDocument, plugins: PreparedSourcePlugins,
