@@ -167,10 +167,11 @@ HEAD00_CATALOG = dict(Name='タイプ０１', MainManifest='abdata', MainAB='cha
 
 def source_head_identity(mode):
     """Pin the new head's measured catalog; retain old capture compatibility."""
-    if mode.get('variant') == 'female200-bone1' or (mode.get('headID') == 200 and mode.get('boneType') == 1):
-        if mode.get('variant') != 'female200-bone1':
+    if mode.get('variant') in ('female200-bone1', 'male200-bone1') or (mode.get('headID') == 200 and mode.get('boneType') == 1):
+        if mode.get('variant') not in ('female200-bone1', 'male200-bone1'):
             raise ValueError('Corrected head200 normal model variant differs')
-        expected = dict(sex=1, headID=200, boneType=1, exType=0, requestedSex=1,
+        sex = 1 if mode['variant'] == 'female200-bone1' else 0
+        expected = dict(sex=sex, headID=200, boneType=1, exType=0, requestedSex=sex,
                         requestedHeadID=200, requestedBoneType=1, requestedExType=0, loadedHeadCatalogID=200)
         if any(type(mode.get(k)) is not int or mode[k] != v for k, v in expected.items()):
             raise ValueError('Corrected head200 requested/loaded normal model identity differs')
@@ -209,7 +210,7 @@ def source_head_identity(mode):
 
 def body_correction_identity(folder, mode, native=None):
     """Measured source SaveCorrectInfo bytes versus the native decoder input."""
-    if mode.get('variant') not in ('female00-bone1', 'male00-bone1', 'female200-bone1', 'female201-bone1', 'male201-bone1'): return None
+    if mode.get('variant') not in ('female00-bone1', 'male00-bone1', 'female200-bone1', 'male200-bone1', 'female201-bone1', 'male201-bone1'): return None
     source_head_identity(mode)
     record = mode.get('bodyCorrection')
     if (not isinstance(record, dict) or record.get('file') != 'body-correction.bytes'
@@ -387,12 +388,12 @@ def compare(folder, native, tolerance=2e-5, shape_baseline=None):
     mode = frame.get('neutralModel')
     if not mode or native.get('kind') != 'ikkoku-neutral-source-model': raise ValueError('Requires neutral source and native model captures')
     identity = native['identity']
-    variants = {'female00': (1, 0), 'female00-bone1': (1, 0), 'female200': (1, 200), 'female200-bone1': (1, 200), 'female201': (1, 201), 'female201-bone1': (1, 201), 'male00': (0, 0), 'male00-bone1': (0, 0), 'male200': (0, 200), 'male201': (0, 201), 'male201-bone1': (0, 201)}
+    variants = {'female00': (1, 0), 'female00-bone1': (1, 0), 'female200': (1, 200), 'female200-bone1': (1, 200), 'female201': (1, 201), 'female201-bone1': (1, 201), 'male00': (0, 0), 'male00-bone1': (0, 0), 'male200': (0, 200), 'male200-bone1': (0, 200), 'male201': (0, 201), 'male201-bone1': (0, 201)}
     if mode.get('variant') not in variants or (mode['sex'], mode['headID']) != variants[mode['variant']]:
         raise ValueError('Unsupported source neutral model identity')
     for key in ('Sex', 'HeadID', 'BoneType'):
         if mode['requested' + key] != mode[key[0].lower() + key[1:]]: raise ValueError('Source silently changed requested identity')
-    expected_bone = 1 if mode['variant'] in ('female00-bone1', 'male00-bone1', 'female200-bone1', 'female201-bone1', 'male201-bone1') else 0
+    expected_bone = 1 if mode['variant'] in ('female00-bone1', 'male00-bone1', 'female200-bone1', 'male200-bone1', 'female201-bone1', 'male201-bone1') else 0
     if mode['variant'] == 'male00' and any(type(identity.get(k)) is not int or identity[k] != 0
                                          for k in ('sex', 'headID', 'boneType', 'exType')):
         raise ValueError('Native normal male00 model identity differs')

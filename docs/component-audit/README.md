@@ -84,8 +84,8 @@ commit identify the snapshot. The dated handoffs below retain each producer, fix
 acceptance boundary; their old “next” steps are historical, not a live queue.
 
 - **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies
-  have bounded original-player gates, plus head-0 bone-type-1 checks for both
-  sexes. Asynchronous normal-head selection is merged. Prepared inputs reduce
+  have bounded original-player gates for standard and bone-type-1 skeletons,
+  including independent neutral repeats and one coupled-shape case per assembly. Asynchronous normal-head selection is merged. Prepared inputs reduce
   owner-thread stalls at a total-latency cost. Fallback reuse is merged with a
   verified allocation reduction, without consistent latency improvement.
   Bounded composition batching is merged in [#213](https://github.com/grabbiel/ikkoku/pull/213)
