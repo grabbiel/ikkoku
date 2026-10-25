@@ -26,15 +26,18 @@ extension StudioModel {
         let muteEnabled: Bool?
         let accessoryNames: Bool
         var hideStudioUI = false
+        var packages: [SourceNativePluginPackage] = []
     }
 
     func loadSourcePlugins(profileURL: URL) throws {
         var candidate = doc
         candidate.sourcePluginLibrary = nil; candidate.sourcePluginLibraryConfiguration = nil
         candidate.sourcePluginState = nil
+        let native = try prepareSourceNativePlugins(candidate.sourceNativePlugins ?? [])
         let attachments = PluginAttachmentPreparation(studio: self)
         defer { attachments.abort() }
         let session = try SourceStudioPluginSession(profileURL: profileURL, document: candidate,
+            nativeContext: native.packages,
             attachment: { child, parent in
                 try MainActor.assumeIsolated { try attachments.frame(child: child, parent: parent) }
             })
@@ -386,20 +389,26 @@ extension StudioModel {
         var refs = doc.sourceNativePlugins ?? []
         refs.removeAll { $0.guid.utf8.elementsEqual(package.manifest.identity.guid.utf8) }
         refs.append(.init(package: package))
-        try applySourceNativePlugins(refs)
+        try validateSourceNativePluginReferences(refs)
+        // The new package was verified above. Load retained pins once and reuse
+        // all immutable packages for configuration and mixed-graph validation.
+        let packages = try refs.dropLast().map { try $0.load() } + [package]
+        let prepared = try prepareSourceNativePlugins(refs, packages: packages)
+        try sourcePluginSession?.library.validate(nativeAdapters: prepared.packages)
+        commitSourceNativePlugins(prepared)
         doc.sourceNativePlugins = refs
         status = "Loaded \(package.manifest.identity.name) \(package.manifest.identity.version)"
     }
 
-    func applySourceNativePlugins(_ refs: [SourceNativePluginReference]) throws {
-        commitSourceNativePlugins(try prepareSourceNativePlugins(refs))
+    private func validateSourceNativePluginReferences(_ refs: [SourceNativePluginReference]) throws {
+        guard refs.count <= 32, Set(refs.map { Data($0.guid.utf8) }).count == refs.count else {
+            throw SourcePluginError.invalid("Duplicate or excessive native adapter mounts.")
+        }
     }
 
     func prepareSourceNativePlugins(_ refs: [SourceNativePluginReference],
                                     packages verified: [SourceNativePluginPackage]? = nil) throws -> PreparedNativePlugins {
-        guard refs.count <= 32, Set(refs.map { Data($0.guid.utf8) }).count == refs.count else {
-            throw SourcePluginError.invalid("Duplicate or excessive native adapter mounts.")
-        }
+        try validateSourceNativePluginReferences(refs)
         let packages = try verified ?? refs.map { try $0.load() }
         guard packages.count == refs.count else { throw SourcePluginError.invalid("Native adapter preparation is incomplete.") }
         var muteEnabled: Bool?, accessoryNames = false, hideStudioUI = false
@@ -412,7 +421,7 @@ extension StudioModel {
                 hideStudioUI = true
             }
         }
-        return .init(muteEnabled: muteEnabled, accessoryNames: accessoryNames, hideStudioUI: hideStudioUI)
+        return .init(muteEnabled: muteEnabled, accessoryNames: accessoryNames, hideStudioUI: hideStudioUI, packages: packages)
     }
 
     func commitSourceNativePlugins(_ prepared: PreparedNativePlugins) {
