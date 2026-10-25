@@ -31,8 +31,9 @@ private enum PluginLibraryFixture {
     }
     /// Writes `revisions/<manifestSHA256>/` and returns its generation record.
     static func translated(_ library: URL, guid: String, version: String = "1.0", salt: String = "",
-                           dependencies: [[String: Any]] = [], incompatibilities: [String] = []) throws -> [String: Any] {
-        let programData = try program(guid: guid, salt: salt)
+                           dependencies: [[String: Any]] = [], incompatibilities: [String] = [],
+                           programData customProgram: Data? = nil) throws -> [String: Any] {
+        let programData = try customProgram ?? program(guid: guid, salt: salt)
         let manifest: [String: Any] = ["schemaVersion": 1, "kind": "ikkoku-translated-plugin",
             "identity": ["guid": guid, "version": version, "name": guid], "processes": [],
             "dependencies": dependencies, "incompatibilities": incompatibilities,
@@ -521,4 +522,154 @@ func sourcePluginLibraryHideStudioUIPreservesPinnedIncompatibilities() throws {
     let newer = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
     #expect(throws: (any Error).self) { try newer.select(guids: ["keelhauled.hideallui"]).resolve() }
     #expect(try selection.resolve().nativeAdapters[0].manifestSHA256 == resolved.nativeAdapters[0].manifestSHA256)
+}
+
+
+// These constructor fixtures use the same two public session entry points as
+// native/history restore. They need no original assets or attachment adapter.
+private struct PluginRestoreFixture {
+    let profile: URL, selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution
+    let configuration = SourceStudioPluginConfiguration(bindings: [.init(guid: "Creator.Motion", type: "Fixture", sourceObjectKey: 42)])
+    static let topologyError = "Restoring plugin initialization changed scene object topology, identities, or clone state."
+
+    init(root: URL, operation: String) throws {
+        func node(_ kind: String, _ type: String? = nil, _ name: String? = nil,
+                  _ children: [[String: Any]] = [], value: Any? = nil) -> [String: Any] {
+            var valueNode: [String: Any] = ["kind": kind, "children": children]
+            if let type { valueNode["type"] = type }; if let name { valueNode["name"] = name }
+            if let value { valueNode["value"] = value }; return valueNode
+        }
+        let object = node("api", "Object", "gameObject")
+        let clone = node("api", "Object", "world.Instantiate", [object])
+        let zero = node("literal", "Float", value: 0)
+        let falseValue = node("literal", "Bool", value: false)
+        let operationNode: [String: Any]?
+        switch operation {
+        case "Instantiate", "AwakeInstantiate": operationNode = clone
+        case "InstantiateDestroy": operationNode = node("api", "Void", "world.Destroy", [clone])
+        case "SetActive": operationNode = node("api", "Void", "setActive", [object, falseValue])
+        case "Destroy": operationNode = node("api", "Void", "world.Destroy", [object])
+        default: operationNode = nil
+        }
+        var program = try #require(JSONSerialization.jsonObject(with: PluginLibraryFixture.program(guid: "Creator.Motion", salt: operation)) as? [String: Any])
+        var methods: [[String: Any]], fields: [[String: Any]]
+        if operation == "AwakeInstantiate" {
+            // Serialized before Instantiate, then copied to the clone, so clone
+            // Awake cannot recursively clone itself. Initial hidden input does
+            // not run Awake; activating the saved input exercises runtime.start.
+            let done = node("field", "Bool", "done")
+            fields = [["name": "done", "type": "Bool", "serialized": true, "initializer": falseValue]]
+            let body = node("if", nil, nil, [node("unary", "Bool", "!", [done]), node("block", nil, nil, [
+                node("assign", "Bool", "=", [done, node("literal", "Bool", value: true)]),
+                node("expression", nil, nil, [clone])]), node("empty")])
+            methods = [["name": "Awake", "symbol": "M:Fixture.Awake", "static": false, "returnType": "Void", "parameters": [],
+                        "body": node("block", nil, nil, [body]), "lifecycle": "Awake"]]
+        } else {
+            fields = [["name": "value", "type": "Float", "serialized": true,
+                       "initializer": node("call", "Float", "Initialize")]]
+            let body = (operationNode.map { [node("expression", nil, nil, [$0])] } ?? []) + [node("return", nil, nil, [zero])]
+            methods = [["name": "Initialize", "symbol": "M:Fixture.Initialize", "static": false, "returnType": "Float", "parameters": [],
+                        "body": node("block", nil, nil, body)]]
+        }
+        program["fields"] = fields; program["methods"] = methods
+        var identity = program["identity"] as! [String: Any]; identity["symbols"] = methods.map { $0["symbol"]! }; program["identity"] = identity
+        let bytes = try JSONSerialization.data(withJSONObject: program, options: [.sortedKeys])
+        _ = try SourceIRProgram.decode(bytes)
+        let revision = try PluginLibraryFixture.translated(root, guid: "Creator.Motion", programData: bytes)
+        try PluginLibraryFixture.publish(root, revisions: [revision])
+        let index = try SourcePluginLibraryIndex.load(libraryURL: root.appendingPathComponent("library.json"))
+        selection = try index.select(guids: ["Creator.Motion"]); resolution = try selection.resolve()
+        profile = root.appendingPathComponent("profile.json")
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
+            "packages": [["manifest": index.manifestURL(try #require(index.revisions.first)).path,
+                          "bindings": [["type": "Fixture", "sourceObjectKey": 42]]]]]).write(to: profile)
+    }
+    func session(_ document: StudioDocument, fromLibrary: Bool, restoring state: SourceStudioPluginState? = nil) throws -> SourceStudioPluginSession {
+        if fromLibrary {
+            return try SourceStudioPluginSession(selection: selection, resolution: resolution, configuration: configuration,
+                document: document, restoring: state)
+        }
+        return try SourceStudioPluginSession(profileURL: profile, document: document, restoring: state)
+    }
+    static func document(visible: Bool = true) -> StudioDocument {
+        var target = StudioObject(name: "Target", kind: .folder); target.sourceObjectKey = 42; target.visible = visible
+        var document = StudioDocument(); document.objects = [target]; document.sourceSceneSHA256 = PluginLibraryFixture.hash
+        return document
+    }
+    func rejectsRestore(_ document: StudioDocument, fromLibrary: Bool) throws {
+        do {
+            _ = try session(document, fromLibrary: fromLibrary, restoring: #require(document.sourcePluginState))
+            Issue.record("Restoring constructor escaped with changed scene topology")
+        } catch SourcePluginError.invalid(let reason) { #expect(reason == Self.topologyError) }
+    }
+}
+
+@Test(arguments: [false, true])
+func sourcePluginRestoreRejectsInitializerClonesButFreshInstallationRemainsSupported(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("restore-clone")
+    defer { try? FileManager.default.removeItem(at: root) }
+    for operation in ["Instantiate", "InstantiateDestroy"] {
+        let fixture = try PluginRestoreFixture(root: root.appendingPathComponent(operation), operation: operation)
+        let fresh = try fixture.session(PluginRestoreFixture.document(), fromLibrary: fromLibrary)
+        let saved = try fresh.savedDocument()
+        #expect(saved.objects.count == 2 && saved.sourcePluginState?.cloneSerial == 1)
+        #expect(fresh.world.pendingSourceDestruction().count == (operation == "InstantiateDestroy" ? 1 : 0))
+        try fixture.rejectsRestore(saved, fromLibrary: fromLibrary)
+        // The original supported session still continues after the same save.
+        let continued = try fresh.step(document: saved, deltaTime: 0.02)
+        #expect(continued.objects.count == (operation == "InstantiateDestroy" ? 1 : 2))
+        #expect(continued.sourcePluginState?.cloneSerial == 1)
+    }
+}
+
+@Test(arguments: [false, true])
+func sourcePluginRestoreValidatesTopologyAfterActivation(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("restore-awake")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try PluginRestoreFixture(root: root, operation: "AwakeInstantiate")
+    let fresh = try fixture.session(PluginRestoreFixture.document(visible: false), fromLibrary: fromLibrary)
+    var saved = try fresh.savedDocument()
+    #expect(saved.objects.count == 1 && saved.sourcePluginState?.bindings.first?.awake == false)
+    saved.objects[0].visible = true
+    try fixture.rejectsRestore(saved, fromLibrary: fromLibrary)
+    let continued = try fresh.step(document: saved, deltaTime: 0.02)
+    #expect(continued.objects.count == 2 && continued.sourcePluginState?.cloneSerial == 1)
+    #expect(fresh.runtime.callbackTrace.filter { $0.hasSuffix(":Awake") }.count == 2)
+}
+
+@Test(arguments: [false, true])
+func sourcePluginRestoreNormalizesMissingUnboundIdentitiesBeforeValidation(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("restore-unbound")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let fixture = try PluginRestoreFixture(root: root, operation: "noop")
+    let fresh = try fixture.session(PluginRestoreFixture.document(), fromLibrary: fromLibrary)
+    var saved = try fresh.savedDocument()
+    let unbound = StudioObject(name: "Added without a plugin binding", kind: .folder)
+    saved.objects.append(unbound)
+    let state = try #require(saved.sourcePluginState)
+    #expect(state.objectIdentities[unbound.id] == nil)
+    let restored = try fixture.session(saved, fromLibrary: fromLibrary, restoring: state)
+    #expect(restored.world.identities[unbound.id] == "native:\(unbound.id.uuidString)")
+    #expect(restored.world.identities.count == state.objectIdentities.count + 1)
+    #expect(restored.world.cloneSerial == state.cloneSerial)
+    #expect(try restored.step(document: saved, deltaTime: 0.02).objects == saved.objects)
+}
+
+@Test(arguments: [false, true])
+func sourcePluginRestorePreservesSameTopologyVisibilityAndPendingDestruction(fromLibrary: Bool) throws {
+    let root = try PluginLibraryFixture.directory("restore-same-topology")
+    defer { try? FileManager.default.removeItem(at: root) }
+    for operation in ["noop", "SetActive", "Destroy"] {
+        let fixture = try PluginRestoreFixture(root: root.appendingPathComponent(operation), operation: operation)
+        let fresh = try fixture.session(PluginRestoreFixture.document(), fromLibrary: fromLibrary)
+        var saved = try fresh.savedDocument()
+        if operation == "SetActive" { saved.objects[0].visible = true } // ordinary input edit wins at the next step
+        let restored = try fixture.session(saved, fromLibrary: fromLibrary, restoring: #require(saved.sourcePluginState))
+        #expect(restored.world.document.objects.count == 1 && restored.world.cloneSerial == 0)
+        #expect(restored.world.pendingSourceDestruction().count == (operation == "Destroy" ? 1 : 0))
+        let expected = try fresh.step(document: saved, deltaTime: 0.02)
+        let actual = try restored.step(document: saved, deltaTime: 0.02)
+        #expect(actual == expected)
+        #expect(restored.runtime.savedClock() == fresh.runtime.savedClock())
+    }
 }

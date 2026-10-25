@@ -102,7 +102,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   evidence, not fixes or added material coverage. The latest controlled split
   associates variation with a discard statement in the instrumented program;
   source alpha testing remains required. A subsequent same-source comparison
-  still varies under explicit Metal language versions 4.0 and 4.1.
+  still varies under explicit Metal language versions 4.0 and 4.1. Supplying
+  explicit sample gradients also preserves variation and changes the pixels.
 - **Mods / Plugins:** immutable library selection, bounded translated profiles
   and three exact native adapters have selected app/save/restore acceptance.
   Mounted-session controls and fresh-profile preview rollback are merged in
@@ -110,6 +111,8 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   open and history restoration support candidate-owned attachment reads when
   initialization leaves the candidate scene unchanged; library installation
   retains its separate attachment-read gate.
+  Saved profile and library restoration also reject initialization that changes
+  object topology, identities or clone state before committing the candidate.
   General plugin compatibility remains outside the supported subset.
 
 Use the linked issue/PR state for work in review, and the owning reference for
@@ -604,6 +607,20 @@ retains the exact results and corrected comparison scope. This private diagnosti
 changes no production option or shader and establishes no source parity, stable
 improvement in variation magnitude or performance gain.
 
+**Diagnostic handoff — explicit sample gradients, [#188](https://github.com/grabbiel/ikkoku/issues/188):**
+Adding only an explicit gradient argument to the first MainTex sample leaves
+repeat variation in both texture providers. The original alpha test remains
+intact. The fresh implicit controls also vary, while paired implicit/explicit
+draws differ at hundreds of sampled pixels; this is neither an equivalent
+substitution nor a stable workaround. Root independently verifies all 80
+attachment planes, repeat and cross-variant counts, 20 paired mip chains,
+148 unchanged mip instances and ten constant buffers. Per-provider coverage,
+IDs, alpha, UVs, mask and predicate remain fixed; the existing 17-pixel
+cross-provider UV difference persists. Exact measurements and limitations are
+in the [renderer reference](../reference/renderer.md#translated-sampling-repeatability-investigation-188).
+This private diagnostic changes no production shader, material coverage,
+source-parity gate or performance claim.
+
 **Reproduced limitation — saved attachment profiles, [#210](https://github.com/grabbiel/ikkoku/issues/210):**
 A supported hidden attachment initializer loads fresh and saves successfully,
 but native reopen rejects it under the existing installation-read policy.
@@ -638,6 +655,25 @@ document, session, history, previews, resources and frame. The original policy
 reproduction stays retained separately. The [plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
 records exact scope, hashes and integration requirements. This does not establish
 GUI acceptance, general plugin compatibility, source parity or a timing benefit.
+
+**Restore boundary — constructor-created objects:**
+A fresh-installable cloning initializer previously reopened into an inconsistent
+session: the saved scene held two objects while its reconstructed runtime held
+three, and the first step failed. Shared session preparation now rejects that
+candidate after activation callbacks, before native open or history commits.
+The normalized object identities and clone serial stay pinned during restore;
+fresh installation can still create objects. Same-topology visibility changes,
+pending destruction and missing identities for unbound input objects retain their
+existing behavior. This makes rejection atomic; reopening non-idempotent cloning
+initializers remains unsupported. The
+[plugin reference](../reference/mods/plugin-execution.md#saved-scenes-and-migration)
+retains the original failing reproduction and the precise supported boundary.
+At `4ebdd727`, all 30 focused Engine tests and 161 application checks pass,
+including native open and real undo/redo retention, plus the prior 117
+attachment/profile/library checks. Root independently verifies all six app
+reports and their executable/source provenance. The first Engine attempt's
+missing fixture is retained separately from the corrected run. These checks
+establish functional behavior, without a timing, GUI or general compatibility claim.
 
 **Completed before this wave:** ST-T02/A-T04 passed local acceptance at PR #2
 (head `93e6b06`, merge `aa4bcb9`). Both configurations retained identities and
