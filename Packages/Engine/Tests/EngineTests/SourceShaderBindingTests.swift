@@ -364,6 +364,7 @@ private enum FaceCompositeFixture {
     static let headSHA = "e6ded0a39b1ca521648597d31d9f868fe354963279a8ccf4140212598289cf7e"
     static let programHash = "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c"
     static let cheekSHA = "d21eeb93b6737b897f916a46fb12fa9c56642986d9c886ab2b5b1123d7e9e6b7"
+    static let liplineSHA = "f919dc7780b5fbf7fa31dde421b64d78a5a7232c38aa50d467322103225d07f6"
     static let tableSHA = "5fe4e6811dc6d2e6edd0153cd73f989991c18573c654e1cbeafec821744a0ded"
     static func vector(_ values: [Double]) -> F.Value { .array(values.map(F.Value.float)) }
     static func record(_ defaults: Fields, _ overrides: Fields) -> F.Value {
@@ -429,7 +430,8 @@ private enum FaceCompositeFixture {
         creator["name"] = "cf_m_face_create"; creator["shader"] = "Shader Forge/create_head"
         creator["serializedFile"] = "CAB-0d1f3d8317188244dde38c81a889d1d4"; creator["pathID"] = "4119387422725910578"; creator["textures"] = environments
         creator["colors"] = ["_Color": [1, 1, 1, 1], "_UnusedAuthored": [0.1, 0.2, 0.3, 0.4],
-                             "_tex4uv": [0.5, 0.6399999856948853, -0.33000001311302185, -4]]
+                             "_tex4uv": [0.5, 0.6399999856948853, -0.33000001311302185, -4],
+                             "_tex5uv": [0.5, 0.7450000047683716, -8, -20]]
         let textures: [Row] = [("cf_face_00_t", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "4156981771398184683"), ("cf_face_00_mc", bundle, "CAB-b45f3dc6094104fda1eb384293a73f74", "5632470389437020241"),
                                ("cf_face_00_mp", base, "CAB-0d1f3d8317188244dde38c81a889d1d4", "4688923211121552405")].map { name, bundle, file, id in
             ["name": name, "bundle": bundle, "serializedFile": file, "pathID": id, "width": 1024, "height": 1024]
@@ -456,6 +458,24 @@ private enum FaceCompositeFixture {
         var sources = result["sources"] as! [Row]
         sources.append(["path": "/abdata/chara/mt_cheek_00.unity3d", "sha256": cheekSHA])
         sources.append(["path": "/abdata/list/characustom/00.unity3d", "sha256": tableSHA])
+        result["sources"] = sources
+        return result
+    }
+    static func liplineHead() -> Row {
+        var result = cheekHead()
+        var rows = result["catalogRows"] as! [Row]
+        rows.append(["table": "mt_lipline_00", "category": 404, "selectedID": 1,
+                     "serializedFile": "CAB-f743f6c65c10409f82c314d690dc0d13", "pathID": "3157866646249929324",
+                     "row": ["MainAB": "chara/mt_lipline_00.unity3d", "LiplineTex": "cw_t_lip_line_000"]])
+        result["catalogRows"] = rows
+        var textures = result["textures"] as! [Row]
+        textures.append(["name": "cw_t_lip_line_000", "bundle": "chara/mt_lipline_00.unity3d",
+                         "serializedFile": "CAB-fc3dc8dbf92f3b888b30c838dd3623fe", "pathID": "-7938000018075691814",
+                         "width": 80, "height": 36, "format": 4, "serializedColorSpace": 1, "mipLevels": 1,
+                         "filter": "Bilinear", "wrap": "Clamp", "aniso": 1])
+        result["textures"] = textures
+        var sources = result["sources"] as! [Row]
+        sources.append(["path": "/abdata/chara/mt_lipline_00.unity3d", "sha256": liplineSHA])
         result["sources"] = sources
         return result
     }
@@ -716,6 +736,130 @@ private enum FaceCompositeFixture {
     for (key, value): (String, Any) in [("filter", "Point"), ("wrap", "Repeat"), ("aniso", 2), ("mipLevels", 2)] {
         var conflicting = cheekRow; conflicting[key] = value; supplement["textures"] = [conflicting]
         #expect(try F.derive(directory: directory, card: card, head: F.cheekHead(), supplement: supplement)?.composite?.unresolved != nil)
+    }
+}
+
+@Test func sourceShaderLiplineCompositeKeepsDefaultsAndFirstSelectedRow() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let old = try F.derive(directory: directory, head: F.cheekHead())
+    #expect(try F.derive(directory: directory, head: F.liplineHead()) == old)
+    let cheek = try F.card(baseOverrides: [("cheekId", .integer(1))])
+    let oldCheek = try F.derive(directory: directory, card: cheek, head: F.cheekHead())
+    #expect(try F.derive(directory: directory, card: cheek, head: F.liplineHead()) == oldCheek)
+    let card = try F.card(faceOverrides: [("lipLineId", .integer(1))])
+    let recipe = try #require(try F.derive(directory: directory, card: card, head: F.liplineHead())?.composite)
+    let input = try #require(recipe.textures["_Texture5"]?.identity)
+    #expect(recipe.unresolved == nil && input.bundleSHA256 == F.liplineSHA)
+    #expect(input.name == "cw_t_lip_line_000" && input.pathID == "-7938000018075691814")
+    #expect(input.width == 80 && input.height == 36 && input.mipLevels == 1)
+    #expect(input.filter == "Bilinear" && input.wrap == "Clamp" && input.aniso == 1)
+    #expect(recipe.vectors["_Color5"]?.values == [0.4, 0.5, 0.6, 0.7])
+    #expect(recipe.vectors["_tex5uv"]?.values == [0.5, 0.745, -8, -20])
+    #expect(recipe.textures["_Texture5"]?.scale == [2, 3] && recipe.textures["_Texture5"]?.offset == [0.125, 0.25])
+    for id: Int64 in [2, 3, 4, 5, 6] {
+        let other = try F.card(faceOverrides: [("lipLineId", .integer(id))])
+        #expect(try F.derive(directory: directory, card: other, head: F.liplineHead())?.composite?.unresolved != nil)
+    }
+    var head = F.liplineHead(), rows = try #require(head["catalogRows"] as? [F.Row])
+    var duplicate = try #require(rows.last)
+    duplicate["row"] = ["MainAB": "unverified", "LiplineTex": "unverified"]
+    rows.append(duplicate); head["catalogRows"] = rows
+    #expect(try F.derive(directory: directory, card: card, head: head)?.composite == recipe)
+    rows.insert(duplicate, at: 0); head["catalogRows"] = rows
+    #expect(try F.derive(directory: directory, card: card, head: head)?.composite?.unresolved != nil)
+}
+
+@Test func sourceShaderLiplineCompositeIsFaceOwnedAndPreservesCheekSelection() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let face: F.Fields = [("lipLineId", .integer(1)), ("lipLineColor", F.vector([0.2, 0.7, 0.9, 0.75]))]
+    let active: F.Fields = [("cheekId", .integer(1)), ("cheekColor", F.vector([0.95, 0.2, 0.3, 0.4]))]
+    let inactive: F.Fields = [("cheekId", .integer(3)), ("cheekColor", F.vector([0.7, 0.1, 0.8, 0.9])), ("version", .string("unsupported"))]
+    for flag: UInt8 in [0, 1, 255] {
+        for cheek in [false, true] {
+            let selected = cheek ? active : []
+            let initial = try F.card(baseOverrides: flag == 0 ? selected : [], coordinateOverrides: flag == 0 ? [] : selected,
+                                     faceOverrides: face, coordinateFlag: flag)
+            let edited = try F.card(baseOverrides: flag == 0 ? selected : inactive, coordinateOverrides: flag == 0 ? inactive : selected,
+                                    faceOverrides: face, coordinateFlag: flag)
+            let expected = try #require(try F.derive(directory: directory, card: initial, head: F.liplineHead())?.composite)
+            #expect(expected.unresolved == nil && expected.vectors["_Color5"]?.values == [0.2, 0.7, 0.9, 0.75])
+            #expect((expected.textures["_Texture4"]?.identity != nil) == cheek)
+            #expect(try F.derive(directory: directory, card: edited, head: F.liplineHead())?.composite == expected)
+            let liplineResolver = try F.card(baseOverrides: flag == 0 ? selected : [], coordinateOverrides: flag == 0 ? [] : selected,
+                                            faceOverrides: face, modProperty: "ChaFileFace.lipLineId", coordinateFlag: flag)
+            #expect(try F.derive(directory: directory, card: liplineResolver, head: F.liplineHead())?.composite?.unresolved?.contains("resolver-backed") == true)
+        }
+        let cheekResolver = try F.card(baseOverrides: flag == 0 ? active : inactive, coordinateOverrides: flag == 0 ? [] : active,
+                                      faceOverrides: face, modProperty: "ChaFileMakeup.cheekId", coordinateFlag: flag)
+        let resolved = try F.derive(directory: directory, card: cheekResolver, head: F.liplineHead())?.composite
+        #expect((resolved?.unresolved == nil) == (flag != 0))
+    }
+}
+
+@Test func sourceShaderLiplineCompositeRequiresExactMetadataAndSourceRevision() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    let card = try F.card(faceOverrides: [("lipLineId", .integer(1))])
+    var cases: [F.Row] = [F.cheekHead()]
+    let replacements: [(String, Any)] = [("name", "other"), ("bundle", "other"), ("serializedFile", "other"),
+        ("pathID", "other"), ("width", 81), ("height", 37), ("mipLevels", 2), ("format", 3),
+        ("serializedColorSpace", 0), ("filter", "Point"), ("wrap", "Repeat"), ("aniso", 2)]
+    for (key, value) in replacements {
+        var head = F.liplineHead(), textures = try #require(head["textures"] as? [F.Row])
+        textures[textures.count - 1][key] = value; head["textures"] = textures; cases.append(head)
+        if ["mipLevels", "format", "serializedColorSpace", "filter", "wrap", "aniso"].contains(key) {
+            textures[textures.count - 1].removeValue(forKey: key); head["textures"] = textures; cases.append(head)
+        }
+    }
+    for key in ["table", "serializedFile", "pathID"] {
+        var head = F.liplineHead(), rows = try #require(head["catalogRows"] as? [F.Row])
+        rows[rows.count - 1][key] = "other"; head["catalogRows"] = rows; cases.append(head)
+    }
+    for suffix in ["chara/mt_lipline_00.unity3d", "list/characustom/00.unity3d"] {
+        var head = F.liplineHead(), sources = try #require(head["sources"] as? [F.Row])
+        let index = try #require(sources.firstIndex { ($0["path"] as? String)?.hasSuffix(suffix) == true })
+        sources[index]["sha256"] = String(repeating: "a", count: 64); head["sources"] = sources; cases.append(head)
+    }
+    for head in cases { #expect(try F.derive(directory: directory, card: card, head: head)?.composite?.unresolved != nil) }
+}
+
+@Test func sourceShaderLiplineMetadataDoesNotChangeOlderInputsOrOverrideSupplement() throws {
+    typealias F = FaceCompositeFixture
+    let directory = try AppearanceTestFixture.directory(); defer { try? FileManager.default.removeItem(at: directory) }
+    var head = F.liplineHead(), textures = try #require(head["textures"] as? [F.Row])
+    for index in 0..<3 {
+        textures[index]["mipLevels"] = 8; textures[index]["filter"] = "Point"
+        textures[index]["wrap"] = "Mirror"; textures[index]["aniso"] = 3
+    }
+    head["textures"] = textures
+    let oldInput = try #require(textures.first)
+    let oldRow: F.Row = ["bundle": oldInput["bundle"]!, "bundleSHA256": F.headSHA,
+        "serializedFile": oldInput["serializedFile"]!, "pathID": oldInput["pathID"]!, "name": oldInput["name"]!,
+        "width": 1024, "height": 1024, "filter": "Bilinear", "wrap": "Clamp", "aniso": 1, "mipLevels": 11]
+    let partial: F.Row = ["materials": [], "textures": [oldRow], "drawMaterials": [], "catalogRows": []]
+    for supplement: F.Row? in [nil, partial] {
+        let expected = try F.derive(directory: directory, head: F.cheekHead(), supplement: supplement)
+        #expect(try F.derive(directory: directory, head: head, supplement: supplement) == expected)
+    }
+    let card = try F.card(faceOverrides: [("lipLineId", .integer(1))])
+    let expected = try F.derive(directory: directory, card: card, head: F.liplineHead())
+    var input = try #require(textures.last); input["bundleSHA256"] = F.liplineSHA
+    var supplement: F.Row = ["materials": [], "textures": [input], "drawMaterials": [], "catalogRows": []]
+    #expect(try F.derive(directory: directory, card: card, head: F.liplineHead(), supplement: supplement) == expected)
+    // A correct supplement cannot conceal conflicting head-contract identity.
+    for (key, value): (String, Any) in [("pathID", "other"), ("serializedFile", "other"), ("width", 81), ("height", 37)] {
+        var conflictingHead = F.liplineHead(), conflictingTextures = try #require(conflictingHead["textures"] as? [F.Row])
+        conflictingTextures[conflictingTextures.count - 1][key] = value; conflictingHead["textures"] = conflictingTextures
+        #expect(try F.derive(directory: directory, card: card, head: conflictingHead, supplement: supplement)?.composite?.unresolved != nil)
+    }
+    var conflictingHead = F.liplineHead(), sources = try #require(conflictingHead["sources"] as? [F.Row])
+    sources[sources.count - 1]["sha256"] = String(repeating: "a", count: 64); conflictingHead["sources"] = sources
+    #expect(try F.derive(directory: directory, card: card, head: conflictingHead, supplement: supplement)?.composite?.unresolved != nil)
+    for (key, value): (String, Any) in [("filter", "Point"), ("wrap", "Repeat"), ("aniso", 2), ("mipLevels", 2)] {
+        var conflicting = input; conflicting[key] = value; supplement["textures"] = [conflicting]
+        #expect(try F.derive(directory: directory, card: card, head: F.liplineHead(), supplement: supplement)?.composite?.unresolved != nil)
     }
 }
 

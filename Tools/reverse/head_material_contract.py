@@ -6,8 +6,8 @@ use verified create_* equations with a documented color-space assumption. The
 contract also records the normal-clothes create material and no-pattern row;
 garment pixels are exported separately by source_texture_store.py. The optional
 ordinary-body extension records metadata only, without decoding body pixels.
-The optional cheek-ID1 extension also records metadata only, preserving all
-ID0 inputs and previews.
+The optional cheek-ID1 and lipline-ID1 extensions also record metadata only,
+preserving all ID0 inputs and previews.
 """
 from __future__ import annotations
 
@@ -51,6 +51,8 @@ BODY_TEXTURES = {"chara/oo_base.unity3d": ["cf_body_00_t", "cf_body_00_mc"],
                  "chara/mm_base.unity3d": ["cf_body_01_mp"]}
 CHEEK_BUNDLE = "chara/mt_cheek_00.unity3d"
 CHEEK_NAME = "cw_t_cheek_000"
+LIPLINE_BUNDLE = "chara/mt_lipline_00.unity3d"
+LIPLINE_NAME = "cw_t_lip_line_000"
 VERIFIED_PROGRAMS = {
     "Shader Forge/create_head": "9ec842e7b29577b0fd4ddb8ffcfc25c288471210b90ab7a312c3e7a9225df72c",
     "Shader Forge/create_eye": "c4bd7e1ec704b84075a666316519230ce163e1f4540be2af7ed25b9f3934fece",
@@ -143,6 +145,35 @@ def cheek_texture_metadata(by_bundle: dict, root: Path) -> dict:
     return {"name": CHEEK_NAME, "bundle": CHEEK_BUNDLE, **identity(reader),
             "format": int(tree["m_TextureFormat"]), "serializedColorSpace": tree["m_ColorSpace"],
             **texture_settings(tree), "metadataOnly": True}
+
+
+def lipline_catalog_row(table: dict, reader) -> dict:
+    """The additive face-owned stock row; ID0 remains the default input."""
+    if table.get("mark") != "【ChaListData】" or table.get("categoryNo") != 404 or 1 not in table.get("dictList", {}):
+        raise ValueError("Expected the category404 lipline ID1 catalog row")
+    row = dict(zip(table["lstKey"], table["dictList"][1], strict=True))
+    if row.get("MainAB") != LIPLINE_BUNDLE or row.get("LiplineTex") != LIPLINE_NAME:
+        raise ValueError("Unverified lipline ID1 catalog input")
+    return {"table": "mt_lipline_00", "category": 404, "selectedID": 1, "row": row, **identity(reader)}
+
+
+def lipline_texture_metadata(by_bundle: dict, root: Path) -> dict:
+    """Record the verified authored input without decoding or baking pixels."""
+    from source_binding_supplement import texture_settings
+    matches = [obj for obj in by_bundle[root / LIPLINE_BUNDLE].objects
+               if obj.type.name == "Texture2D" and obj.peek_name() == LIPLINE_NAME]
+    if len(matches) != 1:
+        raise ValueError(f"Expected one {LIPLINE_NAME} texture in {LIPLINE_BUNDLE}, found {len(matches)}")
+    reader = matches[0]
+    tree = reader.read_typetree()
+    settings = texture_settings(tree)
+    expected = {"width": 80, "height": 36, "mipLevels": 1, "filter": "Bilinear", "wrap": "Clamp", "aniso": 1}
+    if (int(tree["m_TextureFormat"]) != 4 or tree["m_ColorSpace"] != 1
+            or any(settings.get(key) != value for key, value in expected.items())):
+        raise ValueError("Unverified lipline ID1 texture metadata")
+    return {"name": LIPLINE_NAME, "bundle": LIPLINE_BUNDLE, **identity(reader),
+            "format": int(tree["m_TextureFormat"]), "serializedColorSpace": tree["m_ColorSpace"],
+            **settings, "metadataOnly": True}
 
 
 def verify_create_shader(reader, output: Path) -> dict:
@@ -264,6 +295,8 @@ def main() -> None:
                         help="Include ordinary female body creator/input/catalog metadata, without decoding body pixels")
     parser.add_argument("--cheek-composite", action="store_true",
                         help="Append stock cheek ID1 metadata; preserve ID0 defaults and previews")
+    parser.add_argument("--lipline-composite", action="store_true",
+                        help="Append stock lipline ID1 metadata; preserve ID0 defaults and previews")
     args = parser.parse_args()
     output, root = args.output.resolve(), args.source.resolve()
     if not output.is_relative_to((REPO / ".local").resolve()):
@@ -271,7 +304,7 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     table_path = root / "list/characustom/00.unity3d"
     tables = {**TABLES, **(BODY_TABLES if args.body_composite else {})}
-    rows, inputs, cheek_rows = [], [], []
+    rows, inputs, cheek_rows, lipline_rows = [], [], [], []
     for obj in UnityPy.load(str(table_path)).objects:
         if obj.type.name != "TextAsset" or obj.peek_name() not in tables:
             continue
@@ -285,6 +318,8 @@ def main() -> None:
                      "row": row, **identity(obj)})
         if args.cheek_composite and data.m_Name == "mt_cheek_00":
             cheek_rows.append(cheek_catalog_row(table, obj))
+        if args.lipline_composite and data.m_Name == "mt_lipline_00":
+            lipline_rows.append(lipline_catalog_row(table, obj))
         for role, bundle_key, asset_key in tables[data.m_Name]:
             inputs.append({"role": role, "category": table["categoryNo"], "id": 0,
                            "bundle": row[bundle_key], "asset": row[asset_key]})
@@ -294,11 +329,17 @@ def main() -> None:
         if len(cheek_rows) != 1:
             raise ValueError("Expected exactly one additive cheek catalog row")
         rows.extend(cheek_rows)
+    if args.lipline_composite:
+        if len(lipline_rows) != 1:
+            raise ValueError("Expected exactly one additive lipline catalog row")
+        rows.extend(lipline_rows)
     bundles = {table_path, root / "chara/bo_head_00.unity3d", root / "chara/mm_base.unity3d"}
     if args.body_composite:
         bundles.update(root / bundle for bundle in BODY_TEXTURES)
     if args.cheek_composite:
         bundles.add(root / CHEEK_BUNDLE)
+    if args.lipline_composite:
+        bundles.add(root / LIPLINE_BUNDLE)
     bundles.update(root / entry["bundle"] for entry in inputs if entry["bundle"] != "0")
     missing = sorted(str(path) for path in bundles if not path.is_file())
     if missing:
@@ -364,7 +405,8 @@ def main() -> None:
               "sources": [{"path": str(path), "bytes": path.stat().st_size, "sha256": digest(path)} for path in sorted(bundles)],
               "catalogRows": rows, "defaultInputs": inputs,
               "textures": list(exported.values()) + (body_texture_metadata(by_bundle, root) if args.body_composite else [])
-                          + ([cheek_texture_metadata(by_bundle, root)] if args.cheek_composite else []),
+                          + ([cheek_texture_metadata(by_bundle, root)] if args.cheek_composite else [])
+                          + ([lipline_texture_metadata(by_bundle, root)] if args.lipline_composite else []),
               "drawMaterials": list(materials.values()), "createMaterials": creators, "renderers": renderers,
               "verifiedCreateShaders": verified_shaders,
               "derivedPreviews": previews(output, inputs, creators),
