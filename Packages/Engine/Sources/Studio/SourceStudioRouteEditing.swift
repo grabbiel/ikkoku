@@ -77,10 +77,12 @@ public struct SourceStudioRouteState: Codable, Sendable, Equatable {
     public static let easeChoices: [(name: String, ease: SourceStudioRoute.EaseType)] = [
         ("Linear", .linear), ("Gradually faster", .easeInQuad), ("Gradually slower", .easeOutQuad),
         ("Suddenly faster", .easeInQuart), ("Suddenly slower", .easeOutQuart), ("Bounce", .easeOutBounce)]
-    /// The speed slider's range is a prefab value the recovered code only
-    /// reads (`inputSpeed.min/max`); edits stay finite and positive, which
-    /// `SourceStudioRoute` needs to play.
-    public static let speedRange: ClosedRange<Float> = 0.1...10
+    /// The speed slider's range, a prefab value the recovered code only
+    /// reads (`OnEndEditSpeed` clamps typed values to `inputSpeed.min/max`):
+    /// 0.1 to 30, not whole numbers, read from the original player's
+    /// `MPRoutePointCtrl.inputSpeed` slider by the ST-T11 reload probe
+    /// (docs/reference/studio/scene-editing.md, route points and settings).
+    public static let speedRange: ClosedRange<Float> = 0.1...30
 
     public init(points: [Point], loop: Bool, visibleLine: Bool, orientation: Int32, color: SIMD4<Float>) {
         self.points = points; self.loop = loop; self.visibleLine = visibleLine

@@ -460,6 +460,103 @@
       "timeout": 600
     },
     {
+      "id": "studio-scenario-route-edit-export",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_PROBE_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-edit-export.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-edit-export.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T11/ST-T03 route edits on the stt11c route scene (routes key 0 and key 3, both saved playing), every edit through the app's own StudioModel calls: a point drag through the guide's x arrow (mouse down/drag/up on the projected handle and arrow pixels) moves point 2 of the playing route; adding a point and deleting the start point are refused, and so are an ease outside CharaStudio's six-entry list and a speed edit on a curve point linked to the curve before it; after Stop, Add point appends point 4 at the last point with speed 2, linear ease and the uninitialised (1, 1, 1) aid; speed, ease, curve connection (InitAidPos places the aid halfway to the next point), link, loop, orientation, colour and line edits read back from the route state; undo/redo flips the line setting and the drawn line batches (2 to 1); route 3's aid drag and start-point rotation drag apply, and deleting its point 3 stops that route. Export then reimport reads both routes back unedited with every captured point and setting, the added point and aid as keys 18/19 (the smallest free keys), key 0 playing, key 3 stopped and renamed, one drawn line; a negative control rejects comparing route 3 with route 0's capture. The CharaStudio reload of the same export is Tools/reverse/original_scene_reload_probe.py (route-edit label).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-route-edit-export.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/route-edit-export.png",
+          "kind": "exported-scene"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-route-children-edit",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_SCENE",
+          "kind": "file",
+          "from": "IKKOKU_ROUTE_CHILDREN_SCENE"
+        },
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-children-edit.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-children-edit.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "ST-T11/ST-T03 route copies on the CharaStudio-authored scene-route-children.png (route key 0 playing, children folder 9 and the fixture female 10): a guide drag and a point move with undo/redo, then Duplicate of the route copies it with its children and points; the copy's settings are locked while it plays, and after Stop its curve and point moves apply and it plays again. After a 1.5 s advance the copy's folder is not where the original's is (negative control); a native save and in-process load keep both routes' edits, and after another 1.5 s advance each child is within 1e-3 m and 0.1 degrees of its pre-save capture. Export then reimport reads the original route's keys back unchanged and the copy as route 157 with point keys 306/308/310/312 and aid keys 307-313 (after its children 158 and 159), and the children land within 1e-3 m and 0.1 degrees of their captures after 1.5 s. The CharaStudio reload of the same export is Tools/reverse/original_scene_reload_probe.py (route-children-edit label).",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-route-children-edit.json",
+          "kind": "scenario-report"
+        },
+        {
+          "path": ".local/verification/scenario-exports/route-children-edit.png",
+          "kind": "exported-scene"
+        },
+        {
+          "path": ".local/verification/scenario-exports/route-children-edit-document.png",
+          "kind": "saved-document"
+        }
+      ],
+      "timeout": 600
+    },
+    {
+      "id": "studio-scenario-route-children-edit-load",
+      "argv": [
+        ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"
+      ],
+      "fixtures": [
+        {
+          "env": "IKKOKU_SOURCE_AVATAR",
+          "kind": "file"
+        }
+      ],
+      "env": {
+        "IKKOKU_STUDIO_SCENARIO": "Tools/verification/scenarios/route-children-edit-load.json",
+        "IKKOKU_STUDIO_SCENARIO_REPORT": ".local/verification/reports/studio-scenario-route-children-edit-load.json"
+      },
+      "referenceTier": "app-smoke",
+      "tolerance": "The reload half of the route-children-edit save: a fresh process loads the saved document with no import; both route runtimes rehydrate once, route 0 plays from its saved flag and keeps its edited point 1, the copy keeps its moved points and its curve point 3 (a negative control rejects the original's point 1 on the copy), and both routes' folders move during a 1.5 s advance. ST-T11/ST-T01.",
+      "artifacts": [
+        {
+          "path": ".local/verification/reports/studio-scenario-route-children-edit-load.json",
+          "kind": "scenario-report"
+        }
+      ],
+      "timeout": 600
+    },
+    {
       "id": "studio-scenario-mirrored-camera",
       "argv": [
         ".local/build/Build/Products/Debug/Ikkoku.app/Contents/MacOS/Ikkoku"

@@ -400,7 +400,7 @@ def route_case(tree,frames=4):
     trace=[dict(frameCount=10+k,deltaTime=0.5,cumulativeTime=0.5*(k+1),
                 routes=[dict(dicKey=0,position=[0.3*k,0.0,0.0],rotation=turned,active=True,
                              children=[dict(dicKey=1,position=[0.3*k,0.5,0.0],rotation=turned)])]) for k in range(frames)]
-    ui=dict(panels=1,speedMin=0.1,speedMax=10.0,speedWholeNumbers=False,easeOptions=6,routePointLimit=True)
+    ui=dict(panels=1,speedMin=0.1,speedMax=30,speedWholeNumbers=False,easeOptions=6,routePointLimit=True) # the probe prints 30, not 30.0
     return dict(label='route-edit',scene='reload-route-edit.png',afterLoad=after,settled=after,routeTrace=trace,routeUi=ui)
 
 

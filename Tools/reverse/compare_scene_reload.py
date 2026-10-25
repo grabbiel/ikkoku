@@ -519,7 +519,7 @@ ROUTE_INTENT={
     'route-children-edit':{0:dict(name='IKKOKU-RC',keys=[1,3,5,7],aidKeys=[2,4,6,8],playing=True,children=[9,10]),
                            157:dict(name='IKKOKU-RC',keys=[306,308,310,312],aidKeys=[307,309,311,313],playing=True,children=[158,159])}}
 # The route point panel the app offers (SourceStudioRouteState.easeChoices, pointLimit, speedRange).
-APP_ROUTE_UI=dict(easeOptions=6,routePointLimit=True,speedMin=0.1,speedMax=10.0)
+APP_ROUTE_UI=dict(easeOptions=6,routePointLimit=True,speedMin=0.1,speedMax=30.0)
 ROUTE_SAMPLE_SECONDS=(0.5,1.0,1.5,2.0,3.0)
 ROUTE_MOVED_MIN=0.05 # metres a playing route's childRoot must travel over the trace: rejects "never moved", not a pose tolerance
 
@@ -649,8 +649,11 @@ def compare_route_edit(trace,trees,steps,scene_hashes=None):
             payload=steps(label,deltas[1:],deltas[0]) if len(deltas)>=2 else None
             raw.extend(_route_trace_claims(label,case,tree,payload))
             ui=case.get('routeUi') or {}
-            raw.append((label+'/route-point-panel-matches-app',_exact(json.dumps(APP_ROUTE_UI,sort_keys=True)),
-                        json.dumps({field:ui.get(field) for field in APP_ROUTE_UI},sort_keys=True)))
+            # The probe prints a whole float without a fraction (30, not 30.0); both sides compare as float32.
+            app={field:_float32(value) if field.startswith('speed') else value for field,value in APP_ROUTE_UI.items()}
+            raw.append((label+'/route-point-panel-matches-app',_exact(json.dumps(app,sort_keys=True)),
+                        json.dumps({field:_float32(ui[field]) if field.startswith('speed') and isinstance(ui.get(field),(int,float)) else ui.get(field)
+                                    for field in APP_ROUTE_UI},sort_keys=True)))
             raw.append((label+'/route-point-panel',None,ui))
             claims=[]
             for name,expected,actual in raw:

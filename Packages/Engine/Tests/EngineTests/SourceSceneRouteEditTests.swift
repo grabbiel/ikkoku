@@ -1,7 +1,9 @@
 import Foundation
 import Testing
+import simd
 import Assets
 import Character
+import CoreMath
 @testable import Studio
 
 // ST-T11: route point and setting edits and route copies in an exported
@@ -287,4 +289,28 @@ private func state(_ document: KoikatsuSceneDocument, _ key: Int32 = 8) throws -
     #expect(reason { try plugins.editedData(.init(routes: [8: added])) }.contains("plug-in (ExtendedSave) data"))
     #expect(reason { try plugins.editedData(.init(routes: [8: deleted])) }.contains("plug-in (ExtendedSave) data"))
     #expect(reason { try plugins.editedData(.init(routes: [8: moved])) } == "accepted")
+}
+
+/// The editor's route line is the playback path: a line segment's two
+/// points, a curve segment sampled between them, and no line below two
+/// points (`OCIRoute.UpdateLine` deletes it there).
+@Test func sourceStudioRoutePathLinesFollowThePlaybackSegments() throws {
+    let record = try #require(route(8, in: try decoded(scene())))
+    let unity = record.points.map(\.bone.transform.position)
+    let identity = matrix_identity_float4x4
+    let lines = SourceStudioRoutePlayback.pathLines(route: record, routeWorld: identity, pointLocals: [])
+    let expected = [0, 1, 1, 2, 2, 0].map { UnityCoordinates.position(unity[$0]) } // looping: 2 -> 0 closes it
+    #expect(lines.count == expected.count)
+    #expect(zip(lines, expected).allSatisfy { simd_distance($0, $1) < 1e-5 })
+    var edit = SourceStudioRouteState(record: record)
+    try edit.setConnection(1, .curve)
+    let curved = SourceStudioRoutePlayback.pathLines(route: edit.record(authored: record), routeWorld: identity, pointLocals: [])
+    #expect(curved.count > lines.count)
+    #expect(simd_distance(curved[2], UnityCoordinates.position(unity[1])) < 1e-5)
+    #expect(simd_distance(curved[curved.count - 3], UnityCoordinates.position(unity[2])) < 1e-5)
+    var raised = identity; raised.columns.3 = SIMD4<Float>(0, 2, 0, 1)
+    let moved = SourceStudioRoutePlayback.pathLines(route: record, routeWorld: raised, pointLocals: [])
+    #expect(zip(moved, lines).allSatisfy { simd_distance($0, $1 + SIMD3<Float>(0, 2, 0)) < 1e-5 })
+    try edit.deletePoint(2); try edit.deletePoint(1)
+    #expect(SourceStudioRoutePlayback.pathLines(route: edit.record(authored: record), routeWorld: identity, pointLocals: []).isEmpty)
 }
