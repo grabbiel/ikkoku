@@ -1176,9 +1176,10 @@ final class StudioModel: ViewportInputHandler {
         return SourceStudioAccessoryNamesPlugin.update(rows, accessoryNames: names).compactMap(\.text)
     }
 
-    /// Fresh-profile callbacks may read hidden characters before installation
-    /// succeeds. New previews/textures belong to this request; existing previews
-    /// keep their warm histories and are checkpointed only on first use.
+    /// Fresh-profile and explicitly prepared initial-library callbacks may read
+    /// hidden characters before installation succeeds. New previews/textures
+    /// belong to this request; existing previews keep their warm histories and
+    /// are checkpointed only on first use.
     @MainActor final class PluginAttachmentPreparation {
         private weak var studio: StudioModel?
         private var cold: [UUID: SourceStudioCharacterPreview] = [:]

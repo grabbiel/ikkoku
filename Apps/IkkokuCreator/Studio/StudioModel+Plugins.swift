@@ -6,9 +6,9 @@ import Gameplay
 import Character
 
 extension StudioModel {
-    /// The default installation gate blocks callbacks from constructing live
-    /// previews until commit. Native/history restore opts into a separate cold,
-    /// request-owned resolver; fresh profile loading has its own preparation.
+    /// The default gate blocks callbacks from constructing live previews until
+    /// commit. Initial mounts opt into fresh-profile preparation explicitly;
+    /// native/history restore uses a separate cold, candidate-owned resolver.
     final class PluginAttachmentAccess { var committed = false }
     struct PluginAttachmentRestoreInputs {
         let blockedObjects: Set<UUID>
@@ -20,7 +20,8 @@ extension StudioModel {
         let native: PreparedNativePlugins
         let attachmentAccess: PluginAttachmentAccess?
         var restoredAttachments: PluginAttachmentRestorePreparation? = nil
-        func abort() { restoredAttachments?.abort() }
+        var installedAttachments: PluginAttachmentPreparation? = nil
+        func abort() { restoredAttachments?.abort(); installedAttachments?.abort() }
     }
     struct PreparedNativePlugins {
         let muteEnabled: Bool?
@@ -118,7 +119,14 @@ extension StudioModel {
     func prepareSourcePluginLibrary(selection: SourcePluginLibrarySelection, resolution: SourcePluginLibraryResolution,
                                     configuration: SourceStudioPluginConfiguration, document: StudioDocument,
                                     restoring: Bool = false,
-                                    attachmentRestore: PluginAttachmentRestoreInputs? = nil) throws -> PreparedSourcePlugins {
+                                    attachmentRestore: PluginAttachmentRestoreInputs? = nil,
+                                    attachmentInstall: PluginAttachmentPreparation? = nil) throws -> PreparedSourcePlugins {
+        var attachments: PluginAttachmentRestorePreparation?
+        var prepared = false
+        defer { if !prepared { attachments?.abort(); attachmentInstall?.abort() } }
+        guard attachmentInstall == nil || (!restoring && attachmentRestore == nil) else {
+            throw SourcePluginError.invalid("Initial plugin attachment preparation cannot be used for restoration.")
+        }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         guard SourcePluginGraph.targets([selection.process], process: "CharaStudio") else {
             throw SourcePluginError.invalid("The selected plugin process is not Studio.")
@@ -139,9 +147,6 @@ extension StudioModel {
         if !restoring { candidate.sourcePluginState = nil }
         let session: SourceStudioPluginSession?
         let access = PluginAttachmentAccess()
-        var attachments: PluginAttachmentRestorePreparation?
-        var prepared = false
-        defer { if !prepared { attachments?.abort() } }
         if resolution.translated.isEmpty {
             guard configuration.bindings.isEmpty, candidate.sourcePluginState == nil,
                   configuration.fixedDeltaTime.isFinite, configuration.fixedDeltaTime > 0 else {
@@ -152,11 +157,16 @@ extension StudioModel {
             guard !restoring || candidate.sourcePluginState != nil else {
                 throw SourcePluginError.invalid("Saved library selection is missing its converted-plugin state.")
             }
-            // Only native open/history supplies resolved candidate policy. An
-            // ordinary mount or detached restore keeps the installation gate.
+            // Only the current-scene mount supplies initial preparation. Native
+            // open/history supplies its own candidate policy; detached calls
+            // without either explicit context keep the installation gate.
             let baseline = candidate
             let resolver: SourceStudioPluginWorld.AttachmentResolver
-            if restoring, let attachmentRestore {
+            if let attachmentInstall {
+                resolver = { child, parent in
+                    try MainActor.assumeIsolated { try attachmentInstall.frame(child: child, parent: parent) }
+                }
+            } else if restoring, let attachmentRestore {
                 let context = try PluginAttachmentRestorePreparation(studio: self, document: baseline,
                     blockedObjects: attachmentRestore.blockedObjects, animationElapsed: attachmentRestore.animationElapsed)
                 attachments = context
@@ -179,7 +189,8 @@ extension StudioModel {
             }
         }
         prepared = true
-        return .init(document: candidate, session: session, native: native, attachmentAccess: access, restoredAttachments: attachments)
+        return .init(document: candidate, session: session, native: native, attachmentAccess: access,
+            restoredAttachments: attachments, installedAttachments: attachmentInstall)
     }
 
     /// One CPU preparation at a time. The UI retains its current mounted session
@@ -212,8 +223,10 @@ extension StudioModel {
         try Task.checkCancellation()
         guard isActiveMode, generation == sourcePluginMountGeneration,
               sourcePluginMountRequest == request else { throw CancellationError() }
+        let attachments = resolution.translated.isEmpty ? nil : PluginAttachmentPreparation(studio: self)
+        defer { attachments?.abort() }
         let prepared = try prepareSourcePluginLibrary(selection: selection, resolution: resolution,
-            configuration: configuration, document: doc)
+            configuration: configuration, document: doc, attachmentInstall: attachments)
         // No suspension follows validation. Our own document setter must not
         // interpret this successful commit as an external preparation edit.
         sourcePluginMountRequest = nil; sourcePluginLibraryPending = false
@@ -230,6 +243,7 @@ extension StudioModel {
 
     func commitSourcePlugins(_ prepared: PreparedSourcePlugins, running: Bool,
                              mountNative: Bool = true, replaceDocument: Bool = true) {
+        prepared.installedAttachments?.commit(document: prepared.document)
         prepared.attachmentAccess?.committed = true
         if mountNative { commitSourceNativePlugins(prepared.native) }
         sourcePluginSession = prepared.session
