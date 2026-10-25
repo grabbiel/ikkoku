@@ -3642,6 +3642,8 @@ extension PluginLibraryScenario {
                 let afterPreparation = resourceCounts()
                 let actual = try context.frame(child: child, parent: candidateParent), again = try context.frame(child: child, parent: candidateParent)
                 try persist(matrixValues(actual.matrix), "prepared-matrix")
+                try persist(["before": beforePreparation.graph.state.resources,
+                    "afterPreparation": afterPreparation, "afterRepeatedReads": resourceCounts()], "candidate-resource-counts")
                 try check("candidateReadsSharePrivatePreview", actual.matrix == expected.matrix && actual.rotation.vector == expected.rotation.vector
                     && again.matrix == actual.matrix && resourceCounts() == afterPreparation && studio.sourceShapePreview(for: parentID) === warm)
                 try check("preparedSavedStateExact", prepared.session?.world.document.sourcePluginLibrary == candidate.sourcePluginLibrary
@@ -3713,6 +3715,7 @@ extension PluginLibraryScenario {
                     if name == "attachment" {
                         let preview = studio.sourceShapePreview(for: parentID)!
                         let expectedHistory = try attachment(oracle, candidateParent, 0.7), actualHistory = try attachment(preview, candidateParent, 0.7)
+                        try persist(matrixValues(expectedHistory.matrix), "expected-history-matrix")
                         try persist(matrixValues(actualHistory.matrix), "history-matrix")
                         try check("historyCandidateClockAndOwner", preview !== warm && preview.reference == reference
                             && actualHistory.matrix == expectedHistory.matrix && actualHistory.rotation.vector == expectedHistory.rotation.vector)
