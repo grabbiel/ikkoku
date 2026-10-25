@@ -131,6 +131,41 @@ Still missing: the map light is unread, no map is rendered, `shadow` selects
 the native shadow toggle rather than Unity's Soft-shader softness, and the
 override's rendered appearance has not been compared against the original.
 
+### Object tree and keys
+
+Recorded 2026-10-25 for the ST-T03 topology writer. Citations are `file:line`
+under `.local/reverse/managed-recovery/902b9a23…/77473a43…/project/Studio/`.
+
+- **Roots.** `SceneInfo.Load` reads an Int32 root count (SceneInfo.cs:323).
+  For each root it reads an Int32 dictionary key (:326) followed by the object
+  record, and it stores the record with `dicObject.Add(rootKey, info)` (:351).
+  `SceneInfo.Save` (:299) writes `dicObject.Count` and then each key/record pair
+  in dictionary enumeration order.
+- **Child lists.** Every record's children are saved inside its own record:
+  - a folder: name, then count and children;
+  - an item: its fields, then count and children at the end;
+  - a route: name, count and children, then its points;
+  - a character: one group per accessory point, each holding a point key, a
+    count and that point's children.
+
+  Cameras and lights have no child list.
+- **Keys.** `ObjectInfo.Load` sets `dicKey = Studio.SetNewIndex(ReadInt32())`
+  (ObjectInfo.cs:45). `SetNewIndex` (Studio.cs:807) adds the key to a `HashSet`
+  (SceneInfo.cs:99) and returns a fresh key only when that key is already
+  taken. Saved keys therefore survive a load as long as they are unique, and
+  gaps left by deleted records are legal. A root's dictionary key and its
+  record's `dicKey` are stored separately. Studio removes and adds roots by
+  `dicKey` (`DeleteInfo`, `AddInfo`; Studio.cs:714, :705), so the topology
+  writer refuses any root whose two keys differ.
+- **Load order.** Records load depth-first in file order. A camera record's
+  load calls `ChangeCamera(ocic, active)` (AddObjectCamera.cs:82), so the last
+  saved active camera in that order is the one looked through.
+
+The deletion and reparenting rules, and how the writer uses these facts, are in
+[Topology edits](scene-editing.md#topology-edits-deletion-and-reparenting-st-t03-st-s09).
+The original player's reload of edited trees (2026-10-25) loaded every root
+key, child list and change amount exactly as written.
+
 ### Camera objects
 
 Kind 5 records are in-scene camera objects, distinct from the scene camera in
@@ -1007,8 +1042,14 @@ structure. It does not display thumbnails or instantiate scene content.
   implemented (tenth slice, play/stop controls above) as a runtime-only play
   state over the record's saved `active` flag. An interactive app-session
   comparison of the wired preview against the original player is still open.
-- Add original scene topology edits/reference remapping and GUID-specific plugin
-  callbacks/save adapters while preserving source identities (`ST-T03`, `ST-T13`).
+- Deletion and reparenting between the root and folders are written
+  ([topology edits](scene-editing.md#topology-edits-deletion-and-reparenting-st-t03-st-s09)).
+  Still missing:
+  - object addition and duplication with new keys;
+  - the refused topology cases (item, route and accessory attachment, and
+    deletion in scenes that carry plug-in data);
+  - GUID-specific plugin callbacks and save adapters that preserve source
+    identities (`ST-T03`, `ST-T13`).
 
 Use the linked audit acceptance criteria for each task. Parsing success, a rendered
 character and byte-preserved plugin data remain three different compatibility

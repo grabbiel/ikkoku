@@ -1551,7 +1551,7 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func setParent(_ id: UUID, to parent: UUID?) {
-        guard let i = doc.index(of: id) else { return }
+        guard let i = doc.index(of: id), doc.objects[i].parent != parent else { return }
         if let p = parent, p == id || doc.isDescendant(p, of: id) { return }
         let object = doc.objects[i]
         if object.sourceObjectKey != nil {
@@ -1577,10 +1577,17 @@ final class StudioModel: ViewportInputHandler {
                 // childRoot replacement a route's children get never applies.
                 let parentFrame = try parent.map { try sourceWorldMatrix(of: $0, document: doc,
                     previews: sourceInstances) } ?? matrix_identity_float4x4
-                pushUndo(force: true)
-                doc.objects[i] = try SourceStudioWorldTransform.reparented(object, world: world,
+                var moved = try SourceStudioWorldTransform.reparented(object, world: world,
                     parentFrame: parentFrame)
-                doc.objects[i].parent = parent
+                moved.parent = parent
+                pushUndo(force: true)
+                // CharaStudio appends a moved node after its new siblings
+                // (`OCIFolder.OnAttach` -> `List.Add`, `Studio.AddInfo` for
+                // the root), and sibling order is the document's object
+                // order, so the record moves to the end in one write.
+                var objects = doc.objects
+                objects.remove(at: i); objects.append(moved)
+                doc.objects = objects
             } catch {
                 status = "Reparent failed: \(error)"
             }
@@ -1927,24 +1934,22 @@ final class StudioModel: ViewportInputHandler {
         guard doc.effects == SceneEffects(), doc.mainLight == MainLight(), doc.timeline.keyframes.isEmpty else {
             throw RigError.invalid("Original-scene export does not yet serialize native lighting, effects or timeline edits.")
         }
-        var records: [Int32: (KoikatsuObjectRecord, Int32?, Int32?)] = [:]
-        func index(_ record: KoikatsuObjectRecord, parent: Int32?, attachment: Int32? = nil) {
-            records[record.sourceKey] = (record, parent, attachment)
-            for child in record.children { index(child, parent: record.sourceKey) }
-            for (point, children) in record.character?.accessoryChildren ?? [:] {
-                for child in children { index(child, parent: record.sourceKey, attachment: point) }
-            }
+        var records: [Int32: KoikatsuObjectRecord] = [:]
+        func index(_ record: KoikatsuObjectRecord) {
+            records[record.sourceKey] = record
+            for child in record.children { index(child) }
+            for children in (record.character?.accessoryChildren ?? [:]).values { for child in children { index(child) } }
         }
-        for root in source.snapshot.roots { index(root, parent: nil) }
-        guard doc.objects.count == records.count, Set(doc.objects.compactMap(\.sourceObjectKey)).count == records.count else {
-            throw RigError.invalid("Original-scene export does not yet support adding, duplicating or deleting objects.")
-        }
-        var edits = SourceSceneEdits()
+        for root in source.snapshot.roots { index(root) }
+        // ST-T03: records missing from the document are deleted with their
+        // subtree and records under another parent (or re-appended after a
+        // sibling) are moved; each moved record's re-authored local
+        // placement is written by the transform edit below.
+        let topology = try SourceSceneExportValidation.topologyEdits(doc, against: source.snapshot)
+        var edits = SourceSceneEdits(deletions: topology.deletions, reparents: topology.reparents)
         for object in doc.objects {
-            guard let key = object.sourceObjectKey, let (original, parent, attachment) = records[key],
-                  object.parent.flatMap({ doc.object($0)?.sourceObjectKey }) == parent,
-                  object.sourceAttachmentPoint == attachment else {
-                throw RigError.invalid("Original-scene export does not yet support reparenting.")
+            guard let key = object.sourceObjectKey, let original = records[key] else {
+                throw RigError.invalid("Original-scene export contains an unknown source object.")
             }
             if object.visible != original.visible { edits.visibility[key] = object.visible }
             // Only folder, camera and route records serialize a name; the
@@ -2099,7 +2104,7 @@ final class StudioModel: ViewportInputHandler {
             guard i < source.settings.cameraSlots.count, let camera else { throw RigError.invalid("Original scene export cannot remove a camera slot.") }
             if camera != (try source.settings.cameraSlots[i].nativeCamera()) { edits.cameraSlots[i] = camera.sourceCameraRecord() }
         }
-        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty {
+        if !edits.transforms.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || !edits.cards.isEmpty || !edits.mouth.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || !edits.deletions.isEmpty {
             var thumbnailFrame = frame; thumbnailFrame.gizmos = []; thumbnailFrame.effects.showGrid = false
             guard let image = host.renderer.capture(frame: thumbnailFrame, width: 640, height: 360) else { throw RigError.invalid("Could not render the edited Studio thumbnail.") }
             edits.thumbnailData = try CaptureOutput.pngData(image)

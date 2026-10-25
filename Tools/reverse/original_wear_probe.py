@@ -100,6 +100,12 @@ $r.removed=-not(Test-Path -LiteralPath $root);$r.remainingGameProcesses=@(Get-Pr
 """)
 
 
+def fresh_root():
+    """A new private player root for a one-exec run. One-exec runs never reuse a root: they
+    refuse an output folder that already holds run.json and always remove the root they made."""
+    return r'C:\Temp\IkkokuShaderProbe-' + uuid.uuid4().hex
+
+
 def bootstrap(base):
     """The only text on the prlctl command line: fetch run.ps1 and run it."""
     return ("$ErrorActionPreference='Stop';$s=Invoke-WebRequest -UseBasicParsing -Uri '" + base + "run.ps1';"
@@ -107,9 +113,10 @@ def bootstrap(base):
 
 
 class Endpoint:
-    """Serves the named inputs and accepts one bounded character.zip PUT, under a random token."""
-    def __init__(self, address, files):
-        self.token = uuid.uuid4().hex; self.files = files; self.upload = None
+    """Serves the named inputs and accepts one bounded PUT of `upload` (character.zip by
+    default), under a random token."""
+    def __init__(self, address, files, upload='character.zip'):
+        self.token = uuid.uuid4().hex; self.files = files; self.upload = None; self.upload_name = upload
         endpoint = self
         class Handler(http.server.BaseHTTPRequestHandler):
             def name(self):
@@ -122,7 +129,7 @@ class Endpoint:
                 self.send_response(200); self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
             def do_PUT(self):
-                if self.name() != 'character.zip' or endpoint.upload is not None: self.send_error(403); return
+                if self.name() != endpoint.upload_name or endpoint.upload is not None: self.send_error(403); return
                 if self.headers.get('Transfer-Encoding', '').lower() == 'chunked':
                     data = bytearray()
                     while True:
@@ -161,7 +168,7 @@ def run(args):
     settings = args.settings.read_bytes() if args.settings else b''
     properties = shader_properties(args.shaders) if args.shaders else b''
     source = SOURCE.read_bytes()
-    root = r'C:\Temp\IkkokuShaderProbe-' + uuid.uuid4().hex
+    root = fresh_root()
     record = dict(vm=args.vm, root=root, processID=0, sourceSHA256=digest(source), settingsSHA256=digest(settings), shaderPropertiesSHA256=digest(properties),
                   shaders=str(args.shaders) if args.shaders else None,
                   modelVariant=args.model_variant, currentUser=True, stopped=False, errnoBaseline=args.errno_baseline,

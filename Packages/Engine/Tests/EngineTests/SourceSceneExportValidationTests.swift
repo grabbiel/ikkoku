@@ -97,8 +97,18 @@ private func exportValidationDocument(_ source: KoikatsuSceneDocument, rendered:
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(placeholder, against: source.snapshot) }
     placeholder = baseline; placeholder.objects[1].sourceFKRotations = [1: .zero]
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(placeholder, against: source.snapshot) }
+    // ST-T03: a deleted route child is a supported deletion; an accessory
+    // child deleted on its own, an added object and a move under the route
+    // are not.
     var missing = baseline; missing.objects.removeLast()
-    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(missing, against: source.snapshot) }
+    try SourceSceneExportValidation.validate(missing, against: source.snapshot)
+    #expect(try SourceSceneExportValidation.topologyEdits(missing, against: source.snapshot).deletions == Set<Int32>([21]))
+    var detached = baseline; detached.objects.removeAll { $0.sourceObjectKey == 11 }
+    #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.validate(detached, against: source.snapshot) }
+    var added = baseline; added.objects.append(StudioObject(name: "Folder", kind: .folder))
+    #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(added, against: source.snapshot) }
+    var moved = baseline; moved.objects[0].parent = moved.objects[2].id
+    #expect(throws: SourceSceneTopologyError.self) { try SourceSceneExportValidation.validate(moved, against: source.snapshot) }
     var duplicate = baseline; duplicate.objects[1].sourceObjectKey = duplicate.objects[0].sourceObjectKey
     #expect(throws: (any Error).self) { try SourceSceneExportValidation.validate(duplicate, against: source.snapshot) }
     // Swift's canonical String equality must not hide a changed name payload.

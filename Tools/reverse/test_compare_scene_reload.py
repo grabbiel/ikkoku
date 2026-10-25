@@ -1,6 +1,6 @@
 """Synthetic CharaStudio reload records exercise the acceptance comparison; no VM data is read."""
 import math, unittest
-from compare_scene_reload import compare, compare_expression
+from compare_scene_reload import compare, compare_expression, compare_topology, file_tree
 
 
 def obj(key,kind,**over):
@@ -264,3 +264,89 @@ class ExpressionTests(unittest.TestCase):
             self.assertFalse(compare_expression(trace,expected)['passed'])
         trace,expected=self.inputs();del trace['cases']['expression-source']
         self.assertFalse(compare_expression(trace,expected)['passed'])
+
+
+def topo_tree(roots,children,kinds,view=None,sun=-1):
+    """A file_tree as the independent reader returns it, for synthetic records."""
+    transform=lambda key:dict(position=[key*0.1,0.0,0.0],rotation=[0.0,key*1.0,0.0],scale=[1.0,1.0,1.0])
+    return dict(roots=list(roots),rootKeys=list(roots),children={k:list(v) for k,v in children.items()},groups={},
+                records={key:dict(kind=kind,transform=transform(key)) for key,kind in kinds.items()},viewCamera=view,sunCaster=sun)
+
+
+def topo_case(label,tree,world,view=None):
+    """The probe's snapshot of a load that holds exactly `tree`, with `world` key -> (position, quaternion)."""
+    objects=[]
+    for key,record in tree['records'].items():
+        t=record['transform'];position,rotation=world[key]
+        objects.append(obj(key,record['kind'],childKeys=tree['children'].get(key),worldPosition=position,worldRotation=rotation,
+                           changePosition=t['position'],changeRotation=t['rotation'],changeScale=t['scale'],
+                           cameraActive=(key==view) if record['kind']==5 else None))
+    after=dict(objectCount=len(objects),viewCameraKey=view,viewCameraName=None,cameraCtrlEnabled=True,objects=objects,
+               rootKeys=[dict(key=k,dicKey=k) for k in tree['roots']],sunCaster=tree['sunCaster'])
+    return dict(label=label,scene='reload-'+label+'.png',afterLoad=after,settled=after)
+
+
+class TopologyTests(unittest.TestCase):
+    """scene-x: camera 0 and folder 1 holding camera 2 (the load winner); the delete export drops
+    folder 1 with camera 2 and clears camera 0's flag, so nothing is looked through."""
+    def inputs(self):
+        q=[0.0,0.0,0.0,1.0]
+        world={0:([1.0,2.0,3.0],q),1:([-0.5,0.2,0.5],q),2:([0.1,0.8,0.0],[0.0,0.38268343,0.0,0.92387953])}
+        source=topo_tree([0,1],{1:[2]},{0:5,1:3,2:5},view=2)
+        edited=topo_tree([0],{},{0:5})
+        trace=dict(schemaVersion=1,framesPerPhase=4,cases={
+            'topology-delete':topo_case('topology-delete',edited,world),
+            'topology-delete-source':topo_case('topology-delete-source',source,world,view=2)})
+        return trace,{'topology-delete':edited,'topology-delete-source':source}
+
+    def test_matching_load_passes_every_claim(self):
+        trace,trees=self.inputs();report=compare_topology(trace,trees)
+        self.assertTrue(report['passed'],[c for case in report['cases'].values() for c in case['claims'] if c['passed'] is False])
+        claims={c['claim']:c for c in report['cases']['topology-delete']['claims']}
+        self.assertEqual(claims['topology-delete/deleted-records-absent']['actual'],'[1, 2]')
+        self.assertTrue(claims['topology-delete/world-pose-kept-from-source']['passed'])
+        self.assertTrue(claims['topology-delete/scenario-view-camera']['passed'])
+
+    def test_wrong_tree_pose_camera_or_missing_source_fail(self):
+        def failed(mutate):
+            trace,trees=self.inputs();mutate(trace,trees)
+            report=compare_topology(trace,trees)
+            return sorted(c['claim'] for case in report['cases'].values() for c in case['claims'] if c['passed'] is False)
+        def leftover(trace,trees): # the deleted folder survived the load
+            after=trace['cases']['topology-delete']['afterLoad']
+            after['objects'].append(obj(1,3,childKeys=[],worldPosition=[-0.5,0.2,0.5],worldRotation=[0,0,0,1],
+                                        changePosition=[0.1,0,0],changeRotation=[0,1,0],changeScale=[1,1,1]))
+            after['rootKeys'].append(dict(key=1,dicKey=1));after['objectCount']=2
+        self.assertIn('topology-delete/deleted-records-absent',failed(leftover))
+        self.assertIn('topology-delete/root-dictionary-order-matches-record',failed(leftover))
+        def moved(trace,trees): # the kept camera reloads 1 cm away
+            trace['cases']['topology-delete']['afterLoad']['objects'][0]['worldPosition']=[1.01,2.0,3.0]
+        self.assertEqual(failed(moved),['topology-delete/world-pose-kept-from-source'])
+        def turned(trace,trees):
+            trace['cases']['topology-delete']['afterLoad']['objects'][0]['worldRotation']=[0.0,0.0087265,0.0,0.99996192]
+        self.assertEqual(failed(turned),['topology-delete/world-pose-kept-from-source'])
+        def looked(trace,trees): # camera 0's stale active flag selected it at load
+            trace['cases']['topology-delete']['afterLoad']['viewCameraKey']=0
+        self.assertEqual(failed(looked),['topology-delete/scenario-view-camera','topology-delete/view-camera-follows-record-load-order'])
+        def renumbered(trace,trees):
+            trace['cases']['topology-delete']['afterLoad']['rootKeys']=[dict(key=0,dicKey=5)]
+        self.assertIn('topology-delete/root-dictionary-keys-are-dickeys',failed(renumbered))
+        def printed(trace,trees): # the probe's shortest round-trip text of a float32 is that float32 exactly
+            trees['topology-delete']['records'][0]['transform']['rotation']=[0.0,345.65121459960938,0.0]
+            trace['cases']['topology-delete']['afterLoad']['objects'][0]['changeRotation']=[0.0,345.6512,0.0]
+        self.assertEqual(failed(printed),[])
+        def rotated(trace,trees): # one float32 step (3.05e-5 at 345 degrees) further is a different value
+            trees['topology-delete']['records'][0]['transform']['rotation']=[0.0,345.65121459960938,0.0]
+            trace['cases']['topology-delete']['afterLoad']['objects'][0]['changeRotation']=[0.0,345.6513,0.0]
+        self.assertEqual(failed(rotated),['topology-delete/change-amounts-match-record'])
+        def unsourced(trace,trees):del trace['cases']['topology-delete-source']
+        self.assertIn('topology-delete/source-load',failed(unsourced))
+
+    def test_file_tree_reads_the_record_with_the_independent_reader(self):
+        from analysis.studio_scene_contract import scene_fixture
+        raw,_=scene_fixture();tree=file_tree(raw)
+        self.assertEqual(tree['roots'],[10,20])
+        self.assertEqual(tree['groups'][10],[dict(point=7,keys=[11])])
+        self.assertEqual(tree['children'][20],[21])
+        self.assertEqual(sorted(tree['records']),[10,11,20,21])
+        self.assertIsNone(tree['viewCamera'])

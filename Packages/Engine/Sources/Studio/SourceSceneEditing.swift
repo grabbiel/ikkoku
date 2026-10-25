@@ -83,13 +83,30 @@ public struct SourceSceneEdits: Sendable {
     /// nil keeps the original PNG verbatim. Replacement must be one CRC-valid
     /// PNG; unlike embedded card thumbnails, a scene PNG cannot be removed.
     public var thumbnailData: Data?
+    /// ST-T03: source records to delete with their whole subtree
+    /// (`TreeNodeCtrl.DeleteNode`), listed by the top of each subtree. The
+    /// writer drops their bytes, rewrites the owning list's count, writes
+    /// `sunCaster = -1` when it pointed into a deleted subtree, and keeps
+    /// every other record's key (no renumbering; see `SourceSceneTopology`).
+    public var deletions: Set<Int32>
+    /// ST-T03: moves applied in order. Each record leaves its current list
+    /// and is appended to `parent`'s child list (a folder) or, for `nil`, to
+    /// the root dictionary under its own key, carrying its subtree bytes
+    /// unchanged. Pair a move with a `.object` transform edit holding the
+    /// re-authored local placement (`SourceStudioWorldTransform.reparented`).
+    public var reparents: [Reparent]
+    public struct Reparent: Sendable, Equatable {
+        public var object: Int32, parent: Int32?
+        public init(object: Int32, parent: Int32?) { self.object = object; self.parent = parent }
+    }
     public init(transforms: [TransformEdit] = [], cards: [Int32: SourceCharacterCard.Edits] = [:],
                 kinematics: [Int32: KinematicEdit] = [:], animations: [Int32: SourceStudioAnimationState] = [:],
                 voices: [Int32: SourceStudioVoiceState] = [:], currentCamera: KoikatsuCameraRecord? = nil,
                 cameraSlots: [Int: KoikatsuCameraRecord] = [:], thumbnailData: Data? = nil,
                 visibility: [Int32: Bool] = [:], names: [Int32: String] = [:],
                 cameraActive: [Int32: Bool] = [:], routeActive: [Int32: Bool] = [:],
-                mouth: [Int32: MouthEdit] = [:]) {
+                mouth: [Int32: MouthEdit] = [:], deletions: Set<Int32> = [], reparents: [Reparent] = []) {
+        self.deletions = deletions; self.reparents = reparents
         self.transforms = transforms; self.cards = cards; self.kinematics = kinematics; self.thumbnailData = thumbnailData
         self.visibility = visibility; self.names = names
         self.cameraActive = cameraActive; self.routeActive = routeActive
@@ -119,6 +136,21 @@ struct SourceSceneEditSpans {
     struct Mouth { let mouthOpen: Range<Int>, lipSync: Range<Int> }
     var mouth: [Int32: Mouth] = [:]
     var currentCamera: Range<Int>?, cameraSlots: [Int: Range<Int>] = [:]
+    /// The `sceneInfo.sunCaster` Int32 in the settings tail.
+    var sunCaster: Range<Int>?
+    /// Byte layout of the object tree for deletion and reparenting.
+    struct Topology {
+        /// One child list inside a record: the Int32 count at `count`, the
+        /// children's bytes up to `end`, and the accessory point key for a
+        /// character's accessory group (`nil` for folder, item and route lists).
+        struct Slot { let count: Int, end: Int, children: [Int32], point: Int32? }
+        /// Each record from its kind Int32 to its last byte (a root's
+        /// dictionary key precedes it).
+        var records: [Int32: Range<Int>] = [:]
+        /// Each record's child lists in byte order.
+        var slots: [Int32: [Slot]] = [:]
+    }
+    var topology = Topology()
 }
 
 public extension KoikatsuSceneDocument {
@@ -126,8 +158,8 @@ public extension KoikatsuSceneDocument {
     /// Any unsupported/missing destination or invalid input rejects the whole
     /// edit before bytes are returned; source data is never mutated.
     func editedData(_ edits: SourceSceneEdits) throws -> Data {
-        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty else { return preservedData }
-        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
+        guard !edits.transforms.isEmpty || !edits.cards.isEmpty || !edits.kinematics.isEmpty || !edits.animations.isEmpty || !edits.voices.isEmpty || edits.currentCamera != nil || !edits.cameraSlots.isEmpty || edits.thumbnailData != nil || !edits.visibility.isEmpty || !edits.names.isEmpty || !edits.cameraActive.isEmpty || !edits.routeActive.isEmpty || !edits.mouth.isEmpty || !edits.deletions.isEmpty || !edits.reparents.isEmpty else { return preservedData }
+        guard edits.transforms.count <= 100_000, edits.cards.count <= 10_000, edits.kinematics.count <= 10_000, edits.animations.count <= 10_000, edits.voices.count <= 10_000, edits.visibility.count <= 100_000, edits.names.count <= 100_000, edits.cameraActive.count <= 100_000, edits.routeActive.count <= 100_000, edits.mouth.count <= 10_000, edits.deletions.count <= 100_000, edits.reparents.count <= 100_000 else { throw KoikatsuReadError.limitExceeded("too many scene edits") }
         var reader = try KoikatsuBinaryReader(preservedData)
         try reader.skipPNG()
         let thumbnailRange = 0..<reader.offset
@@ -140,6 +172,7 @@ public extension KoikatsuSceneDocument {
                 for children in character.accessoryChildren.values { for child in children { index(child) } }
             }
         }
+        let rootCountOffset = reader.offset
         for _ in 0..<(try reader.count()) {
             let rootKey = try reader.int32()
             index(try reader.object(depth: 0, rootKey: rootKey))
@@ -147,6 +180,25 @@ public extension KoikatsuSceneDocument {
         guard reader.offset == snapshot.objectSectionEndOffset else { throw reader.invalid("scene object byte spans differ from the decoded document") }
         _ = try reader.sceneSettings()
         guard try reader.string() == "【KStudio】", reader.offset == baseSceneEndOffset else { throw reader.invalid("scene settings byte spans differ from the decoded document") }
+        let topology = edits.deletions.isEmpty && edits.reparents.isEmpty ? nil
+            : try SourceSceneTopology.plan(snapshot, deletions: edits.deletions, reparents: edits.reparents)
+        if let topology {
+            if !edits.deletions.isEmpty { try refuseObjectKeyedExtensions() }
+            // An edit of a deleted record has no destination left; refuse it
+            // even when it would not change a byte.
+            var targets = edits.transforms.map { edit -> Int32 in
+                switch edit.destination {
+                case .object(let key), .lookAt(let key): return key
+                case .characterFK(let key, _), .characterIK(let key, _), .itemFK(let key, _): return key
+                }
+            }
+            targets += Array(edits.visibility.keys) + Array(edits.names.keys) + Array(edits.cameraActive.keys)
+            targets += Array(edits.routeActive.keys) + Array(edits.cards.keys) + Array(edits.kinematics.keys)
+            targets += Array(edits.animations.keys) + Array(edits.voices.keys) + Array(edits.mouth.keys)
+            if let key = targets.filter(topology.deleted.contains).min() {
+                throw SourceSceneTopologyError.unsupported("A scene edit targets deleted source object \(key).")
+            }
+        }
         var patches: [(Range<Int>, Data)] = [], destinations = Set<SourceSceneEdits.Destination>()
         func add(_ range: Range<Int>, _ replacement: Data) {
             if preservedData.subdata(in: (preservedData.startIndex + range.lowerBound)..<(preservedData.startIndex + range.upperBound)) != replacement {
@@ -281,6 +333,35 @@ public extension KoikatsuSceneDocument {
             add(span, try cameraBytes(camera))
         }
         if let png = edits.thumbnailData { try SourceScenePNG.validate(png); add(thumbnailRange, png) }
+        if let topology {
+            // Camera look-through state after a reload (ChangeCamera in load
+            // order; the last true record wins). Without an explicit camera
+            // edit the saved winner must stay the camera active at import
+            // when it survives, and none when it was deleted
+            // (Studio.DeleteCamera), as a CharaStudio save would write it.
+            if edits.cameraActive.isEmpty {
+                let cameras = topology.loadOrder(slots: reader.editSpans.topology.slots).filter { objects[$0]?.kind == .camera }
+                let intended = SourceStudioCameraObjects.activeAtLoad(snapshot).flatMap { topology.deleted.contains($0) ? nil : $0 }
+                if cameras.last(where: { objects[$0]?.cameraActive == true }) != intended {
+                    for key in cameras where (objects[key]?.cameraActive == true) != (key == intended) {
+                        guard let range = reader.editSpans.cameraActive[key], range.count == 1 else {
+                            throw reader.invalid("unavailable scene camera active destination")
+                        }
+                        add(range, Data([key == intended ? 1 : 0]))
+                    }
+                }
+            }
+            // Studio.DeleteInfo: deleting the sun caster resets it to -1.
+            if topology.deleted.contains(settings.sunCaster) {
+                guard let range = reader.editSpans.sunCaster, range.count == 4 else { throw reader.invalid("sun caster byte span is unavailable") }
+                var bits = Int32(-1).littleEndian
+                add(range, withUnsafeBytes(of: &bits) { Data($0) })
+            }
+            let result = try topology.emit(preservedData, spans: reader.editSpans.topology, rootCount: rootCountOffset,
+                                           objectEnd: snapshot.objectSectionEndOffset, patches: patches)
+            try topology.verify(KoikatsuSceneReader.decodeDocument(result).snapshot)
+            return result
+        }
         patches.sort { $0.0.lowerBound < $1.0.lowerBound }
         var result = Data(), cursor = 0
         for (range, bytes) in patches {
@@ -295,6 +376,26 @@ public extension KoikatsuSceneDocument {
         // before an invalid export can leave this pure writer.
         _ = try KoikatsuSceneReader.decodeDocument(result)
         return result
+    }
+}
+
+private extension KoikatsuSceneDocument {
+    /// Plug-ins key their scene data by object `dicKey` and rewrite it from
+    /// live objects when CharaStudio saves, which this writer cannot run.
+    /// Deleting is therefore limited to scenes whose trailer carries no
+    /// plug-in entries: no trailer, or one KKEx block with a nil or empty map.
+    func refuseObjectKeyedExtensions() throws {
+        guard !trailingData.isEmpty else { return }
+        let extensions = extensions()
+        let empty: Bool
+        switch extensions.payload {
+        case .some(.null): empty = true
+        case .some(let payload): empty = (try? payload.stringKeyedMap())?.isEmpty == true
+        case .none: empty = false
+        }
+        guard extensions.version != nil, empty, extensions.diagnostics.count == 1 else {
+            throw SourceSceneTopologyError.unsupported("Original-scene export does not delete objects from a scene that carries plug-in (ExtendedSave) data: plug-ins key that data by object and rewrite it when CharaStudio saves. Save in native format instead.")
+        }
     }
 }
 
