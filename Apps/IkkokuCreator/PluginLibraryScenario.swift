@@ -11,6 +11,8 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
+    /// Regression only: real preview/Animator rollback after a failed frame.
+    let frameRollback: FrameRollback?
     /// Source-backed fresh-profile callback and failure-isolation checks.
     let reproduceFreshProfileFailure: Bool?
     /// Reproduction only: save and reopen run in separate owned processes.
@@ -49,6 +51,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let frameRollback { return await reproduceFrameRollback(frameRollback, app: app, studio: studio) }
         if let pendingDestructionRestore {
             return await reproduceInitializerRestore(pendingDestructionRestore, app: app, studio: studio, pendingDestruction: true)
         }
@@ -1368,5 +1371,273 @@ extension PluginLibraryScenario {
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
             "packages": [["manifest": manifestURL.path, "bindings": [["type": type, "sourceObjectKey": 12]]]]]).write(to: profile)
         return profile
+    }
+}
+
+// App-host frame rollback reproduction. Production stepping/ownership is unchanged.
+extension PluginLibraryScenario {
+    struct FrameRollback: Decodable {
+        enum Phase: String, Decodable { case control, warm, cold }
+        let phase: Phase
+        let directory: String
+        let sourceObjectKey: Int32
+    }
+    private struct FrameContinuation: Codable, Equatable {
+        let document: StudioDocument, world: StudioDocument
+        let callbacks: [String]
+        let animationTime: Float
+        let poses: [String: [UInt32]]
+    }
+
+    @MainActor private func reproduceFrameRollback(_ configuration: FrameRollback,
+                                                   app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        func record(_ name: String, _ okay: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+        }
+        func require(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            record(name, okay, detail)
+            if !okay { throw SourcePluginError.runtime("Frame rollback precondition failed: " + name) }
+        }
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let output = directory.appendingPathComponent(configuration.phase.rawValue, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func snapshot() throws -> InitializerObservation {
+            let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+            return .init(document: studio.doc, world: session?.world.document,
+                runtimeDocument: try session?.savedDocument(),
+                pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+                callbacks: session?.runtime.callbackTrace ?? [],
+                resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
+                    r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+                blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
+        }
+        func pose(_ object: StudioObject) throws -> [UInt32] {
+            guard let preview = studio.sourceShapePreview(for: object.id) else {
+                throw SourcePluginError.invalid("Frame rollback preview is absent.")
+            }
+            let value = try preview.editedPose(fkRotations: object.sourceFKRotations ?? [:],
+                faceValues: object.sourceFaceValues, bodyValues: object.sourceBodyValues,
+                ikTargets: object.sourceIKOverrides ?? [:], kinematics: object.sourceKinematics,
+                animationState: object.sourceAnimation, animationElapsed: studio.sourceAnimationTime)
+            return value.localMatrices.flatMap { matrix in (0..<4).flatMap { c in (0..<4).map { matrix[c][$0].bitPattern } } }
+        }
+        // Only successful independent runs normalize random clone UUIDs. Keep
+        // every document/state field and array order; require a bijective exact
+        // identity map, and reject missing references rather than dropping them.
+        func continuation() throws -> FrameContinuation {
+            guard let session = studio.sourcePluginSession else { throw SourcePluginError.invalid("Frame rollback session is absent.") }
+            let identities = session.world.identities
+            guard identities.count <= 10000, Set(identities.values.map { Data($0.utf8) }).count == identities.count else {
+                throw SourcePluginError.invalid("Ambiguous frame control identity map.")
+            }
+            let ordered = identities.sorted { $0.value.utf8.lexicographicallyPrecedes($1.value.utf8) }
+            let remap = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { index, entry in
+                (entry.key, UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!)
+            })
+            func mapped(_ id: UUID) throws -> UUID {
+                guard let value = remap[id] else { throw SourcePluginError.invalid("Frame control reference has no identity.") }
+                return value
+            }
+            func normalized(_ original: StudioDocument) throws -> StudioDocument {
+                guard original.timeline.keyframes.isEmpty, original.sourcePluginLibraryConfiguration == nil else {
+                    throw SourcePluginError.invalid("Frame control supports only its fixed profile fixture.")
+                }
+                var value = original
+                value.objects = try original.objects.map { object in
+                    var copy = object; copy.id = try mapped(object.id); copy.parent = try object.parent.map(mapped); return copy
+                }
+                if let state = original.sourcePluginState {
+                    guard var raw = try JSONSerialization.jsonObject(with: encoder.encode(state)) as? [String: Any] else {
+                        throw SourcePluginError.invalid("Frame control state is not a JSON object.")
+                    }
+                    let pairs = try state.objectIdentities.map { (try mapped($0.key), $0.value) }
+                    raw["objectIdentities"] = try JSONSerialization.jsonObject(with: encoder.encode(Dictionary(uniqueKeysWithValues: pairs)))
+                    if let roots = state.pendingDestructionRoots {
+                        raw["pendingDestructionRoots"] = try roots.map { try mapped($0).uuidString }.sorted()
+                    }
+                    value.sourcePluginState = try JSONDecoder().decode(SourceStudioPluginState.self,
+                        from: JSONSerialization.data(withJSONObject: raw))
+                }
+                return value
+            }
+            var poses: [String: [UInt32]] = [:]
+            for object in studio.doc.objects where object.sourceCharacter != nil {
+                guard let identity = identities[object.id] else { throw SourcePluginError.invalid("Frame pose identity is absent.") }
+                poses[identity] = try pose(object)
+            }
+            return try .init(document: normalized(studio.doc), world: normalized(session.world.document),
+                callbacks: session.runtime.callbackTrace, animationTime: studio.sourceAnimationTime, poses: poses)
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path),
+                  let template = studio.doc.objects.first(where: { $0.sourceObjectKey == configuration.sourceObjectKey && $0.sourceCharacter != nil }) else {
+                throw SourcePluginError.invalid("Frame rollback needs a fresh phase directory and the configured source character.")
+            }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            try persist(["pid": ProcessInfo.processInfo.processIdentifier], "process")
+            if configuration.phase != .control {
+                let producer = try JSONDecoder().decode([String: Int32].self,
+                    from: Data(contentsOf: directory.appendingPathComponent("control/process.json")))
+                try require("IndependentControlProcess", producer["pid"] != nil
+                    && producer["pid"] != ProcessInfo.processInfo.processIdentifier)
+            }
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false
+            let sourceFile = studio.doc.sourceSceneFile, sourceHash = studio.doc.sourceSceneSHA256
+            let names = configuration.phase == .control ? ["warm", "cold"] : [configuration.phase.rawValue]
+            for name in names {
+                let cold = name == "cold", injected = configuration.phase != .control
+                studio.newScene()
+                var parent = template; parent.id = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+                parent.parent = nil; parent.sourceObjectKey = 11; parent.visible = true
+                var child = StudioObject(name: "Frame attachment probe", kind: .folder)
+                child.id = UUID(uuidString: "10000000-0000-0000-0000-000000000002")!
+                child.sourceObjectKey = 12; child.parent = parent.id; child.sourceAttachmentPoint = 17
+                var document = StudioDocument(); document.sourceSceneFile = sourceFile; document.sourceSceneSHA256 = sourceHash
+                document.objects = [parent, child]; studio.doc = document
+                guard let preview = studio.sourceShapePreview(for: parent.id) else { throw SourcePluginError.invalid("Frame fixture character did not render.") }
+                try require(name + "AnimationInput", preview.hasSavedAnimation, "Retained source animation must be executable; no static substitute")
+                studio.selection = parent.id
+                studio.setSourceFKEnabled(false); studio.setSourceIKEnabled(false)
+                var body = preview.savedBodyValues; body[0] = body[0] < 0.5 ? 0.8 : 0.2
+                try studio.setSourceShapeValues(parent.id, face: nil, body: body)
+                try studio.setSourceAnimationSpeed(parent.id, 1)
+                try studio.setSourceAnimationTime(0.7)
+                let fixture = directory.appendingPathComponent("fixture-" + name, isDirectory: true)
+                let profile = fixture.appendingPathComponent("profile.json")
+                if !injected { try frameRollbackFixture(directory: fixture, cold: cold) }
+                try studio.loadSourcePluginProfileInteractively(profileURL: profile, expectedGeneration: studio.sourcePluginMountGeneration)
+                studio.sourcePluginsRunning = false
+                guard let session = studio.sourcePluginSession, let currentParent = studio.doc.object(parent.id) else {
+                    throw SourcePluginError.invalid("Frame fixture failed to install.")
+                }
+                let component = try session.runtime.component(at: 0)
+                // Session.step synchronizes the owner's input before its runtime
+                // transaction. Establish that input once before observing the
+                // failure, so this test isolates callback/host rollback.
+                try session.world.replaceDocument(studio.doc)
+                let baselinePose = try pose(currentParent)
+                try require(name + "Installed", session.runtime.savedBindings().count == 2
+                    && session.world.cloneSerial == 0 && studio.renderedSourceCharacterPreviews.count == 1,
+                    "Child binding first; real point17 read; source parent preview warm; cloned parent absent")
+                if injected {
+                    var fields = try component.savedFields(); fields["trip"] = .bool(true); try component.restoreFields(fields)
+                    for attempt in 1...2 {
+                        studio.sourcePluginsRunning = true
+                        let before = try snapshot(), frame = studio.host.renderer.currentFrame()
+                        let previews = Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init))
+                        let diagnostics = preview.diagnostics, adapter = studio.sourceFocus.adapter
+                        let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
+                        try persist(before, name + "-before-\(attempt)")
+                        var error: String?
+                        let start = ProcessInfo.processInfo.systemUptime
+                        do { try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true) }
+                        catch SourcePluginError.runtime(let reason) { error = reason }
+                        catch { error = "UNEXPECTED: \(error)" }
+                        let elapsed = (ProcessInfo.processInfo.systemUptime - start) * 1000
+                        let after = try snapshot(); try persist(after, name + "-after-\(attempt)")
+                        record(name + "Failure\(attempt)ExactError", error == "Unsupported arithmetic operator or Int32 arithmetic.", error ?? "No failure")
+                        record(name + "Failure\(attempt)ExactState", before == after,
+                            "No normalization; complete document/runtime/clock/history/resource snapshot; synchronous step \(elapsed) ms (functional diagnostic)")
+                        record(name + "Failure\(attempt)OwnersAndFrame", studio.sourcePluginSession === session
+                            && studio.sourceShapePreview(for: parent.id) === preview
+                            && Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)) == previews
+                            && preview.diagnostics == diagnostics && sameFrame(frame, studio.host.renderer.currentFrame())
+                            && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
+                            && studio.sourceFocusObservers.count == observers && !studio.sourcePluginsRunning)
+                        record(name + "Failure\(attempt)Pose", try pose(currentParent) == baselinePose,
+                            "Warm edited pose resumes at exact prior clock")
+                    }
+                    var fields = try component.savedFields(); fields["trip"] = .bool(false); try component.restoreFields(fields)
+                }
+                let clock = studio.sourceAnimationTime, start = ProcessInfo.processInfo.systemUptime
+                try studio.stepSourcePlugins(deltaTime: 0.02, advanceAnimation: true)
+                let stepMS = (ProcessInfo.processInfo.systemUptime - start) * 1000
+                let success = try continuation(); try persist(success, name + "-success")
+                record(name + "SuccessTopology", studio.doc.objects.count == (cold ? 4 : 2)
+                    && session.world.cloneSerial == (cold ? 1 : 0)
+                    && studio.renderedSourceCharacterPreviews.count == (cold ? 2 : 1),
+                    "Cold control proves a real cloned source-parent preview was constructed by the child initializer")
+                record(name + "SuccessClock", studio.sourceAnimationTime.bitPattern == (clock + 0.02).bitPattern,
+                    "Production afterUpdate clock; synchronous step \(stepMS) ms (functional diagnostic)")
+                let lastChild = cold ? studio.doc.objects.last(where: { $0.sourceAttachmentPoint == 17 && $0.id != child.id }) : child
+                let finalIdentity = lastChild.flatMap { session.world.identities[$0.id] }
+                record(name + "SuccessCallbacks", finalIdentity.map { session.runtime.callbackTrace.last?.hasSuffix("FrameChild/" + $0 + ":LateUpdate") == true } == true,
+                    session.runtime.callbackTrace.joined(separator: "; "))
+                record(name + "SuccessAnimatedPose", try pose(studio.doc.object(parent.id)!) != baselinePose,
+                    "Real source animation/dynamics changed the edited pose")
+                if injected {
+                    let url = directory.appendingPathComponent("control/" + name + "-success.json")
+                    let clean = try JSONDecoder().decode(FrameContinuation.self, from: Data(contentsOf: url))
+                    record(name + "RetryMatchesIndependentControl", success == clean,
+                        "Full typed scene/runtime fields, binding order, clocks, trace and bit-exact pose; only random successful clone UUIDs normalized")
+                }
+            }
+        } catch { record("frameReproductionFailure", false, String(describing: error)) }
+        studio.sourcePluginsRunning = false
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+
+    private func frameRollbackFixture(directory: URL, cold: Bool) throws {
+        guard !FileManager.default.fileExists(atPath: directory.path) else { throw SourcePluginError.invalid("Frame fixture directory already exists.") }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        typealias Node = [String: Any]
+        let guid = "Ikkoku.Validation.FrameRollback", hash = String(repeating: "b", count: 64)
+        func field(_ name: String, _ type: String) -> Node { ["kind": "field", "name": name, "type": type] }
+        func boolean(_ value: Bool) -> Node { ["kind": "literal", "type": "Bool", "value": value] }
+        func block(_ nodes: [Node]) -> Node { ["kind": "block", "children": nodes] }
+        func assign(_ name: String, _ type: String, _ value: Node) -> Node {
+            ["kind": "assign", "name": "=", "children": [field(name, type), value]]
+        }
+        let read: Node = ["kind": "api", "type": "Vector3", "name": "position", "children": [
+            ["kind": "api", "type": "Transform", "name": "transform", "children": []]]]
+        let zero: Node = ["kind": "api", "type": "Vector3", "name": "vector.zero", "children": []]
+        let poison: Node = ["kind": "binary", "type": "Int32", "name": "+", "children": [
+            ["kind": "literal", "type": "Int32", "value": 1], ["kind": "literal", "type": "Int32", "value": 1]]]
+        let clone: Node = ["kind": "api", "type": "Object", "name": "world.Instantiate", "children": [
+            ["kind": "api", "type": "Object", "name": "gameObject", "children": []]]]
+        let childFields: [Node] = [
+            ["name": "position", "type": "Vector3", "serialized": true, "initializer": zero],
+            ["name": "constructionPosition", "type": "Vector3", "serialized": false, "initializer": cold ? read : zero],
+            ["name": "trip", "type": "Bool", "serialized": true, "initializer": boolean(false)]]
+        let childBody: [Node] = [assign("position", "Vector3", read),
+            ["kind": "if", "children": [field("trip", "Bool"), block([["kind": "expression", "children": [poison]]]), block([])]]]
+        let parentFields: [Node] = [["name": "cloneOnce", "type": "Bool", "serialized": true, "initializer": boolean(cold)]]
+        let parentBody: [Node] = [["kind": "if", "children": [field("cloneOnce", "Bool"),
+            block([assign("cloneOnce", "Bool", boolean(false)), ["kind": "expression", "children": [clone]]]), block([])]]]
+        var components: [Node] = []
+        for (type, fields, callback, body) in [("FrameChild", childFields, "LateUpdate", childBody), ("FrameParent", parentFields, "Update", parentBody)] {
+            let program: Node = ["schemaVersion": 1, "status": "ready", "mode": "component", "type": type,
+                "source": ["sha256": hash], "identity": ["sourceSHA256": hash, "type": type, "pluginGUID": guid,
+                    "symbols": ["M:\(type).\(callback)"]], "semanticSurfaceSHA256": hash, "bridgeSHA256": hash, "emitterSHA256": hash,
+                "fields": fields, "methods": [["name": callback, "symbol": "M:\(type).\(callback)", "static": false,
+                    "returnType": "Void", "parameters": [], "body": block(body), "lifecycle": callback]]]
+            let bytes = try JSONSerialization.data(withJSONObject: program, options: [.sortedKeys])
+            _ = try SourceIRProgram.decode(bytes)
+            let file = type + ".json"; try bytes.write(to: directory.appendingPathComponent(file))
+            let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            components.append(["type": type, "program": ["file": file, "sha256": digest]])
+        }
+        let manifest: Node = ["schemaVersion": 1, "kind": "ikkoku-translated-plugin",
+            "identity": ["guid": guid, "version": "1.0", "name": "Frame rollback reproduction"],
+            "processes": ["CharaStudio"], "dependencies": [], "incompatibilities": [], "components": components]
+        let manifestURL = directory.appendingPathComponent("manifest.json")
+        try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys]).write(to: manifestURL)
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
+            "packages": [["manifest": manifestURL.path, "bindings": [["type": "FrameChild", "sourceObjectKey": 12],
+                ["type": "FrameParent", "sourceObjectKey": 11]]]]], options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("profile.json"))
     }
 }
