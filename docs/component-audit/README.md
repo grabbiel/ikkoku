@@ -91,7 +91,9 @@ acceptance boundary; their old “next” steps are historical, not a live queue
   [#208](https://github.com/grabbiel/ikkoku/issues/208); remaining stalls stay
   tracked in [#192](https://github.com/grabbiel/ikkoku/issues/192). New base-load
   diagnostics attribute most cold base-appearance time to MetalKit texture
-  loading; this measures the remaining work without claiming a speedup.
+  loading. A separately validated worker diagnostic attributes 88–90% of the
+  selected preparation operation to rig decoding, validation and conversion.
+  These measurements identify remaining work without claiming a speedup.
 - **Materials / Renderer / Visual Fidelity:** the controlled inner-shoe fixture
   reaches 18 live slots with two explicit body/face fallbacks. Same-input sampling
   variation remains open in [#188](https://github.com/grabbiel/ikkoku/issues/188).
@@ -525,6 +527,30 @@ only two samples per sex/state/binary, total API mean differences span
 established. Owner stalls and longer worker preparation remain open. The
 [Maker reference](../reference/character/maker-assets.md) records the exact
 counters, byte meanings, nested intervals and measurement limits.
+
+**Diagnostic acceptance — normal-head worker preparation, [#192](https://github.com/grabbiel/ikkoku/issues/192):**
+Optional worker-local observations separate file reads, verification, decoding,
+assembly and appearance inputs; queue samples distinguish residence, execution
+and delivery. Only a successful current selection publishes its immutable sample.
+Nil collectors preserve the existing uninstrumented path, and validation,
+cache keys, cancellation and resource ownership remain unchanged.
+
+At `1ec2e04`, all 18 focused cases pass across the original 17 passes and one
+corrected error-comparison rerun. Four functional processes pass 124 checks with
+byte-identical accepted exports. Eight quiet processes compare retained
+`bc32a083` and candidate `1ec2e04` Release binaries in 55.212 seconds: all 152
+checks pass, with 48 stage records, identical exports and selected resource
+vectors, and 16 unchanged selections without a new sample. Root independently
+verifies the retained hashes and raw report records.
+
+Across 24 candidate selections, ten rig decodes take 514.134–634.981 ms,
+88–90% of the queue operation. This includes decoding, validation and conversion;
+it does not isolate JSON parsing. Rig reads take 3.519–5.369 ms. Inclusive parent
+spans and their children must not be added together; verification aggregates also
+cross call boundaries. The two-sample API comparisons remain mixed, so no speedup
+or isolated observation overhead is established. The
+[Maker reference](../reference/character/maker-assets.md) records the remaining
+phase, byte-volume and publication boundaries.
 
 **Diagnostic handoff — MainTex-only sampling, [#209](https://github.com/grabbiel/ikkoku/pull/209):**
 Merged after all four CI checks pass at `0bcd33c`. Removing the AlphaMask/combine
