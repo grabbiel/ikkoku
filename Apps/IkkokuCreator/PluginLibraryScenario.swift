@@ -6,6 +6,7 @@ import Studio
 import Renderer
 import Scene
 import ShaderTypes
+import CoreMath
 import CryptoKit
 import simd
 
@@ -13,8 +14,14 @@ import simd
 /// mode. The barrier wraps the real immutable preparation; no result is faked.
 struct PluginLibraryScenario: Decodable {
     let requestFile: String
+    /// Reproduction only: direct profile/native loads versus the mixed graph.
+    let directPluginGraph: DirectPluginGraph?
+    /// Regression only: saved mixed graph identity across native open/history.
+    let nativeGraphRestore: NativeGraphRestore?
     /// Regression only: actual NotificationCenter registration/removal delivery.
     let focusObserverLifecycle: FocusObserverLifecycle?
+    /// Reproduction only: exact observer-token lifetime after model disposal.
+    let focusOwnerLifetime: FocusOwnerLifetime?
     /// Regression only: real preview/Animator rollback after a failed frame.
     let frameRollback: FrameRollback?
     /// Regression only: route-child placement across a rejected plugin frame.
@@ -59,7 +66,10 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let nativeGraphRestore { return reproduceNativeGraphRestore(nativeGraphRestore, app: app, studio: studio) }
+        if let directPluginGraph { return reproduceDirectPluginGraph(directPluginGraph, app: app, studio: studio) }
         if let focusObserverLifecycle { return verifyFocusObserverLifecycle(focusObserverLifecycle, app: app, studio: studio) }
+        if let focusOwnerLifetime { return reproduceFocusOwnerLifetime(focusOwnerLifetime, app: app, studio: studio) }
         if let routeCheckpointCost { return measureRouteCheckpointCost(routeCheckpointCost, app: app, studio: studio) }
         if let routeRollback { return await reproduceRouteRollback(routeRollback, app: app, studio: studio) }
         if let frameRollback { return await reproduceFrameRollback(frameRollback, app: app, studio: studio) }
@@ -493,6 +503,509 @@ struct PluginLibraryScenario: Decodable {
         let session = try SourceStudioPluginSession(profileURL: profile, document: candidate,
             attachment: { _, _ in (matrix_identity_float4x4, simd_quatf(angle: 0, axis: SIMD3(0, 1, 0))) })
         return try session.savedDocument()
+    }
+}
+
+// Reproduction only: the exact native declaration is the graph oracle; the
+// opposing GUID belongs to an explicitly synthetic empty-Awake component.
+extension PluginLibraryScenario {
+    struct DirectPluginGraph: Decodable {
+        enum Phase: String, Decodable { case control, profileFirst, nativeFirst }
+        let phase: Phase
+        let directory: String, nativeManifest: String
+        let conflictManifest: String, conflictProfile: String
+        let compatibleManifest: String, compatibleProfile: String
+    }
+    private struct DirectGraphObservation: Codable, Equatable {
+        let state: InitializerObservation
+        let focus: FocusObservation
+        let hideAdapterVisible: Bool?, interfaceVisible: Bool, accessoryNames: Bool
+        let showGizmos: Bool, effectiveShowGizmos: Bool, showTimeline: Bool
+        let pending: Bool, request: UUID?
+    }
+
+    @MainActor private func directGraphSnapshot(studio: StudioModel, expectedStatus: String? = nil) throws -> DirectGraphObservation {
+        func identity(_ value: AnyObject?) -> String? { value.map { String(describing: ObjectIdentifier($0)) } }
+        let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+        let state = InitializerObservation(document: studio.doc, world: session?.world.document,
+            runtimeDocument: try session?.savedDocument(), pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+            callbacks: session?.runtime.callbackTrace ?? [], resources: [r.meshes, r.textures, r.deformBuffers,
+                r.hiddenBuffers, r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+            undo: studio.undoStack, redo: studio.redoStack, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
+            generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+            blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        let focus = FocusObservation(adapter: identity(studio.sourceFocus.adapter), enabled: studio.sourceFocus.adapter?.enabled,
+            originalVolume: studio.sourceFocus.adapter?.originalVolume?.bitPattern,
+            masterVolume: studio.sourceAudioBus.masterVolume.bitPattern, voiceVolume: studio.sourceAudioBus.voiceVolume.bitPattern,
+            observers: studio.sourceFocusObservers.map { identity($0 as AnyObject)! },
+            launchObserver: identity(studio.sourceLaunchObserver.map { $0 as AnyObject }), awaitingInitialFocus: studio.sourceFocus.awaitingInitialFocus,
+            session: identity(session), running: studio.sourcePluginsRunning)
+        return .init(state: state, focus: focus, hideAdapterVisible: studio.sourceHideStudioUI?.visible,
+            interfaceVisible: studio.sourceInterfaceVisible, accessoryNames: studio.sourceAccessoryNamesEnabled,
+            showGizmos: studio.showGizmos, effectiveShowGizmos: studio.effectiveShowGizmos, showTimeline: studio.showTimeline,
+            pending: studio.sourcePluginLibraryPending, request: studio.sourcePluginMountRequest)
+    }
+
+    // Public toon-frame values only. Numeric draw data uses float bits;
+    // private renderer retirement stamps and texture objects are excluded.
+    private func directGraphFrameBytes(_ frame: RenderFrame) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func json<T: Encodable>(_ value: T) throws -> Any {
+            try JSONSerialization.jsonObject(with: encoder.encode(value), options: [.fragmentsAllowed])
+        }
+        func matrix(_ m: float4x4) -> [UInt32] { (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
+        var items: [[String: Any]] = []
+        for item in frame.items {
+            let m = item.material, u = m.uniforms
+            // Do not serialize C alignment padding after irisRotation.
+            let vectors: [String: SIMD4<Float>] = ["baseColor": u.baseColor, "shadowColor": u.shadowColor,
+                "specular": u.specular, "rim": u.rim, "outline": u.outline, "tint1": u.tint1, "tint2": u.tint2,
+                "tint3": u.tint3, "overlayColor0": u.overlayColor0, "overlayColor1": u.overlayColor1,
+                "overlayColor2": u.overlayColor2, "patternColor": u.patternColor, "hairGloss": u.hairGloss,
+                "params": u.params, "eye": u.eye, "emissive": u.emissive, "uvTransform": u.uvTransform,
+                "irisST0": u.irisST0, "irisST1": u.irisST1, "irisST2": u.irisST2]
+            let uniformFields: [String: Any] = ["vectors": vectors.mapValues { [$0.x.bitPattern, $0.y.bitPattern, $0.z.bitPattern, $0.w.bitPattern] },
+                "kind": u.kind, "flags": u.flags, "sourceAlphaABits": u.sourceAlphaA.bitPattern,
+                "sourceAlphaBBits": u.sourceAlphaB.bitPattern, "irisRotationBits": u.irisRotation.bitPattern]
+            let textures = [m.base, m.colorMask, m.detail, m.line, m.normal, m.overlay0, m.overlay1,
+                m.overlay2, m.pattern, m.hairGloss, m.bodyMask].map { $0?.id }
+            var value: [String: Any] = ["mesh": item.mesh.id, "objectID": item.objectID, "model": matrix(item.model),
+                "materialUniforms": uniformFields, "textures": try json(textures),
+                "transparent": m.transparent, "depthBias": m.depthBias.bitPattern,
+                "castsShadow": item.castsShadow, "outline": item.outline, "outlineScale": item.outlineScale.bitPattern,
+                "visible": item.visible, "hiddenRegions": item.hiddenRegions, "order": item.order,
+                "morphIndices": item.morphWeights.map(\.index), "morphWeightBits": item.morphWeights.map { $0.weight.bitPattern }]
+            value["deformKey"] = try json(item.deformKey); value["skinSet"] = try json(item.skinSet)
+            value["hiddenKey"] = try json(item.hiddenKey); items.append(value)
+        }
+        let gizmos: [[String: Any]] = frame.gizmos.map { g in
+            ["primitive": g.primitive == .lines ? "lines" : "triangles", "model": matrix(g.model),
+             "depthTest": g.depthTest, "objectID": g.objectID,
+             "vertices": g.vertices.map { v in [v.position.x.bitPattern, v.position.y.bitPattern, v.position.z.bitPattern,
+                v.color.x.bitPattern, v.color.y.bitPattern, v.color.z.bitPattern, v.color.w.bitPattern] }]
+        }
+        let skins: [[String: Any]] = frame.skinSets.keys.sorted().map { ["key": $0, "matrices": frame.skinSets[$0]!.map(matrix)] }
+        let bounds = [frame.sceneBounds.min.x, frame.sceneBounds.min.y, frame.sceneBounds.min.z,
+            frame.sceneBounds.max.x, frame.sceneBounds.max.y, frame.sceneBounds.max.z].map(\.bitPattern)
+        return try JSONSerialization.data(withJSONObject: ["camera": json(frame.camera), "mainLight": json(frame.mainLight),
+            "lights": json(frame.lights), "effects": json(frame.effects), "bounds": bounds,
+            "timeBits": frame.time.bitPattern, "items": items, "gizmos": gizmos, "skinSets": skins], options: [.sortedKeys])
+    }
+
+    @MainActor private func reproduceDirectPluginGraph(_ configuration: DirectPluginGraph,
+                                                       app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func record(_ name: String, _ ok: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: ok, detail: detail))
+        }
+        func require(_ name: String, _ ok: Bool, _ detail: String = "") throws {
+            record(name, ok, detail)
+            if !ok { throw SourcePluginError.runtime("Direct graph precondition failed: \(name)") }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: directory.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func snapshot() throws -> DirectGraphObservation { try directGraphSnapshot(studio: studio) }
+        func frame(_ name: String) throws -> Data {
+            let bytes = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try bytes.write(to: directory.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return bytes
+        }
+        func content(_ input: StudioDocument) -> StudioDocument {
+            var value = input; value.sourcePluginState = nil; value.sourceNativePlugins = nil
+            value.sourcePluginLibrary = nil; value.sourcePluginLibraryConfiguration = nil
+            return value
+        }
+        func loadProfile(_ path: String) throws {
+            try studio.loadSourcePluginProfileInteractively(profileURL: URL(fileURLWithPath: path),
+                expectedGeneration: studio.sourcePluginMountGeneration)
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: directory.path) else { throw SourcePluginError.invalid("Direct graph output already exists.") }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            try require("directFixture", studio.doc.objects.contains { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }
+                && !studio.host.renderer.currentFrame().items.isEmpty && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil }
+                && studio.sourcePluginSession == nil && studio.doc.sourceNativePlugins == nil && studio.sourceHideStudioUI == nil)
+            let native = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
+            let conflict = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.conflictManifest))
+            let compatible = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.compatibleManifest))
+            func isExactNoOp(_ package: SourcePluginPackage) -> Bool {
+                guard package.programs.count == 1 else { return false }
+                let program = package.programs[0]
+                guard program.type == "DirectGraphNoOp", program.fields.isEmpty,
+                      program.methods.count == 1 else { return false }
+                let method = program.methods[0]
+                return method.lifecycle == "Awake" && method.body.kind == "block"
+                    && method.body.children?.isEmpty == true
+            }
+            let exactNative = native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
+                && native.manifest.incompatibilities == ["HideStudioUI", "HideHInterface"]
+            let exactConflict = conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
+            let exactCompatible = compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
+            try require("exactGraphInputs", exactNative && exactConflict && exactCompatible
+                && [conflict, compatible].allSatisfy(isExactNoOp))
+            for nativeFirst in [false, true] {
+                let nodes = [SourcePluginGraph.Node(package: conflict), .init(nativeAdapter: native)]
+                var actual: SourcePluginLibraryError?
+                do { _ = try SourcePluginGraph.order(nativeFirst ? Array(nodes.reversed()) : nodes, process: "CharaStudio") }
+                catch let error as SourcePluginLibraryError { actual = error }
+                try require("mixedConflict\(nativeFirst ? "NativeFirst" : "ProfileFirst")",
+                    actual == .incompatible(guid: "keelhauled.hideallui", other: "HideStudioUI"), actual?.description ?? "No rejection")
+                let control = [SourcePluginGraph.Node(package: compatible), .init(nativeAdapter: native)]
+                try require("mixedCompatible\(nativeFirst ? "NativeFirst" : "ProfileFirst")",
+                    try SourcePluginGraph.order(nativeFirst ? Array(control.reversed()) : control, process: "CharaStudio") == [0, 1])
+            }
+            let baseline = try snapshot(); try persist(baseline, "baseline")
+            let nativeURL = URL(fileURLWithPath: configuration.nativeManifest)
+            if configuration.phase == .control {
+                for nativeFirst in [false, true] {
+                    let name = nativeFirst ? "nativeFirst" : "profileFirst"
+                    if nativeFirst { try studio.loadSourceNativePlugin(url: nativeURL) }
+                    try loadProfile(configuration.compatibleProfile)
+                    if !nativeFirst { try studio.loadSourceNativePlugin(url: nativeURL) }
+                    studio.sourcePluginsRunning = false
+                    let mounted = try snapshot(); try persist(mounted, name + "-mounted")
+                    guard let session = studio.sourcePluginSession, let object = studio.doc.objects.first(where: { $0.sourceObjectKey == 10 }),
+                          let sourceIdentity = session.world.identities[object.id] else { throw SourcePluginError.invalid("Control has no bound session.") }
+                    try require(name + "CompatibleMounted", studio.sourceHideStudioUI != nil && studio.doc.sourceNativePlugins == [SourceNativePluginReference(package: native)]
+                        && session.library.packages.count == 1 && session.library.packages[0].manifestData == compatible.manifestData
+                        && mounted.state.callbacks == ["Ikkoku.Validation.DirectGraphControl/DirectGraphNoOp/\(sourceIdentity):Awake"])
+                    try require(name + "NoWorldMutation", content(studio.doc) == content(baseline.state.document)
+                        && content(session.world.document) == content(studio.doc) && mounted.state.resources == baseline.state.resources
+                        && mounted.state.animationTime == baseline.state.animationTime)
+                    let beforeFrame = try frame(name + "-visible")
+                    studio.toggleSourceInterface()
+                    let hidden = try snapshot()
+                    try require(name + "Hide", !studio.sourceInterfaceVisible && !studio.effectiveShowGizmos
+                        && !studio.showGizmos && !studio.showTimeline && hidden.state == mounted.state)
+                    studio.toggleSourceInterface()
+                    let shown = try snapshot(), shownFrame = try frame(name + "-shown")
+                    try require(name + "Show", studio.sourceInterfaceVisible && !studio.showGizmos && !studio.showTimeline
+                        && shown == mounted && shownFrame == beforeFrame)
+                    studio.unloadSourcePluginsInteractively()
+                    try require(name + "Unload", studio.sourcePluginSession == nil && studio.sourceHideStudioUI == nil
+                        && studio.doc.sourceNativePlugins == nil && studio.doc.sourcePluginState == nil
+                        && content(studio.doc) == content(baseline.state.document))
+                }
+            } else {
+                let nativeFirst = configuration.phase == .nativeFirst
+                if nativeFirst {
+                    try studio.loadSourceNativePlugin(url: nativeURL); studio.toggleSourceInterface()
+                    try require("firstMount", studio.sourceHideStudioUI?.visible == false && studio.sourcePluginSession == nil)
+                } else {
+                    try loadProfile(configuration.conflictProfile); studio.sourcePluginsRunning = false
+                    try require("firstMount", studio.sourcePluginSession?.library.packages.first?.manifestData == conflict.manifestData
+                        && studio.sourceHideStudioUI == nil && studio.doc.sourceNativePlugins == nil)
+                }
+                // The first load is a successful precondition, not the rejected
+                // transaction. Preserve only the attempted second-load boundary.
+                let before = try snapshot(), owner = studio.sourcePluginSession, focusOwner = studio.sourceFocus.adapter
+                let tokens = studio.sourceFocusObservers, launch = studio.sourceLaunchObserver
+                try persist(before, "attempt-before"); let beforeFrame = try frame("attempt-before")
+                var errorText: String?
+                do {
+                    if nativeFirst { try loadProfile(configuration.conflictProfile) }
+                    else { try studio.loadSourceNativePlugin(url: nativeURL) }
+                } catch { errorText = String(describing: error) }
+                let after = try snapshot(); try persist(after, "attempt-after"); let afterFrame = try frame("attempt-after")
+                try persist(["outcome": errorText ?? "NO REJECTION"], "attempt-result")
+                let graphError = SourcePluginLibraryError.incompatible(guid: "keelhauled.hideallui", other: "HideStudioUI").description
+                record("secondLoadRejected", errorText == graphError || errorText == SourcePluginError.invalid(graphError).description,
+                    errorText ?? "The direct loader admitted the declared incompatibility")
+                record("secondLoadStateRetained", before == after, "Full document/runtime/history/clock/resources and host state")
+                record("secondLoadOwnersRetained", studio.sourcePluginSession === owner && studio.sourceFocus.adapter === focusOwner
+                    && studio.sourceLaunchObserver === launch && tokens.count == studio.sourceFocusObservers.count
+                    && zip(tokens, studio.sourceFocusObservers).allSatisfy { $0 === $1 })
+                record("secondLoadFrameRetained", beforeFrame == afterFrame, "All public toon-frame fields; private retirement stamps excluded")
+                // Diagnostic observations do not replace the rejection/retention
+                // invariants above, and no retry changes this recorded state.
+                try persist(["translated": studio.sourcePluginSession?.library.packages.map { $0.manifest.identity.guid } ?? [],
+                    "native": studio.doc.sourceNativePlugins?.map(\.guid) ?? []], "mounted-identities")
+            }
+        } catch { record("directGraphReproductionFailure", false, String(describing: error)) }
+        studio.sourcePluginsRunning = false
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+}
+
+// Reproduction only: direct-load admission and saved candidate restoration are
+// distinct entry points. The conflicting cards below are synthetic historical
+// documents, not successful saves through the now-guarded direct loader.
+extension PluginLibraryScenario {
+    struct NativeGraphRestore: Decodable {
+        let phase: NativeProfileRestore.Phase
+        let directory: String, outputDirectory: String, nativeManifest: String
+        let conflictManifest: String, conflictProfile: String
+        let compatibleManifest: String, compatibleProfile: String
+    }
+    private struct NativeGraphObservation: Codable, Equatable {
+        let graph: DirectGraphObservation
+        let previewOwners: [String]
+    }
+
+    @MainActor private func reproduceNativeGraphRestore(_ configuration: NativeGraphRestore,
+                                                         app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let output = URL(fileURLWithPath: configuration.outputDirectory, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func record(_ name: String, _ ok: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: ok, detail: detail))
+        }
+        func require(_ name: String, _ ok: Bool, _ detail: String = "") throws {
+            record(name, ok, detail)
+            if !ok { throw SourcePluginError.runtime("Native graph control failed: \(name)") }
+        }
+        func scene(_ name: String) -> URL { directory.appendingPathComponent(name + ".png") }
+        func decoded(_ name: String) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: scene(name)))
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func snapshot(status: String? = nil) throws -> NativeGraphObservation {
+            .init(graph: try directGraphSnapshot(studio: studio, expectedStatus: status),
+                previewOwners: studio.renderedSourceCharacterPreviews.map { String(describing: ObjectIdentifier($0)) }.sorted())
+        }
+        func frame(_ name: String) throws -> Data {
+            let bytes = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try bytes.write(to: output.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return bytes
+        }
+        func writeScene(_ value: StudioDocument, _ name: String) throws {
+            try CardIO.encode(value, keyword: CardIO.sceneKeyword, thumbnail: nil)
+                .write(to: scene(name), options: .withoutOverwriting)
+        }
+        func sameObjects(_ a: StudioDocument, _ b: StudioDocument) -> Bool {
+            a.objects.map(\.id) == b.objects.map(\.id) && a.sourceSceneSHA256 == b.sourceSceneSHA256
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else {
+                throw SourcePluginError.invalid("Native graph observation output already exists.")
+            }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            try require("sourceFixture", studio.doc.objects.contains { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }
+                && !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil }
+                && studio.sourcePluginSession == nil && studio.doc.sourceNativePlugins == nil)
+            let native = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
+            let conflict = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.conflictManifest))
+            let compatible = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.compatibleManifest))
+            func isExactNoOp(_ package: SourcePluginPackage) -> Bool {
+                guard package.programs.count == 1 else { return false }
+                let program = package.programs[0]
+                guard program.type == "DirectGraphNoOp", program.fields.isEmpty,
+                      program.methods.count == 1 else { return false }
+                let method = program.methods[0]
+                return method.lifecycle == "Awake" && method.body.kind == "block"
+                    && method.body.children?.isEmpty == true
+            }
+            let exactNative = native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
+                && native.manifest.incompatibilities == ["HideStudioUI", "HideHInterface"]
+            let exactConflict = conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
+            let exactCompatible = compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
+            try require("exactGraphInputs", exactNative && exactConflict && exactCompatible
+                && [conflict, compatible].allSatisfy(isExactNoOp))
+            let graphError = SourcePluginLibraryError.incompatible(guid: "keelhauled.hideallui", other: "HideStudioUI")
+            var actual: SourcePluginLibraryError?
+            do { _ = try SourcePluginGraph.order([.init(package: conflict), .init(nativeAdapter: native)], process: "CharaStudio") }
+            catch let error as SourcePluginLibraryError { actual = error }
+            try require("independentConflictOracle", actual == graphError, actual?.description ?? "No rejection")
+            try require("independentCompatibleOracle", try SourcePluginGraph.order(
+                [.init(package: compatible), .init(nativeAdapter: native)], process: "CharaStudio") == [0, 1])
+
+            switch configuration.phase {
+            case .save:
+                guard !FileManager.default.fileExists(atPath: directory.path) else {
+                    throw SourcePluginError.invalid("Native graph save requires a fresh fixture directory.")
+                }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try studio.loadSourcePluginProfileInteractively(profileURL: URL(fileURLWithPath: configuration.compatibleProfile),
+                    expectedGeneration: studio.sourcePluginMountGeneration)
+                try studio.loadSourceNativePlugin(url: native.manifestURL)
+                studio.sourcePluginsRunning = false
+                try studio.stepSourcePlugins(deltaTime: 0.04)
+                let expected = try studio.sourcePluginSession!.savedDocument().sourcePluginState
+                try require("compatibleMounted", studio.sourceHideStudioUI != nil
+                    && studio.doc.sourceNativePlugins == [SourceNativePluginReference(package: native)]
+                    && expected?.clock.elapsedTime == Double(Float(0.04)))
+                try studio.saveScene(to: scene("compatible"))
+                let saved = try decoded("compatible")
+                try persist(saved, "compatible-saved")
+                try require("compatibleActualNativeSave", saved.sourcePluginState == expected
+                    && saved.sourceNativePlugins == studio.doc.sourceNativePlugins && sameObjects(saved, studio.doc))
+
+                var base = saved
+                base.sourcePluginState = nil; base.sourceNativePlugins = nil
+                base.sourcePluginLibrary = nil; base.sourcePluginLibraryConfiguration = nil
+                func historical(_ profile: URL) throws -> StudioDocument {
+                    // No native host is installed. Build a valid saved IR state
+                    // with the existing session API, then encode historical refs.
+                    let session = try SourceStudioPluginSession(profileURL: profile, document: base)
+                    return try session.step(document: base, deltaTime: 0.04)
+                }
+                let plain = try historical(URL(fileURLWithPath: configuration.conflictProfile))
+                try writeScene(plain, "opposing-only")
+                try require("opposingOnlyFixture", sameObjects(plain, saved) && plain.sourceNativePlugins == nil
+                    && plain.sourcePluginState?.packages.map(\.guid) == ["HideStudioUI"])
+                var conflicting = plain; conflicting.sourceNativePlugins = [SourceNativePluginReference(package: native)]
+                try writeScene(conflicting, "conflicting")
+                try require("conflictingHistoricalFixture", try decoded("conflicting") == conflicting
+                    && conflicting.sourcePluginState?.clock == saved.sourcePluginState?.clock
+                    && sameObjects(conflicting, saved), "Synthetic CardIO scene; not a successful direct mixed mount")
+                var disabled = conflicting; disabled.sourceNativePlugins![0].enabled = false
+                try writeScene(disabled, "disabled")
+                try require("disabledSelectedFixture", try decoded("disabled") == disabled
+                    && disabled.sourcePluginState == conflicting.sourcePluginState,
+                    "Only enabled changes; selected package identity and its incompatibility remain")
+
+                let changedProfile = directory.appendingPathComponent("changed-profile.json")
+                let originalProfileBytes = try Data(contentsOf: URL(fileURLWithPath: configuration.conflictProfile))
+                try originalProfileBytes.write(to: changedProfile, options: .withoutOverwriting)
+                var changed = try historical(changedProfile); changed.sourceNativePlugins = conflicting.sourceNativePlugins
+                try writeScene(changed, "changed-profile")
+                var changedBytes = originalProfileBytes; changedBytes.append(contentsOf: [0x20, 0x0a])
+                _ = try JSONSerialization.jsonObject(with: changedBytes)
+                try changedBytes.write(to: changedProfile)
+                let changedSHA = SHA256.hash(data: changedBytes).map { String(format: "%02x", $0) }.joined()
+                try require("changedValidProfileIdentity", changedSHA != changed.sourcePluginState?.profileSHA256
+                    && changed.sourceNativePlugins == conflicting.sourceNativePlugins && sameObjects(changed, saved))
+
+                // Copy only the exact verified manifest and its declared files;
+                // never modify installed/shared source or configuration bytes.
+                guard let config = native.manifest.configuration else { throw SourcePluginError.invalid("Expected native configuration fixture.") }
+                let copy = directory.appendingPathComponent("changed-native", isDirectory: true)
+                try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+                let manifest = copy.appendingPathComponent("manifest.json")
+                try Data(contentsOf: native.manifestURL).write(to: manifest, options: .withoutOverwriting)
+                for file in [native.manifest.source, config] {
+                    let target = copy.appendingPathComponent(file.file)
+                    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data(contentsOf: native.manifestURL.deletingLastPathComponent().appendingPathComponent(file.file))
+                        .write(to: target, options: .withoutOverwriting)
+                }
+                let copied = try SourceNativePluginPackage.load(url: manifest)
+                var changedNative = conflicting; changedNative.sourceNativePlugins = [SourceNativePluginReference(package: copied)]
+                try writeScene(changedNative, "changed-native")
+                let configURL = copy.appendingPathComponent(config.file)
+                var bytes = try Data(contentsOf: configURL); bytes.append(0x0a); try bytes.write(to: configURL)
+                var nativeError: String?
+                do { _ = try changedNative.sourceNativePlugins![0].load() } catch { nativeError = String(describing: error) }
+                try require("changedNativeConfigIdentity", nativeError == SourcePluginError.invalid("Native adapter source or configuration hash changed.").description
+                    && changedNative.sourcePluginState == conflicting.sourcePluginState, nativeError ?? "No rejection")
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("save-pid.txt"), atomically: true, encoding: .utf8)
+                try persist(["compatible": "Actual StudioModel.saveScene",
+                    "others": "Synthetic historical CardIO documents; same UUIDs and validated saved IR state",
+                    "changed-profile": "Copied profile with valid JSON whitespace change after snapshot",
+                    "changed-native": "Copied verified native configuration changed after snapshot"], "fixture-construction")
+            case .reopen:
+                let savedPID = try String(contentsOf: directory.appendingPathComponent("save-pid.txt"), encoding: .utf8)
+                try require("freshProcessBoundary", savedPID != String(ProcessInfo.processInfo.processIdentifier),
+                    "save PID=\(savedPID), reopen PID=\(ProcessInfo.processInfo.processIdentifier)")
+                let saved = try decoded("compatible"), opposing = try decoded("opposing-only")
+                try require("sameUUIDCandidateContexts", sameObjects(saved, opposing)
+                    && saved.sourcePluginState?.packages.map(\.guid) == ["Ikkoku.Validation.DirectGraphControl"]
+                    && opposing.sourcePluginState?.packages.map(\.guid) == ["HideStudioUI"]
+                    && saved.sourceNativePlugins?.count == 1 && opposing.sourceNativePlugins == nil)
+
+                // Drive real history operations. Fixture assignment seeds an
+                // existing document snapshot; no stack or generation is written.
+                func seedHistory(_ action: String, target: StudioDocument) throws {
+                    let prior = studio.doc
+                    if action == "undo" {
+                        studio.doc = target; studio.pushUndo(force: true); studio.doc = prior
+                    } else if action == "redo" {
+                        studio.pushUndo(force: true); studio.doc = target; studio.undo()
+                        guard studio.doc.objects == prior.objects && studio.doc.sourcePluginState == prior.sourcePluginState,
+                              studio.redoStack.last == target, studio.sourcePluginSession != nil else {
+                            throw SourcePluginError.runtime("Unable to seed the real redo candidate.")
+                        }
+                    }
+                }
+                func controlRestored() throws -> Bool {
+                    guard let session = studio.sourcePluginSession else { return false }
+                    let state = try session.savedDocument().sourcePluginState
+                    return studio.doc.objects == saved.objects && studio.doc.sourcePluginState == saved.sourcePluginState
+                        && studio.doc.sourceNativePlugins == saved.sourceNativePlugins && studio.sourceHideStudioUI != nil
+                        && session.library.packages.first?.manifestData == compatible.manifestData
+                        && session.world.document.objects == saved.objects
+                        && state == saved.sourcePluginState
+                        && session.runtime.callbackTrace.isEmpty && !studio.sourcePluginsRunning
+                        && !studio.host.renderer.currentFrame().items.isEmpty
+                }
+                for action in ["open", "undo", "redo"] {
+                    try studio.loadScene(from: scene("opposing-only"))
+                    try seedHistory(action, target: saved)
+                    try require("compatible\(action)PriorContext", studio.sourcePluginSession?.library.packages.first?.manifestData == conflict.manifestData
+                        && studio.doc.sourceNativePlugins == nil && sameObjects(studio.doc, saved)
+                        && (action != "undo" || studio.undoStack.last == saved)
+                        && (action != "redo" || studio.redoStack.last == saved))
+                    try persist(snapshot(), "compatible-\(action)-before")
+                    if action == "open" { try studio.loadScene(from: scene("compatible")) }
+                    else if action == "undo" { studio.undo() } else { studio.redo() }
+                    try persist(snapshot(), "compatible-\(action)-after")
+                    try require("compatible\(action)CandidateRestored", try controlRestored(), studio.status)
+                }
+
+                let incompatible = [graphError.description, SourcePluginError.invalid(graphError.description).description]
+                let changedProfile = [SourcePluginError.invalid("Saved plugin profile or library bindings changed; explicit reinstallation is required.").description]
+                let changedNative = [SourcePluginError.invalid("Native adapter source or configuration hash changed.").description]
+                let cases: [(String, String, [String])] = [
+                    ("conflicting", "open", incompatible), ("conflicting", "undo", incompatible), ("conflicting", "redo", incompatible),
+                    ("disabled", "open", incompatible), ("changed-profile", "open", changedProfile),
+                    ("changed-profile", "undo", changedProfile), ("changed-profile", "redo", changedProfile),
+                    ("changed-native", "open", changedNative)]
+                for (fixture, action, errors) in cases {
+                    let name = fixture + "-" + action, candidate = try decoded(fixture)
+                    try studio.loadScene(from: scene("compatible")); try studio.stepSourcePlugins(deltaTime: 0.02)
+                    studio.sourcePluginsRunning = false
+                    try seedHistory(action, target: candidate)
+                    if studio.sourceInterfaceVisible { studio.toggleSourceInterface() }
+                    try require(name + "Prior", studio.sourcePluginSession?.library.packages.first?.manifestData == compatible.manifestData
+                        && studio.doc.sourceNativePlugins == saved.sourceNativePlugins && studio.sourceHideStudioUI?.visible == false
+                        && sameObjects(studio.doc, candidate) && !studio.renderedSourceCharacterPreviews.isEmpty
+                        && (action != "undo" || studio.undoStack.last == candidate)
+                        && (action != "redo" || studio.redoStack.last == candidate))
+                    let before = try snapshot(), session = studio.sourcePluginSession, focus = studio.sourceFocus.adapter
+                    let previews = studio.renderedSourceCharacterPreviews, tokens = studio.sourceFocusObservers, launch = studio.sourceLaunchObserver
+                    try persist(candidate, name + "-candidate"); try persist(before, name + "-before")
+                    let beforeFrame = try frame(name + "-before")
+                    var result = "NO REJECTION"
+                    if action == "open" {
+                        do { try studio.loadScene(from: scene(fixture)) } catch { result = String(describing: error) }
+                    } else {
+                        if action == "undo" { studio.undo() } else { studio.redo() }
+                        result = studio.status
+                    }
+                    let after = try snapshot(); try persist(after, name + "-after")
+                    let afterFrame = try frame(name + "-after")
+                    try persist(["outcome": result], name + "-result")
+                    let expected = action == "open" ? errors : errors.map { "Plugin restore: " + $0 }
+                    let rejected = expected.contains(result)
+                    // Only an independently matched history error permits its
+                    // documented status update. Raw snapshots keep that status.
+                    let comparison: NativeGraphObservation
+                    if rejected && action != "open" { comparison = try snapshot(status: before.graph.state.status) }
+                    else { comparison = after }
+                    record(name + "Rejected", rejected, result)
+                    record(name + "StateRetained", comparison == before, "Exact document/runtime/history/clocks/resources/host state; only matched history error status is normalized")
+                    record(name + "OwnersRetained", studio.sourcePluginSession === session && studio.sourceFocus.adapter === focus
+                        && studio.sourceLaunchObserver === launch && studio.sourceFocusObservers.count == tokens.count
+                        && zip(tokens, studio.sourceFocusObservers).allSatisfy { $0 === $1 })
+                    record(name + "PreviewOwnersRetained", Set(previews.map(ObjectIdentifier.init))
+                        == Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)))
+                    record(name + "FrameRetained", beforeFrame == afterFrame, "All public toon-frame fields; no padding/private renderer stamps")
+                }
+            }
+        } catch { record("nativeGraphReproductionFailure", false, String(describing: error)) }
+        studio.sourcePluginsRunning = false
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }
 
@@ -1603,6 +2116,247 @@ extension PluginLibraryScenario {
             do { try persist(events, "notification-events") }
             catch { rows.append(.init(op: "focusEvidenceFailure", ok: false, detail: String(describing: error))) }
         }
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+}
+
+// Reproduction only: disposal is deliberately distinct from explicit unload.
+// Weak probes cannot keep the model, adapter or observer tokens alive.
+extension PluginLibraryScenario {
+    struct FocusOwnerLifetime: Decodable {
+        let directory: String, nativeManifest: String, enabledConfig: String, disabledConfig: String
+        let cycles: Int
+    }
+    private final class FocusWeakObject {
+        weak var value: AnyObject?
+        let identity: String
+        init(_ value: AnyObject) {
+            self.value = value; identity = String(describing: ObjectIdentifier(value))
+        }
+    }
+    private struct FocusOwnerProbes {
+        let owner: FocusWeakObject, focusHost: FocusWeakObject, audioBus: FocusWeakObject
+        let adapter: FocusWeakObject?
+        let tokens: [FocusWeakObject]
+        let events: [FocusOwnerEvent]
+    }
+    private struct FocusOwnerEvent: Codable {
+        let phase: String
+        let state: DirectGraphObservation
+    }
+    private struct FocusOwnerLiveness: Codable {
+        let owner: String, focusHost: String, audioBus: String, adapter: String?
+        let tokens: [String]
+        let ownerAlive: Bool, focusHostAlive: Bool, audioBusAlive: Bool, adapterAlive: Bool
+        let tokensAlive: [Bool]
+        var ownersReleased: Bool { !ownerAlive && !focusHostAlive && !audioBusAlive && !adapterAlive }
+        var tokensReleased: Bool { !tokensAlive.contains(true) }
+    }
+    private struct FocusDisposalObservation: Codable {
+        let phase: String
+        let explicitUnload: Bool, enabled: Bool
+        let liveness: FocusOwnerLiveness
+        let retainedTokensAcrossDisposedOwners: Int
+    }
+
+    @MainActor private func focusOwnerProbes(_ owner: StudioModel, events: [FocusOwnerEvent] = []) -> FocusOwnerProbes {
+        .init(owner: .init(owner), focusHost: .init(owner.sourceFocus), audioBus: .init(owner.sourceAudioBus),
+              adapter: owner.sourceFocus.adapter.map { .init($0) },
+              tokens: owner.sourceFocusObservers.map { .init($0 as AnyObject) }, events: events)
+    }
+
+    // Returning only values prevents a weak read's temporary strong reference
+    // from crossing the observation boundary into later exact-token cleanup.
+    @inline(never) @MainActor private func focusOwnerLiveness(_ probes: FocusOwnerProbes) -> FocusOwnerLiveness {
+        autoreleasepool {
+            .init(owner: probes.owner.identity, focusHost: probes.focusHost.identity, audioBus: probes.audioBus.identity,
+                  adapter: probes.adapter?.identity, tokens: probes.tokens.map(\.identity),
+                  ownerAlive: probes.owner.value != nil, focusHostAlive: probes.focusHost.value != nil,
+                  audioBusAlive: probes.audioBus.value != nil, adapterAlive: probes.adapter?.value != nil,
+                  tokensAlive: probes.tokens.map { $0.value != nil })
+        }
+    }
+
+    @inline(never) @MainActor private func removeFocusOwnerTokens(_ probes: [FocusOwnerProbes]) {
+        autoreleasepool {
+            for probe in probes {
+                for weakToken in probe.tokens {
+                    if let token = weakToken.value { NotificationCenter.default.removeObserver(token) }
+                }
+            }
+        }
+    }
+
+    @inline(never) @MainActor private func makeDisposedFocusOwner(
+        host: EngineHost, configuration: FocusOwnerLifetime, mount: Bool, enabled: Bool, explicitUnload: Bool
+    ) throws -> FocusOwnerProbes {
+        try autoreleasepool {
+            let owner = StudioModel(host: host)
+            owner.stopBenchmarkTimer(); owner.liveAnimation = false; owner.isActiveMode = true
+            var completed = false
+            // Infrastructure failures must not strand a partially mounted owner.
+            // A completed disposal experiment intentionally keeps the registration.
+            defer { if !completed { owner.mountSourceFocusAdapter(nil) } }
+            guard mount else { completed = true; return focusOwnerProbes(owner) }
+            try owner.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.nativeManifest))
+            try owner.configureSourceMutePlugin(configURL: URL(fileURLWithPath:
+                enabled ? configuration.enabledConfig : configuration.disabledConfig))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            guard owner.sourceFocus.adapter?.enabled == enabled, owner.sourceFocusObservers.count == 2,
+                  owner.sourceLaunchObserver == nil, !owner.sourceFocus.awaitingInitialFocus else {
+                throw SourcePluginError.runtime("Owner lifetime requires a settled actual focus observer pair.")
+            }
+            owner.sourceAudioBus.masterVolume = 0.75; owner.sourceAudioBus.voiceVolume = 0.5
+            let before = try directGraphSnapshot(studio: owner)
+            let beforeFrame = try directGraphFrameBytes(host.renderer.currentFrame())
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            let loss = try directGraphSnapshot(studio: owner)
+            let expectedGain: Float = enabled ? 0 : 0.75
+            let expectedOriginal: UInt32? = enabled ? Float(0.75).bitPattern : nil
+            guard loss.state == before.state, loss.focus.masterVolume == expectedGain.bitPattern,
+                  loss.focus.originalVolume == expectedOriginal, loss.focus.voiceVolume == Float(0.5).bitPattern else {
+                throw SourcePluginError.runtime("Owner lifetime focus-loss control did not match the requested setting.")
+            }
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            let gain = try directGraphSnapshot(studio: owner)
+            guard gain == before, try directGraphFrameBytes(host.renderer.currentFrame()) == beforeFrame else {
+                throw SourcePluginError.runtime("Owner lifetime single-delivery focus control changed state or frame.")
+            }
+            var events = [FocusOwnerEvent(phase: "settled", state: before),
+                          .init(phase: "loss", state: loss), .init(phase: "gain", state: gain)]
+            let weakOwner = focusOwnerProbes(owner)
+            if explicitUnload {
+                owner.unloadSourcePluginsInteractively()
+                guard owner.sourceFocus.adapter == nil, owner.sourceFocusObservers.isEmpty,
+                      owner.sourceLaunchObserver == nil, owner.doc.sourceNativePlugins == nil else {
+                    throw SourcePluginError.runtime("Owner lifetime explicit unload did not remove its mounted state.")
+                }
+                events.append(.init(phase: "unloaded", state: try directGraphSnapshot(studio: owner)))
+            }
+            completed = true
+            return .init(owner: weakOwner.owner, focusHost: weakOwner.focusHost, audioBus: weakOwner.audioBus,
+                         adapter: weakOwner.adapter, tokens: weakOwner.tokens, events: events)
+        }
+    }
+
+    @MainActor private func reproduceFocusOwnerLifetime(_ configuration: FocusOwnerLifetime,
+                                                        app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = [], observations: [FocusDisposalObservation] = []
+        var probes: [FocusOwnerProbes] = []
+        var control: StudioModel?
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func record(_ name: String, _ ok: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: ok, detail: detail))
+        }
+        func require(_ name: String, _ ok: Bool, _ detail: String = "") throws {
+            record(name, ok, detail)
+            if !ok { throw SourcePluginError.runtime("Owner lifetime control is inconclusive: \(name)") }
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: directory.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func retainedTokens() -> Int {
+            probes.reduce(0) { $0 + focusOwnerLiveness($1).tokensAlive.filter { $0 }.count }
+        }
+        defer {
+            // Only exact tokens created by this diagnostic; never a global removal.
+            removeFocusOwnerTokens(probes)
+            control?.unloadSourcePluginsInteractively(); control?.stopBenchmarkTimer(); control = nil
+            studio.refresh()
+        }
+        do {
+            guard (1...8).contains(configuration.cycles), !FileManager.default.fileExists(atPath: directory.path) else {
+                throw SourcePluginError.invalid("Owner lifetime needs 1...8 cycles and a fresh output directory.")
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            try studio.setSourceAnimationTime(0.25)
+            try require("ownerFixture", studio.doc.objects.contains { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }
+                && !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil }
+                && studio.sourceFocus.adapter == nil && studio.sourceFocusObservers.isEmpty && studio.sourceLaunchObserver == nil)
+            let package = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
+            let enabled = try SourceMuteInBackgroundPlugin.readConfiguration(Data(contentsOf: URL(fileURLWithPath: configuration.enabledConfig)))
+            let disabled = try SourceMuteInBackgroundPlugin.readConfiguration(Data(contentsOf: URL(fileURLWithPath: configuration.disabledConfig)))
+            try require("ownerExactInputs", package.manifest.adapterID == SourceNativePluginPackage.muteAdapter
+                && package.manifest.identity.guid == SourceMuteInBackgroundPlugin.guid
+                && package.manifest.identity.version == SourceMuteInBackgroundPlugin.version && enabled && !disabled)
+            let original = try directGraphSnapshot(studio: studio)
+            let originalFrame = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try persist(original, "original-state")
+            try originalFrame.write(to: directory.appendingPathComponent("original-frame.json"), options: .withoutOverwriting)
+            let plain = try makeDisposedFocusOwner(host: studio.host, configuration: configuration,
+                mount: false, enabled: false, explicitUnload: false)
+            let plainLiveness = focusOwnerLiveness(plain)
+            try persist(plainLiveness, "plain-owner")
+            try require("plainOwnerReleased", plainLiveness.ownersReleased)
+            try require("plainOwnerHasNoTokens", plainLiveness.tokens.isEmpty)
+
+            control = StudioModel(host: studio.host)
+            control!.stopBenchmarkTimer(); control!.liveAnimation = false; control!.isActiveMode = true
+            try control!.loadSourceNativePlugin(url: URL(fileURLWithPath: configuration.nativeManifest))
+            try control!.configureSourceMutePlugin(configURL: URL(fileURLWithPath: configuration.enabledConfig))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            control!.sourceAudioBus.masterVolume = 0.75; control!.sourceAudioBus.voiceVolume = 0.5
+            try require("liveControlMounted", control!.sourceFocusObservers.count == 2
+                && control!.sourceFocus.adapter?.enabled == true && control!.sourceLaunchObserver == nil)
+            let liveBaseline = try directGraphSnapshot(studio: control!)
+            let controlProbes = focusOwnerProbes(control!)
+            for explicitUnload in [true, false] {
+                for cycle in 1...configuration.cycles {
+                    let name = "\(explicitUnload ? "unload" : "dispose")\(cycle)"
+                    let expectedEnabled = cycle % 2 == 1
+                    let probe = try makeDisposedFocusOwner(host: studio.host, configuration: configuration,
+                        mount: true, enabled: expectedEnabled, explicitUnload: explicitUnload)
+                    probes.append(probe)
+                    let liveness = focusOwnerLiveness(probe)
+                    let observation = FocusDisposalObservation(phase: name, explicitUnload: explicitUnload,
+                        enabled: expectedEnabled, liveness: liveness, retainedTokensAcrossDisposedOwners: retainedTokens())
+                    observations.append(observation)
+                    try persist(probe.events, name + "-events"); try persist(observation, name + "-released")
+                    try require(name + "OwnerReleased", liveness.ownersReleased,
+                        "No token-retention inference until the weak owner, focus host, adapter and bus have released")
+                    if explicitUnload {
+                        try require(name + "TokensReleased", liveness.tokensReleased,
+                            "Explicit unload is the independent token-release control")
+                    } else {
+                        record(name + "TokensReleased", liveness.tokensReleased,
+                            "Observed after owner release and before later notifications or exact-token cleanup")
+                    }
+                    try require(name + "LiveOwnerUnchanged", try directGraphSnapshot(studio: control!) == liveBaseline)
+                }
+            }
+            // Preserve all red disposal observations before the differential cleanup.
+            try persist(observations, "before-cleanup")
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: nil)
+            let controlLoss = try directGraphSnapshot(studio: control!)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+            let controlGain = try directGraphSnapshot(studio: control!)
+            try persist([FocusOwnerEvent(phase: "loss", state: controlLoss), .init(phase: "gain", state: controlGain)],
+                        "after-disposal-notifications")
+            try persist(probes.map { focusOwnerLiveness($0) }, "after-notifications-liveness")
+            try require("disposedNotificationsLiveControl", controlLoss.state == liveBaseline.state
+                && controlLoss.focus.masterVolume == Float(0).bitPattern
+                && controlLoss.focus.originalVolume == Float(0.75).bitPattern && controlGain == liveBaseline)
+            removeFocusOwnerTokens(probes)
+            let cleaned = probes.map { focusOwnerLiveness($0) }
+            try persist(cleaned, "after-exact-token-removal")
+            try require("exactTokenRemovalReleasedTokens", cleaned.allSatisfy(\.tokensReleased))
+            try require("exactTokenRemovalOwnersStillReleased", cleaned.allSatisfy(\.ownersReleased))
+            control!.unloadSourcePluginsInteractively(); control!.stopBenchmarkTimer(); control = nil
+            let controlReleased = focusOwnerLiveness(controlProbes)
+            try persist(controlReleased, "live-control-disposed")
+            try require("liveControlReleased", controlReleased.ownersReleased && controlReleased.tokensReleased)
+            studio.refresh()
+            let final = try directGraphSnapshot(studio: studio)
+            let finalFrame = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try persist(final, "final-state")
+            try finalFrame.write(to: directory.appendingPathComponent("final-frame.json"), options: .withoutOverwriting)
+            try require("originalOwnerStateRetained", final == original)
+            try require("originalOwnerFrameRestored", finalFrame == originalFrame)
+        } catch { record("ownerLifetimeFailure", false, String(describing: error)) }
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }
 }

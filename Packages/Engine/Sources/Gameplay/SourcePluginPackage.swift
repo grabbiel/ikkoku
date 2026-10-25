@@ -69,4 +69,14 @@ public struct SourcePluginLibrary: Sendable {
             throw SourcePluginError.invalid(error.description)
         }
     }
+
+    /// Checks separately mounted, already verified adapters without changing this
+    /// library's execution order or allowing them to satisfy profile dependencies.
+    /// Call only at the load boundary, before constructors or host adapter commit.
+    public func validate(nativeAdapters: [SourceNativePluginPackage], process: String = "CharaStudio") throws {
+        guard !nativeAdapters.isEmpty else { return }
+        let nodes = packages.map { SourcePluginGraph.Node(package: $0) }
+            + nativeAdapters.map { SourcePluginGraph.Node(nativeAdapter: $0) }
+        _ = try SourcePluginGraph.order(nodes, process: process)
+    }
 }

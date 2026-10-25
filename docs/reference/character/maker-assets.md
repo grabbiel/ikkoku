@@ -1046,3 +1046,62 @@ RSS was not measured. These results establish a bounded selection improvement,
 not FPS, universal latency, source appearance parity or elimination of owner
 stalls. Private evidence is retained under
 `.local/codex-continue-2026-10-24/rolling/maker-clothes-composition-groups/`.
+
+### Reader-local verified RGBA digest reuse (#192)
+
+The bounded appearance reader retains each digest computed from actual file
+bytes beside its existing immutable RGBA array. Later references check expected
+size first, then compare the expected hash exactly and case-sensitively with that
+verified digest. First-read failures still short-circuit before copying; input
+caps and typed error precedence remain unchanged. There is no cross-reader or
+cross-selection cache, extra pixel buffer, shader change or GPU/publication
+change. Retained metadata adds one 64-character digest per cached input plus
+Swift value/string overhead; heap/RSS was not measured. Optional diagnostics
+separate actual SHA work from `rgbaDigestComparison`; nil diagnostics skip clocks.
+
+Nine focused Engine tests pass at `3793e32`, including all 18 supported
+assembly/head preparation combinations, size/hash precedence, malformed and
+uppercase hashes, changed files between readers, copy-on-write snapshots and
+independent CPU/Metal color checks. The integrated measured source is `d3253535`
+on accepted main `99a6bfb0`. Candidate Release executable
+`bc24b33c8705688921f23e0e6d0c2ecb352ac783833d1f3230079ed1bbfa375c`
+is compared with the accepted clothes-group control `3ca1fac0` /
+`9c55a75dbabf628cb1e63c716b26b6248a38cf1f15c4def7c4418353138b2b2d`.
+Only the two intended production files differ between these producers.
+The compiler exited successfully, but its process watchdog recorded exit 126
+for two detached owned build helpers. Exact-identity cleanup and supplemental
+fresh-product/archive proof are retained alongside that original failure; the
+build was not rerun or relabeled.
+
+Four functional processes pass 124 checks, preserving all four exported cards,
+12 resource/rig-cache pairs and eight no-op/rejected-selection resource states.
+A separate quiet female ABBA / male BAAB pair passes 152 checks across eight
+fresh processes, retaining 48 observations, 16 no-ops and identical exports.
+Both arms keep 20 real and eight fallback input allocations, 316 fallback
+bindings, 16 dispatches and four completions. Reads and copies remain
+32,506,112 bytes in 12 calls per selection. Actual SHA input falls from
+62,914,816 bytes in 20 calls to 32,506,112 bytes in 12 calls, with eight cached
+digest comparisons: 29 MiB of repeated hashing removed, not disk traffic or
+memory-footprint savings. Comparisons take about 0.001 ms per selection here.
+
+The table reports mean milliseconds over three transitions per cycle from two
+processes per arm/sex. Transitions within each process are correlated; cycle 1
+contains different rig-cache miss counts and is not an all-cold measurement.
+
+| Sex / cycle | Selection API, control → candidate | Worker, control → candidate | Owner, control → candidate |
+| --- | ---: | ---: | ---: |
+| Female / 1 | 541.868 → 535.114 | 451.384 → 442.061 | 88.523 → 91.089 |
+| Female / 2 | 148.435 → 137.313 | 83.970 → 72.121 | 63.004 → 63.770 |
+| Male / 1 | 553.470 → 545.221 | 461.845 → 452.108 | 90.121 → 90.694 |
+| Male / 2 | 153.638 → 142.340 | 86.917 → 74.685 | 65.198 → 66.134 |
+
+Across these four cells, selection means fall 6.754–11.299 ms and appearance
+input preparation falls 11.011–12.394 ms. Owner means increase 0.573–2.566 ms;
+individual candidate owner calls still take 61.264–113.264 ms. Issue #192 stays
+open. The prelaunch snapshot records an unmanaged VM at 4.5% CPU and four old
+Cursor processes at 0–0.2%; active owners held heavy work, but this is not
+machine-wide isolation. There is no FPS, universal-latency or full appearance
+parity claim. Nested and inclusive timing intervals are not additive.
+Private evidence is retained in
+`.local/codex-continue-2026-10-24/rolling/maker-rgba-digest-reuse/`, including
+unchanged original failures, raw-first retention and the per-head/cycle analysis.

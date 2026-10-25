@@ -149,6 +149,45 @@ keeps its separate acceptance above; this run does not establish real OS focus
 delivery, model deinitialization, multiple-window ownership or physical audio.
 Ordinary mounts and frame processing gain no instrumentation.
 
+### Temporary Studio owner disposal (#247)
+
+`StudioModel` removes its focus-observer pair and optional launch observer in
+its main-actor-isolated deinitializer. Replacement and interactive unload keep
+their existing cleanup paths. The verified case is a mounted temporary model
+disposed on the main actor. The ordinary app retains one shared Studio model, so
+replacing a scene is a different lifetime.
+
+The original diagnostic at `87dfe9a` (`58f457c1` Release binary SHA-256 prefix)
+completed 59 ordered assertions: 51 passed and eight token-release assertions
+failed. Eight mounted temporary models released their model, focus host, adapter
+and audio bus, but left 16 block-observer tokens registered. Eight explicit-unload
+controls retained none. Removing only the diagnostic's exact tokens released
+all of them; a live-owner control kept receiving one callback per notification.
+Enabled and disabled configurations both exercised disposal.
+
+The corrected candidate is `70a7e3f` (`23bb2f24` Release binary SHA-256 prefix).
+On 2026-10-25, its unchanged scenarios pass **59 disposal checks and 132
+same-owner lifecycle checks** in two fresh app processes. All eight disposal
+assertions change from failure to success; every disposed owner leaves zero
+retained tokens before later notifications or diagnostic cleanup. Original and
+final scene-state/frame files remain byte-identical. The lifecycle report is
+byte-identical to the earlier acceptance, with all 127 events and four exact
+rejected-load snapshot pairs preserved. Independent review verifies all 53 raw
+artifact hashes. Both apps and the compiler release their owned processes.
+
+The source change adds no per-frame work or new instrumentation outside the
+optional scenario. Token counts do not measure retained bytes, RSS or a latency
+improvement.
+
+Private source, archive and raw evidence remain under
+`.local/codex-continue-2026-10-24/wave-three/plugins/focus-owner-lifetime/`.
+The diagnostic stops its temporary models' benchmark timers to isolate observer
+ownership. Deferred-startup disposal, final release from another executor,
+multiple-window ownership, real OS focus and physical audio remain separate
+checks; no broader timer-lifecycle fix is implied.
+
+### Headless capture controls
+
 Headless captures exit before launch finishes, so two capture-only variables
 provide focus evidence. `IKKOKU_APPLICATION_FOCUS=0,1` delivers up to 64 focus
 losses (`0`) and gains (`1`) through the same method as the AppKit observers; it

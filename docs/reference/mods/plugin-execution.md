@@ -63,6 +63,82 @@ adapters share. It also validates every declared version on its own; see
 [dependency policy](#selection-and-dependency-policy). The fixed step is explicit:
 the controlled original Unity player measured 0.02 s.
 
+## Direct profile and native coexistence (#236)
+
+Direct translated-profile and native-adapter loads validate their combined
+selected package graph before installing callbacks or changing host adapters.
+Previously, the two direct entry points could admit a pair that the immutable
+library graph rejected. Profile loading now prepares the recorded native packages
+once and checks them before constructing the plugin world. Native loading verifies
+the new package once, reuses the retained packages for preparation and validates
+against the resident translated library before committing adapters, document
+references or status.
+
+Profile-only dependency checks and execution order remain authoritative: a
+separately mounted adapter cannot satisfy a missing profile dependency. Combined
+validation uses the existing ordinal GUID, version, process and incompatibility
+rules, including selected disabled native references. It adds no hashing, file
+reads or graph traversal to frame ticks. Load-time validation cost was not timed.
+Saved-scene open and undo/redo use separate restoration entry points; their
+later candidate-graph acceptance is recorded below.
+
+The retained regression uses the exact registered HideAllUI package and two
+explicitly synthetic, empty-Awake translated packages: the conflicting
+`HideStudioUI` GUID and a compatible control. Its scene contains original source
+character 10 and a nonempty toon frame. Before the fix, the compatible control
+passed 16 checks, while profile-first passed 9/11 and native-first passed 8/11.
+The independent graph oracle rejected the conflicting pair in both orders.
+
+At `9bcea00`, all 13 focused Engine checks and all 38 checks across three fresh
+Release app processes pass without skips. Both rejection orders retain the exact
+projected document, runtime, callbacks, history, clocks, host state and resource
+counts, with byte-identical named public frame fields; raw material padding and
+private GPU retirement stamps are excluded. The compatible control matches its
+pre-fix report. Public tests additionally cover constructor/attachment isolation,
+profile dependency and changed-package error precedence, and preserved execution
+order. The fixed executable SHA-256 is
+`81422d4705049da49ffb03a72f259b040b4aad2d73289a30c04fdf040da827d9`.
+This is app-model acceptance, not an OS-menu, audio, arbitrary-plugin or timing
+claim. Original red runs and the corrected diagnostic import failure are retained
+separately from the successful run.
+
+## Saved profile and native graph restoration (#242)
+
+Scene open and undo/redo validate the saved candidate's combined translated and
+native package graph before constructing its world, runtime or components. The
+native packages are already verified while preparing that candidate. Restoration
+uses those packages, including selected disabled references, rather than the
+opposing live session's graph. A compatible candidate with the same document UUID
+as the live scene remains valid.
+
+Saved profile identity and saved package identity checks still precede mixed
+graph validation, preserving the original changed-file errors. Profile dependency
+validation and translated execution order remain unchanged. Detached restoration
+with native adapters disabled retains its empty context and adds no file reads.
+The fix adds no work to frame ticks; restoration cost was not measured.
+
+The original reproduction passed 11 save checks but only 40 of 60 fresh-process
+open/history checks. Incompatible open, undo, redo and disabled-reference open each
+admitted a pair rejected by the independent graph oracle. The 20 resulting failed
+assertions and their raw state/frame artifacts remain retained. The compatible
+scene was written through the real `saveScene` path; conflicting historical cards
+were constructed deliberately. Undo/redo use production history operations.
+
+At integrated `a6baf7f`, the unchanged 11 save and 60 fresh-process checks all pass.
+Eight rejection/control pairs retain exact projected state and named frame fields;
+history failures change only the expected error status. Callback and preview
+owners, resources, clocks and history remain intact. Profile and native-file
+tamper controls retain their original errors. The 16 focused Engine tests include
+constructor isolation, compatible restored state without replaying `Awake`, and
+profile/package identity-error precedence. None skipped.
+
+The Release executable SHA-256 is
+`37bb45bb62fdd563af814228548704a74919a5984f9aeba200718087ef8f031e`.
+The full app archive and source equivalence to the focused tests were checked.
+App runs overlapped unrelated compilation, so they establish correctness only.
+This does not establish OS-menu/audio behavior, arbitrary plugin compatibility,
+original-player parity or general save-adapter support.
+
 ## Plugin library
 
 Added 2026-10-23 as the P-T02 first slice and tested with synthetic fixtures
