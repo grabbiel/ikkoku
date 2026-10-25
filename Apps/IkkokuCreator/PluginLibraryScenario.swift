@@ -630,14 +630,21 @@ extension PluginLibraryScenario {
             let native = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
             let conflict = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.conflictManifest))
             let compatible = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.compatibleManifest))
-            try require("exactGraphInputs", native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
+            func isExactNoOp(_ package: SourcePluginPackage) -> Bool {
+                guard package.programs.count == 1 else { return false }
+                let program = package.programs[0]
+                guard program.type == "DirectGraphNoOp", program.fields.isEmpty,
+                      program.methods.count == 1 else { return false }
+                let method = program.methods[0]
+                return method.lifecycle == "Awake" && method.body.kind == "block"
+                    && method.body.children?.isEmpty == true
+            }
+            let exactNative = native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
                 && native.manifest.incompatibilities == ["HideStudioUI", "HideHInterface"]
-                && conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
-                && compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
-                && [conflict, compatible].allSatisfy { $0.programs.count == 1 && $0.programs[0].type == "DirectGraphNoOp"
-                    && $0.programs[0].fields.isEmpty && $0.programs[0].methods.count == 1
-                    && $0.programs[0].methods[0].lifecycle == "Awake" && $0.programs[0].methods[0].body.kind == "block"
-                    && $0.programs[0].methods[0].body.children?.isEmpty == true })
+            let exactConflict = conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
+            let exactCompatible = compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
+            try require("exactGraphInputs", exactNative && exactConflict && exactCompatible
+                && [conflict, compatible].allSatisfy(isExactNoOp))
             for nativeFirst in [false, true] {
                 let nodes = [SourcePluginGraph.Node(package: conflict), .init(nativeAdapter: native)]
                 var actual: SourcePluginLibraryError?
@@ -787,14 +794,21 @@ extension PluginLibraryScenario {
             let native = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
             let conflict = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.conflictManifest))
             let compatible = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.compatibleManifest))
-            try require("exactGraphInputs", native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
+            func isExactNoOp(_ package: SourcePluginPackage) -> Bool {
+                guard package.programs.count == 1 else { return false }
+                let program = package.programs[0]
+                guard program.type == "DirectGraphNoOp", program.fields.isEmpty,
+                      program.methods.count == 1 else { return false }
+                let method = program.methods[0]
+                return method.lifecycle == "Awake" && method.body.kind == "block"
+                    && method.body.children?.isEmpty == true
+            }
+            let exactNative = native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
                 && native.manifest.incompatibilities == ["HideStudioUI", "HideHInterface"]
-                && conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
-                && compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
-                && [conflict, compatible].allSatisfy { $0.programs.count == 1 && $0.programs[0].type == "DirectGraphNoOp"
-                    && $0.programs[0].fields.isEmpty && $0.programs[0].methods.count == 1
-                    && $0.programs[0].methods[0].lifecycle == "Awake" && $0.programs[0].methods[0].body.kind == "block"
-                    && $0.programs[0].methods[0].body.children?.isEmpty == true })
+            let exactConflict = conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
+            let exactCompatible = compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
+            try require("exactGraphInputs", exactNative && exactConflict && exactCompatible
+                && [conflict, compatible].allSatisfy(isExactNoOp))
             let graphError = SourcePluginLibraryError.incompatible(guid: "keelhauled.hideallui", other: "HideStudioUI")
             var actual: SourcePluginLibraryError?
             do { _ = try SourcePluginGraph.order([.init(package: conflict), .init(nativeAdapter: native)], process: "CharaStudio") }
