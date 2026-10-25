@@ -76,8 +76,11 @@ have not been established. Current catalog counts state their actual denominator
 
 Overview reconciled **2026-10-24**; the task entries below name their acceptance
 scope and distinguish local checkpoints from merged work. The
-[README's eight-component table](../../README.md#current-scope) is the concise
-support summary. The dated handoffs below retain each producer, fixture and
+[README's eight-component table](../../README.md#current-scope) and
+[public component status website](https://ikkoku-status.felipearceo.chatgpt.site)
+provide concise support summaries. The website also covers the remaining app
+areas and links back to these references; its review date and accepted source
+commit identify the snapshot. The dated handoffs below retain each producer, fixture and
 acceptance boundary; their old “next” steps are historical, not a live queue.
 
 - **Models / Maker / Shapes:** six normal male/female head 0/200/201 assemblies

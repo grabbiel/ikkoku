@@ -5,6 +5,8 @@ Apple Silicon. It includes bundled generated content and a local pipeline for
 reconstructing Koikatsu and CharaStudio behavior from an installed copy of the game.
 The original-game port is incomplete.
 
+See the [component status website](https://ikkoku-status.felipearceo.chatgpt.site)
+for current support, remaining work and links to the evidence for each component.
 Start with the [documentation index](docs/README.md),
 [build and test guide](docs/guides/build-and-test.md), or
 [app usage guide](docs/guides/using-the-app.md). The
@@ -42,7 +44,7 @@ fixtures and otherwise return without exercising source behavior.
 ## Current scope
 
 Overview refreshed **2026-10-24**, including merged work through
-[#200](https://github.com/grabbiel/ikkoku/pull/200). Each linked reference retains
+[#223](https://github.com/grabbiel/ikkoku/pull/223). Each linked reference retains
 its own measured commit, inputs and exclusions; this refresh is not a new
 all-project acceptance run. All eight priority components remain incomplete.
 
@@ -55,7 +57,7 @@ all-project acceptance run. All eight priority components remain incomplete.
 | **Materials** | Selected native GPU composites and strict independent image gates. The controlled inner-shoe fixture reaches 18 of 20 live slots, with body and face fallbacks. [Material evidence](docs/reference/renderer.md#native-normal-inner-shoe-composite-r1cmt-04-177-2026-10-24). | Body/face composites, broader layers/patterns/states and whole-character shading. Coverage is fixture-specific. |
 | **Visual Fidelity** | Bounded geometry, pose, material and matched-frame gates; independent live comparisons and sampling diagnostics. [Fidelity audit](docs/component-audit/renderer-and-foundation.md). | Full-character silhouette/color parity and same-input live sampling repeatability ([#188](https://github.com/grabbiel/ikkoku/issues/188)). |
 | **Mods** | Incremental immutable archive/profile indexing, saved-ID resolution, converted selections, static ABMX and unknown-payload preservation. [Mod guide](docs/guides/mod-library.md). | General mod geometry, dynamic callbacks, migrations and installation-wide compatibility. |
-| **Plugins** | Bounded translated execution and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Mounted-session controls, cancellation, fresh-profile failure isolation and selected save/restore workflows are exercised. [Execution contract](docs/reference/mods/plugin-execution.md). | General DLL/Harmony/coroutine/Unity compatibility and saved-profile restoration with initializer attachment reads. |
+| **Plugins** | Bounded translated execution and three exact-revision native adapters: Mute, StudioAccessoryNames and HideAllUI. Mounted-session controls, cancellation, fresh-profile failure isolation, candidate-owned attachment reads and pending-destruction save/restore have selected acceptance. [Execution contract](docs/reference/mods/plugin-execution.md). | General DLL/Harmony/coroutine/Unity compatibility, original save adapters and broader lifecycle coverage. Restoration rejects initializer topology changes; library installation retains a separate attachment-read boundary. |
 
 Studio supports selected original characters, cameras, FK/IK, animation,
 expression/shape/outfit/accessory edits and bounded scene export. Its source
@@ -87,6 +89,7 @@ establish native execution, UI support or source-game parity.
 | `Tools/reverse/` | Original-data recovery, conversion, probes and oracles |
 | `Tools/mods/`, `Tools/translation/` | Incremental mod library and bounded C# translation |
 | `docs/` | Guides, architecture, current audit, technical references and archives |
+| `site/` | Public component status website, source data and publishing instructions |
 | `.local/` | Ignored original data, recovered code, generated evidence and builds |
 
 The [architecture guide](docs/architecture.md) explains module responsibilities and

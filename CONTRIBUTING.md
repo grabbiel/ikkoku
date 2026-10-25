@@ -169,6 +169,11 @@ its review date merely because another test passed. A broad revamp is a separate
 explicitly scoped review. Dated handoffs remain historical and link to the
 maintained entry points rather than becoming a second live backlog.
 
+When a component's accepted support boundary changes, also update its entry in
+`site/status.json`, regenerate the static page and publish the reviewed site
+according to [the site maintenance guide](site/README.md). Keep its review date,
+accepted source commit and remaining work explicit; do not promote unmerged work.
+
 Put instructions in `docs/guides/`, contracts in `docs/reference/`, status/tasks in
 `docs/component-audit/`, and superseded records in `docs/archive/`. Link new pages
 from the [documentation index](docs/README.md), repair links after moves and update

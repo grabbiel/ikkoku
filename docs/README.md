@@ -16,6 +16,7 @@ refresh nor a green public CI run re-verifies every private source-data path.
 | Need | Read |
 | --- | --- |
 | Project overview | [Repository README](../README.md) |
+| Component status website | [Public dashboard](https://ikkoku-status.felipearceo.chatgpt.site), with [maintenance instructions](../site/README.md) |
 | Contribute and collaborate through GitHub | [Contribution guide](../CONTRIBUTING.md) |
 | Build, tests, captures and prerequisites | [Build and test](guides/build-and-test.md) |
 | Build and inspect a Release app bundle | [Package and inspect a Release build](guides/build-and-test.md#package-and-inspect-a-release-build) |
