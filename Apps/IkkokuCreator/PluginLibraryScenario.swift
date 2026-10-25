@@ -15,6 +15,8 @@ struct PluginLibraryScenario: Decodable {
     let reproduceFreshProfileFailure: Bool?
     /// Reproduction only: save and reopen run in separate owned processes.
     let nativeProfileRestore: NativeProfileRestore?
+    /// Regression only: attachment-free constructor replay across native save/open.
+    let initializerProfileRestore: NativeProfileRestore?
     struct NativeProfileRestore: Decodable {
         enum Phase: String, Decodable { case save, reopen }
         let phase: Phase
@@ -43,6 +45,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let initializerProfileRestore { return await reproduceInitializerRestore(initializerProfileRestore, app: app, studio: studio) }
         if let nativeProfileRestore { return await reproduceNativeRestore(nativeProfileRestore, app: app, studio: studio) }
         if reproduceFreshProfileFailure == true { return await reproduceFreshLoad(app: app, studio: studio) }
         var rows: [StudioScenario.Report.StepResult] = []
@@ -472,6 +475,229 @@ struct PluginLibraryScenario: Decodable {
     }
 }
 
+// Synthetic constructor-replay reproduction. These snapshots intentionally
+// retain both documents: native open may commit the input while the reconstructed
+// runtime has a different world. No production restore policy is changed here.
+extension PluginLibraryScenario {
+    private struct InitializerObservation: Codable, Equatable {
+        let document: StudioDocument
+        let world: StudioDocument?
+        let runtimeDocument: StudioDocument?
+        let pending: [String], callbacks: [String], resources: [Int]
+        let undo: [StudioDocument], redo: [StudioDocument]
+        let status: String, sceneURL: URL?
+        let generation: UInt64, animationTime: Float
+        let blocked: Set<UUID>, diagnostics: [String]
+    }
+
+    @MainActor private func reproduceInitializerRestore(_ configuration: NativeProfileRestore,
+                                                        app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        func record(_ name: String, _ okay: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+        }
+        func require(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            record(name, okay, detail)
+            if !okay { throw SourcePluginError.runtime("Initializer reproduction precondition failed: \(name)") }
+        }
+        func snapshot(expectedStatus: String? = nil) throws -> InitializerObservation {
+            let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+            return .init(document: studio.doc, world: session?.world.document,
+                runtimeDocument: try session?.savedDocument(),
+                pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+                callbacks: session?.runtime.callbackTrace ?? [],
+                resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
+                    r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+                undo: studio.undoStack, redo: studio.redoStack, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
+                generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+                blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
+        }
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        func path(_ name: String, _ suffix: String) -> URL { directory.appendingPathComponent(name + suffix) }
+        func persist(_ value: InitializerObservation, _ name: String) throws {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(value).write(to: path(name, ".json"))
+        }
+        func card(_ name: String) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: path(name, ".png")))
+        }
+        func outcome(_ error: any Error) -> String {
+            switch error {
+            case SourcePluginError.invalid(let reason): return "invalid: " + reason
+            case SourcePluginError.runtime(let reason): return "runtime: " + reason
+            default: return String(describing: error)
+            }
+        }
+        func summary(_ value: InitializerObservation) -> String {
+            let ids = value.document.objects.map { $0.id.uuidString }.sorted()
+            let worldIDs = value.world?.objects.map { $0.id.uuidString }.sorted() ?? []
+            return "documentIDs=\(ids); worldIDs=\(worldIDs); cloneSerial=\(value.runtimeDocument?.sourcePluginState?.cloneSerial ?? 0); pending=\(value.pending); callbacks=\(value.callbacks)"
+        }
+        let topologyError = "Restoring plugin initialization changed scene object topology, identities, or clone state."
+        func checkHistoryRejection(_ name: String, action: () -> Void) throws {
+            let before = try snapshot(), session = studio.sourcePluginSession
+            let frame = studio.host.renderer.currentFrame(), adapter = studio.sourceFocus.adapter
+            let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
+            let launchObserver = studio.sourceLaunchObserver != nil
+            try persist(before, name + "-before")
+            action()
+            try persist(snapshot(), name + "-after")
+            record(name + "ExactError", studio.status == "Plugin restore: Invalid translated plugin: " + topologyError, studio.status)
+            record(name + "RetainsPrior", try snapshot(expectedStatus: before.status) == before
+                && studio.sourcePluginSession === session && studio.sourceFocus.adapter === adapter
+                && studio.sourceAudioBus.masterVolume == gain && studio.sourceFocusObservers.count == observers
+                && (studio.sourceLaunchObserver != nil) == launchObserver && !studio.sourcePluginsRunning
+                && sameFrame(frame, studio.host.renderer.currentFrame()),
+                "Only the explicit history error status changes; target stack, scene, session, clocks, resources and frame stay intact")
+        }
+        let names = ["noop", "Instantiate", "SetActive", "Destroy", "changed"]
+        do {
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            switch configuration.phase {
+            case .save:
+                guard !FileManager.default.fileExists(atPath: directory.path) else {
+                    throw SourcePluginError.invalid("Initializer reproduction requires a fresh output directory.")
+                }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                for name in names {
+                    studio.newScene()
+                    var target = StudioObject(name: "Synthetic initializer target", kind: .folder)
+                    target.sourceObjectKey = 12
+                    var document = StudioDocument(); document.objects = [target]
+                    document.sourceSceneSHA256 = String(repeating: "c", count: 64); studio.doc = document
+                    let mutation = ["Instantiate", "SetActive", "Destroy"].contains(name) ? name : nil
+                    let profile = try freshProfileFixture(directory: directory.appendingPathComponent(name),
+                        phase: "initializer", fail: false, attachmentRead: false, mutation: mutation)
+                    try studio.loadSourcePluginProfileInteractively(profileURL: profile,
+                        expectedGeneration: studio.sourcePluginMountGeneration)
+                    studio.sourcePluginsRunning = false
+                    let mounted = try snapshot(); try persist(mounted, name + "-mounted")
+                    try require(name + "FreshInstall", mounted.document.objects.count == (name == "Instantiate" ? 2 : 1)
+                        && mounted.document.objects == mounted.world?.objects
+                        && mounted.runtimeDocument?.sourcePluginState?.cloneSerial == (name == "Instantiate" ? 1 : 0), summary(mounted))
+                    if name == "SetActive" {
+                        try require("SetActiveFreshHidden", studio.doc.object(target.id)?.visible == false)
+                        // A genuine user edit, after the constructor, makes the
+                        // saved input differ from replayed SetActive(false).
+                        studio.update(target.id) { $0.visible = true }
+                    }
+                    if name == "Destroy" {
+                        try require("DestroyPendingBeforeSave", mounted.pending.count == 1
+                            && mounted.document.object(target.id) != nil,
+                            "Save before any runtime step; pending destruction is still live")
+                    }
+                    // No runtime step here: it would erase the pending-Destroy
+                    // case and change initializer/Start ordering under study.
+                    try studio.saveScene(to: path(name, ".png"))
+                    let saved = try card(name), afterSave = try snapshot()
+                    try persist(afterSave, name + "-saved")
+                    try require(name + "NativeSave", saved.objects == afterSave.document.objects
+                        && saved.sourcePluginState == afterSave.runtimeDocument?.sourcePluginState
+                        && saved.sourcePluginState?.clock.elapsedTime == 0, summary(afterSave))
+                    // The original, freshly installed session supplies an
+                    // independent continuation oracle after the same save point.
+                    // Destroy is stepped only after its pending state is saved.
+                    try studio.stepSourcePlugins(deltaTime: 0.02)
+                    let continued = try snapshot(); try persist(continued, name + "-fresh-stepped")
+                    try require(name + "FreshFirstStepSucceeds", continued.runtimeDocument?.sourcePluginState?.clock.elapsedTime
+                        == Double(Float(0.02)), summary(continued))
+                    if name == "changed" {
+                        var bytes = try Data(contentsOf: profile); bytes.append(contentsOf: [0x20, 0x0a])
+                        _ = try JSONSerialization.jsonObject(with: bytes); try bytes.write(to: profile)
+                        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                        try require("ChangedValidJSONIdentity", digest != saved.sourcePluginState?.profileSHA256)
+                    }
+                }
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: path("save-pid", ".txt"), atomically: true, encoding: .utf8)
+            case .reopen:
+                let savePID = try String(contentsOf: path("save-pid", ".txt"), encoding: .utf8)
+                try require("FreshProcessBoundary", savePID != String(ProcessInfo.processInfo.processIdentifier),
+                    "save PID=\(savePID), reopen PID=\(ProcessInfo.processInfo.processIdentifier)")
+                // Seed a real retained session before every candidate, including
+                // changed-identity rejection. No source-character cache exists.
+                for name in ["changed", "noop", "Instantiate", "SetActive", "Destroy"] {
+                    try studio.loadScene(from: path("noop", ".png"))
+                    try studio.stepSourcePlugins(deltaTime: 0.06)
+                    let before = try snapshot(), oldSession = studio.sourcePluginSession
+                    let beforeFrame = studio.host.renderer.currentFrame(), adapter = studio.sourceFocus.adapter
+                    let gain = studio.sourceAudioBus.masterVolume, observers = studio.sourceFocusObservers.count
+                    let launchObserver = studio.sourceLaunchObserver != nil
+                    try persist(before, name + "-before-reopen")
+                    let saved = try card(name)
+                    var loadError: String?
+                    do { try studio.loadScene(from: path(name, ".png")) }
+                    catch { loadError = outcome(error) }
+                    let loaded = try snapshot(); try persist(loaded, name + "-reopened")
+                    let expectedLoadError = name == "changed"
+                        ? "invalid: Saved plugin profile or library bindings changed; explicit reinstallation is required."
+                        : name == "Instantiate" ? "invalid: " + topologyError : nil
+                    if let loadError {
+                        record(name + "LoadOutcome", loadError == expectedLoadError, loadError)
+                        record(name + "LoadFailureRetainsPrior", loaded == before && studio.sourcePluginSession === oldSession
+                            && studio.sourceFocus.adapter === adapter && studio.sourceAudioBus.masterVolume == gain
+                            && studio.sourceFocusObservers.count == observers && (studio.sourceLaunchObserver != nil) == launchObserver
+                            && !studio.sourcePluginsRunning && sameFrame(beforeFrame, studio.host.renderer.currentFrame()))
+                        if name == "Instantiate" && loadError == expectedLoadError {
+                            // Seed the original saved target using ordinary history
+                            // capture, never replacing the stacks or invalidation token.
+                            studio.doc = saved; studio.pushUndo(force: true); studio.doc = before.document
+                            try checkHistoryRejection("InstantiateUndo", action: { studio.undo() })
+                            // A successful undo records the rejected target as redo.
+                            studio.pushUndo(force: true); studio.doc = saved; studio.undo()
+                            try require("InstantiateRedoTargetPrepared", studio.doc.objects == before.document.objects
+                                && studio.redoStack.last == saved && studio.sourcePluginSession != nil, studio.status)
+                            try checkHistoryRejection("InstantiateRedo", action: { studio.redo() })
+                        }
+                        continue
+                    }
+                    record(name + "LoadOutcome", expectedLoadError == nil, "Loaded; " + summary(loaded))
+                    record(name + "InputSceneCommitted", studio.doc.objects == saved.objects
+                        && studio.doc.sourcePluginState == saved.sourcePluginState)
+                    let stepFrame = studio.host.renderer.currentFrame(), stepSession = studio.sourcePluginSession
+                    var stepError: String?
+                    do { try studio.stepSourcePlugins(deltaTime: 0.02) }
+                    catch { stepError = outcome(error) }
+                    let stepped = try snapshot(); try persist(stepped, name + "-stepped")
+                    // Keep a real failed invariant if a freshly installable
+                    // profile cannot step after reopen. Do not relabel it as a
+                    // passing observation merely because the error was predicted.
+                    record(name + "FirstStepSucceeds", stepError == nil, stepError ?? summary(stepped))
+                    if stepError != nil {
+                        record(name + "FailedStepRetainsLoadedState", stepped == loaded
+                            && studio.sourcePluginSession === stepSession && sameFrame(stepFrame, studio.host.renderer.currentFrame()))
+                    } else {
+                        record(name + "ClockAdvanced", stepped.runtimeDocument?.sourcePluginState?.clock.elapsedTime
+                            == (saved.sourcePluginState?.clock.elapsedTime ?? 0) + Double(Float(0.02)))
+                        let freshSaved = try JSONDecoder().decode(InitializerObservation.self, from: Data(contentsOf: path(name + "-saved", ".json")))
+                        let freshStepped = try JSONDecoder().decode(InitializerObservation.self, from: Data(contentsOf: path(name + "-fresh-stepped", ".json")))
+                        record(name + "MatchesFreshContinuation", stepped.document.objects == freshStepped.document.objects
+                            && stepped.runtimeDocument?.sourcePluginState == freshStepped.runtimeDocument?.sourcePluginState
+                            && stepped.pending == freshStepped.pending
+                            && Array(stepped.callbacks.dropFirst(loaded.callbacks.count))
+                                == Array(freshStepped.callbacks.dropFirst(freshSaved.callbacks.count)),
+                            "Compare original-session continuation after the same saved clock/state; callback suffixes exclude earlier installation events")
+                    }
+                    if name == "noop" {
+                        record("NoopExactRestoredState", loaded.runtimeDocument?.sourcePluginState == saved.sourcePluginState
+                            && loaded.world?.objects == saved.objects)
+                    }
+                    // Full snapshots retain SetActive visibility, pending Destroy
+                    // and callback order as observations, without imposing a new
+                    // restore policy on those existing semantics.
+                }
+            }
+        } catch { record("initializerRestoreReproductionFailure", false, String(describing: error)) }
+        studio.cancelSourcePluginLibraryMount(); await studio.sourcePluginLibraryPreparationQueue.drain()
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+}
+
 // Source-backed installation regression; the original failing report is retained
 // separately. Both supported callbacks and rejected candidates use the real loader.
 extension PluginLibraryScenario {
@@ -754,8 +980,9 @@ extension PluginLibraryScenario {
         for mutation in ["Instantiate", "SetActive", "Destroy"] {
             let profile = try freshProfileFixture(directory: directory.appendingPathComponent("restore-" + mutation),
                 phase: "initializer", fail: false, mutation: mutation)
-            failures.append((mutation, try pinnedFailure(profile),
-                "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."))
+            failures.append((mutation, try pinnedFailure(profile), mutation == "Instantiate"
+                ? "Restoring plugin initialization changed scene object topology, identities, or clone state."
+                : "Attachment-reading restoration cannot mutate the candidate scene, clone objects, or schedule destruction during initialization."))
         }
         for (name, rejected, expectedError) in failures {
             let url = try write(rejected, "reject-" + name)
@@ -1016,9 +1243,9 @@ extension PluginLibraryScenario {
             case "Destroy": operation = ["kind": "api", "type": "Void", "name": "world.Destroy", "children": [object]]
             default: preconditionFailure("Unknown fixture mutation")
             }
-            // The first field has already performed a successful attachment
-            // read. This second initializer mutates the candidate, then returns
-            // a serializable value so restore reaches its explicit policy gate.
+            // With attachmentRead enabled, the first field has already read
+            // an attachment. This second initializer mutates the candidate and
+            // returns a serializable value so restoration can reach its policy.
             fields[1]["initializer"] = ["kind": "call", "type": "Vector3", "name": "Mutate", "children": []]
             symbols.append("M:\(type).Mutate")
             methods.append(["name": "Mutate", "symbol": "M:\(type).Mutate", "static": false,

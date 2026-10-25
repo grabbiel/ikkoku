@@ -344,6 +344,41 @@ Release `baa32ea` (binary SHA-256
 also passes the same 117 checks in four fresh processes, with zero failures or
 skips. Its reports and input/build hashes are separate from the first acceptance.
 
+A subsequent attachment-free reproduction at `b085ffab` exposed a different
+restore inconsistency. All 18 save-process checks passed; a fresh reopen process
+passed 22 checks and retained one failed first-step invariant. Replaying an
+Instantiate field initializer left the committed scene with two saved objects
+but the reconstructed runtime with three and an incremented clone serial. The
+first step rejected that mismatch. The original red report, snapshots and Release
+binary remain preserved under private `attachment-free-restore` evidence.
+
+The shared restoring session constructor now snapshots the input object UUIDs,
+normalized identity map (including tombstones) and clone serial before component
+construction, then validates them after activation callbacks. Changed topology,
+ordinal identity bytes or clone state produces a named preparation error before
+native open or history can replace the old scene/session. Missing identities for
+unbound input objects are normalized before the snapshot. Fresh installation
+still adopts constructor-created objects; the new check runs only for restore,
+with no frame-path work. This does not implement persistence for non-idempotent
+cloning initializers. Same-topology SetActive and pending Destroy keep the existing
+input-wins/first-step semantics demonstrated against the original session's
+continuation. Attachment-reading restoration retains its stricter read-only
+boundary; cloning now reaches the shared topology error first.
+
+Release `4ebdd727` (binary SHA-256
+`b39d288ce18bb511081ea6de86ba68b8a44a9949568753132871fa2886d4bbae`)
+passes all 161 checks in six fresh processes: 18 synthetic save checks, 26
+synthetic reopen/history checks and the existing 117 attachment/fresh-profile/
+library checks. The cloning case now verifies exact rejection and retention of
+the prior scene, session, history, frame and active resources through native open,
+undo and redo. SetActive/pending-Destroy results still match the original session's
+continuation. All 30 focused Engine tests pass with zero skips, including four new
+parameterized tests through both profile and immutable-library constructors,
+clone-then-Destroy, activation-time cloning and normalized unbound identities.
+The first strict Engine attempt's missing HideUI fixture failure remains recorded;
+the corrected run supplies the pinned original package. This is functional
+acceptance without a GUI, original-player parity or measured performance claim.
+
 For automated captures, `IKKOKU_STUDIO_PLUGIN_SELECTION` names a JSON object with
 `selection` and `configuration`, the same typed values the UI passes to Studio.
 It cannot be combined with a legacy profile or separate adapter manifests. This
@@ -548,8 +583,9 @@ plugins. It does not capture images or play audio.
 
 Native scene cards retain immutable profile/package hashes, component fields,
 clocks, original object identities, clone identities and destroyed-object
-tombstones. Reload resumes the saved state without replaying Awake/Start and
-leaves execution paused. A changed installed profile fails restoration instead
+tombstones. Reload restores lifecycle flags so completed Awake/Start callbacks
+are not repeated; activation may run callbacks for a previously inactive binding.
+Execution remains paused. A changed installed profile fails restoration instead
 of remapping saved state. Original scene export rejects live native plugin state
 because no original KKEx field adapter has yet been established for arbitrary
 translated state. Native saves preserve it completely.
