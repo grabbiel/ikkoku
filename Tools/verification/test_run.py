@@ -637,7 +637,7 @@ SCENARIO_OPS = {"select", "setVisible", "rename", "toggleCamera", "toggleRoute",
                 "addCharacter", "setIKEnabled", "setIKTarget", "captureIKPose",
                 "export", "reimport", "assert", "assertRejected", "loadNativePlugin", "unloadPlugins", "measureAccessoryLabels",
                 "delete", "setParent", "exportRejected", "duplicate", "addFolder", "addCamera", "addLight",
-                "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute"}
+                "focus", "selectRoutePoint", "dragRoutePoint", "captureRoute", "editRoute", "setShowSourceMap"}
 
 # ST-T11 `editRoute` settings: point edits name the point, route edits do not.
 ROUTE_POINT_SETTINGS = ("delete", "move", "speed", "ease", "connection", "link")
@@ -821,7 +821,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                       and not name.startswith(("maker-", "gameplay-")))
 
     def test_lane_validates_and_covers_every_scenario(self):
-        self.assertEqual(len(self.checks), 73)
+        self.assertEqual(len(self.checks), 77)
         referenced = set()
         for check in self.checks:
             scenario = check["env"]["IKKOKU_STUDIO_SCENARIO"]
@@ -1010,6 +1010,8 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     self.assertIn(type(step["parent"]), (int, type(None)))
                 if op == "exportRejected":
                     self.assertTrue(step["errorContains"], "a refused export needs a specific diagnostic")
+                if op == "setShowSourceMap":
+                    self.assertIs(type(step["on"]), bool)
                 if op == "focus":
                     self.assertIs(type(step["key"]), int)
                     if "dy" in step:
@@ -1046,8 +1048,23 @@ class StudioScenarioLaneTests(unittest.TestCase):
                                             "diagnosticContains", "statusContains", "indicatorContains",
                                             "treeLabel", "view", "render",
                                             "exportIdenticalToSource", "outfit", "clothes", "ik", "expression", "accessoryLabels", "pluginMount",
-                                            "children", "absent", "activeCopyOf", "route", "routeLines") if k in step]
+                                            "children", "absent", "activeCopyOf", "route", "routeLines", "sourceMap") if k in step]
                     self.assertTrue(declared, "assert declares nothing: %s" % path)
+                    if "sourceMap" in step:
+                        # ST-A11: `none`, or census fields; pick points are two viewport fractions.
+                        source_map = step["sourceMap"]
+                        self.assertTrue(set(source_map) <= {"none", "map", "draws", "loading", "lineContains", "lineAbsent",
+                                                            "pickNothingAt", "pickSomethingAt"}, "unknown sourceMap field: %s" % path)
+                        self.assertTrue(source_map, "a sourceMap assert must name what it checks: %s" % path)
+                        if source_map.get("none"):
+                            self.assertEqual(set(source_map), {"none"}, "no map has no census to compare: %s" % path)
+                        for name in ("map", "draws"):
+                            if name in source_map:
+                                self.assertIs(type(source_map[name]), int)
+                        for name in ("pickNothingAt", "pickSomethingAt"):
+                            for point in source_map.get(name, []):
+                                self.assertEqual(len(point), 2)
+                                self.assertTrue(all(isinstance(c, (int, float)) and 0 <= c <= 1 for c in point))
                     if op == "assertRejected":
                         self.assertTrue(step["errorContains"], "negative control needs a specific diagnostic")
                         self.assertEqual(len(declared), 1, "negative control must isolate one assertion")
@@ -1229,7 +1246,7 @@ class StudioScenarioLaneTests(unittest.TestCase):
                     # check after this one (lane order is the run order).
                     saved = check["id"]
                     self.assertTrue(saved.startswith("studio-scenario-reload-save-")
-                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics", "accessory-labels", "topology", "duplicate")),
+                                    and saved.endswith(("props", "camera", "route", "outfit", "clothes", "half-state", "ik", "expression", "skirt-dynamics", "accessory-labels", "topology", "duplicate", "source-map")),
                                     "save scenarios are the reload pairs: %s" % saved)
                     index = [c["id"] for c in self.checks].index(saved)
                     partner = self.checks[index + 1]["env"]["IKKOKU_STUDIO_SCENARIO"]

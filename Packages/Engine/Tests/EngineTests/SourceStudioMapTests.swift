@@ -156,14 +156,20 @@ private struct MapFixture {
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
+/// A map load blocks its thread in MetalKit's synchronous texture load, and
+/// `SourceStudioMapLoad.wait()` blocks until it ends. Both run on a thread of
+/// their own (`liveTickOffPool`), so these tests hold no test-pool thread
+/// (a parallel `swift test` once hung with every pool thread in that load);
+/// the checks stay in the test's task.
 @Suite(.serialized, .enabled(if: MTLCreateSystemDefaultDevice() != nil))
 struct SourceStudioMapAssetTests {
-    @Test func mapPartsArePlacedByRoleAndFilteredBySunType() throws {
+    @Test func mapPartsArePlacedByRoleAndFilteredBySunType() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let resources = ResourceStore(device: device)
         let fixture = try MapFixture()
         defer { fixture.remove() }
-        let asset = try SourceStudioMapAsset.load(url: fixture.url, packageRoot: fixture.root, resources: resources)
+        let (url, packageRoot) = (fixture.url, fixture.root)
+        let asset = try await liveTickOffPool { try SourceStudioMapAsset.load(url: url, packageRoot: packageRoot, resources: resources) }
         #expect(asset.parts.count == 2 && asset.textures.count == 1 && asset.triangles == 2 && asset.textureBytes > 0)
         // Private registration: the image's texture is not in the store's key cache.
         #expect(resources.lookup(key: "\(fixture.url.standardizedFileURL.path)#img0#true") == nil)
@@ -199,44 +205,54 @@ struct SourceStudioMapAssetTests {
         #expect(resources.texture(asset.textures[0]) == nil)
     }
 
-    @Test func aFileThatIsNotAConvertedMapFailsByNameAndRegistersNothing() throws {
+    @Test func aFileThatIsNotAConvertedMapFailsByNameAndRegistersNothing() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let resources = ResourceStore(device: device)
         let fixture = try MapFixture(mapNode: false)
         defer { fixture.remove() }
+        let (url, root) = (fixture.url, fixture.root)
         let before = resources.statistics()
-        #expect {
-            try SourceStudioMapAsset.load(url: fixture.url, packageRoot: fixture.root, resources: resources)
-        } throws: { "\($0)".contains("is not a converted map") }
+        // The load's error text, or nil when it loaded.
+        let failures = try await liveTickOffPool { () -> [String?] in
+            [url, root.appendingPathComponent("absent.gltf")].map { file in
+                do { _ = try SourceStudioMapAsset.load(url: file, packageRoot: root, resources: resources); return nil }
+                catch { return "\(error)" }
+            }
+        }
+        #expect(failures[0]?.contains("is not a converted map") == true, "\(failures[0] ?? "loaded")")
         let after = resources.statistics()
         #expect(after.meshes == before.meshes && after.textures == before.textures)
         // A missing file is an error too, never a substitute.
-        #expect(throws: (any Error).self) {
-            try SourceStudioMapAsset.load(url: fixture.root.appendingPathComponent("absent.gltf"), packageRoot: fixture.root, resources: resources)
-        }
+        #expect(failures[1] != nil)
     }
 
-    @Test func aLoadIsTakenOnceAndACancelledLoadReleasesItsAsset() throws {
+    @Test func aLoadIsTakenOnceAndACancelledLoadReleasesItsAsset() async throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let resources = ResourceStore(device: device)
         let fixture = try MapFixture()
         defer { fixture.remove() }
-        let load = SourceStudioMapLoad(url: fixture.url, packageRoot: fixture.root, resources: resources) { _ in }
-        let asset = try #require(try load.wait()?.get())
+        let (url, root) = (fixture.url, fixture.root)
+        let load = SourceStudioMapLoad(url: url, packageRoot: root, resources: resources) { _ in }
+        let (taken, again) = try await liveTickOffPool { (try load.wait()?.get(), load.wait() == nil) }
+        let asset = try #require(taken)
         #expect(load.isFinished && asset.parts.count == 2)
-        #expect(load.wait() == nil) // taken once
-        load.cancel()               // a taken asset stays its owner's
+        #expect(again) // taken once
+        load.cancel()  // a taken asset stays its owner's
         #expect(!asset.isReleased)
         asset.release()
 
-        let cancelled = SourceStudioMapLoad(url: fixture.url, packageRoot: fixture.root, resources: resources) { _ in
+        let cancelled = SourceStudioMapLoad(url: url, packageRoot: root, resources: resources) { _ in
             Issue.record("a cancelled load delivered")
         }
         cancelled.cancel()
-        #expect(cancelled.wait() == nil)
         // The worker drops what it built: everything it registered retires.
-        let deadline = Date().addingTimeInterval(10)
-        while resources.statistics().retiring < 6, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+        let nothing = try await liveTickOffPool { () -> Bool in
+            let delivered = cancelled.wait() != nil
+            let deadline = Date().addingTimeInterval(10)
+            while resources.statistics().retiring < 6, Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            return !delivered
+        }
+        #expect(nothing)
         resources.completeRetirements(createdBefore: ResourceClock.tick())
         #expect(resources.statistics().meshes == 0 && resources.statistics().textures == 0)
     }

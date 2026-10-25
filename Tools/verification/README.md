@@ -1013,32 +1013,34 @@ reused 7 of 7 frames instead of 6.
 
 ### Source maps (ST-A11)
 
-Three checks cover the map an imported scene names
+Four checks cover the map an imported scene names
 ([maps](../../docs/reference/studio/maps.md)). Each declares
 `IKKOKU_STUDIO_MAP_CATALOG`, the converted map catalog; no other check
 declares it, so the runner gives no other check a map.
 
 - `source-map` (`IKKOKU_SOURCE_SCENE` from `IKKOKU_STUDIO_MAP_SHOWOFF_SCENE`,
-  the showoff characters with Map 33 added by the original player; 17 steps).
+  the showoff characters with Map 33 added by the original player; 15 steps).
   It runs these steps in order:
   1. Before the first step the map is already drawn: 8 draws, not loading. The
      status line holds the exact label `Map 33 空き部室 (bushitu): approximated:
      no baked lightmaps, map lights, sun-type lighting, fog or ambient`. Two
      map-only points pick nothing, and a character in front of the wall picks.
-  2. `setShowSourceMap` off draws 0 parts and the line says `hidden (View ▸
-     Show Source Map)`. On restores 8.
-  3. The original-format export is byte-identical to the source.
-  4. Reimporting that export, New Scene (no map, no line) and undo restore the
-     map, and a map pixel still picks nothing.
-  5. A native save, a New Scene and an in-process load show the map again with
-     no scene-file rehydration (`rehydrations: 0`; the runtime caches still
-     cover the scene).
-- `source-map-reload` (only the avatar and the catalog) loads that native save
-  in a fresh process. One rehydration rebuilds the map request, and the map
-  draws again with the same line and picks. It must run after `source-map`.
+  2. `setShowSourceMap` off draws 0 parts, and the line says `hidden (View ▸
+     Show Source Map)`.
+  3. With the map hidden, the original-format export is byte-identical to the
+     source.
+  4. On restores 8 draws. The export is byte-identical again.
+  5. Reimporting that export, New Scene (no map, no line) and undo restore the
+     map. A map pixel still picks nothing and the character still picks.
+- `reload-save-source-map` (same fixtures) saves the scene natively. The map
+  stays drawn, and the save needs no scene-file rehydration.
+- `reload-load-source-map` (only the avatar and the catalog) runs next. It
+  loads that save in a fresh process. One rehydration rebuilds the map request,
+  and the map draws again with the same line and picks.
 - `source-map-none` (`IKKOKU_STUDIO_SCENARIO_SCENE`, `koikatu_cs0002591.png`,
   which names no map) supplies the catalog. It asserts there is no map request
-  or line and that the export is byte-identical.
+  or line before and after an original-format round trip, and that the export
+  is byte-identical.
 
 ## Maker scenario hook (T-T04)
 

@@ -1,6 +1,6 @@
 {
   "steps": [
-    {"op": "loadDocument", "path": ".local/verification/scenario-exports/source-map-document.png"},
+    {"op": "loadDocument", "path": ".local/verification/scenario-exports/reload-save-source-map.png"},
     {"op": "assert", "sourceMap": {"map": 33, "draws": 8, "loading": false,
       "lineContains": "Map 33 空き部室 (bushitu): approximated: no baked lightmaps, map lights, sun-type lighting, fog or ambient",
       "pickNothingAt": [[0.5, 0.03]], "pickSomethingAt": [[0.08, 0.25]]}, "sourceRuntime": {"rehydrations": 1}}

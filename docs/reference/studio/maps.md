@@ -131,15 +131,15 @@ The Engine tests are `SourceStudioMapTests` and `PickTests`:
 - the load, wait, cancel and release ownership;
 - pick occluders hiding what is behind them without selecting.
 
-The Python tests are `test_export_map_scene.py`, `test_compare_original_map.py` and `test_original_map_probe.py`. The Studio scenario lane has three checks:
+The Python tests are `test_export_map_scene.py`, `test_compare_original_map.py` and `test_original_map_probe.py`. The Studio scenario lane has four checks ([verification README](../../../Tools/verification/README.md#source-maps-st-a11)):
 
 - **`studio-scenario-source-map`** runs on the showoff scene and covers:
   - the map, the line and the picks;
   - the View toggle;
-  - an export byte-identical to the source with the map shown or hidden;
-  - reimport, New Scene and undo;
-  - a native save.
-- **`studio-scenario-source-map-reload`** loads that save in a fresh process: one rehydration, and the map draws again.
+  - an export byte-identical to the source with the map hidden or shown;
+  - reimport, New Scene and undo.
+- **`studio-scenario-reload-save-source-map`** saves that scene natively.
+- **`studio-scenario-reload-load-source-map`** loads the save in a fresh process: one rehydration, and the map draws again.
 - **`studio-scenario-source-map-none`** runs on `koikatu_cs0002591.png`, which names no map, with the catalog supplied: there is no request or line, and the export is byte-identical.
 
 Reproduce:

@@ -23,7 +23,7 @@ branch was tested or every asset matches the original game. Feature status,
 specific comments and pending tasks are in the linked reports. Shared behavior
 may be discussed in more than one report; one primary owner is listed here.
 
-**987 files indexed; 987 assigned; 0 unassigned.**
+**988 files indexed; 988 assigned; 0 unassigned.**
 
 | Primary report | Files |
 | --- | ---: |
@@ -31,13 +31,13 @@ may be discussed in more than one report; one primary owner is listed here.
 | [Character / Maker / mods](character-and-mods.md) | 128 |
 | [Studio / IK / animation](studio.md) | 211 |
 | [Renderer / foundation / assets](renderer-and-foundation.md) | 332 |
-| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 196 |
+| [Toolchain / verification / historical docs](toolchain-and-verification.md) | 197 |
 
 | File role | Files |
 | --- | ---: |
 | App resource metadata / icon | 16 |
 | Build / repository configuration | 9 |
-| Conversion / recovery / verification tool | 230 |
+| Conversion / recovery / verification tool | 231 |
 | Documentation / historical evidence | 65 |
 | Generated asset / catalog / fixture | 205 |
 | Reference host / controlled fixture | 30 |
@@ -949,6 +949,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-load-accessory-labels.json](../../Tools/verification/scenarios/reload-load-accessory-labels.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-camera.json](../../Tools/verification/scenarios/reload-load-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/expression-edit.json](../../Tools/verification/scenarios/expression-edit.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-load-source-map.json](../../Tools/verification/scenarios/reload-load-source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-expression.json](../../Tools/verification/scenarios/reload-save-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-expression.json](../../Tools/verification/scenarios/reload-load-expression.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-clothes.json](../../Tools/verification/scenarios/reload-load-clothes.json) | Conversion / recovery / verification tool |
@@ -965,6 +966,7 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-save-outfit.json](../../Tools/verification/scenarios/reload-save-outfit.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-props.json](../../Tools/verification/scenarios/reload-save-props.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-save-route.json](../../Tools/verification/scenarios/reload-save-route.json) | Conversion / recovery / verification tool |
+| [Tools/verification/scenarios/reload-save-source-map.json](../../Tools/verification/scenarios/reload-save-source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/rename-folder.json](../../Tools/verification/scenarios/rename-folder.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-children-motion.json](../../Tools/verification/scenarios/route-children-motion.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/route-children-edit.json](../../Tools/verification/scenarios/route-children-edit.json) | Conversion / recovery / verification tool |
@@ -976,7 +978,6 @@ Feature assessment: [toolchain-and-verification.md](toolchain-and-verification.m
 | [Tools/verification/scenarios/reload-save-skirt-dynamics.json](../../Tools/verification/scenarios/reload-save-skirt-dynamics.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/reload-load-skirt-dynamics.json](../../Tools/verification/scenarios/reload-load-skirt-dynamics.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map-none.json](../../Tools/verification/scenarios/source-map-none.json) | Conversion / recovery / verification tool |
-| [Tools/verification/scenarios/source-map-reload.json](../../Tools/verification/scenarios/source-map-reload.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/source-map.json](../../Tools/verification/scenarios/source-map.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-camera.json](../../Tools/verification/scenarios/undo-camera.json) | Conversion / recovery / verification tool |
 | [Tools/verification/scenarios/undo-no-catalog.json](../../Tools/verification/scenarios/undo-no-catalog.json) | Conversion / recovery / verification tool |
