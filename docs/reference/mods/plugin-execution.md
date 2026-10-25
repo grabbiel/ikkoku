@@ -725,9 +725,25 @@ state: stepper history, built world, reached time, last frame, play state and la
 action. Rollback restores those owners and drops clocks created after capture;
 it does not replay elapsed frames or re-read source data. Immutable route arrays
 remain shared through value copying. Ordinary scrubbing keeps the existing
-fixed-`1/30` rebuild contract. Focused Engine continuation/ownership cases and a
-separate app lazy-clock ownership phase accompany the unchanged 16+56 assertions;
-their execution is pending. No comparative checkpoint-cost claim is made.
+fixed-`1/30` rebuild contract. At `2f50237`, all **11 focused Engine tests** pass,
+including oriented loop/non-loop continuation, inactive/fallback states and
+wrong-owner rejection. Release binary `ca45c636` passes **88/88 app checks** in
+three fresh processes: the unchanged 16 controls and 56 injections, plus 16
+lazy-clock/owner-retention checks. All six previously failing assertions pass;
+rejected irregular frames retain x `0.02666666545`, and retry matches the clean
+x `0.03999999911` at clock `0.08`. Six complete before/after state pairs, twelve
+rejected/refreshed matrices and three independent typed continuations match.
+Only the two declared UUID-keyed identity maps require decoding unordered JSON
+pair arrays; no UUID remapping, tolerance or field omission is applied.
+
+The successful Release compilation initially failed its strict process-cleanup
+check because an owned `ibtoold` service remained. It exited naturally before
+cleanup; no signal was sent. The original rejection, separate cleanup proof,
+fresh current/archived binary hashes and exact source pins are retained alongside
+all original red reports in `.local/codex-continue-2026-10-24/wave-three/plugins/`.
+The integration runtime is byte-identical to the tested source. Capture work is
+linear in resident routes and shares immutable path arrays; no comparative
+checkpoint-cost or original-player parity claim is made.
 
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
