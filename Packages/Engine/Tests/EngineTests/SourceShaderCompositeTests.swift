@@ -1344,7 +1344,10 @@ func liveSourceHeadZeroCheekCompositeMatchesOriginalAndInactiveControls() throws
         if let targetBytes { #expect(texture.allocatedSize == targetBytes) } else { targetBytes = texture.allocatedSize }
         #expect(texture.width == 1024 && texture.height == 1024 && texture.mipmapLevelCount == 11 && texture.pixelFormat == .rgba8Unorm_srgb)
         let uploads = resources.statistics().textures, auxiliaries = store.compositeInputStatistics(for: resources)
-        #expect(uploads == 4 && auxiliaries == .init(defaults: 1, samplers: 2))
+        // ForceEnable produces clamp/aniso9 and repeat/aniso9 for assets;
+        // the nil-anisotropy black default keeps repeat/aniso1 (nearest mip).
+        #expect(uploads == 4)
+        #expect(auxiliaries == .init(defaults: 1, samplers: 3))
         #expect(try store.texture(request, resources: resources).get().texture === texture)
         #expect(store.compositeEvents().last?.cacheHit == true && resources.statistics().textures == uploads)
         #expect(store.compositeInputStatistics(for: resources) == auxiliaries)
@@ -1409,13 +1412,14 @@ func liveSourceHeadZeroCheekCompositeMatchesOriginalAndInactiveControls() throws
             #expect(store.compositeEvents().last?.contentKey == event.contentKey && store.compositeEvents().last?.statistics == nil)
         }
         #expect(released == nil && resources.statistics().textures == 4)
-        #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 2))
+        #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 3))
     }
     #expect(contentKeys.count == 17)
     let reverted = try store.texture(.init(identity: identities[0], property: "_MainTex", mesh: "cf_O_face", slot: 0, anisotropicFiltering: "ForceEnable"), resources: resources).get().texture
     #expect(reverted === textures[0] && store.compositeEvents().last?.cacheHit == true)
     #expect(try readback(reverted, level: 0, device: device) == images[0])
-    #expect(resources.statistics().textures == 4 && store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 2))
+    #expect(resources.statistics().textures == 4)
+    #expect(store.compositeInputStatistics(for: resources) == .init(defaults: 1, samplers: 3))
     func median(_ values: [Double]) -> Double { values.sorted()[values.count / 2] }
     print("[head0 cheek composite] recipe preparation ms active \(activePreparation), inactive \(inactivePreparation); inactive hit ms \(inactiveHits); retained target bytes \(targetBytes ?? 0)")
     print("[head0 cheek composite] first events \(store.compositeEvents().prefix(4))")
