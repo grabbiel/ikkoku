@@ -13,6 +13,8 @@ struct PluginLibraryScenario: Decodable {
     let requestFile: String
     /// Regression only: real preview/Animator rollback after a failed frame.
     let frameRollback: FrameRollback?
+    /// Regression only: route-child placement across a rejected plugin frame.
+    let routeRollback: RouteRollback?
     /// Source-backed fresh-profile callback and failure-isolation checks.
     let reproduceFreshProfileFailure: Bool?
     /// Reproduction only: save and reopen run in separate owned processes.
@@ -51,6 +53,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let routeRollback { return await reproduceRouteRollback(routeRollback, app: app, studio: studio) }
         if let frameRollback { return await reproduceFrameRollback(frameRollback, app: app, studio: studio) }
         if let pendingDestructionRestore {
             return await reproduceInitializerRestore(pendingDestructionRestore, app: app, studio: studio, pendingDestruction: true)
@@ -1371,6 +1374,221 @@ extension PluginLibraryScenario {
         try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
             "packages": [["manifest": manifestURL.path, "bindings": [["type": type, "sourceObjectKey": 12]]]]]).write(to: profile)
         return profile
+    }
+}
+
+// Route rollback reproduction uses real app clocks; no production state is injected.
+extension PluginLibraryScenario {
+    struct RouteRollback: Decodable {
+        enum Phase: String, Decodable { case control, injected }
+        let phase: Phase
+        let directory: String
+        let routeKey: Int32, childKey: Int32
+    }
+    private struct RoutePlayObservation: Codable, Equatable {
+        let playing: Bool, start: Float
+    }
+    private struct RouteRenderItemObservation: Codable, Equatable {
+        let objectID: UInt32
+        let model: [UInt32]
+    }
+    private struct RouteContinuation: Codable, Equatable {
+        let document: StudioDocument, world: StudioDocument
+        let callbacks: [String]
+        let animationTime: Float
+        let routes: [UUID: RoutePlayObservation]
+        let childWorld: [UInt32], renderItems: [RouteRenderItemObservation]
+    }
+
+    @MainActor private func reproduceRouteRollback(_ configuration: RouteRollback,
+                                                   app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        func record(_ name: String, _ okay: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: okay, detail: detail))
+        }
+        func require(_ name: String, _ okay: Bool, _ detail: String = "") throws {
+            record(name, okay, detail)
+            if !okay { throw SourcePluginError.runtime("Route rollback precondition failed: " + name) }
+        }
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let output = directory.appendingPathComponent(configuration.phase.rawValue, isDirectory: true)
+        let seed = directory.appendingPathComponent("route-seed.png")
+        let fixture = directory.appendingPathComponent("fixture", isDirectory: true)
+        let profile = fixture.appendingPathComponent("profile.json")
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func matrixBits(_ matrix: float4x4) -> [UInt32] {
+            (0..<4).flatMap { c in (0..<4).map { matrix[c][$0].bitPattern } }
+        }
+        func routeStates() -> [UUID: RoutePlayObservation] {
+            studio.sourceRoutePlayState.mapValues { .init(playing: $0.playing, start: $0.start) }
+        }
+        func renderItems() -> [RouteRenderItemObservation] {
+            studio.host.renderer.currentFrame().items.map { .init(objectID: $0.objectID, model: matrixBits($0.model)) }
+        }
+        func snapshot() throws -> InitializerObservation {
+            let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+            return .init(document: studio.doc, world: session?.world.document,
+                runtimeDocument: try session?.savedDocument(),
+                pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+                callbacks: session?.runtime.callbackTrace ?? [],
+                resources: [r.meshes, r.textures, r.deformBuffers, r.hiddenBuffers,
+                    r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
+                generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+                blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        }
+        func sameFrame(_ a: RenderFrame, _ b: RenderFrame) -> Bool {
+            a.camera == b.camera && a.mainLight == b.mainLight && a.effects == b.effects && a.lights == b.lights
+                && a.sceneBounds == b.sceneBounds && a.time == b.time && a.skinSets == b.skinSets
+                && a.gizmos.count == b.gizmos.count && a.items.count == b.items.count
+                && zip(a.items, b.items).allSatisfy { $0.mesh == $1.mesh && $0.model == $1.model && $0.objectID == $1.objectID }
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else {
+                throw SourcePluginError.invalid("Route rollback needs a fresh phase directory.")
+            }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            try persist(["pid": ProcessInfo.processInfo.processIdentifier], "process")
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false
+            try require("RouteInput", studio.hasSourceRoutes
+                && studio.doc.objects.contains(where: { $0.sourceObjectKey == configuration.routeKey })
+                && studio.doc.objects.contains(where: { $0.sourceObjectKey == configuration.childKey }),
+                "Use the retained moving route and child; no synthetic placement substitute")
+            if configuration.phase == .control {
+                guard !FileManager.default.fileExists(atPath: seed.path) else {
+                    throw SourcePluginError.invalid("Route rollback native seed already exists.")
+                }
+                try studio.setSourceAnimationTime(0)
+                try studio.saveScene(to: seed)
+                try routeRollbackFixture(directory: fixture, sourceObjectKey: configuration.childKey)
+            } else {
+                let producer = try JSONDecoder().decode([String: Int32].self,
+                    from: Data(contentsOf: directory.appendingPathComponent("control/process.json")))
+                try require("IndependentRouteControlProcess", producer["pid"] != nil
+                    && producer["pid"] != ProcessInfo.processInfo.processIdentifier)
+            }
+            let cases: [(String, Float, Bool)] = [("regular", SourceStudioRouteClock.frameDelta, true), ("irregular", 0.02, true), ("stopped", 0.02, false)]
+            for (name, delta, playing) in cases {
+                // Both processes reopen the same native seed, preserving UUIDs.
+                // No remapping or normalization is needed for this comparison.
+                try studio.loadScene(from: seed)
+                guard let route = studio.doc.objects.first(where: { $0.sourceObjectKey == configuration.routeKey }),
+                      let child = studio.doc.objects.first(where: { $0.sourceObjectKey == configuration.childKey }) else {
+                    throw SourcePluginError.invalid("Native route seed lost a required source object.")
+                }
+                try studio.setSourceAnimationTime(0)
+                studio.selection = route.id
+                if studio.selectedRoutePlaying != playing { studio.toggleSourceRoute(route.id) }
+                try require(name + "RouteMode", studio.selectedRouteIsSource && studio.selectedRoutePlaying == playing
+                    && child.parent == route.id, "The observed child must remain directly under the verified source route")
+                try studio.loadSourcePluginProfileInteractively(profileURL: profile, expectedGeneration: studio.sourcePluginMountGeneration)
+                studio.sourcePluginsRunning = false
+                guard let session = studio.sourcePluginSession else { throw SourcePluginError.invalid("Route fixture failed to install.") }
+                let component = try session.runtime.component(at: 0)
+                let initialMatrix = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                for _ in 0..<3 { try studio.stepSourcePlugins(deltaTime: delta, advanceAnimation: true) }
+                let baselineMatrix = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                try require(name + "PrefixPlacement", playing ? baselineMatrix != initialMatrix : baselineMatrix == initialMatrix,
+                    "Three real successful frames at delta \(delta); moving control must change, stopped control must hold")
+                try session.world.replaceDocument(studio.doc)
+                try persist(baselineMatrix, name + "-prefix-matrix")
+                if configuration.phase == .injected {
+                    var fields = try component.savedFields(); fields["trip"] = .bool(true); try component.restoreFields(fields)
+                    for attempt in 1...2 {
+                        studio.sourcePluginsRunning = true
+                        let before = try snapshot(), routes = routeStates(), frame = studio.host.renderer.currentFrame()
+                        let previews = Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init))
+                        let adapter = studio.sourceFocus.adapter, gain = studio.sourceAudioBus.masterVolume
+                        let observers = studio.sourceFocusObservers.count
+                        try persist(before, name + "-before-\(attempt)")
+                        var rejection: String?
+                        do { try studio.stepSourcePlugins(deltaTime: delta, advanceAnimation: true) }
+                        catch SourcePluginError.runtime(let reason) { rejection = reason }
+                        catch { rejection = "UNEXPECTED: \(error)" }
+                        let after = try snapshot()
+                        let afterMatrix = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                        try persist(after, name + "-after-\(attempt)")
+                        try persist(afterMatrix, name + "-after-matrix-\(attempt)")
+                        record(name + "Failure\(attempt)ExactError", rejection == "Unsupported arithmetic operator or Int32 arithmetic.", rejection ?? "No failure")
+                        record(name + "Failure\(attempt)ExactState", before == after && routeStates() == routes,
+                            "Complete document/runtime/clock/history/resource snapshot and route play state")
+                        record(name + "Failure\(attempt)RoutePose", afterMatrix == baselineMatrix,
+                            "Exact pre-failure route child matrix; no fixed-step reconstruction tolerance")
+                        record(name + "Failure\(attempt)OwnersAndFrame", studio.sourcePluginSession === session
+                            && Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)) == previews
+                            && sameFrame(frame, studio.host.renderer.currentFrame()) && studio.sourceFocus.adapter === adapter
+                            && studio.sourceAudioBus.masterVolume == gain && studio.sourceFocusObservers.count == observers
+                            && !studio.sourcePluginsRunning)
+                        studio.refresh()
+                        let refreshedMatrix = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                        try persist(refreshedMatrix, name + "-refreshed-matrix-\(attempt)")
+                        try persist(renderItems(), name + "-refreshed-items-\(attempt)")
+                        record(name + "Failure\(attempt)RefreshedPose", refreshedMatrix == baselineMatrix,
+                            "A real refresh must not expose a changed route cache behind an unchanged submitted frame")
+                        record(name + "Failure\(attempt)RefreshedFrame", sameFrame(frame, studio.host.renderer.currentFrame()))
+                    }
+                    var retryFields = try component.savedFields(); retryFields["trip"] = .bool(false); try component.restoreFields(retryFields)
+                }
+                let clock = studio.sourceAnimationTime
+                try studio.stepSourcePlugins(deltaTime: delta, advanceAnimation: true)
+                studio.refresh()
+                let finalMatrix = matrixBits(try studio.sourceObjectWorldMatrix(child.id))
+                let success = RouteContinuation(document: studio.doc, world: session.world.document,
+                    callbacks: session.runtime.callbackTrace, animationTime: studio.sourceAnimationTime,
+                    routes: routeStates(), childWorld: finalMatrix, renderItems: renderItems())
+                try persist(success, name + "-success")
+                record(name + "SuccessClock", studio.sourceAnimationTime.bitPattern == (clock + delta).bitPattern)
+                record(name + "SuccessCallback", session.runtime.callbackTrace.last?.hasSuffix(":LateUpdate") == true)
+                record(name + "SuccessPlacement", playing ? finalMatrix != baselineMatrix : finalMatrix == baselineMatrix)
+                if configuration.phase == .injected {
+                    let clean = try JSONDecoder().decode(RouteContinuation.self,
+                        from: Data(contentsOf: directory.appendingPathComponent("control/" + name + "-success.json")))
+                    record(name + "RetryMatchesIndependentControl", success == clean,
+                        "Same native UUIDs; full documents/fields/bindings/callbacks/clocks plus bit-exact route and ordered render-item matrices")
+                }
+            }
+        } catch { record("routeReproductionFailure", false, String(describing: error)) }
+        studio.sourcePluginsRunning = false
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+
+    private func routeRollbackFixture(directory: URL, sourceObjectKey: Int32) throws {
+        guard !FileManager.default.fileExists(atPath: directory.path) else {
+            throw SourcePluginError.invalid("Route rollback fixture already exists.")
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        typealias Node = [String: Any]
+        let type = "RouteFrame", guid = "Ikkoku.Validation.RouteRollback", hash = String(repeating: "c", count: 64)
+        let poison: Node = ["kind": "binary", "type": "Int32", "name": "+", "children": [
+            ["kind": "literal", "type": "Int32", "value": 1], ["kind": "literal", "type": "Int32", "value": 1]]]
+        let body: Node = ["kind": "block", "children": [["kind": "if", "children": [
+            ["kind": "field", "type": "Bool", "name": "trip"],
+            ["kind": "block", "children": [["kind": "expression", "children": [poison]]]],
+            ["kind": "block", "children": []]]]]]
+        let program: Node = ["schemaVersion": 1, "status": "ready", "mode": "component", "type": type,
+            "source": ["sha256": hash], "identity": ["sourceSHA256": hash, "type": type, "pluginGUID": guid,
+                "symbols": ["M:\(type).LateUpdate"]], "semanticSurfaceSHA256": hash, "bridgeSHA256": hash, "emitterSHA256": hash,
+            "fields": [["name": "trip", "type": "Bool", "serialized": true,
+                "initializer": ["kind": "literal", "type": "Bool", "value": false]]],
+            "methods": [["name": "LateUpdate", "symbol": "M:\(type).LateUpdate", "static": false,
+                "returnType": "Void", "parameters": [], "body": body, "lifecycle": "LateUpdate"]]]
+        let bytes = try JSONSerialization.data(withJSONObject: program, options: [.sortedKeys])
+        _ = try SourceIRProgram.decode(bytes)
+        try bytes.write(to: directory.appendingPathComponent("program.json"), options: .withoutOverwriting)
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let manifest: Node = ["schemaVersion": 1, "kind": "ikkoku-translated-plugin",
+            "identity": ["guid": guid, "version": "1.0", "name": "Route rollback reproduction"],
+            "processes": ["CharaStudio"], "dependencies": [], "incompatibilities": [],
+            "components": [["type": type, "program": ["file": "program.json", "sha256": digest]]]]
+        let manifestURL = directory.appendingPathComponent("manifest.json")
+        try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys]).write(to: manifestURL, options: .withoutOverwriting)
+        try JSONSerialization.data(withJSONObject: ["schemaVersion": 1, "fixedDeltaTime": 0.02,
+            "packages": [["manifest": manifestURL.path, "bindings": [["type": type, "sourceObjectKey": sourceObjectKey]]]]], options: [.sortedKeys])
+            .write(to: directory.appendingPathComponent("profile.json"), options: .withoutOverwriting)
     }
 }
 

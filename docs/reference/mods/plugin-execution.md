@@ -701,6 +701,17 @@ assets, so this does not establish cleanup of every distinct cold texture input.
 Functional step timings are diagnostics; they do not establish checkpoint cost,
 source parity or a performance improvement.
 
+The separate `PluginLibraryScenario.routeRollback` reproduction covers a route
+child, which the character-preview case above deliberately omits. Both processes
+reopen the same native seed to retain exact UUIDs. A clean process records three
+successful-prefix continuations: moving at `1/30`, moving at `0.02`, and stopped
+at `0.02`. The second process repeats the prefix, rejects two `LateUpdate`
+callbacks after animation advancement, and retries. It compares exact route-child
+matrices before and after a real refresh as well as document/runtime state,
+resources, ownership and submitted frames. This is a regression-only checkpoint
+pending execution: the rollback path's fixed-step route reconstruction is a
+source observation, not yet an observed defect or a production behavior change.
+
 This implements an explicit Unity/BepInEx subset. Coroutines, Harmony interception,
 arbitrary engine components, reflection, serialized object fields and unrecognized
 APIs still require recovery and adapters. Sheared/reflected unparented clone
