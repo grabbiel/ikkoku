@@ -378,14 +378,23 @@ extension StudioModel {
     /// copy shares its original's runtime (the copy's document entry carries
     /// the same edits) and, like CharaStudio's Save + Import of a playing
     /// route, plays from point 0 at the duplicate instant; a route character
-    /// copy gets its own preview.
-    func copySourceRouteRuntime(from original: UUID, to copy: UUID) {
+    /// copy gets its own preview. With `asyncSourceBuilds` that preview is
+    /// not built here: the copy is appended to `characterBuilds`, which the
+    /// caller hands to `startSourceRouteCharacterBuilds` once the whole
+    /// subtree is copied (R7 phase 2 item 6 follow-up). Captures and
+    /// scenarios build it here, on the main thread, as before.
+    func copySourceRouteRuntime(from original: UUID, to copy: UUID,
+                                characterBuilds: inout [(id: UUID, reference: SourceStudioCharacterReference)]) {
         if let runtime = sourceRoutes[original] {
             sourceRoutes[copy] = runtime
             sourceRoutePlayState[copy] = isSourceRoutePlaying(original)
                 ? (playing: true, start: sourceAnimationTime) : (playing: false, start: 0)
         }
         if let preview = sourceRouteCharacterPreviews[original] {
+            if asyncSourceBuilds {
+                characterBuilds.append((copy, preview.reference))
+                return
+            }
             do { sourceRouteCharacterPreviews[copy] = try makeSourceRouteCharacterPreview(like: preview) }
             catch { status = "Route character copy: \(error)" }
         }

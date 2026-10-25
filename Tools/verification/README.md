@@ -256,7 +256,7 @@ the synchronous pick reads it, both in the model and in the frame's
 highlighted gizmo batches; the pick counters must show the coalesced moves
 and the dropped stale results),
 `backgroundBuild` `{build:"import"|"importTwice"|"importThenNewScene"|"importWhileHidden"}`
-or `{build:"duplicate"|"duplicateWhileHidden",key}` (R7 phase 2, item 6: interactive runs build source
+or `{build:"duplicate"|"duplicateWhileHidden"|"duplicateRoute"|"duplicateRouteWhileHidden",key}` (R7 phase 2, item 6: interactive runs build source
 characters off the main thread, while scenarios build them synchronously. The
 op runs the operation synchronously first, then with background builds through
 the app's own methods, pumps the main run loop until no import or character
@@ -267,7 +267,11 @@ single completion; `importTwice` starts a second import before the first
 commits and accepts only the second's completion; `importThenNewScene` cancels
 with New Scene and requires no completion and an empty document; `duplicate`
 duplicates the keyed object, then undoes, and each side must have built at
-least one character in the background. The `WhileHidden` builds hide the
+least one character in the background. `duplicateRoute` duplicates the keyed
+route with its character: the synchronous Duplicate, Undo and Redo are the
+reference for the background ones, the Duplicate must build no route
+character preview on the main thread, and a Duplicate undone before its copy's
+build lands must leave nothing pending and match the synchronous Undo. The `WhileHidden` builds hide the
 Studio while the builds land, as a switch to the Maker does, with an empty
 frame standing in for the Maker's on the shared renderer: that frame must
 still be current when the Studio shows again and refreshes. Live animation is

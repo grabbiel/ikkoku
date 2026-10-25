@@ -215,6 +215,16 @@ private func batchScene(_ previews: [SourceStudioCharacterPreview], renderer: Re
     func sourceStudioCharacterDonationRendersLikeAFreshBuildWhenSupplied() async throws {
         for check in try await liveTickOffPool(batchDonationRendersLikeAFreshBuild) { #expect(check.passed, "\(check.name)") }
     }
+
+    /// R7 phase 2 item 6 follow-up: a deleted character's donation, kept in
+    /// the bounded cache after its preview is gone, holds no store resource,
+    /// and the build that restores the character borrows it and renders
+    /// byte-identical to a fresh build. The budget evicts the oldest.
+    @Test(.enabled(if: SourceFixtureSupport.shouldRun(batchVariables) && MTLCreateSystemDefaultDevice() != nil,
+                   "Requires the Studio scenario scene and its import fixtures (\(batchVariables.joined(separator: ", "))) and a Metal device"))
+    func sourceStudioDeletedCharacterDonationRendersLikeAFreshBuildWhenSupplied() async throws {
+        for check in try await liveTickOffPool(batchDeletedCharacterDonation) { #expect(check.passed, "\(check.name)") }
+    }
 }
 
 private func batchMatchesSequentialBuilds() throws -> [BatchCheck] {
@@ -315,5 +325,43 @@ private func batchDonationRendersLikeAFreshBuild() throws -> [BatchCheck] {
     checks.append(("the edit must change the copy's render", bent != base))
     checks.append(("the same edit renders the same on a fresh build", try render(fresh, fk: [bone: Float3(35, -20, 10)]) == bent))
     checks.append(("editing the copy leaves the original's render", try render(original) == base))
+    return checks
+}
+
+private func batchDeletedCharacterDonation() throws -> [BatchCheck] {
+    let references = Array(try batchFixtureReferences().prefix(3))
+    try batchRequire(references.count == 3, "the scenario scene must hold three characters")
+    let renderer = try makeSourceShaderRenderer(), resources = renderer.resources
+    // Warm the shared texture cache, as the cancellation test does.
+    _ = try references.map { try SourceStudioCharacterPreview(reference: $0, resources: resources) }
+    let before = resources.statistics()
+    var previews = try references.map { try SourceStudioCharacterPreview(reference: $0, resources: resources) }
+    let charges = try previews.map { try batchUnwrap(SourceStudioDonationCache.charge($0.donation), "a donation has no charge") }
+    print("[r7i-donation] logical charge per character (bytes): \(charges)")
+    // Room for the last two: keeping all three evicts the first.
+    let cache = SourceStudioDonationCache(maximumBytes: charges[1] + charges[2], maximumEntries: 8)
+    for preview in previews { cache.keep(preview.donation) }
+    var checks: [BatchCheck] = [
+        ("the budget keeps the two newest", cache.count == 2 && cache.bytes == charges[1] + charges[2] && cache.counts.evicted == 1),
+    ]
+    // The characters are deleted: their previews go, the donations stay.
+    previews.removeAll()
+    let after = resources.statistics()
+    checks.append(("kept donations hold no store resource", before.meshes == after.meshes && before.textures == after.textures
+        && before.meshBufferBytes == after.meshBufferBytes && before.hiddenBuffers == after.hiddenBuffers))
+    checks.append(("the evicted character has no donation", cache.take { $0.reference == references[0] } == nil))
+    let donation = cache.take { $0.reference == references[1] }
+    checks.append(("the deleted character's donation is kept", donation != nil && cache.count == 1))
+    let batch = SourceStudioCharacterBatch(requests: [.init(reference: references[1], donation: donation)], resources: resources)
+    let restored = try batch.build(0)
+    let fresh = try SourceStudioCharacterPreview(reference: references[1], resources: resources)
+    checks.append(("the restored character borrows the kept assembly", restored.sharedAssembly && !fresh.sharedAssembly))
+    checks.append(("the restored character has a fresh build's diagnostics", restored.diagnostics == fresh.diagnostics))
+    func render(_ preview: SourceStudioCharacterPreview) throws -> [UInt8] {
+        let frame = try preview.frame(camera: OrbitCamera(), mainLight: MainLight(), effects: SceneEffects(),
+                                      world: matrix_identity_float4x4, objectID: 1)
+        return try batchPixels(try batchUnwrap(renderer.capture(frame: frame, width: 256, height: 256), "the capture failed"))
+    }
+    checks.append(("the restored character renders like a fresh build", try render(restored) == render(fresh)))
     return checks
 }

@@ -194,6 +194,10 @@ final class StudioModel: ViewportInputHandler {
         let batch: SourceStudioCharacterBatch
     }
     @ObservationIgnored private var pendingSourceBuilds: [UUID: PendingSourceBuild] = [:]
+    /// A route character copy's background build (a Duplicate of a route
+    /// with its character), by the copy's placeholder object; it installs
+    /// into `sourceRouteCharacterPreviews` (`installSourceRouteCharacterBuild`).
+    @ObservationIgnored private var pendingRouteCharacterBuilds: [UUID: PendingSourceBuild] = [:]
     /// A background build that failed, kept so `refresh()` reports it like
     /// the synchronous build's error instead of building it every frame.
     @ObservationIgnored private var failedSourceBuilds: [UUID: (reference: SourceStudioCharacterReference, outfit: Int?, error: String)] = [:]
@@ -201,6 +205,13 @@ final class StudioModel: ViewportInputHandler {
     /// rebuilds (`SourceStudioCharacterPreview.Donation`); the next refresh's
     /// builds take them and drop them.
     @ObservationIgnored private var sourceDonations: [SourceStudioCharacterPreview.Donation] = []
+    /// R7 phase 2 item 6 follow-up: what previews dropped with no rebuild
+    /// waiting for them (a deleted character, an outfit replaced, the scene
+    /// an import or New Scene replaced) can lend the build that brings them
+    /// back, such as the undo of a delete. Bounded by its byte and entry
+    /// budget, and emptied on memory pressure (`keepSourceDonations`).
+    @ObservationIgnored let sourceDonationCache = SourceStudioDonationCache()
+    @ObservationIgnored private var sourceDonationPressure: (any DispatchSourceMemoryPressure)?
     /// Background character builds, for the status line.
     struct SourceBuildProgress: Equatable {
         let label: String
@@ -1048,6 +1059,8 @@ final class StudioModel: ViewportInputHandler {
         // The face state is Status data independent of the outfit.
         try fresh.setExpressionState(object.sourceExpression)
         pushUndo(force: true)
+        // The replaced outfit stays borrowable for its undo.
+        keepSourceDonations([current])
         // The cache entry goes first: the document's didSet refresh then
         // keeps this instance instead of building the same outfit again.
         sourceInstances[id] = fresh
@@ -1667,6 +1680,7 @@ final class StudioModel: ViewportInputHandler {
         for object in subtree { remap[object.id] = UUID() }
         var copies: [StudioObject] = []
         copies.reserveCapacity(subtree.count)
+        var routeCharacterBuilds: [(id: UUID, reference: SourceStudioCharacterReference)] = []
         for object in subtree {
             var copy = object
             copy.id = remap[object.id]!
@@ -1676,13 +1690,17 @@ final class StudioModel: ViewportInputHandler {
             // The runtime entries the copy renders from are its original's.
             if let entry = sourceCameras[object.id] { sourceCameras[copy.id] = entry }
             if let entry = sourceItemAssets[object.id] { sourceItemAssets[copy.id] = entry }
-            copySourceRouteRuntime(from: object.id, to: copy.id)
+            copySourceRouteRuntime(from: object.id, to: copy.id, characterBuilds: &routeCharacterBuilds)
             if resourceBlockedObjects.contains(object.id) { resourceBlockedObjects.insert(copy.id) }
         }
         if var coverage = sourceRuntimeCoverage, coverage.sceneSHA256 == doc.sourceSceneSHA256 {
             coverage.objectIDs.formUnion(copies.filter { $0.sourceRecordKey != nil }.map(\.id))
             sourceRuntimeCoverage = coverage
         }
+        // Registered before the copies enter the document, so the refresh
+        // that follows already treats objects attached to a route character
+        // copy as waiting for its build.
+        startSourceRouteCharacterBuilds(routeCharacterBuilds)
         doc.objects += copies
         if let active = activeSourceCamera, let copy = remap[active] { activeSourceCamera = copy }
         selection = remap[id]
@@ -2050,8 +2068,12 @@ final class StudioModel: ViewportInputHandler {
         }
         imported.camera = try source.settings.camera.nativeCamera()
         imported.cameraSlots = try source.settings.cameraSlots.map { try $0.nativeCamera() }
+        // Route copies still building for the replaced document stop.
+        cancelSourceRouteCharacterBuilds()
         pushUndo(force: true)
         sourceAnimationCatalog = job.animationCatalog; sourceAnimationCatalogError = job.animationCatalogError
+        // The replaced scene's characters stay borrowable for an undo.
+        keepSourceDonations(sourceInstances.filter { previews[$0.key] !== $0.value }.values)
         stopSourceVoices(); sourcePluginSession = nil; sourcePluginsRunning = false; sourceAnimationTime = 0; sourceInstances = previews; sourceRoutes = routes; sourceRoutePlayState = Dictionary(uniqueKeysWithValues: routes.map { ($0.key, (playing: $0.value.route.active, start: 0)) }); sourceRouteCharacterPreviews = routeCharacterPreviews; lastSourceRouteDiagnostic = nil; releaseInstances { _ in true }; sourceCameras = cameras; sourceItemAssets = itemAssets; activeSourceCamera = activeCameraAtLoad; sourceCameraLoadActive = activeCameraAtLoad; clearResourceDiagnostics(); doc = imported; sourceSceneLight = sceneLightOverride.map { (hash, $0) }; coverSourceRuntime(imported); self.sceneURL = nil
         rebuildSourceRouteClocks()
         selection = imported.objects.first(where: { $0.sourceCharacter != nil })?.id
@@ -2061,13 +2083,15 @@ final class StudioModel: ViewportInputHandler {
 
     /// Whether a background source scene import is still building its characters.
     var isLoadingSourceScene: Bool { sourceImportJob != nil }
-    /// Background builds of missing previews not installed yet.
-    var pendingSourceCharacterBuilds: Int { pendingSourceBuilds.count }
+    /// Background builds of missing previews and of route character copies
+    /// not installed yet.
+    var pendingSourceCharacterBuilds: Int { pendingSourceBuilds.count + pendingRouteCharacterBuilds.count }
 
-    /// Stops every background character build: the import in flight and the
-    /// rebuilds of missing previews (another import, New Scene, a scene
-    /// load). Nothing they built reaches the model; the previews already
-    /// built release their meshes and buffers when dropped.
+    /// Stops every background character build: the import in flight, the
+    /// rebuilds of missing previews and the route character copies (another
+    /// import, New Scene, a scene load). Nothing they built reaches the
+    /// model; the previews already built release their meshes and buffers
+    /// when dropped.
     func cancelSourceBuilds() {
         sourceImportJob?.batch.cancel()
         sourceImportJob = nil
@@ -2075,7 +2099,27 @@ final class StudioModel: ViewportInputHandler {
         pendingSourceBuilds.removeAll()
         failedSourceBuilds.removeAll()
         sourceDonations.removeAll()
+        cancelSourceRouteCharacterBuilds()
         updateSourceBuildProgress()
+    }
+
+    /// Stops the route character copies in flight: their placeholders' route
+    /// previews are being replaced (an import's commit, a rehydration) or
+    /// every build stops.
+    func cancelSourceRouteCharacterBuilds() {
+        guard !pendingRouteCharacterBuilds.isEmpty else { return }
+        for build in pendingRouteCharacterBuilds.values { build.batch.cancel() }
+        pendingRouteCharacterBuilds.removeAll()
+        updateSourceBuildProgress()
+    }
+
+    /// Cancels `batch` once no pending build is waiting for it any more. A
+    /// batch serves several objects, so a build that one of them no longer
+    /// wants must not stop the others; its result is dropped on install.
+    private func cancelSourceBatchIfUnused(_ batch: SourceStudioCharacterBatch) {
+        guard !pendingSourceBuilds.values.contains(where: { $0.batch === batch }),
+              !pendingRouteCharacterBuilds.values.contains(where: { $0.batch === batch }) else { return }
+        batch.cancel()
     }
 
     private func updateSourceBuildProgress() {
@@ -2083,9 +2127,9 @@ final class StudioModel: ViewportInputHandler {
         if let job = sourceImportJob {
             progress = .init(label: "Importing \(job.sceneURL.deletingPathExtension().lastPathComponent)",
                              built: job.builtCount, total: job.references.count)
-        } else if !pendingSourceBuilds.isEmpty {
-            progress = .init(label: "Building \(pendingSourceBuilds.count) source character\(pendingSourceBuilds.count == 1 ? "" : "s")",
-                             built: 0, total: pendingSourceBuilds.count)
+        } else if pendingSourceCharacterBuilds > 0 {
+            let count = pendingSourceCharacterBuilds
+            progress = .init(label: "Building \(count) source character\(count == 1 ? "" : "s")", built: 0, total: count)
         }
         if sourceBuildProgress != progress { sourceBuildProgress = progress }
     }
@@ -2102,7 +2146,22 @@ final class StudioModel: ViewportInputHandler {
             let donation = preview.donation
             if matches(donation) { return donation }
         }
-        return sourceDonations.first(where: matches)
+        return sourceDonations.first(where: matches) ?? sourceDonationCache.take(where: matches)
+    }
+
+    /// Keeps the donations of previews the model dropped with no rebuild
+    /// waiting for them in `sourceDonationCache` (R7 phase 2 item 6
+    /// follow-up). The first call also empties the cache on the system's
+    /// memory-pressure warnings.
+    private func keepSourceDonations(_ previews: some Sequence<SourceStudioCharacterPreview>) {
+        for preview in previews { sourceDonationCache.keep(preview.donation) }
+        guard sourceDonationPressure == nil, sourceDonationCache.count > 0 else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.sourceDonationCache.removeAll() }
+        }
+        source.activate()
+        sourceDonationPressure = source
     }
 
     /// Starts the first halves of these source character builds together
@@ -2136,9 +2195,21 @@ final class StudioModel: ViewportInputHandler {
     /// `refreshFrame` where it would have built each preview, so a
     /// synchronous refresh registers in the same order as before.
     private func startMissingSourceBuilds(sourceCharacters: Int) -> (batch: SourceStudioCharacterBatch, index: [UUID: Int])? {
-        defer { sourceDonations.removeAll() }
-        guard sourceInstances.count < sourceCharacters else { return nil }
         var wanted: [(reference: SourceStudioCharacterReference, outfit: Int?)] = [], ids: [UUID] = []
+        defer {
+            // What the last undo or redo dropped and no build here wants
+            // (the copy an undone Duplicate removed) stays borrowable.
+            if !sourceDonations.isEmpty {
+                let live = Array(sourceInstances.values)
+                let unused = sourceDonations.filter { donation in
+                    !wanted.contains { $0.reference == donation.reference && ($0.outfit ?? donation.savedCoordinate) == donation.coordinate }
+                        && !live.contains { $0.reference == donation.reference && $0.coordinate == donation.coordinate }
+                }
+                sourceDonations.removeAll()
+                for donation in unused { sourceDonationCache.keep(donation) }
+            }
+        }
+        guard sourceInstances.count < sourceCharacters else { return nil }
         for o in doc.objects where o.kind == .character {
             guard let reference = o.sourceCharacter, !resourceBlockedObjects.contains(o.id), doc.isVisible(o.id) else { continue }
             if let cached = sourceInstances[o.id], cached.reference == reference,
@@ -2152,9 +2223,11 @@ final class StudioModel: ViewportInputHandler {
         let batch = sourceCharacterBatch(wanted)
         guard asyncSourceBuilds else { return (batch, Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, $0) })) }
         for (index, id) in ids.enumerated() {
-            pendingSourceBuilds[id]?.batch.cancel()
+            // The superseded build's batch may still serve other objects.
+            let superseded = pendingSourceBuilds[id]?.batch
             pendingSourceBuilds[id] = PendingSourceBuild(reference: wanted[index].reference, outfit: wanted[index].outfit, batch: batch)
             failedSourceBuilds[id] = nil
+            if let superseded { cancelSourceBatchIfUnused(superseded) }
         }
         updateSourceBuildProgress()
         batch.run(ids.indices.map { .character($0) }, on: sourceBuildQueue, main: { _ in }, built: { [weak self] delivery in
@@ -2163,16 +2236,63 @@ final class StudioModel: ViewportInputHandler {
         return nil
     }
 
-    /// Whether `id` or one of its ancestors is a character whose background
-    /// build has not installed yet.
+    /// Whether `id` or one of its ancestors is a character, or a route
+    /// character copy, whose background build has not installed yet.
     private func awaitsSourceBuild(_ id: UUID) -> Bool {
-        guard !pendingSourceBuilds.isEmpty else { return false }
+        guard pendingSourceCharacterBuilds > 0 else { return false }
         var current: UUID? = id, steps = 0
         while let candidate = current, steps <= doc.objects.count {
-            if pendingSourceBuilds[candidate] != nil { return true }
+            if pendingSourceBuilds[candidate] != nil || pendingRouteCharacterBuilds[candidate] != nil { return true }
             current = doc.object(candidate)?.parent; steps += 1
         }
         return false
+    }
+
+    /// R7 phase 2 item 6 follow-up (ST-T11): the previews of route character
+    /// copies a Duplicate made, built in the background like a duplicated
+    /// character (`startMissingSourceBuilds`). One batch in subtree order:
+    /// the first halves borrow the original's converted assembly
+    /// (`sourceDonation` finds the original's route preview), and the second
+    /// halves run on `sourceBuildQueue`. Each copy installs itself
+    /// (`installSourceRouteCharacterBuild`); until then its placeholder
+    /// draws nothing, and objects attached to it wait without a message.
+    func startSourceRouteCharacterBuilds(_ copies: [(id: UUID, reference: SourceStudioCharacterReference)]) {
+        guard !copies.isEmpty else { return }
+        let batch = sourceCharacterBatch(copies.map { ($0.reference, nil) })
+        for copy in copies {
+            let superseded = pendingRouteCharacterBuilds[copy.id]?.batch
+            pendingRouteCharacterBuilds[copy.id] = PendingSourceBuild(reference: copy.reference, outfit: nil, batch: batch)
+            if let superseded { cancelSourceBatchIfUnused(superseded) }
+        }
+        updateSourceBuildProgress()
+        let ids = copies.map(\.id)
+        batch.run(ids.indices.map { .character($0) }, on: sourceBuildQueue, main: { _ in }, built: { [weak self] delivery in
+            self?.installSourceRouteCharacterBuild(delivery, id: ids[delivery.index], batch: batch)
+        }, finished: {})
+    }
+
+    /// A route character copy's build arrived. It installs only while its
+    /// placeholder is still in the document showing the same record of the
+    /// same scene (the prune rule of `refreshFrame`), exactly as the
+    /// synchronous copy installs it; a failure reports the synchronous
+    /// copy's message.
+    private func installSourceRouteCharacterBuild(_ delivery: SourceStudioCharacterBatch.Delivery, id: UUID,
+                                                  batch: SourceStudioCharacterBatch) {
+        guard let pending = pendingRouteCharacterBuilds[id], pending.batch === batch else { return }
+        pendingRouteCharacterBuilds[id] = nil
+        defer { updateSourceBuildProgress() }
+        guard doc.sourceSceneSHA256 == pending.reference.sceneSHA256,
+              doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == pending.reference.objectKey }) else { return }
+        switch delivery.result {
+        case .success(let preview):
+            preview.automaticBlink = sourceAutomaticBlink
+            sourceRouteCharacterPreviews[id] = preview
+            PerfTrace.characterInstalled()
+        case .failure(let error):
+            status = "Route character copy: \(error)"
+        }
+        // With the Maker shown, its frame stays; switching back refreshes.
+        if isActiveMode { refresh() }
     }
 
     /// A background build arrived: installs it if its object still shows
@@ -2789,7 +2909,11 @@ final class StudioModel: ViewportInputHandler {
         cameraReuse = nil
         let currentIDs = Set(doc.objects.filter { $0.kind == .character && $0.sourceCharacter != nil }.map(\.id))
         let keptSourceInstances = sourceInstances.filter { currentIDs.contains($0.key) }
-        if keptSourceInstances.count != sourceInstances.count { sourceInstances = keptSourceInstances }
+        if keptSourceInstances.count != sourceInstances.count {
+            // A deleted character's assembly stays borrowable for its undo.
+            keepSourceDonations(sourceInstances.filter { !currentIDs.contains($0.key) }.values)
+            sourceInstances = keptSourceInstances
+        }
         // R7 phase 2 item 6: the source characters this frame lacks start
         // building together; see `startMissingSourceBuilds`.
         let missingSourceBuilds = sourcePreviewsChecked ? nil : startMissingSourceBuilds(sourceCharacters: currentIDs.count)
@@ -2819,10 +2943,25 @@ final class StudioModel: ViewportInputHandler {
         applySourceRouteEdits()
         // Route-character previews are likewise authored data with no document
         // counterpart to edit; the prune only drops gone objects.
-        let previewIDsBeforePrune = Set(sourceRouteCharacterPreviews.keys)
+        var previewIDsBeforePrune = Set(sourceRouteCharacterPreviews.keys)
         sourceRouteCharacterPreviews = sourceRouteCharacterPreviews.filter { id, preview in
             doc.sourceSceneSHA256 == preview.reference.sceneSHA256
                 && doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == preview.reference.objectKey })
+        }
+        // A route character copy still building for a placeholder that left
+        // the document (an undo of the Duplicate) stops, and is no longer
+        // covered either, so a redo rehydrates it like an installed one.
+        if !pendingRouteCharacterBuilds.isEmpty {
+            let gone = pendingRouteCharacterBuilds.filter { id, pending in
+                doc.sourceSceneSHA256 != pending.reference.sceneSHA256
+                    || !doc.objects.contains(where: { $0.id == id && $0.sourceRecordKey == pending.reference.objectKey })
+            }
+            for (id, pending) in gone {
+                pendingRouteCharacterBuilds[id] = nil
+                previewIDsBeforePrune.insert(id)
+                cancelSourceBatchIfUnused(pending.batch)
+            }
+            if !gone.isEmpty { updateSourceBuildProgress() }
         }
         if var coverage = sourceRuntimeCoverage {
             coverage.objectIDs.subtract(routeIDsBeforePrune.subtracting(sourceRoutes.keys))
@@ -3422,6 +3561,9 @@ final class StudioModel: ViewportInputHandler {
     }
 
     func installSourceRuntime(_ bundle: StudioSourceRuntimeBundle) {
+        // The bundle replaces every route preview, so no copy still building
+        // may install over it.
+        cancelSourceRouteCharacterBuilds()
         sourceRoutes = bundle.routes
         sourceRouteCharacterPreviews = bundle.routeCharacterPreviews
         sourceRoutePlayState = Dictionary(uniqueKeysWithValues: bundle.routes.map {
