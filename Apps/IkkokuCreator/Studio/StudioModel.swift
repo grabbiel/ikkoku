@@ -491,6 +491,13 @@ final class StudioModel: ViewportInputHandler {
         }
     }
 
+    // NotificationCenter retains block-observer tokens even after their weak
+    // owner disappears. Match replacement/unload cleanup for model disposal.
+    isolated deinit {
+        for token in sourceFocusObservers { NotificationCenter.default.removeObserver(token) }
+        if let token = sourceLaunchObserver { NotificationCenter.default.removeObserver(token) }
+    }
+
     private func tick() {
         guard isActiveMode else { return }
         if let text = renderStatus.status(current: status, error: host.renderer.lastFrameError,
