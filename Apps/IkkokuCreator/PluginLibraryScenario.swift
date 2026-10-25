@@ -16,6 +16,8 @@ struct PluginLibraryScenario: Decodable {
     let requestFile: String
     /// Reproduction only: direct profile/native loads versus the mixed graph.
     let directPluginGraph: DirectPluginGraph?
+    /// Regression only: saved mixed graph identity across native open/history.
+    let nativeGraphRestore: NativeGraphRestore?
     /// Regression only: actual NotificationCenter registration/removal delivery.
     let focusObserverLifecycle: FocusObserverLifecycle?
     /// Regression only: real preview/Animator rollback after a failed frame.
@@ -62,6 +64,7 @@ struct PluginLibraryScenario: Decodable {
     }
 
     @MainActor func run(app: AppState, studio: StudioModel) async -> StudioScenario.Report {
+        if let nativeGraphRestore { return reproduceNativeGraphRestore(nativeGraphRestore, app: app, studio: studio) }
         if let directPluginGraph { return reproduceDirectPluginGraph(directPluginGraph, app: app, studio: studio) }
         if let focusObserverLifecycle { return verifyFocusObserverLifecycle(focusObserverLifecycle, app: app, studio: studio) }
         if let routeCheckpointCost { return measureRouteCheckpointCost(routeCheckpointCost, app: app, studio: studio) }
@@ -518,6 +521,74 @@ extension PluginLibraryScenario {
         let pending: Bool, request: UUID?
     }
 
+    @MainActor private func directGraphSnapshot(studio: StudioModel, expectedStatus: String? = nil) throws -> DirectGraphObservation {
+        func identity(_ value: AnyObject?) -> String? { value.map { String(describing: ObjectIdentifier($0)) } }
+        let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
+        let state = InitializerObservation(document: studio.doc, world: session?.world.document,
+            runtimeDocument: try session?.savedDocument(), pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
+            callbacks: session?.runtime.callbackTrace ?? [], resources: [r.meshes, r.textures, r.deformBuffers,
+                r.hiddenBuffers, r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
+            undo: studio.undoStack, redo: studio.redoStack, status: expectedStatus ?? studio.status, sceneURL: studio.sceneURL,
+            generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
+            blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
+        let focus = FocusObservation(adapter: identity(studio.sourceFocus.adapter), enabled: studio.sourceFocus.adapter?.enabled,
+            originalVolume: studio.sourceFocus.adapter?.originalVolume?.bitPattern,
+            masterVolume: studio.sourceAudioBus.masterVolume.bitPattern, voiceVolume: studio.sourceAudioBus.voiceVolume.bitPattern,
+            observers: studio.sourceFocusObservers.map { identity($0 as AnyObject)! },
+            launchObserver: identity(studio.sourceLaunchObserver.map { $0 as AnyObject }), awaitingInitialFocus: studio.sourceFocus.awaitingInitialFocus,
+            session: identity(session), running: studio.sourcePluginsRunning)
+        return .init(state: state, focus: focus, hideAdapterVisible: studio.sourceHideStudioUI?.visible,
+            interfaceVisible: studio.sourceInterfaceVisible, accessoryNames: studio.sourceAccessoryNamesEnabled,
+            showGizmos: studio.showGizmos, effectiveShowGizmos: studio.effectiveShowGizmos, showTimeline: studio.showTimeline,
+            pending: studio.sourcePluginLibraryPending, request: studio.sourcePluginMountRequest)
+    }
+
+    // Public toon-frame values only. Numeric draw data uses float bits;
+    // private renderer retirement stamps and texture objects are excluded.
+    private func directGraphFrameBytes(_ frame: RenderFrame) throws -> Data {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func json<T: Encodable>(_ value: T) throws -> Any {
+            try JSONSerialization.jsonObject(with: encoder.encode(value), options: [.fragmentsAllowed])
+        }
+        func matrix(_ m: float4x4) -> [UInt32] { (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
+        var items: [[String: Any]] = []
+        for item in frame.items {
+            let m = item.material, u = m.uniforms
+            // Do not serialize C alignment padding after irisRotation.
+            let vectors: [String: SIMD4<Float>] = ["baseColor": u.baseColor, "shadowColor": u.shadowColor,
+                "specular": u.specular, "rim": u.rim, "outline": u.outline, "tint1": u.tint1, "tint2": u.tint2,
+                "tint3": u.tint3, "overlayColor0": u.overlayColor0, "overlayColor1": u.overlayColor1,
+                "overlayColor2": u.overlayColor2, "patternColor": u.patternColor, "hairGloss": u.hairGloss,
+                "params": u.params, "eye": u.eye, "emissive": u.emissive, "uvTransform": u.uvTransform,
+                "irisST0": u.irisST0, "irisST1": u.irisST1, "irisST2": u.irisST2]
+            let uniformFields: [String: Any] = ["vectors": vectors.mapValues { [$0.x.bitPattern, $0.y.bitPattern, $0.z.bitPattern, $0.w.bitPattern] },
+                "kind": u.kind, "flags": u.flags, "sourceAlphaABits": u.sourceAlphaA.bitPattern,
+                "sourceAlphaBBits": u.sourceAlphaB.bitPattern, "irisRotationBits": u.irisRotation.bitPattern]
+            let textures = [m.base, m.colorMask, m.detail, m.line, m.normal, m.overlay0, m.overlay1,
+                m.overlay2, m.pattern, m.hairGloss, m.bodyMask].map { $0?.id }
+            var value: [String: Any] = ["mesh": item.mesh.id, "objectID": item.objectID, "model": matrix(item.model),
+                "materialUniforms": uniformFields, "textures": try json(textures),
+                "transparent": m.transparent, "depthBias": m.depthBias.bitPattern,
+                "castsShadow": item.castsShadow, "outline": item.outline, "outlineScale": item.outlineScale.bitPattern,
+                "visible": item.visible, "hiddenRegions": item.hiddenRegions, "order": item.order,
+                "morphIndices": item.morphWeights.map(\.index), "morphWeightBits": item.morphWeights.map { $0.weight.bitPattern }]
+            value["deformKey"] = try json(item.deformKey); value["skinSet"] = try json(item.skinSet)
+            value["hiddenKey"] = try json(item.hiddenKey); items.append(value)
+        }
+        let gizmos: [[String: Any]] = frame.gizmos.map { g in
+            ["primitive": g.primitive == .lines ? "lines" : "triangles", "model": matrix(g.model),
+             "depthTest": g.depthTest, "objectID": g.objectID,
+             "vertices": g.vertices.map { v in [v.position.x.bitPattern, v.position.y.bitPattern, v.position.z.bitPattern,
+                v.color.x.bitPattern, v.color.y.bitPattern, v.color.z.bitPattern, v.color.w.bitPattern] }]
+        }
+        let skins: [[String: Any]] = frame.skinSets.keys.sorted().map { ["key": $0, "matrices": frame.skinSets[$0]!.map(matrix)] }
+        let bounds = [frame.sceneBounds.min.x, frame.sceneBounds.min.y, frame.sceneBounds.min.z,
+            frame.sceneBounds.max.x, frame.sceneBounds.max.y, frame.sceneBounds.max.z].map(\.bitPattern)
+        return try JSONSerialization.data(withJSONObject: ["camera": json(frame.camera), "mainLight": json(frame.mainLight),
+            "lights": json(frame.lights), "effects": json(frame.effects), "bounds": bounds,
+            "timeBits": frame.time.bitPattern, "items": items, "gizmos": gizmos, "skinSets": skins], options: [.sortedKeys])
+    }
+
     @MainActor private func reproduceDirectPluginGraph(_ configuration: DirectPluginGraph,
                                                        app: AppState, studio: StudioModel) -> StudioScenario.Report {
         var rows: [StudioScenario.Report.StepResult] = []
@@ -533,73 +604,9 @@ extension PluginLibraryScenario {
         func persist<T: Encodable>(_ value: T, _ name: String) throws {
             try encoder.encode(value).write(to: directory.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
         }
-        func identity(_ value: AnyObject?) -> String? { value.map { String(describing: ObjectIdentifier($0)) } }
-        func snapshot() throws -> DirectGraphObservation {
-            let session = studio.sourcePluginSession, r = studio.host.renderer.resources.statistics()
-            let state = InitializerObservation(document: studio.doc, world: session?.world.document,
-                runtimeDocument: try session?.savedDocument(), pending: session?.world.pendingSourceDestruction().map(\.sourceIdentity).sorted() ?? [],
-                callbacks: session?.runtime.callbackTrace ?? [], resources: [r.meshes, r.textures, r.deformBuffers,
-                    r.hiddenBuffers, r.meshBufferBytes, r.deformBufferBytes, r.hiddenBufferBytes, r.retiring],
-                undo: studio.undoStack, redo: studio.redoStack, status: studio.status, sceneURL: studio.sceneURL,
-                generation: studio.sourcePluginMountGeneration, animationTime: studio.sourceAnimationTime,
-                blocked: studio.resourceBlockedObjects, diagnostics: studio.resourceDiagnostics)
-            let focus = FocusObservation(adapter: identity(studio.sourceFocus.adapter), enabled: studio.sourceFocus.adapter?.enabled,
-                originalVolume: studio.sourceFocus.adapter?.originalVolume?.bitPattern,
-                masterVolume: studio.sourceAudioBus.masterVolume.bitPattern, voiceVolume: studio.sourceAudioBus.voiceVolume.bitPattern,
-                observers: studio.sourceFocusObservers.map { identity($0 as AnyObject)! },
-                launchObserver: identity(studio.sourceLaunchObserver.map { $0 as AnyObject }), awaitingInitialFocus: studio.sourceFocus.awaitingInitialFocus,
-                session: identity(session), running: studio.sourcePluginsRunning)
-            return .init(state: state, focus: focus, hideAdapterVisible: studio.sourceHideStudioUI?.visible,
-                interfaceVisible: studio.sourceInterfaceVisible, accessoryNames: studio.sourceAccessoryNamesEnabled,
-                showGizmos: studio.showGizmos, effectiveShowGizmos: studio.effectiveShowGizmos, showTimeline: studio.showTimeline,
-                pending: studio.sourcePluginLibraryPending, request: studio.sourcePluginMountRequest)
-        }
-        // Public toon-frame values only. Numeric draw data uses float bits;
-        // private renderer retirement stamps and texture objects are excluded.
-        func frameBytes(_ frame: RenderFrame) throws -> Data {
-            func json<T: Encodable>(_ value: T) throws -> Any {
-                try JSONSerialization.jsonObject(with: encoder.encode(value), options: [.fragmentsAllowed])
-            }
-            func matrix(_ m: float4x4) -> [UInt32] { (0..<4).flatMap { c in (0..<4).map { m[c][$0].bitPattern } } }
-            var items: [[String: Any]] = []
-            for item in frame.items {
-                let m = item.material, u = m.uniforms
-                // Do not serialize C alignment padding after irisRotation.
-                let vectors: [String: SIMD4<Float>] = ["baseColor": u.baseColor, "shadowColor": u.shadowColor,
-                    "specular": u.specular, "rim": u.rim, "outline": u.outline, "tint1": u.tint1, "tint2": u.tint2,
-                    "tint3": u.tint3, "overlayColor0": u.overlayColor0, "overlayColor1": u.overlayColor1,
-                    "overlayColor2": u.overlayColor2, "patternColor": u.patternColor, "hairGloss": u.hairGloss,
-                    "params": u.params, "eye": u.eye, "emissive": u.emissive, "uvTransform": u.uvTransform,
-                    "irisST0": u.irisST0, "irisST1": u.irisST1, "irisST2": u.irisST2]
-                let uniformFields: [String: Any] = ["vectors": vectors.mapValues { [$0.x.bitPattern, $0.y.bitPattern, $0.z.bitPattern, $0.w.bitPattern] },
-                    "kind": u.kind, "flags": u.flags, "sourceAlphaABits": u.sourceAlphaA.bitPattern,
-                    "sourceAlphaBBits": u.sourceAlphaB.bitPattern, "irisRotationBits": u.irisRotation.bitPattern]
-                let textures = [m.base, m.colorMask, m.detail, m.line, m.normal, m.overlay0, m.overlay1,
-                    m.overlay2, m.pattern, m.hairGloss, m.bodyMask].map { $0?.id }
-                var value: [String: Any] = ["mesh": item.mesh.id, "objectID": item.objectID, "model": matrix(item.model),
-                    "materialUniforms": uniformFields, "textures": try json(textures),
-                    "transparent": m.transparent, "depthBias": m.depthBias.bitPattern,
-                    "castsShadow": item.castsShadow, "outline": item.outline, "outlineScale": item.outlineScale.bitPattern,
-                    "visible": item.visible, "hiddenRegions": item.hiddenRegions, "order": item.order,
-                    "morphIndices": item.morphWeights.map(\.index), "morphWeightBits": item.morphWeights.map { $0.weight.bitPattern }]
-                value["deformKey"] = try json(item.deformKey); value["skinSet"] = try json(item.skinSet)
-                value["hiddenKey"] = try json(item.hiddenKey); items.append(value)
-            }
-            let gizmos: [[String: Any]] = frame.gizmos.map { g in
-                ["primitive": g.primitive == .lines ? "lines" : "triangles", "model": matrix(g.model),
-                 "depthTest": g.depthTest, "objectID": g.objectID,
-                 "vertices": g.vertices.map { v in [v.position.x.bitPattern, v.position.y.bitPattern, v.position.z.bitPattern,
-                    v.color.x.bitPattern, v.color.y.bitPattern, v.color.z.bitPattern, v.color.w.bitPattern] }]
-            }
-            let skins: [[String: Any]] = frame.skinSets.keys.sorted().map { ["key": $0, "matrices": frame.skinSets[$0]!.map(matrix)] }
-            let bounds = [frame.sceneBounds.min.x, frame.sceneBounds.min.y, frame.sceneBounds.min.z,
-                frame.sceneBounds.max.x, frame.sceneBounds.max.y, frame.sceneBounds.max.z].map(\.bitPattern)
-            return try JSONSerialization.data(withJSONObject: ["camera": json(frame.camera), "mainLight": json(frame.mainLight),
-                "lights": json(frame.lights), "effects": json(frame.effects), "bounds": bounds,
-                "timeBits": frame.time.bitPattern, "items": items, "gizmos": gizmos, "skinSets": skins], options: [.sortedKeys])
-        }
+        func snapshot() throws -> DirectGraphObservation { try directGraphSnapshot(studio: studio) }
         func frame(_ name: String) throws -> Data {
-            let bytes = try frameBytes(studio.host.renderer.currentFrame())
+            let bytes = try directGraphFrameBytes(studio.host.renderer.currentFrame())
             try bytes.write(to: directory.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
             return bytes
         }
@@ -717,6 +724,283 @@ extension PluginLibraryScenario {
                     "native": studio.doc.sourceNativePlugins?.map(\.guid) ?? []], "mounted-identities")
             }
         } catch { record("directGraphReproductionFailure", false, String(describing: error)) }
+        studio.sourcePluginsRunning = false
+        return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
+    }
+}
+
+// Reproduction only: direct-load admission and saved candidate restoration are
+// distinct entry points. The conflicting cards below are synthetic historical
+// documents, not successful saves through the now-guarded direct loader.
+extension PluginLibraryScenario {
+    struct NativeGraphRestore: Decodable {
+        let phase: NativeProfileRestore.Phase
+        let directory: String, outputDirectory: String, nativeManifest: String
+        let conflictManifest: String, conflictProfile: String
+        let compatibleManifest: String, compatibleProfile: String
+    }
+    private struct NativeGraphObservation: Codable, Equatable {
+        let graph: DirectGraphObservation
+        let previewOwners: [String]
+    }
+
+    @MainActor private func reproduceNativeGraphRestore(_ configuration: NativeGraphRestore,
+                                                         app: AppState, studio: StudioModel) -> StudioScenario.Report {
+        var rows: [StudioScenario.Report.StepResult] = []
+        let directory = URL(fileURLWithPath: configuration.directory, isDirectory: true)
+        let output = URL(fileURLWithPath: configuration.outputDirectory, isDirectory: true)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        func record(_ name: String, _ ok: Bool, _ detail: String = "") {
+            rows.append(.init(op: name, ok: ok, detail: detail))
+        }
+        func require(_ name: String, _ ok: Bool, _ detail: String = "") throws {
+            record(name, ok, detail)
+            if !ok { throw SourcePluginError.runtime("Native graph control failed: \(name)") }
+        }
+        func scene(_ name: String) -> URL { directory.appendingPathComponent(name + ".png") }
+        func decoded(_ name: String) throws -> StudioDocument {
+            try CardIO.decode(StudioDocument.self, keyword: CardIO.sceneKeyword, from: Data(contentsOf: scene(name)))
+        }
+        func persist<T: Encodable>(_ value: T, _ name: String) throws {
+            try encoder.encode(value).write(to: output.appendingPathComponent(name + ".json"), options: .withoutOverwriting)
+        }
+        func snapshot(status: String? = nil) throws -> NativeGraphObservation {
+            .init(graph: try directGraphSnapshot(studio: studio, expectedStatus: status),
+                previewOwners: studio.renderedSourceCharacterPreviews.map { String(describing: ObjectIdentifier($0)) }.sorted())
+        }
+        func frame(_ name: String) throws -> Data {
+            let bytes = try directGraphFrameBytes(studio.host.renderer.currentFrame())
+            try bytes.write(to: output.appendingPathComponent(name + "-frame.json"), options: .withoutOverwriting)
+            return bytes
+        }
+        func writeScene(_ value: StudioDocument, _ name: String) throws {
+            try CardIO.encode(value, keyword: CardIO.sceneKeyword, thumbnail: nil)
+                .write(to: scene(name), options: .withoutOverwriting)
+        }
+        func sameObjects(_ a: StudioDocument, _ b: StudioDocument) -> Bool {
+            a.objects.map(\.id) == b.objects.map(\.id) && a.sourceSceneSHA256 == b.sourceSceneSHA256
+        }
+        do {
+            guard !FileManager.default.fileExists(atPath: output.path) else {
+                throw SourcePluginError.invalid("Native graph observation output already exists.")
+            }
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            studio.liveAnimation = false; app.maker?.liveAnimation = false; app.mode = .studio
+            studio.sourceAutomaticBlink = false; studio.showGizmos = false; studio.showTimeline = false
+            try require("sourceFixture", studio.doc.objects.contains { $0.sourceObjectKey == 10 && $0.sourceCharacter != nil }
+                && !studio.host.renderer.currentFrame().items.isEmpty
+                && studio.host.renderer.currentFrame().items.allSatisfy { $0.sourceShader == nil }
+                && studio.sourcePluginSession == nil && studio.doc.sourceNativePlugins == nil)
+            let native = try SourceNativePluginPackage.load(url: URL(fileURLWithPath: configuration.nativeManifest))
+            let conflict = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.conflictManifest))
+            let compatible = try SourcePluginPackage.load(url: URL(fileURLWithPath: configuration.compatibleManifest))
+            func isExactNoOp(_ package: SourcePluginPackage) -> Bool {
+                guard package.programs.count == 1 else { return false }
+                let program = package.programs[0]
+                guard program.type == "DirectGraphNoOp", program.fields.isEmpty,
+                      program.methods.count == 1 else { return false }
+                let method = program.methods[0]
+                return method.lifecycle == "Awake" && method.body.kind == "block"
+                    && method.body.children?.isEmpty == true
+            }
+            let exactNative = native.manifestSHA256 == "32b46f07df8841801080c54145c147b9722319fab538f61d6a9fbb79b0a3a496"
+                && native.manifest.incompatibilities == ["HideStudioUI", "HideHInterface"]
+            let exactConflict = conflict.manifest.identity.guid.utf8.elementsEqual("HideStudioUI".utf8)
+            let exactCompatible = compatible.manifest.identity.guid.utf8.elementsEqual("Ikkoku.Validation.DirectGraphControl".utf8)
+            try require("exactGraphInputs", exactNative && exactConflict && exactCompatible
+                && [conflict, compatible].allSatisfy(isExactNoOp))
+            let graphError = SourcePluginLibraryError.incompatible(guid: "keelhauled.hideallui", other: "HideStudioUI")
+            var actual: SourcePluginLibraryError?
+            do { _ = try SourcePluginGraph.order([.init(package: conflict), .init(nativeAdapter: native)], process: "CharaStudio") }
+            catch let error as SourcePluginLibraryError { actual = error }
+            try require("independentConflictOracle", actual == graphError, actual?.description ?? "No rejection")
+            try require("independentCompatibleOracle", try SourcePluginGraph.order(
+                [.init(package: compatible), .init(nativeAdapter: native)], process: "CharaStudio") == [0, 1])
+
+            switch configuration.phase {
+            case .save:
+                guard !FileManager.default.fileExists(atPath: directory.path) else {
+                    throw SourcePluginError.invalid("Native graph save requires a fresh fixture directory.")
+                }
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                try studio.loadSourcePluginProfileInteractively(profileURL: URL(fileURLWithPath: configuration.compatibleProfile),
+                    expectedGeneration: studio.sourcePluginMountGeneration)
+                try studio.loadSourceNativePlugin(url: native.manifestURL)
+                studio.sourcePluginsRunning = false
+                try studio.stepSourcePlugins(deltaTime: 0.04)
+                let expected = try studio.sourcePluginSession!.savedDocument().sourcePluginState
+                try require("compatibleMounted", studio.sourceHideStudioUI != nil
+                    && studio.doc.sourceNativePlugins == [SourceNativePluginReference(package: native)]
+                    && expected?.clock.elapsedTime == Double(Float(0.04)))
+                try studio.saveScene(to: scene("compatible"))
+                let saved = try decoded("compatible")
+                try persist(saved, "compatible-saved")
+                try require("compatibleActualNativeSave", saved.sourcePluginState == expected
+                    && saved.sourceNativePlugins == studio.doc.sourceNativePlugins && sameObjects(saved, studio.doc))
+
+                var base = saved
+                base.sourcePluginState = nil; base.sourceNativePlugins = nil
+                base.sourcePluginLibrary = nil; base.sourcePluginLibraryConfiguration = nil
+                func historical(_ profile: URL) throws -> StudioDocument {
+                    // No native host is installed. Build a valid saved IR state
+                    // with the existing session API, then encode historical refs.
+                    let session = try SourceStudioPluginSession(profileURL: profile, document: base)
+                    return try session.step(document: base, deltaTime: 0.04)
+                }
+                let plain = try historical(URL(fileURLWithPath: configuration.conflictProfile))
+                try writeScene(plain, "opposing-only")
+                try require("opposingOnlyFixture", sameObjects(plain, saved) && plain.sourceNativePlugins == nil
+                    && plain.sourcePluginState?.packages.map(\.guid) == ["HideStudioUI"])
+                var conflicting = plain; conflicting.sourceNativePlugins = [SourceNativePluginReference(package: native)]
+                try writeScene(conflicting, "conflicting")
+                try require("conflictingHistoricalFixture", try decoded("conflicting") == conflicting
+                    && conflicting.sourcePluginState?.clock == saved.sourcePluginState?.clock
+                    && sameObjects(conflicting, saved), "Synthetic CardIO scene; not a successful direct mixed mount")
+                var disabled = conflicting; disabled.sourceNativePlugins![0].enabled = false
+                try writeScene(disabled, "disabled")
+                try require("disabledSelectedFixture", try decoded("disabled") == disabled
+                    && disabled.sourcePluginState == conflicting.sourcePluginState,
+                    "Only enabled changes; selected package identity and its incompatibility remain")
+
+                let changedProfile = directory.appendingPathComponent("changed-profile.json")
+                let originalProfileBytes = try Data(contentsOf: URL(fileURLWithPath: configuration.conflictProfile))
+                try originalProfileBytes.write(to: changedProfile, options: .withoutOverwriting)
+                var changed = try historical(changedProfile); changed.sourceNativePlugins = conflicting.sourceNativePlugins
+                try writeScene(changed, "changed-profile")
+                var changedBytes = originalProfileBytes; changedBytes.append(contentsOf: [0x20, 0x0a])
+                _ = try JSONSerialization.jsonObject(with: changedBytes)
+                try changedBytes.write(to: changedProfile)
+                let changedSHA = SHA256.hash(data: changedBytes).map { String(format: "%02x", $0) }.joined()
+                try require("changedValidProfileIdentity", changedSHA != changed.sourcePluginState?.profileSHA256
+                    && changed.sourceNativePlugins == conflicting.sourceNativePlugins && sameObjects(changed, saved))
+
+                // Copy only the exact verified manifest and its declared files;
+                // never modify installed/shared source or configuration bytes.
+                guard let config = native.manifest.configuration else { throw SourcePluginError.invalid("Expected native configuration fixture.") }
+                let copy = directory.appendingPathComponent("changed-native", isDirectory: true)
+                try FileManager.default.createDirectory(at: copy, withIntermediateDirectories: true)
+                let manifest = copy.appendingPathComponent("manifest.json")
+                try Data(contentsOf: native.manifestURL).write(to: manifest, options: .withoutOverwriting)
+                for file in [native.manifest.source, config] {
+                    let target = copy.appendingPathComponent(file.file)
+                    try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data(contentsOf: native.manifestURL.deletingLastPathComponent().appendingPathComponent(file.file))
+                        .write(to: target, options: .withoutOverwriting)
+                }
+                let copied = try SourceNativePluginPackage.load(url: manifest)
+                var changedNative = conflicting; changedNative.sourceNativePlugins = [SourceNativePluginReference(package: copied)]
+                try writeScene(changedNative, "changed-native")
+                let configURL = copy.appendingPathComponent(config.file)
+                var bytes = try Data(contentsOf: configURL); bytes.append(0x0a); try bytes.write(to: configURL)
+                var nativeError: String?
+                do { _ = try changedNative.sourceNativePlugins![0].load() } catch { nativeError = String(describing: error) }
+                try require("changedNativeConfigIdentity", nativeError == SourcePluginError.invalid("Native adapter source or configuration hash changed.").description
+                    && changedNative.sourcePluginState == conflicting.sourcePluginState, nativeError ?? "No rejection")
+                try String(ProcessInfo.processInfo.processIdentifier).write(to: directory.appendingPathComponent("save-pid.txt"), atomically: true, encoding: .utf8)
+                try persist(["compatible": "Actual StudioModel.saveScene",
+                    "others": "Synthetic historical CardIO documents; same UUIDs and validated saved IR state",
+                    "changed-profile": "Copied profile with valid JSON whitespace change after snapshot",
+                    "changed-native": "Copied verified native configuration changed after snapshot"], "fixture-construction")
+            case .reopen:
+                let savedPID = try String(contentsOf: directory.appendingPathComponent("save-pid.txt"), encoding: .utf8)
+                try require("freshProcessBoundary", savedPID != String(ProcessInfo.processInfo.processIdentifier),
+                    "save PID=\(savedPID), reopen PID=\(ProcessInfo.processInfo.processIdentifier)")
+                let saved = try decoded("compatible"), opposing = try decoded("opposing-only")
+                try require("sameUUIDCandidateContexts", sameObjects(saved, opposing)
+                    && saved.sourcePluginState?.packages.map(\.guid) == ["Ikkoku.Validation.DirectGraphControl"]
+                    && opposing.sourcePluginState?.packages.map(\.guid) == ["HideStudioUI"]
+                    && saved.sourceNativePlugins?.count == 1 && opposing.sourceNativePlugins == nil)
+
+                // Drive real history operations. Fixture assignment seeds an
+                // existing document snapshot; no stack or generation is written.
+                func seedHistory(_ action: String, target: StudioDocument) throws {
+                    let prior = studio.doc
+                    if action == "undo" {
+                        studio.doc = target; studio.pushUndo(force: true); studio.doc = prior
+                    } else if action == "redo" {
+                        studio.pushUndo(force: true); studio.doc = target; studio.undo()
+                        guard studio.doc.objects == prior.objects && studio.doc.sourcePluginState == prior.sourcePluginState,
+                              studio.redoStack.last == target, studio.sourcePluginSession != nil else {
+                            throw SourcePluginError.runtime("Unable to seed the real redo candidate.")
+                        }
+                    }
+                }
+                func controlRestored() throws -> Bool {
+                    guard let session = studio.sourcePluginSession else { return false }
+                    let state = try session.savedDocument().sourcePluginState
+                    return studio.doc.objects == saved.objects && studio.doc.sourcePluginState == saved.sourcePluginState
+                        && studio.doc.sourceNativePlugins == saved.sourceNativePlugins && studio.sourceHideStudioUI != nil
+                        && session.library.packages.first?.manifestData == compatible.manifestData
+                        && session.world.document.objects == saved.objects
+                        && state == saved.sourcePluginState
+                        && session.runtime.callbackTrace.isEmpty && !studio.sourcePluginsRunning
+                        && !studio.host.renderer.currentFrame().items.isEmpty
+                }
+                for action in ["open", "undo", "redo"] {
+                    try studio.loadScene(from: scene("opposing-only"))
+                    try seedHistory(action, target: saved)
+                    try require("compatible\(action)PriorContext", studio.sourcePluginSession?.library.packages.first?.manifestData == conflict.manifestData
+                        && studio.doc.sourceNativePlugins == nil && sameObjects(studio.doc, saved)
+                        && (action != "undo" || studio.undoStack.last == saved)
+                        && (action != "redo" || studio.redoStack.last == saved))
+                    try persist(snapshot(), "compatible-\(action)-before")
+                    if action == "open" { try studio.loadScene(from: scene("compatible")) }
+                    else if action == "undo" { studio.undo() } else { studio.redo() }
+                    try persist(snapshot(), "compatible-\(action)-after")
+                    try require("compatible\(action)CandidateRestored", try controlRestored(), studio.status)
+                }
+
+                let incompatible = [graphError.description, SourcePluginError.invalid(graphError.description).description]
+                let changedProfile = [SourcePluginError.invalid("Saved plugin profile or library bindings changed; explicit reinstallation is required.").description]
+                let changedNative = [SourcePluginError.invalid("Native adapter source or configuration hash changed.").description]
+                let cases: [(String, String, [String])] = [
+                    ("conflicting", "open", incompatible), ("conflicting", "undo", incompatible), ("conflicting", "redo", incompatible),
+                    ("disabled", "open", incompatible), ("changed-profile", "open", changedProfile),
+                    ("changed-profile", "undo", changedProfile), ("changed-profile", "redo", changedProfile),
+                    ("changed-native", "open", changedNative)]
+                for (fixture, action, errors) in cases {
+                    let name = fixture + "-" + action, candidate = try decoded(fixture)
+                    try studio.loadScene(from: scene("compatible")); try studio.stepSourcePlugins(deltaTime: 0.02)
+                    studio.sourcePluginsRunning = false
+                    try seedHistory(action, target: candidate)
+                    if studio.sourceInterfaceVisible { studio.toggleSourceInterface() }
+                    try require(name + "Prior", studio.sourcePluginSession?.library.packages.first?.manifestData == compatible.manifestData
+                        && studio.doc.sourceNativePlugins == saved.sourceNativePlugins && studio.sourceHideStudioUI?.visible == false
+                        && sameObjects(studio.doc, candidate) && !studio.renderedSourceCharacterPreviews.isEmpty
+                        && (action != "undo" || studio.undoStack.last == candidate)
+                        && (action != "redo" || studio.redoStack.last == candidate))
+                    let before = try snapshot(), session = studio.sourcePluginSession, focus = studio.sourceFocus.adapter
+                    let previews = studio.renderedSourceCharacterPreviews, tokens = studio.sourceFocusObservers, launch = studio.sourceLaunchObserver
+                    try persist(candidate, name + "-candidate"); try persist(before, name + "-before")
+                    let beforeFrame = try frame(name + "-before")
+                    var result = "NO REJECTION"
+                    if action == "open" {
+                        do { try studio.loadScene(from: scene(fixture)) } catch { result = String(describing: error) }
+                    } else {
+                        if action == "undo" { studio.undo() } else { studio.redo() }
+                        result = studio.status
+                    }
+                    let after = try snapshot(); try persist(after, name + "-after")
+                    let afterFrame = try frame(name + "-after")
+                    try persist(["outcome": result], name + "-result")
+                    let expected = action == "open" ? errors : errors.map { "Plugin restore: " + $0 }
+                    let rejected = expected.contains(result)
+                    // Only an independently matched history error permits its
+                    // documented status update. Raw snapshots keep that status.
+                    let comparison: NativeGraphObservation
+                    if rejected && action != "open" { comparison = try snapshot(status: before.graph.state.status) }
+                    else { comparison = after }
+                    record(name + "Rejected", rejected, result)
+                    record(name + "StateRetained", comparison == before, "Exact document/runtime/history/clocks/resources/host state; only matched history error status is normalized")
+                    record(name + "OwnersRetained", studio.sourcePluginSession === session && studio.sourceFocus.adapter === focus
+                        && studio.sourceLaunchObserver === launch && studio.sourceFocusObservers.count == tokens.count
+                        && zip(tokens, studio.sourceFocusObservers).allSatisfy { $0 === $1 })
+                    record(name + "PreviewOwnersRetained", Set(previews.map(ObjectIdentifier.init))
+                        == Set(studio.renderedSourceCharacterPreviews.map(ObjectIdentifier.init)))
+                    record(name + "FrameRetained", beforeFrame == afterFrame, "All public toon-frame fields; no padding/private renderer stamps")
+                }
+            }
+        } catch { record("nativeGraphReproductionFailure", false, String(describing: error)) }
         studio.sourcePluginsRunning = false
         return .init(steps: rows, passed: rows.filter(\.ok).count, failed: rows.filter { !$0.ok }.count)
     }

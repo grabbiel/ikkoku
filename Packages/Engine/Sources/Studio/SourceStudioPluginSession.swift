@@ -60,13 +60,11 @@ public final class SourceStudioPluginSession {
             guard requested.updateValue(package, forKey: value.ordinalGUID) == nil else { throw SourcePluginError.invalid("Duplicate plugin package identity.") }
             requested[value.ordinalGUID] = package; loaded.append(value)
         }
-        // Preserve profile-only dependency validation and order. The immutable
-        // context checks coexistence before any world or component is created.
+        // Preserve profile-only dependency validation and order. Saved identity
+        // checks precede the mixed context check in the designated initializer.
         let library = try SourcePluginLibrary(packages: loaded)
-        do { try library.validate(nativeAdapters: nativeContext) }
-        catch let error as SourcePluginLibraryError { throw SourcePluginError.invalid(error.description) }
         try self.init(profileURL: profileURL, profileSHA256: Self.hash(data), libraryConfigurationSHA256: nil,
-            library: library, fixedDeltaTime: profile.fixedDeltaTime,
+            library: library, nativeContext: nativeContext, fixedDeltaTime: profile.fixedDeltaTime,
             requested: requested.mapValues { $0.bindings }, document: document, restoring: saved, attachment: attachment)
     }
 
@@ -94,14 +92,15 @@ public final class SourceStudioPluginSession {
             throw SourcePluginError.invalid("Every selected converted plugin requires a scene-object binding.")
         }
         try self.init(profileURL: nil, profileSHA256: nil,
-            libraryConfigurationSHA256: Self.hash(encoder.encode(configuration)), library: library,
+            libraryConfigurationSHA256: Self.hash(encoder.encode(configuration)), library: library, nativeContext: [],
             fixedDeltaTime: configuration.fixedDeltaTime, requested: requested,
             document: document, restoring: saved, attachment: attachment)
     }
 
     private static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
-    private init(profileURL: URL?, profileSHA256: String?, libraryConfigurationSHA256: String?, library: SourcePluginLibrary, fixedDeltaTime: Float,
+    private init(profileURL: URL?, profileSHA256: String?, libraryConfigurationSHA256: String?, library: SourcePluginLibrary,
+                 nativeContext: [SourceNativePluginPackage], fixedDeltaTime: Float,
                  requested: [Data: [Profile.Package.Binding]], document: StudioDocument,
                  restoring saved: SourceStudioPluginState?, attachment: SourceStudioPluginWorld.AttachmentResolver?) throws {
         self.profileURL = profileURL?.resolvingSymlinksInPath(); self.profileSHA256 = profileSHA256
@@ -120,6 +119,11 @@ public final class SourceStudioPluginSession {
                 throw SourcePluginError.invalid("Saved plugin package identity or version changed.")
             }
         }
+        // Candidate metadata is already verified by the caller. Reject an
+        // incompatible union before any world, component or callback exists,
+        // while retaining the saved profile/package identity error precedence.
+        do { try library.validate(nativeAdapters: nativeContext) }
+        catch let error as SourcePluginLibraryError { throw SourcePluginError.invalid(error.description) }
         world = try SourceStudioPluginWorld(document: document, identities: saved?.objectIdentities ?? [:], cloneSerial: saved?.cloneSerial ?? 0,
             pendingDestructionRoots: saved?.pendingDestructionRoots ?? [], attachment: attachment)
         // Normalization may add identities for unbound input objects. Snapshot
