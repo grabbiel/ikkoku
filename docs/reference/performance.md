@@ -3293,7 +3293,10 @@ rounds. A 4 s `sample` of the map configuration found
   - The frame's item array is reserved at the last frame's size, so the
     characters' and the map's appends no longer regrow it.
 
-The reports are in `.local/sta11a-maps/refresh-bench`.
+The reports are in `.local/sta11a-maps/refresh-bench`. With the change
+(`58d0998`), the four map checks passed 4/4 under `--strict`, and the 14
+Release captures were byte-identical to the merged head's
+(`.local/sta11a-maps/captures-fix`).
 
 ### Scaling to a base M1 (estimate)
 
